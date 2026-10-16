@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import dis
 import hashlib
-import json
+from pops._structural_data import canonical_json
 import math
 import sys
 import types
@@ -486,7 +486,7 @@ def _digest(value: Any) -> str:
 
 
 def _json_key(value: Any) -> str:
-    return json.dumps(value, sort_keys=False, separators=(",", ":"), allow_nan=False)
+    return canonical_json(value, sort_keys=False, allow_nan=False)
 
 
 __all__ = [

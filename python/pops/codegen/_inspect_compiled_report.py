@@ -182,11 +182,8 @@ class CompiledReport(Report):
             runtime_params = cache.get("runtime_params", [])
             lines.append("    runtime_params  : %s"
                          % (", ".join(runtime_params) or "(none)"))
-            # Runtime-param capacity utilization (ADC-610): surface the fixed-array kMaxRuntimeParams
-            # bound so the headroom is visible in the report (previously a hidden C++ constant).
-            from pops.physics.aux import max_runtime_params  # lazy: keep the report import-light
-            lines.append("    runtime_params_utilization : %d / %d"
-                         % (len(runtime_params), max_runtime_params()))
+            lines.append("    runtime_params_storage : %d values; byte capacity resolved at bind"
+                         % len(runtime_params))
         if self.env:
             lines.append("  environment (active POPS_*):")
             lines.append("    log_level     : %s" % self.env.get("log_level"))
@@ -312,6 +309,13 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
                  "header_signature": _abi_token(abi_key, "headers") or "unknown",
                  "cache_key": _short(cache_key),
                  "cache_keys": cache_keys}
+    artifacts["program_source_maps"] = {
+        owner: {"source_sha256": data["source_sha256"], "map_sha256": data["map_sha256"],
+                "operation_emissions": len(data["operations"]),
+                "unlocated_ssa": len(data["unlocated"]), "complete": data["complete"],
+                "evidence": data["evidence"]}
+        for owner, data in getattr(compiled, "source_maps", {}).items()
+    }
     from pops._capabilities import native_capability_report
     try:
         capability_report = native_capability_report(

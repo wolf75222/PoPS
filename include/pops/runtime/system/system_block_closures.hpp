@@ -60,8 +60,8 @@ struct SystemBlockClosures {
       std::function<void(const point_type&, field_type&, field_type&, const ExecutionLane&,
                          const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PreparedPointPathResidual = std::function<Real(
-      const point_type&, field_type&, field_type&, const boundary_type*,
-      const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+      const point_type&, field_type&, field_type&, const boundary_type*, const ExecutionLane&,
+      const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
   using PreparedPointJvp = std::function<void(
       const point_type&, field_type&, const field_type&, field_type&, const boundary_type&,
       const ExecutionLane&, const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
@@ -282,6 +282,7 @@ typename SystemBlockClosures<Dim>::PreparedPointJvp make_prepared_boundary_jvp(
 enum class PreparedPhysicalBoundaryRoute {
   legacy_spatial,
   path_residual,
+  ghost_extension,
 };
 
 template <int Dim>

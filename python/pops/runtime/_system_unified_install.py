@@ -401,6 +401,11 @@ class _SystemUnifiedInstall(_System):
             if self._pending_native_packages:
                 self._s._finalize_native_packages()
                 self._pending_native_packages = 0
+            elif compiled is not None:
+                # The empty provider graph is still an authenticated registry. A Program can own
+                # its complete state as a typed continuation without staging spatial packages.
+                # Seal that graph before Program/checkpoint installation consumes its capacities.
+                self._s._seal_auxiliary_providers()
         finally:
             self._batch_native_packages = False
 

@@ -16,7 +16,12 @@ from pops.model.ownership import OwnerKind, OwnerPath
 from pops.time._program.contract import register_program_type
 from pops.time._cadence import ProgramCadence
 from pops.time._program.authoring import _ProgramAuthoring
+from pops.time._program.structured_control import _ProgramStructuredControl
+from pops.time._program.finite_arrays import _ProgramFiniteArrays
+from pops.time._program.field_representation import _ProgramFieldRepresentation
+from pops.time._program.versioned_values import _ProgramVersionedValues
 from pops.time._program.expressions import _ProgramExpressions
+from pops.time._program.stencil_flux import _ProgramStencilFlux
 from pops.time._program.affine_moments import _ProgramAffineMoments
 from pops.time._program.condensed import _ProgramCondensed
 from pops.time._program.operations import _ProgramCore
@@ -45,6 +50,11 @@ from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue u
 
 @register_program_type
 class Program(
+    _ProgramFiniteArrays,
+    _ProgramFieldRepresentation,
+    _ProgramVersionedValues,
+    _ProgramStencilFlux,
+    _ProgramStructuredControl,
     _ProgramExpressions,
     _ProgramAffineMoments,
     _ProgramTimeHandles,
@@ -92,9 +102,31 @@ class Program(
             raise RuntimeError("pops.time.Program is frozen: cannot delete %s" % name)
         object.__delattr__(self, name)
 
-    def __init__(self, name: Any) -> None:
+    def __init__(self, name: Any, *, max_exact_coefficient_bytes: int = 64 * 1024,
+                 flux_expression_budget: tuple[int, int] | None = None,
+                 history_field_metadata_budget: tuple[int, int] | None = None,
+                 terminal_failure_byte_capacity: int = 64 * 1024 * 1024,
+                 terminal_failure_aggregate_byte_capacity: int = 256 * 1024 * 1024,
+                 representation_workspace_byte_capacity: int = 64 * 1024 * 1024) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("Program name must be a non-empty string")
+        if type(max_exact_coefficient_bytes) is not int or not 8 <= max_exact_coefficient_bytes <= (1 << 63) - 1:
+            raise ValueError("max_exact_coefficient_bytes must be an integer in [8, INT64_MAX]")
+        from .resource_budgets import validate_flux_expression_budget
+        validate_flux_expression_budget(flux_expression_budget)
+        self.flux_expression_budget = flux_expression_budget
+        from .resource_budgets import validate_history_field_metadata_budget
+        validate_history_field_metadata_budget(history_field_metadata_budget)
+        self.history_field_metadata_budget = history_field_metadata_budget
+        self.max_exact_coefficient_bytes = max_exact_coefficient_bytes
+        from .resource_budgets import validate_terminal_failure_capacities
+        validate_terminal_failure_capacities(
+            terminal_failure_byte_capacity, terminal_failure_aggregate_byte_capacity)
+        self.terminal_failure_byte_capacity = terminal_failure_byte_capacity
+        self.terminal_failure_aggregate_byte_capacity = terminal_failure_aggregate_byte_capacity
+        from .resource_budgets import validate_representation_workspace_capacity
+        validate_representation_workspace_capacity(representation_workspace_byte_capacity)
+        self.representation_workspace_byte_capacity = representation_workspace_byte_capacity
         self.name = name
         self._owner_path = OwnerPath.fresh(OwnerKind.CONSUMER, name)
         # Exact live CASE authority selected by the first block. Runtime block indices have meaning
@@ -108,6 +140,7 @@ class Program(
         self._values = []
         self._issued_values = {}  # id -> strong identity, including stale immutable replacement records
         self._next_id = 0
+        self._next_finite_domain_identity = 0
         self._commits = {}  # qualified state Handle -> State value
         self._geometry_states = {}  # qualified physical State -> coupled geometry SSA
         self._recording = []  # stack of sub-block lists (a control-flow body); see _new / while_

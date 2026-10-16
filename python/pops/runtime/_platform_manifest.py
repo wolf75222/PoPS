@@ -21,6 +21,12 @@ def execution_context_for_bind(platform, resources):
     """Resolve the sole explicit context against authenticated native runtime facts."""
     exact = dict(resources or {})
     supplied = exact.pop("execution_context", None)
+    if "runtime_parameter_byte_capacity" in exact:
+        from pops.runtime._runtime_parameter_storage import validate_parameter_byte_capacity
+
+        # A storage bound does not select a communicator, device or datatype.
+        # InstallPlan separately checks it against every compiled parameter carrier.
+        validate_parameter_byte_capacity(exact.pop("runtime_parameter_byte_capacity"))
     runtime = native_runtime_backend(platform)
     if supplied is not None:
         if exact:

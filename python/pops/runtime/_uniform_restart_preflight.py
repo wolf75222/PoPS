@@ -101,6 +101,7 @@ def preflight_uniform_restart(payload: Any) -> None:
     from pops.runtime._checkpoint_exchanges import (
         CONTINUATION_CHECKPOINT_KEYS, validate_checkpoint_continuation_arrays,
     )
+    from pops.runtime._checkpoint_finite_continuation import FINITE_CONTINUATION_KEYS
     from pops.runtime._program_cadence_checkpoint import (
         PROGRAM_CADENCE_CHECKPOINT_KEYS,
     )
@@ -178,6 +179,13 @@ def preflight_uniform_restart(payload: Any) -> None:
     }
     if version == 9:
         allowed.add(STATE_CARRIERS_KEY)
+    # The installed-owner validator authenticates the schema, ranked bounded bytes and
+    # native frontier later in _prepare_checkpoint_restart. Admit only its complete group
+    # here; neither unknown sibling names nor partially stored groups are acceptable.
+    finite_members = files & FINITE_CONTINUATION_KEYS
+    if finite_members and finite_members != FINITE_CONTINUATION_KEYS:
+        raise ValueError("restart : strict Uniform checkpoint has an incomplete finite continuation")
+    allowed.update(finite_members)
     from pops.runtime._checkpoint_program_diagnostics import validate_checkpoint_program_diagnostic_arrays
     validate_checkpoint_program_diagnostic_arrays(payload)
     if "blocks" in files:

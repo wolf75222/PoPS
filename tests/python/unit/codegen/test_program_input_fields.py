@@ -43,14 +43,22 @@ def test_runtime_inputs_resolve_and_emit_an_actual_collective_publication():
     from pops.codegen.program_models import ProgramModelGraph
     authority = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
     code = emit_cpp_program(resolved.time, model=authority)
-    with pytest.raises(ValueError, match="requires resolved ProgramModelGraph source authority"):
-        emit_cpp_program(resolved.time, model=lower_and_validate(model)[0])
+    lowered = lower_and_validate(model)[0]
+    direct = emit_cpp_program(resolved.time, model=lowered)
+    assert "ctx.prepare_provider_values(" in direct and ".apply(" in direct
+    # A real Module-lowered emitter has an exact attachment witness. A copied
+    # carrier cannot borrow that witness, even with identical visible metadata.
+    from copy import copy
+    copied = copy(getattr(lowered, "_m", lowered))
+    with pytest.raises(ValueError, match="attachment witness belongs to a different emitter"):
+        emit_cpp_program(resolved.time, model=copied)
     assert "ctx.prepare_provider_values(" in code
     assert ".apply(" in code
     assert "ctx.solve_fields" not in code
     assert fields.field_context.stage_sources == ((value.n.block, value.n.id),)
-    with pytest.raises(NotImplementedError, match="nonempty input_fields"):
-        emit_cpp_program(resolved.time, model=authority, target="amr_system")
+    amr = emit_cpp_program(resolved.time, model=authority, target="amr_system")
+    assert "ctx.prepare_provider_values(" in amr and ".apply(" in amr
+    assert "ctx.solve_fields" not in amr
 
 
 def test_input_observation_refuses_foreign_operator_and_stale_stage():

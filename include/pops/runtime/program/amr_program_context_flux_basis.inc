@@ -176,13 +176,14 @@ void prepare_active_flux_basis_impl_(
     const bool prepared_evaluation = provider == FluxBasisProvider::PreparedResidual ||
                                      provider == FluxBasisProvider::PreparedDefaultFlux;
     if ((!prepared_evaluation && provider != FluxBasisProvider::ExactFace &&
-         provider != FluxBasisProvider::NamedCell &&
-         provider != FluxBasisProvider::DiffusiveFace) ||
+         provider != FluxBasisProvider::NamedCell && provider != FluxBasisProvider::DiffusiveFace &&
+         provider != FluxBasisProvider::GeneratedFace) ||
         (prepared_evaluation &&
          (evaluation == nullptr || exact_face_fluxes != nullptr || named_cell_fluxes != nullptr)) ||
         (provider == FluxBasisProvider::ExactFace &&
          (evaluation == nullptr || exact_face_fluxes == nullptr || named_cell_fluxes != nullptr)) ||
-        (provider == FluxBasisProvider::DiffusiveFace &&
+        ((provider == FluxBasisProvider::DiffusiveFace ||
+          provider == FluxBasisProvider::GeneratedFace) &&
          (evaluation != nullptr || exact_face_fluxes == nullptr || named_cell_fluxes != nullptr)) ||
         (provider == FluxBasisProvider::NamedCell &&
          (evaluation != nullptr || exact_face_fluxes != nullptr || named_cell_fluxes == nullptr)))

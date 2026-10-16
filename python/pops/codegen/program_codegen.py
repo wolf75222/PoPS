@@ -31,6 +31,11 @@ are module-level constants in ``program_emit_kernels``, re-exported here.
 from __future__ import annotations
 
 from typing import Any
+from .cpp_symbols import printer_scope
+from .cpp_strings import cpp_string_literal
+from .program_source_map import emission_program_hash, emission_scope
+from .program_kernel_registry import kernel_scope, kernel_definitions
+from .program_uniform_finite import uniform_scope, uniform_definitions
 from pops.time.references import block_name
 
 import json  # noqa: F401  (kept for any external reference to program_codegen.json)
@@ -160,10 +165,11 @@ def _emit_resolved_cpp_program(
     )
 
 
-from .cpp_symbols import printer_scope
-from .cpp_strings import cpp_string_literal
 
 @printer_scope
+@emission_scope
+@kernel_scope
+@uniform_scope
 def _emit_cpp_program_impl(
     program: Any,
     model: Any = None,
@@ -325,19 +331,39 @@ def _emit_cpp_program_impl(
             has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
             provider_plans=provider_plans)
         if target == "amr_system" else None)
+    from .program_emit_finite_arrays import FINITE_OPS, finite_cpp_helpers
+    from .program_emit_versioned import VERSIONED_OPS
+    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
+    value_ops = FINITE_OPS | VERSIONED_OPS | FIELD_REPRESENTATION_OPS
+    finite_roots = list(program._values)
+    if program._dt_bound is not None:
+        finite_roots.extend(program._dt_bound[0])
+    uses_finite_arrays = any(
+        value.op in value_ops or any(child.op in value_ops for child in program._subblock_value_refs(value))
+        for value in finite_roots)
+    from .program_emit_distributed_arrays import OPS as DISTRIBUTED_OPS
+    from .program_emit_composite import composite_integral_helpers
+    distributed_ops = DISTRIBUTED_OPS | FIELD_REPRESENTATION_OPS
+    uses_distributed = any(value.op in distributed_ops or any(
+        child.op in distributed_ops for child in program._subblock_value_refs(value)) for value in finite_roots)
+    finite_helpers = finite_cpp_helpers() if uses_finite_arrays or uses_distributed else ""
+    if uses_distributed:
+        finite_helpers += "\n#include <pops/runtime/program/distributed_array.hpp>\n"
     return _PROGRAM_CPP_TEMPLATE.format(
         name=cpp_string_literal(program.name),
-        hash=program._ir_hash(),
+        hash=emission_program_hash(program),
         prelude=prelude,
         body=body,
         history_replay_authorities=_emit_history_replay_authorities(program),
         operator_authorities=_emit_operator_authorities(operator_authorities),
         has_dt_bound=has_dt_bound,
         dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
-        module_metadata=_emit_module_metadata(program, authority),
+        module_metadata=(_emit_module_metadata(program, authority)
+                         + _emit_uniform_history_metadata(program, target)),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
-        model_helpers=(_emit_program_model_helpers(program, authority)
+        model_helpers=(finite_helpers + uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
+                       + _emit_program_model_helpers(program, authority)
                        + provider_plans.source_kernel_helpers.cpp()),
         block_names=(_emit_block_names(program, value_authority.block_names)
                      + (_emit_uniform_clock_manifest(program) if target == "system" else "")),
@@ -602,6 +628,8 @@ def _check_lowerable(
     at ``commit`` time); a read-only block (declared via ``T.state`` but never committed) is allowed
     (e.g. a passive field whose charge couples the others); a commit of a block that was never
     declared by ``T.state`` is rejected (an unknown-block commit cannot route to an index)."""
+    from pops.time._program.versioned_values import validate_continuations
+    validate_continuations(program, target=target)
     _check_model_owner_dispatch(program, model)
     from .program_emit_moving import check_moving_program
     check_moving_program(program, model, target)
@@ -639,6 +667,23 @@ def _check_lowerable(
 def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> None:
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
     Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
+    from .program_emit_distributed_arrays import OPS as DISTRIBUTED_OPS
+    if v.op in DISTRIBUTED_OPS:
+        from pops.time._program.distributed_arrays import local_effects
+        local_effects(v.attrs.get("body_block", ()))
+        return
+    from .program_emit_structured_control import STRUCTURED_OPS
+    from .program_emit_finite_arrays import FINITE_OPS
+    from .program_emit_versioned import VERSIONED_OPS
+    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS, validate_field_representation
+    if v.op in FIELD_REPRESENTATION_OPS:
+        validate_field_representation(v)
+        return
+    if v.op in STRUCTURED_OPS | FINITE_OPS | VERSIONED_OPS:
+        for key in ("cond_block", "body_block", "true_block", "false_block"):
+            for child in v.attrs.get(key, ()):
+                _check_op_lowerable(program, child, model, field_plans)
+        return
     node_model = (
         model_for_node(model, v)
         if model is not None and (v.block is not None or v.attrs.get("operator_handle") is not None)
@@ -778,3 +823,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
                     "unknown source_term '%s' in rhs '%s'; declared source_terms: %s"
                     % (s, v.name, sorted(impl._source_terms))
                 )
+
+
+def _emit_uniform_history_metadata(program: Any, target: str) -> str:
+    if target != "system":
+        return ""
+    from .program_history_metadata import emit_checkpoint_history_metadata
+    return emit_checkpoint_history_metadata(program, require_owner=False)

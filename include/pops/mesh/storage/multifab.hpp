@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -80,10 +81,23 @@ class MultiFab {
     fabs_ = std::move(allocated);
   }
 
-  MultiFab(const MultiFab&) = default;
-  MultiFab& operator=(const MultiFab&) = default;
+  MultiFab(const MultiFab& other)
+      : layout_(other.layout_),
+        distribution_(other.distribution_),
+        local_rank_(other.local_rank_),
+        ncomp_(other.ncomp_),
+        ghosts_(other.ghosts_),
+        local_global_indices_(other.local_global_indices_),
+        global_to_local_(other.global_to_local_),
+        fabs_(other.fabs_) {}
 
-  MultiFab(MultiFab&& other) noexcept { move_from_(std::move(other)); }
+  MultiFab& operator=(const MultiFab& other) {
+    if (this != &other)
+      *this = MultiFab(other);
+    return *this;
+  }
+
+  MultiFab(MultiFab&& other) noexcept : storage_identity_(nullptr) { move_from_(std::move(other)); }
 
   MultiFab& operator=(MultiFab&& other) noexcept {
     if (this != &other) {
@@ -157,6 +171,15 @@ class MultiFab {
   /// Storage is always deep-owned; only the same object can expose the same owned allocation set.
   bool shares_storage_with(const MultiFab& other) const noexcept { return this == &other; }
 
+  /// Process-local identity of this storage incarnation, including an empty MPI rank.
+  /// Copies receive a fresh token; moves transfer the storage and token together.
+  /// Retaining the token prevents allocator address reuse from restoring old authority.
+  /// It is not a scientific identifier and must never enter a checkpoint or model hash.
+  const std::shared_ptr<const void>& storage_identity() const noexcept { return storage_identity_; }
+  static constexpr std::size_t storage_identity_payload_bytes() noexcept {
+    return sizeof(StorageIdentityTag);
+  }
+
   /// Fill valid and ghost cells in the selected memory space through Kokkos deep copies.
   void set_val(Real value) {
     for (fab_type& local_fab : fabs_)
@@ -204,6 +227,7 @@ class MultiFab {
     local_global_indices_.clear();
     global_to_local_.clear();
     fabs_.clear();
+    storage_identity_.reset();
   }
 
   void move_from_(MultiFab&& other) noexcept {
@@ -215,6 +239,7 @@ class MultiFab {
     local_global_indices_ = std::move(other.local_global_indices_);
     global_to_local_ = std::move(other.global_to_local_);
     fabs_ = std::move(other.fabs_);
+    storage_identity_ = std::move(other.storage_identity_);
     other.reset_moved_from_();
   }
 
@@ -226,6 +251,8 @@ class MultiFab {
   std::vector<std::size_t> local_global_indices_{};
   std::vector<std::size_t> global_to_local_{};
   std::vector<fab_type> fabs_{};
+  struct StorageIdentityTag {};
+  std::shared_ptr<const void> storage_identity_ = std::make_shared<const StorageIdentityTag>();
 };
 
 }  // namespace pops

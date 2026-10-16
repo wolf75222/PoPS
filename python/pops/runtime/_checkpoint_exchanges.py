@@ -33,7 +33,7 @@ def capture_checkpoint_continuation(owner, payload):
         plan.require("restart")
         plan_json = plan._json
         local = owner._s._checkpoint_program_exchanges()
-        if type(local) is not bytes or not local.startswith((b"POPSEX01", b"POPSEX02", b"POPSEX03", b"POPSEX04")):
+        if type(local) is not bytes or not local.startswith((b"POPSEX01", b"POPSEX02", b"POPSEX03", b"POPSEX04", b"POPSEX05", b"POPSEX06")):
             raise RuntimeError("checkpoint accepted exchange mailbox is not an exact native image")
     except BaseException as exc:
         error = exc
@@ -94,11 +94,19 @@ def prepare_checkpoint_continuation(owner, payload):
     topology = checkpoint_topology(owner)
     images = tuple(raw[int(first):int(last)].tobytes()
                    for first, last in zip(offsets[:-1], offsets[1:], strict=True))
-    if len(images) != topology.size and any(image != images[0] for image in images[1:]):
-        raise ValueError("restart cannot remap rank-dependent accepted exchange mailboxes")
-    selected = images[topology.rank] if len(images) == topology.size else images[0]
+    remap = getattr(owner._s, "_remap_checkpoint_program_exchanges", None)
+    if len(images) != topology.size and callable(remap):
+        # Pure native preparation receives every authenticated source shard. Its
+        # result is committed only by the existing outer restart transaction.
+        selected = remap(images)
+        if type(selected) is not bytes or len(selected) > bound:
+            raise ValueError("rematerialized accepted exchanges exceed the resolved byte capacity")
+    else:
+        if len(images) != topology.size and any(image != images[0] for image in images[1:]):
+            raise ValueError("restart cannot remap rank-dependent accepted exchange mailboxes")
+        selected = images[topology.rank] if len(images) == topology.size else images[0]
     owner._s._validate_checkpoint_program_exchanges(selected)
-    if selected.startswith((b"POPSEX03", b"POPSEX04")):
+    if selected.startswith((b"POPSEX03", b"POPSEX04", b"POPSEX05", b"POPSEX06")):
         accepted_time, macro_step = np.asarray(payload.get("t")), np.asarray(payload.get("macro_step"))
         if accepted_time.ndim != 0 or accepted_time.dtype.kind != "f" or not np.isfinite(accepted_time) \
                 or macro_step.ndim != 0 or macro_step.dtype.kind not in "iu" or int(macro_step) < 0:
@@ -172,6 +180,24 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
         capacity += rank_capacity * (moving_records * record_bytes
                                      + 8 * (field_words + face_words + 5 * topology_words)
                                      + 12 * max_text + 2048 + 8)
+    from pops.codegen.program_lowerability import all_ops
+    if any(value.op == "stencil_flux_divergence" for value in all_ops(program)) and program._histories:
+        from pops.codegen.program_stencil_budget import uniform_stencil_expression_budget
+        from pops._structural_data import canonical_json
+        bases, _terms = uniform_stencil_expression_budget(program)
+        identity_bytes = len(canonical_json(serial).encode("utf-8"))
+        components = max(1, sum(len(getattr(value.space, "components", ()))
+                                for value in program._values if value.op == "state"))
+        face_records = max(1, sum(cells) * 2 * dimension * components)
+        retained_bytes = bases * face_records * (8 * identity_bytes + 2048)
+        # The native POPSEX05 writer admits this exact per-rank metadata bound in addition
+        # to its inner mailbox. HID2/ring-table overhead is inside retained_bytes.
+        capacity += rank_capacity * retained_bytes
+    metadata_budget = getattr(program, "history_field_metadata_budget", None)
+    if metadata_budget is not None and program._histories:
+        # POPSEX06 is bounded by its independently declared workspace, including
+        # the exact nested exchange image, metadata and sample identity tables.
+        capacity += rank_capacity * metadata_budget[1]
     if capacity > (1 << 63) - 1:
         raise OverflowError("resolved accepted exchange checkpoint capacity exceeds int64")
     return capacity

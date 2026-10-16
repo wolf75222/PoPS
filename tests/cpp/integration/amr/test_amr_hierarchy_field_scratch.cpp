@@ -33,6 +33,22 @@ struct Fixture {
   std::shared_ptr<Context> context;
 };
 
+template <class SerialError, class Function>
+void expect_observation_rejection(const Context& context, const char* reason, Function&& function) {
+  try {
+    std::forward<Function>(function)();
+    FAIL() << "invalid observation was accepted";
+  } catch (const std::exception& error) {
+    EXPECT_NE(std::string(error.what()).find(reason), std::string::npos);
+    if (context.prepared_execution_lane().size() == 1)
+      EXPECT_NE(dynamic_cast<const SerialError*>(&error), nullptr);
+    else {
+      EXPECT_NE(dynamic_cast<const std::runtime_error*>(&error), nullptr);
+      EXPECT_NE(std::string(error.what()).find("failed collectively"), std::string::npos);
+    }
+  }
+}
+
 std::string rollback_program_source() {
   // This artifact owns its actual Program/context. The real loader alone grants snapshot
   // enrollment; a direct context.install callback deliberately has no artifact authority.
@@ -350,6 +366,72 @@ TEST(AmrHierarchyFieldScratch, SolverOwnershipAndExactLevelSlotsReuseWithoutAlia
   EXPECT_FALSE(levels[0]->shares_storage_with(*levels[1]));
 }
 
+TEST(AmrHierarchyFieldScratch, AssemblyReadRequiresExactLiveProviderLevelAndAllocation) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  std::array<Field*, 2> assemblies{};
+  auto retained_provider = context.retain_hierarchy_field_solver(701);
+  context.for_each_program_resource_level([&](int level) {
+    auto& rhs = context.hierarchy_field_assembly(701, general::rhs_slot);
+    auto& coefficients = context.hierarchy_field_assembly(701, general::coefficient_slot);
+    assemblies[level] = &rhs;
+    EXPECT_NO_THROW(context.require_program_field_access(rhs));
+    EXPECT_NO_THROW(context.require_program_field_access(coefficients));
+    Field lookalike(rhs);
+    EXPECT_THROW(context.require_program_field_access(lookalike), std::invalid_argument);
+    // Numerical read authority does not turn a provider field into a State scratch prototype.
+    EXPECT_THROW(context.scalar_scratch(990, 0, rhs), std::invalid_argument);
+  });
+  context.for_each_program_resource_level([&](int level) {
+    EXPECT_THROW(context.require_program_field_access(*assemblies[1 - level]),
+                 std::invalid_argument);
+  });
+  replace_child(fixture, 2);
+  context.with_program_resource_level(1, [&] {
+    // Keep the retired provider alive so this tests revocation, not dangling memory.
+    EXPECT_THROW(context.require_program_field_access(*assemblies[1]), std::invalid_argument);
+    auto& current = context.hierarchy_field_assembly(701, general::rhs_slot);
+    EXPECT_NE(&current, assemblies[1]);
+    EXPECT_NO_THROW(context.require_program_field_access(current));
+    EXPECT_THROW(context.require_program_field_access(*assemblies[1]), std::invalid_argument);
+  });
+}
+
+TEST(AmrHierarchyFieldScratch, RepresentationQueryAuthenticatesNativeProviderWithoutStateOwner) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  std::array<Field*, 2> solutions{};
+  auto retained_provider = context.retain_hierarchy_field_solver(701);
+  context.for_each_program_resource_level([&](int level) {
+    auto& solution = context.hierarchy_field_solution(701);
+    auto& rhs = context.hierarchy_field_assembly(701, general::rhs_slot);
+    auto& coefficients = context.hierarchy_field_assembly(701, general::coefficient_slot);
+    auto& scratch = context.hierarchy_field_scratch(701, 995, 0, 1, 1);
+    solutions[level] = &solution;
+    for (const auto* field : {&solution, &rhs, &coefficients, &scratch}) {
+      EXPECT_EQ(context.field_representation_obligation(*field), nullptr);
+      EXPECT_NO_THROW(context.require_discharged_field_representation(*field));
+      Field lookalike(*field);
+      EXPECT_THROW(context.field_representation_obligation(lookalike), std::invalid_argument);
+      EXPECT_THROW(context.require_discharged_field_representation(lookalike),
+                   std::invalid_argument);
+      // Reading metadata must not grant a State-owned allocation/projection.
+      EXPECT_THROW(context.scalar_scratch(996, 0, *field), std::invalid_argument);
+    }
+  });
+  context.for_each_program_resource_level([&](int level) {
+    EXPECT_THROW(context.field_representation_obligation(*solutions[1 - level]),
+                 std::invalid_argument);
+  });
+  replace_child(fixture, 2);
+  context.with_program_resource_level(1, [&] {
+    EXPECT_THROW(context.field_representation_obligation(*solutions[1]), std::invalid_argument);
+    auto& current = context.hierarchy_field_solution(701);
+    EXPECT_NO_THROW(context.require_discharged_field_representation(current));
+    EXPECT_THROW(context.field_representation_obligation(*solutions[1]), std::invalid_argument);
+  });
+}
+
 TEST(AmrHierarchyFieldScratch, RetainedInputsPreserveBytesAndVoteBeforeAnyReset) {
   auto fixture = prepare_fixture();
   auto& context = *fixture.context;
@@ -374,6 +456,101 @@ TEST(AmrHierarchyFieldScratch, RetainedInputsPreserveBytesAndVoteBeforeAnyReset)
     EXPECT_EQ(&next, &retained);
     expect_value(next, pops::Real(0));
   });
+}
+
+TEST(AmrHierarchyFieldScratch, ImmutableObservationKeepsCompositeReductionAcrossProviderReuse) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  context.begin_step(0.125);
+  context.for_each_program_resource_level(
+      [&](int level) { context.hierarchy_field_solution(701).set_val(pops::Real(7 + level)); });
+  const auto before = context.reduce_hierarchy_field_component(701, 0, "sum");
+  auto coarse = context.capture_hierarchy_field_observation(701, 910, 0, 1024 * 1024);
+  expect_value(coarse->local_field(), pops::Real(7));
+  const auto* coarse_storage = &coarse->local_field();
+  EXPECT_TRUE(context.recognizes_hierarchy_field_observation(*coarse_storage));
+  pops::MultiFab<pops::kNativeDimension> lookalike(*coarse_storage);
+  EXPECT_FALSE(context.recognizes_hierarchy_field_observation(lookalike));
+  EXPECT_DOUBLE_EQ(context.reduce_hierarchy_field_observation(coarse, "sum"), before);
+  context.for_each_program_resource_level(
+      [&](int level) { context.hierarchy_field_solution(701).set_val(pops::Real(11 + level)); });
+  const auto current = context.reduce_hierarchy_field_component(701, 0, "sum");
+  ASSERT_NE(current, before);  // The former mutable-provider lookup is a real counterexample.
+  context.with_program_resource_level(1, [&] {
+    auto fine = context.capture_hierarchy_field_observation(701, 910, 0, 1024 * 1024);
+    expect_value(fine->local_field(), pops::Real(12));
+    EXPECT_DOUBLE_EQ(context.reduce_hierarchy_field_observation(fine, "sum"), current);
+    expect_observation_rejection<std::invalid_argument>(
+        context, "field observation has foreign snapshot authority",
+        [&] { context.reduce_hierarchy_field_observation(coarse, "sum"); });
+    EXPECT_THROW(context.recognizes_hierarchy_field_observation(*coarse_storage),
+                 std::invalid_argument);
+    EXPECT_EQ(context.hierarchy_field_observation_source(*coarse_storage), coarse);
+  });
+  expect_value(coarse->local_field(), pops::Real(7));
+  EXPECT_DOUBLE_EQ(context.reduce_hierarchy_field_observation(coarse, "sum"), before);
+  expect_observation_rejection<std::length_error>(
+      context, "immutable field observation exceeds its byte capacity",
+      [&] { context.capture_hierarchy_field_observation(701, 911, 0, 1); });
+  EXPECT_DOUBLE_EQ(context.reduce_hierarchy_field_observation(coarse, "sum"), before);
+  EXPECT_DOUBLE_EQ(context.reduce_hierarchy_field_component(701, 0, "sum"), current);
+  context.resource_attempt().reject();
+  expect_observation_rejection<std::invalid_argument>(
+      context, "field observation has foreign snapshot authority",
+      [&] { context.reduce_hierarchy_field_observation(coarse, "sum"); });
+  EXPECT_THROW(coarse->local_field(), std::invalid_argument);
+  EXPECT_THROW(context.recognizes_hierarchy_field_observation(*coarse_storage),
+               std::invalid_argument);
+}
+
+TEST(AmrHierarchyFieldScratch, ObservationRankMismatchRejectsBeforeAllocatingOrPublishing) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  context.begin_step(0.125);
+  context.for_each_program_resource_level(
+      [&](int) { context.hierarchy_field_solution(701).set_val(pops::Real(3)); });
+  const int rank = context.prepared_execution_lane().rank();
+  EXPECT_THROW(
+      context.capture_hierarchy_field_observation(701, 920, 0, rank == 0 ? 1 : 1024 * 1024),
+      std::exception);
+  if (context.prepared_execution_lane().size() > 1)
+    EXPECT_THROW(
+        context.capture_hierarchy_field_observation(701, rank == 0 ? 920 : 921, 0, 1024 * 1024),
+        std::invalid_argument);
+  auto accepted = context.capture_hierarchy_field_observation(701, 922, 0, 1024 * 1024);
+  expect_value(accepted->local_field(), pops::Real(3));
+}
+
+TEST(AmrHierarchyFieldScratch, ImmutableObservationKeepsSolvedHaloAcrossProviderReuse) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  context.begin_step(0.125);
+  context.for_each_program_resource_level([&](int) {
+    auto& field = context.hierarchy_field_solution(701);
+    const auto geometry = context.geometry();
+    for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
+      const auto view = field.fab(patch).view();
+      pops::for_each_cell(field.fab(patch).grown_box(), [=] POPS_HD(const pops::Index<Dim>& cell) {
+        pops::Real value = 0;
+        for (int axis = 0; axis < Dim; ++axis)
+          value += pops::Real(cell[axis]) * geometry.spacing(axis);
+        view(cell, 0) = value;
+      });
+    }
+  });
+  auto snapshot = context.capture_hierarchy_field_observation(701, 930, 0, 1024 * 1024, true);
+  context.for_each_program_resource_level(
+      [&](int) { context.hierarchy_field_solution(701).set_val(pops::Real(19)); });
+  auto& gradient = context.hierarchy_field_scratch(701, 931, 0, Dim, 1);
+  context.observe_hierarchy_field_gradient(701, gradient, 0);
+  expect_value(gradient, pops::Real(0));
+  context.observe_hierarchy_field_gradient(snapshot, gradient);
+  expect_value(gradient, pops::Real(1));
+  auto without_halo = context.capture_hierarchy_field_observation(701, 932, 0, 1024 * 1024);
+  expect_observation_rejection<std::invalid_argument>(
+      context, "field observation did not retain the solved halo",
+      [&] { context.observe_hierarchy_field_gradient(without_halo, gradient); });
+  expect_value(gradient, pops::Real(1));
 }
 
 TEST(AmrHierarchyFieldScratch, RankLocalUnknownSolveAndShapeRejectWithoutResetThenRetry) {
@@ -463,4 +640,197 @@ TEST(AmrHierarchyFieldScratch, RollbackDiscardsProviderScratchBeforeReconstructi
   pops::dynlib::close(handle);
   std::remove(source.c_str());
   std::remove(library.c_str());
+}
+
+TEST(AmrHierarchyFieldScratch, IndependentProviderAuthenticatesIssuedObservationAndDerivedStorage) {
+  using namespace pops::runtime::program;
+  pops::comm_init();
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_field_provider_" +
+                           std::to_string(pops::my_rank()) + "_" + std::to_string(std::clock());
+  const std::string source = stem + ".cpp", library = stem + ".so";
+  {
+    std::ofstream output(source);
+    output << rollback_program_source();
+  }
+  const auto package = pops::test::native_dso::compile_shared(
+      source, library, "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
+  if (!package.ok)
+    pops::test::native_dso::report_compile_failure("AmrHierarchyFieldProvider", package);
+  ASSERT_EQ(pops::all_reduce_min(package.ok ? 1L : 0L), 1L);
+  auto fixture = prepare_fixture(library);
+  auto& context = *fixture.context;
+  ASSERT_EQ(fixture.system->installed_program_hash(),
+            "tests.field-scratch/authenticated-rollback@1");
+  constexpr std::string_view component_key = "test.field-problem/unknown-u/component";
+  constexpr std::string_view other_key = "test.field-problem/unknown-v/component";
+  constexpr std::string_view gradient_key = "test.field-problem/unknown-u/gradient";
+  context.configure_hierarchy_continuation_field_provider(component_key, 701, 0);
+  context.configure_hierarchy_continuation_field_provider(component_key, 702, 0);
+  context.configure_hierarchy_continuation_field_provider(other_key, 702, 0);
+  context.configure_hierarchy_continuation_field_provider(gradient_key, 701, 0, Dim, 1);
+  context.begin_step(0.125);
+  context.for_each_program_resource_level([&](int) {
+    auto& field = context.hierarchy_field_solution(701);
+    const auto geometry = context.geometry();
+    for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
+      const auto view = field.fab(patch).view();
+      pops::for_each_cell(field.fab(patch).grown_box(), [=] POPS_HD(const pops::Index<Dim>& cell) {
+        pops::Real value = 0;
+        for (int axis = 0; axis < Dim; ++axis)
+          value += pops::Real(cell[axis]) * geometry.spacing(axis);
+        view(cell, 0) = value;
+      });
+    }
+    context.hierarchy_field_solution(702).set_val(pops::Real(9));
+  });
+  auto first =
+      context.capture_hierarchy_field_observation(701, 941, 0, 1 << 20, true, component_key);
+  auto second =
+      context.capture_hierarchy_field_observation(702, 942, 0, 1 << 20, true, component_key);
+  expect_value(second->local_field(), pops::Real(9));
+  ContinuationType component(ContinuationKind::Field);
+  component.field_owner = -1;
+  component.field_components = 1;
+  component.field_provider = component_key;
+  component.scientific_contract = "test.field-problem/unknown-u/scalar-type";
+  auto retained = context.own_structural_field(first->local_field());
+  const auto metadata = context.continuation_bind_field_provenance(first->local_field(), *retained,
+                                                                   retained, component);
+  ASSERT_NE(metadata.support, nullptr);
+  EXPECT_EQ(metadata.support->program_owner, -1);
+  EXPECT_EQ(metadata.support->field_provider, component_key);
+  EXPECT_EQ(metadata.support->producer_level, 0);
+  EXPECT_NO_THROW(context.continuation_preflight_field(*retained, component, metadata));
+  auto foreign_component = component;
+  foreign_component.field_provider = other_key;
+  EXPECT_THROW(context.continuation_preflight_field(*retained, foreign_component),
+               std::invalid_argument);
+  auto lookalike = std::make_shared<Field>(*retained);
+  EXPECT_THROW(context.continuation_preflight_field(*lookalike, component), std::invalid_argument);
+
+  auto obligation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"test.closed-transform", "test.exact-production"});
+  auto raw = context.own_field_representation(*retained, component, obligation, 1 << 20, 945);
+  EXPECT_EQ(context.field_representation_obligation(*raw), obligation);
+  EXPECT_THROW(context.require_discharged_field_representation(*raw), std::invalid_argument);
+  auto raw_copy = context.own_structural_field(*raw);
+  EXPECT_EQ(context.field_representation_obligation(*raw_copy), obligation);
+  EXPECT_THROW(context.require_discharged_field_representation(*raw_copy), std::invalid_argument);
+  EXPECT_EQ(context.field_representation_obligation(*retained), nullptr);
+
+  auto replaced = context.own_structural_field(*retained);
+  EXPECT_NO_THROW(context.continuation_preflight_field(*replaced, component));
+  *replaced = Field(*retained);
+  EXPECT_THROW(context.continuation_preflight_field(*replaced, component), std::invalid_argument);
+
+  auto gradient = context.allocate_hierarchy_continuation_field_observation(gradient_key, 1 << 20);
+  // The former estimate omitted the second layout, owner/index maps and both
+  // pending/sealed allocation records. That amount must fail before allocation,
+  // including on a rank without a local patch.
+  std::uint64_t incomplete_budget =
+      sizeof(Field) + sizeof(ContinuationFieldSupport) + 2 * gradient_key.size() +
+      gradient->layout().size() * (sizeof(pops::Box<Dim>) + sizeof(std::size_t)) +
+      gradient->local_size() * sizeof(Field::fab_type);
+  for (std::size_t patch = 0; patch < gradient->local_size(); ++patch)
+    incomplete_budget += gradient->fab(patch).size() * sizeof(pops::Real);
+  EXPECT_ANY_THROW(
+      context.allocate_hierarchy_continuation_field_observation(gradient_key, incomplete_budget));
+  auto replaced_fab =
+      context.allocate_hierarchy_continuation_field_observation(gradient_key, 1 << 20);
+  for (std::size_t patch = 0; patch < replaced_fab->local_size(); ++patch) {
+    auto& fab = replaced_fab->fab(patch);
+    const auto box = fab.box();
+    const auto ghosts = fab.ghosts();
+    const auto components = fab.ncomp();
+    const auto allocation = fab.storage();
+    EXPECT_GE(allocation.use_count(), 3);
+    fab = Field::fab_type{};
+    EXPECT_GE(allocation.use_count(), 2);
+    fab = Field::fab_type(box, components, ghosts);
+    EXPECT_NE(fab.storage().data(), allocation.data());
+  }
+  if (replaced_fab->local_size() == 0)
+    *replaced_fab = Field(*replaced_fab);
+  EXPECT_ANY_THROW(context.seal_hierarchy_continuation_field_observation(gradient_key, 944,
+                                                                         replaced_fab, first));
+  context.observe_hierarchy_field_gradient(first, *gradient);
+  expect_value(*gradient, pops::Real(1));
+  auto replaced_unsealed =
+      context.allocate_hierarchy_continuation_field_observation(gradient_key, 1 << 20);
+  *replaced_unsealed = Field(*gradient);
+  EXPECT_THROW(context.seal_hierarchy_continuation_field_observation(gradient_key, 943,
+                                                                     replaced_unsealed, first),
+               std::exception);
+  auto unissued = std::make_shared<Field>(*gradient);
+  EXPECT_THROW(
+      context.seal_hierarchy_continuation_field_observation(gradient_key, 943, unissued, first),
+      std::exception);
+  EXPECT_NO_THROW(
+      context.seal_hierarchy_continuation_field_observation(gradient_key, 943, gradient, first));
+  EXPECT_THROW(
+      context.seal_hierarchy_continuation_field_observation(gradient_key, 943, gradient, first),
+      std::exception);
+  ContinuationType derived(ContinuationKind::Field);
+  derived.field_owner = -1;
+  derived.field_components = Dim;
+  derived.field_provider = gradient_key;
+  derived.scientific_contract = "test.field-problem/unknown-u/gradient-type";
+  EXPECT_NO_THROW(context.continuation_preflight_field(*gradient, derived));
+  context.with_program_resource_level(1, [&] {
+    // Structural ownership is opaque; numerical use must not reinterpret a
+    // coarse observation as a fine-level allocation with a similar shape.
+    EXPECT_THROW(context.require_program_field_access(*retained), std::invalid_argument);
+    EXPECT_THROW(context.require_program_field_access(*gradient), std::invalid_argument);
+  });
+  EXPECT_NO_THROW(context.require_program_field_access(*gradient));
+  context.resource_attempt().reject();
+  EXPECT_THROW(context.continuation_preflight_field(*retained, component), std::invalid_argument);
+  EXPECT_THROW(context.continuation_preflight_field(*gradient, derived), std::invalid_argument);
+  EXPECT_THROW(context.own_structural_field(*gradient), std::invalid_argument);
+  EXPECT_THROW(context.field_representation_obligation(*raw), std::invalid_argument);
+  EXPECT_THROW(context.field_representation_obligation(*raw_copy), std::invalid_argument);
+  std::remove(source.c_str());
+  std::remove(library.c_str());
+}
+
+TEST(AmrHierarchyFieldScratch, StagedPublicationRetainsExactSnapshotsAfterTheirSegmentsReturn) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  context.begin_step(0.125);
+  context.begin_staged_field_publications();
+  std::vector<std::weak_ptr<const Context::HierarchyFieldObservationSnapshot>> snapshots;
+  context.for_each_program_resource_level([&](int level) {
+    context.hierarchy_field_solution(701).set_val(pops::Real(31 + level));
+    auto observation = context.capture_hierarchy_field_observation(701, 951, 0, 1 << 20);
+    snapshots.push_back(observation);
+    Context::ProgramFieldComponent component{};
+    component.values = &observation->local_field();
+    component.component = 0;
+    context.stage_field_components(952, "tests.staged-snapshot-retention", {component});
+  });
+  // No shared_ptr from the producing segment remains: only the staged native
+  // transaction may keep these exact leaves alive until publication or abort.
+  for (std::size_t level = 0; level < snapshots.size(); ++level) {
+    auto observed = snapshots[level].lock();
+    ASSERT_NE(observed, nullptr);
+    expect_value(observed->local_field(), pops::Real(31 + level));
+  }
+  context.begin_staged_field_publications();
+  for (const auto& snapshot : snapshots)
+    EXPECT_TRUE(snapshot.expired());
+
+  std::weak_ptr<const Context::HierarchyFieldObservationSnapshot> abandoned;
+  {
+    auto observation = context.capture_hierarchy_field_observation(701, 953, 0, 1 << 20);
+    abandoned = observation;
+    Context::ProgramFieldComponent component{};
+    component.values = &observation->local_field();
+    component.component = 0;
+    context.stage_field_components(954, "tests.staged-snapshot-abort", {component});
+  }
+  ASSERT_FALSE(abandoned.expired());
+  // Repeated level zero is invalid on every rank and must drop every retained leaf.
+  EXPECT_THROW(context.stage_field_components(954, "tests.staged-snapshot-abort", {}),
+               std::invalid_argument);
+  EXPECT_TRUE(abandoned.expired());
 }

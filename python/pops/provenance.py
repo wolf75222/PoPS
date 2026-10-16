@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import operator
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -84,14 +85,37 @@ class SourceSpan:
 def source_span(*, skip_package: bool = True, depth: int = 1) -> SourceSpan:
     """Capture the first useful caller as immutable scalar data."""
     package_root = os.path.dirname(__file__)
-    frames = inspect.stack(context=0)[depth + 1:]
+    # Preserve slice indexing (including negative depths and __index__ inputs).
+    start = operator.index(depth + 1)
+    if start < 0:
+        frames = inspect.stack(context=0)[start:]
+        try:
+            for frame_info in frames:
+                filename = os.path.abspath(frame_info.filename)
+                if not skip_package or not filename.startswith(package_root + os.sep):
+                    return SourceSpan(filename, frame_info.lineno)
+        finally:
+            del frames
+            if 'frame_info' in locals():
+                del frame_info
+        return SourceSpan("<unknown>", 0)
+
+    frame = inspect.currentframe()
     try:
-        for frame in frames:
-            filename = os.path.abspath(frame.filename)
+        for _ in range(start):
+            if frame is None:
+                return SourceSpan("<unknown>", 0)
+            frame = frame.f_back
+        while frame is not None:
+            # This is the filename rule used by inspect.getframeinfo. Do not
+            # resolve code positions or materialize the unused outer stack.
+            filename = os.path.abspath(inspect.getsourcefile(frame) or inspect.getfile(frame))
             if not skip_package or not filename.startswith(package_root + os.sep):
-                return SourceSpan(filename, frame.lineno)
+                info = inspect.getframeinfo(frame, context=0)
+                return SourceSpan(filename, info.lineno)
+            frame = frame.f_back
     finally:
-        del frames
+        del frame
     return SourceSpan("<unknown>", 0)
 
 

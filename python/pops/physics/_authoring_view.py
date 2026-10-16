@@ -97,6 +97,7 @@ class _OperatorViewMixin(_HyperbolicModel):
             layout=metadata["layout"],
             storage=metadata["storage"],
             representation=metadata["representation"],
+            representation_data=metadata.get("representation_data"),
             centering=metadata["centering"],
             units=metadata["units"],
             frame=metadata["frame"],
@@ -119,9 +120,13 @@ class _OperatorViewMixin(_HyperbolicModel):
         if not declarations:
             return _model.FieldSpace(name=name, components=components, layout="cell")
         first = declarations[0]
-        attributes = ("layout", "representation", "centering", "frame", "clock", "support",
+        attributes = ("layout", "representation", "representation_data", "centering", "frame", "clock", "support",
                       "sampling", "domain")
-        if any(getattr(space, attribute) != getattr(first, attribute)
+        from pops.representations import _data_identity
+        def attribute_key(space, attribute):
+            value = getattr(space, attribute)
+            return _data_identity(value) if attribute == "representation_data" else value
+        if any(attribute_key(space, attribute) != attribute_key(first, attribute)
                for space in declarations for attribute in attributes):
             raise ValueError("shared field carrier requires explicitly co-located physical fields")
         units = {}
@@ -140,7 +145,7 @@ class _OperatorViewMixin(_HyperbolicModel):
         carrier = self.field_space()
         if any(component not in carrier.components for component in components):
             raise ValueError("named field output is absent from its storage carrier")
-        attributes = ("layout", "representation", "centering", "frame", "clock", "support",
+        attributes = ("layout", "representation", "representation_data", "centering", "frame", "clock", "support",
                       "sampling", "domain")
         return _model.FieldSpace(name=name, components=components,
             units=tuple(carrier.units[carrier.components.index(component)] for component in components),

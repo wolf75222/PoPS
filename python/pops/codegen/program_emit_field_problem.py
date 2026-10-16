@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 from typing import Any
 
 from pops.identity import Identity, canonical_bytes
@@ -54,6 +55,9 @@ def guard_candidate_allocations(rows: list[str]) -> list[str]:
 
 def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: Any,
                              *, target: str) -> None:
+    from .program_emit_temporal_field import emit_temporal_field_assembly
+    if emit_temporal_field_assembly(value, var, lines, prelude, target=target):
+        return
     if target not in ("system", "amr_system") or prelude is None:
         raise NotImplementedError("field expression storage requires a supported native Program body")
     hierarchy = target == "amr_system"
@@ -114,26 +118,50 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
             raise ValueError("field expression dependency metadata differs from its actual input reads")
 
     token = "program_field_%d" % value.id
+    if hierarchy and component:
+        from .program_lowerability import all_ops
+        from .program_field_provider_catalog import field_provider_contract
+
+        # Every consumed observation owns its immutable solved image, including
+        # values retained only in products, histories or Continuation images.
+        solve = hierarchy_field_solve(value)
+        snapshot = token + "_snapshot"
+        capacity = value.attrs.get("observation_byte_capacity", 64 * 1024 * 1024)
+        retain_halo = any(node.op == "field_gradient" and len(node.inputs) == 1
+                          and node.inputs[0] is value for node in all_ops(value.prog))
+        lines.append("auto %s = ctx.capture_hierarchy_field_observation(%d, %d, %d, UINT64_C(%d), %s, %s);" %
+                     (snapshot, solve.id, value.id, selected, capacity,
+                      "true" if retain_halo else "false", json.dumps(field_provider_contract(value))))
+        var[value.id] = snapshot + "->local_field()"
+        var[("field_pointer", value.id)] = "(&%s->local_field())" % snapshot
+        var[("field_observation", value.id)] = identity.token
+        var[("field_observation_snapshot", value.id)] = snapshot
+        return
     if hierarchy:
         solve = hierarchy_field_solve(value)
-        if component:
-            lines.append("auto& %s = ctx.hierarchy_field_scratch(%d, %d, 0, 1, 1);" %
-                         (token, solve.id, value.id))
-        else:
-            slot = "coefficients" if value.op == "field_problem_coefficients" else "rhs"
-            lines.append('auto& %s = ctx.hierarchy_field_assembly(%d, "pops.general-field.%s");' % (token, solve.id, slot))
+        slot = "coefficients" if value.op == "field_problem_coefficients" else "rhs"
+        lines.append('auto& %s = ctx.hierarchy_field_assembly(%d, "pops.general-field.%s");' % (token, solve.id, slot))
         lines.append("auto* %s_status = &ctx.hierarchy_field_scratch(%d, %d, 1, 1, 0);" %
                      (token, solve.id, value.id))
         pointer = "(&%s)" % token
     else:
-        allocation_start = len(prelude)
-        prelude.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                       "ctx.alloc_scalar_field(%d, 1));" % (token, ncomp))
+        # Component storage belongs to this actual invocation. An install-time
+        # allocation would be overwritten when this SSA node executes again.
+        allocation_lines = lines if component else prelude
+        allocation_start = len(allocation_lines)
+        if component:
+            from .program_field_provider_catalog import field_provider_contract
+            capacity = value.attrs.get("observation_byte_capacity", 64 * 1024 * 1024)
+            allocation_lines.append("auto %s = ctx.allocate_continuation_field_observation(%s, UINT64_C(%d));"
+                                    % (token, json.dumps(field_provider_contract(value)), capacity))
+        else:
+            allocation_lines.append("auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                                    "ctx.alloc_scalar_field(%d, 1));" % (token, ncomp))
         if not deferred:
-            prelude.append("auto %s_status = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
-                           "ctx.alloc_scalar_field(1, 0));" % token)
-        if deferred:
-            prelude[allocation_start:] = guard_candidate_allocations(prelude[allocation_start:])
+            allocation_lines.append("auto %s_status = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                                    "ctx.alloc_scalar_field(1, 0));" % token)
+        if deferred or component:
+            allocation_lines[allocation_start:] = guard_candidate_allocations(allocation_lines[allocation_start:])
         pointer = token
     var[value.id] = "(*%s)" % pointer
     var[("field_pointer", value.id)] = pointer
@@ -167,8 +195,7 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         "  if (pops::all_reduce_max(field_layout_invalid, ctx.prepared_execution_lane()) != 0)",
         '    throw std::invalid_argument("field expression inputs require exact layout/distribution identity");',
     ])
-    if original_hierarchy:
-        lines += ["  pops::Real field_value_invalid = 0;", "  ctx.prepare_spatial_collectively([&] {"]
+    lines += ["  pops::Real field_value_invalid = 0;", "  ctx.continuation_local_phase([&] {"]
     lines.extend([
         "  for (std::size_t li = 0; li < %s.local_size(); ++li) {" % destination,
         "    auto output = %s.fab(li).view();" % destination,
@@ -188,10 +215,9 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         "    });",
         "  }",
     ])
-    if original_hierarchy:
-        lines += ["    field_value_invalid = std::max(pops::Real(0), pops::reduce_max_local(*%s_status));" % token,
-                  "    Kokkos::fence();", "  });"]
-    local_invalid = "field_value_invalid" if original_hierarchy else "pops::reduce_max_local(*%s_status)" % token
+    lines += ["    field_value_invalid = std::max(pops::Real(0), pops::reduce_max_local(*%s_status));" % token,
+              "    Kokkos::fence();", '  }, "field equation kernel");']
+    local_invalid = "field_value_invalid"
     lines.extend([
         "  if (pops::all_reduce_max(%s, ctx.prepared_execution_lane()) > 0)" % local_invalid,
         "    throw pops::runtime::program::StepAttemptRejected("
@@ -200,28 +226,50 @@ def emit_field_problem_value(value: Any, var: Any, lines: list[str], prelude: An
         '"field_evaluation", "nonfinite field expression");',
         "}",
     ])
+    if component:
+        lines.append("ctx.seal_continuation_field_observation(%s, %d, %s);"
+                     % (json.dumps(field_provider_contract(value)), value.id, pointer))
 
 
 __all__ = ["emit_field_problem_value"]
 
 
 def field_observation_reduction(value: Any, var: Any, *, target: str) -> str:
-    """Reduce an already authenticated Cartesian field observation without a species owner."""
+    """Reduce a composite snapshot or a retained Field on its exact local support."""
     if target not in ("system", "amr_system") or len(value.inputs) != 1:
         raise ValueError("field observation reduction requires one authenticated native field value")
     source = value.inputs[0]
-    if source.op != "field_component" or var.get(("field_observation", source.id)) != source.attrs.get("field_problem_identity"):
-        raise ValueError("unowned reduction requires an authenticated consumed field observation")
     kind = value.attrs.get("kind")
     methods = {"sum": "sum_component", "abs_sum": "abs_sum_component",
                "max": "max_component", "min": "min_component"}
     if kind not in methods:
         raise NotImplementedError("this independent field observation reduction has no native realization")
+    direct = source.op == "field_component"
+    if direct and var.get(("field_observation", source.id)) != source.attrs.get("field_problem_identity"):
+        raise ValueError("unowned reduction requires an authenticated consumed field observation")
+    from pops.time.value_signatures import value_signature
+    from .program_emit_versioned import schema_cpp
+    signature = value_signature(source)
+    authority = signature.get("field_authority")
+    if (source.vtype != "scalar_field" or source.block is not None or not isinstance(authority, Mapping)
+            or authority.get("kind") != "field_problem" or authority.get("version") != 1
+            or type(authority.get("components")) is not int or authority["components"] < 1):
+        raise ValueError("unowned reduction requires an exact independent Field provider type")
     component = value.attrs.get("comp", 0)
-    if type(component) is not int or component != 0:
-        raise ValueError("scalar field observation has exactly one component")
-    if target == "amr_system":
-        solve = hierarchy_field_solve(source)
-        return 'ctx.reduce_hierarchy_field_component(%d, %d, "%s")' % (
-            solve.id, source.attrs["component"], kind)
-    return "ctx.%s(%s, 0)" % (methods[kind], var[source.id])
+    if type(component) is not int or not 0 <= component < authority["components"]:
+        raise ValueError("field observation reduction selects an absent component")
+    if target == "amr_system" and direct:
+        snapshot = var.get(("field_observation_snapshot", source.id))
+        if snapshot is None:
+            raise ValueError("composite field reduction lost its immutable observation snapshot")
+        return 'ctx.reduce_hierarchy_field_observation(%s, "%s")' % (snapshot, kind)
+    # Structural projection preserves the exact Field type, but cannot invent
+    # the composite tower carried only by a direct solved snapshot. Validate
+    # its live leaf before the existing local-support numerical reduction.
+    native_type = schema_cpp(signature, {})
+    field = var[source.id]
+    access = "ctx.require_program_field_access(%s); " % field if target == "amr_system" else ""
+    return ('([&]() { ctx.continuation_local_phase([&] { '
+            'ctx.continuation_preflight_field(%s, %s); %s'
+            '}, "retained Field observation reduction"); return ctx.%s(%s, %d); }())'
+            % (field, native_type, access, methods[kind], field, component))

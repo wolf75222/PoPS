@@ -209,6 +209,37 @@ def test_binary64_rational_boundary_rounds_the_exact_fraction_only_once():
     assert ScalarLiteral.from_value(value).to_cpp() == "pops::Real(%s)" % repr(float(value))
 
 
+def test_unbounded_integer_metadata_does_not_change_the_python_digit_limit():
+    import sys
+    limit = sys.get_int_max_str_digits()
+    value = 10**5000 + 7
+    literal = ScalarLiteral.from_value(-value)
+    assert literal.to_data()["value"] == "-1" + "0"*4999 + "7"
+    ratio = ScalarLiteral.from_value(Fraction(value, value+1))
+    assert ratio.to_data()["denominator"] == "1" + "0"*4999 + "8"
+    assert ratio.to_cpp() == "pops::Real(1.0)"
+    cpp = ScalarLiteral.from_value(value, target="ExactReal").to_cpp()
+    assert cpp.count("value = value") > 500 and "return value;" in cpp
+    assert sys.get_int_max_str_digits() == limit
+
+
+def test_custom_literal_metadata_uses_explicit_work_stack_and_rejects_cycles():
+    import sys
+    limit = sys.getrecursionlimit()
+    payload = 7
+    for _ in range(2048):
+        payload = {"nested": [payload]}
+    literal = ScalarLiteral("custom", payload, cpp="pops::Real(7)")
+    restored = literal.to_data()["value"]
+    for _ in range(2048):
+        restored = restored["nested"][0]
+    assert restored == 7 and sys.getrecursionlimit() == limit
+    cyclic = []
+    cyclic.append(cyclic)
+    with pytest.raises(ValueError, match="cycle"):
+        ScalarLiteral("custom", cyclic, cpp="pops::Real(7)")
+
+
 @pytest.mark.parametrize("value", [10 ** 1000, Fraction(10 ** 1000, 3), Decimal("1e1000")])
 def test_literals_outside_the_real_target_range_fail_with_a_clear_lowering_error(value):
     with pytest.raises(OverflowError, match="finite pops::Real target"):

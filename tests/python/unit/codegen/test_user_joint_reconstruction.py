@@ -173,6 +173,11 @@ def test_compiled_joint_row_mapping_capture_rebind_and_orientation(tmp_path):
     import ctypes
     import shutil
     import subprocess
+    from pops.codegen.toolchain import pops_loader_build_flags
+    from pops.codegen._native_toolchain import (
+        capture_native_toolchain, native_toolchain_flags, verify_native_toolchain,
+    )
+    from tests.python.support.requirements import repo_include
     from pops.codegen.program_models import ProgramModelGraph
     from pops.codegen.program_emit_principal_numerics import emit_principal_reconstruction
 
@@ -186,19 +191,20 @@ def test_compiled_joint_row_mapping_capture_rebind_and_orientation(tmp_path):
         """#include <array>
 #include <cmath>
 #include <limits>
-#define POPS_HD
-namespace pops { using Real=double;
-struct RuntimeParams { double v; double get(int) const { return v; } };
-template<class T> concept ReconstructionPolicy=true;
-template<class T> constexpr bool stencil_envelope_fits_storage=true;
-}
+#include <pops/runtime/config/runtime_params.hpp>
+#include <pops/numerics/fv/reconstruction.hpp>
 struct Sample { int orientation; double operator()(int offset,int c) const {
  return 10.*(c+1)+orientation*offset*(c+2); } };
 """
         + definition
         + """
 extern "C" void evaluate(int orientation,double alpha,double beta,double* output) {
- %s policy{}; policy.parameter_sets[0].v=alpha; policy.parameter_sets[1].v=beta;
+ %s policy{};
+ static_assert(pops::device_capture_v<decltype(policy)>);
+ const std::array<double,1> first{alpha}, second{beta};
+ const auto bytes=pops::RuntimeParams::checked_storage_bytes(1);
+ policy.parameter_sets[0]=pops::RuntimeParams::from_host(first,bytes);
+ policy.parameter_sets[1]=pops::RuntimeParams::from_host(second,bytes);
  auto result=policy.stencil_face_state(Sample{orientation});
  for(int i=0;i<5;++i) output[i]=result[i];
 }
@@ -207,21 +213,15 @@ extern "C" void evaluate(int orientation,double alpha,double beta,double* output
     )
     cpp, library = tmp_path / "joint.cpp", tmp_path / "joint.so"
     cpp.write_text(source)
-    result = subprocess.run(
-        [
-            compiler,
-            "-std=c++20",
-            "-shared",
-            "-fPIC",
-            "-O2",
-            "-fno-fast-math",
-            str(cpp),
-            "-o",
-            str(library),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    toolchain = capture_native_toolchain()
+    compiler, native_flags, link_flags = pops_loader_build_flags(compiler)
+    flags = native_toolchain_flags(toolchain, [
+        "-std=c++20", "-shared", "-fPIC", "-O2", "-fno-fast-math",
+        "-ffp-contract=off", *native_flags, "-I", str(repo_include()),
+    ])
+    result = subprocess.run([compiler, *flags, str(cpp), "-o", str(library), *link_flags],
+                            capture_output=True, text=True)
+    verify_native_toolchain(toolchain)
     assert result.returncode == 0, result.stderr
     evaluate = ctypes.CDLL(str(library)).evaluate
     evaluate.argtypes = [

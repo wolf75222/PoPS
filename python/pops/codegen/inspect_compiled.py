@@ -492,7 +492,7 @@ def _build_arguments(
     ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
     # The scalar remains an exact conservative aggregate for legacy/native consumers; each block's
     # authoritative value is retained separately and may differ.
-    ghost_depth = max(ghost_depth_by_block.values())
+    ghost_depth = max(ghost_depth_by_block.values(), default=0)
     # The runtime LAYOUT the artifact targets: "amr" for an AMR-route CompiledModel (target=
     # 'amr_system', ADC-515) so ``arguments()`` reports the native per-block AMR loader; a whole-system
     # Program handle stays "system" (its only target today).
@@ -503,7 +503,11 @@ def _build_arguments(
         for row in model_rows
         if getattr(row.model, "caps", None) and "mpi" in row.model.caps
     ]
-    supports_mpi = bool(mpi_values) and len(mpi_values) == len(model_rows) and all(mpi_values)
+    if model_rows:
+        supports_mpi = bool(mpi_values) and len(mpi_values) == len(model_rows) and all(mpi_values)
+    else:
+        from pops.codegen._artifact_models import program_mpi_capability
+        supports_mpi = program_mpi_capability(compiled)
     layout_runtime = {"layout": layout_kind, "requires_mpi": False, "requires_gpu": False,
                       "ghost_depth": ghost_depth, "ghost_depth_by_block": ghost_depth_by_block,
                       "supports_mpi": supports_mpi}
@@ -518,10 +522,10 @@ def _ghost_depth(compiled: Any) -> int:
     """Return the exact maximum halo depth derived from every resolved block plan."""
     plan = getattr(compiled, "plan", None)
     blocks = getattr(plan, "blocks", None)
-    if not isinstance(blocks, tuple) or not blocks:
+    if not isinstance(blocks, tuple):
         raise ValueError(
             "compiled artifact has no resolved block plan from which to derive ghost depth")
-    return max(_ghost_depth_by_block(compiled, tuple(block.name for block in blocks)).values())
+    return max(_ghost_depth_by_block(compiled, tuple(block.name for block in blocks)).values(), default=0)
 
 
 def _ghost_depth_by_block(compiled: Any, block_names: Any) -> dict[str, int]:
@@ -533,8 +537,6 @@ def _ghost_depth_by_block(compiled: Any, block_names: Any) -> dict[str, int]:
             "compiled artifact has no resolved block plan from which to derive ghost depth")
     by_name = {block.name: block for block in blocks}
     names = tuple(block_names)
-    if not names:
-        raise ValueError("ghost depth derivation requires at least one compiled block")
     if len(names) != len(set(names)) or set(names) - set(by_name):
         raise ValueError("ghost depth derivation received non-exact compiled block names")
     field_depths: dict[str, list[int]] = {}
@@ -562,10 +564,11 @@ def _ghost_depth_by_block(compiled: Any, block_names: Any) -> dict[str, int]:
         numerics = getattr(block, "numerics", None)
         if numerics is not None:
             rates = getattr(numerics, "rates", None)
-            if not isinstance(rates, tuple) or not rates:
+            states = getattr(numerics, "states", ())
+            if not isinstance(rates, tuple) or not isinstance(states, tuple) or not (rates or states):
                 raise ValueError(
                     "compiled block %r numerics carries no rate stencil ghost depth" % name)
-            candidates.append(max(row.method.ghost_depth for row in rates))
+            candidates.append(max(row.method.ghost_depth for row in (*rates, *states)))
         spatial = getattr(block, "spatial", None)
         if spatial is not None:
             value = spatial.get("ghost_depth") if isinstance(spatial, Mapping) \

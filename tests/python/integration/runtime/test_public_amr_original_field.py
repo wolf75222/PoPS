@@ -34,7 +34,7 @@ from pops.numerics.terms import SourceTerm
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.solvers import Newton
-from pops.time import FailRun, FixedDt, every
+from pops.time import FailRun, FixedDt, RejectAttempt, every
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.amr_snapshots import composite_active_mask
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
@@ -47,7 +47,7 @@ DIFFUSION = np.array(((.04, .006, 0.), (-.003, .05, 0.), (0., 0., .03)))
 DT, TOL = .01, 3e-8
 
 
-def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditioner=None, solver=None, physical_seed=None):
+def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditioner=None, solver=None, physical_seed=None, second_solve=False, reuse_request=False, control_region=None):
     width = len(order)
     frame = Rectangle("closed-original-field-box", lower=(0, 0), upper=(1, 1)).frame(Cartesian2D())
     fluid = pops.Model("actual-field-consumer", frame=frame)
@@ -102,7 +102,9 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
     current, load, coefficient = (program.state(block[handle]) for block, handle in
         zip(blocks, (state, forcing, parameter), strict=True))
     program.store_history("accepted-response", current.n, depth=1)
-    original_point = (coefficient.n.point if physical_seed is not None else program.stage("original-field", c=0))
+    original_point = (coefficient.n.point if physical_seed is not None or control_region in
+        ("capture_typed", "iterate_typed_success", "iterate_typed_error", "iterate_typed_budget")
+        else program.stage("original-field", c=0))
     request = field.bind_program_inputs(program=program,
         values={blocks[1][forcing]: load.n, blocks[2][parameter]: coefficient.n},
         at=original_point, solver=solver)
@@ -118,7 +120,102 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
             frame=state.space.frame, clock=state.space.clock, support=state.space.support)
         request = request.seed_product(program=program, space=space, name="declared-original-seed",
             expressions=tuple(0 * coefficient.n[0] + physical_seed for _ in order))
+    if control_region is not None:
+        if width != 1 or control_region not in ("branch_true", "branch_false", "fold", "fold_overflow", "capture_success", "capture_runtime", "capture_terminal", "capture_user", "capture_typed", "iterate_success", "iterate_budget", "iterate_runtime", "iterate_typed_success", "iterate_typed_error", "iterate_typed_budget"):
+            raise ValueError("invalid original-field structured observation fixture")
+
+        def regional_solve(body, factor, *, reject=False, terminal=False):
+            regional_solver = (Newton(tolerance=1e-10, max_iterations=1, linear_tolerance=1e-8,
+                linear_max_iterations=240, restart=60, **realization) if reject else solver)
+            changed = body.value("regional-original-load",
+                (factor*load.n[0] + (factor**3-factor)*float(TARGET[0])**3,), at=original_point)
+            regional_request = field.bind_program_inputs(program=body,
+                values={blocks[1][forcing]: changed, blocks[2][parameter]: coefficient.n},
+                at=original_point, solver=regional_solver)
+            result = field.observe(body.solve(regional_request, solver=regional_solver).consume(action=RejectAttempt() if reject and not terminal else FailRun()))
+            return body.max(result[field[unknowns[0]]])
+
+        def typed_result(body, value, error):
+            from pops.time.variant_types import Result, Variant, type_of
+            domain = body.range_set(3, capacity=3, ownership="replicated")
+            samples = body.map(domain, lambda child, index: value + child.float64(child.index_value(index)))
+            payload = body.product(code=body.int64(-(1 << 63)), samples=samples)
+            errors = Variant(retry=type_of(payload))
+            result_type = Result(type_of(value), errors)
+            return body.branch(error,
+                lambda child: child.variant(result_type, "err", child.variant(errors, "retry", payload)),
+                lambda child: child.variant(result_type, "ok", value))
+
+        def typed_observation(body, error):
+            return body.match(error, retry=lambda child, payload: child.branch(payload["code"] == -(1 << 63),
+                lambda inner: inner.reduce(payload["samples"], inner.float64(0),
+                    lambda local, total, sample: total + sample, order="ascending"),
+                lambda inner: inner.float64(-9)), runtime=lambda child, payload: child.branch(payload["code"] == 1,
+                    lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
+
+        if control_region.startswith("branch"):
+            observation = program.branch(program.boolean(control_region == "branch_true"),
+                lambda body: regional_solve(body, 2), lambda body: regional_solve(body, 1))
+        elif control_region.startswith("capture"):
+            def captured(body):
+                result = regional_solve(body, 1, reject=control_region in ("capture_runtime", "capture_terminal"),
+                    terminal=control_region == "capture_terminal")
+                if control_region == "capture_user":
+                    result = body.require_success(body.failure(result, -(1 << 63)))
+                if control_region == "capture_typed":
+                    result = body.require_success(typed_result(body, result, body.boolean(True)))
+                return result
+            result = program.capture(captured)
+            if control_region == "capture_typed":
+                observation = program.match(result, ok=lambda body, value: body.float64(5), err=typed_observation)
+            else:
+                observation = program.match(result,
+                    ok=lambda body, value: body.float64(5),
+                    err=lambda body, error: body.branch(error["code"] == (-(1 << 63) if control_region == "capture_user" else 3),
+                        lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
+        elif control_region.startswith("iterate"):
+            if control_region.startswith("iterate_typed"):
+                result = program.iterate(program.float64(0),
+                    lambda body, carry: typed_result(body, carry + regional_solve(body, 1),
+                        carry > 0 if control_region == "iterate_typed_error" else body.boolean(False)),
+                    lambda body, carry: carry > .2, max_steps=1 if control_region == "iterate_typed_budget" else 3)
+                observation = program.match(result,
+                    ok=lambda body, value: value["state"] + .01*body.float64(value["iterations"]),
+                    err=typed_observation)
+            else:
+                result = program.iterate(program.float64(0),
+                    lambda body, carry: carry + regional_solve(body, 1, reject=control_region == "iterate_runtime"),
+                    lambda body, carry: carry > .2, max_steps=1 if control_region == "iterate_budget" else 3)
+                observation = program.match(result,
+                    ok=lambda body, value: body.float64(5),
+                    err=lambda body, error: body.branch(error["code"] == (1 if control_region == "iterate_budget" else 3),
+                        lambda inner: inner.float64(-7), lambda inner: inner.float64(-9)))
+        else:
+            observation = program.fold(program.float64(0), program.int64(3 if control_region == "fold_overflow" else 2),
+                lambda body, carry, index: carry + regional_solve(body, 1), max_steps=program.int64(2))
+        if (control_region.startswith(("capture", "iterate")) and "typed" not in control_region):
+            error_origin = program.match(result,
+                ok=lambda body, value: body.float64(0),
+                err=lambda body, error: body.branch(error["origin"] == 1,
+                    lambda inner: inner.float64(1),
+                    lambda inner: inner.branch(error["origin"] == 2,
+                        lambda nested: nested.float64(2), lambda nested: nested.float64(-99))))
+            program.record_scalar("structured_original_failure_origin", error_origin)
+        program.record_scalar("structured_original_observation", observation)
     observed = field.observe(program.solve(request, solver=solver).consume(action=FailRun()))
+    if second_solve:
+        if width != 1:
+            raise ValueError("the independent repeated-solve witness has one unknown")
+        program.record_scalar("first_original_observation", program.sum(observed[field[unknowns[0]]]))
+        if not reuse_request:
+            # If F(q)=a*q+q^3=f, then F(2q)=2*f+6*q^3. The source is an
+            # authored Python equation; the engine never knows this relation.
+            changed_load = program.value("second-original-load", (2*load.n[0] + 6*float(TARGET[0])**3,),
+                                         at=original_point)
+            request = field.bind_program_inputs(program=program,
+                values={blocks[1][forcing]: changed_load, blocks[2][parameter]: coefficient.n},
+                at=original_point, solver=solver)
+        observed = field.observe(program.solve(request, solver=solver).consume(action=FailRun()))
     outputs = tuple(observed[field[unknown]] for unknown in unknowns)
     module = fluid.module
     carrier = blocks[0][module.field_handle(module.field_spaces()["fields"])]
@@ -310,7 +407,7 @@ def test_public_original_amr_saved_reaction_and_exact_restart(isolated_native_ca
                 "fixture_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "initialization": {"kind":initialization, "components":len(order)},
                 "finite_difference_step": 1e-6,
-                "finite_difference_step_binary64": float(1e-6).hex(),
+                "finite_difference_step_binary64": (1e-6).hex(),
                 "solver_controls": {"tolerance":1e-10, "max_iterations":20,
                     "linear_tolerance":1e-6 if cells == 32 else 1e-8,
                     "linear_max_iterations":240, "restart":60},

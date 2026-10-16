@@ -103,6 +103,7 @@ class Module(ModuleFreezable):
     # --- spaces ---
     def state_space(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
                     storage: str = "multifab", *, representation: Any = "conservative",
+                    representation_data: Any = None,
                     centering: Any = None, units: Any = None, frame: Any = "model",
                     clock: Any = "simulation", support: Any = None,
                     sampling: Any = "unspecified", value_shape: Any = None,
@@ -114,20 +115,21 @@ class Module(ModuleFreezable):
             elif frame != self.frame.canonical_id:
                 raise ValueError("StateSpace frame differs from its declared Module frame")
         space = StateSpace(
-            name, components, roles, layout, storage, representation=representation,
+            name, components, roles, layout, storage, representation=representation, representation_data=representation_data,
             centering=centering, units=units, frame=frame, clock=clock,
             support=support, sampling=sampling, value_shape=value_shape, domain=domain)
         return self._declare_descriptor(
             self._state_spaces, self._state_handles, space, "StateSpace", "state")
 
     def field_space(self, name: Any, components: Any = (), layout: str = "cell", *,
-                    representation: Any = "field", centering: Any = None, units: Any = None,
+                    representation: Any = "field", representation_data: Any = None,
+                    centering: Any = None, units: Any = None,
                     frame: Any = "model", clock: Any = "simulation", support: Any = None,
                     sampling: Any = "unspecified", value_shape: Any = None,
                     domain: Any = "real") -> Any:
         """Declare and return a :class:`FieldSpace`."""
         space = FieldSpace(
-            name, components, layout, representation=representation, centering=centering,
+            name, components, layout, representation=representation, representation_data=representation_data, centering=centering,
             units=units, frame=frame, clock=clock, support=support,
             sampling=sampling, value_shape=value_shape, domain=domain)
         return self._declare_descriptor(

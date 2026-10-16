@@ -111,5 +111,5 @@ def emit_analytic_aux_launcher(identity, producer):
         "              }, invalid);",
         '              if (invalid) throw std::runtime_error("analytic auxiliary produced a non-finite value");',
         "            }",
-        "          })",
+        "          }), AuxiliaryPointReads{%s}" % ("AuxiliaryPointReads::clock | AuxiliaryPointReads::physical_time" if clock_id is not None else "0"),
     ])

@@ -44,6 +44,42 @@ def _transport_program(factory=None):
     return program, model
 
 
+def _assert_cell_local_source_map(program, source):
+    from pops.codegen.program_source_map import emission_scope, source_map
+
+    evidence = source_map(source)
+    assert evidence["complete"] and not evidence["unlocated"]
+    expected = {value.id: value for value in program._values}
+    rows = evidence["operations"]
+    assert {row["ssa"] for row in rows} == set(expected)
+    assert len(rows) == len(expected)
+    assert {row["op"] for row in rows} == {"state", "rhs", "linear_combine"}
+    assert len({row["shared_emission_group"] for row in rows}) == 1
+    lines = source.splitlines()
+    for row in rows:
+        value = expected[row["ssa"]]
+        assert row["inputs"] == [item.id for item in value.inputs]
+        assert row["channel"] == "cell_local_provider_advance"
+        assert set(row["shared_ssa"]) == set(expected)
+        assert row["cpp_binding"] is None and row["identifier_binding"] is None
+        assert row["location_basis"] == "direct_statements"
+        assert row["effective_ranges"] == row["ranges"]
+        assert [lines[line - 1].strip() for first, last in row["ranges"]
+                for line in range(first, last + 1)] == [
+                    "ctx_owner->advance_same_level_cell_temporal(dt);"]
+
+    # Keep the provider call and its complete route table intact: without the
+    # exact coalesced markers neither the parser nor the emission guard may
+    # claim that those SSA operations are accounted for.
+    stripped = "\n".join(line for line in lines if not line.lstrip().startswith((
+        "// pops-source-map@1 group_begin ", "// pops-source-map@1 group_end ")))
+    missing = source_map(stripped)
+    assert not missing["complete"]
+    assert {row["ssa"] for row in missing["unlocated"]} == set(expected)
+    with pytest.raises(ValueError, match="Program source map has unaccounted SSA"):
+        emission_scope(lambda _program: stripped)(program)
+
+
 def test_cell_local_time_contract_is_frozen_rebuilt_and_hashed() -> None:
     global_program, _ = _transport_program()
     local_program, _ = _transport_program()
@@ -97,6 +133,7 @@ def test_amr_codegen_selects_only_the_prepared_cell_local_driver() -> None:
     assert "ctx_owner->advance_same_level_cell_temporal(dt);" in source
     assert "ctx.advance_hierarchy(dt" not in source
     assert "ctx.advance_synchronized_hierarchy(dt" not in source
+    _assert_cell_local_source_map(program, source)
 
 
 def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
@@ -125,6 +162,7 @@ def test_amr_codegen_emits_one_typed_cell_local_route_per_block() -> None:
     assert "SameLevelCellTemporalForwardEulerRoute, 2>" in source
     assert "{0, -1," in source and "{1, -1," in source
     assert "return UINT64_C(2);" in source
+    _assert_cell_local_source_map(program, source)
 
 
 def test_cell_local_codegen_refuses_non_euler_and_nondefault_cadence() -> None:
@@ -145,6 +183,14 @@ def test_cell_local_bounded_provider_refuses_extra_rate_materialization() -> Non
     aliased.cell_local_time(tick_denominator=100)
     with pytest.raises(ValueError, match="one transport-only ForwardEuler route"):
         _emit_program(aliased, model, target="amr_system")
+
+    # An unused operation is still outside the exact provider language; source
+    # mapping must not silently label it as executed by the coalesced call.
+    extra, model = _transport_program()
+    extra.norm_inf(next(value for value in extra._values if value.op == "state"))
+    extra.cell_local_time(tick_denominator=100)
+    with pytest.raises(ValueError, match="one transport-only ForwardEuler route"):
+        _emit_program(extra, model, target="amr_system")
 
 
 def test_cell_local_codegen_refuses_uniform_target() -> None:

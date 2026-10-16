@@ -39,6 +39,9 @@ outputs:
   cache-platform:
     description: 'Identite exacte image/architecture/compilateur pour les caches ABI-dependants'
     value: ${{ steps.cache-platform.outputs.key }}
+  compiler-includes:
+    description: Exact post-install compiler and implicit-header fingerprint for native module caches
+    value: ${{ steps.compiler-includes.outputs.identity }}
 
 runs:
   using: composite
@@ -75,6 +78,19 @@ runs:
           || "$CXX_BIN" -dumpversion)"
         version="$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '-')"
         echo "key=${image}-${RUNNER_ARCH}-${{ inputs.compiler }}-${version}" >> "$GITHUB_OUTPUT"
+
+    - name: Fingerprint installed compiler include trees
+      id: compiler-includes
+      shell: bash
+      run: |
+        case "${{ inputs.compiler }}" in
+          gcc) CXX_BIN=g++ ;;
+          clang) CXX_BIN=clang++ ;;
+          *) echo "unsupported compiler identity" >&2; exit 2 ;;
+        esac
+        python3 scripts/ci_compiler_include_identity.py --compiler "$CXX_BIN" \
+          --output "$RUNNER_TEMP/pops-ci-compiler-include-identity.json" \
+          --github-output "$GITHUB_OUTPUT"
 
     # Avec les defauts (serial + gcc), la cle est IDENTIQUE a celle du gate ci.yml -> cache partage
     # uniquement sur la meme image/architecture/version de compilateur. Chaque execution space reste

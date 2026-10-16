@@ -821,10 +821,12 @@ def _run_section_b(t):
         )
         encoded_source = source_history.encode("utf-8")
         encoded_target = b"poison"
-        source_header = b"POPSHID1" + struct.pack("<Q", len(encoded_source)) + encoded_source
+        magic = renamed_identity[:8]
+        assert magic in (b"POPSHID1", b"POPSHID2")
+        source_header = magic + struct.pack("<Q", len(encoded_source)) + encoded_source
         assert renamed_identity.startswith(source_header)
         renamed_identity = (
-            b"POPSHID1"
+            magic
             + struct.pack("<Q", len(encoded_target))
             + encoded_target
             + renamed_identity[len(source_header) :]

@@ -39,7 +39,7 @@ from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
 _MODEL_OPS = (
-    "diffusive_rhs", "principal_rate", "input_fields", "source",
+    "diffusive_rhs", "stencil_flux_divergence", "principal_rate", "input_fields", "source",
     "apply",
     "local_transform",
     "affine_moment_update",
@@ -52,6 +52,7 @@ _ALLOWED_OPS = frozenset(
     {
         "solve_spatial_field",
         "state",
+        "provenance_bind",
         "geometry_state",
         "reynolds_update",
         "layout_map_export",
@@ -68,6 +69,8 @@ _ALLOWED_OPS = frozenset(
         "linear_source",
         "reduce",
         "scalar_op",
+        "scalar_isfinite",
+        "scalar_expression",
         "compare",
         "hmin",
         "max_wave_speed",
@@ -107,7 +110,18 @@ _ALLOWED_OPS = frozenset(
         "project",
         "record_scalar",
         "requested_dt",
+        "invocation_level",
+        "interval_begin",
+        "interval_end",
+        "interval_check",
+        "history_interval_begin",
+        "history_interval_duration",
+        "history_interval_check",
         "reached_duration",
+        "attempt_start",
+        "composite_pair",
+        "composite_integral",
+        "accept_increment",
         "record_balance_term",
         "cell_compare",
         "where",
@@ -419,6 +433,8 @@ def _prepared_native_component_includes(program: Any, *, target: str = "system")
     from .program_lowerability import all_ops
     if any(value.attrs.get("native_functions") for value in all_ops(program)):
         result = "#include <pops/core/model/native_call.hpp>\n" + result
+    if any(value.op == "variant_require_success" for value in all_ops(program)):
+        result = "#include <pops/runtime/program/typed_failure.hpp>\n" + result
     return result
 
 
@@ -437,7 +453,8 @@ def _block_inverse_include(program: Any) -> str:
     """The closed-form block-inverse #include for @p program's generated .so, or "" when it carries no
     condensed-implicit op (ADC-637): only a Program using condensed_* emits pops::detail::block_inverse.
     (block_inverse.hpp itself includes dense_eig.hpp, already pulled in by the template.)"""
-    result = _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
+    result = "#include <pops/runtime/program/host_face_publication.hpp>\n"
+    result += _BLOCK_INVERSE_INCLUDE if any(v.op in _CONDENSED_OPS for v in program._values) else ""
     if any(v.op in ("solve_spatial_nonlinear", "solve_spatial_field") for v in program._values):
         result += "#include <pops/runtime/program/prepared_spatial_residual.hpp>\n"
     if any(v.op == "solve_spatial_field" for v in program._values):
@@ -445,6 +462,8 @@ def _block_inverse_include(program: Any) -> str:
     if any(v.op == "affine_moment_update" for v in program._values):
         result += "#include <pops/numerics/moments/affine_velocity.hpp>\n"
     from .program_lowerability import all_ops
+    if any(v.op == "stencil_flux_divergence" for v in all_ops(program)):
+        result += "#include <pops/numerics/fv/stencil_flux.hpp>\n"
     if any(any(node[0] == "finite_linear_v1" for node in v.attrs.get("expression_nodes", ()))
            for v in all_ops(program)):
         result += "#include <pops/numerics/linalg/finite_linear.hpp>\n"
@@ -543,23 +562,20 @@ def _coeff_metadata_terms(powers: Any) -> tuple[tuple[int, int, int], ...]:
                 "AMR conservative coefficient is not an exact rational literal"
             ) from error
         if ratio:
-            signed_limit = (1 << 63) - 1
-            if (
-                power > (1 << 31) - 1
-                or ratio.numerator < -signed_limit
-                or ratio.numerator > signed_limit
-                or ratio.denominator > signed_limit
-            ):
-                raise OverflowError(
-                    "AMR conservative coefficient cannot be represented by the native exact ledger"
-                )
+            if power > (1 << 31) - 1:
+                raise OverflowError("AMR conservative dt power exceeds the native int range")
             terms.append((power, ratio.numerator, ratio.denominator))
     return tuple(terms)
 
 
 def _coeff_metadata_cpp(powers: Any) -> str:
     """Render the same dt polynomial as checked exact native-ledger metadata."""
-    return "{%s}" % ", ".join("{%d, %d, %d}" % term for term in _coeff_metadata_terms(powers))
+    def render(term: tuple[int, int, int]) -> str:
+        power, numerator, denominator = term
+        if -(1 << 63) < numerator < (1 << 63) and denominator < (1 << 63):
+            return "{%d, %d, %d}" % term
+        return '{%d, "%s", "%s"}' % (power, hex(numerator), hex(denominator))
+    return "{%s}" % ", ".join(render(term) for term in _coeff_metadata_terms(powers))
 
 
 # --- Phase-4b: lower a model's split-source / local-linear ops to per-cell C++ kernels ----------
@@ -633,7 +649,7 @@ def _has_runtime_param(exprs: Any) -> bool:
 
 
 def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_prim: Any,
-                 provider_binding: Any = None) -> list:
+                 provider_binding: Any = None, with_providers: bool = True) -> list:
     """C++ local declarations binding the names the @p exprs reference to per-cell values:
       - provider fields -> ``const pops::Real <name> = providers(index, <local-slot>);``;
       - conservative vars -> ``const pops::Real <name> = <state>A(index, <idx>);`` (when @p with_cons);
@@ -711,8 +727,9 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
             raise ValueError(
                 "Program provider plan does not cover its emitted expressions"
             )
-        for name in sorted(used_provider_names, key=lambda item: slots[item]):
-            lines.append("const pops::Real %s = providers(index, %d);" % (variable_identifier(name,'aux'), slots[name]))
+        if with_providers:
+            for name in sorted(used_provider_names, key=lambda item: slots[item]):
+                lines.append("const pops::Real %s = providers(index, %d);" % (variable_identifier(name,'aux'), slots[name]))
     return lines
 
 

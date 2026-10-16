@@ -38,6 +38,8 @@ ALL_PROVISIONAL_STORES = tuple(ProvisionalStore)
 class GuardRole(str, Enum):
     INVARIANT = "invariant"
     ERROR_ESTIMATE = "error_estimate"
+    # An authored compiled acceptance predicate, not a compiler-proved theorem.
+    NUMERICAL_STABILITY = "numerical_stability"
 
 
 @dataclass(frozen=True, slots=True)

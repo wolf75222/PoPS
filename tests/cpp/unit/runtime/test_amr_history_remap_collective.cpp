@@ -25,6 +25,52 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
   using Field = MultiFab<Dim>;
 
   static auto& manager(Context& context) { return context.runtime_state().hist_; }
+  static bool live_copied_field(Context& context, const Field* field) {
+    const auto found = context.continuation_field_storage_.find(field);
+    return found != context.continuation_field_storage_.end() && !found->second.lifetime.expired();
+  }
+  static void revoke_copied_fields(Context& context) { context.continuation_revoke_attempt_(); }
+  static void promotion_preflight_fixture(Context& context, std::int64_t operation) {
+    context.mapping_continuation_ = std::make_unique<typename Context::MappingContinuation>();
+    auto& frame = *context.mapping_continuation_;
+    frame.executing = true;
+    frame.failures.resize(static_cast<std::size_t>(context.nlev()));
+    for (auto& handlers : frame.failures) {
+      typename Context::MappingFailureHandler handler;
+      handler.operation = operation;
+      handler.identity = "tests.child-promotion-local-preflight";
+      handler.callback = [](std::exception_ptr) {};
+      handlers.push_back(std::move(handler));
+    }
+    context.level_continuation_authorities_[0] = std::make_shared<ContinuationAuthority<Dim>>();
+  }
+  static void discard_promotion_fixture(Context& context) { context.mapping_continuation_.reset(); }
+  static void capture_affine_fields(Context& context) {
+    typename Context::AffineMacroFinalization frame;
+    frame.entry = context.copy_affine_tower_();
+    frame.provisional = context.copy_affine_tower_();
+    frame.measures = context.capture_affine_measures_();
+    frame.topology_epoch = context.runtime_->topology_epoch();
+    frame.materialization_generation = context.runtime_->materialization_generation();
+    frame.ready = true;
+    context.affine_finalization_.emplace(std::move(frame));
+  }
+  static void set_affine_measure(Context& context, int level, Real active, Real fraction) {
+    auto& measure = context.affine_finalization_->measures.at(0).at(level);
+    const auto& source = context.affine_finalization_->entry.at(0).at(level);
+    measure.active.emplace(source.layout(), source.distribution(), source.local_rank(), 1,
+                           source.ghosts());
+    measure.fraction.emplace(source.layout(), source.distribution(), source.local_rank(), 1,
+                             source.ghosts());
+    measure.active->set_val(active);
+    measure.fraction->set_val(fraction);
+  }
+  static Field& affine_entry(Context& context, int level) {
+    return context.affine_finalization_->entry.at(0).at(level);
+  }
+  static void stale_affine_fields(Context& context) {
+    ++context.affine_finalization_->materialization_generation;
+  }
   static std::string key(Context& context, const std::string& name, int level) {
     return context.history_key_(name, level);
   }
@@ -33,21 +79,24 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
         [&] {
           context.validate_accepted_history_remap_metadata_();
           return std::string("tests.amr.declared-history-halo-metadata@1");
-        }, [](const std::string& proof) -> const std::string& { return proof; },
+        },
+        [](const std::string& proof) -> const std::string& { return proof; },
         "tests.amr.declared-history-halo-metadata");
     // The first vote completes before a healthy peer may enter a ranked façade getter.
     (void)context.prepare_history_mutation_collectively_(
         [&] {
           context.validate_accepted_history_remap_();
           return std::string("tests.amr.declared-history-halo-remap@1");
-        }, [](const std::string& proof) -> const std::string& { return proof; },
+        },
+        [](const std::string& proof) -> const std::string& { return proof; },
         "tests.amr.declared-history-halo-remap");
   }
   static void replace_slot_ghosts(Context& context, const std::string& name, int level,
                                   int slot_index, int depth) {
     auto& slot = manager(context).histories.at(key(context, name, level)).at(slot_index);
     Extent<Dim> ghosts{};
-    for (int axis = 0; axis < Dim; ++axis) ghosts[axis] = depth;
+    for (int axis = 0; axis < Dim; ++axis)
+      ghosts[axis] = depth;
     Field replacement(slot.layout(), slot.distribution(), slot.local_rank(), slot.ncomp(), ghosts);
     replacement.set_val(Real(17));
     for (std::size_t local = 0; local < slot.local_size(); ++local) {
@@ -82,7 +131,8 @@ struct ScalarModel {
     return {"tests.amr.history-declared-ghost.scalar", 1};
   }
   void serialize_exact_parameters(pops::ExactContractBuilder& proof) const {
-    for (int axis = 0; axis < Dim; ++axis) proof.scalar(law.velocity()[axis]);
+    for (int axis = 0; axis < Dim; ++axis)
+      proof.scalar(law.velocity()[axis]);
   }
   static pops::VariableSet conservative_vars() {
     return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
@@ -91,10 +141,16 @@ struct ScalarModel {
     return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
   }
   POPS_HD auto recover(const State& state) const { return law.recover(state); }
-  POPS_HD auto make_conservative(const Primitive& state) const { return law.make_conservative(state); }
+  POPS_HD auto make_conservative(const Primitive& state) const {
+    return law.make_conservative(state);
+  }
   POPS_HD auto admissibility(const State& state) const { return law.admissibility(state); }
-  template <int Axis> POPS_HD State flux(const State& state) const { return law.template flux<Axis>(state); }
-  template <int Axis> POPS_HD pops::Real max_wave_speed(const State& state) const {
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
     return law.template max_wave_speed<Axis>(state);
   }
   template <int Axis>
@@ -122,17 +178,18 @@ struct Fixture {
   }
   static std::size_t cells() {
     std::size_t total = 1;
-    for (int axis = 0; axis < Dim; ++axis) total *= 16;
+    for (int axis = 0; axis < Dim; ++axis)
+      total *= 16;
     return total;
   }
   Fixture() : system(config()) {
     pops::test::install_amr_runtime_authority(system, "tests.amr.history-declared-ghost/runtime");
     system.set_temporal_relations({1}, {1}, {"integral_only"});
     system.install_block_state_route("tracer", "state/tracer");
-    pops::add_compiled_model<Dim>(system, "tracer", ScalarModel{}, "minmod", "rusanov",
-        "conservative", "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1,
-        {}, {}, 0., static_cast<double>(pops::kWenoEpsilon), false,
-        "tests.amr.history-declared-ghost/flux");
+    pops::add_compiled_model<Dim>(
+        system, "tracer", ScalarModel{}, "minmod", "rusanov", "conservative", "explicit",
+        static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.,
+        static_cast<double>(pops::kWenoEpsilon), false, "tests.amr.history-declared-ghost/flux");
     system.set_conservative_state("tracer", std::vector<double>(cells(), 1.));
     pops::test::install_prepared_refine_coarsen_threshold(
         system, {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above},
@@ -141,16 +198,16 @@ struct Fixture {
     context = pops::runtime::program::make_program_execution_provider(&system);
     context->configure_primary_clock("clock.macro");
     context->declare_clock_relation("clock.macro", "clock.level.1", 1);
-    context->install([owner = context](double dt) {
-      owner->advance_hierarchy(dt, [](double) {});
-    }, context);
+    context->install([owner = context](double dt) { owner->advance_hierarchy(dt, [](double) {}); },
+                     context);
     system.set_program_block_map({0});
     using Budget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
     system.install_prepared_amr_program_flux_expression_budget(
         "tests.amr.history-declared-ghost/flux-budget", std::vector<Budget>(1, Budget{2, 1}), 0, 0);
     context->for_each_program_resource_level([&](int) {
       context->register_history(kHistory, 1, 1, 0, "scalar-history:" + std::string(kHistory),
-          std::string(pops::runtime::program::kScalarOutputHistorySpace), "clock.macro", "none", 1);
+                                std::string(pops::runtime::program::kScalarOutputHistorySpace),
+                                "clock.macro", "none", 1);
     });
   }
   void fill_history(pops::Real scale = pops::Real(10)) {
@@ -169,7 +226,10 @@ struct Fixture {
     std::vector<double> state(cells(), full ? 1. : .25);
     if (!full) {
       std::size_t centre = 0, stride = 1;
-      for (int axis = 0; axis < Dim; ++axis) { centre += 8 * stride; stride *= 16; }
+      for (int axis = 0; axis < Dim; ++axis) {
+        centre += 8 * stride;
+        stride *= 16;
+      }
       state[centre] = 1.;
     }
     system.set_conservative_state("tracer", state);
@@ -179,7 +239,8 @@ struct Fixture {
   void expect_declared_storage() {
     context->for_each_program_resource_level([&](int level) {
       const auto& live = context->state(0);
-      for (int axis = 0; axis < Dim; ++axis) EXPECT_EQ(live.ghosts()[axis], 2);
+      for (int axis = 0; axis < Dim; ++axis)
+        EXPECT_EQ(live.ghosts()[axis], 2);
       auto& manager = Access::manager(*context);
       const auto key = Access::key(*context, kHistory, level);
       EXPECT_EQ(manager.ghost_depth.at(key), 1);
@@ -188,7 +249,8 @@ struct Fixture {
         EXPECT_EQ(slot.distribution(), live.distribution());
         EXPECT_EQ(slot.local_rank(), live.local_rank());
         EXPECT_EQ(slot.ncomp(), 1);
-        for (int axis = 0; axis < Dim; ++axis) EXPECT_EQ(slot.ghosts()[axis], 1);
+        for (int axis = 0; axis < Dim; ++axis)
+          EXPECT_EQ(slot.ghosts()[axis], 1);
       }
     });
     EXPECT_NO_THROW(Access::validate_collectively(*context));
@@ -217,7 +279,7 @@ TEST(AmrDeclaredHistoryGhosts, ScalarGhostOneSurvivesRealRegridOnStateGhostTwo) 
   for (int level = 0; level < 2; ++level)
     for (int slot = 0; slot < 2; ++slot)
       restored.system.restore_history(kHistory, level, slot,
-          fixture.system.history_global(kHistory, level, slot));
+                                      fixture.system.history_global(kHistory, level, slot));
   ASSERT_NO_THROW(restored.system.restore_checkpoint_accepted_state(bytes));
   restored.expect_declared_storage();
   EXPECT_EQ(restored.system.program_accepted_state(), bytes);
@@ -246,8 +308,8 @@ TEST(AmrDeclaredHistoryGhosts, SlotAndLevelGhostTamperingFailsCollectivelyAndRol
       Access::replace_slot_ghosts(*fixture.context, kHistory, 0, 0, 2);
       if (whole_level) {
         Access::replace_slot_ghosts(*fixture.context, kHistory, 0, 1, 2);
-        Access::manager(*fixture.context).ghost_depth.at(
-            Access::key(*fixture.context, kHistory, 0)) = 2;
+        Access::manager(*fixture.context)
+            .ghost_depth.at(Access::key(*fixture.context, kHistory, 0)) = 2;
       }
     }
     EXPECT_THROW(Access::validate_collectively(*fixture.context), std::exception);
@@ -284,7 +346,8 @@ TEST(AmrDeclaredHistoryGhosts, ForgedWireHistoryTupleFailsCollectivelyBeforeMuta
   const auto before_revision = fixture.system.program_accepted_state_revision();
   const auto before_time = fixture.system.time();
   const auto before_step = fixture.system.macro_step();
-  const auto before_wire = pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(before);
+  const auto before_wire =
+      pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(before);
   ASSERT_EQ(before_wire.histories.size(), 1u);
   std::vector<std::vector<double>> before_values;
   for (int level = 0; level < 2; ++level) {
@@ -295,25 +358,41 @@ TEST(AmrDeclaredHistoryGhosts, ForgedWireHistoryTupleFailsCollectivelyBeforeMuta
   for (bool rank_zero_only : {false, true}) {
     for (bool checkpoint_route : {false, true}) {
       for (int field = 0; field < 7; ++field) {
-        SCOPED_TRACE(::testing::Message() << "rank_zero_only=" << rank_zero_only
-            << "/checkpoint_route=" << checkpoint_route << "/field=" << field);
+        SCOPED_TRACE(::testing::Message()
+                     << "rank_zero_only=" << rank_zero_only
+                     << "/checkpoint_route=" << checkpoint_route << "/field=" << field);
         auto changed = before_wire;
         if (!rank_zero_only || pops::my_rank() == 0) {
           auto& descriptor = changed.histories.front();
           switch (field) {
-            case 0: ++descriptor.program_owner; break;
-            case 1: descriptor.state_identity += ".foreign"; break;
-            case 2: descriptor.space_identity += ".foreign"; break;
-            case 3: descriptor.clock_identity = "clock.level.1"; break;
-            case 4: descriptor.interpolation_identity += ".foreign"; break;
-            case 5: ++descriptor.components; break;
-            case 6: ++descriptor.ghost_depth; break;
+            case 0:
+              ++descriptor.program_owner;
+              break;
+            case 1:
+              descriptor.state_identity += ".foreign";
+              break;
+            case 2:
+              descriptor.space_identity += ".foreign";
+              break;
+            case 3:
+              descriptor.clock_identity = "clock.level.1";
+              break;
+            case 4:
+              descriptor.interpolation_identity += ".foreign";
+              break;
+            case 5:
+              ++descriptor.components;
+              break;
+            case 6:
+              ++descriptor.ghost_depth;
+              break;
           }
         }
         // Each forged packet remains wire-valid; native admission must reject its tuple.
         const auto bytes = pops::runtime::program::serialize_amr_program_accepted_state(changed);
-        EXPECT_EQ(pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes).histories,
-                  changed.histories);
+        EXPECT_EQ(
+            pops::runtime::program::deserialize_amr_program_accepted_state<Dim>(bytes).histories,
+            changed.histories);
         if (checkpoint_route)
           EXPECT_THROW(fixture.system.restore_checkpoint_accepted_state(bytes), std::exception);
         else
@@ -328,7 +407,8 @@ TEST(AmrDeclaredHistoryGhosts, ForgedWireHistoryTupleFailsCollectivelyBeforeMuta
         EXPECT_EQ(retained.logical_clock_ticks, before_wire.logical_clock_ticks);
         std::size_t index = 0;
         for (int level = 0; level < 2; ++level) {
-          EXPECT_EQ(fixture.system.block_level_state_global("tracer", level), before_values[index++]);
+          EXPECT_EQ(fixture.system.block_level_state_global("tracer", level),
+                    before_values[index++]);
           for (int slot = 0; slot < 2; ++slot)
             EXPECT_EQ(fixture.system.history_global(kHistory, level, slot), before_values[index++]);
         }
@@ -336,4 +416,158 @@ TEST(AmrDeclaredHistoryGhosts, ForgedWireHistoryTupleFailsCollectivelyBeforeMuta
     }
   }
 }
+TEST(AmrContinuationFieldStorage, ExactCopiesRetainOwnerWithoutShapeOrPointerReuseAuthority) {
+  Fixture fixture;
+  using Field = pops::MultiFab<Dim>;
+  std::vector<std::shared_ptr<Field>> copies;
+  fixture.context->for_each_program_resource_level([&](int level) {
+    auto& source = fixture.context->state(0);
+    auto copy = std::make_shared<Field>(source);
+    EXPECT_THROW(fixture.context->require_program_field_access(*copy), std::invalid_argument);
+    EXPECT_THROW(fixture.context->rhs_scratch(9901, 0, *copy), std::invalid_argument);
+    fixture.context->continuation_bind_field_provenance(source, *copy, copy);
+    EXPECT_NO_THROW(fixture.context->rhs_scratch(9901, 0, *copy));
+    EXPECT_TRUE(Access::live_copied_field(*fixture.context, copy.get()));
+    if (level != 0) {
+      EXPECT_THROW(fixture.context->rhs_scratch(9902, 0, *copies.front()), std::invalid_argument);
+      // Moving a structural payload is legal, even when calculating with it is not.
+      auto opaque = fixture.context->own_structural_field(*copies.front());
+      EXPECT_THROW(fixture.context->require_program_field_access(*opaque), std::invalid_argument);
+      EXPECT_EQ(opaque->layout(), copies.front()->layout());
+    }
+    auto transient = std::make_shared<Field>(source);
+    fixture.context->continuation_bind_field_provenance(source, *transient, transient);
+    const auto retired = transient.get();
+    transient.reset();
+    EXPECT_FALSE(Access::live_copied_field(*fixture.context, retired));
+    copies.push_back(std::move(copy));
+  });
+  Access::revoke_copied_fields(*fixture.context);
+  fixture.context->for_each_program_resource_level([&](int level) {
+    if (copies[level]) {
+      EXPECT_THROW(fixture.context->rhs_scratch(9903, 0, *copies[level]), std::invalid_argument);
+      EXPECT_THROW(fixture.context->require_program_field_access(*copies[level]),
+                   std::invalid_argument);
+      EXPECT_THROW(fixture.context->own_structural_field(*copies[level]), std::invalid_argument);
+    }
+  });
+}
+TEST(AmrContinuationFieldStorage, AffineSnapshotsHaveExactPreparedStorageAuthority) {
+  Fixture fixture;
+  Access::capture_affine_fields(*fixture.context);
+  fixture.context->for_each_program_resource_level([&](int level) {
+    auto& source = Access::affine_entry(*fixture.context, level);
+    EXPECT_NO_THROW(fixture.context->require_program_field_access(source));
+    EXPECT_NO_THROW(fixture.context->rhs_scratch(9911, 0, source));
+    auto owned = fixture.context->own_structural_field(source);
+    EXPECT_NO_THROW(fixture.context->require_program_field_access(*owned));
+    pops::MultiFab<Dim> lookalike(source);
+    EXPECT_THROW(fixture.context->require_program_field_access(lookalike), std::invalid_argument);
+    if (level != 0)
+      EXPECT_THROW(
+          fixture.context->require_program_field_access(Access::affine_entry(*fixture.context, 0)),
+          std::invalid_argument);
+  });
+  Access::stale_affine_fields(*fixture.context);
+  fixture.context->for_each_program_resource_level([&](int level) {
+    EXPECT_THROW(fixture.context->require_program_field_access(
+                     Access::affine_entry(*fixture.context, level)),
+                 std::invalid_argument);
+  });
+}
+TEST(AmrContinuationFieldStorage, RankLocalPromotionFailurePrecedesTheOnlyCollectiveVote) {
+  Fixture fixture;
+  using Authority = pops::runtime::program::ContinuationAuthority<Dim>;
+  constexpr std::int64_t operation = 771;
+  Access::promotion_preflight_fixture(*fixture.context, operation);
+  const auto& lane = fixture.context->prepared_execution_lane();
+  Authority::Scope scope;
+  Authority::Accepted accepted;
+  std::shared_ptr<int> lifetime;
+  if (lane.rank() != 0)
+    lifetime = std::make_shared<int>(1);
+  // Rank zero rejects the absent frame. Other ranks reach their existing but
+  // uninitialized issuer and reject its absent scope. Neither local path may
+  // enter an issuer getter collective before this one common outer vote.
+  std::exception_ptr failure;
+  try {
+    fixture.context->prepare_hierarchy_scope_promotion(operation, scope, accepted, lifetime);
+  } catch (...) {
+    failure = std::current_exception();
+  }
+  EXPECT_TRUE(failure);
+  EXPECT_THROW(
+      pops::collectively_rethrow_exception(failure, lane, "promotion preflight must converge"),
+      std::exception);
+  Access::discard_promotion_fixture(*fixture.context);
+}
+
+TEST(AmrContinuationFieldStorage, InvocationLevelRequiresTheExactPreparedHierarchy) {
+  Fixture fixture;
+  EXPECT_THROW((void)fixture.context->invocation_level(), std::logic_error);
+  fixture.context->advance_hierarchy(.1, [&](double) {
+    const auto level = fixture.context->invocation_level();
+    EXPECT_EQ(level, fixture.context->level());
+    const auto& lane = fixture.context->prepared_execution_lane();
+    EXPECT_EQ(pops::all_reduce_min(static_cast<long>(level), lane), level);
+    EXPECT_EQ(pops::all_reduce_max(static_cast<long>(level), lane), level);
+  });
+}
+// The production integrator traverses real prepared AMR measures and snapshots.
+struct UnitCompositeIntegrand {
+  pops::FieldView<const pops::Real, Dim> entry{}, current{};
+  POPS_HD pops::Real operator()(const pops::Index<Dim>&) const { return pops::Real(1); }
+};
+
+TEST(AmrCompositeIntegral, SelectedLevelsPartitionPhysicalCompositeMeasure) {
+  Fixture fixture;
+  fixture.regrid(false);
+  Access::capture_affine_fields(*fixture.context);
+  const auto all = fixture.context->composite_integral(0, UnitCompositeIntegrand{});
+  const auto coarse = fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 0);
+  const auto fine = fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 1);
+  EXPECT_NEAR(all, 1., 1.e-13);
+  EXPECT_GT(coarse, 0.);
+  EXPECT_GT(fine, 0.);
+  EXPECT_NEAR(coarse + fine, all, 1.e-13);
+  // A domain selection intersects the existing support; it cannot re-activate
+  // covered cells or replace active/cut-cell fractions by a geometric box.
+  Access::set_affine_measure(*fixture.context, 0, 1., .25);
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 0), coarse * .25,
+              1.e-13);
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}), coarse * .25 + fine,
+              1.e-13);
+  Access::set_affine_measure(*fixture.context, 0, 0., .25);
+  EXPECT_EQ(fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 0), 0.);
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}), fine, 1.e-13);
+}
+
+TEST(AmrCompositeIntegral, InvalidSelectedLevelConvergesBeforeReduction) {
+  Fixture fixture;
+  Access::capture_affine_fields(*fixture.context);
+  const auto& lane = fixture.context->prepared_execution_lane();
+  EXPECT_THROW(fixture.context->composite_integral(0, UnitCompositeIntegrand{}, -1),
+               std::exception);
+  // Only rank zero supplies the invalid value. All ranks must leave the same
+  // preflight before any healthy peer starts its numerical reduction.
+  EXPECT_THROW(
+      fixture.context->composite_integral(0, UnitCompositeIntegrand{}, lane.rank() == 0 ? 2 : 0),
+      std::exception);
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}), 1., 1.e-13);
+}
+
+TEST(AmrCompositeIntegral, DistinctValidRankSelectionsCannotMixDomains) {
+  Fixture fixture;
+  Access::capture_affine_fields(*fixture.context);
+  const auto& lane = fixture.context->prepared_execution_lane();
+  if (lane.size() > 1) {
+    EXPECT_THROW(
+        fixture.context->composite_integral(0, UnitCompositeIntegrand{}, lane.rank() == 0 ? 0 : 1),
+        std::invalid_argument);
+  } else {
+    EXPECT_NO_THROW(fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 0));
+  }
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}), 1., 1.e-13);
+}
+
 }  // namespace

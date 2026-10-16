@@ -1,0 +1,19 @@
+# Accepted-continuation forest migration across MPI cardinality
+
+A restart at a different MPI cardinality consumes the **complete authenticated source-rank table** (RSA1 and accepted forest records). It never executes a representative rank-zero continuation. Scientific Program/artifact identities are unchanged.
+
+The target backend currently assigns every distributed finite domain by the native balanced partition: for cardinality `N` and target size `P`, rank `r` owns `N//P + (r < N%P)` consecutive global indices. This is an explicit backend placement contract, independent of equations. `Distributed.balanced_domain` uses the same helper; it does not put `P` in the scientific IR. General user-composed target placement policies are not implemented by this receiver.
+
+Migration decodes source distributed descriptors without constructing a fake old communicator. It authenticates all old shards, reconstructs the complete dependency graph, issues **fresh target registries/domains/array versions on the actual native execution lane**, and rebinds every Domain/Index/Array reference using one shared mapping. Global GIDs, exact integer/Real bits, logical values, aliases, accepted clocks and steps remain unchanged. Placement-bound old tokens are not valid target authorities.
+
+Source and target store limits remain the capacities authenticated by the installed schemas. `restart(..., workspace_byte_capacity=...)` supplies temporary source/migration capacity; its default for cardinality-changing AMR restart is 64 MiB and may be overridden. The cold archive-read envelope combines the installed destination envelope with this explicit temporary source capacity. ZIP headers never authorize larger allocations. Framing, sealed manifests, complete source-rank tables, RSA1 and native store checks still precede publication. Identical-topology strict restart retains the installed envelope. The workspace selected for native migration is recorded in the restart receipt.
+
+The target forest is prepared completely, with target Field layouts/halos/components and shared finite/distributed aliases, then admitted through the existing native checkpoint transaction. Any failure must leave the live accepted state unchanged. Parent Continuations remain field-free under the existing forest schema contract; this change does not infer a child-level provenance for a parent Field.
+
+## Evidence and outstanding reception
+
+- `test_continuation_distributed_migration`: three native cases received on MPI1/2/3, 18 per-rank XML observations. Tests compare inert parsing charges and collective identity to the existing native codec, verify Int64 values above 2^60, signed zeros, indices, alias preservation, fresh authorities and rejection of missing shards/insufficient capacity. These are native codec/store tests, **not** a RuntimeInstance restart campaign.
+- `test_continuation_field_migration`: native Field/replicated data tests include different archive component/halo counts from the state prototype.
+- `test_restart_source_workspace`: source tests exercise a sealed three-rank archive against a one-rank destination envelope, unchanged digest/table rejection, small-capacity failure and strict/uniform envelope preservation.
+- `test_continuation_migration_authoring`: validates/resolves one rank-independent Python PDE plus distributed history graph and emits the real AMR C++ source, including a Product capture whose unused sibling is a Field.
+- `test_api_v02_continuation_migration`: the full receiver launches independent MPI1→2→3→1 processes. Each process reuses the same artifact and checks exact restored global Fields, aliased distributed histories, fresh authorities, rollback on insufficient workspace and a subsequent accepted step. **This receiver is implemented but has not yet been received against the updated SDK.** A passing codec test or source test must not be substituted for that result.

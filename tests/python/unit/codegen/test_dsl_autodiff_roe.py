@@ -4,8 +4,8 @@ symbolique du DSL + dissipation de Roe ecrite par l'utilisateur.
 
   (a) diff : differentiation symbolique de l'arbre Expr (linearite, produit, quotient, chaine
       pour pow/sqrt). Verifiee NUMERIQUEMENT (chemin d'evaluation reference des Expr, sans
-      compilateur) sur des cas analytiques ; noeud non derivable / exposant dependant de la
-      variable -> NotImplementedError ;
+      compilateur) sur des cas analytiques, dont l'exposant variable sur base positive ;
+      noeud non derivable -> NotImplementedError ;
   (b) m.flux_jacobian(dir) : A = dF/dU auto-derive des flux declares == matrice analytique connue
       de l'isotherme 3-var (evaluation numerique point a point), pour les deux directions ;
   (c) m.roe_dissipation(x=, y=) reproduisant A LA MAIN le Roe isotherme (left/right des deux etats)
@@ -130,12 +130,9 @@ try:
 except NotImplementedError as ex:
     chk("Weird" in str(ex), f"noeud inconnu -> NotImplementedError ({str(ex)[:48]})")
 
-# exposant DEPENDANT de la variable (x^x) -> NotImplementedError (logarithme absent du DSL)
-try:
-    diff(x ** x, x)
-    chk(False, "x^x aurait du lever NotImplementedError")
-except NotImplementedError as ex:
-    chk("logarithm" in str(ex), f"d(x^x)/dx -> NotImplementedError ({str(ex)[:48]})")
+# exposant DEPENDANT : la branche reelle differentiable exige x > 0.
+chk(np.allclose(diff(x ** x, x).eval({"x": xp}), xp ** xp * (np.log(xp) + 1.0)),
+    "d(x^x)/dx == x^x (log(x)+1) sur base positive")
 
 
 # === (b) m.flux_jacobian : A = dF/dU de l'isotherme 3-var == matrice analytique =================

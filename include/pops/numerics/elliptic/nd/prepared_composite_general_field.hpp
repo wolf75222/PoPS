@@ -233,7 +233,8 @@ class PreparedCompositeGeneralField final
                                 const ExecutionLane& lane, bool apply_only = false)
       : request_(std::move(request)),
         contract_(std::move(contract)),
-        lane_(&lane), apply_only_(apply_only) {
+        lane_(&lane),
+        apply_only_(apply_only) {
     std::optional<amr::CompositeFacBuildRequest<Dim>> scalar_request;
     // Allocate locally before entering any nested collective preparation.
     long failure = 0;
@@ -260,17 +261,17 @@ class PreparedCompositeGeneralField final
         measures_.push_back(measure);
       }
       if (!apply_only_) {
-      residual_ = make_vector_();
-      image_ = make_vector_();
-      work_ = make_vector_();
-      for (int i = 0; i <= options_.restart; ++i)
-        basis_.push_back(make_vector_());
-      const auto restart = static_cast<std::size_t>(options_.restart);
-      hessenberg_.resize(general_composite_detail::product(restart, restart + 1));
-      cosine_.resize(restart);
-      sine_.resize(restart);
-      y_.resize(restart);
-      rotated_.resize(restart + 1);
+        residual_ = make_vector_();
+        image_ = make_vector_();
+        work_ = make_vector_();
+        for (int i = 0; i <= options_.restart; ++i)
+          basis_.push_back(make_vector_());
+        const auto restart = static_cast<std::size_t>(options_.restart);
+        hessenberg_.resize(general_composite_detail::product(restart, restart + 1));
+        cosine_.resize(restart);
+        sine_.resize(restart);
+        y_.resize(restart);
+        rotated_.resize(restart + 1);
       }
       entries_.reserve(options_.coefficients);
       rhs_views_.reserve(rhs_.size());
@@ -279,7 +280,11 @@ class PreparedCompositeGeneralField final
       failure = 1;
     }
     if (apply_only_) {
-      try { Kokkos::fence(); } catch (...) { failure = 1; }
+      try {
+        Kokkos::fence();
+      } catch (...) {
+        failure = 1;
+      }
     }
     if (all_reduce_max(failure, lane) != 0)
       throw std::runtime_error("composite field tuple allocation failed collectively");
@@ -296,7 +301,8 @@ class PreparedCompositeGeneralField final
             owned_request.emplace(*scalar_request);
             storage = ::operator new(sizeof(scalar_type));
           });
-          auto* value = new (storage) scalar_type(std::move(*owned_request), CompositeFacOptions{}, Real(0), &lane, true, true);
+          auto* value = new (storage) scalar_type(std::move(*owned_request), CompositeFacOptions{},
+                                                  Real(0), &lane, true, true);
           entries_.emplace_back(value);  // capacity was reserved before the first vote
         } catch (...) {
           ::operator delete(storage);
@@ -304,7 +310,8 @@ class PreparedCompositeGeneralField final
         }
       }
     }
-    if (!apply_only_) prepare_nullspace_();
+    if (!apply_only_)
+      prepare_nullspace_();
   }
 
   std::string_view provider_identity() const noexcept override {
@@ -324,6 +331,21 @@ class PreparedCompositeGeneralField final
     throw std::invalid_argument("unknown composite general field assembly slot");
   }
   field_type& solution(int level) override { return solution_.at(level); }
+  const field_type& prepare_solution_extension(int level, const Extent<Dim>& requested,
+                                               const ExecutionLane& lane) override {
+    this->require_consumed_solution_extension(lane);
+    local_field_phase_(true, [&] {
+      if (&lane != lane_ || level < 0 || level >= level_count())
+        throw std::invalid_argument("general field extension has a foreign level or lane");
+      for (int axis = 0; axis < Dim; ++axis)
+        if (requested[axis] < 0 || requested[axis] > solution_[level].ghosts()[axis])
+          throw std::invalid_argument("general field extension exceeds its prepared halo");
+    });
+    // This is the same provider-owned extension used by original residual
+    // evaluations: parent interpolation, ranked exchange and the exact field BC.
+    synchronize_original_field_candidate(solution_);
+    return solution_[level];
+  }
   void stage_initial_guess(int level, const field_type* guess) override {
     auto& destination = initial_.at(level);
     if (guess == nullptr)
@@ -332,6 +354,12 @@ class PreparedCompositeGeneralField final
       copy_field_(*guess, destination);
   }
   const field_type& active_cell_mask(int level) const override { return active_cells(level); }
+  typename runtime::program::PreparedHierarchyTensorSolver<Dim>::RepresentationTopology
+  representation_topology(int level) const override {
+    // This prepared rectangular provider has no embedded physical mask. FAC's
+    // exact active quotient supplies coarse/fine coverage independently of State.
+    return {request_.levels.at(level).geometry, active_cells(level), nullptr, nullptr};
+  }
   std::string_view original_field_contract() const noexcept override { return contract_; }
   const ExecutionLane& original_field_execution_lane() const noexcept override { return *lane_; }
   int original_field_levels() const noexcept override { return level_count(); }
@@ -360,7 +388,8 @@ class PreparedCompositeGeneralField final
         contract = contract_;
         storage = ::operator new(sizeof(PreparedCompositeGeneralField));
       });
-      auto* result = new (storage) PreparedCompositeGeneralField(std::move(*request), std::move(contract), *lane_, true);
+      auto* result = new (storage)
+          PreparedCompositeGeneralField(std::move(*request), std::move(contract), *lane_, true);
       return std::unique_ptr<runtime::program::PreparedHierarchyCandidateEvaluation<Dim>>(result);
     } catch (...) {
       ::operator delete(storage);
@@ -516,7 +545,8 @@ class PreparedCompositeGeneralField final
  protected:
   SolveReport solve(const runtime::program::HierarchyTensorSolveControls& controls,
                     const ExecutionLane& lane) override {
-    if (apply_only_) throw std::logic_error("candidate coefficient resource is apply-only");
+    if (apply_only_)
+      throw std::logic_error("candidate coefficient resource is apply-only");
     if (&lane != lane_)
       throw std::logic_error("composite field execution lane changed");
     SolveReport report;
@@ -801,7 +831,12 @@ class PreparedCompositeGeneralField final
     } catch (...) {
       error = std::current_exception();
     }
-    try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
+    try {
+      Kokkos::fence();
+    } catch (...) {
+      if (!error)
+        error = std::current_exception();
+    }
     collectively_rethrow_exception(error, *lane_, "composite original field local phase");
   }
   void prepare_nullspace_() {

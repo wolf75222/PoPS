@@ -27,6 +27,7 @@ _PUBLIC = (
     "compile",
     "bind",
     "run",
+    "step",
     "__version__",
 )
 

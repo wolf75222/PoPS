@@ -36,6 +36,7 @@ def emit_principal_reconstruction(entry):
         "  static constexpr int stencil_min_offset=%d;" % min(item.options["stencil_min_offset"] for item in descriptors),
         "  static constexpr int stencil_max_offset=%d;" % max(item.options["stencil_max_offset"] for item in descriptors),
         "  std::array<pops::RuntimeParams,%d> parameter_sets{};" % len(group.states),
+        "  using pops_device_capture_members = pops::DeviceCaptureMembers<decltype(parameter_sets)>;",
         "  template<class Sample> POPS_HD pops::Real stencil_face_value(const Sample& sample) const {"]
     end = 0
     for row, (policy, count, descriptor) in enumerate(zip(policies, group.component_counts, descriptors, strict=True)):
@@ -67,6 +68,7 @@ def emit_principal_numerical_flux(entry):
         policies.append("pops_generated::" + policy)
     lines = ["struct %s {" % wrapper,
         "  std::array<pops::RuntimeParams,%d> parameter_sets{};" % len(group.states),
+        "  using pops_device_capture_members = pops::DeviceCaptureMembers<decltype(parameter_sets)>;",
         "  template<int Count> struct RowPhysical {",
         "    static constexpr int n_vars=Count; using State=pops::StateVec<Count>;",
         "    struct ProviderPack {};",
@@ -127,6 +129,7 @@ def _emit_joint_reconstruction(entry, wrapper, definitions, policies, descriptor
         "  static constexpr int stencil_max_offset=%d;"
         % max(d.options["stencil_max_offset"] for d in descriptors),
         "  std::array<pops::RuntimeParams,%d> parameter_sets{};" % len(group.states),
+        "  using pops_device_capture_members = pops::DeviceCaptureMembers<decltype(parameter_sets)>;",
         "  template<class Sample,int Count> struct MappedSample {",
         "    const Sample& source; std::array<int,Count> components; int component=0;",
         "    POPS_HD pops::Real operator()(int offset,int index) const { return source(offset,components[index]); }",

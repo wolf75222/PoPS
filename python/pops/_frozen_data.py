@@ -12,16 +12,19 @@ def freeze_containers(value: Any) -> Any:
     This does not validate a canonical payload or invoke leaf ``freeze`` hooks;
     Case and Program own those validation and transaction boundaries.
     """
-    if isinstance(value, Mapping):
-        return MappingProxyType({
-            freeze_containers(key): freeze_containers(item)
-            for key, item in value.items()
-        })
-    if isinstance(value, (list, tuple)):
-        return tuple(freeze_containers(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(freeze_containers(item) for item in value)
-    return value
+    from pops._structural_data import transform_tree
+
+    def describe(node):
+        if isinstance(node, Mapping):
+            return tuple(child for pair in node.items() for child in pair), lambda items: (
+                MappingProxyType(dict(zip(items[::2], items[1::2], strict=True))))
+        if isinstance(node, (list, tuple)):
+            return tuple(node), tuple
+        if isinstance(node, (set, frozenset)):
+            return tuple(node), frozenset
+        return None, node
+
+    return transform_tree(value, describe)
 
 
 def freeze_data(value: Any, where: str) -> Any:

@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_python_test_units  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests/python/native_dimensions.json"
@@ -25,7 +27,7 @@ def partition(paths: list[str], contract: dict) -> dict[int, list[str]]:
         raise ValueError("selected Python files must not be duplicated")
     groups: dict[int, list[str]] = {}
     for path in paths:
-        groups.setdefault(overrides.get(path, default), []).append(path)
+        groups.setdefault(overrides.get(ci_python_test_units.owner(path), default), []).append(path)
     return dict(sorted(groups.items()))
 
 
@@ -66,7 +68,8 @@ def run_groups(groups: dict[int, list[str]], packages: Path, timings: Path,
             environment.pop(key, None)
         environment.update(POPS_NATIVE_DIM=str(dimension), PYTHONNOUSERSITE="1",
                            POPS_CI_PYTEST_TIMINGS_DIR=str(receipts),
-                           POPS_CI_TEST_EXECUTION="installed")
+                           POPS_CI_TEST_EXECUTION="installed",
+                           POPS_CI_TEST_UNITS=json.dumps(paths))
         python = prefix / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         stages = [
             [sys.executable, "-m", "venv", "--system-site-packages", str(prefix)],
@@ -103,8 +106,9 @@ def run_groups(groups: dict[int, list[str]], packages: Path, timings: Path,
         result = subprocess.run(
             [str(python), "-u", "-c", bootstrap, "-v", "-ra", "--durations=20",
              "-o", "pythonpath=", "-o", f"cache_dir={receipts / 'pytest-cache'}",
-             f"--basetemp={receipts / 'pytest-tmp'}", "-p", "ci_pytest_timings",
-             f"--junitxml={receipts / 'junit.xml'}", *paths],
+             f"--basetemp={receipts / 'pytest-tmp'}", "-p", "ci_pytest_timings", "-p", "ci_python_test_units",
+             f"--junitxml={receipts / 'junit.xml'}",
+             *sorted({ci_python_test_units.owner(path) for path in paths})],
             cwd=ROOT, env=environment, check=False)
         status = status or result.returncode
     return status

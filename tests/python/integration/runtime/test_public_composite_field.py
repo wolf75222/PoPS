@@ -248,7 +248,7 @@ def test_public_joint_field_amr_source_gate(n):
         code = emit_cpp_program(case._time, model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks), target="amr_system")
         for required in ("ctx.solve_hierarchy_field(", "ctx.stage_field_components(",
                          "ctx.publish_staged_field_components();", "ctx.observe_hierarchy_field_gradient(",
-                         "ctx.reduce_hierarchy_field_component("):
+                         "ctx.reduce_hierarchy_field_observation("):
             assert required in code
         solve = code.index("HierarchyBarrierKind::linear_solve")
         observe = code.index("ctx.observe_hierarchy_field_gradient(", solve)

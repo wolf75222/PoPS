@@ -59,7 +59,7 @@ class ProgramValueAuthorityPlan:
 
 
 _BUFFER_TYPES = frozenset(("state", "rhs", "scalar_field", "vector_field", "mask"))
-_RHS_STORAGE = frozenset(("rhs", "diffusive_rhs", "source", "implicit_source", "apply"))
+_RHS_STORAGE = frozenset(("rhs", "diffusive_rhs", "stencil_flux_divergence", "source", "implicit_source", "apply"))
 _STATE_STORAGE = frozenset(("linear_combine", "solve_local_linear", "solve_local_nonlinear",
                             "solve_implicit_source", "where", "pointwise_expression"))
 _PURE_ALIASES = frozenset(("solve_outcome", "solve_outcome_component",
@@ -231,7 +231,8 @@ def prepare_program_value_authority(program: Any, authority: Any,
     for edge in edges:
         if not edge.accepted_only:
             visit(by_id[edge.source], edge.block)
-    return ProgramValueAuthorityPlan(program._ir_hash(), tuple(producers.values()), tuple(edges),
+    from .program_source_map import emission_program_hash
+    return ProgramValueAuthorityPlan(emission_program_hash(program), tuple(producers.values()), tuple(edges),
                                      tuple(owner_names))
 
 

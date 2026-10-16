@@ -16,7 +16,7 @@ from pops.time.solve_outcome import FailRun
 from test_field_rhs_auxiliary_inputs import _field_model
 
 
-def _authored(*, auxiliary=True, implicit=False, off=None, accepted_name=None):
+def _authored(*, auxiliary=True, implicit=False, off=None, accepted_name=None, factor=2):
     model, physical_state, operator = _field_model(auxiliary=auxiliary)
     if implicit:
         body = model.local_linear_operator("stage_linear", on=physical_state, matrix=((3,),))
@@ -34,7 +34,7 @@ def _authored(*, auxiliary=True, implicit=False, off=None, accepted_name=None):
         method=CellCenteredSecondOrder(), boundaries=(), solver=GeometricMG()))
     program = Program("issued-stage-value")
     state = program.state(block[physical_state])
-    stage = program.value("stage-value", 2 * state.n, at=state.n.point)
+    stage = program.value("stage-value", factor * state.n, at=state.n.point)
     if implicit:
         from pops.time import LocalLinear
         from pops.solvers import DenseLU
@@ -375,3 +375,21 @@ def test_late_refusal_remains_after_rate_and_field_candidates_before_atomic_comm
     commit = source.index("ctx.commit_many(", refusal)
     assert complete < field < refusal < commit
     assert "acceptance guard 'late-diffusive-refusal' failed" in source[refusal:commit]
+
+
+def test_identity_metadata_selection_does_not_replace_the_issued_write_storage():
+    program, model, fields, state, stage, _ = _authored(factor=1)
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    source = emit_cpp_program(program, model=model, field_plans=fields)
+    begin = source.index("auto value_write_%d = ctx.begin_program_value_write(" % stage.id)
+    write_line = source[begin:source.index("\n", begin)]
+    assert ", u%d, {ctx.program_value(%d, 0, u%d)});" % (stage.id, state.id, state.id) in write_line
+    numerical = source.index("ctx.axpy(u%d," % stage.id, begin)
+    alias = source.index("auto& identity_observed_%d =" % stage.id, numerical)
+    complete = source.index("ctx.complete_program_value_write(std::move(value_write_%d))" % stage.id, alias)
+    assert begin < numerical < alias < complete
+    # The subsequent Field consumes the selected result, not an invented storage
+    # alias before declaration. Native admission of opaque copies remains strict.
+    consumer = source.index("ctx.solve_fields_from_program_values_at(", complete)
+    assert "identity_observed_%d" % stage.id in source[consumer:source.index(";", consumer)]

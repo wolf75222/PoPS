@@ -12,6 +12,30 @@ def facts(abi=NATIVE_ABI_VERSION, **changes):
                 mapped_consumed_field_output_amr=True, **changes)
 
 
+@pytest.mark.parametrize("leaf,required", [
+    ({"op": "field_map_pack"}, True),
+    ({"contract": "mapped-consumed-output@1"}, True),
+    ({"op": "field_map_other", "ir_version": 999}, False),
+])
+def test_capability_discovery_has_no_python_container_depth_limit(leaf, required):
+    value = leaf
+    for _ in range(1500):
+        value = {"metadata": (value,)}
+    assert admission.requires_mapped_consumed_field_output(value) is required
+
+
+def test_capability_discovery_preserves_shared_dags_and_rejects_cycles():
+    shared = {"op": "ordinary_value"}
+    for _ in range(40):
+        shared = [shared, shared]
+    assert not admission.requires_mapped_consumed_field_output(shared)
+    assert admission.requires_mapped_consumed_field_output([shared, {"op": "field_map_pack"}])
+    cyclic = []
+    cyclic.append(cyclic)
+    with pytest.raises(ValueError, match="cycle"):
+        admission.requires_mapped_consumed_field_output(cyclic)
+
+
 @pytest.mark.parametrize("abi,adaptive", [(9, False), (10, False), (10, True),
                                         (NATIVE_ABI_VERSION, False), (NATIVE_ABI_VERSION, True)])
 def test_known_endpoint_abis_through_published_release(abi, adaptive):

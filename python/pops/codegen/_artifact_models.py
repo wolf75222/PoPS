@@ -121,10 +121,31 @@ def aggregate_model_metadata(compiled: Any) -> tuple[Any, ...]:
     )
 
 
+def program_mpi_capability(compiled: Any) -> bool | None:
+    """Read the sealed artifact platform, including Programs with no model blocks.
+
+    This is inert metadata: never infer serial from an empty model list, consult
+    the current native module, or derive a capability from a Program's name.
+    Low-level handles without the exact platform proof remain unknown.
+    """
+    from pops._platform_contracts import PlatformManifest
+    platform = getattr(compiled, "platform_manifest", None)
+    if type(platform) is not PlatformManifest or not platform.communicator.known:
+        return None
+    communicator = platform.communicator.require("compiled artifact communicator")
+    if communicator == "MPI_COMM_WORLD":
+        return True
+    if communicator == "serial":
+        return False
+    return None
+
+
 def aggregate_capability(compiled: Any, name: str) -> bool | None:
     """Return the proven intersection of one capability across every installed model."""
     rows = artifact_model_metadata(compiled)
-    if not rows or any(name not in row.capabilities for row in rows):
+    if not rows:
+        return program_mpi_capability(compiled) if name == "mpi" else None
+    if any(name not in row.capabilities for row in rows):
         return None
     return all(row.capabilities[name] for row in rows)
 
@@ -213,6 +234,7 @@ __all__ = [
     "ArtifactModelMetadata",
     "ArtifactModelMetadataProvider",
     "aggregate_capability",
+    "program_mpi_capability",
     "aggregate_model_metadata",
     "artifact_model_metadata",
     "component_model_metadata",

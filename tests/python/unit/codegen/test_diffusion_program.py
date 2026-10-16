@@ -109,3 +109,90 @@ def test_unproved_accepted_transform_cannot_silently_drop_diffusive_exchanges():
     transformed=SimpleNamespace(op="local_transform",inputs=(accepted,))
     with pytest.raises(ValueError,match="hides diffusive exchanges"):
         accepted_diffusive_quadrature(SimpleNamespace(_commits={"state":transformed}))
+
+
+@pytest.mark.parametrize("frontier", [None, "rhs", "source", "coupled_rate"])
+def test_deep_diffusion_search_retains_fresh_residual_frontiers(frontier):
+    from types import SimpleNamespace
+    from pops.codegen.program_diffusion_exchanges import accepted_diffusive_quadrature
+
+    value = SimpleNamespace(op="diffusive_rhs", inputs=())
+    if frontier is not None:
+        value = SimpleNamespace(op=frontier, inputs=(value,))
+    for _ in range(1500):
+        value = SimpleNamespace(op="product_get", inputs=(value,))
+    program = SimpleNamespace(_commits={"state": value})
+    if frontier is None:
+        with pytest.raises(ValueError, match="hides diffusive exchanges"):
+            accepted_diffusive_quadrature(program)
+    else:
+        assert accepted_diffusive_quadrature(program) == ()
+
+
+def test_shared_deep_diffusion_free_structure_has_no_hidden_exchange():
+    from types import SimpleNamespace
+    from pops.codegen.program_diffusion_exchanges import accepted_diffusive_quadrature
+
+    value = SimpleNamespace(op="state", inputs=())
+    for _ in range(1500):
+        value = SimpleNamespace(op="product_get", inputs=(value, value))
+    assert accepted_diffusive_quadrature(SimpleNamespace(_commits={"state": value})) == ()
+
+
+def test_deep_affine_quadrature_preserves_shared_path_multiplicity_order_and_exact_weights():
+    from fractions import Fraction
+    from types import SimpleNamespace
+    from pops.codegen.program_diffusion_exchanges import accepted_diffusive_quadrature
+
+    first = SimpleNamespace(op="diffusive_rhs", inputs=(), id=11)
+    second = SimpleNamespace(op="diffusive_rhs", inputs=(), id=12)
+    value = SimpleNamespace(op="linear_combine", inputs=(first, second, first), attrs={
+        "coeffs": ({1: Fraction(1, 3)}, {1: Fraction(-1, 2)}, {1: Fraction(2, 3)})})
+    for _ in range(1500):
+        value = SimpleNamespace(op="linear_combine", inputs=(value,), attrs={"coeffs": ({0: 1},)})
+    program = SimpleNamespace(_commits={"state": value})
+    rows = accepted_diffusive_quadrature(program, authored_stability_rates=(11, 12))
+    assert [(rate.id, weights) for rate, weights in rows] == [
+        (11, {1: Fraction(1)}), (12, {1: Fraction(-1, 2)})]
+    with pytest.raises(ValueError, match="SSP coefficient-one convex proof"):
+        accepted_diffusive_quadrature(program)
+
+
+def test_deep_local_euler_atoms_keep_exact_coefficients_and_duplicate_paths():
+    from fractions import Fraction
+    from types import SimpleNamespace
+    from pops.codegen.program_diffusion_exchanges import _single_forward_euler_with_frozen_inputs
+
+    class Reference:
+        block_ref = "block"
+
+    reference = Reference()
+    initial = SimpleNamespace(op="state", block="block", point="n", state_ref=reference)
+    rate = SimpleNamespace(op="diffusive_rhs", block="block", point="n", inputs=(initial,))
+
+    def wrapped(inputs, coefficients):
+        value = SimpleNamespace(op="linear_combine", inputs=inputs, attrs={"coeffs": coefficients})
+        for _ in range(1500):
+            value = SimpleNamespace(op="linear_combine", inputs=(value,), attrs={"coeffs": ({0: 1},)})
+        return SimpleNamespace(_commits={reference: value})
+
+    rows = ((rate, {1: Fraction(1)}),)
+    assert _single_forward_euler_with_frozen_inputs(
+        wrapped((initial, rate), ({0: 1}, {1: 1})), rows)
+    assert not _single_forward_euler_with_frozen_inputs(
+        wrapped((initial, rate), ({0: 1}, {1: Fraction(3, 2)})), rows)
+    # The local recognizer intentionally accepts one actual Euler rate atom.
+    # Sharing a node must not silently collapse two authored occurrences.
+    assert not _single_forward_euler_with_frozen_inputs(
+        wrapped((initial, rate, rate), ({0: 1}, {1: Fraction(1, 2)}, {1: Fraction(1, 2)})), rows)
+
+
+def test_explicit_affine_cycle_is_rejected_without_unbounded_work():
+    from fractions import Fraction
+    from types import SimpleNamespace
+    from pops.codegen.program_diffusion_exchanges import accepted_diffusive_quadrature
+
+    value = SimpleNamespace(op="linear_combine", attrs={"coeffs": ({0: Fraction(1)},)})
+    value.inputs = (value,)
+    with pytest.raises(ValueError, match="quadrature contains a cycle"):
+        accepted_diffusive_quadrature(SimpleNamespace(_commits={"state": value}))

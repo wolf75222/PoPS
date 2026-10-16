@@ -107,6 +107,10 @@ class _ProgramHistory(_ProgramBase):
             from pops.problem.handles import BlockHandle
             if not isinstance(block, BlockHandle):
                 raise TypeError("history: block must be a BlockHandle or None")
+        if name in getattr(self, "_global_field_history_issuance", {}):
+            from .global_history_reads import read
+            return read(self, name, lag, ncomp=ncomp, space=space, block=block,
+                        state_ref=state_ref, contract=contract)
         if ncomp is None:
             if space is None and name in self._history_spaces:
                 space = self._history_spaces[name]
@@ -203,6 +207,7 @@ class _ProgramHistory(_ProgramBase):
         depth: Any = None,
         checkpoint_policy: Any = None,
         owner_block: Any = None,
+        interpolation: Any = None,
     ) -> Any:
         """Store a ring value with one typed, immutable checkpoint-persistence policy.
 
@@ -221,6 +226,7 @@ class _ProgramHistory(_ProgramBase):
             checkpoint_policy=checkpoint_policy,
             history_depth=depth,
             owner_block=owner_block,
+            interpolation=interpolation,
         )
 
     def _store_history(
@@ -231,6 +237,7 @@ class _ProgramHistory(_ProgramBase):
         checkpoint_policy: Any,
         history_depth: Any,
         owner_block: Any = None,
+        interpolation: Any = None,
     ) -> Any:
         self._guard_mutable("store history")
         if not isinstance(name, str) or not name:
@@ -301,6 +308,14 @@ class _ProgramHistory(_ProgramBase):
             self._histories_ncomp[name] = width
             self._declare_history_block(name, value.block)
         attrs = {"history": name, "state": value.state_ref}
+        if interpolation is not None:
+            from pops.time._history.transfer import HistoryTransfer, require_ring_transfer
+            if type(interpolation) is not HistoryTransfer or (value.state_ref is None and storage is None):
+                raise TypeError("store_history interpolation requires state or issued output storage")
+            data = interpolation.to_data()
+            require_ring_transfer(data, ring_slots)
+            attrs["history_transfer"] = data
+
         if storage is not None:
             self._declare_history_block(name, storage_owner)
             attrs["global_field_storage"] = storage

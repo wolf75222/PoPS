@@ -12,17 +12,17 @@ int main(int argc, char** argv) {
       throw std::invalid_argument("expected variant, source path, and shared-object path");
     std::size_t consumed = 0;
     const auto value = std::stoul(argv[1], &consumed);
-    if (consumed != std::string(argv[1]).size() || value > 31)
+    if (consumed != std::string(argv[1]).size() || value > 63)
       throw std::invalid_argument("invalid synthetic loader variant encoding");
     const bool interface_blocks = value & 1, histories = value & 2, attempt_cursor = value & 4,
-               with_flux = value & 8, mapping = value & 16;
+               with_flux = value & 8, mapping = value & 16, history_metadata = value & 32;
     (void)pops::test::synthetic_loader::variant(interface_blocks, histories, attempt_cursor,
-                                                with_flux, mapping);
+                                                with_flux, mapping, history_metadata);
     {
       std::ofstream source(argv[2]);
       source.exceptions(std::ios::badbit | std::ios::failbit);
       source << pops::test::synthetic_loader::source(interface_blocks, histories, attempt_cursor,
-                                                     with_flux, mapping);
+                                                     with_flux, mapping, history_metadata);
     }
     const auto result = pops::test::native_dso::compile_shared(
         argv[2], argv[3], "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");

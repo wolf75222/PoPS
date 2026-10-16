@@ -1,4 +1,7 @@
 #include "../bindings_detail.hpp"
+#include "collective_python_prepare.hpp"
+#include "pops_compiler_include_contract.hpp"
+#include "pops_native_contract_strings.hpp"
 
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI) || !defined(POPS_EXPORT_BUILDING_MODULE)
 #error "the _pops host must build the shared runtime exception ABI as its exporting producer"
@@ -7,8 +10,8 @@
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/parallel/world_communicator.hpp>
-#include <pops/runtime/config/runtime_params.hpp>  // ADC-610: kMaxRuntimeParams (mirrored to Python)
-#include <pops/runtime/config/platform_manifest.hpp>  // ADC-683: explicit launch contracts
+#include <pops/runtime/config/platform_manifest.hpp>
+#include <pops/runtime/config/runtime_params.hpp>  // ADC-683: explicit launch contracts
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/module_capabilities.hpp>  // ADC-479 (#36/#37): authoritative static capability facts
 #include <pops/runtime/runtime_environment.hpp>  // ADC-609: runtime environment/precision/communicator report
@@ -60,6 +63,21 @@
 #endif
 #ifndef POPS_KOKKOS_HEADER_HASHES
 #define POPS_KOKKOS_HEADER_HASHES ""
+#endif
+#ifndef POPS_KOKKOS_STANDARD
+#define POPS_KOKKOS_STANDARD ""
+#endif
+#ifndef POPS_KOKKOS_COMPILE_OPTIONS
+#define POPS_KOKKOS_COMPILE_OPTIONS ""
+#endif
+#ifndef POPS_KOKKOS_COMPILE_DEFINITIONS
+#define POPS_KOKKOS_COMPILE_DEFINITIONS ""
+#endif
+#ifndef POPS_KOKKOS_LINK_OPTIONS
+#define POPS_KOKKOS_LINK_OPTIONS ""
+#endif
+#ifndef POPS_KOKKOS_COMPILE_FEATURES
+#define POPS_KOKKOS_COMPILE_FEATURES ""
 #endif
 
 namespace pops::detail {
@@ -283,6 +301,14 @@ py::dict runtime_backend_manifest_to_dict(const std::string& backend, const std:
   capabilities["ownership"] = pops::platform::require_text_set(
       pops::platform::capability(manifest, "ownership"), "capabilities.ownership");
   capabilities["generic_field_view"] = true;
+  // Initial arrays are imported through native host mirrors. This capability
+  // does not permit kernels to dereference host arrays on a device backend.
+  capabilities["initial_state_import_mode"] = pops::platform::require_text(
+      pops::platform::capability(manifest, "initial_state_import_mode"),
+      "capabilities.initial_state_import_mode");
+  capabilities["initial_state_import_memory_spaces"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "initial_state_import_memory_spaces"),
+      "capabilities.initial_state_import_memory_spaces");
   capabilities["execution_backend"] = pops::platform::require_text(
       pops::platform::capability(manifest, "execution_backend"), "capabilities.execution_backend");
   capabilities["shared_space"] = pops::platform::require_text(
@@ -446,18 +472,23 @@ void init_core(py::module_& m) {
           },
           py::arg("payload"), py::arg("root") = 0)
       .def(
+          "collective_prepare",
+          [](const pops::WorldCommunicator& world, py::handle callback) {
+            return pops::python_collective::collective_prepare(world, callback);
+          },
+          py::arg("callback"),
+          "Run one strictly local callback; return only after every rank prepared successfully.")
+      .def(
+          "agree_control_bytes",
+          [](const pops::WorldCommunicator& world, py::handle schema, py::handle payload) {
+            return pops::python_collective::agree_control_bytes(world, schema, payload);
+          },
+          py::arg("schema"), py::arg("payload"),
+          "Compare two exact byte strings collectively with fixed-memory native chunks.")
+      .def(
           "allgather_bytes",
-          [](const pops::WorldCommunicator& world, const py::bytes& payload) {
-            const std::string native = payload.cast<std::string>();
-            std::vector<std::string> gathered;
-            {
-              py::gil_scoped_release release;
-              gathered = world.allgather_bytes(native);
-            }
-            py::tuple result(gathered.size());
-            for (std::size_t index = 0; index < gathered.size(); ++index)
-              result[index] = py::bytes(gathered[index]);
-            return result;
+          [](const pops::WorldCommunicator& world, py::handle payload) {
+            return pops::python_collective::allgather_bytes(world, payload);
           },
           py::arg("payload"))
       .def(
@@ -516,18 +547,23 @@ void init_core(py::module_& m) {
           },
           py::arg("payload"), py::arg("root") = 0)
       .def(
+          "collective_prepare",
+          [](const pops::ObserverMpiLane& lane, py::handle callback) {
+            return pops::python_collective::collective_prepare(lane, callback);
+          },
+          py::arg("callback"),
+          "Run one strictly local callback; return only after every rank prepared successfully.")
+      .def(
+          "agree_control_bytes",
+          [](const pops::ObserverMpiLane& lane, py::handle schema, py::handle payload) {
+            return pops::python_collective::agree_control_bytes(lane, schema, payload);
+          },
+          py::arg("schema"), py::arg("payload"),
+          "Compare two exact byte strings collectively with fixed-memory native chunks.")
+      .def(
           "allgather_bytes",
-          [](const pops::ObserverMpiLane& lane, const py::bytes& payload) {
-            const std::string native = payload.cast<std::string>();
-            std::vector<std::string> gathered;
-            {
-              py::gil_scoped_release release;
-              gathered = lane.allgather_bytes(native);
-            }
-            py::tuple result(gathered.size());
-            for (std::size_t index = 0; index < gathered.size(); ++index)
-              result[index] = py::bytes(gathered[index]);
-            return result;
+          [](const pops::ObserverMpiLane& lane, py::handle payload) {
+            return pops::python_collective::allgather_bytes(lane, payload);
           },
           py::arg("payload"))
       .def(
@@ -565,14 +601,17 @@ void init_core(py::module_& m) {
   // type.  Status/action are exposed as their stable semantic names instead of leaking C++ enum
   // ordinals into the private bootstrap ABI.
   py::class_<pops::ResidualEvaluationEvidence>(m, "_ResidualEvaluationEvidence")
-      .def_readonly("initial_residual_norm", &pops::ResidualEvaluationEvidence::initial_residual_norm)
+      .def_readonly("initial_residual_norm",
+                    &pops::ResidualEvaluationEvidence::initial_residual_norm)
       .def_readonly("rhs_norm", &pops::ResidualEvaluationEvidence::rhs_norm)
-      .def_readonly("initial_evaluation_bound", &pops::ResidualEvaluationEvidence::initial_evaluation_bound)
+      .def_readonly("initial_evaluation_bound",
+                    &pops::ResidualEvaluationEvidence::initial_evaluation_bound)
       .def_readonly("evaluation_bound", &pops::ResidualEvaluationEvidence::evaluation_bound)
       .def_readonly("requested_threshold", &pops::ResidualEvaluationEvidence::requested_threshold)
       .def_readonly("applied_threshold", &pops::ResidualEvaluationEvidence::applied_threshold)
       .def_readonly("roundoff_limited", &pops::ResidualEvaluationEvidence::roundoff_limited)
-      .def_readonly("relative_to_rhs_upper", &pops::ResidualEvaluationEvidence::relative_to_rhs_upper);
+      .def_readonly("relative_to_rhs_upper",
+                    &pops::ResidualEvaluationEvidence::relative_to_rhs_upper);
   py::class_<pops::SolveReport>(m, "_SolveReport")
       .def_readonly("iters", &pops::SolveReport::iters)
       .def_readonly("evaluations", &pops::SolveReport::evaluations)
@@ -631,6 +670,7 @@ void init_core(py::module_& m) {
   m.attr("__cxx_std__") = static_cast<int>(__cplusplus > 202002L ? 23 : 20);
 #endif
   m.attr("__native_dimension__") = pops::kNativeDimension;
+  m.attr("__compiler_include_contract__") = pops::build::compiler_include_contract_json;
 
   // Compute backend COMPILED into the module: True if _pops was built with Kokkos
   // (-DPOPS_USE_KOKKOS=ON -> POPS_HAS_KOKKOS), hence capable of multi-thread (OpenMP device) / GPU.
@@ -639,11 +679,17 @@ void init_core(py::module_& m) {
 #ifdef POPS_HAS_KOKKOS
   m.attr("__has_kokkos__") = true;
   py::dict kokkos_contract;
-  kokkos_contract["schema_version"] = 1;
+  kokkos_contract["schema_version"] = 2;
   kokkos_contract["abi_sha256"] = POPS_KOKKOS_ABI;
   kokkos_contract["include_dirs"] = pipe_tuple(POPS_KOKKOS_INCLUDE);
   kokkos_contract["header_paths"] = pipe_tuple(POPS_KOKKOS_HEADER_PATHS);
   kokkos_contract["header_sha256"] = pipe_tuple(POPS_KOKKOS_HEADER_HASHES);
+  kokkos_contract["compiler"] = POPS_CXX_COMPILER;
+  kokkos_contract["standard"] = POPS_KOKKOS_STANDARD;
+  kokkos_contract["compile_options"] = pipe_tuple(POPS_KOKKOS_COMPILE_OPTIONS);
+  kokkos_contract["compile_definitions"] = pipe_tuple(POPS_KOKKOS_COMPILE_DEFINITIONS);
+  kokkos_contract["link_options"] = pipe_tuple(POPS_KOKKOS_LINK_OPTIONS);
+  kokkos_contract["compile_features"] = pipe_tuple(POPS_KOKKOS_COMPILE_FEATURES);
   m.attr("__kokkos_contract__") = std::move(kokkos_contract);
 #else
   m.attr("__has_kokkos__") = false;
@@ -768,10 +814,11 @@ void init_core(py::module_& m) {
   m.def("reset_fallback_diagnostics", &pops::reset_fallback_diagnostics_counters,
         "Reset process-local fallback/degraded-route diagnostic counters.");
 
-  // Runtime-param capacity (ADC-610): the SINGLE C++ source of kMaxRuntimeParams
-  // (pops/runtime/config/runtime_params.hpp). The codegen guard reads this so the Python literal
-  // fallback (physics/aux.py) cannot SILENTLY drift from the fixed-size device array bound.
-  m.attr("__max_runtime_params__") = static_cast<int>(pops::kMaxRuntimeParams);
+  // Exact cardinality is authenticated by BindSchema; storage is bounded in
+  // bytes for each immutable host/device incarnation, without a fixed count cap.
+  m.attr("__max_runtime_params__") = py::none();
+  m.def("runtime_parameter_storage_bytes", &pops::RuntimeParams::checked_storage_bytes,
+        py::arg("count"), "Complete immutable carrier bytes; performs no allocation.");
   // REAL state of the Kokkos init (lazy: first Fab allocation, through ANY path --
   // System, AmrSystem, DSL .so...). Internal environment diagnostics rely on this rather than on a
   // Python flag that only saw System/AmrSystem, so a "too late" report remains reliable.
@@ -790,6 +837,8 @@ void init_core(py::module_& m) {
   using NativeSystemConfig = SystemConfig<kNativeDimension>;
   py::class_<NativeSystemConfig>(m, "SystemConfig")
       .def(py::init<>())
+      .def_readwrite("runtime_parameter_byte_capacity",
+                     &NativeSystemConfig::runtime_parameter_byte_capacity)
       .def_property(
           "shape",
           [](const NativeSystemConfig& config) { return ranked_extent_to_python(config.shape); },

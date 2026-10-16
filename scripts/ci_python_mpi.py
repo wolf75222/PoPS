@@ -19,6 +19,7 @@ import ci_select_tests as selection
 ROOT = Path(__file__).resolve().parents[1]
 TEST_STEP_SECONDS = 35 * 60
 LEGACY_PARENT_CASES = {
+    'tests/python/integration/mpi/test_api_v02_continuation_migration.py': 1,
     'tests/python/integration/mpi/test_amr_rank_change_restart.py': 1,
     'tests/python/integration/mpi/test_initial_field_ghost_mpi.py': 2,
 }

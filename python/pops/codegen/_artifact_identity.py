@@ -20,7 +20,7 @@ def model_artifact_spec(
         NATIVE_SYSTEM_PACKAGE_ABI_VERSION,
         model_hash,
     )
-    from pops.codegen.toolchain import _native_feature_key
+    from pops.codegen.toolchain import _native_feature_key, native_compiler_command_contract
     from pops.codegen.compile_link_flags import deterministic_component_link_flags
     from pops.codegen._native_model_provider_plan import NATIVE_MODEL_PROVIDER_CONTRACT
     from pops.identity import artifact_spec_identity, make_identity
@@ -43,6 +43,7 @@ def model_artifact_spec(
             "features": _native_feature_key(),
         },
         components={
+            **native_compiler_command_contract(compiler),
             "codegen_source_authority": codegen_source_authority(),
             "model_hash": digest,
             "emitted_name": str(name or ""),
@@ -78,8 +79,9 @@ def program_artifact_spec(
 ) -> tuple[Any, Any]:
     """Return semantic and artifact-spec identities for one compiled Program."""
     from pops.codegen.cache import _precision_cache_key, _registry_cache_key
-    from pops.codegen.toolchain import _native_feature_key
+    from pops.codegen.toolchain import _native_feature_key, native_compiler_command_contract
     from pops.identity import artifact_spec_identity
+    from pops.codegen.program_source_map import source_map
     from pops.identity.semantic import (
         model_semantic_data, program_semantic_data, semantic_identity, semantic_identity_of,
     )
@@ -125,7 +127,9 @@ def program_artifact_spec(
         toolchain="%s|%s" % (compiler, standard),
         routes={"registry": _registry_cache_key(), "features": _native_feature_key()},
         components={
+            **native_compiler_command_contract(compiler),
             "generated_source": hashlib.sha256(source.encode("utf-8")).digest(),
+            "program_source_map": source_map(source)["map_sha256"],
             "native_dependency_contract": (
                 "compiler-observed-sdk-metadata-v2" if toolchain_capture is not None
                 else "compiler-observed-v1"),

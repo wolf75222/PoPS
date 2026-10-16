@@ -37,6 +37,7 @@ PUBLIC_ROOT = (
     "compile",
     "bind",
     "run",
+    "step",
     "__version__",
 )
 
@@ -82,6 +83,7 @@ expected_public = (
     "compile",
     "bind",
     "run",
+    "step",
     "__version__",
 )
 if tuple(pops.__all__) != expected_public:

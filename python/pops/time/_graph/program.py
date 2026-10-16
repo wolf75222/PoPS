@@ -2,19 +2,19 @@
 from __future__ import annotations
 
 import hashlib
-import json
+from pops._structural_data import canonical_json
 from dataclasses import dataclass
 from typing import Any
 
 from pops.time._graph.base import ValueRef, nonempty
-from pops.time._graph.control import Branch, Loop
+from pops.time._graph.control import Branch, Capture, Loop
 from pops.time._graph.nodes import NODE_TYPES
 from pops.time._graph.validation import validate_nodes
 from pops.time.points import Clock
 from pops.time._cadence import ProgramCadence
 
 
-GRAPH_NODE_TYPES = (*NODE_TYPES, Branch, Loop)
+GRAPH_NODE_TYPES = (*NODE_TYPES, Branch, Capture, Loop)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -58,7 +58,7 @@ class ProgramGraph:
         object.__setattr__(self, "cadence", cadence)
         available: dict[int, Any] = {}
         validate_nodes(self.nodes, self.clocks, available, where="ProgramGraph")
-        payload = json.dumps(self.to_data(), sort_keys=True, separators=(",", ":"))
+        payload = canonical_json(self.to_data())
         object.__setattr__(self, "graph_hash", hashlib.sha256(payload.encode()).hexdigest())
 
     def ref(self, node: Any) -> ValueRef:

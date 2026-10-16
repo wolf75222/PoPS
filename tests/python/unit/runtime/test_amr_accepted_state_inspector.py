@@ -15,7 +15,7 @@ def _image(version, *, committed_attempt=37):
     frame = lambda value: word(len(value)) + value
     image = bytearray(f"POPSAND{version}".encode() + word(2) + frame(b"spatial"))
     image += word(9) + word(4)  # topology, materialization
-    if version in (8, 9, "A"):
+    if version in (8, 9, "A", "B", "C", "D", "E", "F"):
         image += word(committed_attempt)
     image += word(2) + struct.pack("<qqqqd", 0, 3, 0, 1, .25) * 2
     image += word(1) + frame(b"macro") + word(3)
@@ -23,15 +23,17 @@ def _image(version, *, committed_attempt=37):
     for identity in (b"state", b"space", b"clock", b"interpolation"):
         image += frame(identity)
     image += word(2) + word(1)
-    if version == "A":
+    if version in ("A", "B", "C", "D", "E", "F"):
         image += word(1)  # exact declared history ghost depth
     image += word(2)
     for slot in (0, 1):
         image += frame(b"dense") + struct.pack("<qqdQq", 1, slot, .125, 1, 2)
-        if version in (7, 8, 9, "A"):
+        if version in (7, 8, 9, "A", "B", "C", "D", "E", "F"):
             image += struct.pack("<QQQQ", 1, 0x3FD0000000000000, 0x3FC0000000000000, 3)
+        if version in ("B", "C", "D", "E", "F"):
+            image += struct.pack("<QQQQ", 0, 0, 0, 0)
     image += word(1) + frame(b"remap") + struct.pack("<qqQQQQqqqddQ", 0, 1, 8, 3, 9, 4, 3, 1, 2, .25, .125, 1)
-    if version in (9, "A"):
+    if version in (9, "A", "B", "C", "D", "E", "F"):
         image += word(10) + word(5) + word(2) + word(0) + word(0x3FD0000000000000) + word(17)
         image += frame(b"opaque\x00captured-ring-contract\xff")
     image += frame(b"history-flux")
@@ -44,7 +46,7 @@ def _image(version, *, committed_attempt=37):
     return bytes(image) + suffix, tagging, suffix
 
 
-@pytest.mark.parametrize("version", (4, 5, 6, 7, 8, 9, "A"))
+@pytest.mark.parametrize("version", (4, 5, 6, 7, 8, 9, "A", "B", "C", "D", "E", "F"))
 def test_tagging_extraction_and_replacement_preserve_other_authorities(version):
     image, tagging, suffix = _image(version)
     found, offset = accepted_tagging_hysteresis_span(image, dimension=2)
@@ -57,7 +59,7 @@ def test_tagging_extraction_and_replacement_preserve_other_authorities(version):
         assert accepted_tagging_hysteresis_span(changed, dimension=2) == (replacement, offset)
 
 
-@pytest.mark.parametrize("version", (7, 8, 9, "A"))
+@pytest.mark.parametrize("version", (7, 8, 9, "A", "B", "C", "D", "E", "F"))
 def test_truncated_prefix_unknown_version_and_wrong_dimension_are_refused(version):
     image, tagging, suffix = _image(version)
     # Every boundary, including the attempt, ghost depth and four sample words, must fail closed.
@@ -67,7 +69,7 @@ def test_truncated_prefix_unknown_version_and_wrong_dimension_are_refused(versio
     with pytest.raises(AssertionError, match="dimension"):
         accepted_tagging_hysteresis_span(image, dimension=1)
     with pytest.raises(AssertionError, match="v4/v5/v6/v7/v8"):
-        accepted_tagging_hysteresis_span(b"POPSANDB" + image[8:], dimension=2)
+        accepted_tagging_hysteresis_span(b"POPSANDG" + image[8:], dimension=2)
 
 
 @pytest.mark.parametrize("committed_attempt", (0, 42, 2**64 - 1))

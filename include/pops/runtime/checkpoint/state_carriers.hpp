@@ -55,8 +55,14 @@ std::uint64_t state_carriers_byte_capacity(std::span<const std::uint64_t> level_
       throw std::length_error("state carrier capacity multiplication overflows");
     return a * b;
   };
-  if (level_cells.empty() || blocks.empty())
-    throw std::invalid_argument("state carrier capacity requires configured levels and blocks");
+  if (level_cells.empty())
+    throw std::invalid_argument("state carrier capacity requires configured levels");
+  // No block owns any patch storage. The existing wire still carries its exact
+  // dimension, scalar width, rank/shard, level count, zero block count and zero
+  // patch count: 64 bytes, with no invented cell or field. A Continuation-only
+  // System has a configured level but no carrier cells on that level.
+  if (blocks.empty())
+    return 8 + 7 * 8;
   std::uint64_t cells = 0;
   for (auto count : level_cells) {
     if (!count) throw std::invalid_argument("state carrier capacity level is empty");
@@ -90,7 +96,7 @@ inline std::uint64_t product(std::uint64_t a, std::uint64_t b) {
   return a * b;
 }
 template <int Dim> void validate(const StateCarrierArchive<Dim>& a) {
-  if ((a.real_bits != 32 && a.real_bits != 64) || !a.ranks || !a.levels || a.blocks.empty() ||
+  if ((a.real_bits != 32 && a.real_bits != 64) || !a.ranks || !a.levels ||
       a.ranks > std::uint64_t(std::numeric_limits<std::int64_t>::max()) || a.shard < -1 ||
       (a.shard >= 0 && std::uint64_t(a.shard) >= a.ranks))
     throw std::invalid_argument("state carrier archive has invalid authority");
@@ -325,6 +331,9 @@ template <int Dim> void validate_complete_state_carriers(
     const StateCarrierArchive<Dim>& a, StateCarrierSpatialValidationStats* stats = nullptr) {
   state_carrier_detail::validate(a);
   if (a.shard != -1) throw std::invalid_argument("state carrier restore requires a merged archive");
+  // validate() already rejects any patch without an owning block. Avoid
+  // allocating an index of levels when there is no spatial carrier to index.
+  if (a.blocks.empty()) return;
   if (state_carrier_detail::product(a.blocks.size(), a.levels) > a.patches.size())
     throw std::invalid_argument("state carrier source block/level count exceeds actual rows");
   // Cache block-zero source ranges once. All subsequent blocks compare linearly to these exact

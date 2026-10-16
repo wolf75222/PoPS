@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from fractions import Fraction
 from typing import Any
 
-from pops.identity.scalar import scalar_cpp
+from pops.identity.scalar import scalar_cpp, parse_canonical_integer
 from pops.time.references import block_name, state_name
 from pops.codegen.program_emit_kernels import (
     _PROFILE_SKIP_OPS,
@@ -187,7 +187,7 @@ def _canonical_metadata_int(value: Any, *, where: str) -> int:
         if isinstance(scalar, Mapping) and scalar.get("kind") == "integer" \
                 and isinstance(scalar.get("value"), str):
             try:
-                return int(scalar["value"])
+                return parse_canonical_integer(scalar["value"])
             except ValueError:
                 pass
     raise TypeError("%s must be an exact graph-canonical integer" % where)
@@ -377,6 +377,18 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
              field_plans: Any = None,
              has_shared_interface_implicit_jacvec: bool = False, *,
              implicit_spatial_residual: bool = False) -> None:
+    from .program_source_map import operation
+    with operation(v, lines, prelude, environment=var):
+        _emit_op_impl(program, v, base, committed_ids, var, model, lines, prelude,
+            block_idx, target, field_plans, has_shared_interface_implicit_jacvec,
+            implicit_spatial_residual=implicit_spatial_residual)
+
+
+def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, model: Any, lines: Any,
+             prelude: Any = None, block_idx: Any = None, target: Any = "system",
+             field_plans: Any = None,
+             has_shared_interface_implicit_jacvec: bool = False, *,
+             implicit_spatial_residual: bool = False) -> None:
     """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
     by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
     reductions / compares / linear_combine all lower identically inside the loop. @p base is the
@@ -386,6 +398,52 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     the matrix-free Krylov ops; None inside a sub-block (those ops only appear at the top level for
     now). @p block_idx maps exact ``BlockHandle`` identities to runtime indices (ADC-426). Missing
     routing is always an error; even a one-block Program reaches index 0 through an explicit map."""
+    if v.op == "provenance_bind":
+        from pops.ledger_provenance import validate_contract_operation
+        from pops.time._program.structured_control import value_signature
+        validate_contract_operation(v.inputs, v.attrs, value_signature(v))
+        # The contract is checked at authoring/reload/emission. The native value
+        # is the exact existing binding, including any structured ownership.
+        var[v.id] = var[v.inputs[0].id]
+        return
+    from .program_emit_distributed_arrays import OPS as DISTRIBUTED_OPS, emit_distributed_op
+    if v.op in DISTRIBUTED_OPS or (v.op == "finite_same_domain" and
+            v.inputs[0].attrs["signature"]["ownership"] != "replicated"):
+        emit_distributed_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
+    from .program_emit_structured_control import STRUCTURED_OPS, emit_structured_op
+    if v.op in STRUCTURED_OPS:
+        emit_structured_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
+    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
+    if v.op in FIELD_REPRESENTATION_OPS:
+        from .program_emit_field_representation import emit_field_representation
+        emit_field_representation(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
+    from .program_emit_versioned import VERSIONED_OPS, emit_versioned_op
+    if v.op in VERSIONED_OPS:
+        emit_versioned_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
+    from .program_emit_finite_arrays import FINITE_OPS, emit_finite_op
+    if v.op in FINITE_OPS:
+        emit_finite_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
+        return
+    if target == "amr_system" and v.op not in {
+            "branch", "while", "range", "subcycle", "synchronize", "provenance_bind",
+            "solve_outcome", "solve_outcome_component", "layout_map_export", "layout_map_import"}:
+        # Structural carriers may retain a producer-level Field opaquely. A
+        # mathematical consumer must authenticate its instance before allocating
+        # outputs or launching any numerical kernel; matching shape is not a port.
+        reads = [item for item in v.inputs
+                 if item.vtype in {"state", "rhs", "scalar_field"}
+                 and item.id in var
+                 and ("field_observation_snapshot", item.id) not in var]
+        if reads:
+            lines.append("ctx.prepare_spatial_collectively([&]() {")
+            lines.extend("  ctx.require_program_field_access(%s);" % var[item.id] for item in reads)
+            lines.append("}); // Program numerical Field input authority")
+    from .program_emit_transform_obligation import emit_physical_input_guards
+    lines += emit_physical_input_guards(v, var)
     bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
             if v.block is not None else None)
     if v.id in var.get(("moving_deferred_rates",), ()):
@@ -413,6 +471,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     # Operation lowering explicitly identifies the storage setup needed by both cadence
     # branches. Evaluation context and kernels remain in the guarded body.
     output_setup_end = None
+    observed_output = None
     delegated_before_write = None
     evaluation_prelude = []
     if v.op in {"source", "implicit_source", "local_transform", "affine_moment_update", "apply", "integral_candidate",
@@ -492,14 +551,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 raise ValueError(
                     "LinearInterpolation target %s lies outside retained history [-%d, 0]"
                     % (coordinate, depth))
-            var[v.id] = "u%d" % v.id
+            owned = "history_interpolation_%d" % v.id
+            var[v.id] = "(*%s)" % owned
+            var[("field_pointer", v.id)] = owned
             lines.append(
-                "pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                % (var[v.id], int(v.id), var[source.id]))
-            lines.append(
-                "ctx.interpolate_history_linear(%s, %s, %d, %d, %s, %s, %d, %s);"
+                "auto %s = ctx.interpolate_history_linear_owned(%s, %d, %d, %s, %s, %d, %s);"
                 % (
-                    var[v.id],
+                    owned,
                     json.dumps(source.attrs["history"]),
                     depth,
                     bidx,
@@ -749,7 +807,20 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # slot, the declared step-0 value -- while the default multistep read keeps the fail-loud
         # ctx.history byte-identical (a store-first scheme reading before its store is a config error).
         var[v.id] = "h%d" % v.id
-        if "ncomp" in v.attrs:
+        from .program_emit_intervals import emit_authenticated_history_read
+        if v.attrs.get("global_field_history_read"):
+            from pops.time._program.global_history_reads import validate_read
+            from pops.time._program.global_history_storage import descriptor
+            store = validate_read(program, v)
+            owner = block_idx[store.block]
+            lines.append("auto& %s = ctx.history_observation(%s, %d, %d, %d, %s);"
+                         % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
+                            int(v.attrs["ncomp"]), owner,
+                            json.dumps(descriptor(program, v.attrs["history"]))))
+            output_setup_end = len(lines)
+        elif emit_authenticated_history_read(program, v, var, lines, target=target):
+            output_setup_end = len(lines)
+        elif "ncomp" in v.attrs:
             if target == "amr_system" and bidx is not None:
                 lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.history_zero_start(%s, %d, %d, %d);"
                              % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
@@ -883,12 +954,35 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 status, active_mask, bidx, provider_plans=provider_plans,
                 consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
         else:
-            lines += _emit_local_transform_kernel(
+            from .program_emit_transform_obligation import emit_closed_transform, emit_pending_presence
+            from pops.time.value_signatures import value_signature
+            pending_lines, pending = emit_pending_presence(var[state_in.id], "transform_%d" % v.id)
+            lines += pending_lines
+            closed_owner = "transform_closed_owner_%d" % v.id
+            lines.append("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % closed_owner)
+            lines.append("if (%s) {" % pending)
+            closed, owned = emit_closed_transform(
+                model=node_model, name=v.attrs["transform"], source=var[state_in.id],
+                output=var[v.id], status=status, mask=active_mask, owner=bidx,
+                signature=value_signature(state_in), block_indices=block_idx,
+                provider_plans=provider_plans,
+                consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+                stem="closed_transform_%d" % v.id,
+                capacity=program.representation_workspace_byte_capacity,
+                target=target, issue=False)
+            lines += ["  " + line for line in closed]
+            lines.append("  %s = std::move(%s);" % (closed_owner, owned))
+            lines.append("} else {")
+            lines += ["  " + line for line in _emit_local_transform_kernel(
                 node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
                 active_mask, bidx,
                 provider_plans=provider_plans,
                 consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
-            )
+            )]
+            lines.append("}")
+            alias = "transform_observed_%d" % v.id
+            lines.append("auto& %s = %s ? *%s : %s;" % (alias, closed_owner, closed_owner, var[v.id]))
+            var[v.id] = alias
         reduced = "transform_failed_%d" % v.id
         # AMR transforms (including after-synchronization and composite Q maps) are
         # produced and checked collectively one level at a time. Sibling statuses
@@ -938,9 +1032,45 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      % (var[v.id], int(v.id), var[a_in.id]))
         output_setup_end = len(lines)
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
+    elif v.op in {"interval_begin", "interval_end", "interval_check", "history_interval_begin",
+                  "history_interval_duration", "history_interval_check"}:
+        from .program_emit_intervals import emit_interval
+        emit_interval(program, v, var, lines, target=target, block_idx=block_idx)
+    elif v.op == "invocation_level":
+        if v.vtype != "int64" or v.inputs or v.attrs.get("schema_version") != 1:
+            raise ValueError("invocation level requires its closed Int64 contract")
+        var[v.id] = "invocation_level_%d" % v.id
+        lines.append("const std::int64_t %s = ctx.invocation_level();" % var[v.id])
     elif v.op == "requested_dt":
         var[v.id] = "requested_dt_%d" % v.id
         lines.append("const pops::Real %s = static_cast<pops::Real>(dt);" % var[v.id])
+    elif v.op == "attempt_start":
+        if target != "amr_system" or dict(v.attrs) != {"schema_version": 1}:
+            raise ValueError("attempt_start requires the AMR macro snapshot contract")
+        var[v.id] = "macro_entry_%d" % v.id
+        lines.append("auto& %s = ctx.attempt_start(%d);" % (var[v.id], bidx))
+    elif v.op == "composite_pair":
+        if target != "amr_system" or v.attrs.get("schema_version") != 1:
+            raise ValueError("composite_pair requires the AMR physical-volume contract")
+        left, right = v.inputs
+        var[v.id] = "composite_pair_%d" % v.id
+        weights = ", ".join(repr(float(weight)) for weight in v.attrs["weights"])
+        lines.append("const pops::Real %s = ctx.composite_pair(%d, %s, %s, {%s});" % (
+            var[v.id], bidx, "true" if left.op == "attempt_start" else "false",
+            "true" if right.op == "attempt_start" else "false", weights))
+    elif v.op == "composite_integral":
+        from .program_emit_composite import emit_composite_integral
+        emit_composite_integral(v, var, lines, target=target, block_index=bidx)
+    elif v.op == "accept_increment":
+        if target != "amr_system" or {key: item for key, item in v.attrs.items() if key != "histories"} != {
+                "schema_version": 1, "interval_rule": "affine_macro_publication"}:
+            raise ValueError("accept_increment has an unsupported macro publication contract")
+        from pops.time._program.affine_history import validate_history_contract
+        validate_history_contract(program, v.attrs.get("histories", {}))
+        scale, duration = v.inputs
+        var[v.id] = var[duration.id]
+        lines.append("ctx.accept_increment(static_cast<double>(%s), static_cast<double>(%s));" % (
+            var[scale.id], var[duration.id]))
     elif v.op == "reached_duration":
         if dict(v.attrs) != {"schema_version": 1, "interval_rule": "no_spatial_exchanges"}:
             raise ValueError("computed frontier has an unsupported interval contract")
@@ -972,14 +1102,26 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 )
             )
         var[v.id] = var[scalar_in.id]
+    elif v.op == "stencil_flux_divergence":
+        if bidx is None:
+            raise ValueError("stencil flux delegate requires an explicit resolved block owner")
+        from .program_emit_stencil_flux import emit_stencil_flux
+        from .program_value_authority import delegated_output_boundaries
+        publication = emit_stencil_flux(v, var, lines, block=bidx, target=target)
+        output_setup_end, delegated_before_write = delegated_output_boundaries(
+            v, var, lines, _profile_start, bidx, publication)
     elif v.op == "diffusive_rhs":
         if bidx is None:
             raise ValueError("diffusive delegate requires an explicit resolved block owner")
         from pops.codegen.program_emit_diffusion import _emit_diffusive_rhs
         from pops.codegen.program_partition_stability import has_independent_diffusion_transport
-        defer_bound = (has_independent_diffusion_transport(node_model)
-                       and any(node is v for node in program._values)
-                       and v.attrs.get("schedule") is None)
+        # A rate has no timestep until an actual state consumer supplies its
+        # coefficient. This also applies to a single diffusion partition.
+        defer_bound = (v.id in var.get(("authored_stability_rates",), ()) or (
+                       (v.id in var.get(("consumed_explicit_rates",), ())
+                        or (has_independent_diffusion_transport(node_model)
+                            and any(node is v for node in program._values)))
+                       and v.attrs.get("schedule") is None))
         publications = []
         _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                             defer_explicit_bound=defer_bound,
@@ -989,8 +1131,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         from .program_value_authority import delegated_output_boundaries
         output_setup_end, delegated_before_write = delegated_output_boundaries(
             v, var, lines, _profile_start, bidx, publications[0])
-        var[("partition_frequency", v.id)] = "diffusion_frequency_%d" % v.id
-        if defer_bound:
+        if defer_bound and ("partition_frequency", v.id) in var:
             key = ("partition_stability_deferred",)
             var[key] = var.get(key, frozenset()) | frozenset((v.id,))
     elif v.op == "rhs" and v.attrs.get("path_conservative", False):
@@ -1324,6 +1465,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         sp = "sf%d" % v.id
         var[v.id] = "(*%s)" % sp
         ncomp = int(v.attrs.get("ncomp", 1))
+        if "spatial_port_storage" in v.attrs:
+            from pops.time._program.spatial_interaction import validate_spatial_scratch
+            validate_spatial_scratch(v)
+            if target != "system":
+                raise NotImplementedError("computed cell scratch currently requires a Uniform layout; composite ghosts need their own port")
+            owner = _cartesian_generated_owner_index(block_idx, v, where="computed cell scratch")
+            prelude.append("auto %s = ctx.alloc_shared_scalar_field_for_block(%d, %d, 1);"
+                           % (sp, owner, ncomp))
+            var[("field_pointer", v.id)] = sp
+            return
         if v.attrs.get("scalar_storage") is not None:
             if target == "amr_system":
                 rebound = v.id in var.get(("hierarchy_retained_bindings",), ())
@@ -1381,6 +1532,11 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # Step-body bare Laplacian (e.g. Lap phi^n for the condensed RHS). Inside an apply sub-block
         # this op is handled by _emit_matrix_free_operator; here it is the top-level path.
         o, i = v.inputs
+        if var.get(("structured_control",)):
+            from pops.codegen.program_emit_structured_control import emit_region_laplacian
+            owner = _cartesian_generated_owner_index(block_idx, v, where="region computed Laplacian")
+            emit_region_laplacian(v, var, lines, owner=owner, target=target)
+            return
         if target == "system":
             owner = _cartesian_generated_owner_index(
                 block_idx, v, where="preflight laplacian %r" % v.name)
@@ -1575,6 +1731,30 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         if due is not None:
             expression = "(%s) ? (%s) : pops::Real(0)" % (due, expression)
         lines.append("const pops::Real %s = %s;" % (var[v.id], expression))
+        from pops.codegen.program_emit_structured_control import _reject_if
+        _reject_if("!std::isfinite(%s)" % var[v.id], lines,
+                   "nonfinite scalar arithmetic or invalid division")
+    elif v.op == "scalar_isfinite":
+        from pops.codegen.program_emit_expressions import prepared_scalar_input
+        var[v.id] = "std::isfinite(%s)" % prepared_scalar_input(v.inputs[0], var)
+    elif v.op == "scalar_expression":
+        from pops.codegen.program_emit_expressions import checked_expression_dag, prepared_scalar_input
+        from pops.codegen.program_emit_structured_control import _reject_if
+        if v.vtype != "scalar" or any(item.vtype != "scalar" for item in v.inputs):
+            raise TypeError("scalar expression has lost its finite scalar authority")
+        body, outputs, invalid = checked_expression_dag(
+            v.attrs["expressions"], v.attrs["expression_nodes"],
+            tuple((prepared_scalar_input(item, var),) for item in v.inputs))
+        if len(outputs) != 1:
+            raise ValueError("a scalar expression must yield exactly one value")
+        evaluation = "scalar_evaluation_%d" % v.id
+        lines.append("const auto %s = [&]() {" % evaluation)
+        lines.extend("  " + line for line in body)
+        lines.append("  return std::pair<pops::Real, bool>{%s, (%s)};" % (outputs[0], invalid))
+        lines.append("}();")
+        _reject_if(evaluation + ".second", lines, "scalar expression domain or nonfinite result")
+        var[v.id] = "s%d" % v.id
+        lines.append("const pops::Real %s = %s.first;" % (var[v.id], evaluation))
     elif v.op == "compare":
         # A predicate over scalars -> an inline boolean C++ expression (no statement of its own; the
         # while op embeds it directly in `if (!(<expr>)) break;`).
@@ -1591,6 +1771,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         action = v.attrs["action"]
         from pops.time.solve_outcome import FailRun, RejectAttempt
         message = "acceptance guard %r failed" % v.attrs["guard"]
+        from pops.codegen.program_emit_structured_control import _uniform_int
+        _uniform_int(var[condition.id], lines, "acceptance guard differs across execution lane")
         lines.append("if (!(%s)) {" % var[condition.id])
         if type(action) is RejectAttempt:
             lines.append(
@@ -1619,7 +1801,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             program, v, base, var, model, lines, prelude, block_idx, field_plans,
             target=target)
     elif v.op == "pointwise_expression":
-        from pops.codegen.program_emit_expressions import emit_pointwise_kernel, pointwise_output_template
+        from pops.codegen.program_emit_expressions import (
+            emit_pointwise_kernel, pointwise_output_template, pointwise_scalar_bindings)
         if "global_template_index" in v.attrs:
             from pops.time._evaluation_point import evaluation_stage_fraction
             template = pointwise_output_template(v)
@@ -1643,10 +1826,16 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                          % (var[v.id], v.id, template_var))
         output_setup_end = len(lines)
+        # Lift authenticated scalar reads into the shared consumer scope, before
+        # either the device kernel or its affine provenance reconstruction. Field
+        # seeds evaluate their kernel inside a local failure scope; their scalar
+        # PODs must remain visible after its converged completion as well.
+        lines += pointwise_scalar_bindings(v, var)
         status = "expression_status_%d" % v.id
         if "field_product_seed" in v.attrs:
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *seed_status_%d;" % (status, v.id))
-            kernel = emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+            kernel = emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status,
+                                          scalars_prepared=True)
             lines += ["const pops::MultiFab<pops::kNativeDimension>* expression_active_%d = nullptr;" % v.id,
                       "std::exception_ptr seed_kernel_error_%d;" % v.id, "try {"]
             lines += [kernel[0].replace("const auto* ", "", 1), *kernel[1:]]
@@ -1656,7 +1845,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         else:
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scalar_scratch(%d, 1, %s, 1, 0);"
                          % (status, v.id, template_var))
-            lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status)
+            lines += emit_pointwise_kernel(v, var, var[v.id], block_index=bidx, status=status,
+                                           scalars_prepared=True)
         reduction = "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
         lines.append("if (ctx.%s(%d, %s, expression_active_%d, ctx.prepared_execution_lane()) != pops::Real(0)) {"
                      % (reduction, bidx, status, v.id))
@@ -1664,14 +1854,25 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                      "pops::SolveStatus::kInvalidEvaluation, \"pointwise_expression\", "
                      "\"non-finite scientific expression input or intermediate\");")
         lines.append("}")
+        from pops.codegen.program_emit_affine_expressions import emit_affine_expression
+        emit_affine_expression(v, var, lines, block_index=bidx,
+            explicit=not implicit_spatial_residual and v.id in var.get(("explicit_state_updates",), frozenset()))
     elif v.op == "linear_combine":
+        if "cell_field_projection" in v.attrs:
+            from pops.time._program.spatial_interaction import validate_cell_field
+            validate_cell_field(v)
+            if target not in ("system", "amr_system"):
+                raise NotImplementedError("computed cell sampling requires a native state extension")
         from pops.codegen.program_partition_stability import (
-            emit_partition_stability, has_independent_diffusion_transport,
+            consumes_deferred_diffusion, emit_partition_stability,
+            has_independent_diffusion_transport,
         )
         # An authenticated implicit residual is an equation evaluation, not an explicit
         # state advance. Its captured predictor already received its outer-stage bound.
         if (not implicit_spatial_residual and node_model is not None
-                and has_independent_diffusion_transport(node_model)):
+                and v.id in var.get(("explicit_state_updates",), frozenset())
+                and (has_independent_diffusion_transport(node_model)
+                     or consumes_deferred_diffusion(v, var))):
             emit_partition_stability(v, var, lines, block_index=bidx, include_transport=True)
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
         if (not implicit_spatial_residual
@@ -1679,6 +1880,14 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             from pops.codegen.program_partition_stability import emit_user_face_stability
             emit_user_face_stability(v, var, lines, block_index=bidx)
         if v.id in committed_ids:
+            # A direct identity commit is still a physical publication. Inspect
+            # its selected source before any in-place write to the block state.
+            if len(v.inputs) == 1 and dict(v.attrs["coeffs"][0]) == {0: 1}:
+                from .program_emit_transform_obligation import emit_pending_presence
+                pending_lines, pending = emit_pending_presence(
+                    var[v.inputs[0].id], "commit_identity_%d" % v.id)
+                lines += pending_lines
+                lines.append('if (%s) throw std::invalid_argument("conservative identity commit has a pending representation");' % pending)
             # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
             c_base = {0: 0}
             acc = "acc%d" % v.id
@@ -1702,15 +1911,38 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             # base block-state to shape the scratch: inherit the exact first field input, including
             # every component of a coupled field tuple. A State combine uses the block base as before.
             template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
+            field_ghost_depth = 1
+            if "cell_field_projection" in v.attrs:
+                from pops.codegen.program_emit_stencil_inputs import cell_sample_ghost_depth
+                field_ghost_depth = cell_sample_ghost_depth(v)
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.%s(%d, 0, %s%s);"
                          % (var[v.id], "scalar_scratch" if v.vtype == "scalar_field" else "scratch_state",
-                            int(v.id), template, ", (%s).ncomp(), 1" % template
+                            int(v.id), template, ", (%s).ncomp(), %d" % (template,field_ghost_depth)
                             if v.vtype == "scalar_field" else ""))
             output_setup_end = len(lines)
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
                              % (var[v.id], _coeff_cpp(coeff), var[inp.id],
                                 _coeff_metadata_cpp(coeff)))
+            if "cell_field_projection" in v.attrs:
+                from pops.codegen.program_emit_stencil_inputs import emit_cell_sample_extension
+                emit_cell_sample_extension(v,var,lines,block=bidx,target=target)
+    if (v.op == "linear_combine" and len(v.inputs) == 1
+            and dict(v.attrs["coeffs"][0]) == {0: 1} and v.id not in committed_ids):
+        from .program_emit_transform_obligation import emit_pending_presence
+        source = var[v.inputs[0].id]
+        pending_lines, pending = emit_pending_presence(source, "identity_%d" % v.id)
+        lines += pending_lines
+        owner = "identity_owner_%d" % v.id
+        alias = "identity_observed_%d" % v.id
+        lines.append("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % owner)
+        lines.append("if (%s) {" % pending)
+        lines.append("  pops::runtime::program::field_read_detail::phase(ctx.prepared_execution_lane(), [&] {")
+        lines.append("    %s = ctx.own_structural_field(%s);" % (owner, source))
+        lines.append('  }, "identity Field metadata copy rejected");')
+        lines.append("}")
+        lines.append("auto& %s = %s ? *%s : %s;" % (alias, owner, owner, var[v.id]))
+        observed_output = alias
     # UNIFIED SCHEDULER (ADC-458, Spec 3 sections 17-18): if this op carries a non-always schedule,
     # wrap the statements it just emitted (lines[_profile_start:]) in the due-test guard + policy
     # branch. Done HERE, after the op lowered itself, so EVERY schedulable node (field solve, rhs,
@@ -1720,8 +1952,22 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     evaluation_start = (delegated_before_write if delegated_before_write is not None else
                         output_setup_end if output_setup_end is not None else _profile_start)
     lines[evaluation_start:evaluation_start] = evaluation_prelude
+    from .program_emit_stencil_flux import stencil_expression_write
+    stencil_before, stencil_after = stencil_expression_write(
+        v, var, has_output_boundary=output_setup_end is not None)
+    write_start = evaluation_start + len(evaluation_prelude)
+    lines[write_start:write_start] = stencil_before
     from .program_value_authority import instrument_value_cpp
-    instrument_value_cpp(v, var, lines, evaluation_start + len(evaluation_prelude))
+    instrument_value_cpp(v, var, lines, write_start + len(stencil_before))
+    lines.extend(stencil_after)
+    if observed_output is not None:
+        # The write ticket and receipt guards surround the context-owned buffer
+        # actually evaluated above. Only later consumers select the retained
+        # structural identity copy; it never substitutes for a write target.
+        var[v.id] = observed_output
+    if v.op == "stencil_flux_divergence":
+        from .program_emit_stencil_flux import emit_stencil_exchange_capture
+        lines.extend(emit_stencil_exchange_capture(v, var, block=bidx, target=target))
     _emit_schedule_wrap(program, v, var, lines, _profile_start,
                         output_setup_end=output_setup_end)
     # PER-NODE PROFILING (ADC-459): if this op emitted at least one statement, bracket those

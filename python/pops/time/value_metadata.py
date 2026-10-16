@@ -169,27 +169,31 @@ class CoeffPolynomial(Mapping):
 
 
 def _freeze_attr(value: Any) -> Any:
-    """Deeply freeze Program IR metadata without changing its semantic contents."""
-    if isinstance(value, CoeffPolynomial):
-        return value
-    if isinstance(value, Mapping):
-        if any(not isinstance(key, str) or not key for key in value):
-            raise TypeError("ProgramValue metadata mapping keys must be non-empty strings")
-        return MappingProxyType({key: _freeze_attr(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_attr(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_freeze_attr(item) for item in value)
-    if value is None or isinstance(value, (bool, int, str, ScalarLiteral)):
-        return value
-    if isinstance(value, (float, Fraction, Decimal)):
-        scalar_literal(value)  # reject non-finite leaves without changing their number domain
-        return value
-    if getattr(value, "__pops_ir_immutable__", False) is True:
-        return value
-    raise TypeError(
-        "ProgramValue metadata leaf %s is not an immutable IR value; convert it to strict data"
-        % type(value).__name__)
+    """Deeply freeze Program IR metadata without depending on the Python stack."""
+    from pops._structural_data import transform
+    def describe(node):
+        if isinstance(node, CoeffPolynomial):
+            return None, node
+        if isinstance(node, Mapping):
+            if any(not isinstance(key, str) or not key for key in node):
+                raise TypeError("ProgramValue metadata mapping keys must be non-empty strings")
+            keys = tuple(node)
+            return tuple(node.values()), lambda children: MappingProxyType(dict(zip(keys, children)))
+        if isinstance(node, (list, tuple)):
+            return node, tuple
+        if isinstance(node, (set, frozenset)):
+            return tuple(node), frozenset
+        if node is None or isinstance(node, (bool, int, str, ScalarLiteral)):
+            return None, node
+        if isinstance(node, (float, Fraction, Decimal)):
+            scalar_literal(node)
+            return None, node
+        if getattr(node, "__pops_ir_immutable__", False) is True:
+            return None, node
+        raise TypeError(
+            "ProgramValue metadata leaf %s is not an immutable IR value; convert it to strict data"
+            % type(node).__name__)
+    return transform(value, describe)
 
 
 __all__ = [

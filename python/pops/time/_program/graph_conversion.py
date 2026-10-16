@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 from typing import Any
+from weakref import WeakKeyDictionary
+
+
+# Detached Programs are deeply frozen and graphs retain no authoring authorities.
+# Rehash on every lookup: reuse avoids repeated conversion, never the identity check.
+_detached_graphs: WeakKeyDictionary[Any, tuple[str, Any]] = WeakKeyDictionary()
 
 
 def _name(value: Any) -> str:
@@ -32,8 +38,9 @@ def _declared_clocks(nodes: Any, primary: Any) -> tuple[Any, ...]:
             for arm in (node.when_true, node.when_false):
                 candidates.extend(arm.clocks)
                 pending.extend(getattr(arm, "nodes", ()))
-        elif node.kind == "loop":
-            regions = ((node.condition,) if node.condition is not None else ()) + (node.body,)
+        elif node.kind in ("loop", "capture"):
+            regions = ((node.condition,) if node.kind == "loop" and node.condition is not None
+                       else ()) + (node.body,)
             for region in regions:
                 candidates.extend(region.clocks)
                 pending.extend(region.nodes)
@@ -58,13 +65,17 @@ def program_to_graph(program: Any) -> Any:
         raise RuntimeError("cannot snapshot a Program while authoring a nested region")
     if getattr(program, "_compiled_detached", False):
         detached = program
+        identity = detached._ir_hash()
+        previous = _detached_graphs.get(detached)
+        if previous is not None and previous[0] == identity:
+            return previous[1]
     else:
         from pops.time._program.detach import detach_compiled_program
 
         detached = detach_compiled_program(program)
 
     from pops.time._graph.base import ValueRef
-    from pops.time._graph.control import Branch, Loop, Region, RegionCapture
+    from pops.time._graph.control import Branch, Capture, Loop, Region, RegionCapture
     from pops.time._graph.nodes import (
         Commit,
         OperatorCall,
@@ -111,11 +122,16 @@ def program_to_graph(program: Any) -> Any:
         return tuple(captures[key] for key in sorted(captures))
 
     def result_signature(result: Any) -> dict[str, Any]:
-        return {
+        signature = {
             "value_type": result.vtype,
             "space": result.space.to_data() if result.space is not None else None,
             "block": result.block.inspect() if result.block is not None else None,
         }
+        if result.vtype in ("product", "variant", "iteration_result", "result", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
+            from pops.time.canonical_data import _json_ready
+            signature["structure"] = _json_ready(result.attrs.get("signature", result.attrs.get(
+                "state_signature", result.attrs.get("success_signature"))))
+        return signature
 
     def convert_region(block: Any, result: Any, name: str,
                        *, signature: Any = None) -> Any:
@@ -141,7 +157,13 @@ def program_to_graph(program: Any) -> Any:
         nonlocal next_id
         prefix = ()
         inputs = tuple(ValueRef(item.id) for item in value.inputs)
-        if value.op == "branch":
+        if value.op == "capture_result":
+            body = convert_region(value.attrs["body_block"], value.attrs["body"],
+                                  "%s/body" % _name(value),
+                                  signature=result_signature(value.attrs["body"]))
+            return (Capture(value.id, body, value.clock, value.point, name=_name(value),
+                            result_signature=result_signature(value)),)
+        if value.op in ("branch", "result_match"):
             signature = result_signature(value)
             when_true = convert_region(
                 value.attrs["true_block"], value.attrs["true_result"],
@@ -151,7 +173,7 @@ def program_to_graph(program: Any) -> Any:
                 "%s/false" % _name(value), signature=signature)
             return (Branch(
                 value.id,
-                inputs[0],
+                inputs[0] if value.op == "branch" else inputs[1],
                 when_true,
                 when_false,
                 value.clock,
@@ -159,6 +181,27 @@ def program_to_graph(program: Any) -> Any:
                 name=_name(value),
                 result_signature=signature,
             ),)
+        if value.op in ("finite_map", "finite_scan"):
+            body = convert_region(value.attrs["body_block"], value.attrs["body"],
+                                  "%s/body" % _name(value),
+                                  signature=result_signature(value.attrs["body"]))
+            return (Loop(value.id, "map" if value.op == "finite_map" else "scan",
+                         inputs[0], body, value.clock, value.point, count=inputs[-2],
+                         max_steps=inputs[-1], result_signature=result_signature(value),
+                         name=_name(value)),)
+        if value.op in ("structured_fold", "structured_iterate"):
+            body = convert_region(value.attrs["body_block"], value.attrs["body"],
+                                  "%s/body" % _name(value),
+                                  signature=result_signature(value.attrs["body"]))
+            condition = (convert_region(value.attrs["cond_block"], value.attrs["cond"],
+                                        "%s/condition" % _name(value))
+                         if value.op == "structured_iterate" else None)
+            return (Loop(
+                value.id, "fold" if value.op == "structured_fold" else "iterate",
+                inputs[0], body, value.clock, value.point,
+                condition=condition,
+                count=inputs[1] if value.op == "structured_fold" else None,
+                max_steps=inputs[-1], result_signature=result_signature(value), name=_name(value)),)
         if value.op == "range":
             body = convert_region(
                 value.attrs["body_block"], value.attrs["body"], "%s/body" % _name(value))
@@ -352,8 +395,10 @@ def program_to_graph(program: Any) -> Any:
         cadence=detached.cadence_contract(),
     )
     # Detachment and graph conversion are read-only; authoring identity remains stable.
-    if detached._ir_hash() != program._ir_hash():
+    identity = detached._ir_hash()
+    if identity != program._ir_hash():
         raise RuntimeError("Program.to_graph changed authoring IR identity")
+    _detached_graphs[detached] = (identity, graph)
     return graph
 
 

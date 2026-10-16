@@ -1,5 +1,6 @@
 """Foundational immutable values shared by temporal graph records."""
 from __future__ import annotations
+from pops.identity.scalar import parse_canonical_integer
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -33,7 +34,7 @@ def _canonical_int(value: Any) -> int | None:
             raw = scalar.get("value")
             if isinstance(raw, str):
                 try:
-                    return int(raw)
+                    return parse_canonical_integer(raw)
                 except ValueError:
                     return None
     return None

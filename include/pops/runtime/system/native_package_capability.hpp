@@ -20,6 +20,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <pops/runtime/config/runtime_params.hpp>
 
 namespace pops::runtime::system {
 
@@ -52,11 +53,11 @@ inline void validate_native_elliptic_attachment_contract(
       (static_cast<bool>(attachment.rhs) == static_cast<bool>(attachment.rhs_v2)) ||
       (attachment.gradient_sign != -1 && attachment.gradient_sign != 1))
     throw std::invalid_argument("native package committed an incomplete elliptic attachment");
-  if ((attachment.rhs_v2 && (attachment.rhs_input_contract_version != 2 ||
-                            attachment.rhs_consumer_qid.empty())) ||
-      (!attachment.rhs_v2 && (attachment.rhs_input_contract_version != 0 ||
-                             attachment.rhs_provider_count != 0 ||
-                             !attachment.rhs_consumer_qid.empty())))
+  if ((attachment.rhs_v2 &&
+       (attachment.rhs_input_contract_version != 2 || attachment.rhs_consumer_qid.empty())) ||
+      (!attachment.rhs_v2 &&
+       (attachment.rhs_input_contract_version != 0 || attachment.rhs_provider_count != 0 ||
+        !attachment.rhs_consumer_qid.empty())))
     throw std::invalid_argument("native Field RHS attachment has an invalid input contract");
   if (attachment.role == NativeEllipticAttachmentRole::rhs_only) {
     if (attachment.field_slot.empty() || attachment.binding_identity.empty() ||
@@ -219,6 +220,7 @@ struct NativePackageCapabilityState final {
   std::string identity;
   NativeCapabilityPhase phase = NativeCapabilityPhase::revoked;
   std::optional<Geometry<Dim>> geometry;
+  std::optional<std::uint64_t> runtime_parameter_byte_capacity;
   std::array<bool, Dim> periodicity{};
   std::shared_ptr<const AuxiliaryStorageGroups<Dim>> provider_storage_owner;
   std::shared_ptr<ExactAuxiliaryRegistry<Dim>> detached_registry;
@@ -295,6 +297,15 @@ class PreparedNativeBlockInstaller final {
   PreparedNativeBlockInstaller& operator=(const PreparedNativeBlockInstaller&) = delete;
   PreparedNativeBlockInstaller(PreparedNativeBlockInstaller&&) = delete;
   PreparedNativeBlockInstaller& operator=(PreparedNativeBlockInstaller&&) = delete;
+  [[nodiscard]] std::uint64_t runtime_parameter_byte_capacity(std::size_t count) const {
+    state_->require(NativeCapabilityPhase::install_open,
+                    "PreparedNativeBlockInstaller::runtime_parameter_byte_capacity");
+    const auto required = RuntimeParams::checked_storage_bytes(count);
+    const auto capacity = state_->runtime_parameter_byte_capacity.value_or(required);
+    if (required > capacity)
+      throw std::length_error("native package runtime parameters exceed the bound byte capacity");
+    return capacity;
+  }
   [[nodiscard]] Geometry<Dim> geometry() const {
     state_->require(NativeCapabilityPhase::install_open, "PreparedNativeBlockInstaller::geometry");
     if (!state_->geometry)

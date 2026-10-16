@@ -1223,6 +1223,7 @@ def restore_checkpoint_payload(
     state_storage: str = "full",
     hierarchy_mode: str = "restore_recorded_hierarchy",
     hierarchy_identity: str | None = None,
+    workspace_byte_capacity: int | None = None,
     phase_prefix: str = "native restart",
     prepare_outer_state: Callable[[], Any] | None = None,
     after_native_apply: Callable[[Any], Any] | None = None,
@@ -1278,6 +1279,11 @@ def restore_checkpoint_payload(
             policy = require_restart_bit_identical(
                 bit_identical, where="restart preparation policy"
             )
+            if workspace_byte_capacity is not None and (
+                type(workspace_byte_capacity) is not int
+                or not 1 <= workspace_byte_capacity <= (1 << 63) - 1
+            ):
+                raise ValueError("restart workspace_byte_capacity must be an exact positive Int64")
             selected_hierarchy_mode = require_restart_hierarchy_mode(
                 hierarchy_mode, where="restart preparation policy"
             )
@@ -1303,6 +1309,7 @@ def restore_checkpoint_payload(
             "hierarchy_mode": selected_hierarchy_mode,
             "hierarchy_identity": selected_hierarchy_identity,
             "outer_state": outer_active,
+            "workspace_byte_capacity": workspace_byte_capacity,
         },
     )
     if any(row["value"] != policy_rows[0]["value"] for row in policy_rows[1:]):
@@ -1344,16 +1351,20 @@ def restore_checkpoint_payload(
     prepared = None
     prepare_error = None
     try:
+        resource_options = ({} if workspace_byte_capacity is None else
+                            {"workspace_byte_capacity": workspace_byte_capacity})
         if selected_hierarchy_mode == "regrid_on_restart":
             prepared = methods["_prepare_checkpoint_restart"](
                 payload,
                 bit_identical=policy,
                 hierarchy_mode=selected_hierarchy_mode,
                 hierarchy_identity=selected_hierarchy_identity,
+                **resource_options,
             )
         else:
             options = {} if state_storage == "full" else {"state_storage": state_storage}
-            prepared = methods["_prepare_checkpoint_restart"](payload, bit_identical=policy, **options)
+            prepared = methods["_prepare_checkpoint_restart"](
+                payload, bit_identical=policy, **options, **resource_options)
     except BaseException as error:
         prepare_error = error
     consensus(topology, "%s preflight" % phase_prefix, error=prepare_error)
@@ -1502,6 +1513,7 @@ def restore_checkpoint_path(
     state_storage: str = "full",
     hierarchy_mode: str = "restore_recorded_hierarchy",
     hierarchy_identity: str | None = None,
+    workspace_byte_capacity: int | None = None,
     phase_prefix: str = "native restart",
 ) -> Any:
     """Collectively read and restore one shared checkpoint through native transports.
@@ -1537,9 +1549,19 @@ def restore_checkpoint_path(
         raise RuntimeError("%s target consensus lost its local path" % phase_prefix)
     if any(row["value"] != target_text for row in rows):
         raise ValueError("%s target differs across ranks" % phase_prefix)
-    from ._checkpoint_contract import require_checkpoint_resource_budget
+    from ._checkpoint_restart_budget import restart_checkpoint_resource_budget
 
-    archive_budget = require_checkpoint_resource_budget(executor).max_archive_bytes
+    archive_budget = 0
+    resource_error = None
+    try:
+        archive_budget = restart_checkpoint_resource_budget(
+            executor, workspace_byte_capacity, bit_identical=policy).max_archive_bytes
+    except BaseException as error:
+        resource_error = error
+    resource_rows = consensus(topology, "%s source resource preflight" % phase_prefix,
+                              error=resource_error, value=(workspace_byte_capacity, archive_budget))
+    if any(tuple(row["value"]) != (workspace_byte_capacity, archive_budget) for row in resource_rows):
+        raise ValueError("restart source resource policy differs across ranks")
     payload = root_bytes(
         topology,
         "%s read" % phase_prefix,
@@ -1555,6 +1577,7 @@ def restore_checkpoint_path(
             state_storage=state_storage,
             hierarchy_mode=selected_hierarchy_mode,
             hierarchy_identity=hierarchy_identity,
+            workspace_byte_capacity=workspace_byte_capacity,
             phase_prefix=phase_prefix,
         )
     return restore_checkpoint_payload(
@@ -1563,6 +1586,7 @@ def restore_checkpoint_path(
         payload,
         bit_identical=policy,
         state_storage=state_storage,
+        workspace_byte_capacity=workspace_byte_capacity,
         phase_prefix=phase_prefix,
     )
 

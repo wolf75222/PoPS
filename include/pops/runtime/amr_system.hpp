@@ -1,4 +1,5 @@
 #pragma once
+#include <pops/runtime/program/continuation_migration_request.hpp>
 #include <pops/runtime/system/analytic_mapped_input.hpp>
 #include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
 
@@ -176,6 +177,8 @@ template <int Dim>
 struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
   static_assert(Dim >= 1 && Dim <= 3, "AmrSystemConfig only supports dimensions 1, 2, and 3");
 
+  std::optional<std::uint64_t> runtime_parameter_byte_capacity;
+
   AmrSystemConfig() { this->shape = runtime_config_detail::filled_extent<Dim>(128); }
 
   int regrid_every = 20;  ///< re-refinement every N steps (0 = never after init)
@@ -306,6 +309,7 @@ class AmrSystem {
   struct PreparedAmrProgramFluxExpressionBlockBudget {
     std::size_t rhs_basis_bound = 0;
     std::size_t coefficient_term_bound = 0;
+    std::size_t exact_coefficient_bytes = 64 * 1024;
   };
   struct PreparedAmrProgramFluxExpressionBudget {
     std::string program_hash;
@@ -468,7 +472,6 @@ class AmrSystem {
   POPS_EXPORT void enable_field_candidate_observation(std::uint32_t version);
   /// Read-only rank-local last witnesses per (slot, consumer block, consumer level). No solve.
   POPS_EXPORT std::vector<FieldCandidateObservation> field_candidate_observations() const;
-
 
   POPS_EXPORT void publish_prepared_amr_program_candidates(
       int level, std::span<MultiFab<Dim>* const> program_candidates);
@@ -890,12 +893,14 @@ class AmrSystem {
   std::size_t recompute_bootstrap_field(const std::string& subject_id,
                                         const std::string& provider_slot);
   void stage_bootstrap_initial_program_seed(const std::string& subject_id,
-      const std::string& runtime_block, const analytic::AnalyticOpcodeRows& opcodes,
-      const analytic::AnalyticLiteralRows& literals);
-  std::pair<std::size_t, SolveReport> solve_bootstrap_initial_field(const std::string& subject_id,
-      const std::string& provider_slot, int ordinal);
-  std::size_t map_bootstrap_state_hierarchy(const std::string& subject_id,
-      const analytic::AnalyticOpcodeRows& opcodes, const analytic::AnalyticLiteralRows& literals,
+                                            const std::string& runtime_block,
+                                            const analytic::AnalyticOpcodeRows& opcodes,
+                                            const analytic::AnalyticLiteralRows& literals);
+  std::pair<std::size_t, SolveReport> solve_bootstrap_initial_field(
+      const std::string& subject_id, const std::string& provider_slot, int ordinal);
+  std::size_t map_bootstrap_state_hierarchy(
+      const std::string& subject_id, const analytic::AnalyticOpcodeRows& opcodes,
+      const analytic::AnalyticLiteralRows& literals,
       const std::vector<runtime::system::AnalyticMappedInput>& inputs,
       const std::string& consumer_qid, const std::string& provider_slot);
   /// Restrict one already-materialized fine state onto its live parent during an explicit
@@ -947,6 +952,8 @@ class AmrSystem {
   prepared_amr_provider_storage_groups(int level) const;
   [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
   prepared_amr_auxiliary_consumer_plan(const std::string& consumer_qid, int level) const;
+  [[nodiscard]] POPS_EXPORT std::string prepared_amr_auxiliary_read_authority(
+      std::string_view consumer, int level, std::size_t slot, std::uint64_t byte_capacity) const;
 
   using ProgramFieldComponent = runtime::system::ProgramFieldComponent<Dim>;
   using ProgramFieldLevel = runtime::system::ProgramFieldLevel<Dim>;
@@ -981,6 +988,7 @@ class AmrSystem {
     explicit PreparedCheckpointCapture(std::shared_ptr<const State> state)
         : state_(std::move(state)) {}
     friend class AmrSystem<Dim>;
+
    public:
     PreparedCheckpointCapture(const PreparedCheckpointCapture&) = default;
     PreparedCheckpointCapture(PreparedCheckpointCapture&&) noexcept = default;
@@ -1052,11 +1060,13 @@ class AmrSystem {
       const std::string& block_name, const std::string& field,
       const std::string& rhs_provider_identity,
       std::function<void(const MultiFab<Dim>&, MultiFab<Dim>&)> rhs);
-  POPS_EXPORT void set_block_elliptic_field_v2(
-      const std::string& block_name, const std::string& field,
-      const std::string& rhs_provider_identity, const std::string& binding_identity,
-      const std::string& consumer_qid, std::size_t provider_count,
-      runtime::system::FieldRhsCallbackV2<Dim> rhs);
+  POPS_EXPORT void set_block_elliptic_field_v2(const std::string& block_name,
+                                               const std::string& field,
+                                               const std::string& rhs_provider_identity,
+                                               const std::string& binding_identity,
+                                               const std::string& consumer_qid,
+                                               std::size_t provider_count,
+                                               runtime::system::FieldRhsCallbackV2<Dim> rhs);
   /// Solved potential of named @p field on the coarse level, flattened in native index order. Solves the
   /// hierarchy fields if needed (so it is current even before any step), then reads the field's phi
   /// component. AMR counterpart of System::aux_field_component for a named elliptic field. @throws if the
@@ -1193,12 +1203,20 @@ class AmrSystem {
       std::function<void()> preflight, std::function<void()> regrid, std::function<void()> resync,
       std::function<std::unique_ptr<runtime::program::AcceptedProgramContextSnapshot>()>
           accepted_context_snapshot);
+  /// Validate complete continuation images against native candidate/live storage before accepting
+  /// their facade archive. The second argument distinguishes restart from ordinary publication.
+  POPS_EXPORT void install_program_continuation_checkpoint_preflight(
+      std::function<void(std::span<const std::uint8_t>, bool)> preflight);
   /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
   /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
   /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
   /// stride macro-steps (hold-then-catch-up). Both must be >= 1 (throws std::invalid_argument).
   /// Default 1/1 -> a single program closure call per macro-step. Kept SEPARATE from install_program so
   /// the generated .so ABI is untouched (the cadence is runtime metadata).
+
+  POPS_EXPORT void install_program_continuation_rematerializer(
+      runtime::program::AmrContinuationRematerializer callback);
+
   POPS_EXPORT void set_program_cadence(int substeps, int stride);
   /// Installed GLOBAL macro-step cadence (ADC-594, parity System): the current @c substeps / @c stride
   /// the compiled Program runs at (default 1/1 with no cadence set). Const, side-effect-free -- the
@@ -1283,6 +1301,10 @@ class AmrSystem {
                                                          const std::vector<int>& ncomps);
   POPS_EXPORT std::uint64_t program_accepted_state_revision() const;
   /// Human/audit-readable qualification rows decoded from the same accepted image persisted as bytes.
+  /// Owning diagnostic tables from one fully authenticated accepted image. Each call
+  /// validates current authority anew; no projection survives as a runtime capability.
+  POPS_EXPORT std::map<std::string, std::vector<std::vector<std::string>>>
+  program_manifest_snapshot() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_accepted_state_manifest() const;
   POPS_EXPORT std::vector<std::vector<std::string>> program_clock_manifest() const;
   /// Accepted temporal-partition provider, synchronization tick and per-rung cell counts. The rows
@@ -1325,6 +1347,9 @@ class AmrSystem {
   /// Block @p prog_block's CURRENT RuntimeParams (a device-clean by-value copy). An UNSEEDED block
   /// returns a default-constructed RuntimeParams (count 0). Read by the AmrProgramContext.
   POPS_EXPORT RuntimeParams program_params(int prog_block) const;
+  /// Return the configured per-incarnation storage capacity, after checking that
+  /// the exact authenticated cardinality fits; nullopt selects its exact charge.
+  POPS_EXPORT std::uint64_t runtime_parameter_byte_capacity(std::size_t count) const;
   /// Seed block @p prog_block's RuntimeParams to its DECLARATION defaults (@p count values, the .so
   /// pops_program_param_default metadata). Called by install_program once per runtime-param Program
   /// block; a later set_program_params overwrites only the supplied values. Idempotent.
@@ -1496,7 +1521,10 @@ class AmrSystem {
       const std::vector<std::vector<int>>& target_level_owners,
       const std::vector<std::string>& source_level_modes,
       const std::vector<std::string>& target_level_modes,
-      const std::vector<std::uint8_t>& source_authority);
+
+      const std::vector<std::uint8_t>& source_authority,
+      const std::vector<std::vector<std::uint8_t>>& source_rank_states = {},
+      std::uint64_t workspace_byte_capacity = 64ULL * 1024 * 1024);
 
   /// Per-block per-level checkpoint accessors (ADC-509). The AmrRuntime engine shares the
   /// layout AND the aux across blocks, so the per-level STATE is read/restored PER BLOCK (by NAME)
@@ -1598,6 +1626,8 @@ class AmrSystem {
   /// prepared-history remap boundary. It is intentionally absent from the public facade surface.
   POPS_EXPORT void install_program_history_remap_accepted(
       std::function<void(const runtime::program::AmrProgramHistoryRemapDescriptor&)> refresh);
+  POPS_EXPORT void install_program_continuation_regrid_hooks(std::function<bool()> begin,
+                                                             std::function<void(bool)> finish);
   std::vector<std::string> prepare_topology_field_order(
       std::string_view reason, const runtime::multiblock::BoundaryEvaluationPoint& accepted_point);
   std::vector<std::vector<std::string>> rematerialize_fields_after_topology_change(
@@ -1642,7 +1672,7 @@ class AmrSystem {
       int runtime_block, const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab<Dim>& state, int parent_level, const MultiFab<Dim>* staged_parent);
   POPS_EXPORT std::string prepared_amr_block_path_operator_identity_(int runtime_block,
-                                                                    int level) const;
+                                                                     int level) const;
   POPS_EXPORT double active_program_step_courant_() const;
   POPS_EXPORT double numerical_face_courant_() const;
   /// The validation phase is collective and must complete before any caller publishes another
@@ -1682,12 +1712,13 @@ class AmrSystem {
   POPS_EXPORT SolveOutcome solve_program_field_from_blocks_on_prepared_lane(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
       int active_level, const std::vector<const MultiFab<Dim>*>& stage_overrides);
-  POPS_EXPORT SolveOutcome solve_fields_from_request_at_in_place_(
-      const runtime::system::FieldSolveRequest<Dim>& request);
+  POPS_EXPORT SolveOutcome
+  solve_fields_from_request_at_in_place_(const runtime::system::FieldSolveRequest<Dim>& request);
   void invoke_field_rhs_v2_(const std::string& field, int block, int level,
-      const MultiFab<Dim>& state, MultiFab<Dim>& rhs, const std::string& binding,
-      const std::string& consumer, std::size_t count,
-      const runtime::system::FieldRhsCallbackV2<Dim>& callback);
+                            const MultiFab<Dim>& state, MultiFab<Dim>& rhs,
+                            const std::string& binding, const std::string& consumer,
+                            std::size_t count,
+                            const runtime::system::FieldRhsCallbackV2<Dim>& callback);
   POPS_EXPORT void refresh_auxiliary_on_prepared_lane(
       const runtime::system::AuxiliaryEvaluationPoint& point,
       const std::vector<std::string>& consumer_qids = {}, int consumer_source_block = -1);

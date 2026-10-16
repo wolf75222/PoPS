@@ -6,7 +6,7 @@ import pytest
 
 from pops.codegen.program_partition_stability import (
     emit_partition_stability, emit_user_face_stability, explicit_update_consumers,
-    partition_stability_groups,
+    partition_stability_groups, require_deferred_partition_bounds,
 )
 
 
@@ -216,6 +216,20 @@ def test_guard_evidence_and_frequency_tokens_do_not_escape_a_child_region():
     assert outer == {key: frozenset({99})}
     with pytest.raises(ValueError, match="unavailable in this region"):
         emit_partition_stability(update, outer, [], block_index=0)
+
+
+def test_child_region_must_close_its_own_deferred_diffusion_budget():
+    key = ("partition_stability_deferred",)
+    outer = {key: frozenset({10})}
+    child = {**outer, key: frozenset({10, 20})}
+    # The surrounding region may consume its own rate later; a branch-local
+    # unbounded rate cannot disappear when its variable map goes out of scope.
+    with pytest.raises(ValueError, match="lacks its consuming bound"):
+        require_deferred_partition_bounds(child, inherited=outer[key])
+    child[("partition_stability_checked",)] = frozenset({20})
+    require_deferred_partition_bounds(child, inherited=outer[key])
+    with pytest.raises(ValueError, match="lacks its consuming bound"):
+        require_deferred_partition_bounds(outer)
 
 
 def test_separate_source_terms_require_their_own_certificate():

@@ -14,7 +14,7 @@ from pops._ir import Expr, _wrap  # noqa: F401  -- _validate_hook_form isinstanc
 from pops._ir.values import RuntimeParamRef, set_runtime_param_indices  # noqa: F401
 from pops._ir.visitors import _children  # noqa: F401
 
-from .aux import _K_MAX_RUNTIME_PARAMS, max_runtime_params  # noqa: F401 -- literal + _pops-preferring
+
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel
@@ -104,22 +104,12 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         return [seen[k] for k in sorted(seen)]
 
     def assign_runtime_indices(self) -> Any:
-        """Assigns to each RuntimeParamRef its STABLE index (sorted order of names) and returns the
-        ordered list of nodes. CALLED before any brick codegen: without this call, to_cpp() would raise
-        (index -1). Idempotent (reassigns the same indices). Rejects a model exceeding the C++ bound
-        kMaxRuntimeParams EARLY, with a user-facing error naming the limit, the count, and the offending
-        params -- the fixed-size device array RuntimeParams::values[kMaxRuntimeParams] would otherwise be
-        read out of bounds on device (no bound check on the hot path get())."""
+        """Assign sorted exact indices; storage capacity is authenticated at bind."""
         nodes = self.runtime_param_nodes()
-        limit = max_runtime_params()  # _pops.__max_runtime_params__ when present, else literal 32
-        if len(nodes) > limit:
-            names = ", ".join(repr(node.name) for node in nodes)
-            raise ValueError(
-                "model '%s': %d runtime parameters exceed kMaxRuntimeParams=%d "
-                "(include/pops/runtime/config/runtime_params.hpp); the fixed-size device array would "
-                "overflow. Reduce the number of runtime params or promote some to kind='const'. "
-                "Declared runtime params: %s"
-                % (self.name, len(nodes), limit, names))
+        # The exported package count/index ABI uses signed 32-bit integers.
+        # This representation check is independent of the configurable byte budget.
+        if len(nodes) > 2147483647:
+            raise OverflowError("runtime parameter cardinality exceeds the native index representation")
         set_runtime_param_indices({node.name: k for k, node in enumerate(nodes)})
         return nodes
 
@@ -131,9 +121,9 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         nodes = self.assign_runtime_indices()
         if not nodes:
             return ""
-        vals = ", ".join("pops::Real(0)" for _ in nodes)
-        return ("  pops::RuntimeParams params{%d, {%s}};  // defaults installed from BindSchema\n"
-                % (len(nodes), vals))
+        return ("  using pops_device_capture_members = pops::DeviceCaptureMembers<pops::RuntimeParams>;\n"
+                "  pops::RuntimeParams params = pops::RuntimeParams::declaration(%d); "
+                " // bound from BindSchema before execution\n" % len(nodes))
 
     def has_runtime_params(self) -> bool:
         """True if at least one formula reads a runtime parameter (kind='runtime')."""

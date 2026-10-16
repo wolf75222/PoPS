@@ -279,9 +279,13 @@ def _write_authority(tmp_path, native_cxx, *, history_slot_dt=(0.01, 0.01)):
         sample_identity = bytearray(np.asarray(payload[sample_key]).tobytes())
         depth = int(payload["history_depth_" + history_name])
         row_offset = 8 + 8 + len(history_name.encode("utf-8")) + 8 + 8
-        assert len(sample_identity) == row_offset + 32 * depth
+        # The real producer writes HID2: four window words plus the four-word
+        # reconstruction identity. Preserve the latter while changing only dt.
+        assert sample_identity[:8] == b"POPSHID2"
+        row_width = 64
+        assert len(sample_identity) == row_offset + row_width * depth
         for slot, interval in enumerate(history_slot_dt):
-            struct.pack_into("<d", sample_identity, row_offset + 32 * slot + 16, interval)
+            struct.pack_into("<d", sample_identity, row_offset + row_width * slot + 16, interval)
         validate_identity_bytes(
             sample_identity,
             history_name,

@@ -258,3 +258,16 @@ set(POPS_CPP_TEST_SOURCE_test_mpi_amr_spatial_norm "tests/cpp/integration/mpi/te
 set(POPS_CPP_TEST_SOURCE_test_mpi_exchange_batches "tests/cpp/integration/mpi/test_mpi_exchange_batches.cpp")
 
 set(POPS_CPP_TEST_SOURCE_test_amr_history_flux_snapshot "tests/cpp/unit/runtime/test_amr_history_flux_snapshot.cpp")
+set(POPS_CPP_TEST_SOURCE_test_continuation_image "tests/cpp/integration/runtime/test_continuation_image.cpp")
+set(POPS_CPP_TEST_SOURCE_test_continuation_field_migration "tests/cpp/integration/runtime/test_continuation_field_migration.cpp")
+set(POPS_CPP_TEST_SOURCE_test_distributed_array "tests/cpp/integration/runtime/test_distributed_array.cpp")
+set(POPS_CPP_TEST_SOURCE_test_bundle_v14 "tests/cpp/integration/runtime/test_bundle_v14.cpp")
+set(POPS_CPP_TEST_SOURCE_test_distributed_algebra_v14 "tests/cpp/integration/runtime/test_distributed_algebra_v14.cpp")
+set(POPS_CPP_TEST_SOURCE_test_distributed_gc_v14 "tests/cpp/integration/runtime/test_distributed_gc_v14.cpp")
+set(POPS_CPP_TEST_SOURCE_test_state_carriers_zero_block_v14 "tests/cpp/integration/runtime/test_state_carriers_zero_block_v14.cpp")
+set(POPS_CPP_TEST_SOURCE_test_composite_physical_measure "tests/cpp/unit/numerics/test_composite_physical_measure.cpp")
+
+set(POPS_CPP_TEST_SOURCE_test_continuation_distributed_migration "tests/cpp/integration/runtime/test_continuation_distributed_migration.cpp")
+set(POPS_CPP_TEST_SOURCE_test_field_read_transport "tests/cpp/unit/runtime/test_field_read_transport.cpp")
+set(POPS_CPP_TEST_SOURCE_test_field_transform_support "tests/cpp/unit/runtime/test_field_transform_support.cpp")
+set(POPS_CPP_TEST_SOURCE_test_field_provider_read_authority "tests/cpp/unit/runtime/test_field_provider_read_authority.cpp")

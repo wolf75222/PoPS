@@ -103,7 +103,10 @@ def test_symbolic_required_faces_match_independent_numpy_under_permutation(order
     face = example.declarations(order)[-1]
     left, right = np.array([.9, .07, .1]), np.array([.8, -.03, .2])
     indices = [oracle.ORDERS[0].index(name) for name in order]
-    lower, upper = face(left[indices], right[indices], None, None, None)
+    # Python scalars compose with the symbolic algebra; NumPy evaluates the oracle.
+    authored_left = tuple(float(left[i]) for i in indices)
+    authored_right = tuple(float(right[i]) for i in indices)
+    lower, upper = face(authored_left, authored_right, None, None, None)
     actual = [[float(value.eval({})) for value in side] for side in (lower, upper)]
     expected_lower, expected_upper, _ = oracle.face_contributions(left, right)
     np.testing.assert_allclose(actual, [expected_lower[indices], expected_upper[indices]],

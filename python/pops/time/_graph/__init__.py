@@ -12,11 +12,11 @@ from pops.time._graph.nodes import (
     Synchronize,
     Unknown,
 )
-from pops.time._graph.control import Branch, Loop, Region, RegionCapture
+from pops.time._graph.control import Branch, Capture, Loop, Region, RegionCapture
 from pops.time._graph.program import ProgramGraph
 
 __all__ = [
-    "Branch", "CanonicalData", "Commit", "Loop", "OperatorCall", "ProgramGraph", "Region",
+    "Branch", "Capture", "CanonicalData", "Commit", "Loop", "OperatorCall", "ProgramGraph", "Region",
     "RegionCapture", "ProgramValue", "ResidualEvaluation", "ResidualSolve", "Solve",
     "StateRead", "Synchronize", "Unknown", "ValueRef",
 ]

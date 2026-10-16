@@ -46,10 +46,25 @@ def test_completed_original_interaction_source_uses_real_accept_and_keeps_origin
     resolved = pops.resolve(pops.validate(case), layout=layout)
     assert resolved.time._serialize()["version"] == 19
     cpp = emit_cpp_program(resolved.time, model=ProgramModelGraph.from_resolved_blocks(resolved.blocks), target="amr_system")
-    assert "ctx.seal_original_field_source(" in cpp and "ctx.prepare_closed_original_interaction(" in cpp
+    assert cpp.count("ctx.seal_original_field_source(") == 1
+    assert "ctx.prepare_closed_original_interaction(" in cpp
+    assert "ctx.seal_original_field_source(%d," % solve.id in cpp
+    for interaction in (node for node in program._values if node.op == "spatial_interaction"):
+        # The closure is emitted before its future consumer and must retain its
+        # exact SSA source/component identity across the CPS suspension.
+        assert "{%d, %d, %d," % (interaction.id, interaction.inputs[0].id,
+                                  interaction.inputs[0].attrs["component"]) in cpp
     assert "accepted_original_candidate_generation" not in cpp  # Native owns this guard.
     assert "AmrFieldRightPreconditioner::kFullResidualBasisLU" in cpp
-    assert cpp.count("ctx.reduce_closed_original_interaction(") == 8  # flat plus composite observer routes
+    # CPS has one observer continuation shared by every hierarchy depth, rather
+    # than separately generated flat/composite observer bodies.
+    interactions = [node for node in program._values if node.op == "spatial_interaction"]
+    assert cpp.count("ctx.prepare_closed_original_interaction(") == len(interactions)
+    assert cpp.count("ctx.reduce_closed_original_interaction(") == len(KINDS)
+    for interaction in interactions:
+        for kind in KINDS:
+            assert 'ctx.reduce_closed_original_interaction(%d, 0, "%s")' % (interaction.id, kind) in cpp
+        assert "::HierarchyBarrierKind::control, %d," % interaction.id in cpp
     initial = resolved.initial_condition_plan
     assert len(initial.bindings) == width+1
     for row in initial.bindings:
@@ -128,10 +143,10 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
         restart_authority = None
         if phase == "replay":
             owner = collective_call(world, bind)
-            restart_authority = collective_call(world, lambda: checkpoint_restart_authority(owner))
+            restart_authority = collective_call(world, lambda owner=owner: checkpoint_restart_authority(owner))
             collective_call(world, lambda owner=owner: owner.restart(checkpoints["accepted"]["path"]))
             restart_authority["restored_source_run"] = collective_call(world,
-                lambda: owner.last_run_identity.token)
+                lambda owner=owner: owner.last_run_identity.token)
             checkpoints["reloaded"] = checkpoint(world,owner,directory,"reloaded")
             phases["reloaded"] = capture(world,owner,width)
             with collective_check(world):
@@ -139,7 +154,7 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
         end = DT if phase == "accepted" else 2*DT
         collective_call(world, lambda owner=owner,end=end: pops.run(owner,t_end=end,max_steps=1,console=False))
         checkpoints[phase] = checkpoint(world,owner,directory,phase)
-        provenance[phase] = collective_call(world, lambda owner=owner,phase=phase:
+        provenance[phase] = collective_call(world, lambda owner=owner,phase=phase,restart_authority=restart_authority:
             checkpoint_provenance(owner,checkpoints[phase]["path"],restart_authority=restart_authority))
         phases[phase] = capture(world,owner,width)
     with collective_check(world):
@@ -173,7 +188,7 @@ def test_public_completed_original_interaction_exact_restart_and_saved_reduction
                 "interaction":"DirectSpatialInteraction@1","max_workspace_bytes":WORKSPACE,
                 "source_contract":"pops.completed-original-field-source@1",
                 "array_wire":"pops.spatial-interaction-fixture-array-wire@1",
-                "history":{"wire":"POPSHID1","latest_slot":1,"previous_slot":0,"depth":2},
+                "history":{"wire":"POPSHID2","latest_slot":1,"previous_slot":0,"depth":2},
                 "source_physical_owner":None,"storage_owner_only":profile["storage"],
                 "native_I_array_available":False,"I_array_role":"COMPUTED_REFERENCE_ONLY",
                 "native_I_reductions":KINDS,"entire_I_per_cell_qualified":False,

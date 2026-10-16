@@ -234,6 +234,37 @@ class _ProgramCall(_ProgramBase):
         path = lower_path_rate(self, op, args, name)
         if path is not None:
             return path
+        from pops.physics._balance_composition import balance_composition
+        declaration = (_operator_handle.declaration_ref if _operator_handle.is_instance
+                       else _operator_handle)
+        registry = self._operator_registries[declaration.owner_path]
+        parts = balance_composition(registry, op)
+        if parts:
+            from pops.model import OperatorHandle
+            from pops.time.values import _Coeff
+            values, handles = [], []
+            for part in parts:
+                handle = OperatorHandle(part.name, kind=part.kind, owner=registry.owner_path,
+                    signature=part.signature, registered_operator_name=part.name)
+                inputs = []
+                for space in part.signature.inputs:
+                    if getattr(space,"kind",None) not in {"state","field"}:
+                        continue
+                    matches = [value for value in args if value.space == space]
+                    if len(matches) != 1:
+                        raise ValueError("balance composition needs one exact input for every partition space")
+                    inputs.append(matches[0])
+                values.append(self._call(handle,*inputs))
+                handles.append(handle)
+            from pops.time.field_context import merge_field_provenance
+            return self._new("rhs","linear_combine",tuple(values),
+                {"coeffs":tuple(_Coeff({0:1}).to_polynomial() for _ in values),
+                 "physical_balance":op.lowering["physical_balance"],
+                 "balance_partitions":tuple(handles)},name or operator_name,args[0].block,
+                space=op.signature.output,point=args[0].point,
+                field_context=merge_field_provenance(*(value.field_context for value in values)))
+        if op.lowering.get("native_unsupported"):
+            raise ValueError("physical balance has no supported realization or exact disjoint registered partition")
         # grid_operator (flux divergence only) and local_rate (flux + sources per op.lowering).
         fields = args[1] if len(args) > 1 else None
         if op.kind == "grid_operator":

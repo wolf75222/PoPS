@@ -22,6 +22,9 @@ def _literal_data(value: Any) -> dict[str, Any]:
 
 
 def _literal_from_data(data: Any) -> Any:
+    # Canonical scalar conversion is a lazy serialization seam, like _literal_data.
+    from pops.identity.scalar import parse_canonical_integer
+
     if not isinstance(data, Mapping) or not isinstance(data.get("kind"), str):
         raise TypeError("constraint literal data must be a mapping with a kind")
     kind = data["kind"]
@@ -32,12 +35,12 @@ def _literal_from_data(data: Any) -> Any:
     if kind == "none" and set(data) == {"kind"}:
         return None
     if kind == "integer" and set(data) in ({"kind", "value"}, {"kind", "value", "target"}):
-        return int(data["value"])
+        return parse_canonical_integer(data["value"])
     if kind == "rational" and set(data) in (
         {"kind", "numerator", "denominator"},
         {"kind", "numerator", "denominator", "target"},
     ):
-        return Fraction(int(data["numerator"]), int(data["denominator"]))
+        return Fraction(parse_canonical_integer(data["numerator"]), parse_canonical_integer(data["denominator"]))
     if kind == "decimal" and set(data) in ({"kind", "value"}, {"kind", "value", "target"}):
         return Decimal(data["value"])
     if kind == "binary64" and set(data) in ({"kind", "value"}, {"kind", "value", "target"}):

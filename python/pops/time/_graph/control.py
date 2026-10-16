@@ -86,7 +86,7 @@ class Region:
         if any(type(capture) is not RegionCapture for capture in frozen_captures):
             raise TypeError("Region captures must contain exact RegionCapture values")
         frozen_nodes = tuple(nodes)
-        if any(type(node) not in (*NODE_TYPES, Branch, Loop) for node in frozen_nodes):
+        if any(type(node) not in (*NODE_TYPES, Branch, Loop, Capture) for node in frozen_nodes):
             raise TypeError("Region nodes must be exact graph node records")
         if type(result) is not ValueRef:
             raise TypeError("Region result must be an exact ValueRef")
@@ -207,7 +207,9 @@ class Loop(_Node):
     initial: ValueRef
     body: Region
     condition: Region | None
-    count: int | None
+    count: int | ValueRef | None
+    max_steps: ValueRef | None
+    result_signature: CanonicalData | None
     parent_clock: Clock | None
     clock: Clock
     point: TimePoint | StagePoint
@@ -215,10 +217,11 @@ class Loop(_Node):
 
     def __init__(self, node_id: int, loop_kind: str, initial: ValueRef, body: Region,
                  clock: Clock, point: TimePoint | StagePoint, *, condition: Region | None = None,
-                 count: int | None = None, parent_clock: Clock | None = None,
+                 count: int | ValueRef | None = None, parent_clock: Clock | None = None,
+                 max_steps: ValueRef | None = None, result_signature: Any = None,
                  name: str = "loop") -> None:
-        if loop_kind not in {"while", "range", "subcycle"}:
-            raise ValueError("Loop loop_kind must be 'while', 'range', or 'subcycle'")
+        if loop_kind not in {"while", "range", "subcycle", "fold", "iterate", "map", "scan"}:
+            raise ValueError("unsupported structured Loop kind")
         if type(initial) is not ValueRef:
             raise TypeError("Loop initial must be an exact ValueRef")
         if type(body) is not Region:
@@ -238,12 +241,24 @@ class Loop(_Node):
                 "subcycle Loop requires a positive count and one distinct exact parent_clock")
         if loop_kind != "subcycle" and parent_clock is not None:
             raise ValueError("only a subcycle Loop may declare parent_clock")
+        if loop_kind in {"fold", "iterate", "map", "scan"}:
+            if type(max_steps) is not ValueRef:
+                raise TypeError("bounded Loop requires an Int64 budget ValueRef")
+            if loop_kind in {"fold", "map", "scan"} and (type(count) is not ValueRef or condition is not None):
+                raise TypeError("fold requires an Int64 count reference and no condition")
+            if loop_kind == "iterate" and (condition is None or count is not None):
+                raise TypeError("iterate requires a stop region and no count")
+        elif max_steps is not None:
+            raise ValueError("legacy Loop cannot carry a structured budget")
         object.__setattr__(self, "node_id", _node_id(node_id))
         object.__setattr__(self, "loop_kind", loop_kind)
         object.__setattr__(self, "initial", initial)
         object.__setattr__(self, "body", body)
         object.__setattr__(self, "condition", condition)
         object.__setattr__(self, "count", count)
+        object.__setattr__(self, "max_steps", max_steps)
+        object.__setattr__(self, "result_signature", None if result_signature is None else
+                           CanonicalData(result_signature, where="Loop.result_signature"))
         object.__setattr__(self, "parent_clock", parent_clock)
         object.__setattr__(self, "clock", clock)
         object.__setattr__(self, "point", _point(point))
@@ -251,17 +266,59 @@ class Loop(_Node):
 
     def references(self) -> tuple[ValueRef, ...]:
         captures = _capture_refs(self.condition, self.body)
-        return (self.initial,) + tuple(ref for ref in captures if ref != self.initial)
+        values = (self.initial,) + tuple(ref for ref in (self.count, self.max_steps)
+                                         if type(ref) is ValueRef) + captures
+        return tuple(dict.fromkeys(values))
 
     def to_data(self) -> dict[str, Any]:
         data = _node_data(
             self, loop_kind=self.loop_kind, initial=self.initial.to_data(),
             body=self.body.to_data(),
             condition=self.condition.to_data() if self.condition is not None else None,
-            count=self.count, name=self.name)
+            count=self.count.to_data() if type(self.count) is ValueRef else self.count, name=self.name)
+        if self.max_steps is not None:
+            data["max_steps"] = self.max_steps.to_data()
+        if self.result_signature is not None:
+            data["result_signature"] = self.result_signature.to_data()
         if self.parent_clock is not None:
             data["parent_clock"] = self.parent_clock.to_data()
         return data
 
 
-__all__ = ["Branch", "Loop", "Region", "RegionCapture"]
+@dataclass(frozen=True, slots=True, init=False)
+class Capture(_Node):
+    """One closed region whose recoverable failures become an opaque typed Result."""
+
+    kind: ClassVar[str] = "capture"
+    node_id: int
+    body: Region
+    clock: Clock
+    point: TimePoint | StagePoint
+    name: str
+    result_signature: CanonicalData
+
+    def __init__(self, node_id: int, body: Region, clock: Clock,
+                 point: TimePoint | StagePoint, *, name: str = "capture",
+                 result_signature: Any) -> None:
+        if type(body) is not Region:
+            raise TypeError("Capture body must be an exact immutable Region")
+        source = body.result_source()
+        if source.clock != clock or source.point != point:
+            raise ValueError("Capture result must preserve its region result clock and point")
+        object.__setattr__(self, "node_id", _node_id(node_id))
+        object.__setattr__(self, "body", body)
+        object.__setattr__(self, "clock", clock)
+        object.__setattr__(self, "point", _point(point))
+        object.__setattr__(self, "name", _nonempty(name, where="Capture name"))
+        object.__setattr__(self, "result_signature",
+                           CanonicalData(result_signature, where="Capture.result_signature"))
+
+    def references(self) -> tuple[ValueRef, ...]:
+        return _capture_refs(self.body)
+
+    def to_data(self) -> dict[str, Any]:
+        return _node_data(self, body=self.body.to_data(), name=self.name,
+                          result_signature=self.result_signature.to_data())
+
+
+__all__ = ["Branch", "Capture", "Loop", "Region", "RegionCapture"]

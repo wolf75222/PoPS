@@ -184,6 +184,7 @@ def _two_layout_install_plan(execution_context):
         params={},
         components={},
         execution_context=execution_context,
+        runtime_parameter_storage={"byte_capacity": 0},
         instances={"tracer": object(), "coarse": object()},
         aux={},
     )
@@ -320,10 +321,11 @@ def test_later_child_failure_releases_earlier_children_in_reverse_order(monkeypa
 
     class FakeSystem:
         def __init__(self, config):
-            self.config = config
+            assert config.runtime_parameter_byte_capacity == 0
+            self.config = config.layout
             self.events = []
-            self._s = SimpleNamespace(layout=config)
-            child_events[config] = self.events
+            self._s = SimpleNamespace(layout=config.layout)
+            child_events[config.layout] = self.events
 
         def destroy(self):
             released.append(self.config)
@@ -383,7 +385,7 @@ def test_later_child_failure_releases_earlier_children_in_reverse_order(monkeypa
     )
     monkeypatch.setattr(
         "pops.runtime._runtime_mesh_lowering.system_config_from_layout",
-        lambda layout: layout,
+        lambda layout: SimpleNamespace(layout=layout),
     )
     monkeypatch.setattr(
         "pops.runtime._runtime_mesh_lowering.install_embedded_boundary",
@@ -931,7 +933,7 @@ def _patch_physical_preflight(monkeypatch, plan, runtime_plan, fake_layouts):
         # Keep the production ranked-box validator; only native config allocation is replaced.
         _uniform_system_values(layout)
         lowered.append(layout.layout_id)
-        return layout
+        return SimpleNamespace(layout=layout)
 
     monkeypatch.setattr("pops.runtime._runtime_mesh_lowering.system_config_from_layout",
                         checked_uniform_config)

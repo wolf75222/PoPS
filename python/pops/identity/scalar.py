@@ -57,17 +57,53 @@ def _finite_real_token(value: Any, *, description: str) -> str:
     return repr(lowered)
 
 
+def _decimal_integer(value: int) -> str:
+    """Exact decimal identity without Python's process-wide digit-limit setting."""
+    negative = value < 0
+    remaining, chunks = abs(value), []
+    while remaining:
+        remaining, chunk = divmod(remaining, 1_000_000_000)
+        chunks.append(chunk)
+    if not chunks:
+        return "0"
+    digits = str(chunks.pop()) + "".join("%09d" % chunk for chunk in reversed(chunks))
+    return "-" + digits if negative else digits
+
+
+def parse_canonical_integer(value: Any) -> int:
+    """Decode an exact decimal identity without changing Python's digit limit.
+
+    ScalarLiteral decimal integers have one spelling: ASCII digits, no leading
+    zero, and a minus sign only for a nonzero negative integer. Chunked parsing
+    keeps every call to Python's bounded decimal converter below ten digits.
+    """
+    if not isinstance(value, str):
+        raise TypeError("canonical integer payload must be a decimal string")
+    if value == "0":
+        return 0
+    negative = value.startswith("-")
+    digits = value[1:] if negative else value
+    if not digits or digits[0] not in "123456789" or any(c not in "0123456789" for c in digits):
+        raise ValueError("integer payload is not canonical decimal")
+    first = len(digits) % 9 or 9
+    result = int(digits[:first])
+    for offset in range(first, len(digits), 9):
+        result = result * 1_000_000_000 + int(digits[offset:offset+9])
+    return -result if negative else result
+
+
 def _integer_chunks_cpp(value: int, cpp_type: str) -> str:
     """Spell an arbitrary integer using only signed-64-safe C++ integer tokens."""
     sign = -1 if value < 0 else 1
-    digits = str(abs(value))
+    digits = _decimal_integer(abs(value))
     first = len(digits) % 9 or 9
     chunks = [int(digits[:first])]
     chunks.extend(int(digits[index : index + 9]) for index in range(first, len(digits), 9))
-    expression = "%s(%d)" % (cpp_type, chunks[0])
-    for chunk in chunks[1:]:
-        expression = "((%s * %s(1000000000)) + %s(%d))" % (expression, cpp_type, cpp_type, chunk)
-    return "(-%s)" % expression if sign < 0 else expression
+    statements = ["%s value(%d);" % (cpp_type, chunks[0])]
+    statements.extend("value = value * %s(1000000000) + %s(%d);" % (cpp_type, cpp_type, chunk)
+                      for chunk in chunks[1:])
+    statements.append("return -value;" if sign < 0 else "return value;")
+    return "([]() { %s }())" % " ".join(statements)
 
 
 def _integer_cpp(value: int, cpp_type: str, *, bounded_real: bool) -> str:
@@ -110,31 +146,37 @@ def _rational_cpp(
 
 
 def _freeze_payload(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        if any(not isinstance(key, str) for key in value):
-            raise TypeError("custom ScalarLiteral payload mappings require string keys")
-        return MappingProxyType({key: _freeze_payload(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_payload(item) for item in value)
-    if value is None or isinstance(value, (bool, int, str)):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("custom ScalarLiteral floating payloads must be finite")
-        return value
-    raise TypeError(
-        "custom ScalarLiteral payload must be strict JSON data (string-keyed mappings, "
-        "lists, and scalar values)"
-    )
+    from pops._structural_data import transform
+    def describe(node):
+        if isinstance(node, Mapping):
+            keys = tuple(node)
+            if any(not isinstance(key, str) for key in keys):
+                raise TypeError("custom ScalarLiteral payload mappings require string keys")
+            return tuple(node.values()), lambda items: MappingProxyType(dict(zip(keys, items, strict=True)))
+        if isinstance(node, (list, tuple)):
+            return node, tuple
+        if node is None or isinstance(node, (bool, int, str)):
+            return None, node
+        if isinstance(node, float):
+            if not math.isfinite(node):
+                raise ValueError("custom ScalarLiteral floating payloads must be finite")
+            return None, node
+        raise TypeError("custom ScalarLiteral payload must be strict JSON data (string-keyed "
+                        "mappings, lists, and scalar values)")
+    return transform(value, describe)
 
 
 def _data_payload(value: Any) -> Any:
     """Return a detached JSON-shaped view of an immutable custom literal payload."""
-    if isinstance(value, Mapping):
-        return {key: _data_payload(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_data_payload(item) for item in value]
-    return value
+    from pops._structural_data import transform
+    def describe(node):
+        if isinstance(node, Mapping):
+            keys = tuple(node)
+            return tuple(node.values()), lambda items: dict(zip(keys, items, strict=True))
+        if isinstance(node, tuple):
+            return node, list
+        return None, node
+    return transform(value, describe)
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,10 +339,10 @@ class ScalarLiteral:
     def to_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {"kind": self.kind}
         if self.kind == "integer":
-            data["value"] = str(self.payload)
+            data["value"] = _decimal_integer(self.payload)
         elif self.kind == "rational":
-            data["numerator"] = str(self.payload[0])
-            data["denominator"] = str(self.payload[1])
+            data["numerator"] = _decimal_integer(self.payload[0])
+            data["denominator"] = _decimal_integer(self.payload[1])
         else:
             data["value"] = _data_payload(self.payload)
         if self.unit is not None:

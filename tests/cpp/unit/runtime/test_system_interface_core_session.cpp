@@ -31,8 +31,7 @@ struct NativeCoordinatedPath : pops::nd::ScalarAdvection<pops::kNativeDimension>
     return {"tests.stage-time/coordinated-scalar", 1};
   }
   template <int Axis>
-  POPS_HD pops::PathInterfaceResult<1> coordinated_face(const State& left,
-                                                         const State&) const {
+  POPS_HD pops::PathInterfaceResult<1> coordinated_face(const State& left, const State&) const {
     static_assert(Axis < pops::kNativeDimension);
     pops::PathInterfaceResult<1> result;
     result.status = pops::PathStatus::Success;
@@ -46,9 +45,13 @@ struct NativeFactoryProbe {
   pops::SystemBlockClosures<pops::kNativeDimension>::ExternalGhostBoundary ghost;
   std::function<void(const void*)> observe_transport;
   std::function<void(const pops::runtime::multiblock::BoundaryEvaluationPoint&,
-                     const pops::MultiFab<pops::kNativeDimension>&)> observe_legacy_state;
+                     const pops::MultiFab<pops::kNativeDimension>&)>
+      observe_legacy_state;
   std::function<void(const pops::runtime::multiblock::BoundaryEvaluationPoint&,
-                     const pops::MultiFab<pops::kNativeDimension>&)> observe_path_state;
+                     const pops::MultiFab<pops::kNativeDimension>&)>
+      observe_path_state;
+  bool ghost_only = false;
+  bool omit_ghost_transport = false;
   bool path_only = false;
   bool real_path = false;
   bool analytic_inflow = false;
@@ -73,17 +76,15 @@ PreparedSystemBlock<Dim> prepare_exact_system_block(
         auto physical = prepared.closures.path_rhs_at_point_prepared;
         auto observe = native_factory_probe->observe_path_state;
         prepared.closures.path_rhs_at_point_prepared =
-            [physical, observe](const auto& point, auto& state, auto& output,
-                                const auto* boundary, const auto& lane,
-                                const auto& transport) {
+            [physical, observe](const auto& point, auto& state, auto& output, const auto* boundary,
+                                const auto& lane, const auto& transport) {
               const auto frequency = physical(point, state, output, boundary, lane, transport);
               if (observe)
                 observe(point, state);
               return frequency;
             };
       } else if (native_factory_probe->path_only) {
-        prepared.physical_boundary_route =
-            pops::PreparedPhysicalBoundaryRoute::path_residual;
+        prepared.physical_boundary_route = pops::PreparedPhysicalBoundaryRoute::path_residual;
         prepared.closures.boundary_full_at_point_prepared = {};
         prepared.closures.boundary_core_at_point_prepared = {};
         prepared.closures.boundary_flux_full_at_point_prepared = {};
@@ -106,7 +107,8 @@ PreparedSystemBlock<Dim> prepare_exact_system_block(
         auto observe_state = native_factory_probe->observe_legacy_state;
         prepared.closures.boundary_flux_full_at_point_prepared =
             [physical, observe, observe_state](const auto& point, auto& state, auto& output,
-                                const auto& boundary, const auto& lane, const auto& transport) {
+                                               const auto& boundary, const auto& lane,
+                                               const auto& transport) {
               if (observe)
                 observe(&transport);
               physical(point, state, output, boundary, lane, transport);
@@ -124,9 +126,19 @@ PreparedSystemBlock<Dim> prepare_exact_system_block(
               };
         }
       }
+      if (native_factory_probe->ghost_only) {
+        prepared.physical_boundary_route = pops::PreparedPhysicalBoundaryRoute::ghost_extension;
+        prepared.closures.boundary_full_at_point_prepared = {};
+        prepared.closures.boundary_core_at_point_prepared = {};
+        prepared.closures.boundary_flux_full_at_point_prepared = {};
+        prepared.closures.boundary_flux_core_at_point_prepared = {};
+        prepared.closures.boundary_residual_at_point_prepared = {};
+        prepared.closures.boundary_jvp_at_point_prepared = {};
+        if (native_factory_probe->omit_ghost_transport)
+          prepared.closures.prepare_generated_state_with_transport_prepared = {};
+      }
       if (native_factory_probe->unknown_boundary_route)
-        prepared.physical_boundary_route =
-            static_cast<pops::PreparedPhysicalBoundaryRoute>(99);
+        prepared.physical_boundary_route = static_cast<pops::PreparedPhysicalBoundaryRoute>(99);
     }
   }
   return prepared;
@@ -388,19 +400,18 @@ struct NativeFixture {
           clocks[0] = "macro";
         }
         auto boundary = std::make_shared<const pops::PreparedHyperbolicBoundary<kDim>>(
-            pops::prepare_hyperbolic_boundary<kDim>(
-                kinds, std::vector<double>(2 * kDim, 0.0), identities, {"Scalar"}, false, {}, {},
-                opcodes, literals, clocks));
+            pops::prepare_hyperbolic_boundary<kDim>(kinds, std::vector<double>(2 * kDim, 0.0),
+                                                    identities, {"Scalar"}, false, {}, {}, opcodes,
+                                                    literals, clocks));
         system->install_prepared_hyperbolic_boundary(name, identity + "/" + name + "/boundary", 1,
                                                      identity + "/" + name + "/state", boundary);
       }
       // Block preparation captures the already authenticated physical boundary.
       if (probe && probe->real_path)
-        pops::add_compiled_model(
-            *system, name, NativeCoordinatedPath{}, "none",
-            std::string("coordinated_face:v1:") +
-                std::string(NativeCoordinatedPath::path_operator_identity()),
-            "conservative", "explicit");
+        pops::add_compiled_model(*system, name, NativeCoordinatedPath{}, "none",
+                                 std::string("coordinated_face:v1:") +
+                                     std::string(NativeCoordinatedPath::path_operator_identity()),
+                                 "conservative", "explicit");
       else
         pops::add_compiled_model(*system, name, pops::nd::ScalarAdvection<kDim>::prepare(velocity),
                                  "none", "rusanov", "conservative", "explicit");
@@ -518,8 +529,7 @@ TEST(SystemInterfaceCoreSession, path_and_legacy_boundary_routes_still_require_t
   NativeFactoryProbe missing_path;
   missing_path.path_only = true;
   missing_path.omit_path = true;
-  EXPECT_THROW(NativeFixture("missing-path-boundary", false, &missing_path),
-               std::exception);
+  EXPECT_THROW(NativeFixture("missing-path-boundary", false, &missing_path), std::exception);
 
   NativeFactoryProbe incomplete_legacy;
   incomplete_legacy.incomplete_legacy = true;
@@ -528,8 +538,7 @@ TEST(SystemInterfaceCoreSession, path_and_legacy_boundary_routes_still_require_t
 
   NativeFactoryProbe unknown_route;
   unknown_route.unknown_boundary_route = true;
-  EXPECT_THROW(NativeFixture("unknown-boundary-route", false, &unknown_route),
-               std::exception);
+  EXPECT_THROW(NativeFixture("unknown-boundary-route", false, &unknown_route), std::exception);
 }
 
 TEST(SystemInterfaceCoreSession, prepared_analytic_inflow_uses_the_stage_physical_time) {
@@ -550,32 +559,29 @@ TEST(SystemInterfaceCoreSession, prepared_analytic_inflow_uses_the_stage_physica
     fixture.system->mark_bound();
     auto& state = fixture.system->block_state(0);
     state.set_val(pops::Real(1));
-    const auto topology = pops::BoundaryTopology<kDim>::axis_periodic(
-        fixture.system->prepared_block_periodicity());
+    const auto topology =
+        pops::BoundaryTopology<kDim>::axis_periodic(fixture.system->prepared_block_periodicity());
     std::uint64_t generation = 1;
     for (const double time : {0.0, 0.25}) {
       auto point = fixture.point();
       point.physical_time = time;
-      auto transport =
-          pops::runtime::program::PreparedScalarBoundarySession<kDim>::prepare_block(
-              fixture.system->prepared_block_geometry(), topology, state, *fixture.lane,
-              generation++);
+      auto transport = pops::runtime::program::PreparedScalarBoundarySession<kDim>::prepare_block(
+          fixture.system->prepared_block_geometry(), topology, state, *fixture.lane, generation++);
       const auto before = observations.size();
       fixture.left_output->set_val(pops::Real(-17));
       if (path)
-        fixture.system->block_path_rhs_into_at(point, 0, state, *fixture.left_output,
-                                               pops::Real(1), fixture.system.get(), 0, point,
-                                               *fixture.lane, *transport);
+        fixture.system->block_path_rhs_into_at(point, 0, state, *fixture.left_output, pops::Real(1),
+                                               fixture.system.get(), 0, point, *fixture.lane,
+                                               *transport);
       else
         fixture.system->block_rhs_into_at_prepared(point, 0, state, *fixture.left_output,
-                                                  fixture.system.get(), 0, point,
-                                                  *fixture.lane, *transport);
+                                                   fixture.system.get(), 0, point, *fixture.lane,
+                                                   *transport);
       const long local_samples = static_cast<long>(observations.size() - before);
       EXPECT_EQ(pops::all_reduce_sum(local_samples, *fixture.lane), 1L);
       if (observations.size() > before) {
         EXPECT_DOUBLE_EQ(observations.back().first, time);
-        EXPECT_DOUBLE_EQ(observations.back().second,
-                         static_cast<pops::Real>(1 + 2 * time));
+        EXPECT_DOUBLE_EQ(observations.back().second, static_cast<pops::Real>(1 + 2 * time));
       }
     }
   }
@@ -796,4 +802,39 @@ TEST(SystemInterfaceCoreSession, real_system_rank_local_boundary_discard_retains
   fixture.evaluate(fixture.point());
   fixture.expect_outputs(pops::Real(0));
   EXPECT_EQ(evaluations, 0);
+}
+
+TEST(SystemInterfaceCoreSession, ghost_extension_has_its_own_complete_authority) {
+  NativeFactoryProbe probe;
+  probe.ghost_only = true;
+  NativeFixture fixture("generated-ghost-only", false, &probe);
+  EXPECT_TRUE(fixture.system->requires_block_boundary_session(0));
+  EXPECT_FALSE(fixture.system->has_block_boundary_linearization(0));
+  NativeFactoryProbe missing;
+  missing.ghost_only = true;
+  missing.omit_ghost_transport = true;
+  EXPECT_THROW(NativeFixture("generated-missing-transport", false, &missing), std::exception);
+}
+
+TEST(SystemInterfaceCoreSession,
+     generated_ghost_extension_authenticates_stage_time_and_rolls_back) {
+  NativeFactoryProbe probe;
+  probe.ghost_only = true;
+  probe.analytic_inflow = true;
+  NativeFixture fixture("generated-ghost-time", false, &probe);
+  fixture.system->mark_bound();
+  auto& state = fixture.system->block_state(0);
+  state.set_val(pops::Real(1));
+  for (const double time : {0.0, 0.25}) {
+    auto point = fixture.point();
+    point.physical_time = time;
+    fixture.system->block_prepare_generated_state_at(point, 0, state);
+    if (const auto ghost = physical_left_ghost(state))
+      EXPECT_DOUBLE_EQ(*ghost, static_cast<pops::Real>(1 + 2 * time));
+  }
+  const auto before = physical_left_ghost(state);
+  auto invalid = fixture.point();
+  invalid.clock.clear();
+  EXPECT_THROW(fixture.system->block_prepare_generated_state_at(invalid, 0, state), std::exception);
+  EXPECT_EQ(physical_left_ghost(state), before);
 }

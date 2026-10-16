@@ -50,3 +50,15 @@ def test_slot_labels_refuse_foreign_or_stale_publication_authority(attack):
         durations = (DT, 2*DT)
     with pytest.raises(ValueError, match="name/level/window/slot authority"):
         published_history_image("T0", 1, (np.array((1.,)), np.array((2.,))), durations, encoded, 2)
+
+
+@pytest.mark.parametrize("step", (1,2))
+def test_hid2_publications_preserve_zero_reconstruction_identity(step):
+    old=sample(step=step)
+    header_size=len(old)-64
+    current=b"POPSHID2"+old[8:header_size]+old[header_size:header_size+32]+b"\0"*32+old[-32:]+b"\0"*32
+    result=published_history_image("T0",1,(np.array((1.,)),np.array((2.,))),(DT,DT),current,step)
+    assert result["history_sample_identity_T0"].tobytes()==current
+    forged=bytearray(current);forged[-1]=1
+    with pytest.raises(ValueError,match="name/level/window/slot authority"):
+        published_history_image("T0",1,(np.array((1.,)),np.array((2.,))),(DT,DT),forged,step)

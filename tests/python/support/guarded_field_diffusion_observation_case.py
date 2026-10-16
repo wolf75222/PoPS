@@ -19,7 +19,12 @@ from pops.numerics import Diffusion, DiscretizationPlan
 
 
 def author_frozen_coefficient_case(
-    *, guard_driver=False, guard_field_input=False, suffix=""
+    *,
+    guard_driver=False,
+    guard_field_input=False,
+    suffix="",
+    alias_depth=0,
+    shared_depth=0,
 ):
     frame = Rectangle("audit-domain" + suffix, (0, 0), (2, 3)).frame(Cartesian2D())
     donor = pops.Model("forcing-library" + suffix, frame=frame)
@@ -76,6 +81,10 @@ def author_frozen_coefficient_case(
         if guard_field_input
         else d.n
     )
+    for index in range(alias_depth):
+        consumed_driver = p.value(
+            f"read-alias-{index}", 1 * consumed_driver, at=consumed_driver.point
+        )
     outcome = p.solve(field, values={left[driver]: consumed_driver}, at=point)
     solution = field.observe(outcome.consume(action=FailRun()))
     target = right[
@@ -93,6 +102,17 @@ def author_frozen_coefficient_case(
     if guard_driver:
         next_d = p.guard(
             "finite-forcing" + suffix, next_d, p.norm2(next_d) >= 0, action=FailRun()
+        )
+    for index in range(alias_depth):
+        next_d = p.value(f"frozen-alias-{index}", 1 * next_d, at=next_d.point)
+        next_u = p.value(f"accepted-alias-{index}", 1 * next_u, at=next_u.point)
+    for index in range(shared_depth):
+        left_alias = p.value(f"shared-left-{index}", 1 * next_d, at=next_d.point)
+        right_alias = p.value(f"shared-right-{index}", 1 * next_d, at=next_d.point)
+        next_d = p.value(
+            f"shared-result-{index}",
+            Fraction(1, 3) * left_alias + Fraction(2, 3) * right_alias,
+            at=next_d.point,
         )
     p.commit(d.next, next_d)
     p.commit(u.next, next_u)

@@ -183,6 +183,19 @@ def build_temporal_manifest(program: Any) -> dict[str, Any]:
             contract_data = contract.to_data()
             validity = contract_data["validity"]
             interpolation = contract_data["interpolation"]
+        transfers = [node.attrs["history_transfer"] for node in nodes
+                     if node.op == "store_history" and node.attrs.get("history") == name
+                     and "history_transfer" in node.attrs]
+        if transfers:
+            from pops.time._history.transfer import require_ring_transfer
+            transfer = _json_ready(transfers[0])
+            require_ring_transfer(transfer, int(depth)+1)
+            if any(
+                    _json_ready(candidate) != transfer for candidate in transfers[1:]):
+                raise ValueError("history %r has conflicting transfer graphs or widths" % name)
+            if contract is not None and interpolation != transfer:
+                raise ValueError("history %r store transfer differs from its keeper contract" % name)
+            interpolation = transfer
         histories.append({
             "name": name,
             "owner": handle_data(owner) if owner is not None else None,

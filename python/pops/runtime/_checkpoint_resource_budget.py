@@ -213,9 +213,9 @@ def _history_capacity(
                     if level is None
                     else "history_%s_level_%d_%d" % (name, level, slot)
                 )
-            # POPSHID1: fixed magic/name-length/level/depth, exact UTF-8 name, four u64 per slot.
+            # POPSHID2 adds a fixed SHA256 reconstruction identity to each slot.
             identity_bytes = _add(32, len(name.encode("utf-8")), where="history identity header")
-            identity_bytes = _add(identity_bytes, _mul(depth, 32, where="history identity slots"),
+            identity_bytes = _add(identity_bytes, _mul(depth, 64, where="history identity slots"),
                                   where="history identity bytes")
             data_bytes = _add(data_bytes, identity_bytes, where="history identity budget")
             values = _mul(level_cells, ncomp, where="history scalar budget")
@@ -568,6 +568,7 @@ def _checkpoint_member_names(
     levels: int,
     rank_capacity: int,
     has_amr_legacy_phi: bool = False,
+    has_finite_continuation: bool = False,
 ) -> tuple[str, ...]:
     from pops.runtime._checkpoint_embedded_boundary import EMBEDDED_BOUNDARY_CONTRACT_KEY
     from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
@@ -656,12 +657,35 @@ def _checkpoint_member_names(
             for level in range(levels):
                 names.append("field_provider_phi_%d_%d" % (index, level))
         names.append("program_accepted_state")
+        names.append("program_accepted_state_rank_count")
+        names.extend("program_accepted_state_rank_%d" % rank for rank in range(rank_capacity))
         for level in range(levels):
             names.extend(("distribution_mode_%d" % level, "dmap_%d" % level))
+    if has_finite_continuation:
+        if runtime_kind != "uniform":
+            raise ValueError("finite continuation AMR checkpoint is not qualified")
+        from pops.runtime._checkpoint_finite_continuation import FINITE_CONTINUATION_KEYS
+        names.extend(sorted(FINITE_CONTINUATION_KEYS))
     names.extend((*runtime, MANIFEST_KEY, IDENTITY_KEY))
     if not names or len(names) != len(set(names)):
         raise RuntimeError("checkpoint resource authority produced duplicate member names")
     return tuple(names)
+
+
+def _accepted_program_archive_capacity(per_rank: int, ranks: int, *, ranked: bool) -> int:
+    """Exact framing capacity of canonical image + complete AMR rank table."""
+    per_rank = _capacity(per_rank, where="accepted Program image capacity")
+    ranks = _capacity(ranks, where="accepted Program rank capacity", positive=True)
+    if type(ranked) is not bool:
+        raise TypeError("accepted Program ranked policy must be an exact bool")
+    if not ranked:
+        return per_rank
+    return _add(
+        _mul(per_rank, _add(ranks, 1, where="accepted Program archive image count"),
+             where="accepted Program ranked image bytes"),
+        8,
+        where="accepted Program rank-count scalar bytes",
+    )
 
 
 def _common_budget(
@@ -747,11 +771,23 @@ def _common_budget(
         rank_capacity=max(rank_capacity, checkpoint_topology(owner).size),
         resolved_plan=install_plan.artifact.plan)
     owner._checkpoint_exchange_byte_capacity = exchange_bytes
-    program_bytes = _mul(
-        accepted_program_bytes,
-        1,
-        where="accepted Program checkpoint byte budget",
-    )
+    finite_bytes = 0
+    finite_schema = ""
+    if runtime_kind == "uniform":
+        from pops.runtime._checkpoint_finite_continuation import installed_capacity
+        finite_schema, per_rank = installed_capacity(owner)
+        if per_rank:
+            ranks = max(rank_capacity, checkpoint_topology(owner).size)
+            finite_bytes = _add(_mul(per_rank, ranks, where="finite continuation ranked byte capacity"),
+                                _add(_mul(ranks + 1, 8, where="finite continuation offsets capacity"),
+                                     _mul(len(finite_schema), 4, where="finite continuation schema capacity"),
+                                     where="finite continuation archive metadata"),
+                                where="finite continuation archive capacity")
+    # AMR keeps the complete native rank table plus its historical canonical image.
+    # All capacities come from the installed artifact and the actual execution lane;
+    # archive-authored counts never enlarge this capture/ordinary-restart authority.
+    program_bytes = _accepted_program_archive_capacity(
+        accepted_program_bytes, rank_capacity, ranked=runtime_kind == "amr")
     migration_bytes = 0
     if runtime_kind == "uniform":
         import numpy as np
@@ -771,6 +807,7 @@ def _common_budget(
         program_bytes,
         history_flux_snapshot_bytes,
         exchange_bytes,
+        finite_bytes,
         source_authority_bytes,
         structural_bytes,
         migration_bytes,
@@ -786,6 +823,7 @@ def _common_budget(
         levels=len(cells),
         rank_capacity=rank_capacity,
         has_amr_legacy_phi=runtime_kind == "amr" and bool(field_names),
+        has_finite_continuation=bool(finite_schema),
     )
     consumer_identity, consumer_count, consumer_data = _consumer_evidence(install_plan)
     temporal_manifest = program.temporal_manifest()
@@ -816,6 +854,8 @@ def _common_budget(
     }
     control_data["state_carriers_capacity_contract"] = "pops.%s.state-carriers-capacity@1" % runtime_kind
     control_data["state_carriers_bytes"] = state_carriers_bytes
+    if finite_schema:
+        control_data["finite_continuation"] = {"schema": finite_schema, "ranked_bytes": finite_bytes}
     control_characters = len(
         json.dumps(control_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     )

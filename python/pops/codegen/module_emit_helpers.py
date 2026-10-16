@@ -107,12 +107,10 @@ def _exact_brick_contract(
     ]
     if runtime_params:
         lines += [
-            "    if (params.count < 0 || params.count > pops::kMaxRuntimeParams)",
-            "      throw std::invalid_argument(\"generated physics brick runtime parameter count "
-            "is invalid\");",
+            "    params.require_bound();",
             "    contract.scalar(static_cast<std::int32_t>(params.count));",
             "    for (int index = 0; index < params.count; ++index)",
-            "      contract.scalar(params.values[index]);",
+            "      contract.scalar(params.get(index));",
         ]
     else:
         lines.append("    contract.scalar(std::int32_t{0});")

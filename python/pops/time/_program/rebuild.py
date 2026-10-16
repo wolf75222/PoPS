@@ -75,7 +75,12 @@ def rebuild_program(
         raise TypeError("Program._rebuild canonical_owner must be bool")
     from .global_history_storage import transfer_issuances, validate_issuances
     validate_issuances(self)
-    out = type(self)(self.name)
+    out = type(self)(self.name, max_exact_coefficient_bytes=self.max_exact_coefficient_bytes,
+                     flux_expression_budget=self.flux_expression_budget,
+                     history_field_metadata_budget=self.history_field_metadata_budget,
+                     terminal_failure_byte_capacity=self.terminal_failure_byte_capacity,
+                     terminal_failure_aggregate_byte_capacity=self.terminal_failure_aggregate_byte_capacity,
+                     representation_workspace_byte_capacity=self.representation_workspace_byte_capacity)
     if canonical_owner:
         object.__setattr__(out, "_owner_path", out.owner_path.canonical())
         case_owner = getattr(self, "_case_owner_path", None)
@@ -87,6 +92,11 @@ def rebuild_program(
         object.__setattr__(out, "clock", Clock("macro", owner=out.owner_path))
     out.dt = self.dt
     out._next_stage_identity = self._next_stage_identity
+    out._next_finite_domain_identity = self._next_finite_domain_identity
+    out._finite_families = dict(getattr(self, "_finite_families", {}))
+    if hasattr(self, "_distributed_storage_policy"):
+        out._distributed_storage_policy = self._distributed_storage_policy
+        out._distributed_storage_explicit = getattr(self, "_distributed_storage_explicit", False)
     out._step_strategy = getattr(self, "_step_strategy", None)
     out._cadence = getattr(self, "_cadence", None)
     out._cell_local_time = getattr(self, "_cell_local_time", None)
@@ -246,18 +256,24 @@ def rebuild_program(
         )
 
     def remap_metadata(value: Any) -> Any:
-        """Recursively reown ProgramValue and semantic Handle leaves in IR metadata."""
+        """Reown metadata containers without adding a Python nesting limit."""
+        from pops._structural_data import transform_tree
+        return transform_tree(value, describe_remapped_metadata)
+
+    def describe_remapped_metadata(value: Any) -> Any:
+        if type(value) in (TimePoint, StagePoint):
+            return None, remap_point(value)
         if isinstance(value, (ProgramValue, _Affine)):
-            return remap(value)
+            return None, remap(value)
         from pops.model.handles import Handle
         if isinstance(value, Handle):
-            return reference_of(value)
+            return None, reference_of(value)
         from pops._ir.expr import Expr
         if isinstance(value, Expr):
-            return value.resolve_references(reference_of)
+            return None, value.resolve_references(reference_of)
         from pops.time.field_context import FieldContext, FieldReadProvenance
         if isinstance(value, (FieldContext, FieldReadProvenance)):
-            return remap_provenance(value)
+            return None, remap_provenance(value)
         if isinstance(value, Schedule):
             mapped_schedule = value.map_values(remap_metadata)
             domain = mapped_schedule.domain.map_values(
@@ -269,32 +285,30 @@ def rebuild_program(
             rebuilt_schedule = replace(mapped_schedule, trigger=trigger)
             if type(rebuilt_schedule) is not type(value):
                 raise TypeError("Schedule rebuild must preserve the exact extension type")
-            return rebuilt_schedule
+            return None, rebuilt_schedule
         if getattr(value, "__pops_ir_immutable__", False) is True:
             references = getattr(value, "declaration_references", None)
             resolve = getattr(value, "resolve_references", None)
             if callable(references) and references():
                 if not callable(resolve):
                     raise TypeError("immutable Program metadata with declarations requires reference resolution")
-                return resolve(reference_of)
-            return value
+                return None, resolve(reference_of)
+            return None, value
         if isinstance(value, Mapping):
-            return {
-                remap_metadata(key): remap_metadata(item)
-                for key, item in value.items()
-            }
+            children = tuple(child for pair in value.items() for child in pair)
+            return children, lambda items: dict(zip(items[::2], items[1::2], strict=True))
         if isinstance(value, (list, tuple)):
-            return tuple(remap_metadata(item) for item in value)
+            return tuple(value), tuple
         if isinstance(value, (set, frozenset)):
-            return frozenset(remap_metadata(item) for item in value)
+            return tuple(value), frozenset
         if value is None or isinstance(
                 value, (bool, int, float, complex, str, bytes, Decimal, Fraction, Enum)):
-            return value
+            return None, value
         if retain_operator_registries:
             # Optimization/authoring rebuilds preserve extension metadata. The compiled-boundary
             # rebuild below is intentionally stricter because preserving a foreign record there
             # could retain its mutable builder or registry graph in the public artifact.
-            return value
+            return None, value
         raise TypeError(
             "compiled Program metadata contains unsupported mutable value %s.%s; lower it to "
             "immutable scalar/container/Handle data or declare __pops_ir_immutable__ = True"

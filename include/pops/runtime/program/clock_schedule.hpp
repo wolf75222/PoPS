@@ -10,6 +10,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -25,6 +26,13 @@ struct ExactCoefficientTerm {
   int dt_power = 0;
   std::int64_t numerator = 0;
   std::int64_t denominator = 1;
+  std::string_view numerator_text;
+  std::string_view denominator_text;
+  ExactCoefficientTerm() = default;
+  ExactCoefficientTerm(int power, std::int64_t n, std::int64_t d)
+      : dt_power(power), numerator(n), denominator(d) {}
+  ExactCoefficientTerm(int power, std::string_view n, std::string_view d)
+      : dt_power(power), numerator_text(n), denominator_text(d) {}
 };
 
 /// Exception-safe runtime validation for generated nested logical-clock schedules.

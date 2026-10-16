@@ -59,8 +59,7 @@ class PreparedCartesianOperatorScratch {
         field.ncomp() != residual_candidate_.ncomp() ||
         field.ghosts() != residual_candidate_.ghosts() ||
         face_candidates_.size() != field.local_size() ||
-        face_statuses_.size() != field.local_size() ||
-        face_speeds_.size() != field.local_size())
+        face_statuses_.size() != field.local_size() || face_speeds_.size() != field.local_size())
       throw std::invalid_argument(
           "prepared Cartesian operator scratch differs from its authenticated field layout");
   }
@@ -201,8 +200,17 @@ struct CopyCellField {
   }
 };
 
+/// Default trace transform preserves reconstructed traces. A prepared boundary
+/// may supply another device-callable transform without introducing boundary
+/// laws into the FV operator.
+struct IdentityFaceTrace {
+  template <int Axis, class Model, int Dim, class Pair>
+  POPS_HD void operator()(const Model&, const FieldView<const Real, Dim>&,
+                          const FaceIndex<Dim, Axis>&, Pair&) const {}
+};
+
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
-          class Reconstruction, class NumericalFlux, class ProviderStorage>
+          class Reconstruction, class NumericalFlux, class ProviderStorage, class TraceTransform>
 struct MaterializeFaceFlux {
   Model model;
   Metric metric;
@@ -218,6 +226,7 @@ struct MaterializeFaceFlux {
   bool record_speeds = false;
   Box<Dim> domain{};
   std::array<bool, 2 * Dim> omitted_faces{};
+  TraceTransform trace_transform;
 
   POPS_HD void fail(const FaceIndex<Dim, Axis>& face, FiniteVolumeStatus status) const {
     for (int component = 0; component < Model::n_vars; ++component)
@@ -225,8 +234,7 @@ struct MaterializeFaceFlux {
     statuses.template operator()<Axis>(face.coordinate) = static_cast<Real>(status);
     if (record_speeds)
       speeds.template operator()<Axis>(face.coordinate) =
-          status == FiniteVolumeStatus::Success ? Real(0)
-                                                : std::numeric_limits<Real>::quiet_NaN();
+          status == FiniteVolumeStatus::Success ? Real(0) : std::numeric_limits<Real>::quiet_NaN();
   }
 
   POPS_HD void operator()(const FaceIndex<Dim, Axis>& face) const {
@@ -237,6 +245,22 @@ struct MaterializeFaceFlux {
       return;
     }
     auto traces = reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
+    Index<Dim> left_cell = face.coordinate;
+    --left_cell[Axis];
+    const Index<Dim> right_cell = face.coordinate;
+    if (positivity_floor > Real(0)) {
+      if (traces.left_status == StateConversionStatus::Success &&
+          traces.left[positivity_component] < positivity_floor) {
+        traces.left = load_state<Model>(state, left_cell);
+        traces.left_status = model.admissibility(traces.left);
+      }
+      if (traces.right_status == StateConversionStatus::Success &&
+          traces.right[positivity_component] < positivity_floor) {
+        traces.right = load_state<Model>(state, right_cell);
+        traces.right_status = model.admissibility(traces.right);
+      }
+    }
+    trace_transform.template operator()<Axis>(model, state, face, traces);
     if (traces.left_status != StateConversionStatus::Success) {
       fail(face, finite_volume_detail::finite_volume_status(traces.left_status));
       return;
@@ -246,27 +270,6 @@ struct MaterializeFaceFlux {
       return;
     }
 
-    Index<Dim> left_cell = face.coordinate;
-    --left_cell[Axis];
-    const Index<Dim> right_cell = face.coordinate;
-    if (positivity_floor > Real(0)) {
-      if (traces.left[positivity_component] < positivity_floor) {
-        traces.left = load_state<Model>(state, left_cell);
-        traces.left_status = model.admissibility(traces.left);
-      }
-      if (traces.right[positivity_component] < positivity_floor) {
-        traces.right = load_state<Model>(state, right_cell);
-        traces.right_status = model.admissibility(traces.right);
-      }
-      if (traces.left_status != StateConversionStatus::Success) {
-        fail(face, finite_volume_detail::finite_volume_status(traces.left_status));
-        return;
-      }
-      if (traces.right_status != StateConversionStatus::Success) {
-        fail(face, finite_volume_detail::finite_volume_status(traces.right_status));
-        return;
-      }
-    }
     FaceContext context{};
     if (face[Axis] == integrated_fluxes.cells.lo[Axis])
       context = metric_face_context<Axis, MetricFaceSide::Lower>(metric, right_cell);
@@ -281,8 +284,7 @@ struct MaterializeFaceFlux {
       return;
     }
     if (record_speeds &&
-        (!Kokkos::isfinite(evaluation.stability.value) ||
-         evaluation.stability.value < Real(0) ||
+        (!Kokkos::isfinite(evaluation.stability.value) || evaluation.stability.value < Real(0) ||
          evaluation.stability.unit != StabilityUnit::kLengthPerTime ||
          evaluation.stability.convention != StabilityConvention::kNormalSpectralRadius)) {
       fail(face, FiniteVolumeStatus::InvalidWaveSpeed);
@@ -379,9 +381,8 @@ struct MaterializePathFace {
     // path policy performs its own declared physical admissibility checks on both traces.
     const auto left = load_state<Model>(state, left_cell),
                right = load_state<Model>(state, right_cell);
-    const auto evaluation =
-        evaluate_path_at<Axis>(ModelPathFlux<Model>{}, model, left, providers, left_cell,
-                               right, providers, right_cell);
+    const auto evaluation = evaluate_path_at<Axis>(ModelPathFlux<Model>{}, model, left, providers,
+                                                   left_cell, right, providers, right_cell);
     if (!evaluation.succeeded()) {
       clear(face, Real(1024) + static_cast<Real>(evaluation.status));
       return;
@@ -458,7 +459,8 @@ struct MaterializePathResidual {
 };
 
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
-          class Reconstruction, class NumericalFlux, class ProviderStorage, class MemorySpace>
+          class Reconstruction, class NumericalFlux, class ProviderStorage, class MemorySpace,
+          class TraceTransform = IdentityFaceTrace>
 void materialize_axes(const Model& model, const Metric& metric,
                       const Reconstruction& reconstruction, const NumericalFlux& numerical_flux,
                       Real positivity_floor, int positivity_component,
@@ -466,18 +468,20 @@ void materialize_axes(const Model& model, const Metric& metric,
                       FaceField<Dim, MemorySpace>& integrated_fluxes,
                       FaceField<Dim, MemorySpace>& statuses,
                       const std::array<bool, 2 * Dim>& omitted_faces = {},
-                      FaceField<Dim, MemorySpace>* speeds = nullptr) {
-  for_each_face<Axis>(state.box(),
-                      MaterializeFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction,
-                                          NumericalFlux, ProviderStorage>{
-                          model, metric, reconstruction, numerical_flux, positivity_floor,
-                          positivity_component, state.view(), providers, integrated_fluxes.view(),
-                          statuses.view(), speeds ? speeds->view() : FaceFieldView<Real, Dim>{},
-                          speeds != nullptr, metric.identity().domain, omitted_faces});
+                      FaceField<Dim, MemorySpace>* speeds = nullptr,
+                      const TraceTransform& trace_transform = {}) {
+  for_each_face<Axis>(
+      state.box(),
+      MaterializeFaceFlux<Axis, Variables, Dim, Model, Metric, Reconstruction, NumericalFlux,
+                          ProviderStorage, TraceTransform>{
+          model, metric, reconstruction, numerical_flux, positivity_floor, positivity_component,
+          state.view(), providers, integrated_fluxes.view(), statuses.view(),
+          speeds ? speeds->view() : FaceFieldView<Real, Dim>{}, speeds != nullptr,
+          metric.identity().domain, omitted_faces, trace_transform});
   if constexpr (Axis + 1 < Dim)
-    materialize_axes<Axis + 1, Variables>(model, metric, reconstruction, numerical_flux,
-                                          positivity_floor, positivity_component, state, providers,
-                                          integrated_fluxes, statuses, omitted_faces, speeds);
+    materialize_axes<Axis + 1, Variables>(
+        model, metric, reconstruction, numerical_flux, positivity_floor, positivity_component,
+        state, providers, integrated_fluxes, statuses, omitted_faces, speeds, trace_transform);
 }
 
 template <int Axis, int Dim, class MemorySpace>
@@ -571,8 +575,8 @@ template <int Dim, class Model, class Metric, class Reconstruction = NoSlope,
 class PreparedCartesianOperator {
  public:
   static_assert(stencil_envelope_fits_storage<Reconstruction>);
-  static_assert(std::is_trivially_copyable_v<Reconstruction>);
-  static_assert(std::is_trivially_copyable_v<NumericalFlux>);
+  static_assert(device_capture_v<Reconstruction>);
+  static_assert(device_capture_v<NumericalFlux>);
 
   using State = typename Model::State;
   static constexpr int dimension = Dim;
@@ -695,10 +699,11 @@ class PreparedCartesianOperator {
     device_fence();
   }
 
-  template <class MemorySpace>
+  template <class MemorySpace, class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                FaceField<Dim, MemorySpace>& output,
-                               const std::array<bool, 2 * Dim>& omitted_faces = {}) const
+                               const std::array<bool, 2 * Dim>& omitted_faces = {},
+                               const TraceTransform& trace_transform = {}) const
     requires(flux_provider_count<Model> == 0)
   {
     require_ordinary_route_();
@@ -707,16 +712,18 @@ class PreparedCartesianOperator {
 
     FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
     FaceField<Dim, MemorySpace> statuses(state.box(), 1);
-    materialize_face_fluxes(state, output, candidate, statuses, omitted_faces);
+    materialize_face_fluxes(state, output, candidate, statuses, omitted_faces,
+                            static_cast<FaceField<Dim, MemorySpace>*>(nullptr), trace_transform);
   }
 
-  template <class MemorySpace>
+  template <class MemorySpace, class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                FaceField<Dim, MemorySpace>& output,
                                FaceField<Dim, MemorySpace>& candidate,
                                FaceField<Dim, MemorySpace>& statuses,
                                const std::array<bool, 2 * Dim>& omitted_faces = {},
-                               FaceField<Dim, MemorySpace>* speeds = nullptr) const
+                               FaceField<Dim, MemorySpace>* speeds = nullptr,
+                               const TraceTransform& trace_transform = {}) const
     requires(flux_provider_count<Model> == 0)
   {
     require_ordinary_route_();
@@ -731,7 +738,7 @@ class PreparedCartesianOperator {
     cartesian_operator_detail::materialize_axes<0, Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
         state, cartesian_operator_detail::ProviderFreeStorage<Dim>{}, candidate, statuses,
-        omitted_faces, speeds);
+        omitted_faces, speeds, trace_transform);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error(hyperbolic_publication_refusal(
@@ -741,11 +748,12 @@ class PreparedCartesianOperator {
     device_fence();
   }
 
-  template <class MemorySpace>
+  template <class MemorySpace, class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                const Fab<Dim, MemorySpace>& providers,
                                FaceField<Dim, MemorySpace>& output,
-                               const std::array<bool, 2 * Dim>& omitted_faces = {}) const {
+                               const std::array<bool, 2 * Dim>& omitted_faces = {},
+                               const TraceTransform& trace_transform = {}) const {
     require_ordinary_route_();
     require_state_patch_(state);
     require_provider_patch_(state, providers);
@@ -753,17 +761,19 @@ class PreparedCartesianOperator {
 
     FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
     FaceField<Dim, MemorySpace> statuses(state.box(), 1);
-    materialize_face_fluxes(state, providers, output, candidate, statuses, omitted_faces);
+    materialize_face_fluxes(state, providers, output, candidate, statuses, omitted_faces,
+                            static_cast<FaceField<Dim, MemorySpace>*>(nullptr), trace_transform);
   }
 
-  template <class MemorySpace>
+  template <class MemorySpace, class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                const Fab<Dim, MemorySpace>& providers,
                                FaceField<Dim, MemorySpace>& output,
                                FaceField<Dim, MemorySpace>& candidate,
                                FaceField<Dim, MemorySpace>& statuses,
                                const std::array<bool, 2 * Dim>& omitted_faces = {},
-                               FaceField<Dim, MemorySpace>* speeds = nullptr) const {
+                               FaceField<Dim, MemorySpace>* speeds = nullptr,
+                               const TraceTransform& trace_transform = {}) const {
     require_ordinary_route_();
     if (&output == &candidate || &output == &statuses || &candidate == &statuses)
       throw std::invalid_argument("prepared ND hyperbolic face output and scratch must not alias");
@@ -776,7 +786,7 @@ class PreparedCartesianOperator {
       cartesian_operator_detail::require_face_output(*speeds, state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
-        state, providers.view(), candidate, statuses, omitted_faces, speeds);
+        state, providers.view(), candidate, statuses, omitted_faces, speeds, trace_transform);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error(hyperbolic_publication_refusal(
@@ -786,13 +796,16 @@ class PreparedCartesianOperator {
     device_fence();
   }
 
-  /// Plan-mapped provider route.  The host has already validated the immutable consumer plan and
-  /// gathered its storage-component map; this operator sees only dense local slots.
-  template <class MemorySpace, int Count>
+  /// Plan-mapped provider route.  The host has already validated the immutable
+  /// consumer plan and gathered its storage-component map; this operator sees
+  /// only dense local slots.
+  template <class MemorySpace, int Count,
+            class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                const ProviderStorageView<Dim, Count>& providers,
                                FaceField<Dim, MemorySpace>& output,
-                               const std::array<bool, 2 * Dim>& omitted_faces = {}) const
+                               const std::array<bool, 2 * Dim>& omitted_faces = {},
+                               const TraceTransform& trace_transform = {}) const
     requires(Count == flux_provider_count<Model>)
   {
     require_ordinary_route_();
@@ -802,17 +815,20 @@ class PreparedCartesianOperator {
 
     FaceField<Dim, MemorySpace> candidate(state.box(), n_vars);
     FaceField<Dim, MemorySpace> statuses(state.box(), 1);
-    materialize_face_fluxes(state, providers, output, candidate, statuses, omitted_faces);
+    materialize_face_fluxes(state, providers, output, candidate, statuses, omitted_faces,
+                            static_cast<FaceField<Dim, MemorySpace>*>(nullptr), trace_transform);
   }
 
-  template <class MemorySpace, int Count>
+  template <class MemorySpace, int Count,
+            class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                const ProviderStorageView<Dim, Count>& providers,
                                FaceField<Dim, MemorySpace>& output,
                                FaceField<Dim, MemorySpace>& candidate,
                                FaceField<Dim, MemorySpace>& statuses,
                                const std::array<bool, 2 * Dim>& omitted_faces = {},
-                               FaceField<Dim, MemorySpace>* speeds = nullptr) const
+                               FaceField<Dim, MemorySpace>* speeds = nullptr,
+                               const TraceTransform& trace_transform = {}) const
     requires(Count == flux_provider_count<Model>)
   {
     require_ordinary_route_();
@@ -827,7 +843,7 @@ class PreparedCartesianOperator {
       cartesian_operator_detail::require_face_output(*speeds, state.box(), 1);
     cartesian_operator_detail::materialize_axes<0, Variables>(
         model_, metric_, reconstruction_, numerical_flux_, positivity_floor_, positivity_component_,
-        state, providers, candidate, statuses, omitted_faces, speeds);
+        state, providers, candidate, statuses, omitted_faces, speeds, trace_transform);
     const Real failure = cartesian_operator_detail::maximum_face_status<0>(statuses);
     if (failure != static_cast<Real>(FiniteVolumeStatus::Success))
       throw std::runtime_error(hyperbolic_publication_refusal(
@@ -1054,8 +1070,7 @@ class PreparedCartesianOperator {
   {
     if constexpr (!std::is_same_v<Reconstruction, NoSlope> ||
                   Variables != ReconstructionVariables::Conservative ||
-                  !std::is_same_v<NumericalFlux, ModelPathFlux<Model>> ||
-                  DiffusiveModel<Model>)
+                  !std::is_same_v<NumericalFlux, ModelPathFlux<Model>> || DiffusiveModel<Model>)
       throw std::invalid_argument(
           "Path transport requires first-order conservative "
           "authenticated path interface policy without diffusion");

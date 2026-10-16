@@ -28,9 +28,11 @@
 #include <vector>
 
 namespace pops {
-template <int> class System;
-template <int> class AmrSystem;
-}
+template <int>
+class System;
+template <int>
+class AmrSystem;
+}  // namespace pops
 
 namespace pops::runtime::system {
 
@@ -305,20 +307,21 @@ struct AuxiliaryPhysicalEvaluation {
     // Rational fields are public: authenticate canonical form before invoking arithmetic.
     if (stage_fraction.denominator <= 0 || stage_fraction.numerator < 0 ||
         stage_fraction.numerator > stage_fraction.denominator ||
-        ::pops::amr::Rational(stage_fraction.numerator, stage_fraction.denominator) != stage_fraction ||
+        ::pops::amr::Rational(stage_fraction.numerator, stage_fraction.denominator) !=
+            stage_fraction ||
         !std::isfinite(dt) || (dt <= 0 && !native_accepted_initial_) ||
         !std::isfinite(physical_time))
       throw std::invalid_argument("auxiliary physical evaluation requires an exact finite stage");
-    if (native_accepted_initial_ &&
-        (dt != 0 || std::signbit(dt) || stage_fraction != native_accepted_initial_->stage_fraction ||
-         physical_time != native_accepted_initial_->physical_time))
+    if (native_accepted_initial_ && (dt != 0 || std::signbit(dt) ||
+                                     stage_fraction != native_accepted_initial_->stage_fraction ||
+                                     physical_time != native_accepted_initial_->physical_time))
       throw std::invalid_argument("auxiliary accepted initial physical authority changed");
   }
   [[nodiscard]] bool native_accepted_initial() const noexcept {
     return native_accepted_initial_.has_value();
   }
-  void require_logical_match(std::string_view clock, std::uint64_t tick, int level,
-                             int substep, int stage) const {
+  void require_logical_match(std::string_view clock, std::uint64_t tick, int level, int substep,
+                             int stage) const {
     if (native_accepted_initial_ &&
         (native_accepted_initial_->clock != clock ||
          native_accepted_initial_->tick != static_cast<std::int64_t>(tick) ||
@@ -329,24 +332,26 @@ struct AuxiliaryPhysicalEvaluation {
   friend bool operator==(const AuxiliaryPhysicalEvaluation& a,
                          const AuxiliaryPhysicalEvaluation& b) noexcept {
     return a.native_accepted_initial_ == b.native_accepted_initial_ &&
-        a.stage_fraction == b.stage_fraction &&
-        std::bit_cast<std::uint64_t>(a.dt) == std::bit_cast<std::uint64_t>(b.dt) &&
-        std::bit_cast<std::uint64_t>(a.physical_time) ==
-            std::bit_cast<std::uint64_t>(b.physical_time);
+           a.stage_fraction == b.stage_fraction &&
+           std::bit_cast<std::uint64_t>(a.dt) == std::bit_cast<std::uint64_t>(b.dt) &&
+           std::bit_cast<std::uint64_t>(a.physical_time) ==
+               std::bit_cast<std::uint64_t>(b.physical_time);
   }
+
  private:
-  template <int> friend class ::pops::System;
-  template <int> friend class ::pops::AmrSystem;
+  template <int>
+  friend class ::pops::System;
+  template <int>
+  friend class ::pops::AmrSystem;
   void qualify_native_accepted_initial(const runtime::multiblock::BoundaryEvaluationPoint& point) {
     if (point.clock.empty() || point.tick != 0 || point.level < 0 || point.substep != 0 ||
-        point.stage != 0 || point.stage_fraction != ::pops::amr::Rational(0, 1) ||
-        point.dt != 0 || std::signbit(point.dt) || !std::isfinite(point.physical_time))
+        point.stage != 0 || point.stage_fraction != ::pops::amr::Rational(0, 1) || point.dt != 0 ||
+        std::signbit(point.dt) || !std::isfinite(point.physical_time))
       throw std::invalid_argument("native auxiliary accepted initial point is malformed");
     native_accepted_initial_ = point;
     validate();
   }
   std::optional<runtime::multiblock::BoundaryEvaluationPoint> native_accepted_initial_;
-
 };
 
 /// Integer-identical evaluation point supplied by Program/AMR. An optional exact physical
@@ -381,8 +386,10 @@ struct AuxiliaryEvaluationPoint {
     if (source.clock != clock || source.tick < 0 ||
         static_cast<std::uint64_t>(source.tick) != accepted_step || source.level != level ||
         source.substep != substep || source.stage != stage)
-      throw std::invalid_argument("auxiliary physical point differs from its exact logical authority");
-    const AuxiliaryPhysicalEvaluation physical{source.stage_fraction, source.dt, source.physical_time};
+      throw std::invalid_argument(
+          "auxiliary physical point differs from its exact logical authority");
+    const AuxiliaryPhysicalEvaluation physical{source.stage_fraction, source.dt,
+                                               source.physical_time};
     physical.validate();
     physical_evaluation = physical;
   }
@@ -397,8 +404,9 @@ struct AuxiliaryEvaluationPoint {
   void serialize_exact(ExactContractBuilder& exact) const {
     validate();
     exact.text("pops.auxiliary-evaluation-point")
-        .scalar(std::uint32_t{physical_evaluation && physical_evaluation->native_accepted_initial() ? 4U :
-                              (physical_evaluation ? 3U : 2U)})
+        .scalar(std::uint32_t{physical_evaluation && physical_evaluation->native_accepted_initial()
+                                  ? 4U
+                                  : (physical_evaluation ? 3U : 2U)})
         .text(clock)
         .scalar(accepted_step)
         .scalar(layout_generation)
@@ -611,6 +619,22 @@ struct AuxiliaryKernelLaunchContext {
   AuxiliaryCarrierStorage<Dim> storage{};
 };
 
+/// Exact scalar point inputs read by a compiled auxiliary launcher. This is
+/// derived from its equation lowering, never inferred from a physics name.
+/// A native extension defaults to all inputs; external publications must keep
+/// their complete native producer point. Dependencies carry their own origins.
+struct AuxiliaryPointReads {
+  static constexpr std::uint16_t clock = 1, accepted_step = 2, layout_generation = 4, level = 8,
+                                 substep = 16, stage = 32, nonlinear_iteration = 64, event = 128,
+                                 stage_fraction = 256, dt = 512, physical_time = 1024, all = 2047;
+  std::uint16_t fields = all;
+  void validate() const {
+    if (fields & ~all)
+      throw std::invalid_argument("auxiliary point read set is invalid");
+  }
+  bool reads(std::uint16_t field) const noexcept { return (fields & field) != 0; }
+};
+
 /// Immutable provider package.  A derived route must own a typed PreparedProvider launcher;
 /// input and field-output routes are externally staged by their corresponding native subsystems.
 /// The generic registry accepts no untyped lambda and never dispatches on a physics name.
@@ -623,17 +647,19 @@ class PreparedAuxiliaryProvider final {
                             AuxiliaryEvaluationPolicy policy,
                             std::vector<AuxiliaryOutput<Dim>> outputs,
                             std::vector<AuxiliaryDependency<Dim>> dependencies,
-                            std::optional<launcher_type> launcher = std::nullopt)
+                            std::optional<launcher_type> launcher = std::nullopt,
+                            AuxiliaryPointReads point_reads = {})
       : identity_(std::move(identity)),
         kind_(kind),
         policy_(policy),
         outputs_(std::move(outputs)),
         dependencies_(std::move(dependencies)),
-        launcher_(std::move(launcher)) {
+        launcher_(std::move(launcher)),
+        point_reads_(point_reads) {
     validate_();
     ExactContractBuilder exact;
     exact.text("pops.prepared-auxiliary-provider")
-        .scalar(std::uint32_t{1})
+        .scalar(std::uint32_t{point_reads_.fields == AuxiliaryPointReads::all ? 1U : 2U})
         .text(identity_)
         .scalar(kind_);
     policy_.serialize_exact(exact);
@@ -647,11 +673,14 @@ class PreparedAuxiliaryProvider final {
     exact.presence(launcher_.has_value());
     if (launcher_)
       exact.bytes(launcher_->collective_contract());
+    if (point_reads_.fields != AuxiliaryPointReads::all)
+      exact.scalar(point_reads_.fields);
     collective_contract_ = std::move(exact).release();
   }
 
   [[nodiscard]] const std::string& identity() const noexcept { return identity_; }
   [[nodiscard]] AuxiliaryProviderKind kind() const noexcept { return kind_; }
+  [[nodiscard]] AuxiliaryPointReads point_reads() const noexcept { return point_reads_; }
   [[nodiscard]] const AuxiliaryEvaluationPolicy& policy() const noexcept { return policy_; }
   [[nodiscard]] const std::vector<AuxiliaryOutput<Dim>>& outputs() const noexcept {
     return outputs_;
@@ -672,6 +701,10 @@ class PreparedAuxiliaryProvider final {
 
  private:
   void validate_() const {
+    point_reads_.validate();
+    if (kind_ != AuxiliaryProviderKind::derived && point_reads_.fields != AuxiliaryPointReads::all)
+      throw std::invalid_argument(
+          "external auxiliary publication requires its complete producer point");
     if (identity_.empty())
       throw std::invalid_argument("auxiliary provider identity must not be empty");
     if (outputs_.empty())
@@ -693,6 +726,7 @@ class PreparedAuxiliaryProvider final {
   std::vector<AuxiliaryOutput<Dim>> outputs_;
   std::vector<AuxiliaryDependency<Dim>> dependencies_;
   std::optional<launcher_type> launcher_;
+  AuxiliaryPointReads point_reads_;
   std::string collective_contract_;
 };
 

@@ -5,10 +5,33 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <array>
 #include <limits>
 #include <type_traits>
 
 namespace {
+
+class DeclaredKernelCaller {
+ public:
+  struct Write {
+    pops::FieldView<pops::Real, 2> values;
+    POPS_HD void operator()(const pops::Index<2>& index) const {
+      values(index) = pops::Real(index[0] + 2 * index[1]);
+    }
+  };
+  struct Read {
+    pops::FieldView<const pops::Real, 2> values;
+    POPS_HD pops::Real operator()(const pops::Index<2>& index) const { return values(index); }
+  };
+
+  static std::array<pops::Real, 2> execute(const pops::Box<2>& box, pops::Fab<2>& field) {
+    const Kokkos::DefaultExecutionSpace execution;
+    pops::for_each_cell(execution, box, Write{field.view()});
+    const Read read{static_cast<const pops::Fab<2>&>(field).view()};
+    return {pops::for_each_cell_reduce_sum(execution, box, read),
+            pops::for_each_cell_reduce_max(execution, box, read)};
+  }
+};
 
 template <int Dim>
 pops::Box<Dim> sample_box() {
@@ -34,6 +57,11 @@ struct ReadCellValue {
   pops::FieldView<const pops::Real, Dim> values;
 
   POPS_HD pops::Real operator()(const pops::CellIndex<Dim>& index) const { return values(index); }
+};
+
+struct ShiftCellValue {
+  pops::FieldView<pops::Real, 2> values;
+  POPS_HD void operator()(const pops::Index<2>& index) const { values(index) += pops::Real(3); }
 };
 
 template <int Dim, int Axis>
@@ -109,4 +137,17 @@ TEST(test_nd_execution, empty_and_non_addressable_face_domains_fail_deterministi
   EXPECT_TRUE(pops::face_box<0>(pops::Box<1>{}).empty());
   const pops::Box<1> overflow{pops::Index<1>{0}, pops::Index<1>{std::numeric_limits<int>::max()}};
   EXPECT_THROW((void)pops::face_box<0>(overflow), std::overflow_error);
+}
+
+TEST(test_nd_execution, namespace_and_public_nested_functors_use_the_real_execution_space) {
+  const pops::Box<2> box{pops::Index<2>{-1, 2}, pops::Index<2>{1, 3}};
+  pops::Fab<2> field(box, 1);
+  const auto reductions = DeclaredKernelCaller::execute(box, field);
+  EXPECT_EQ(reductions[0], pops::Real(30));
+  EXPECT_EQ(reductions[1], pops::Real(7));
+  const Kokkos::DefaultExecutionSpace execution;
+  pops::for_each_cell(execution, box, ShiftCellValue{field.view()});
+  const ReadCellValue<2> read{static_cast<const pops::Fab<2>&>(field).view()};
+  EXPECT_EQ(pops::for_each_cell_reduce_sum(execution, box, read), pops::Real(48));
+  EXPECT_EQ(pops::for_each_cell_reduce_max(execution, box, read), pops::Real(10));
 }

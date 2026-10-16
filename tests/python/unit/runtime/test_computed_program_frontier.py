@@ -47,12 +47,22 @@ def test_vector_pairing_is_explicit_and_keeps_component_zero_ir_unchanged():
     from pops.codegen.module_lowering import lower_and_validate
     from pops.codegen.program_codegen import emit_cpp_program
     _, _, model, program = rotation_case()
+    # Rotation already computes gamma and its reached duration with checked
+    # scalar arithmetic (IR v28). Adding vector pairing (v7) must not downgrade
+    # that executable contract or rewrite the component-zero reduction.
+    initial = program._serialize(include_provenance=False)
+    assert any(node["op"] == "scalar_op" for node in initial["nodes"])
+    assert initial["version"] == 28
     state = next(value for value in program._values if value.op == "state")
     legacy = program.dot(state, state)
+    before_vector = program._serialize(include_provenance=False)
     vector = program.dot_all(state, state)
     assert dict(legacy.attrs) == {"kind": "dot"}
     assert dict(vector.attrs) == {"kind": "dot_all", "component_contract": "pops.program.dot-all@1"}
-    assert program._serialize()["version"] == 7
+    after_vector = program._serialize(include_provenance=False)
+    assert after_vector["version"] == 28
+    assert after_vector["nodes"][-1]["id"] == vector.id
+    assert dict(after_vector, nodes=after_vector["nodes"][:-1]) == before_vector
     lowered, _ = lower_and_validate(model, facade=model)
     source = emit_cpp_program(program, model=lowered)
     assert "ctx.dot(" in source and "ctx.dot_all(" in source

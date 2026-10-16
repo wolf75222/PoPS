@@ -10,6 +10,7 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -17,6 +18,15 @@
 #include <utility>
 
 namespace pops {
+namespace detail {
+// Namespace-visible kernel type also works with nvcc's generated host stubs.
+template <class Storage>
+struct FabScalarFill {
+  Storage storage;
+  Real value;
+  KOKKOS_INLINE_FUNCTION void operator()(std::size_t index) const { storage(index) = value; }
+};
+}  // namespace detail
 
 /// Component-slowest field storage.  Host access is explicit through a Kokkos host mirror so a
 /// device-only MemorySpace is never presented as directly host-accessible.
@@ -151,8 +161,22 @@ class Fab {
       Kokkos::deep_copy(data_, host.values_);
   }
   void set_val(Real value) {
-    if (size_ != 0)
+    if (size_ == 0)
+      return;
+    // Some Kokkos scalar-fill implementations test equality with zero before
+    // choosing memset. IEEE -0 compares equal to +0 but must retain its bits.
+    constexpr auto negative_zero_bits = RealBits{1} << (8 * sizeof(Real) - 1);
+    if (std::bit_cast<RealBits>(value) == negative_zero_bits) {
+      using Execution = typename storage_type::execution_space;
+      using Policy = Kokkos::RangePolicy<Execution, Kokkos::IndexType<std::size_t>>;
+      // Match the synchronous before/after contract of the scalar deep_copy.
+      Kokkos::fence("pops::Fab::set_val negative zero pre fill");
+      Kokkos::parallel_for("pops::Fab::set_val negative zero", Policy(0, size_),
+                           detail::FabScalarFill<storage_type>{data_, value});
+      Kokkos::fence("pops::Fab::set_val negative zero post fill");
+    } else {
       Kokkos::deep_copy(data_, value);
+    }
   }
 
  private:

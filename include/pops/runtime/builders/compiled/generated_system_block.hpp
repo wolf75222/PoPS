@@ -205,9 +205,7 @@ template <int Dim>
 struct PublishPoissonRhsV2 {
   FieldView<Real, Dim> target{};
   FieldView<const Real, Dim> candidate{};
-  POPS_HD void operator()(const Index<Dim>& index) const {
-    target(index) += candidate(index);
-  }
+  POPS_HD void operator()(const Index<Dim>& index) const { target(index) += candidate(index); }
 };
 
 template <int Axis, int Dim, class Model>
@@ -751,8 +749,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   auto prepare_state_with_transport =
       [model, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan,
        geometry](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
-                 const PreparedHyperbolicBoundary<Dim>* boundary,
-                 const ExecutionLane& lane,
+                 const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
                  const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         prepared_boundary_collective_phase(
             lane,
@@ -779,9 +776,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
               lane,
               [&] {
                 transport.with_characteristic_candidate(state, [&](MultiFab<Dim>& candidate) {
-                  boundary->fill_physical_model_qualified(
-                      state, geometry, model, lane, candidate,
-                      static_cast<Real>(point.physical_time));
+                  boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
+                                                          static_cast<Real>(point.physical_time));
                 });
               },
               "generated prepared physical boundary fill failed collectively");
@@ -797,16 +793,20 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
 
     const auto omitted_faces =
         boundary == nullptr ? std::array<bool, 2 * Dim>{} : boundary->omitted_interface_faces();
+    const auto physical_trace =
+        boundary ? boundary->physical_face_trace(geometry)
+                 : hyperbolic_boundary_detail::PrescribedFaceTrace<Dim>(geometry);
     auto faces = nd::make_face_flux_workspace(state);
     for (std::size_t local = 0; local < state.local_size(); ++local) {
       if constexpr (flux_provider_count<Model> == 0)
-        spatial.materialize_face_fluxes(state.fab(local), faces[local], omitted_faces);
+        spatial.materialize_face_fluxes(state.fab(local), faces[local], omitted_faces,
+                                        physical_trace);
       else
         spatial.materialize_face_fluxes(
             state.fab(local),
             runtime::system::bind_provider_storage_view<Dim, flux_provider_count<Model>>(
                 provider_plan, provider_storage, local),
-            faces[local], omitted_faces);
+            faces[local], omitted_faces, physical_trace);
       if (boundary != nullptr)
         boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
     }
@@ -861,13 +861,17 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       prepared_boundary_collective_phase(
           lane,
           [&] {
+            const auto physical_trace =
+                boundary ? boundary->physical_face_trace(geometry,
+                                                         static_cast<Real>(point.physical_time))
+                         : hyperbolic_boundary_detail::PrescribedFaceTrace<Dim>(geometry);
             for (std::size_t local = 0; local < state.local_size(); ++local) {
               if constexpr (flux_provider_count<Model> == 0)
-                spatial.materialize_face_fluxes(state.fab(local), faces[local],
-                                                scratch.cartesian_operator.face_candidate(local),
-                                                scratch.cartesian_operator.face_status(local),
-                                                omitted_faces,
-                                                &scratch.cartesian_operator.face_speed(local));
+                spatial.materialize_face_fluxes(
+                    state.fab(local), faces[local],
+                    scratch.cartesian_operator.face_candidate(local),
+                    scratch.cartesian_operator.face_status(local), omitted_faces,
+                    &scratch.cartesian_operator.face_speed(local), physical_trace);
               else
                 spatial.materialize_face_fluxes(
                     state.fab(local),
@@ -875,7 +879,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                         provider_plan, provider_storage, local),
                     faces[local], scratch.cartesian_operator.face_candidate(local),
                     scratch.cartesian_operator.face_status(local), omitted_faces,
-                    &scratch.cartesian_operator.face_speed(local));
+                    &scratch.cartesian_operator.face_speed(local), physical_trace);
               if (boundary != nullptr)
                 boundary->apply_physical_flux_conditions(faces[local], geometry.domain());
             }
@@ -1183,9 +1187,10 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   static_assert(PhysicalStateFor<Model, Dim>);
   if constexpr (path_conservative_model<Model>) {
-    const std::string expected_face = coordinated_face_model<Model>
-        ? std::string("coordinated_face:v1:") + std::string(Model::path_operator_identity())
-        : std::string("rusanov");
+    const std::string expected_face =
+        coordinated_face_model<Model>
+            ? std::string("coordinated_face:v1:") + std::string(Model::path_operator_identity())
+            : std::string("rusanov");
     if (request.routes.limiter != "none" || request.routes.riemann != expected_face ||
         request.routes.reconstruction != "conservative" ||
         !std::isfinite(request.routes.positivity_floor) ||
@@ -1222,7 +1227,7 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   PreparedSystemBlock<Dim> result;
   result.provider_identity =
       std::string(path_conservative_model<Model> ? "pops.generated.path.nd/"
-                                                : "pops.generated.program-state.nd/") +
+                                                 : "pops.generated.program-state.nd/") +
       std::to_string(Dim);
   result.provider_components = provider_count;
   result.ghosts = ghosts;
@@ -1244,13 +1249,49 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   result.closures.prepare_generated_state_at_point = [prepare](const auto&, MultiFab<Dim>& state) {
     prepare(state);
   };
+  // Generated stencils consume the same authenticated state extension as spatial
+  // operators, without claiming a residual, Jacobian, or numerical face law.
+  result.physical_boundary_route = PreparedPhysicalBoundaryRoute::ghost_extension;
   result.closures.prepare_generated_state_at_point_prepared =
       [](const auto&, MultiFab<Dim>&, const PreparedHyperbolicBoundary<Dim>&) {
-        throw std::logic_error("state storage cannot consume a hyperbolic boundary law");
+        throw std::logic_error("generated state extension requires prepared boundary transport");
       };
-  result.closures.prepare_generated_state_with_transport_prepared = unavailable;
-  result.closures.external_ghost_boundary =
+  auto external_ghost_boundary =
       std::make_shared<typename SystemBlockClosures<Dim>::ExternalGhostBoundary>();
+  result.closures.external_ghost_boundary = external_ghost_boundary;
+  const auto provider_storage_owner = request.provider_storage;
+  const auto provider_plan_owner = request.provider_plan;
+  result.closures.prepare_generated_state_with_transport_prepared =
+      [model, geometry, external_ghost_boundary, provider_storage_owner, provider_plan_owner](
+          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
+          const PreparedHyperbolicBoundary<Dim>& boundary, const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        prepared_boundary_collective_phase(
+            lane,
+            [&] { boundary.template require_model_qualified_characteristic_provider<Model>(); },
+            "generated state extension model authentication failed collectively");
+        prepared_boundary_collective_phase(
+            lane,
+            [&] {
+              transport.fill_halo(state);
+              if (provider_storage_owner)
+                runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
+                    state, provider_storage_owner.get(), provider_plan_owner.get(),
+                    "generated state extension providers");
+            },
+            "generated state extension halo preparation failed collectively");
+        prepared_boundary_collective_phase(
+            lane,
+            [&] {
+              transport.with_characteristic_candidate(state, [&](MultiFab<Dim>& candidate) {
+                boundary.fill_physical_model_qualified(state, geometry, model, lane, candidate,
+                                                       static_cast<Real>(point.physical_time));
+              });
+              if (*external_ghost_boundary)
+                (*external_ghost_boundary)(point, state, geometry, lane);
+            },
+            "generated physical state extension failed collectively");
+      };
   result.maximum_speed = [](const MultiFab<Dim>&, const ExecutionLane&) -> Real {
     throw std::logic_error("state storage has no hyperbolic wave-speed provider");
   };
@@ -1275,26 +1316,23 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
   if constexpr (path_conservative_model<Model>) {
     result.physical_boundary_route = PreparedPhysicalBoundaryRoute::path_residual;
-    const auto spatial = nd::prepare_cartesian_operator<
-        Dim, Model, NoSlope, ModelPathFlux<Model>,
-        nd::ReconstructionVariables::Conservative>(
+    const auto spatial = nd::prepare_cartesian_operator<Dim, Model, NoSlope, ModelPathFlux<Model>,
+                                                        nd::ReconstructionVariables::Conservative>(
         geometry, model, NoSlope{}, ModelPathFlux<Model>{});
     const auto provider_storage_owner = request.provider_storage;
     const auto provider_plan_owner = request.provider_plan;
     const auto* provider_storage = provider_storage_owner.get();
     const auto* provider_plan = provider_plan_owner.get();
-    result.maximum_speed = [model, provider_storage_owner, provider_plan_owner,
-                            provider_storage, provider_plan](const MultiFab<Dim>& state,
-                                                             const ExecutionLane& lane) {
+    result.maximum_speed = [model, provider_storage_owner, provider_plan_owner, provider_storage,
+                            provider_plan](const MultiFab<Dim>& state, const ExecutionLane& lane) {
       return maximum_speed<Dim>(model, state, provider_storage, provider_plan, lane);
     };
     result.closures.path_rhs_at_point_prepared =
-        [model, spatial, geometry, provider_storage_owner, provider_plan_owner,
-         provider_storage, provider_plan](
-            const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
-            MultiFab<Dim>& residual,
-            const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
-            const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        [model, spatial, geometry, provider_storage_owner, provider_plan_owner, provider_storage,
+         provider_plan](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                        MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                        const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
+                        const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
           constexpr int flux_count = flux_provider_count<Model>;
           std::array<bool, 2 * Dim> omitted{};
           prepared_boundary_collective_phase(
@@ -1310,8 +1348,7 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
                   runtime::system::require_pointwise_provider_groups<Dim, flux_count>(
                       state, provider_storage, provider_plan, "generated Uniform path providers");
                 for (int axis = 0; axis < Dim; ++axis)
-                  if (!std::isfinite(geometry.spacing(axis)) ||
-                      !(geometry.spacing(axis) > Real(0)))
+                  if (!std::isfinite(geometry.spacing(axis)) || !(geometry.spacing(axis) > Real(0)))
                     throw std::invalid_argument("Uniform path geometry has invalid spacing");
               },
               "generated Uniform path preflight failed collectively");
@@ -1329,9 +1366,8 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
                 lane,
                 [&] {
                   transport.with_characteristic_candidate(state, [&](MultiFab<Dim>& candidate) {
-                    boundary->fill_physical_model_qualified(
-                        state, geometry, model, lane, candidate,
-                        static_cast<Real>(point.physical_time));
+                    boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
+                                                            static_cast<Real>(point.physical_time));
                   });
                 },
                 "generated Uniform path physical boundary failed collectively");
@@ -1346,10 +1382,10 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
                   nd::FaceField<Dim> right(patch.box(), Model::n_vars);
                   nd::FaceField<Dim> speed(patch.box(), 1);
                   nd::PreparedCartesianPathFaceScratch<Dim> face_scratch(patch.box(),
-                                                                          Model::n_vars);
+                                                                         Model::n_vars);
                   if constexpr (flux_count == 0)
-                    spatial.materialize_path_face_contributions(
-                        patch, flux, left, right, speed, face_scratch, omitted);
+                    spatial.materialize_path_face_contributions(patch, flux, left, right, speed,
+                                                                face_scratch, omitted);
                   else
                     spatial.materialize_path_face_contributions(
                         patch,
@@ -1358,22 +1394,21 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
                         flux, left, right, speed, face_scratch, omitted);
                   Fab<Dim> candidate(patch.box(), Model::n_vars, residual.ghosts());
                   Fab<Dim> statuses(patch.box(), 1, residual.ghosts());
-                  spatial.assemble_residual_from_path_faces(
-                      flux, left, right, residual.fab(local), candidate, statuses);
+                  spatial.assemble_residual_from_path_faces(flux, left, right, residual.fab(local),
+                                                            candidate, statuses);
                   const auto speeds = speed.view();
                   RealVector<Dim> inverse_spacing{};
                   for (int axis = 0; axis < Dim; ++axis)
                     inverse_spacing[axis] = Real(1) / geometry.spacing(axis);
-                  const Real frequency = for_each_cell_reduce_max(
-                      patch.box(), [=] POPS_HD(const Index<Dim>& cell) {
+                  const Real frequency =
+                      for_each_cell_reduce_max(patch.box(), [=] POPS_HD(const Index<Dim>& cell) {
                         Real value = Real(0);
                         for (int axis = 0; axis < Dim; ++axis) {
                           Index<Dim> upper = cell;
                           ++upper[axis];
                           const Real lower_speed = speeds.axes[axis](cell, 0);
                           const Real upper_speed = speeds.axes[axis](upper, 0);
-                          if (!Kokkos::isfinite(lower_speed) ||
-                              !Kokkos::isfinite(upper_speed) ||
+                          if (!Kokkos::isfinite(lower_speed) || !Kokkos::isfinite(upper_speed) ||
                               lower_speed < Real(0) || upper_speed < Real(0))
                             return std::numeric_limits<Real>::infinity();
                           value += (lower_speed + upper_speed) * inverse_spacing[axis];
@@ -1454,23 +1489,23 @@ PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numeri
   using Model = std::remove_cvref_t<decltype(request.model)>;
   switch (parse_limiter_route(request.routes.limiter, "generated System face block")) {
     case LimiterRouteId::kNone:
-      return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(
-          std::move(request), NoSlope{}, numerical);
+      return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(std::move(request),
+                                                                          NoSlope{}, numerical);
     case LimiterRouteId::kMinmod:
-      return materialize_block<Dim, Model, Minmod, Numerical, Variables>(
-          std::move(request), Minmod{}, numerical);
+      return materialize_block<Dim, Model, Minmod, Numerical, Variables>(std::move(request),
+                                                                         Minmod{}, numerical);
     case LimiterRouteId::kVanLeer:
-      return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(
-          std::move(request), VanLeer{}, numerical);
+      return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(std::move(request),
+                                                                          VanLeer{}, numerical);
     case LimiterRouteId::kWeno5:
       return materialize_block<Dim, Model, Weno5, Numerical, Variables>(
           std::move(request), configured_reconstruction<Weno5>(), numerical);
     case LimiterRouteId::kMc:
-      return materialize_block<Dim, Model, MC, Numerical, Variables>(
-          std::move(request), MC{}, numerical);
+      return materialize_block<Dim, Model, MC, Numerical, Variables>(std::move(request), MC{},
+                                                                     numerical);
     case LimiterRouteId::kSuperbee:
-      return materialize_block<Dim, Model, Superbee, Numerical, Variables>(
-          std::move(request), Superbee{}, numerical);
+      return materialize_block<Dim, Model, Superbee, Numerical, Variables>(std::move(request),
+                                                                           Superbee{}, numerical);
   }
   throw std::logic_error("generated face limiter route escaped its exhaustive selector");
 }
@@ -1489,7 +1524,7 @@ template <class Model>
 constexpr unsigned poisson_rhs_state_read_cells() {
   if constexpr (requires { Model::prepared_field_rhs_state_read_cells; })
     return Model::prepared_field_rhs_state_read_cells;
-  return 0; // Meaningful only when the explicit contract version is nonzero.
+  return 0;  // Meaningful only when the explicit contract version is nonzero.
 }
 
 template <class Model>
@@ -1512,8 +1547,10 @@ template <class Model>
 class PoissonRhsV2Callable final {
   static constexpr int Dim = kNativeDimension;
   static constexpr int Count = [] {
-    if constexpr (requires { Model::n_providers; }) return Model::n_providers;
-    else return 0;
+    if constexpr (requires { Model::n_providers; })
+      return Model::n_providers;
+    else
+      return 0;
   }();
   static_assert(Count >= 0);
   Model model;
@@ -1541,33 +1578,41 @@ class PoissonRhsV2Callable final {
       if (rhs.ncomp() != 1 || state.ncomp() != Model::n_vars)
         throw std::invalid_argument("Field RHS V2 requires its exact scalar/physical-State arity");
       generated_system_detail::require_same_layout(state, rhs, 1, "Field RHS V2");
-      workspace->candidate.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
-      workspace->status.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1, rhs.ghosts());
+      workspace->candidate.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1,
+                                   rhs.ghosts());
+      workspace->status.emplace(rhs.layout(), rhs.distribution(), rhs.local_rank(), 1,
+                                rhs.ghosts());
       workspace->kernels.reserve(state.local_size());
       workspace->outputs.reserve(state.local_size());
       workspace->output_allocations.reserve(state.local_size());
       for (std::size_t local = 0; local < state.local_size(); ++local) {
-        workspace->kernels.push_back({model, state.fab(local).view(),
-            inputs.template provider_values_view<Count>(local),
-            workspace->candidate->fab(local).view(), workspace->status->fab(local).view()});
+        workspace->kernels.push_back(
+            {model, state.fab(local).view(), inputs.template provider_values_view<Count>(local),
+             workspace->candidate->fab(local).view(), workspace->status->fab(local).view()});
         workspace->output_allocations.push_back(rhs.fab(local).storage());
         workspace->outputs.emplace_back(rhs.fab(local).view(),
-            std::as_const(*workspace->candidate).fab(local).view());
+                                        std::as_const(*workspace->candidate).fab(local).view());
       }
       inputs.retain_execution_owner(workspace);
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         error, &lane, "Field RHS V2 input/allocation preparation failed collectively");
     try {
       for (std::size_t local = 0; local < workspace->kernels.size(); ++local)
-        for_each_cell(workspace->execution, workspace->candidate->box(local), workspace->kernels[local]);
+        for_each_cell(workspace->execution, workspace->candidate->box(local),
+                      workspace->kernels[local]);
       workspace->execution.fence();
       if (!workspace->kernels.empty() && reduce_max_local(*workspace->status) != Real(0))
         throw std::runtime_error("Field RHS V2 produced a non-finite candidate");
     } catch (...) {
       error = std::current_exception();
-      try { workspace->execution.fence(); }
-      catch (...) { error = std::current_exception(); }
+      try {
+        workspace->execution.fence();
+      } catch (...) {
+        error = std::current_exception();
+      }
     }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         error, &lane, "Field RHS V2 candidate failed collectively before publication");
@@ -1576,13 +1621,16 @@ class PoissonRhsV2Callable final {
         const auto target = workspace->outputs[local].first;
         const auto candidate = workspace->outputs[local].second;
         for_each_cell(workspace->execution, workspace->candidate->box(local),
-            generated_system_detail::PublishPoissonRhsV2<Dim>{target, candidate});
+                      generated_system_detail::PublishPoissonRhsV2<Dim>{target, candidate});
       }
       workspace->execution.fence();
     } catch (...) {
       error = std::current_exception();
-      try { workspace->execution.fence(); }
-      catch (...) { error = std::current_exception(); }
+      try {
+        workspace->execution.fence();
+      } catch (...) {
+        error = std::current_exception();
+      }
     }
     runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
         error, &lane, "Field RHS V2 publication failed collectively");
@@ -1633,20 +1681,19 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
   static_assert(Model::dimension == Dim);
   static_assert(StencilReconstruction<Reconstruction>);
   static_assert(stencil_envelope_fits_storage<Reconstruction>);
-  if (request.routes.limiter !=
-      std::string("source_stencil:") + Reconstruction::source_identity)
-    throw std::invalid_argument("generated System reconstruction source identity differs from package");
+  if (request.routes.limiter != std::string("source_stencil:") + Reconstruction::source_identity)
+    throw std::invalid_argument(
+        "generated System reconstruction source identity differs from package");
   if constexpr (path_conservative_model<Model>) {
     throw std::invalid_argument("source reconstruction needs a composed path face policy");
   } else {
     switch (parse_recon_route(request.routes.reconstruction, "generated System block")) {
       case ReconRouteId::kConservative:
-        return generated_system_detail::select_riemann<
-            Dim, nd::ReconstructionVariables::Conservative>(
+        return generated_system_detail::select_riemann<Dim,
+                                                       nd::ReconstructionVariables::Conservative>(
             std::move(request), reconstruction);
       case ReconRouteId::kPrimitive:
-        return generated_system_detail::select_riemann<
-            Dim, nd::ReconstructionVariables::Primitive>(
+        return generated_system_detail::select_riemann<Dim, nd::ReconstructionVariables::Primitive>(
             std::move(request), reconstruction);
     }
     throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
@@ -1687,8 +1734,7 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
   using Model = std::remove_cvref_t<decltype(request.model)>;
   static_assert(StencilReconstruction<Reconstruction>);
   static_assert(stencil_envelope_fits_storage<Reconstruction>);
-  if (request.routes.limiter !=
-      std::string("source_stencil:") + Reconstruction::source_identity ||
+  if (request.routes.limiter != std::string("source_stencil:") + Reconstruction::source_identity ||
       request.routes.riemann != std::string("source_face:") + Numerical::source_identity)
     throw std::invalid_argument("generated System numerical source identity differs from package");
   if constexpr (path_conservative_model<Model>) {
@@ -1700,8 +1746,8 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
             Dim, Model, Reconstruction, Numerical, nd::ReconstructionVariables::Conservative>(
             std::move(request), reconstruction, numerical);
       case ReconRouteId::kPrimitive:
-        return generated_system_detail::materialize_block<
-            Dim, Model, Reconstruction, Numerical, nd::ReconstructionVariables::Primitive>(
+        return generated_system_detail::materialize_block<Dim, Model, Reconstruction, Numerical,
+                                                          nd::ReconstructionVariables::Primitive>(
             std::move(request), reconstruction, numerical);
     }
     throw std::logic_error("generated source reconstruction route escaped its exhaustive selector");

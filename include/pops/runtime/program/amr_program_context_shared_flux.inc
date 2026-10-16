@@ -31,7 +31,9 @@ shared_flux_samples_type capture_grouped_shared_flux_(
       states[block] = requests[index]->state;
       rhs[block] = &candidates[index];
     }
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "shared RHS capture preparation failed collectively");
   auto samples = facade_->capture_prepared_amr_interface_residual(point, states, rhs);
   shared_flux_samples_type retained;
@@ -40,7 +42,9 @@ shared_flux_samples_type capture_grouped_shared_flux_(
     retained.reserve(samples.size());
     for (auto& sample : samples)
       retained.push_back(std::make_shared<const shared_flux_sample_type>(std::move(sample)));
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "shared RHS retention failed collectively");
   return retained;
 }
@@ -68,20 +72,29 @@ void attach_grouped_shared_flux_(const std::vector<const RhsGroupRequest*>& requ
 static std::string shared_flux_source_identity_(const shared_flux_sample_type& sample) {
   ExactContractBuilder exact;
   const auto& point = sample.source_point;
-  exact.text(sample.route_contract).scalar(sample.source_topology_epoch).text(point.clock).scalar(point.tick).scalar(point.level)
-      .scalar(point.substep).scalar(point.stage).scalar(point.stage_fraction.numerator)
-      .scalar(point.stage_fraction.denominator).scalar(point.dt).scalar(point.physical_time)
-      .text(point.graph_identity).text(point.rate_identity).text(point.application_identity);
+  exact.text(sample.route_contract)
+      .scalar(sample.source_topology_epoch)
+      .text(point.clock)
+      .scalar(point.tick)
+      .scalar(point.level)
+      .scalar(point.substep)
+      .scalar(point.stage)
+      .scalar(point.stage_fraction.numerator)
+      .scalar(point.stage_fraction.denominator)
+      .scalar(point.dt)
+      .scalar(point.physical_time)
+      .text(point.graph_identity)
+      .text(point.rate_identity)
+      .text(point.application_identity);
   return std::move(exact).release();
 }
 
 static std::string shared_flux_stage_(const shared_flux_sample_type& sample,
-                                      ::pops::amr::Rational weight,
+                                      const ::pops::ExactWeight& weight,
                                       const std::string& source_identity, bool projected) {
   std::string stage = "shared-source/" + std::to_string(sample.source_point.tick) + "/" +
                       std::to_string(sample.source_point.substep) + "/" +
-                      std::to_string(sample.source_point.stage) + "/weight/" +
-                      std::to_string(weight.numerator) + "/" + std::to_string(weight.denominator);
+                      std::to_string(sample.source_point.stage) + "/weight/" + weight.text();
   // A projected parent and a current child can share all rebased consumer coordinates. Retain
   // the complete physical source identity, including its level/epoch, without attempt ordinals.
   // The slash suffix cannot alias the historical format, whose final token is an integer.
@@ -222,17 +235,29 @@ void materialize_active_shared_flux_() const {
       const auto clock = runtime::multiblock::clock_stamp_in_window(point, value.window);
       const std::string stage =
           shared_flux_stage_(sample, weight, identity, value.projection.has_value());
-      const auto append = [&](int coarse, int fine, ::pops::amr::InterfaceFluxOrientation orientation) {
-        ::pops::amr::InterfaceFluxFragmentKey key{
-            sample.interface_identity, runtime_->topology_epoch(), coarse, fine, clock, stage,
-            point.graph_identity, point.rate_identity, point.application_identity, value.window,
-            orientation, sample.left_block, sample.right_block};
+      const auto append = [&](int coarse, int fine,
+                              ::pops::amr::InterfaceFluxOrientation orientation) {
+        ::pops::amr::InterfaceFluxFragmentKey key{sample.interface_identity,
+                                                  runtime_->topology_epoch(),
+                                                  coarse,
+                                                  fine,
+                                                  clock,
+                                                  stage,
+                                                  point.graph_identity,
+                                                  point.rate_identity,
+                                                  point.application_identity,
+                                                  value.window,
+                                                  orientation,
+                                                  sample.left_block,
+                                                  sample.right_block};
         entries.push_back({std::move(key), {weight, measure, duration, true}, density});
       };
       if (active_level_ > 0)
-        append(active_level_ - 1, active_level_, ::pops::amr::InterfaceFluxOrientation::FineOutward);
+        append(active_level_ - 1, active_level_,
+               ::pops::amr::InterfaceFluxOrientation::FineOutward);
       if (active_level_ + 1 < nlev())
-        append(active_level_, active_level_ + 1, ::pops::amr::InterfaceFluxOrientation::CoarseOutward);
+        append(active_level_, active_level_ + 1,
+               ::pops::amr::InterfaceFluxOrientation::CoarseOutward);
     }
     route_contract = std::move(routes).release();
     if (!entries.empty()) {
@@ -240,7 +265,9 @@ void materialize_active_shared_flux_() const {
         throw std::logic_error("shared flux publication has no active accepted-state transaction");
       publication.emplace(interface_flux_ledger_->prepare_accumulation(std::move(entries)));
     }
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "shared quadrature preparation failed collectively");
   // Digest certificates retain a bounded wire identity; live route consensus remains exact bytes.
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"shared-live-routes", route_contract}}, lane))
@@ -265,13 +292,17 @@ static void write_shared_flux_sample_(checkpoint_detail::Writer& out,
   out.i32(sample.level);
   out.u64(sample.source_topology_epoch);
   out.real(sample.face_measure);
-  out.i32(sample.left_axis); out.i32(sample.right_axis);
+  out.i32(sample.left_axis);
+  out.i32(sample.right_axis);
   out.u64(static_cast<std::uint64_t>(sample.left_side));
   out.u64(static_cast<std::uint64_t>(sample.right_side));
-  out.real(sample.left_normal_spacing); out.real(sample.right_normal_spacing);
-  out.size(sample.face_count); out.i32(sample.component_count);
+  out.real(sample.left_normal_spacing);
+  out.real(sample.right_normal_spacing);
+  out.size(sample.face_count);
+  out.i32(sample.component_count);
   out.size(sample.right_component_for_left.size());
-  for (int component : sample.right_component_for_left) out.i32(component);
+  for (int component : sample.right_component_for_left)
+    out.i32(component);
   const auto& point = sample.source_point;
   out.string(point.clock);
   out.i64(point.tick);
@@ -300,21 +331,24 @@ std::shared_ptr<const shared_flux_sample_type> read_shared_flux_sample_(
   sample.level = in.i32();
   sample.source_topology_epoch = in.u64();
   sample.face_measure = in.real();
-  sample.left_axis = in.i32(); sample.right_axis = in.i32();
+  sample.left_axis = in.i32();
+  sample.right_axis = in.i32();
   const auto left_side = in.u64(), right_side = in.u64();
   if (left_side > static_cast<std::uint64_t>(runtime::multiblock::InterfaceSide::High) ||
       right_side > static_cast<std::uint64_t>(runtime::multiblock::InterfaceSide::High))
     throw std::invalid_argument("retained shared endpoint side is invalid");
   sample.left_side = static_cast<runtime::multiblock::InterfaceSide>(left_side);
   sample.right_side = static_cast<runtime::multiblock::InterfaceSide>(right_side);
-  sample.left_normal_spacing = in.real(); sample.right_normal_spacing = in.real();
-  sample.face_count = in.u64(); sample.component_count = in.i32();
+  sample.left_normal_spacing = in.real();
+  sample.right_normal_spacing = in.real();
+  sample.face_count = in.u64();
+  sample.component_count = in.i32();
   sample.right_component_for_left.resize(in.size(checkpoint_detail::kEncodedScalarBytes));
-  for (int& component : sample.right_component_for_left) component = in.i32();
+  for (int& component : sample.right_component_for_left)
+    component = in.i32();
   if (sample.route_contract.size() != 64 ||
-      !std::all_of(sample.route_contract.begin(), sample.route_contract.end(), [](char c) {
-        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-      }))
+      !std::all_of(sample.route_contract.begin(), sample.route_contract.end(),
+                   [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
     throw std::invalid_argument("retained shared route certificate is not canonical SHA256");
   auto& point = sample.source_point;
   point.clock = in.string();

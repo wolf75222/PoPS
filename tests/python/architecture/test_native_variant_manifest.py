@@ -544,6 +544,7 @@ def test_ctest_python_mpi_projection_matches_the_manifest_and_dim2_contract():
         r'\{ path = "([^"]+)"(?: \}|, partitions = \[)', manifest_suite("pops_python_integration_mpi")
     ))
     assert manifest_orchestrators == (
+        "tests/python/integration/mpi/test_api_v02_continuation_migration.py",
         "tests/python/integration/mpi/test_amr_rank_change_restart.py",
         "tests/python/integration/mpi/test_initial_field_ghost_mpi.py",
         "tests/python/integration/mpi/test_public_accepted_halo_mpi1.py",

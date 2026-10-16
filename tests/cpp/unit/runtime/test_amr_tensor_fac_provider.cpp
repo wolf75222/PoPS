@@ -41,8 +41,8 @@ TEST(HierarchyTensorExactRank, CoarseGmresNativeOptionsKeepExactWireTypes) {
   EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
   options.values.at("fac.coarse_restart") = true;
   EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
-  for (const std::int64_t invalid : {std::int64_t{0}, std::int64_t{-1},
-       std::int64_t{std::numeric_limits<int>::max()} + 1}) {
+  for (const std::int64_t invalid :
+       {std::int64_t{0}, std::int64_t{-1}, std::int64_t{std::numeric_limits<int>::max()} + 1}) {
     options.values.at("fac.coarse_restart") = invalid;
     EXPECT_THROW(tensor_elliptic_detail::decode_controls(options), std::invalid_argument);
   }
@@ -486,6 +486,70 @@ TEST(HierarchyTensorExactRank, ContractsAuthenticateRankGeometryAndOwnership) {
   EXPECT_NE(one_contract, two_contract);
   EXPECT_NE(two_contract, three_contract);
   EXPECT_NE(one_contract, three_contract);
+}
+
+template <int Dim>
+void verify_representation_topology(bool external_kernel, bool refined) {
+  using namespace pops;
+  using namespace pops::runtime::program;
+  auto source = request<Dim>(refined);
+  if (refined) {
+    auto& fine = source.levels.back();
+    auto patch = fine.geometry.domain();
+    patch.hi[0] = 3;
+    fine.layout = mesh::BoxArray<Dim>(std::vector<Box<Dim>>{patch});
+    fine.distribution = mesh::Distribution<Dim>::partitioned(
+        fine.layout, fine.distribution.rank_space(), std::vector<Index<Dim>>{Index<Dim>{}});
+  }
+  const auto original = source;
+  PreparedHierarchyTensorKernel<Dim> kernel;
+  if (external_kernel)
+    kernel = PreparedHierarchyTensorKernel<Dim>{ExactIdentityTensorKernel<Dim>{}};
+  const ExecutionLane lane = ExecutionLane::world("pops.test.tensor-representation-topology");
+  const auto registry =
+      make_hierarchy_tensor_solver_provider_registry<Dim>(std::move(kernel), lane);
+  auto prepared = prepare_hierarchy_tensor_solver_collectively(
+      *registry, tensor_elliptic_detail::kCompositeTensorProvider, source, lane);
+  // The provider owns its request. A later edit to the caller's geometry cannot
+  // relabel the provider's already prepared support.
+  source.levels[0].geometry = Geometry<Dim>::from_bounds(
+      source.levels[0].geometry.domain(), coordinates<Dim>(Real(2)), coordinates<Dim>(Real(3)));
+  const auto& immutable = std::as_const(*prepared);
+  for (int level = 0; level < immutable.level_count(); ++level) {
+    const auto topology = immutable.representation_topology(level);
+    EXPECT_EQ(topology.geometry, original.levels.at(level).geometry);
+    EXPECT_EQ(&topology.coverage, &immutable.active_cell_mask(level));
+    EXPECT_EQ(topology.coverage.layout(), original.levels.at(level).layout);
+    EXPECT_EQ(topology.coverage.distribution(), original.levels.at(level).distribution);
+    EXPECT_EQ(topology.coverage.local_rank(), original.levels.at(level).local_rank);
+    EXPECT_EQ(topology.coverage.ghosts(), Extent<Dim>{});
+    EXPECT_EQ(topology.coverage.ncomp(), 1);
+    EXPECT_EQ(topology.active, nullptr);
+    EXPECT_EQ(topology.volume_fraction, nullptr);
+    for (std::size_t patch = 0; patch < topology.coverage.local_size(); ++patch) {
+      auto host = topology.coverage.fab(patch).create_host_mirror();
+      topology.coverage.fab(patch).copy_to_host(host);
+      for (std::size_t i = 0; i < host.size(); ++i)
+        EXPECT_EQ(host(i), refined && level == 0 && i % 4 < 2 ? Real(0) : Real(1));
+    }
+  }
+  EXPECT_THROW(immutable.representation_topology(-1), std::out_of_range);
+  EXPECT_THROW(immutable.representation_topology(immutable.level_count()), std::out_of_range);
+}
+
+TEST(HierarchyTensorExactRank, BuiltinProviderPublishesItsActualCompositeCoverageAndGeometry) {
+  verify_representation_topology<1>(false, true);
+  verify_representation_topology<2>(false, true);
+  verify_representation_topology<3>(false, true);
+}
+
+TEST(HierarchyTensorExactRank, FlatAndExternalKernelKeepTheirExactRequestSupport) {
+  verify_representation_topology<1>(false, false);
+  verify_representation_topology<2>(false, false);
+  verify_representation_topology<3>(false, false);
+  verify_representation_topology<1>(true, true);
+  verify_representation_topology<2>(true, true);
+  verify_representation_topology<3>(true, true);
 }
 
 }  // namespace

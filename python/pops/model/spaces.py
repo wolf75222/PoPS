@@ -101,6 +101,7 @@ class Space(_ImmutableTypeValue):
     components: tuple[str, ...]
     layout: str
     representation: str
+    representation_data: Any
     centering: str
     units: tuple[Any, ...]
     frame: str
@@ -117,6 +118,7 @@ class Space(_ImmutableTypeValue):
         layout: str = "cell",
         *,
         representation: Any = None,
+        representation_data: Any = None,
         centering: Any = None,
         units: Any = None,
         frame: Any = "model",
@@ -140,6 +142,8 @@ class Space(_ImmutableTypeValue):
         object.__setattr__(self, "layout", layout)
         object.__setattr__(self, "representation", _semantic_tag(
             representation or self.kind, "Space representation"))
+        from pops.representations import _freeze_data
+        object.__setattr__(self, "representation_data", _freeze_data(representation_data))
         object.__setattr__(self, "centering", _semantic_tag(
             centering or layout, "Space centering"))
         object.__setattr__(self, "units", _component_units(normalized, units))
@@ -163,12 +167,14 @@ class Space(_ImmutableTypeValue):
         object.__setattr__(self, "domain", _semantic_tag(domain, "Space domain"))
 
     def _key(self) -> Any:
+        from pops.representations import _data_identity
         return (
             self.kind,
             self.name,
             self.components,
             self.layout,
             self.representation,
+            None if self.representation_data is None else _data_identity(self.representation_data),
             self.centering,
             self.units,
             self.frame,
@@ -189,7 +195,10 @@ class Space(_ImmutableTypeValue):
 
     def to_data(self) -> dict[str, Any]:
         """Stable structural type identity used by Program IR serialization."""
+        from pops.representations import _data_to_wire
         return {
+            **({"representation_data": _data_to_wire(self.representation_data)}
+               if self.representation_data is not None else {}),
             "kind": self.kind,
             "name": self.name,
             "components": list(self.components),
@@ -236,6 +245,7 @@ class StateSpace(Space):
 
     def __init__(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
                  storage: str = "multifab", *, representation: Any = "conservative",
+                 representation_data: Any = None,
                  centering: Any = None, units: Any = None, frame: Any = "model",
                  clock: Any = "simulation", support: Any = None,
                  sampling: Any = "unspecified", value_shape: Any = None,
@@ -244,7 +254,7 @@ class StateSpace(Space):
             name,
             components,
             layout,
-            representation=representation,
+            representation=representation, representation_data=representation_data,
             centering=centering,
             units=units,
             frame=frame,
@@ -300,7 +310,7 @@ class RateSpace(Space):
             "Rate(%s)" % base_name,
             components=base.components,
             layout=base.layout,
-            representation="rate",
+            representation="rate", representation_data=base.representation_data,
             centering=base.centering,
             units=base.units,
             frame=base.frame,

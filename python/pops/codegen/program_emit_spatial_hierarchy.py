@@ -149,23 +149,28 @@ def emit_amr_spatial_solve(
         ]
         body = ["auto& ctx = *spatial_context;", "auto& %s_iterate = *%s;" % (stem, trial)]
         rate_seen = False
+        from .program_source_map import operation
         for node in value.attrs["residual_block"]:
             if node is value.attrs["iterate"]:
+                with operation(node, mapping_body, environment=subvars, channel="spatial_residual",
+                               binding_role="lexical_formal"):
+                    pass
                 continue
             if node.op == "diffusive_rhs":
                 mapping_body.append("return &(%s);" % subvars[node.inputs[0].id])
                 subvars[node.inputs[0].id] = "current_conserved"
                 rate_seen = True
-                _emit_diffusive_rhs(
-                    node,
-                    subvars,
-                    body,
-                    model_for_node(model, node),
-                    variables.get(("program_provider_plans",)),
-                    owner,
-                    "amr_system",
-                    prepared_var="(*" + slot + ")",
-                )
+                with operation(node, body, environment=subvars, channel="spatial_residual"):
+                    _emit_diffusive_rhs(
+                        node,
+                        subvars,
+                        body,
+                        model_for_node(model, node),
+                        variables.get(("program_provider_plans",)),
+                        owner,
+                        "amr_system",
+                        prepared_var="(*" + slot + ")",
+                    )
             else:
                 emit_node(
                     node,
@@ -262,3 +267,5 @@ def emit_amr_spatial_solve(
         "ctx.record_scalar(%s,static_cast<pops::Real>(%s->derivative_evaluations()));"
         % (json.dumps(stem + ".finite_difference_jvps"), workspace),
     ]
+    from .program_emit_spatial_representation import emit_spatial_representation
+    emit_spatial_representation(program, value, variables, model, lines, block_indices, "amr_system")

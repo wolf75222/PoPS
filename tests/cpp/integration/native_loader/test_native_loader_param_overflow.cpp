@@ -9,6 +9,8 @@
 #include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/system.hpp>
+#include <pops/parallel/comm.hpp>
+#include <pops/parallel/execution_lane.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -32,7 +34,7 @@ std::string parameter_names(int count) {
 }
 
 std::string stub_source() {
-  const int count = kMaxRuntimeParams + 1;
+  const int count = 65;
   return "extern \"C\" const char* pops_native_abi_key() { return \"" +
          System<kNativeDimension>::abi_key() +
          "\"; }\n"
@@ -54,8 +56,7 @@ std::string stub_source() {
 }  // namespace
 
 static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
-  (void)argc;
-  (void)argv;
+  comm_init(&argc, &argv);
   const std::string stem = std::string(POPS_TEST_TMPDIR) + "/native_package_param_overflow_" +
                            std::to_string(static_cast<long>(std::clock()));
   const std::string source = stem + ".cpp";
@@ -78,7 +79,9 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
     config.periodicity[axis] = true;
   }
   System<kNativeDimension> system(config);
-  std::vector<double> params(static_cast<std::size_t>(kMaxRuntimeParams + 1), 0.0);
+  system.install_prepared_boundary_execution_lane(
+      std::make_shared<ExecutionLane>(ExecutionLane::world("test.native-parameter-cardinality")));
+  std::vector<double> params(64, 0.0);
   const std::string binary_identity = dynlib::AuthenticatedNativeFile(library).binary_identity();
 
   bool threw = false;
@@ -97,11 +100,12 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
   }
 
   pops::test::Checker checker;
-  checker(threw, "production package rejects parameter vectors above exact capacity");
-  checker(message.find(std::to_string(kMaxRuntimeParams + 1)) != std::string::npos,
-          "error names the declared count");
-  checker(message.find(std::to_string(kMaxRuntimeParams)) != std::string::npos,
-          "error names the supported capacity");
+  checker(threw,
+          "production package rejects a vector differing from its exact "
+          "declared cardinality");
+  checker(message.find(std::to_string(65)) != std::string::npos, "error names the declared count");
+  checker(message.find(std::to_string(64)) != std::string::npos,
+          "error names the supplied cardinality");
   checker(system.n_blocks() == 0, "refused package does not partially install a block");
   return checker.failed();
 }

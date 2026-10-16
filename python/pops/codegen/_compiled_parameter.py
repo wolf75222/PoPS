@@ -7,6 +7,7 @@ protocol into an immutable data value and keeps only the decoded scalar default 
 runtime compatibility surface.
 """
 from __future__ import annotations
+from pops.identity.scalar import parse_canonical_integer
 
 import json
 from collections.abc import Mapping
@@ -50,9 +51,9 @@ def _decode_scalar(data: Any) -> Any:
             raise TypeError("boolean compiled parameter default must contain a bool")
         return value
     if kind == "integer":
-        return int(data["value"])
+        return parse_canonical_integer(data["value"])
     if kind == "rational":
-        return Fraction(int(data["numerator"]), int(data["denominator"]))
+        return Fraction(parse_canonical_integer(data["numerator"]), parse_canonical_integer(data["denominator"]))
     if kind == "decimal":
         return Decimal(data["value"])
     if kind == "binary64":

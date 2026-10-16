@@ -92,6 +92,12 @@ def _wrap(o: Any) -> Any:
     node = getattr(o, "_node", None)
     if isinstance(node, Expr):
         return node
+    scalar_expression = getattr(o, "__pops_scalar_expression__", None)
+    if callable(scalar_expression):
+        node = scalar_expression()
+        if not isinstance(node, Expr):
+            raise TypeError("a symbolic scalar expression protocol must return an Expr")
+        return node
     if callable(getattr(o, "__pops_scalar_plan__", None)):
         from .finite_linear import lower_finite_scalars
         return lower_finite_scalars((o,))[0]
@@ -344,6 +350,66 @@ class Exp(Expr):
     def deps(self) -> Any: return self.a.deps()
     def to_cpp(self) -> str: return "std::exp(%s)" % self.a.to_cpp()
     def _str(self) -> str: return "exp(%s)" % self.a
+
+
+class UnaryMath(Expr):
+    """A closed elementary scalar operation, shared by all native lowering paths.
+
+    The operation belongs to the compiler's arithmetic vocabulary, never to a physical
+    model. Subclasses name a supported operation; authors compose the public functions.
+    """
+    operation: str
+
+    def __init__(self, a: Any) -> None:
+        if type(self) not in (Sin, Cos, Log, Expm1):
+            raise TypeError("unsupported elementary scalar operation")
+        self.a = _wrap(a)
+
+    def __pops_ir_children__(self):
+        return (self.a,)
+
+    def __pops_ir_key__(self, recurse):
+        return (self.operation, recurse(self.a))
+
+    def __pops_ir_diff__(self, recurse, target, definitions):
+        from .lowering import _s_mul, _s_div, _s_neg
+        derivative = recurse(self.a)
+        if type(self) is Sin:
+            return _s_mul(Cos(self.a), derivative)
+        if type(self) is Cos:
+            return _s_mul(_s_neg(Sin(self.a)), derivative)
+        if type(self) is Log:
+            return _s_div(derivative, self.a)
+        return _s_mul(Exp(self.a), derivative)
+
+    def eval(self, env: Any) -> Any:
+        import numpy as np
+        return getattr(np, self.operation)(self.a.eval(env))
+
+    def deps(self) -> Any:
+        return self.a.deps()
+
+    def to_cpp(self) -> str:
+        return "Kokkos::%s(%s)" % (self.operation, self.a.to_cpp())
+
+    def _str(self) -> str:
+        return "%s(%s)" % (self.operation, self.a)
+
+
+class Sin(UnaryMath):
+    operation = "sin"
+
+
+class Cos(UnaryMath):
+    operation = "cos"
+
+
+class Log(UnaryMath):
+    operation = "log"
+
+
+class Expm1(UnaryMath):
+    operation = "expm1"
 
 
 class Abs(Expr):

@@ -102,6 +102,8 @@ def run(instance: Any, **controls: Any) -> RunReport:
     diagnostics are declared explicitly with :class:`pops.output.ConsoleMonitor`; their cadence
     belongs to the ConsumerGraph and native reductions run only when that consumer is due.
     """
+    if "_accepted_step_limit" in controls:
+        raise TypeError("pops.run requires reaching t_end; use pops.step for one accepted step")
     if "strategy" in controls or "cfl" in controls:
         raise TypeError(
             "pops.run does not accept strategy= or cfl=; declare the controller with "
@@ -114,4 +116,22 @@ def run(instance: Any, **controls: Any) -> RunReport:
     return instance._run(**dict(controls))
 
 
-__all__ = ["bind", "compile", "resolve", "run", "validate"]
+def step(instance: Any, *, t_bound: Any, output_dir: Any = None,
+         console: bool = False) -> RunReport:
+    """Execute one accepted controller step, including all permitted retries.
+
+    ``t_bound`` is a finite absolute future bound for the accepted endpoint. The
+    Program's step strategy still chooses the requested duration. This transition
+    uses the complete run lifecycle: consumers, identities, accepted snapshots,
+    temporal envelopes and checkpoint authority. It does not promise to reach the
+    bound. Failure raises; success reports exactly one accepted step.
+    """
+    from pops.runtime._runtime_instance import RuntimeInstance
+    if type(instance) is not RuntimeInstance:
+        raise TypeError("pops.step expects the exact RuntimeInstance returned by pops.bind")
+    instance._install_plan.verify()
+    return instance._run(t_end=t_bound, max_steps=1, output_dir=output_dir,
+                         console=console, _accepted_step_limit=1)
+
+
+__all__ = ["bind", "compile", "resolve", "run", "step", "validate"]

@@ -56,6 +56,10 @@ import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_python_test_units  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DURATIONS_JSON = ROOT / "tests/python/test_durations.json"
@@ -221,6 +225,8 @@ def shard_files(
         raise PartitionError(f"invalid shard {shard_index}/{shard_total}")
     excluded_set = set(excluded)
     shardable = [f for f in files if f not in excluded_set]
-    shards = assign_shards(shardable, shard_total, durations)
-    verify_partition(files, shards, excluded)
+    units = ci_python_test_units.expand(shardable)
+    costs = ci_python_test_units.weights(load_durations() if durations is None else durations)
+    shards = assign_shards(units, shard_total, costs)
+    verify_partition(units, shards, excluded=())
     return shards[shard_index]

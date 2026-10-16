@@ -179,7 +179,11 @@ class HistoryContract:
             raise ValueError("HistoryContract validity must use the history clock")
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
             raise ValueError("HistoryContract depth must be a Python int >= 1")
-        capability = _CanonicalInterpolation(interpolation_data(interpolation))
+        data = interpolation_data(interpolation)
+        if data["kind"] == "history_transfer":
+            from .transfer import require_ring_transfer
+            require_ring_transfer(data, depth+1)
+        capability = _CanonicalInterpolation(data)
         object.__setattr__(self, "owner", owner)
         object.__setattr__(self, "state", state)
         object.__setattr__(self, "space", space)

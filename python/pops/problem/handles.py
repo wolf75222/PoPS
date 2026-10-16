@@ -127,7 +127,7 @@ class FieldHandle(Handle):
             raise MissingOwnershipError("detached field handle has no Case solver authority")
         return self._field_registry.resolved_registration(self).discretization.solver
 
-    def bind_program_inputs(self, program: Any, *, values: Any, at: Any, solver: Any = None) -> Any:
+    def bind_program_inputs(self, program: Any, *, values: Any, at: Any, solver: Any = None, temporal: Any = None) -> Any:
         """Bind the physical field problem to explicit Program inputs and evaluation context."""
         if self._field_registry is None:
             raise MissingOwnershipError("detached field handle has no Case problem authority")
@@ -135,16 +135,16 @@ class FieldHandle(Handle):
 
         return bind_field_problem(
             program, self._field_registry.canonicalize(self),
-            self._field_registry.resolved_registration(self), values=values, at=at, solver=solver,
+            self._field_registry.resolved_registration(self), values=values, at=at, solver=solver, temporal=temporal,
         )
 
-    def observe(self, solution: Any, unknown: Any = None) -> Any:
+    def observe(self, solution: Any, unknown: Any = None, *, byte_capacity: int = 64 * 1024 * 1024) -> Any:
         """Read one typed unknown from this field's explicitly consumed solve result."""
         if self._field_registry is None:
             raise MissingOwnershipError("detached field handle has no Case observation authority")
         from pops.fields._program_problem import observe_field_solution
 
-        return observe_field_solution(self, solution, unknown=unknown)
+        return observe_field_solution(self, solution, unknown=unknown, byte_capacity=byte_capacity)
 
     def __call__(
         self,

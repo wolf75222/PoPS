@@ -149,7 +149,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
     @atomic_authoring
     def solve(self, problem: Any, *, solver: Any = None, name: Any = None,
-              values: Any = None, at: Any = None) -> Any:
+              values: Any = None, at: Any = None, temporal: Any = None) -> Any:
         """Build one typed solve through the solver's small Program provider interface.
 
         The Program does not select a PDE family or algorithm.  A solver descriptor prepares an
@@ -161,11 +161,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             if not callable(default_solver):
                 raise TypeError("solve: an explicit solver or default_program_solver is required")
             solver = default_solver()
-        if values is not None or at is not None:
+        if values is not None or at is not None or temporal is not None:
             bind_inputs = getattr(problem, "bind_program_inputs", None)
             if not callable(bind_inputs):
                 raise TypeError("solve: values/at require a problem with bind_program_inputs")
-            problem = bind_inputs(program=self, values=values, at=at, solver=solver)
+            options = {} if temporal is None else {"temporal": temporal}
+            problem = bind_inputs(program=self, values=values, at=at, solver=solver, **options)
         if isinstance(solver, str):
             raise TypeError("solve: solver must be a typed descriptor, not %r" % solver)
         prepare = getattr(solver, "prepare_program_solve", None)
@@ -476,14 +477,38 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     # A ``matrix_free_op`` supplies an exact apply callback. Mathematical shape and hierarchy use
     # are validated by the selected prepared solver provider, not by this generic authoring core.
 
-    def scalar_field(self, name: Any = None, ncomp: Any = 1, *, like: Any = None) -> Any:
+    def scalar_field(self, name: Any = None, ncomp: Any = None, *, like: Any = None,
+                     topology: Any = None, initial: Any = None) -> Any:
         """A fresh, zero-initialized scalar field: scratch the apply sub-block uses (e.g. the Laplacian
-        output, or a 2-component gradient buffer). @p ncomp is the component count (1 by default; 2 for a
-        gradient field consumed by ``P.divergence``). Lowered to ``ctx.alloc_scalar_field(ncomp, 1)``."""
+        output, or a 2-component gradient buffer). ``ncomp`` inherits the exact field prototype's
+        width when omitted, or defaults to one without a prototype. An explicit incompatible width
+        is rejected. Lowered through the prototype's block-qualified allocation when present.
+        An explicit target topology instead allocates that target storage and requires an authored
+        Float64 initial value; it never copies or interpolates the prototype's values."""
+        if topology is not None:
+            from pops.time._program.field_representation import allocate_field_storage
+            return allocate_field_storage(self, like, topology, initial, ncomp=ncomp, name=name)
+        if initial is not None:
+            raise ValueError("scalar_field: initial requires an explicit target topology")
+        if ncomp is None:
+            ncomp = len(like.space.components) if (isinstance(like, ProgramValue)
+                and like.space is not None and like.vtype == "scalar_field") else 1
         if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
             raise ValueError("scalar_field: ncomp must be a positive integer (got %r)" % (ncomp,))
         if like is not None:
             require_owned(self, like, "scalar field prototype")
+            from pops.model.spaces import FieldSpace
+            if (like.vtype == "scalar_field" and type(like.space) is FieldSpace
+                    and like.attrs.get("scalar_storage") is None and like.block is not None):
+                if ncomp != len(like.space.components):
+                    raise ValueError("computed cell scratch must preserve the declared component shape")
+                value = self._new("scalar_field", "scalar_field", (like,),
+                    {"ncomp": ncomp, "spatial_port_storage": "pops.computed-cell-field@1",
+                     "stencil_access": StencilAccess.pointwise()}, name, like.block,
+                    space=like.space, point=like.point, inherit_state_ref=False)
+                from .spatial_interaction import validate_spatial_scratch
+                validate_spatial_scratch(value)
+                return value
             from pops.time.field_sampling import storage_contract
             attrs = storage_contract(self, like, like.attrs.get("scalar_storage"), like.space)
             if ncomp != 1:
@@ -613,16 +638,16 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         operator = self._canonical_value(operator)
         if not (isinstance(operator, ProgramValue) and operator.vtype == "matrix_free_op"):
             raise ValueError("set_apply: operator must be a matrix_free_operator value")
-        require_top_level(self, operator, "set_apply")
+        from pops.time._program.value_validation import validate_input_regions
+        validate_input_regions(self, (operator,), self._current_region(), "set_apply")
         if operator.attrs["apply_block"] is not None:
             raise ValueError("set_apply: operator '%s' already has an apply" % operator.name)
-        if self._recording:
-            raise NotImplementedError(
-                "set_apply: recording an apply inside another sub-block (apply / while body) is a "
-                "later phase")
         # The apply ops (the in/out placeholders + the body) live in the operator's OWN sub-block, NOT
         # the flat SSA list: they are re-emitted as the C++ apply lambda, never walked at the top level.
         sub = []
+        apply_region = self._region_for_block(sub)
+        for parent in self._recording:
+            self._allow_region_capture(self._region_for_block(parent), apply_region)
         self._recording.append(sub)
         # The in/out buffers carry the operator's component count: a vector / state operator applies on
         # an ncomp buffer (scalar -> ncomp == 1). The apply body sees ncomp-component in / out fields.
@@ -719,13 +744,23 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     def laplacian(self, out: Any, in_: Any) -> Any:
         """Record ``out = Lap(in_)`` (the shared exact-ranked Cartesian Laplacian). @p out and @p in_ are
         scalar_field values. Lowered to ``ctx.laplacian(out, in_)``. Used inside an apply sub-block to
-        form a Helmholtz operator ``A(in) = in - alpha*Lap(in)`` via the affine algebra."""
+        form a Helmholtz operator ``A(in) = in - alpha*Lap(in)`` via the affine algebra.
+
+        For a typed computed-cell port, ``out`` is an allocation prototype. The returned SSA
+        field owns fresh storage, so reusing the prototype cannot overwrite earlier results.
+        """
         if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("laplacian: out must be a scalar_field value")
         if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
             raise ValueError("laplacian: in must be a scalar_field value")
         from pops.time.field_sampling import scalar_co_location
         scalar_co_location(out, in_, "laplacian")
+        if out.attrs.get("spatial_port_storage") is not None:
+            out = self.scalar_field(name=out.name, like=out)
+            return self._new("scalar_field", "laplacian", (out, in_),
+                {"ncomp": int(out.attrs["ncomp"]),
+                 "stencil_access": StencilAccess.nearest_neighbour()}, out.name, in_.block,
+                space=out.space, point=in_.point, inherit_state_ref=False)
         attrs = {key: in_.attrs[key] for key in
                  ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")
                  if key in in_.attrs}
@@ -739,7 +774,9 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
     def gradient(self, out: Any, phi: Any) -> Any:
         """Record ``out = grad(phi)`` (centered differences; @p out has one component per native axis). @p out and
-        @p phi are scalar_field values. Lowered to ``ctx.gradient(out, phi)``."""
+        @p phi are scalar_field values. Lowered to ``ctx.gradient(out, phi)``.
+        A typed computed-cell ``out`` is an allocation prototype; each result owns fresh storage.
+        """
         if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("gradient: out must be a scalar_field value")
         if not (isinstance(phi, ProgramValue) and phi.vtype == "scalar_field"):
@@ -749,6 +786,14 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError("gradient: out must carry one component per spatial axis")
         if int(phi.attrs.get("ncomp", 1)) != 1:
             raise ValueError("gradient: phi must have exactly one component")
+        if out.attrs.get("spatial_port_storage") is not None:
+            from pops.time.field_sampling import scalar_co_location
+            scalar_co_location(out, phi, "gradient", same_space=False)
+            out = self.scalar_field(name=out.name, like=out)
+            return self._new("scalar_field", "gradient", (out, phi),
+                {"ncomp": output_components, "spatial_dimension": output_components,
+                 "stencil_access": StencilAccess.nearest_neighbour()}, out.name, phi.block,
+                space=out.space, point=phi.point, inherit_state_ref=False)
         return self._new(
             "scalar_field", "gradient", (out, phi),
             {"ncomp": output_components, "spatial_dimension": output_components,
@@ -759,6 +804,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
         ``flux`` carries one component per native axis, so it is directly composable with
         :meth:`gradient`; native binding authenticates its width against the resolved domain.
+        A typed computed-cell ``out`` is an allocation prototype; each result owns fresh storage.
         """
         if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
             raise ValueError("divergence: out must be a scalar_field value")
@@ -769,6 +815,14 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         flux_components = int(flux.attrs.get("ncomp", 1))
         if flux_components not in (1, 2, 3):
             raise ValueError("divergence: flux must carry one component per spatial axis")
+        if out.attrs.get("spatial_port_storage") is not None:
+            from pops.time.field_sampling import scalar_co_location
+            scalar_co_location(out, flux, "divergence", same_space=False)
+            out = self.scalar_field(name=out.name, like=out)
+            return self._new("scalar_field", "divergence", (out, flux),
+                {"ncomp": 1, "spatial_dimension": flux_components,
+                 "stencil_access": StencilAccess.nearest_neighbour()}, out.name, flux.block,
+                space=out.space, point=flux.point, inherit_state_ref=False)
         return self._new(
             "scalar_field", "divergence", (out, flux),
             {"ncomp": 1, "spatial_dimension": flux_components,

@@ -28,6 +28,17 @@
 
 namespace pops::numerics::time::amr {
 
+namespace detail {
+template <int Dim>
+struct AffineMacroFiniteKernel {
+  FieldView<const Real, Dim> values;
+  int component = 0;
+  POPS_HD Real operator()(const Index<Dim>& index) const {
+    return Kokkos::isfinite(values(index, component)) ? Real(0) : Real(1);
+  }
+};
+}  // namespace detail
+
 /// Budgets for one exact multi-block, multi-level conservative attempt.
 struct MultiBlockAmrSubcyclingBudget {
   AmrSubcyclePreparationBudget transitions{};
@@ -209,6 +220,99 @@ class PreparedMultiBlockAmrSubcyclingEngine {
   const std::optional<::pops::amr::ClockStamp>& accepted_clock(std::size_t block,
                                                                std::size_t level) const {
     return accepted_clocks_.at(block).at(level);
+  }
+
+  /// Replace one fully refluxed macro map by an affine increment. The caller's
+  /// outer transaction remains the rollback authority across this publication.
+  /// Internal interpolation histories become the actual macro entry/accepted
+  /// endpoints; provisional fine-substep histories are never renamed accepted.
+  template <class ValidateAccepted, class PrepareAccepted>
+  void finalize_affine_macro(const ::pops::amr::reflux::AffineIntervalPublication& publication,
+                             const std::vector<std::vector<field_type>>& entry,
+                             const std::vector<std::vector<field_type>>& provisional,
+                             ValidateAccepted&& validate, PrepareAccepted&& prepare) {
+    require_no_callback_reentry_();
+    require_live_();
+    decltype(accepted_histories_) histories;
+    decltype(accepted_clocks_) clocks;
+    decltype(accepted_ledgers_) ledgers;
+    std::vector<std::vector<field_type>> candidates;
+    invoke_collectively_(
+        [&] {
+          ::pops::amr::reflux::validate_affine_interval_publication(publication);
+          if (has_attempt_candidates() || last_accepted_attempt_ == 0 ||
+              entry.size() != hierarchy_->block_count() || provisional.size() != entry.size())
+            throw std::logic_error(
+                "affine macro finalization requires one complete refluxed tower");
+          candidates = provisional;
+          histories = accepted_histories_;
+          clocks = accepted_clocks_;
+          ledgers = accepted_ledgers_;
+          for (std::size_t block = 0; block < candidates.size(); ++block) {
+            if (entry[block].size() != hierarchy_->level_count() ||
+                candidates[block].size() != hierarchy_->level_count())
+              throw std::invalid_argument("affine macro finalization has a partial level tower");
+            for (std::size_t level = 0; level < candidates[block].size(); ++level) {
+              if (!clocks[block][level] || !histories[block][level])
+                throw std::logic_error("affine macro finalization lacks its provisional clock");
+              auto& clock = *clocks[block][level];
+              if (clock.phase != ::pops::amr::Rational{1, 1} ||
+                  clock.physical_time != publication.source_start + publication.source_duration)
+                throw std::invalid_argument("affine macro finalization source endpoint is stale");
+              pops::lincomb(candidates[block][level], Real(1 - publication.increment_scale),
+                            entry[block][level], Real(publication.increment_scale),
+                            candidates[block][level]);
+              const auto& candidate = candidates[block][level];
+              for (std::size_t local = 0; local < candidate.local_size(); ++local) {
+                const auto view = candidate.fab(local).view();
+                for (int component = 0; component < candidate.ncomp(); ++component)
+                  if (pops::for_each_cell_reduce_max(
+                          candidate.box(local),
+                          detail::AffineMacroFiniteKernel<Dim>{view, component}) > Real(0))
+                    throw std::overflow_error("affine macro increment produced a nonfinite State");
+              }
+              clock.physical_time = publication.source_start + publication.accepted_duration;
+              auto begin = clock;
+              begin.phase = {0, 1};
+              begin.physical_time = publication.source_start;
+              histories[block][level].emplace(
+                  AcceptedHistory{entry[block][level], candidates[block][level], {begin, clock}});
+            }
+            for (auto& transition : ledgers[block])
+              for (auto& ledger : transition)
+                ledger.finalize_affine_publication(publication);
+          }
+        },
+        "affine macro candidate preparation failed collectively");
+    for (std::size_t block = 0; block < candidates.size(); ++block)
+      for (std::size_t level = 0; level < candidates[block].size(); ++level)
+        invoke_collectively_(
+            [&] { validate(block, level, std::as_const(candidates[block][level])); },
+            "affine macro accepted State validation failed collectively");
+    invoke_collectively_(
+        [&] { prepare(candidates, std::as_const(clocks), std::as_const(histories)); },
+        "affine macro accepted halo preparation failed collectively");
+    invoke_collectively_(
+        [&] {
+          for (std::size_t block = 0; block < candidates.size(); ++block)
+            for (std::size_t level = 0; level < candidates[block].size(); ++level)
+              histories[block][level]->newer = candidates[block][level];
+        },
+        "affine macro accepted history preparation failed collectively");
+    for (std::size_t level = 0; level < hierarchy_->level_count(); ++level) {
+      std::vector<field_type*> pack;
+      invoke_collectively_(
+          [&] {
+            pack.reserve(hierarchy_->block_count());
+            for (auto& block : candidates)
+              pack.push_back(&block[level]);
+          },
+          "affine macro publication pack preparation failed collectively");
+      hierarchy_->publish_program_candidates(program_map_, level, pack);
+    }
+    accepted_histories_.swap(histories);
+    accepted_clocks_.swap(clocks);
+    accepted_ledgers_.swap(ledgers);
   }
 
   const std::optional<AcceptedHistory>& accepted_history(std::size_t block,
@@ -518,9 +622,13 @@ class PreparedMultiBlockAmrSubcyclingEngine {
                              "multi-block AMR candidate staging failed collectively");
     // Optional explicit whole-tower effect: all level staging is complete, no live publication
     // has begun, and exact candidate clocks/parents remain available. Legacy stages are unchanged.
-    if constexpr (std::is_invocable_v<Stage&, CandidateMatrix&, const ClockMatrix&, const HistoryMatrix&>)
-      invoke_collectively_([&] { stage(candidates, std::as_const(attempt.clocks), std::as_const(attempt.histories)); },
-                           "multi-block AMR accepted halo preparation failed collectively");
+    if constexpr (std::is_invocable_v<Stage&, CandidateMatrix&, const ClockMatrix&,
+                                      const HistoryMatrix&>)
+      invoke_collectively_(
+          [&] {
+            stage(candidates, std::as_const(attempt.clocks), std::as_const(attempt.histories));
+          },
+          "multi-block AMR accepted halo preparation failed collectively");
     bool publication_started = false;
     try {
       for (std::size_t level = 0; level < hierarchy_->level_count(); ++level) {

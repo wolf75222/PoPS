@@ -108,11 +108,11 @@ def _resolved_linear_properties(problem: FieldProblem, reaction: Any) -> Any:
     return LinearOperatorProperties.symmetric_operator() if symmetric else LinearOperatorProperties.general()
 
 
-def bind_field_problem(program: Any, field: Handle, registration: Any, *, values: Any, at: Any, solver: Any = None) -> Any:
+def bind_field_problem(program: Any, field: Handle, registration: Any, *, values: Any, at: Any, solver: Any = None, temporal: Any = None) -> Any:
     """Freeze explicit equation inputs; field storage never borrows a species owner."""
     from pops.linalg import LinearProblem
     from pops.time import DerivativeStrategy, SolveRequest, SolveUnknown
-    from pops.time._program.value_validation import require_top_level
+    from pops.time._program.value_validation import validate_input_regions
     from pops.identity.scalar import scalar_literal
     from ._program_expression import encode_field_expression, field_expression_dependencies
     from .methods import CellCenteredGeneralCoupled, CellCenteredSecondOrder
@@ -123,6 +123,8 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
         raise TypeError("general field binding requires FieldProblem; scalar provider adapters retain their existing field solve route")
     from .methods import CellCenteredNonlinearCoupled
     if type(registration.discretization.method) is CellCenteredNonlinearCoupled:
+        if temporal is not None:
+            raise ValueError("nonlinear field temporal evaluation requires an explicit candidate source bundle")
         from ._program_nonlinear_problem import bind_nonlinear_field_problem
         return bind_nonlinear_field_problem(program, field, registration, values=values, at=at, solver=solver)
     method = registration.discretization.method
@@ -149,7 +151,7 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
         value = getattr(value, "_value", value)
         if not isinstance(value, ProgramValue) or value.vtype != "state":
             raise TypeError("field equation inputs must be Program state values")
-        require_top_level(program, value, "field solve input")
+        validate_input_regions(program, (value,), program._current_region(), "field solve input")
         if value.state_ref is None or _identity(value.state_ref) != _identity(key):
             raise FieldProblemError("field.native.input", "field input binding changes its exact state owner")
         states.append(value)
@@ -177,6 +179,11 @@ def bind_field_problem(program: Any, field: Handle, registration: Any, *, values
               "field_dependencies": tuple(_identity(row) for row in dependencies),
               "field_handle": field.canonical_identity(), "physical_boundary": physical_boundary,
               "scope": scope}
+    if temporal is not None:
+        if scope != "hierarchy":
+            raise ValueError("TemporalEvaluation binds a composite hierarchy field solve")
+        from pops.time._program.temporal_field import bind_temporal_field
+        common["temporal_evaluation"] = bind_temporal_field(program, states, dependencies, temporal)
     if general_coupled:
         common["coefficient_admissibility"] = "finite_general"
     rhs_expressions = tuple(encode_field_expression(eq.rhs, states) for eq in problem.equations)
@@ -227,6 +234,7 @@ class FieldSolution:
     observation_spaces: tuple[Any, ...] = ()
     coordinate_units: tuple[Any, ...] = ()
     observation_axes: tuple[int, ...] | None = None
+    byte_capacity: int = 64 * 1024 * 1024
 
     def mapping_port(self, unknown: Handle, *, derivative_axis: int | None = None, factor: Any = 1):
         """Declare a scalar physical port of this consumed Field problem."""
@@ -255,11 +263,16 @@ class FieldSolution:
         matches = [index for index, row in enumerate(self.unknowns) if row == _identity(unknown)]
         if len(matches) != 1:
             raise FieldProblemError("field.observation.unknown", "observation selects a foreign field unknown")
+        from ._observation_contract import field_provider_authority
+        space = None if not self.observation_spaces else self.observation_spaces[matches[0]]
+        authority = field_provider_authority(self.problem_identity, self.unknowns[matches[0]], space)
         return self.packed.prog._new("scalar_field", "field_component", (self.packed,),
             {"ncomp": 1, "component": matches[0], "field_problem_identity": self.problem_identity,
+             "field_authority": authority,
+             "observation_byte_capacity": self.byte_capacity,
              "field_unknown": self.unknowns[matches[0]], "stencil_access": StencilAccess.pointwise()},
             unknown.local_id + "_value", None, point=self.packed.point, inherit_state_ref=False,
-            space=None if not self.observation_spaces else self.observation_spaces[matches[0]])
+            space=space)
 
     def cell_mean_state(self, unknown: Handle, *, target: Any) -> ProgramValue:
         """Project one solved cell mean to an exact one-component State endpoint.
@@ -349,15 +362,20 @@ class FieldSolution:
             space = FieldSpace(value.space.name + ".gradient", components=tuple("axis%d" % axis for axis in range(dimension)),
                 representation="field", centering="cell", units=tuple(units),
                 support=value.space.support, sampling="cell", frame=value.space.frame, clock=value.space.clock)
+        from ._observation_contract import field_gradient_authority
+        authority = field_gradient_authority(value.attrs["field_authority"], dimension, space)
         return value.prog._new("scalar_field", "field_gradient", (value,),
-            {"ncomp": dimension, "spatial_dimension": dimension,
+            {"ncomp": dimension, "spatial_dimension": dimension, "field_authority": authority,
              "differentiation": "cell_centered_second_order",
              "sampling": "cell", "field_problem_identity": self.problem_identity,
              "stencil_access": StencilAccess.nearest_neighbour()},
             unknown.local_id + "_gradient", None, point=value.point, inherit_state_ref=False, space=space)
 
 
-def observe_field_solution(field: Handle, solution: Any, *, unknown: Handle | None = None) -> Any:
+def observe_field_solution(field: Handle, solution: Any, *, unknown: Handle | None = None,
+                           byte_capacity: int = 64 * 1024 * 1024) -> Any:
+    if type(byte_capacity) is not int or not 1 <= byte_capacity <= (1 << 63) - 1:
+        raise ValueError("field observation byte_capacity must be a positive int64 ceiling")
     from pops.time.solve_outcome import ResidualSolution
     if type(solution) is not ResidualSolution or len(solution.values) != 1:
         raise TypeError("field observation requires the consumed ResidualSolution of one field solve")
@@ -383,7 +401,8 @@ def observe_field_solution(field: Handle, solution: Any, *, unknown: Handle | No
     result = FieldSolution(field, packed, unknowns, registered.identity.token,
         tuple(registered.unknown_spaces[row] for row in registered.unknowns) if getattr(registered, "unknown_spaces", None) else (),
         getattr(registered, "coordinate_units", ()),
-        getattr(registry.resolved_registration(field).discretization, "observation_axes", None))
+        getattr(registry.resolved_registration(field).discretization, "observation_axes", None),
+        byte_capacity)
     return result if unknown is None else result[unknown]
 
 

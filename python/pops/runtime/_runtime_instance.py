@@ -1029,6 +1029,10 @@ class RuntimeInstance:
                     layout_id: row.to_data()
                     for layout_id, row in self._install_plan.artifact.native_layouts.items()
                 },
+                "runtime_parameter_storage": {
+                    key: dict(value) if isinstance(value, Mapping) else value
+                    for key, value in self._install_plan.runtime_parameter_storage.items()
+                },
                 "execution_context": self._execution_context.to_data(),
                 "runtime_plan": self._runtime_plan.to_data(),
                 "installed_components": [
@@ -1700,10 +1704,17 @@ class RuntimeInstance:
         max_steps: int = 1_000_000,
         output_dir: Any = None,
         console: bool = True,
+        _accepted_step_limit: int | None = None,
         **controller_controls: Any,
     ) -> RunReport:
         if type(console) is not bool:
             raise TypeError("pops.run console= must be an exact bool")
+        if _accepted_step_limit is not None:
+            if type(_accepted_step_limit) is not int or _accepted_step_limit != 1 or max_steps != 1:
+                raise ValueError("single-step lifecycle requires exactly one accepted step")
+            if isinstance(t_end, bool) or not isinstance(t_end, (int, float)) or \
+                    not math.isfinite(t_end) or not float(t_end) > float(self.time()):
+                raise ValueError("pops.step t_bound must be a finite future bound")
         if "progress" in controller_controls:
             raise TypeError(
                 "pops.run progress= was removed; declare a scheduled "
@@ -1753,6 +1764,8 @@ class RuntimeInstance:
                 step_transaction=prepared_run.control_payload,
                 max_steps=max_steps,
                 output_dir=output_dir,
+                **({"stop_condition": "one_accepted_step"}
+                   if _accepted_step_limit is not None else {}),
             )
             if console:
                 from pops.runtime._console_run import safe_begin_console_run
@@ -1782,11 +1795,15 @@ class RuntimeInstance:
                     prepared_run,
                     t_end=step_end,
                     deadline=deadline if deadline_is_active else None,
-                    at_end=lambda: not prepared_run.pending(native, t_end=t_end),
+                    at_end=lambda steps=steps: (_accepted_step_limit is not None and
+                                    steps + 1 == _accepted_step_limit) or
+                                   not prepared_run.pending(native, t_end=t_end),
                 )
                 rejected_steps += int(step_report.attempts) - 1
                 steps += 1
-            if prepared_run.pending(native, t_end=t_end):
+            if _accepted_step_limit is not None and steps != _accepted_step_limit:
+                raise RuntimeError("pops.step controller did not produce one accepted step")
+            if _accepted_step_limit is None and prepared_run.pending(native, t_end=t_end):
                 raise RuntimeError(
                     "max_steps exhausted before t_end: "
                     f"accepted {steps} step(s), reached t={native.time()!r}, "
@@ -1896,7 +1913,9 @@ class RuntimeInstance:
             rejected_steps=rejected_steps,
             final_time=native.time(),
             final_macro_step=native.macro_step(),
-            stop_reason=RunStopReason.TARGET_TIME_REACHED,
+            stop_reason=(RunStopReason.ACCEPTED_STEP_LIMIT_REACHED
+                         if _accepted_step_limit is not None
+                         else RunStopReason.TARGET_TIME_REACHED),
             run_identity=manifest.run_identity,
             bind_identity=self.bind_identity,
             execution_identity=self._execution_context.identity,
@@ -2386,13 +2405,17 @@ class RuntimeInstance:
             raise ValueError("restart consumer cursor rows are not canonical")
         return cursors
 
-    def _inspect_checkpoint_payload(self, payload: bytes) -> ConsumerCursorSet:
+    def _inspect_checkpoint_payload(self, payload: bytes, *,
+                                    workspace_byte_capacity: int | None = None) -> ConsumerCursorSet:
         """Authenticate exact in-memory bytes on rank zero without native mutation."""
         from pops.output._checkpoint_collective import decode_checkpoint_bytes
         from ._checkpoint_manifest import MANIFEST_KEY, authenticate_checkpoint_payload
+        from pops.output._checkpoint_restart_budget import restart_checkpoint_resource_budget
         from ._checkpoint_resource_budget import require_checkpoint_resource_budget
 
-        stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
+        budget = (require_checkpoint_resource_budget(self) if workspace_byte_capacity is None else
+                  restart_checkpoint_resource_budget(self, workspace_byte_capacity))
+        stored = decode_checkpoint_bytes(payload, budget)
         if MANIFEST_KEY not in stored.files:
             raise ValueError("checkpoint has no canonical manifest")
         manifest = json.loads(str(stored[MANIFEST_KEY]))
@@ -2423,6 +2446,7 @@ class RuntimeInstance:
         state_storage: str = "full",
         hierarchy_mode: str = "restore_recorded_hierarchy",
         hierarchy_identity: str | None = None,
+        workspace_byte_capacity: int | None = None,
     ) -> Any:
         from pops.output._checkpoint_collective import (
             decode_checkpoint_bytes,
@@ -2430,7 +2454,7 @@ class RuntimeInstance:
             require_restart_hierarchy_mode,
             restore_checkpoint_payload,
         )
-        from ._checkpoint_resource_budget import require_checkpoint_resource_budget
+        from pops.output._checkpoint_restart_budget import restart_checkpoint_resource_budget
 
         policy = require_restart_bit_identical(bit_identical, where="RuntimeInstance restart")
         selected_hierarchy_mode = require_restart_hierarchy_mode(
@@ -2440,7 +2464,8 @@ class RuntimeInstance:
             raise ValueError(
                 "RuntimeInstance restart hierarchy identity is only valid with RegridOnRestart"
             )
-        stored = decode_checkpoint_bytes(payload, require_checkpoint_resource_budget(self))
+        stored = decode_checkpoint_bytes(payload, restart_checkpoint_resource_budget(
+            self, workspace_byte_capacity, bit_identical=policy))
         from ._checkpoint_manifest import checkpoint_run_identity
 
         def snapshot_run_authorities(executor: Any) -> tuple[tuple[Any, tuple[Any, ...], tuple[str, ...]], ...]:
@@ -2650,23 +2675,32 @@ class RuntimeInstance:
             hierarchy_mode=selected_hierarchy_mode,
             hierarchy_identity=hierarchy_identity,
             phase_prefix="native restart",
+            workspace_byte_capacity=workspace_byte_capacity,
             prepare_outer_state=prepare_outer_state,
             after_native_apply=restore_outer_state,
             rollback_after_native_apply=rollback_outer_state,
         )
         return result.restart_identity if selected_hierarchy_mode == "regrid_on_restart" else result
 
-    def restart(self, path: Any, *, state_storage: str = "full") -> Any:
+    def restart(self, path: Any, *, state_storage: str = "full",
+                workspace_byte_capacity: int | None = None) -> Any:
         if type(state_storage) is not str or state_storage not in ("full", "valid_only_legacy8"):
             raise ValueError("restart state_storage must be full or valid_only_legacy8")
         operation = self._restart_operation()
-        reopened = operation.reopen(self, path)
-        if state_storage == "full":
+        if workspace_byte_capacity is None:
+            reopened = operation.reopen(self, path)
+        else:
+            from pops.output._restart_provider import RestartV3
+            if type(operation) is not RestartV3:
+                raise TypeError("restart workspace requires RestartV3")
+            reopened = operation.reopen(self, path, workspace_byte_capacity=workspace_byte_capacity)
+        if state_storage == "full" and workspace_byte_capacity is None:
             return operation.restore(self, reopened)
         from pops.output._restart_provider import RestartV3
         if type(operation) is not RestartV3:
             raise TypeError("legacy Uniform state-storage restart requires RestartV3")
-        return operation.restore(self, reopened, state_storage=state_storage)
+        return operation.restore(self, reopened, state_storage=state_storage,
+                                 workspace_byte_capacity=workspace_byte_capacity)
 
     def __str__(self) -> str:
         return "RuntimeInstance(layouts=%d, blocks=%d, consumers=%d)" % (

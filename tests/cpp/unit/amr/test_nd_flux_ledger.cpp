@@ -73,6 +73,20 @@ struct CopyOnlyPayload {
   CopyOnlyPayload& operator=(CopyOnlyPayload&&) = delete;
 };
 
+struct ThrowingMovePayload {
+  double value = 0.0;
+  inline static int moves_before_failure = -1;
+
+  explicit ThrowingMovePayload(double input = 0.0) : value(input) {}
+  ThrowingMovePayload(const ThrowingMovePayload&) = default;
+  ThrowingMovePayload(ThrowingMovePayload&& other) : value(other.value) {
+    if (moves_before_failure == 0)
+      throw std::runtime_error("injected payload move failure");
+    if (moves_before_failure > 0)
+      --moves_before_failure;
+  }
+};
+
 static_assert(std::is_copy_constructible_v<CopyOnlyPayload>);
 static_assert(!std::is_copy_assignable_v<CopyOnlyPayload>);
 
@@ -784,6 +798,9 @@ TEST(test_nd_flux_ledger, failed_commit_preserves_accepted_and_pending_transacti
   EXPECT_TRUE(ledger.in_transaction());
   EXPECT_EQ(ledger.published_size(), 1u);
   EXPECT_EQ(ledger.pending_size(), 1u);
+  EXPECT_THROW(ledger.accumulate(ledger.pending_entries(0).front().key,
+                                 ledger.pending_entries(0).front().measure, ThrowingPayload{9.0}),
+               std::runtime_error);
   ledger.rollback();
   EXPECT_EQ(ledger.published_size(), 1u);
   EXPECT_EQ(ledger.pending_size(), 0u);
@@ -800,6 +817,117 @@ TEST(test_nd_flux_ledger, failed_commit_preserves_accepted_and_pending_transacti
   EXPECT_THROW((void)ledger.discard_published_attempt(0), std::runtime_error);
   ThrowingPayload::fail_copy = false;
   EXPECT_EQ(ledger.published_size(), 2u);
+  EXPECT_EQ(ledger.discard_published_attempt(0), 1u);
+  EXPECT_EQ(ledger.published_size(), 1u);
+}
+
+TEST(test_nd_flux_ledger, identity_index_preserves_insertion_order_and_exact_equivalence) {
+  const auto query = sample_query<2>(0, 0);
+  const FaceFluxFragmentMeasure measure{{1, 1}, {0, 1}, {1, 1}, 0.1, 1.0};
+  TransactionalFaceFluxLedger<2, double> ledger{ledger_budget()};
+  ledger.begin(query.attempt);
+  const std::array<std::string, 3> stages{"z", "a", "m"};
+  const std::array<double, 3> values{1.e16, -1.e16, 1.0};
+  for (std::size_t index = 0; index < stages.size(); ++index)
+    ledger.accumulate(
+        fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, stages[index], {0, 1}),
+        measure, values[index]);
+  auto same = ledger.pending_entries(0).front().key;
+  // Physical time and payload/measure are not part of the original ordering identity.
+  same.clock.physical_time = -0.0;
+  EXPECT_THROW(ledger.accumulate(same, {{1, 2}, {0, 1}, {1, 1}, 0.2, 2.0}, 9.0),
+               std::runtime_error);
+  auto separate_family = same;
+  separate_family.temporal_family = "another-occurrence";
+  ledger.accumulate(separate_family, measure, 0.0);
+  auto separate_axis = same;
+  separate_axis.axis = 1;
+  ledger.accumulate(separate_axis, measure, 7.0);
+  ledger.commit();
+  ASSERT_EQ(ledger.published_entries(0).size(), 4u);
+  double sum = 0.0;
+  for (std::size_t index = 0; index < stages.size(); ++index) {
+    EXPECT_EQ(ledger.published_entries(0)[index].key.stage, stages[index]);
+    sum += ledger.published_entries(0)[index].payload;
+  }
+  EXPECT_DOUBLE_EQ(sum, 1.0);
+  EXPECT_DOUBLE_EQ(ledger.published_entries(1).front().payload, 7.0);
+}
+
+TEST(test_nd_flux_ledger, identity_index_follows_nested_rollback_copy_move_and_clear) {
+  const auto query = sample_query<1>(0, 0);
+  const FaceFluxFragmentMeasure measure{{1, 1}, {0, 1}, {1, 1}, 0.1, 1.0};
+  const auto first =
+      fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "first", {0, 1});
+  const auto child =
+      fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "child", {0, 1});
+  TransactionalFaceFluxLedger<1, double> ledger{ledger_budget()};
+  ledger.begin(query.attempt);
+  ledger.accumulate(first, measure, 1.0);
+  ledger.begin(query.attempt);
+  ledger.accumulate(child, measure, 2.0);
+  auto copied = ledger;
+  ledger.rollback();
+  EXPECT_NO_THROW(ledger.accumulate(child, measure, 3.0));
+  EXPECT_THROW(copied.accumulate(child, measure, 4.0), std::runtime_error);
+  copied.rollback();
+  EXPECT_NO_THROW(copied.accumulate(child, measure, 5.0));
+  TransactionalFaceFluxLedger<1, double> assigned{ledger_budget()};
+  assigned = copied;
+  auto moved = std::move(assigned);
+  EXPECT_THROW(moved.accumulate(first, measure, 6.0), std::runtime_error);
+  moved.commit();
+  EXPECT_EQ(moved.discard_published_attempt(query.attempt), 2u);
+  moved.clear();
+  moved.begin(query.attempt);
+  EXPECT_NO_THROW(moved.accumulate(first, measure, 7.0));
+  moved.commit();
+  ASSERT_EQ(moved.published_size(), 1u);
+  EXPECT_DOUBLE_EQ(moved.published_entries(0).front().payload, 7.0);
+  EXPECT_DOUBLE_EQ(ledger.pending_entries(0).back().payload, 3.0);
+  EXPECT_DOUBLE_EQ(copied.pending_entries(0).back().payload, 5.0);
+}
+
+TEST(test_nd_flux_ledger, failed_insertion_does_not_retain_an_identity) {
+  const auto query = sample_query<1>(0, 0);
+  const auto key = fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "retry", {0, 1});
+  const FaceFluxFragmentMeasure measure{{1, 1}, {0, 1}, {1, 1}, 0.1, 1.0};
+  for (int failed_move : {0, 1}) {
+    TransactionalFaceFluxLedger<1, ThrowingMovePayload> ledger{ledger_budget()};
+    ledger.begin(query.attempt);
+    ThrowingMovePayload::moves_before_failure = failed_move;
+    EXPECT_THROW(ledger.accumulate(key, measure, ThrowingMovePayload{2.0}), std::runtime_error);
+    ThrowingMovePayload::moves_before_failure = -1;
+    EXPECT_EQ(ledger.pending_size(), 0u);
+    EXPECT_NO_THROW(ledger.accumulate(key, measure, ThrowingMovePayload{3.0}));
+    EXPECT_THROW(ledger.accumulate(key, measure, ThrowingMovePayload{4.0}), std::runtime_error);
+    ledger.commit();
+    EXPECT_DOUBLE_EQ(ledger.published_entries(0).front().payload.value, 3.0);
+  }
+}
+
+TEST(test_nd_flux_ledger, failed_copy_assignment_preserves_both_payload_and_identity) {
+  const auto query = sample_query<1>(0, 0);
+  const auto old_key =
+      fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "old", {0, 1});
+  const auto new_key =
+      fragment_key(query, FaceLedgerRole::Coarse, query.coarse_face, "new", {0, 1});
+  const FaceFluxFragmentMeasure measure{{1, 1}, {0, 1}, {1, 1}, 0.1, 1.0};
+  TransactionalFaceFluxLedger<1, ThrowingPayload> source{ledger_budget()};
+  TransactionalFaceFluxLedger<1, ThrowingPayload> destination{ledger_budget()};
+  source.begin(query.attempt);
+  destination.begin(query.attempt);
+  source.accumulate(new_key, measure, ThrowingPayload{2.0});
+  destination.accumulate(old_key, measure, ThrowingPayload{1.0});
+  ThrowingPayload::fail_copy = true;
+  EXPECT_THROW(destination = source, std::runtime_error);
+  ThrowingPayload::fail_copy = false;
+  ASSERT_EQ(destination.pending_size(), 1u);
+  EXPECT_DOUBLE_EQ(destination.pending_entries(0).front().payload.value, 1.0);
+  EXPECT_THROW(destination.accumulate(old_key, measure, ThrowingPayload{3.0}), std::runtime_error);
+  EXPECT_NO_THROW(destination.accumulate(new_key, measure, ThrowingPayload{4.0}));
+  destination.commit();
+  EXPECT_EQ(destination.published_size(), 2u);
 }
 
 TEST(test_nd_flux_ledger, subnormal_cell_measure_fails_before_non_finite_axpy) {
@@ -841,4 +969,50 @@ TEST(test_nd_flux_ledger, sources_cell_centering_and_stale_attempts_fail_closed)
   EXPECT_EQ(ledger.pending_size(), 0u);
   ledger.rollback();
   EXPECT_EQ(ledger.published_size(), 0u);
+}
+
+TEST(test_nd_flux_ledger, authored_partial_integral_requires_its_independent_exact_contract) {
+  using pops::amr::reflux::MetricRefluxTemporalContract;
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto query = sample_query<2>(0, 814);
+  const auto budget = reflux_budget();
+  // This comes from q + h/3 R(q), independently of any emitted face record.
+  MetricRefluxTemporalContract expected;
+  expected.coarse["diffusive-operator"][{{0, 1}, {1, 1}}] = pops::ExactWeight{1, 3};
+  expected.fine = expected.coarse;
+  TransactionalFaceFluxLedger<2, double> ledger{ledger_budget()};
+  ledger.begin(query.attempt);
+  accumulate_stage(ledger, query, ratio, mapping, budget, "predictor", Rational{0, 1},
+                   Rational{1, 3}, Rational{0, 1}, Rational{1, 1}, 2.0, 2.0, 1.0, 2.0, 5.0,
+                   "diffusive-operator");
+  ledger.commit();
+  // The full-step API must continue to refuse this incomplete quadrature.
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy),
+               std::runtime_error);
+  const auto result = metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy, &expected);
+  EXPECT_DOUBLE_EQ(result.coarse_integrated, 8.0 / 3.0);
+  EXPECT_DOUBLE_EQ(result.fine_integrated, 20.0 / 3.0);
+  EXPECT_NEAR(result.mismatch, 4.0, 1e-14);
+  auto wrong = expected;
+  wrong.fine["diffusive-operator"].begin()->second = pops::ExactWeight{1, 2};
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy, &wrong),
+               std::runtime_error);
+  wrong = expected;
+  wrong.coarse["foreign-operator"] = wrong.coarse["diffusive-operator"];
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy, &wrong),
+               std::runtime_error);
+  wrong = expected;
+  wrong.coarse["diffusive-operator"][{{0, 1}, {1, 2}}] = pops::ExactWeight{1, 3};
+  EXPECT_THROW((void)metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy, &wrong),
+               std::runtime_error);
+  // Mutating both emitted sides together must not become its own authority.
+  TransactionalFaceFluxLedger<2, double> mutated{ledger_budget()};
+  mutated.begin(query.attempt);
+  accumulate_stage(mutated, query, ratio, mapping, budget, "predictor", Rational{0, 1},
+                   Rational{1, 2}, Rational{0, 1}, Rational{1, 1}, 2.0, 2.0, 1.0, 2.0, 5.0,
+                   "diffusive-operator");
+  mutated.commit();
+  EXPECT_THROW((void)metric_reflux(mutated, query, ratio, mapping, budget, scalar_axpy, &expected),
+               std::runtime_error);
 }

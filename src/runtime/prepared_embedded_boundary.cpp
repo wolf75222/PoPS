@@ -266,7 +266,7 @@ template <int Dim>
 struct SamplePhysicalGhostKernel {
   analytic::AnalyticLevelSet<Dim> level_set;
   Geometry<Dim> geometry;
-  BoundaryTopology<Dim> topology;
+  std::array<bool, Dim> periodic_axes;
   FieldView<Real, Dim> phi;
 
   POPS_HD void operator()(const Index<Dim>& index) const {
@@ -275,8 +275,7 @@ struct SamplePhysicalGhostKernel {
     for (int axis = 0; axis < Dim; ++axis) {
       if (index[axis] >= geometry.domain().lo[axis] && index[axis] <= geometry.domain().hi[axis])
         continue;
-      const Face<Dim> lower{axis, BoundarySide::lower};
-      if (topology.is_periodic(lower)) {
+      if (periodic_axes[axis]) {
         sampled[axis] =
             wrapped_index(index[axis], geometry.domain().lo[axis], geometry.domain().hi[axis]);
       } else {
@@ -513,9 +512,14 @@ prepare_embedded_boundary_geometry_collectively(
     fill_boundary(fields.phi, schedule);
   }
 
+  // Topology validation above establishes matching lower/upper periodicity.
+  // Capture only its value data: BoundaryTopology queries are host operations.
+  std::array<bool, Dim> periodic_axes{};
+  for (int axis = 0; axis < Dim; ++axis)
+    periodic_axes[axis] = topology.is_periodic(Face<Dim>{axis, BoundarySide::lower});
   for (std::size_t local = 0; local < fields.phi.local_size(); ++local)
     for_each_cell(fields.phi.fab(local).grown_box(),
-                  SamplePhysicalGhostKernel<Dim>{level_set, geometry, topology,
+                  SamplePhysicalGhostKernel<Dim>{level_set, geometry, periodic_axes,
                                                  fields.phi.fab(local).view()});
 
   Real local_non_finite = Real(0);

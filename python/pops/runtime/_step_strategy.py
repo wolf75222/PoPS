@@ -181,6 +181,9 @@ def _attempt_error_record(error: BaseException) -> dict[str, Any]:
     except (TypeError, ValueError, OverflowError):
         reason_code = 0
 
+    schema = attribute("typed_failure_schema", "") if rejected else ""
+    payload = attribute("typed_failure_payload", b"") if rejected else b""
+    valid = type(schema) is str and type(payload) is bytes and bool(schema) == bool(payload)
     return {
         "kind": "reject" if rejected else "fail",
         "type": type(error).__name__,
@@ -193,6 +196,8 @@ def _attempt_error_record(error: BaseException) -> dict[str, Any]:
         "disposition": text(attribute("disposition", "reject"), "reject")
         if rejected else None,
         "reason_code": reason_code,
+        "typed_failure_schema": schema if valid else None,
+        "typed_failure_payload": payload if valid else None,
     }
 
 
@@ -204,15 +209,41 @@ def _collective_attempt_error(
     if world is None or int(world.size) == 1:
         return local_error
 
-    from pops._native_collectives import allgather_value
+    from pops._native_collectives import encode_value, decode_value
 
-    rows = allgather_value(world, {
-        "rank": int(world.rank),
-        "error": None if local_error is None else _attempt_error_record(local_error),
-    })
+    def prepare():
+        record = None if local_error is None else _attempt_error_record(local_error)
+        schema, payload = "", b""
+        if record is not None:
+            schema = record.pop("typed_failure_schema")
+            payload = record.pop("typed_failure_payload")
+            valid = type(schema) is str and type(payload) is bytes and bool(schema) == bool(payload)
+            record["typed_failure_present"] = bool(payload) if valid else None
+            if not valid:
+                schema, payload = "", b""
+        return encode_value({"rank": int(world.rank), "error": record}), schema.encode("utf-8"), payload
+
+    # All allocations before and after byte collectives are local checked phases. The native
+    # error image is already rank-ordered and identical; compare it exactly without allgathering
+    # P copies of its bytes (or hexadecimal expansion) back into Python on every rank.
+    frame, schema_bytes, payload = world.collective_prepare(prepare)
+    typed_agreement = world.agree_control_bytes(schema_bytes, payload)
+    frames = world.allgather_bytes(frame)
+
+    def decide():
+        if type(frames) is not tuple or len(frames) != int(world.size):
+            raise RuntimeError("native attempt exchange returned an invalid rank payload set")
+        rows = tuple(decode_value(item) for item in frames)
+        return _select_collective_attempt_error(rows, schema_bytes.decode("utf-8"), payload, typed_agreement)
+
+    return world.collective_prepare(decide)
+
+
+def _select_collective_attempt_error(rows, typed_schema, typed_payload, typed_agreement):
     failures: list[tuple[int, Mapping[str, Any]]] = []
     expected_error_keys = {
         "kind", "type", "message", "status", "phase", "detail", "disposition", "reason_code",
+        "typed_failure_present",
     }
     for rank, row in enumerate(rows):
         if not isinstance(row, Mapping) or set(row) != {"rank", "error"} \
@@ -227,6 +258,8 @@ def _collective_attempt_error(
         if error["kind"] == "reject" and (type(error["phase"]) is not str or not error["phase"]):
             return RuntimeError(
                 "collective step attempt returned an invalid rejection phase on rank %d" % rank)
+        if type(error["typed_failure_present"]) is not bool:
+            return RuntimeError("collective step attempt returned an invalid typed failure on rank %d" % rank)
         failures.append((rank, error))
     if not failures:
         return None
@@ -239,11 +272,12 @@ def _collective_attempt_error(
             error["phase"],
             error["disposition"],
             error["reason_code"],
+            error["typed_failure_present"],
         )
         for _, error in failures
         if error["kind"] == "reject"
     }
-    rejection_divergent = len(rejection_controls) > 1
+    rejection_divergent = len(rejection_controls) > 1 or not typed_agreement
     selected_rank, selected = (fatal or tuple(failures))[0]
     diagnostics = "; ".join(
         "rank %d %s: %s" % (rank, error["type"], error["message"])
@@ -274,6 +308,8 @@ def _collective_attempt_error(
     rejection.detail = selected["detail"]
     rejection.disposition = cast(_StepDisposition, disposition)
     rejection.reason_code = int(selected["reason_code"])
+    rejection.typed_failure_schema = typed_schema
+    rejection.typed_failure_payload = typed_payload
     rejection.failed_rank = selected_rank
     return rejection
 
@@ -731,7 +767,7 @@ class ComputedDtController(StepController[ComputedDt]):
         if local_error is not None:
             raise local_error
         receipt = {}
-        requested_dt = self.strategy.dt
+        requested_dt = self.strategy.initial_request(now, float(t_end))
         rejected = 0
 
         def advance() -> None:

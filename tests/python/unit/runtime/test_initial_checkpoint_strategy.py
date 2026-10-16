@@ -43,10 +43,13 @@ def _program(policy):
 class _InstallProbe(_SystemUnifiedInstall, _AmrSystemProgram):
     def __init__(self):
         self._temporal_restart_state = TemporalRestartState()
-        self._s = SimpleNamespace(time=lambda: 0., macro_step=lambda: 0)
+        self._s = SimpleNamespace(time=lambda: 0., macro_step=lambda: 0,
+                                  _seal_auxiliary_providers=self._seal_auxiliary_providers)
         self._pending_native_packages = 0
         self.frozen = False
         self.events = []
+    def _seal_auxiliary_providers(self):
+        self.events.append("seal_providers")
     def time(self): return 0.
     def macro_step(self): return 0
     def set_program_cadence(self, substeps, stride):
@@ -78,6 +81,7 @@ def test_real_install_tail_prepares_initial_checkpoint_before_any_run(monkeypatc
         monkeypatch.setattr(_bound_snapshot, "build_uniform_snapshot", lambda *args, **kwargs: object())
         owner._install_compiled(compiled)
         assert owner.frozen and owner.events[-1] == "freeze"
+        assert owner.events.index("seal_providers") < owner.events.index("program")
     else:
         owner._finish_program_install(compiled, compiled.so_path, None, None)
     state = owner._temporal_restart_state
@@ -108,6 +112,8 @@ def test_undeclared_program_can_bind_without_inventing_a_controller(monkeypatch,
         owner._install_compiled(compiled)
     else:
         owner._finish_program_install(compiled, compiled.so_path, None, None)
+    if route == "uniform":
+        assert owner.events.index("seal_providers") < owner.events.index("program")
     assert owner._temporal_restart_state.strategy is None
     with pytest.raises(RuntimeError, match="requires a declared step strategy"):
         owner._temporal_restart_state.checkpoint_json(time=0., macro_step=0)

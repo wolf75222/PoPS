@@ -133,6 +133,81 @@ RuntimeParams program_params(int program_block) const {
   return facade_->program_params(program_block);
 }
 
+/// Rank-local structured-control copy. The generated control operation performs
+/// failure consensus after all its local allocations/copies; do not enter an
+/// inner collective here. Preserve the exact source expression, including empty.
+void copy_with_provenance(field_type& destination, const field_type& source) const {
+  FluxExpressionUpdate update;
+  if (!active_attempt_states_.empty()) {
+    FluxExpressionRegistry candidate = active_flux_expressions_;
+    FluxExpression expression = active_flux_expression_(source);
+    require_flux_expression_budget_(expression);
+    candidate[&destination] = std::move(expression);
+    update = std::move(candidate);
+  }
+  PureFieldAlgebra::copy(destination, source);
+  publish_active_flux_expression_update_(std::move(update));
+  count_kernel_();
+}
+
+// Rank-local copy observer for structural Field ownership conversion. This
+// performs no field arithmetic and no nested collective; the caller converges
+// metadata allocation failures before it exposes the copied value.
+void continuation_bind_field_provenance(const field_type& source,
+                                        const field_type& destination) const {
+  continuation_bind_regrid_field_(source, destination);
+  if (active_attempt_states_.empty())
+    return;
+  require_same_field_contract_(source, destination, "Continuation Field provenance copy");
+  FluxExpressionRegistry candidate = active_flux_expressions_;
+  auto expression = active_flux_expression_(source);
+  require_flux_expression_budget_(expression);
+  candidate[&destination] = std::move(expression);
+  active_flux_expressions_.swap(candidate);
+}
+
+struct UniformAffineTerm {
+  const field_type* source;
+  Real coefficient;
+  bool rate;
+};
+
+// Publish only metadata for the already executed pointwise equation. The whole
+// candidate registry is prepared before publication; failure leaves it unchanged.
+void attach_affine_flux_expression(field_type& destination,
+                                   std::span<const UniformAffineTerm> terms) const {
+  auto update = prepare_flux_metadata_collectively_(
+      [&]() -> FluxExpressionUpdate {
+        FluxExpression result;
+        for (const auto& term : terms) {
+          if (term.source == nullptr || !std::isfinite(term.coefficient))
+            throw std::invalid_argument("AMR Program affine field coefficient is invalid");
+          require_same_field_contract_(destination, *term.source, "AMR Program affine field");
+          const auto source = active_flux_expression_(*term.source);
+          if (source.empty())
+            continue;
+          ExactPolynomial coefficient;
+          if (term.rate) {
+            if (!std::isfinite(current_dt_) || !(current_dt_ > 0.0))
+              throw std::logic_error("AMR Program affine rate lacks active duration");
+            coefficient = {{1, exact_binary_rational_(term.coefficient) /
+                                   exact_binary_rational_(static_cast<Real>(current_dt_))}};
+          } else {
+            coefficient = exact_runtime_coefficient_unchecked_(term.coefficient);
+          }
+          add_flux_expression_(result, scaled_flux_expression_(source, coefficient));
+        }
+        if (active_attempt_states_.empty())
+          return std::nullopt;
+        require_flux_expression_budget_(result);
+        FluxExpressionRegistry candidate = active_flux_expressions_;
+        candidate[&destination] = std::move(result);
+        return FluxExpressionUpdate(std::move(candidate));
+      },
+      "AMR Program affine field metadata failed collectively");
+  publish_active_flux_expression_update_(std::move(update));
+}
+
 void axpy(field_type& destination, Real factor, const field_type& source) const {
   require_same_field_contract_(destination, source, "AMR Program axpy");
   auto expression_update = prepare_active_axpy_flux_expression_(
@@ -178,6 +253,10 @@ void lincomb(field_type& destination, Real left_factor, const field_type& left, 
 }
 
 void commit_many(std::initializer_list<std::pair<field_type*, const field_type*>> commits) const {
+  commit_many(
+      std::span<const std::pair<field_type*, const field_type*>>(commits.begin(), commits.size()));
+}
+void commit_many(std::span<const std::pair<field_type*, const field_type*>> commits) const {
   const auto& commit_lane = facade_->prepared_amr_multiblock_hierarchy_().lane();
   std::vector<field_type*> targets;
   std::vector<field_type> snapshots;

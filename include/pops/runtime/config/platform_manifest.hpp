@@ -384,6 +384,8 @@ inline PlatformManifest proven_host_platform(const std::string& backend, const s
            {"layouts", prove_text_set({"right", "left", "strided"}, evidence)},
            {"ownership", prove_text_set({"borrowed", "owned", "shared"}, evidence)},
            {"generic_field_view", prove_bool(true, evidence)},
+           {"initial_state_import_mode", prove_text("copy_to_native_field", evidence)},
+           {"initial_state_import_memory_spaces", prove_text_set({"host"}, evidence)},
            {"execution_backend", prove_text("host", evidence)},
            {"shared_space", prove_text("HostSpace", evidence)},
            {"stream_identity", prove_text("host::synchronous", evidence)}}};
@@ -412,6 +414,8 @@ inline PlatformManifest proven_native_platform(
            {"layouts", prove_text_set({"right", "left", "strided"}, evidence)},
            {"ownership", prove_text_set({"borrowed", "owned", "shared"}, evidence)},
            {"generic_field_view", prove_bool(true, evidence)},
+           {"initial_state_import_mode", prove_text("copy_to_native_field", evidence)},
+           {"initial_state_import_memory_spaces", prove_text_set({"host"}, evidence)},
            {"execution_backend", prove_text(execution_backend, evidence)},
            {"shared_space", prove_text(shared_space, evidence)},
            {"stream_identity", prove_text(stream_identity, evidence)}}};

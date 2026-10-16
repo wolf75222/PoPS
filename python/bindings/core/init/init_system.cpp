@@ -90,7 +90,8 @@ SystemLayoutTransferSpec layout_transfer_spec_from_python(const py::dict& input)
       py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_to_target"]),
       py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_source_active"]),
       py::cast<std::array<std::int32_t, pops::kNativeDimension>>(row["physical_target_active"]),
-      py::cast<std::string>(row["program_invocation"]), mapped_components};
+      py::cast<std::string>(row["program_invocation"]),
+      mapped_components};
 }
 
 SystemLayoutTransferExecution layout_transfer_execution_from_python(const py::dict& row) {
@@ -632,6 +633,7 @@ void bind_system_assembly(py::class_<System>& cls) {
            py::arg("evolve") = true, py::arg("stride") = 1, py::arg("positivity_floor") = 0.0,
            py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
       .def("_finalize_native_packages", &System::finalize_native_packages)
+      .def("_seal_auxiliary_providers", &System::seal_auxiliary_providers)
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
       // ABI key against this module (fail-loud -> RuntimeError), and install its macro-step body. The
       // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
@@ -735,17 +737,20 @@ void bind_system_program(py::class_<System>& cls) {
           "_restore_checkpoint_program_diagnostics",
           [](System& s, py::object payload) {
             // Type/byte extraction executes inside native preparation before its failure vote.
-            s.restore_checkpoint_program_diagnostics(+[](const void* context)
-                                                         -> std::span<const std::uint8_t> {
-              const auto& payload = *static_cast<const py::object*>(context);
-              if (!PyBytes_CheckExact(payload.ptr()))
-                throw py::type_error("Program diagnostic checkpoint payload must be exact bytes");
-              char* data = nullptr;
-              Py_ssize_t size = 0;
-              if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
-                throw py::error_already_set();
-              return {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)};
-            }, &payload);
+            s.restore_checkpoint_program_diagnostics(
+                +[](const void* context) -> std::span<const std::uint8_t> {
+                  const auto& payload = *static_cast<const py::object*>(context);
+                  if (!PyBytes_CheckExact(payload.ptr()))
+                    throw py::type_error(
+                        "Program diagnostic checkpoint payload must be exact bytes");
+                  char* data = nullptr;
+                  Py_ssize_t size = 0;
+                  if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
+                    throw py::error_already_set();
+                  return {reinterpret_cast<const std::uint8_t*>(data),
+                          static_cast<std::size_t>(size)};
+                },
+                &payload);
           },
           py::arg("payload"))
       .def("_accepted_balance_terms", &System::accepted_balance_terms, py::arg("route"))
@@ -905,8 +910,9 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("set_clock", &System::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("set_potential", &System::set_potential, py::arg("phi"))
       .def("field_provider_slots", &System::field_provider_slots)
-      .def("field_solve_report", &System::field_solve_report, py::arg("provider_slot"),
-           "Read the last accepted field report; guesses and rejected candidates cannot replace it.")
+      .def(
+          "field_solve_report", &System::field_solve_report, py::arg("provider_slot"),
+          "Read the last accepted field report; guesses and rejected candidates cannot replace it.")
       .def("field_provider_materialized", &System::field_provider_materialized,
            py::arg("provider_slot"),
            "Collective-free readiness of one exact registered field provider.")
@@ -1125,10 +1131,11 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
            py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
            py::arg("minimum_step"))
-      .def("set_field_newton_convergence_plan", &System::set_field_newton_convergence_plan, py::arg("provider_slot"),
-           py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
-           py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
-           py::arg("minimum_step"), py::arg("convergence_kind"), py::arg("relative"), py::arg("absolute"))
+      .def("set_field_newton_convergence_plan", &System::set_field_newton_convergence_plan,
+           py::arg("provider_slot"), py::arg("tolerance"), py::arg("max_iterations"),
+           py::arg("linear_tolerance"), py::arg("linear_max_iterations"), py::arg("restart"),
+           py::arg("armijo"), py::arg("minimum_step"), py::arg("convergence_kind"),
+           py::arg("relative"), py::arg("absolute"))
       // Runtime-private lowering seam for every public analytic LevelSet.  The native System owns,
       // validates and materializes the scalar postfix program; no Python callback reaches a cell
       // kernel.  Active is the strict convention phi < 0.
@@ -1201,15 +1208,41 @@ void bind_system_physics(py::class_<System>& cls) {
 void bind_system_stepping(py::class_<System>& cls) {
   cls.def("solve_fields",
           [](System& system) { return consume_solve_outcome(system.solve_fields()); })
-      .def("_solve_initial_field", [](System& system, const std::string& provider_slot) {
-        return consume_solve_outcome(system.solve_initial_field(provider_slot));
-      }, py::arg("provider_slot"))
+      .def(
+          "_solve_initial_field",
+          [](System& system, const std::string& provider_slot) {
+            return consume_solve_outcome(system.solve_initial_field(provider_slot));
+          },
+          py::arg("provider_slot"))
       .def("step", &System::step, py::arg("dt"))
       .def("_advance_program_region", &System::advance_program_region, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)
       .def("_begin_nested_step_transaction", &System::begin_nested_step_transaction)
       .def("_step_transaction_depth", &System::step_transaction_depth)
+      .def("_checkpoint_continuation_schema", &System::checkpoint_continuation_schema)
+      .def("_checkpoint_continuation_capacity", &System::checkpoint_continuation_capacity)
+      .def("_checkpoint_continuation_image",
+           [](const System& system) {
+             const auto bytes = system.checkpoint_continuation_image();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
+      .def("_validate_checkpoint_continuation_image",
+           [](const System& system, py::bytes payload, double time, int step) {
+             const auto* bytes =
+                 reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(payload.ptr()));
+             system.validate_checkpoint_continuation_image(
+                 std::span<const std::uint8_t>(
+                     bytes, static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr()))),
+                 time, step);
+           })
+      .def("_restore_checkpoint_continuation_image",
+           [](System& system, py::bytes payload) {
+             const auto* bytes =
+                 reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(payload.ptr()));
+             system.restore_checkpoint_continuation_image(std::span<const std::uint8_t>(
+                 bytes, static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr()))));
+           })
       .def("_checkpoint_program_exchanges",
            [](const System& system) {
              // RuntimeInstance stages this image inside its outer accepted-effect
@@ -1222,9 +1255,8 @@ void bind_system_stepping(py::class_<System>& cls) {
              const std::string_view bytes(
                  PyBytes_AS_STRING(payload.ptr()),
                  static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
-             system.validate_checkpoint_program_exchanges(
-                 std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
-                                               bytes.size()));
+             system.validate_checkpoint_program_exchanges(std::span<const std::uint8_t>(
+                 reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
            })
       .def("_restore_checkpoint_program_exchanges",
            [](System& system, py::bytes payload) {
@@ -1234,12 +1266,31 @@ void bind_system_stepping(py::class_<System>& cls) {
              system.restore_checkpoint_program_exchanges(std::span<const std::uint8_t>(
                  reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
            })
+      .def("_remap_checkpoint_program_exchanges",
+           [](const System& system, const py::tuple& source_images) {
+             // The tuple keeps every Python bytes object alive while the pure native
+             // preparation reads its non-owning view; no payload is copied here.
+             std::vector<std::span<const std::uint8_t>> views;
+             views.reserve(source_images.size());
+             for (const auto& image : source_images) {
+               if (!PyBytes_CheckExact(image.ptr()))
+                 throw py::type_error("exchange rematerialization requires exact bytes shards");
+               views.emplace_back(
+                   reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(image.ptr())),
+                   static_cast<std::size_t>(PyBytes_GET_SIZE(image.ptr())));
+             }
+             const auto bytes = system.remap_checkpoint_program_exchanges(views);
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
       .def("_validate_checkpoint_moving_geometry",
            [](const System& system, py::bytes payload, double accepted_time, int macro_step) {
-             const std::string_view bytes(PyBytes_AS_STRING(payload.ptr()),
+             const std::string_view bytes(
+                 PyBytes_AS_STRING(payload.ptr()),
                  static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
-             system.validate_checkpoint_moving_geometry(std::span<const std::uint8_t>(
-                 reinterpret_cast<const std::uint8_t*>(bytes.data()),bytes.size()),accepted_time,macro_step);
+             system.validate_checkpoint_moving_geometry(
+                 std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                                               bytes.size()),
+                 accepted_time, macro_step);
            })
       .def("_program_exchange_records",
            [](const System& system) {
@@ -1296,9 +1347,9 @@ void bind_system_stepping(py::class_<System>& cls) {
             if (preparation_error)
               std::rethrow_exception(preparation_error);
 #endif
-            return PreparedSystemLayoutTransfer::prepare(
-                source, target, std::move(component), std::move(*prepared_spec),
-                std::move(*prepared_execution));
+            return PreparedSystemLayoutTransfer::prepare(source, target, std::move(component),
+                                                         std::move(*prepared_spec),
+                                                         std::move(*prepared_execution));
           },
           py::arg("target"), py::arg("component"), py::arg("spec"), py::arg("execution_context"),
           py::keep_alive<0, 1>(), py::keep_alive<0, 2>(),
@@ -1472,53 +1523,80 @@ void bind_system_data(py::class_<System>& cls) {
             return to_ranked_field(s.density_global(name), s.spatial_shape());
           },
           py::arg("name"))
-      .def("checkpoint_state_carriers", [](const System& s) {
-        const auto bytes=s.checkpoint_state_carriers();
-        py::object result;std::exception_ptr error;
-        try {result=py::bytes(reinterpret_cast<const char*>(bytes.data()),bytes.size());}
-        catch (...) {error=std::current_exception();}
-        pops::collectively_rethrow_exception(error,s.prepared_boundary_execution_lane(),"Uniform checkpoint carrier Python staging");
-        return result;
-      })
+      .def("checkpoint_state_carriers",
+           [](const System& s) {
+             const auto bytes = s.checkpoint_state_carriers();
+             py::object result;
+             std::exception_ptr error;
+             try {
+               result = py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+             } catch (...) {
+               error = std::current_exception();
+             }
+             pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
+                                                  "Uniform checkpoint carrier Python staging");
+             return result;
+           })
       .def("checkpoint_state_carriers_capacity", &System::checkpoint_state_carriers_capacity)
-      .def("validate_checkpoint_state_carriers", [](const System& s, py::object value) {
-        std::span<const std::uint8_t> bytes;
-        std::exception_ptr error;
-        try {
-          if (!PyBytes_CheckExact(value.ptr())) throw std::invalid_argument("Uniform carriers require immutable bytes");
-          bytes={reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(value.ptr())),static_cast<std::size_t>(PyBytes_GET_SIZE(value.ptr()))};
-        } catch (...) {error=std::current_exception();}
-        if (error) std::rethrow_exception(error);
-        s.validate_checkpoint_state_carriers(bytes);
-      })
-      .def("restore_checkpoint_state_carriers", [](System& s, py::object value) {
-        std::span<const std::uint8_t> bytes;
-        std::exception_ptr error;
-        try {
-          if (!PyBytes_CheckExact(value.ptr())) throw std::invalid_argument("Uniform carriers require immutable bytes");
-          bytes={reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(value.ptr())),static_cast<std::size_t>(PyBytes_GET_SIZE(value.ptr()))};
-        } catch (...) {error=std::current_exception();}
-        pops::collectively_rethrow_exception(error,s.prepared_boundary_execution_lane(),"Uniform carrier Python restore input");
-        s.restore_checkpoint_state_carriers(bytes);
-      })
-      .def("observe_accepted_state_storage", [](const System& s) {
-        const auto images = s.observe_accepted_state_storage();
-        py::object result;
-        std::exception_ptr error;
-        try {
-          py::dict record;
-          record["contract"] = "accepted-state-storage-observation@1";
-          record["dimension"] = pops::kNativeDimension;
-          record["time"] = s.time(); record["macro_step"] = s.macro_step();
-          record["rank_local"] = py::bytes(reinterpret_cast<const char*>(images.at(0).data()), images.at(0).size());
-          record["complete"] = py::bytes(reinterpret_cast<const char*>(images.at(1).data()), images.at(1).size());
-          result = py::module_::import("pops.runtime._state_storage_observation")
-              .attr("AcceptedStateStorageObservation").attr("from_native")(record);
-        } catch (...) { error = std::current_exception(); }
-        pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
-            "accepted state storage Python result staging");
-        return result;
-      }, "Collectively copy accepted grown storage; never fill, refresh or restore.")
+      .def("validate_checkpoint_state_carriers",
+           [](const System& s, py::object value) {
+             std::span<const std::uint8_t> bytes;
+             std::exception_ptr error;
+             try {
+               if (!PyBytes_CheckExact(value.ptr()))
+                 throw std::invalid_argument("Uniform carriers require immutable bytes");
+               bytes = {reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(value.ptr())),
+                        static_cast<std::size_t>(PyBytes_GET_SIZE(value.ptr()))};
+             } catch (...) {
+               error = std::current_exception();
+             }
+             if (error)
+               std::rethrow_exception(error);
+             s.validate_checkpoint_state_carriers(bytes);
+           })
+      .def("restore_checkpoint_state_carriers",
+           [](System& s, py::object value) {
+             std::span<const std::uint8_t> bytes;
+             std::exception_ptr error;
+             try {
+               if (!PyBytes_CheckExact(value.ptr()))
+                 throw std::invalid_argument("Uniform carriers require immutable bytes");
+               bytes = {reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(value.ptr())),
+                        static_cast<std::size_t>(PyBytes_GET_SIZE(value.ptr()))};
+             } catch (...) {
+               error = std::current_exception();
+             }
+             pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
+                                                  "Uniform carrier Python restore input");
+             s.restore_checkpoint_state_carriers(bytes);
+           })
+      .def(
+          "observe_accepted_state_storage",
+          [](const System& s) {
+            const auto images = s.observe_accepted_state_storage();
+            py::object result;
+            std::exception_ptr error;
+            try {
+              py::dict record;
+              record["contract"] = "accepted-state-storage-observation@1";
+              record["dimension"] = pops::kNativeDimension;
+              record["time"] = s.time();
+              record["macro_step"] = s.macro_step();
+              record["rank_local"] = py::bytes(reinterpret_cast<const char*>(images.at(0).data()),
+                                               images.at(0).size());
+              record["complete"] = py::bytes(reinterpret_cast<const char*>(images.at(1).data()),
+                                             images.at(1).size());
+              result = py::module_::import("pops.runtime._state_storage_observation")
+                           .attr("AcceptedStateStorageObservation")
+                           .attr("from_native")(record);
+            } catch (...) {
+              error = std::current_exception();
+            }
+            pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
+                                                 "accepted state storage Python result staging");
+            return result;
+          },
+          "Collectively copy accepted grown storage; never fill, refresh or restore.")
       .def(
           "state_global",
           [](const System& s, const std::string& name) {
@@ -1618,8 +1696,9 @@ void bind_system_data(py::class_<System>& cls) {
           },
           py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"), py::arg("cell_measure"),
           "Private Writer geometry view: native, immutable, and cacheable by the runtime.")
-      .def("_output_moving_geometry_snapshot", &pops::python::detail::moving_output_geometry_snapshot<pops::kNativeDimension>,
-           py::arg("identity"),py::arg("frame"))
+      .def("_output_moving_geometry_snapshot",
+           &pops::python::detail::moving_output_geometry_snapshot<pops::kNativeDimension>,
+           py::arg("identity"), py::arg("frame"))
       // LOCAL per-fab accessors (NOT collective): native ownership inspection. ScientificOutput
       // consumes the typed output_*_local_pieces API above; local_boxes returns the list of boxes
       // as (lower[Dim], upper_exclusive[Dim]) in GLOBAL native-axis indices. local_state returns fab
@@ -1698,43 +1777,52 @@ void init_system(py::module_& m) {
   bind_system_physics(cls);
   bind_system_stepping(cls);
   bind_system_data(cls);
-  m.def("_attest_uniform_migration_state_carriers",
+  m.def(
+      "_attest_uniform_migration_state_carriers",
       [](py::object payload, py::object shape, const std::vector<std::string>& blocks,
          const std::vector<std::uint64_t>& components) {
         if (!PyBytes_CheckExact(payload.ptr()))
           throw py::type_error("Uniform migration carrier attestation requires exact bytes");
-        char* data = nullptr; Py_ssize_t size = 0;
+        char* data = nullptr;
+        Py_ssize_t size = 0;
         if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
           throw py::error_already_set();
         const auto extent = ranked_extent_from_python<pops::kNativeDimension>(
             shape, "Uniform migration carrier domain");
         std::array<std::uint64_t, pops::kNativeDimension> domain{};
-        for (int d=0; d<pops::kNativeDimension; ++d) domain[d]=extent[d];
-        const auto projections = pops::runtime::checkpoint::uniform_migration_valid_projection<
-            pops::kNativeDimension>({reinterpret_cast<const std::uint8_t*>(data),
-                static_cast<std::size_t>(size)}, domain, blocks, components);
+        for (int d = 0; d < pops::kNativeDimension; ++d)
+          domain[d] = extent[d];
+        const auto projections =
+            pops::runtime::checkpoint::uniform_migration_valid_projection<pops::kNativeDimension>(
+                {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)},
+                domain, blocks, components);
         py::tuple images(projections.size());
-        for (std::size_t b=0; b<projections.size(); ++b)
-          images[b]=py::bytes(reinterpret_cast<const char*>(projections[b].data()),
-                             projections[b].size()*sizeof(std::uint64_t));
+        for (std::size_t b = 0; b < projections.size(); ++b)
+          images[b] = py::bytes(reinterpret_cast<const char*>(projections[b].data()),
+                                projections[b].size() * sizeof(std::uint64_t));
         py::dict result;
-        result["contract"]="pops.uniform-migration-valid-projection@1";
-        result["dimension"]=pops::kNativeDimension;
-        result["blocks"]=blocks;
-        result["valid_state_double_bytes"]=images;
+        result["contract"] = "pops.uniform-migration-valid-projection@1";
+        result["dimension"] = pops::kNativeDimension;
+        result["blocks"] = blocks;
+        result["valid_state_double_bytes"] = images;
         return result;
-      }, py::arg("payload"), py::arg("shape"), py::arg("blocks"), py::arg("components"));
-  m.def("_attest_uniform_migration_program_diagnostics",
+      },
+      py::arg("payload"), py::arg("shape"), py::arg("blocks"), py::arg("components"));
+  m.def(
+      "_attest_uniform_migration_program_diagnostics",
       [](py::object payload, int rank, int ranks) {
         if (!PyBytes_CheckExact(payload.ptr()))
           throw py::type_error("Uniform migration diagnostic attestation requires exact bytes");
-        char* data = nullptr; Py_ssize_t size = 0;
+        char* data = nullptr;
+        Py_ssize_t size = 0;
         if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
           throw py::error_already_set();
         const auto records = pops::runtime::program::read_program_diagnostics_checkpoint(
-            {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)}, rank, ranks);
+            {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)}, rank,
+            ranks);
         return records.size();
-      }, py::arg("payload"), py::arg("rank"), py::arg("ranks"));
+      },
+      py::arg("payload"), py::arg("rank"), py::arg("ranks"));
   m.def(
       "_attest_empty_uniform_auxiliary_checkpoint",
       [](py::object payload) {

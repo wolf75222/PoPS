@@ -1102,11 +1102,12 @@ def test_uniform_child_clock_history_owns_exact_slot_ledger_across_restart(
         # Four child stores and rotations leave the recycled .05 sample in slot zero,
         # the .15 sample in lag one and the .1 sample in lag two. These are actual
         # child windows, not macro windows or inferred identities after restart.
-        rows = list(struct.iter_unpack("<QQQQ", identities[-3 * 32:]))
+        assert identities[:8] == b"POPSHID2"
+        rows = list(struct.iter_unpack("<QQQQQQQQ", identities[-3 * 64:]))
         def bits(value):
             return struct.unpack("<Q", struct.pack("<d", value))[0]
 
-        assert rows == [(2, bits(start), bits(0.05), 1)
+        assert rows == [(2, bits(start), bits(0.05), 1, 0, 0, 0, 0)
                         for start in (0.05, 0.1 + 0.05, 0.1)]
         retained_history = {
             key: stored[key].copy() for key in stored.files if key.startswith("history_")
@@ -1470,6 +1471,7 @@ def test_uniform_restart_restores_clock_before_selective_history_replay(monkeypa
         exchange_checkpoint=_CHECKPOINT_EXCHANGE_IMAGE,
         program_diagnostic_checkpoint=_CHECKPOINT_DIAGNOSTIC_IMAGE,
         state_carriers=None,
+        finite_continuation=None,
     )
 
     owner = _checkpoint_owner(native)
@@ -1508,6 +1510,13 @@ def test_uniform_capture_uses_field_slots_without_materializing_default_field(
             calls.append(("field", slot))
             return field_values[slot]
 
+        def _checkpoint_continuation_schema(self):
+            # Match a native System without a configured finite continuation.
+            return ""
+
+        def _checkpoint_continuation_capacity(self):
+            return 0
+
         def checkpoint_state_carriers(self):
             """I/O fixture sentinel only, not a complete C++ carrier image."""
             return b"POPSCAR1"
@@ -1541,6 +1550,7 @@ def test_uniform_capture_uses_field_slots_without_materializing_default_field(
     payload, token = _SystemIO._capture_checkpoint(owner, prepared)
 
     assert token == "sealed"
+    assert not any(key.startswith("finite_continuation_") for key in payload)
     assert calls == [("state", "blk")] + [("field", slot) for slot in field_slots]
     assert payload["phi"].dtype == np.dtype(np.float64)
     assert payload["phi"].shape == (2, 2)
@@ -1629,6 +1639,13 @@ def test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias(mo
             assert slot == _DEFAULT_FIELD_SLOT
             return default.copy()
 
+        def _checkpoint_continuation_schema(self):
+            # Match a native System without a configured finite continuation.
+            return ""
+
+        def _checkpoint_continuation_capacity(self):
+            return 0
+
         def checkpoint_state_carriers(self):
             """I/O fixture sentinel only, not a complete C++ carrier image."""
             return b"POPSCAR1"
@@ -1660,6 +1677,7 @@ def test_uniform_capture_default_field_keeps_the_legacy_phi_as_an_exact_alias(mo
     )
     payload, _token = _SystemIO._capture_checkpoint(_checkpoint_owner(Native()), prepared)
 
+    assert not any(key.startswith("finite_continuation_") for key in payload)
     assert calls == [("state", "blk"), ("potential",), ("field", _DEFAULT_FIELD_SLOT)]
     assert payload["phi"].tobytes(order="C") == payload["field_potential_0"].tobytes(order="C")
 
@@ -1767,6 +1785,7 @@ def test_uniform_phi_alias_validation_and_restore_uses_default_once():
         exchange_checkpoint=_CHECKPOINT_EXCHANGE_IMAGE,
         program_diagnostic_checkpoint=_CHECKPOINT_DIAGNOSTIC_IMAGE,
         state_carriers=None,
+        finite_continuation=None,
     )
     owner = _checkpoint_owner(Native())
     owner._temporal_restart_state = None
@@ -1792,6 +1811,7 @@ def test_uniform_phi_alias_validation_and_restore_uses_default_once():
             exchange_checkpoint=_CHECKPOINT_EXCHANGE_IMAGE,
             program_diagnostic_checkpoint=_CHECKPOINT_DIAGNOSTIC_IMAGE,
             state_carriers=None,
+            finite_continuation=None,
         ),
     )
     assert calls == []

@@ -29,10 +29,13 @@ def continuation_capture(values, var):
 
 def open_map_continuation(value, values, var, lines):
     capture = continuation_capture(values, var)
+    from .program_amr_finite_scope import continuation_scope_capture, resume_scope
+    capture = continuation_scope_capture(capture, var)
     lines.append("ctx.suspend_map(%s, %s, %s, [%s]() {" %
                  (json.dumps(value.attrs["invocation"]),
                   "true" if value.op == "layout_map_import" else "false", var[value.id], capture))
     lines.append("auto& ctx = *ctx_owner;")
+    resume_scope(lines, var)
 
 
 def close_map_continuations(count, lines):

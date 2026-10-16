@@ -457,7 +457,10 @@ def test_amr_spatial_runtime_owns_no_cfl_or_temporal_advance_authority():
     assert "void step(" not in runtime
     assert "step_cfl(" not in runtime
     step_cfl = _function_body(system, "double AmrSystem<Dim>::step_cfl(")
-    assert "generated stability bound" in step_cfl
+    assert "const bool has_program_bound = static_cast<bool>(p_->program.dt_bound_);" in step_cfl
+    assert "if (has_program_bound)" in step_cfl
+    assert "AmrSystem Program dt-bound evaluation failed collectively" in step_cfl
+    assert "AmrSystem::step_cfl found no finite stability bound" in step_cfl
     assert "program.dt_bound_(" in step_cfl
     assert "step(selected);" in step_cfl
 

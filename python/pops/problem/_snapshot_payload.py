@@ -211,7 +211,7 @@ def _time_snapshot_value(program: Any, *, artifact: bool = False) -> Any:
     if hasattr(program, "kind") and hasattr(program, "stride") and not hasattr(program, "ir_nodes"):
         return {
             "type": "%s.%s" % (type(program).__module__, type(program).__qualname__),
-            "kind": str(getattr(program, "kind")),
+            "kind": str(program.kind),
             "stride": int(program.stride),
             "substeps": int(getattr(program, "substeps", 1)),
             "implicit_vars": list(getattr(program, "implicit_vars", []) or []),
@@ -220,9 +220,12 @@ def _time_snapshot_value(program: Any, *, artifact: bool = False) -> Any:
     serialize = getattr(program, "_serialize", None)
     if callable(serialize):
         ir_hash = getattr(program, "_ir_hash", None)
+        ir = serialize(include_provenance=not artifact)
+        # Hashing is a separate serialization protocol: metadata and validation
+        # hooks may observe or reject this second pass even for a native Program.
         return {
             "type": "%s.%s" % (type(program).__module__, type(program).__qualname__),
-            "ir": serialize(include_provenance=not artifact),
+            "ir": ir,
             "hash": ir_hash() if callable(ir_hash) else None,
         }
     return program

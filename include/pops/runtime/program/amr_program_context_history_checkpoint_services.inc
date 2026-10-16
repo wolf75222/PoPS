@@ -15,6 +15,7 @@ void store_history_(const std::string& name, const field_type& value) const {
     std::vector<Real> dts;
     std::vector<HistorySampleIdentity> samples;
     std::vector<FluxExpression> expressions;
+    std::vector<HistoryFieldMetadata> fields;
     std::string exact_contract;
   };
   auto& manager = runtime_state().hist_;
@@ -27,13 +28,38 @@ void store_history_(const std::string& name, const field_type& value) const {
           throw std::out_of_range("AMR Program history is not registered on the active level");
         require_same_field_contract_(found->second.front(), value, "AMR Program history store");
         if (found->second.front().ghosts() != value.ghosts())
-          throw std::invalid_argument("AMR Program history store fields have different declared halos");
+          throw std::invalid_argument(
+              "AMR Program history store fields have different declared halos");
         if (!std::isfinite(current_dt_) || !(current_dt_ > 0.0))
           throw std::logic_error("AMR Program history store has no positive exact interval");
         const auto flux_found = history_flux_expressions_.find(staged.key);
         if (flux_found == history_flux_expressions_.end() ||
             flux_found->second.size() != found->second.size())
           throw std::logic_error("AMR Program history flux provenance differs from its ring depth");
+        const auto source_metadata = continuation_source_field_authority_(value);
+        const HistoryFieldMetadata incoming{source_metadata.support,
+                                            source_metadata.representation};
+        if (!incoming.empty() && !manager.field_metadata_budget.enabled())
+          throw std::length_error(
+              "retaining Field metadata requires "
+              "Program(history_field_metadata_budget=(retained_bytes, workspace_bytes))");
+        auto metadata_budget = manager.field_metadata_budget;
+        if (metadata_budget.enabled()) {
+          std::uint64_t staging_bytes = 0;
+          history_field_detail::charge(staging_bytes, found->second.size(),
+                                       sizeof(HistoryFieldMetadata),
+                                       metadata_budget.workspace_bytes);
+          metadata_budget.workspace_bytes -= staging_bytes;
+        }
+        staged.fields = manager.slot_fields.at(staged.key);
+        staged.fields.front() = incoming;
+        if (!manager.initialized.at(staged.key))
+          std::fill(staged.fields.begin(), staged.fields.end(), incoming);
+        if (manager.field_metadata_budget.enabled()) {
+          history_field_detail::Tables table(metadata_budget.workspace_bytes);
+          table.collect(manager.slot_fields, metadata_budget, staged.key, staged.fields);
+          append_current_deferred_history_metadata_budget_(table, metadata_budget);
+        }
         staged.rollback_ring = found->second;
         staged.ring = staged.rollback_ring;
         staged.dts = manager.slot_dt.at(staged.key);
@@ -59,6 +85,19 @@ void store_history_(const std::string& name, const field_type& value) const {
             .scalar(static_cast<std::uint64_t>(staged.ring.size()))
             .scalar(manager.initialized.at(staged.key));
         manager.append_descriptor_contract(staged.key, contract);
+        contract.presence(incoming.support != nullptr).presence(incoming.representation != nullptr);
+        if (incoming.support) {
+          const auto& support = *incoming.support;
+          contract.text(support.program_identity)
+              .text(support.origin_point)
+              .scalar(support.program_owner)
+              .scalar(support.producer_level)
+              .scalar(support.topology_epoch)
+              .scalar(support.materialization_generation)
+              .text(support.field_provider);
+        }
+        if (incoming.representation)
+          contract.text(incoming.representation->contract).text(incoming.representation->origin);
         for (const auto& identity : staged.samples)
           identity.append_contract(contract);
         staged.exact_contract = std::move(contract).release();
@@ -69,7 +108,8 @@ void store_history_(const std::string& name, const field_type& value) const {
 
   const auto found = manager.histories.find(candidate.key);
   const auto flux_found = history_flux_expressions_.find(candidate.key);
-  for (const auto& slot : found->second) program_values_.revoke_buffer_(slot);
+  for (const auto& slot : found->second)
+    program_values_.revoke_buffer_(slot);
   // Public history() references name individual ring elements.  Keep those elements at stable
   // addresses.  A MultiFab valid-copy has no allocation path after its exact field contract has
   // been prepared above; nevertheless, converge a device/local exception before metadata moves.
@@ -101,8 +141,18 @@ void store_history_(const std::string& name, const field_type& value) const {
     manager.slot_sample.at(candidate.key)[slot] = candidate.samples[slot];
     flux_found->second[slot].swap(candidate.expressions[slot]);
   }
+  manager.slot_fields.at(candidate.key).swap(candidate.fields);
   manager.initialized.at(candidate.key) = true;
   manager.store_pending.at(candidate.key) = true;
+}
+
+void publish_history_flux_snapshots_() const {
+  if (history_flux_expressions_.empty() && facade_->program_history_flux_snapshots().empty())
+    return;
+  prepare_spatial_collectively([&] {
+    facade_->publish_program_history_flux_snapshots(history_flux::reachable_sources<Dim>(
+        history_flux_expressions_, facade_->configured_n_levels()));
+  });
 }
 
 void rotate_histories_(std::optional<std::string> clock_identity) const {
@@ -148,7 +198,8 @@ void rotate_histories_(std::optional<std::string> clock_identity) const {
       "AMR Program history rotation");
   for (const std::string& key : candidate.selected) {
     auto& ring = manager.histories.at(key);
-    for (const auto& slot : ring) program_values_.revoke_buffer_(slot);
+    for (const auto& slot : ring)
+      program_values_.revoke_buffer_(slot);
     for (std::size_t slot = ring.size(); slot-- > 1;)
       std::swap(ring[slot], ring[slot - 1]);
     auto& dts = manager.slot_dt.at(key);
@@ -157,6 +208,9 @@ void rotate_histories_(std::optional<std::string> clock_identity) const {
     auto& samples = manager.slot_sample.at(key);
     for (std::size_t slot = samples.size(); slot-- > 1;)
       std::swap(samples[slot], samples[slot - 1]);
+    auto& fields = manager.slot_fields.at(key);
+    for (std::size_t slot = fields.size(); slot-- > 1;)
+      std::swap(fields[slot], fields[slot - 1]);
     auto& expressions = history_flux_expressions_.at(key);
     for (std::size_t slot = expressions.size(); slot-- > 1;)
       std::swap(expressions[slot], expressions[slot - 1]);
@@ -166,6 +220,7 @@ void rotate_histories_(std::optional<std::string> clock_identity) const {
       manager.store_pending.at(key) = false;
       pending_history_remaps_.erase(key);
       deferred_history_lag_scratches_.erase(key);
+      deferred_history_lag_authorities_.erase(key);
     }
   }
 }
@@ -245,8 +300,10 @@ void require_current_boundary_point_exact_(
     const runtime::multiblock::BoundaryEvaluationPoint& point, std::string_view operation) const {
   require_rate_identity_(point.stage);
   const double physical_time = current_interval_start_time_ + stage_time_.value() * current_dt_;
-  if (primary_clock_.empty() || !std::isfinite(current_dt_) || !(current_dt_ > 0.0) ||
-      point.clock != primary_clock_ ||
+  const bool topology_point = continuation_regrid_phase() && current_dt_ == 0.0 &&
+                              current_interval_start_time_ == require_continuation_regrid_().time;
+  if (primary_clock_.empty() || !std::isfinite(current_dt_) ||
+      (!(current_dt_ > 0.0) && !topology_point) || point.clock != primary_clock_ ||
       point.tick != static_cast<std::int64_t>(facade_->macro_step()) ||
       point.level != active_level_ || point.substep != logical_substep_ ||
       point.stage_fraction != stage_time_ || point.dt != current_dt_ ||
@@ -274,6 +331,8 @@ field_type& deferred_history_lag_(const std::string& key,
   struct DeferredCandidate {
     AmrProgramPendingHistoryRemap marker;
     DeferredHistoryLagScratches scratch;
+    DeferredHistoryLagAuthorities authorities;
+    HistoryFieldMetadata metadata;
     field_type* published_scratch = nullptr;
     bool inserts_scratch = false;
     FluxExpressionRegistry expressions;
@@ -307,6 +366,26 @@ field_type& deferred_history_lag_(const std::string& key,
         DeferredCandidate staged;
         staged.marker = marker;
         staged.next_identity = next_active_flux_basis_identity_;
+        const auto& fields = manager.slot_fields.at(key);
+        if (fields.size() != ring.size())
+          throw std::invalid_argument("deferred History metadata has a foreign slot count");
+        const auto& samples = manager.validated_samples(key);
+        // The numerical lag is a point inside the earned source interval, not
+        // an outgoing interval forged at the current invocation time.
+        const double target_time = std::bit_cast<double>(marker.source_sample.start_bits) +
+                                   marker.source_dt - marker.target_dt;
+        staged.metadata = history_field_detail::interpolated_metadata(
+            fields[1], fields[0], marker.temporal_numerator == 1 ? 0.0 : 0.5, target_time,
+            manager.field_metadata_budget);
+        if ((!fields[1].empty() && !samples[1].authenticated()) ||
+            (marker.temporal_numerator == 2 && !fields[0].empty() && !samples[0].authenticated()))
+          throw std::invalid_argument("deferred History metadata has no exact sample authority");
+        if (marker.temporal_numerator == 2) {
+          require_program_field_access(ring[0]);
+          require_program_field_access(ring[1]);
+        }
+        require_deferred_history_metadata_budget_(key, staged.metadata, ring.front());
+        staged.authorities = deferred_history_lag_authorities_;
         const auto live_scratch = deferred_history_lag_scratches_.find(key);
         staged.inserts_scratch = live_scratch == deferred_history_lag_scratches_.end();
         auto scratch =
@@ -317,6 +396,14 @@ field_type& deferred_history_lag_(const std::string& key,
             staged.inserts_scratch ? &scratch->second : &live_scratch->second;
         require_same_field_contract_(scratch->second, ring.front(),
                                      "AMR Program deferred history lag");
+        const auto source_authority = continuation_source_field_authority_(ring[1]);
+        staged.authorities.insert_or_assign(
+            key, ContinuationFieldStorageAuthority{
+                     scratch->second.storage_identity(), source_authority.runtime_owner,
+                     source_authority.level, runtime_->topology_epoch(),
+                     runtime_->materialization_generation(), staged.metadata.support,
+                     continuation_field_allocations_(scratch->second), false, std::nullopt,
+                     staged.metadata.representation});
         if (marker.temporal_numerator == 1)
           copy_valid_(ring[1], scratch->second);
         else
@@ -382,6 +469,9 @@ field_type& deferred_history_lag_(const std::string& key,
             .scalar(static_cast<std::uint64_t>(deferred_history_lag_scratches_.size()) +
                     static_cast<std::uint64_t>(staged.inserts_scratch))
             .scalar(static_cast<std::uint64_t>(staged.expressions.size()));
+        staged.metadata.append_contract(contract);
+        marker.source_sample.append_contract(contract);
+        samples[0].append_contract(contract);
         staged.exact_contract = std::move(contract).release();
         return staged;
       },
@@ -394,6 +484,7 @@ field_type& deferred_history_lag_(const std::string& key,
   static_assert(std::allocator_traits<
                 typename DeferredHistoryLagScratches::allocator_type>::is_always_equal::value);
   static_assert(std::is_nothrow_swappable_v<FluxExpressionRegistry>);
+  static_assert(std::is_nothrow_swappable_v<DeferredHistoryLagAuthorities>);
   [&]() noexcept {
     if (candidate.inserts_scratch) {
       // extract(iterator) cannot throw.  insert(node) does not allocate and can throw only
@@ -404,6 +495,7 @@ field_type& deferred_history_lag_(const std::string& key,
     } else {
       std::swap(*candidate.published_scratch, candidate.scratch.begin()->second);
     }
+    deferred_history_lag_authorities_.swap(candidate.authorities);
     active_flux_expressions_.swap(candidate.expressions);
     next_active_flux_basis_identity_ = candidate.next_identity;
   }();
@@ -416,14 +508,15 @@ field_type& deferred_history_lag_(const std::string& key,
   return *candidate.published_scratch;
 }
 
-field_type& history_slot_(const std::string& name, int lag, bool zero_start, int components) const {
+field_type& history_slot_(const std::string& name, int lag, bool zero_start, int components,
+                          bool authenticated_output = false) const {
   const std::string key = history_key_(name, active_level_);
   auto& manager = runtime_state().hist_;
   const auto found = manager.histories.find(key);
   if (found == manager.histories.end() || lag < 0 || lag >= manager.depth.at(key))
     throw std::out_of_range("AMR Program history slot is absent");
-  if (manager.space_identity.at(key) == kScalarOutputHistorySpace ||
-      manager.space_identity.at(key) == kOutputHistoryProjectionSpace)
+  if (!authenticated_output && (manager.space_identity.at(key) == kScalarOutputHistorySpace ||
+                                manager.space_identity.at(key) == kOutputHistoryProjectionSpace))
     throw std::invalid_argument(
         "AMR scalar output history permits inspection/export, not Program reads");
   field_type& result = found->second[static_cast<std::size_t>(lag)];

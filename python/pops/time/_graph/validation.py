@@ -17,6 +17,8 @@ def _nested_regions(node: Any) -> tuple[Any, ...]:
         return (node.when_true, node.when_false)
     if node.kind == "loop":
         return ((node.condition,) if node.condition is not None else ()) + (node.body,)
+    if node.kind == "capture":
+        return (node.body,)
     return ()
 
 
@@ -149,8 +151,12 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
             if node.kind == "synchronize":
                 if source.clock != node.source_clock:
                     raise ValueError("Synchronize source_clock does not match its input value")
-            elif ref.node_id in direct_ids or node.kind not in ("branch", "loop"):
+            elif ref.node_id in direct_ids or node.kind not in ("branch", "loop", "capture"):
                 if source.clock == node.clock:
+                    continue
+                if node.kind == "program_value" and node.op in ("product", "product_get"):
+                    # Structural packaging/projection preserves leaf point/clock in its typed
+                    # signature; this is not an implicit numerical Synchronize.
                     continue
                 raise ValueError(
                     "cross-clock read %s -> %s requires an explicit Synchronize node"

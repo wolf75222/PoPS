@@ -8,6 +8,36 @@ from types import SimpleNamespace
 import pytest
 
 
+@pytest.fixture(autouse=True, params=("platform_only", "compiler_bundle"))
+def compiler_authority(request, tmp_path, monkeypatch):
+    """Exercise both supported captures without depending on the runner's SDK."""
+    from pops.codegen import _compiler_include_contract as compiler_contract
+    from pops.codegen._compiler_include_tree import file_digest, snapshot_include_tree
+
+    capture = None
+    if request.param == "compiler_bundle":
+        compiler = tmp_path / "configured-compiler"
+        compiler.write_bytes(b"test configured compiler")
+        root = tmp_path / "configured-includes"
+        root.mkdir()
+        (root / "vector").write_bytes(b"test configured header")
+        size, digest = file_digest(str(compiler))
+        tree = snapshot_include_tree(str(root))
+        capture = compiler_contract.CapturedCompilerIncludes(
+            str(compiler), str(compiler), size, digest,
+            ((tree["root"], tree["sha256"], tree["file_count"]),),
+        )
+        assert capture.verify() == frozenset((str(root / "vector"),))
+    monkeypatch.setattr(compiler_contract, "capture_compiler_includes", lambda: capture)
+    return capture
+
+
+def _sdk(capture):
+    from pops.codegen._native_toolchain import CapturedNativeToolchainBundle
+
+    return capture.sdk if type(capture) is CapturedNativeToolchainBundle else capture
+
+
 @pytest.fixture
 def declared_sdk(tmp_path, monkeypatch):
     from pops.codegen import _native_toolchain as toolchain
@@ -54,7 +84,7 @@ def test_declared_metadata_admits_only_exact_file(declared_sdk, tmp_path, monkey
     capture = _capture(root)
     assert str(metadata) in _verify(tmp_path, monkeypatch, capture, [metadata])
     with pytest.raises(FrozenInstanceError):
-        capture.sha256 = "0" * 64
+        _sdk(capture).sha256 = "0" * 64
 
 
 @pytest.mark.parametrize("declared", (None, "", "macosx", "relative/sdk"))
@@ -65,12 +95,18 @@ def test_darwin_requires_explicit_absolute_sdkroot(declared_sdk, declared):
         capture_native_toolchain({} if declared is None else {"SDKROOT": declared})
 
 
-def test_linux_retains_existing_flags_without_sdkroot(monkeypatch):
+def test_linux_retains_existing_flags_without_sdkroot(monkeypatch, compiler_authority):
     from pops.codegen import _native_toolchain as toolchain
 
     monkeypatch.setattr(toolchain, "_platform_name", lambda: "linux")
-    assert toolchain.capture_native_toolchain({}) is None
-    assert toolchain.capture_native_toolchain({"SDKROOT": "/ignored"}) is None
+    for environment in ({}, {"SDKROOT": "/ignored"}):
+        capture = toolchain.capture_native_toolchain(environment)
+        assert _sdk(capture) is None
+        if compiler_authority is not None:
+            assert capture.compiler is compiler_authority
+            assert capture.verify() == compiler_authority.verify()
+        else:
+            assert capture is None
     flags = ["-I", "/closed/include", "-DPOPS_HAS_MPI"]
     assert toolchain.native_toolchain_flags(None, flags) == flags
     assert toolchain.verify_native_toolchain(None) == frozenset()
@@ -83,7 +119,7 @@ def test_declared_sdk_alias_is_pinned_canonically(declared_sdk, tmp_path):
     alias = tmp_path / "SDK alias"
     alias.symlink_to(root, target_is_directory=True)
     capture = _capture(alias)
-    assert capture.sysroot == str(root)
+    assert _sdk(capture).sysroot == str(root)
     assert native_toolchain_flags(capture, ["-DPOPS_HAS_MPI"]) == [
         "-DPOPS_HAS_MPI", "-isysroot", str(root)
     ]
@@ -171,7 +207,7 @@ def test_metadata_change_alters_program_artifact_identity(declared_sdk, monkeypa
     first_identity = artifact(first)
     metadata.write_bytes(b'{"Version":"28.0"}\n')
     second = _capture(root)
-    assert first.sha256 != second.sha256
+    assert _sdk(first).sha256 != _sdk(second).sha256
     assert first_identity != artifact(second)
     with pytest.raises(RuntimeError, match="changed after capture"):
         artifact(first)
@@ -253,7 +289,7 @@ def test_model_metadata_rechecked_before_publication(
                             _check_require_metadata=lambda *args: None)
     def compiler(model, output, *args, **kwargs):
         capture = kwargs["_toolchain_capture"]
-        assert capture.sysroot == str(root)
+        assert _sdk(capture).sysroot == str(root)
         Path(output).write_bytes(b"UNVERIFIED-BINARY")
         metadata.write_bytes(b'{"Version":"changed during compile"}\n')
         return output
@@ -325,11 +361,13 @@ def test_link_flags_cannot_override_the_declared_compiler_sysroot(
         monkeypatch.setattr(drivers, "emit_cpp_native_loader", lambda *args, **kwargs: "// generated")
         monkeypatch.setattr("pops.codegen.native_build.model_native_components", lambda model: ())
         monkeypatch.setattr(drivers, "model_hash", lambda model: "unchanged model")
-        invoke = lambda: drivers.compile_native(model, str(tmp_path / "model.so"), include=INCLUDE)
+        def invoke():
+            return drivers.compile_native(model, str(tmp_path / "model.so"), include=INCLUDE)
     else:
-        invoke = lambda: drivers.compile_problem(
-            model=model, time=program, force=True, include=INCLUDE, native_dimension=2
-        )
+        def invoke():
+            return drivers.compile_problem(
+                model=model, time=program, force=True, include=INCLUDE, native_dimension=2
+            )
     with pytest.raises(ValueError, match="sysroot"):
         invoke()
     assert not tuple(tmp_path.rglob("*.so"))

@@ -9,7 +9,7 @@ import math
 import struct
 
 PREFIX = "history_sample_identity_"
-MAGIC = b"POPSHID1"
+MAGIC = b"POPSHID2"
 
 
 def identity_key(name, level):
@@ -37,20 +37,27 @@ def validate_identity_bytes(raw, name, level, depth, *, initialized=None, slot_d
         raise TypeError("history sample identity must be bytes")
     raw = bytes(raw)
     encoded_name = name.encode("utf-8")
-    header = MAGIC + struct.pack("<Q", len(encoded_name)) + encoded_name
+    legacy = raw[:8] == b"POPSHID1"
+    magic = b"POPSHID1" if legacy else MAGIC
+    width = 32 if legacy else 64
+    header = magic + struct.pack("<Q", len(encoded_name)) + encoded_name
     header += struct.pack("<qQ", -1 if level is None else level, depth)
-    if depth < 1 or len(raw) != len(header) + 32 * depth or raw[:len(header)] != header:
+    if depth < 1 or len(raw) != len(header) + width * depth or raw[:len(header)] != header:
         raise ValueError("history sample identity has an invalid version, ring, level or depth")
     if slot_dt is not None and len(slot_dt) != depth:
         raise ValueError("history sample identity dt ledger differs from depth")
     real_bytes = None
-    rows = struct.iter_unpack("<QQQQ", raw[len(header):])
-    for slot, (kind, start_bits, interval_bits, ordinal) in enumerate(rows):
-        if kind not in (0, 1, 2):
+    rows = struct.iter_unpack("<QQQQ" if legacy else "<QQQQQQQQ", raw[len(header):])
+    for slot, row in enumerate(rows):
+        kind, start_bits, interval_bits, ordinal = row[:4]
+        reconstruction = row[4:]
+        if kind not in ((0, 1, 2) if legacy else (0, 1, 2, 3)):
             raise ValueError("history sample identity has an invalid kind")
-        if initialized is not None and ((kind == 1 and initialized) or (kind == 2 and not initialized)):
+        if (kind == 3) != any(reconstruction):
+            raise ValueError("history sample reconstruction identity is missing or foreign")
+        if initialized is not None and ((kind == 1 and initialized) or (kind in (2, 3) and not initialized)):
             raise ValueError("history sample identity differs from its initialized metadata")
-        if kind != 2:
+        if kind not in (2, 3):
             if start_bits or interval_bits or ordinal:
                 raise ValueError("history sample identity has noncanonical unknown/zero-start fields")
         else:

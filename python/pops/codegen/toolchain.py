@@ -314,12 +314,57 @@ def native_compile_environment(environment: Any = None) -> dict[str, str]:
     return result
 
 
+def native_compiler_command_contract(compiler: str) -> dict[str, str]:
+    """Cache authority for argv normalization that changes wrapper parsing."""
+    if "nvcc_wrapper" in os.path.basename(compiler):
+        return {"compiler_command_contract": "pops.nvcc-wrapper-joined-operands@1"}
+    return {}
+
+
+def normalize_native_compiler_command(command: Any) -> list[str]:
+    """Use the joined option form required by Kokkos' nvcc_wrapper parser.
+
+    Its -I*, -L*, -l* and -D* cases consume one argv item. Passing a separate
+    operand leaves that operand in the host-source list. Joining is an argv
+    transformation, never shell quoting: order, duplicates and operand bytes
+    remain unchanged. Call before retaining command provenance, then execution
+    may apply this idempotently as a final boundary check.
+    """
+    result = list(command)
+    if not result or "nvcc_wrapper" not in os.path.basename(result[0]):
+        return result
+    joined = []
+    index = 0
+    # These options own an opaque next argument; do not reinterpret it as one
+    # of the wrapper's own search/definition switches.
+    opaque = {"-Xcompiler", "--compiler-options", "-Xlinker", "--linker-options",
+              "-Xptxas", "--ptxas-options", "-Xnvlink", "--nvlink-options"}
+    while index < len(result):
+        token = result[index]
+        if token == "--":
+            joined.extend(result[index:])
+            break
+        if token in {"-I", "-L", "-l", "-D"}:
+            if index + 1 == len(result) or not result[index + 1]:
+                raise ValueError("nvcc_wrapper option %s requires a nonempty operand" % token)
+            joined.append(token + result[index + 1])
+            index += 2
+        elif token in opaque and index + 1 < len(result):
+            joined.extend(result[index:index + 2])
+            index += 2
+        else:
+            joined.append(token)
+            index += 1
+    return joined
+
+
 def _run_compile(cmd: Any, what: Any) -> None:
     """Run the compilation command @p cmd CAPTURING stderr : on failure, raises a
     SELF-CONTAINED RuntimeError (command + compiler output + remedies) instead of the raw
     CalledProcessError whose message contains only the command line (real bug : the user sees
     only a 'returned non-zero exit status 1' drowned in the traceback)."""
     import subprocess
+    cmd = normalize_native_compiler_command(cmd)
     r = subprocess.run(cmd, capture_output=True, env=native_compile_environment())
     if r.returncode != 0:
         err = (r.stderr or b"").decode(errors="replace").strip()
@@ -402,6 +447,8 @@ def _native_kokkos_root() -> Any:
 
 _KOKKOS_CONTRACT_FIELDS = frozenset({
     "schema_version", "abi_sha256", "include_dirs", "header_paths", "header_sha256",
+    "compiler", "standard", "compile_options", "compile_definitions", "link_options",
+    "compile_features",
 })
 
 
@@ -434,20 +481,39 @@ def _native_kokkos_contract(module: Any = None) -> Mapping[str, Any] | None:
         raise RuntimeError(
             "Kokkos-enabled pops._pops must expose the exact __kokkos_contract__ schema; "
             "rebuild PoPS")
-    if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != 2:
         raise RuntimeError("unsupported pops._pops.__kokkos_contract__ schema_version")
     abi = raw["abi_sha256"]
     if not isinstance(abi, str) or re.fullmatch(r"[0-9a-f]{64}", abi) is None:
         raise RuntimeError("Kokkos contract abi_sha256 must be a lowercase SHA-256")
+    for name in ("compiler", "standard"):
+        if not isinstance(raw[name], str) or not raw[name] or any(
+                token in raw[name] for token in ("|", ";", "\r", "\n")):
+            raise RuntimeError("Kokkos contract compiler/standard must be unambiguous text")
+    if not raw["standard"].isdigit():
+        raise RuntimeError("Kokkos contract standard must be the configured C++ standard number")
 
     tuples = {}
-    for name in ("include_dirs", "header_paths", "header_sha256"):
+    for name in ("include_dirs", "header_paths", "header_sha256", "compile_options",
+                 "compile_definitions", "link_options", "compile_features"):
         value = raw[name]
-        if type(value) is not tuple or not value or any(
+        required = name in ("include_dirs", "header_paths", "header_sha256")
+        if type(value) is not tuple or (required and not value) or any(
                 not isinstance(item, str) or not item for item in value):
             raise RuntimeError(
                 "pops._pops.__kokkos_contract__[%r] must be a non-empty tuple of text" % name)
         tuples[name] = value
+    for name in ("compile_options", "compile_definitions", "link_options", "compile_features"):
+        if any(any(token in value for token in ("|", ";", "\r", "\n", "$<"))
+               for value in tuples[name]):
+            raise RuntimeError("Kokkos contract contains a non-replayable usage requirement")
+    baked_standard = _pops_cxx_std_from_module(module)
+    if baked_standard is not None and baked_standard != "c++" + raw["standard"]:
+        raise RuntimeError("Kokkos contract standard differs from the loaded native module")
+    for feature in tuples["compile_features"]:
+        if feature.startswith("cxx_std_") and (
+                not feature[8:].isdigit() or int(feature[8:]) > int(raw["standard"])):
+            raise RuntimeError("Kokkos compile feature exceeds the baked native C++ standard")
     includes = tuples["include_dirs"]
     paths = tuples["header_paths"]
     hashes = tuples["header_sha256"]
@@ -475,7 +541,9 @@ def _native_kokkos_contract(module: Any = None) -> Mapping[str, Any] | None:
     if ordered_paths != paths:
         raise RuntimeError("Kokkos contract header order is not canonical")
     header_hashes = dict(zip(paths, hashes, strict=True))
-    material_lines = []
+    material_lines = ["compiler=%s\n" % raw["compiler"], "standard=%s\n" % raw["standard"]]
+    for name in ("compile_option", "compile_definition", "link_option", "compile_feature"):
+        material_lines.extend("%s=%s\n" % (name, value) for value in tuples[name + "s"])
     for include in includes:
         material_lines.append("include=%s\n" % include)
         for name in ("Kokkos_Core.hpp", "KokkosCore_config.h"):
@@ -535,6 +603,33 @@ def _native_kokkos_selection() -> tuple[str, tuple[str, ...], str] | None:
 def _native_kokkos_include_dirs() -> tuple[str, ...]:
     selected = _native_kokkos_selection()
     return () if selected is None else selected[1]
+
+
+def _native_kokkos_openmp(include_dirs: tuple[str, ...]) -> bool:
+    """Read the enabled host backend from the exact authenticated configuration bytes."""
+    import hashlib
+    import re
+
+    contract = _native_kokkos_contract()
+    if contract is None:
+        raise RuntimeError("Kokkos backend flags require an authenticated native contract")
+    expected = next(digest for path, digest in zip(
+        contract["header_paths"], contract["header_sha256"], strict=True)
+        if os.path.basename(path) == "KokkosCore_config.h")
+    # Use the effective include order, including an authenticated relocation. Check the captured
+    # bytes again: flags and the earlier selection must not observe different header revisions.
+    path = next((os.path.join(include, "KokkosCore_config.h") for include in include_dirs
+                 if os.path.isfile(os.path.join(include, "KokkosCore_config.h"))), None)
+    if path is None:
+        raise RuntimeError("authenticated Kokkos configuration header is unavailable")
+    with open(path, "rb") as stream:
+        content = stream.read()
+    if hashlib.sha256(content).hexdigest() != expected:
+        raise RuntimeError("Kokkos configuration changed before backend flag selection; rebuild PoPS")
+    # Kokkos's generated configuration uses defined/undefined feature macros, including in its
+    # OpenMP compiler guard. Ignore commented-out cmakedefine lines, not an enabled value of zero.
+    content = re.sub(rb"/\*.*?\*/|//[^\n]*", b"", content, flags=re.DOTALL)
+    return re.search(rb"(?m)^\s*#\s*define\s+KOKKOS_ENABLE_OPENMP\b", content) is not None
 
 
 def _libomp_prefix() -> Any:
@@ -629,6 +724,21 @@ def _native_kokkos_flags() -> tuple:
     include_dirs = _native_kokkos_include_dirs()
     if not include_dirs:
         return [], []
+    contract = _native_kokkos_contract()
+    assert contract is not None
+    def options(name):
+        import shlex
+        result = []
+        for value in contract[name]:
+            if value.startswith("SHELL:"):
+                result.extend(shlex.split(value[6:]))
+            elif value.startswith("LINKER:"):
+                raise RuntimeError("Kokkos linker wrapper options must be resolved by its native build")
+            else:
+                result.append(value)
+        return result
+    definitions = ["-D" + value for value in contract["compile_definitions"]]
+    native_compile, native_link = options("compile_options"), options("link_options")
     if sys.platform == "win32":
         # MSVC/clang-cl: Kokkos as a SHARED DLL -> link the import lib kokkoscore.lib (ONE single runtime;
         # _pops loads the same kokkoscore.dll). cl accepts -D/-I. No -fopenmp/-ldl/-pthread (POSIX).
@@ -636,10 +746,12 @@ def _native_kokkos_flags() -> tuple:
         compile_flags = ["-DPOPS_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE"]
         for include in include_dirs:
             compile_flags.extend(("-I", include))
-        return compile_flags, [os.path.join(root, "lib", "kokkoscore.lib")]
+        return [*compile_flags, *definitions, *native_compile], [
+            os.path.join(root, "lib", "kokkoscore.lib"), *native_link]
     compile_flags = ["-DPOPS_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE"]
     for include in include_dirs:
         compile_flags.extend(("-I", include))
+    compile_flags.extend((*definitions, *native_compile))
     # Do NOT link libkokkos* INTO the .so: the _pops module has already loaded the Kokkos runtime, a
     # SINGLETON (global registry of execution spaces), and add_native_block promotes it to global
     # scope (RTLD_GLOBAL). Linking a 2nd copy of Kokkos into the loader gives two runtimes: the
@@ -648,9 +760,10 @@ def _native_kokkos_flags() -> tuple:
     # (resolved at load time against the module, like install_block/grid_context). Only -fopenmp (the
     # OpenMP backend of the generated kernel) + -ldl/-pthread remain. ROMEO validation: DSL warm scales and
     # clean exit (exit 0), ratio ~0.96x the bricks.
-    link_flags = ["-ldl", "-pthread"]
-    if "nvcc_wrapper" not in os.path.basename(_native_kokkos_compiler(None) or ""):
-        # OpenMP required for the Kokkos OpenMP exec space (harmless/ignored under Kokkos Serial).
+    link_flags = ["-ldl", "-pthread", *native_link]
+    if _native_kokkos_openmp(include_dirs):
+        # CUDA and OpenMP may coexist in one authenticated Kokkos installation. nvcc_wrapper
+        # forwards this host option to its C++ compiler; CUDA alone is not an OpenMP opt-out.
         if sys.platform == "darwin":
             # macOS / AppleClang: `-fopenmp` alone is rejected -> -Xpreprocessor -fopenmp (+ include
             # Homebrew libomp if present). We do NOT link libomp (-lomp) into the .so: a 2nd copy of
@@ -658,13 +771,16 @@ def _native_kokkos_flags() -> tuple:
             # The omp_*/__kmpc_* symbols resolve at load time (flat namespace, -undefined
             # dynamic_lookup set by compile_aot/compile_native) against the libomp already loaded by _pops.
             libomp = _libomp_prefix()
-            compile_flags += ["-Xpreprocessor", "-fopenmp"]
-            if libomp is not None:
+            if "-fopenmp" not in compile_flags:
+                compile_flags += ["-Xpreprocessor", "-fopenmp"]
+            if libomp is not None and os.path.join(libomp, "include") not in include_dirs:
                 compile_flags += ["-I", os.path.join(libomp, "include")]
         else:
             # ELF/Linux: libgomp is shared by soname (no double-runtime), -fopenmp on both sides.
-            compile_flags.append("-fopenmp")
-            link_flags.append("-fopenmp")
+            if "-fopenmp" not in compile_flags:
+                compile_flags.append("-fopenmp")
+            if "-fopenmp" not in link_flags:
+                link_flags.append("-fopenmp")
     return compile_flags, link_flags
 
 

@@ -21,7 +21,7 @@ from pops.identity import Identity, canonical_bytes, make_identity
 
 
 _TARGETS = frozenset({"system", "amr_system"})
-_BIND_RESOURCE_KEYS = frozenset({"execution_context"})
+_BIND_RESOURCE_KEYS = frozenset({"execution_context", "runtime_parameter_byte_capacity"})
 _SEMANTIC_OVERRIDE_KEYS = frozenset({
     "solver", "solvers", "cadence", "layout", "target", "backend", "spatial",
     "outputs", "diagnostics", "program", "algorithm",
@@ -37,14 +37,9 @@ def _builtin_restart_authority():
 
 def _deep_freeze(value: Any) -> Any:
     """Freeze container structure without copying runtime payloads such as arrays/resources."""
-    if isinstance(value, Mapping):
-        return MappingProxyType({_deep_freeze(key): _deep_freeze(item)
-                                 for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_deep_freeze(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_deep_freeze(item) for item in value)
-    return value
+    from pops._frozen_data import freeze_containers
+
+    return freeze_containers(value)
 
 
 def _string_mapping(value: Any, *, where: str) -> Mapping[str, Any]:
@@ -586,8 +581,13 @@ class ResolvedSimulationPlan:
         if type(self.bind_schema) is not BindSchema:
             raise TypeError("ResolvedSimulationPlan.bind_schema must be an exact BindSchema")
         blocks = tuple(self.blocks)
-        if not blocks or any(type(block) is not ResolvedBlock for block in blocks):
+        if any(type(block) is not ResolvedBlock for block in blocks):
             raise TypeError("ResolvedSimulationPlan blocks must contain exact ResolvedBlock values")
+        if not blocks:
+            from pops.time._program.finite_state import require_finite_state_program
+            require_finite_state_program(self.time)
+            if self.target != "system":
+                raise ValueError("finite-state packets use the whole-System execution context")
         names = [block.name for block in blocks]
         if len(set(names)) != len(names):
             raise ValueError("ResolvedSimulationPlan block names must be unique")
@@ -903,6 +903,9 @@ class BindInputs:
         if any(not isinstance(key, Handle) or not key.is_resolved for key in self.initial_values):
             raise TypeError("BindInputs.initial_values keys must be canonical owner-qualified Handles")
         object.__setattr__(self, "initial_values", _deep_freeze(self.initial_values))
+        from pops.runtime._runtime_parameter_storage import validate_parameter_byte_capacity
+        if "runtime_parameter_byte_capacity" in self.resources:
+            validate_parameter_byte_capacity(self.resources["runtime_parameter_byte_capacity"])
         forbidden = set(self.resources) & _SEMANTIC_OVERRIDE_KEYS
         unknown = set(self.resources) - _BIND_RESOURCE_KEYS
         if forbidden:
@@ -946,6 +949,7 @@ class InstallPlan:
     resources: Mapping[str, Any] = field(default_factory=dict)
     components: Mapping[str, Any] = field(default_factory=dict)
     execution_context: Any = None
+    runtime_parameter_storage: Mapping[str, Any] = field(init=False)
     bind_identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -1029,6 +1033,9 @@ class InstallPlan:
         if _evidence(self.resources, where="InstallPlan.resources") != _evidence(
                 self.bind_inputs.resources, where="BindInputs.resources"):
             raise ValueError("InstallPlan resources must come from BindInputs")
+        from pops.runtime._runtime_parameter_storage import resolve_runtime_parameter_storage
+        object.__setattr__(self, "runtime_parameter_storage", _deep_freeze(
+            resolve_runtime_parameter_storage(self.artifact, self.resources)))
         object.__setattr__(self, "bind_identity", make_identity("bind", self._payload()))
 
     @property
@@ -1117,6 +1124,8 @@ class InstallPlan:
             "params": _evidence(self.params, where="install.params"),
             "aux": _evidence(self.aux, where="install.aux"),
             "resources": _evidence(self.resources, where="install.resources"),
+            "runtime_parameter_storage": _evidence(
+                self.runtime_parameter_storage, where="install.runtime_parameter_storage"),
             "components": _evidence(self.components, where="install.components"),
             "initial_values": _evidence(
                 self.initial_values, where="install.initial_values"

@@ -49,7 +49,7 @@ _PARAM_ROW_KEYS = {
     "handle",
 }
 
-_DECLARATION_ROW_KEYS = {
+_DECLARATION_ROW_KEYS: dict[str, tuple[set[str], ...]] = {
     "state": ({
         "components", "roles", "layout", "storage", "representation", "centering",
         "units", "frame", "clock", "support", "sampling", "value_shape", "domain", "qid", "handle",
@@ -63,6 +63,12 @@ _DECLARATION_ROW_KEYS = {
         "aux_kind", "representation", "centering", "unit", "frame", "clock", "qid", "handle",
     },),
 }
+
+
+# Optional inert mathematical representation descriptor, retained in identity.
+for _kind in ("state", "field"):
+    _rows = _DECLARATION_ROW_KEYS[_kind]
+    _DECLARATION_ROW_KEYS[_kind] = _rows + tuple(row | {"representation_data"} for row in _rows)
 
 
 def _validate_declaration_rows(

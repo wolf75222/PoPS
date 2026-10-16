@@ -30,10 +30,32 @@ def _frontier_values(program):
 
 
 def require_computed_frontier_support(program, *, target):
+    values = _frontier_values(program)
+    affine = [value for value in values if value.op == "accept_increment"]
+    if affine:
+        from pops.codegen.program_lowerability import all_ops_with_ancestry
+        if target != "amr_system" or len(affine) != 1:
+            raise ValueError("accept_increment requires one AMR parent finalization")
+        by_id = {value.id: value for value in values}
+        ancestry = next(path for value, path in all_ops_with_ancestry(program) if value is affine[0])
+        if len(ancestry) != 1 or by_id[ancestry[0][0]].op != "post_synchronization":
+            raise ValueError("accept_increment must belong directly to after_synchronization")
+        if getattr(program, "_post_sync_commits", {}):
+            raise ValueError("accept_increment owns all affine commits; manual post-sync commits are forbidden")
+        from pops.time._program.affine_history import validate_history_contract
+        validate_history_contract(program, affine[0].attrs.get("histories", {}))
+        forbidden = {"reached_duration", "history_snapshot",
+                     "interval_begin", "interval_check", "history_interval_begin",
+                     "subcycle", "synchronize", "layout_map_export", "layout_map_import"}
+        if any(value.op in forbidden or value.attrs.get("schedule") is not None for value in values):
+            raise NotImplementedError("affine macro publication requires an explicit remap law for "
+                                      "retained histories, nested Program clocks and held caches")
+        if getattr(program, "_integral_transfers", ()):
+            raise NotImplementedError("affine macro publication requires a persistent integral remap law")
+        return
     if target != "system":
         raise NotImplementedError("ComputedDt version 1 requires a uniform Program; AMR interval "
                                   "exchanges cannot yet be remapped to a computed endpoint")
-    values = _frontier_values(program)
     for value in values:
         if value.op in {"diffusive_rhs", "principal_rate", "coupled_rate", "subcycle",
                         "synchronize", "layout_map_export", "layout_map_import", "post_synchronization"} \

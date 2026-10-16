@@ -1,4 +1,6 @@
 #pragma once
+#include <pops/runtime/program/history_field_metadata.hpp>
+#include <pops/runtime/program/continuation_migration_request.hpp>
 
 // Compiled time-Program RUNTIME STATE, extracted out of System::Impl / AmrSystem::Impl (ADC-594). A
 // compiled Program (epic ADC-399) installs a whole-system macro-step closure plus a small cluster of
@@ -55,14 +57,18 @@
 #include <vector>
 
 #include <pops/core/identity/prepared_provider.hpp>
+#include <pops/core/identity/sha256.hpp>
 #include <pops/core/foundation/types.hpp>  // Real
+#include <pops/math/exact_weight.hpp>
 #include <pops/mesh/storage/multifab.hpp>  // MultiFab (history ring element)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
-#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams, kMaxRuntimeParams
+#include <pops/runtime/config/runtime_params.hpp>  // owned immutable RuntimeParams
 #include <pops/runtime/program/accepted_exchange.hpp>
 #include <pops/runtime/program/moving_interval_geometry.hpp>
 #include <pops/runtime/program/collective_step_rejection.hpp>
-#include <pops/runtime/program/cache_manager.hpp>    // CacheManager (held-node scheduler cache)
+#include <pops/runtime/program/continuation_authority.hpp>
+#include <pops/runtime/program/field_exchange_expression.hpp>
+#include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node scheduler cache)
 #include <pops/runtime/program/prepared_resource_lifetime.hpp>
 #include <pops/runtime/program/module_metadata.hpp>  // frozen checkpoint-shape metadata
 #include <pops/runtime/program/profiler.hpp>         // Profiler (per-node / per-brick timing)
@@ -83,13 +89,80 @@ enum class AmrProgramHistoryRemapSource : std::uint8_t {
   ParentAlignedState = 4,
   /// Equal-clock scalar output samples; retained overlap is not temporally interpolated.
   ParentAlignedScalarOutput = 5,
+  /// Entire child ring reconstructed by an artifact-authored temporal matrix.
+  ParentReconstructed = 6,
 };
+
+struct HistoryTransferInput {
+  std::vector<Real> times;
+  std::vector<Real> intervals;
+  Real accepted_time = 0;
+  Real temporal_ratio = 1;
+  /// Exact ordered scalar bindings declared by the immutable transfer graph.
+  std::vector<Real> parameters;
+  std::size_t exact_coefficient_bytes = ::pops::ExactWeight::default_max_bytes;
+};
+struct HistoryTransferRow {
+  Real time = 0;
+  Real interval = 0;
+  std::vector<Real> weights;
+  /// Same authored rational equations, retained before their one Real rounding.
+  /// Empty only for the older native callback ABI: those weights are dyadics.
+  std::vector<::pops::ExactWeight> exact_weights{};
+  bool operator==(const HistoryTransferRow&) const = default;
+};
+
+inline void validate_history_transfer_weights(const HistoryTransferRow& row) {
+  if (!row.exact_weights.empty() && row.exact_weights.size() != row.weights.size())
+    throw std::invalid_argument("HistoryTransfer exact and numerical coefficient widths differ");
+  for (std::size_t i = 0; i < row.weights.size(); ++i) {
+    if (!std::isfinite(row.weights[i]))
+      throw std::invalid_argument("HistoryTransfer numerical coefficient is nonfinite");
+    if (!row.exact_weights.empty() &&
+        std::bit_cast<std::uint64_t>(static_cast<double>(row.weights[i])) !=
+            std::bit_cast<std::uint64_t>(
+                static_cast<double>(static_cast<Real>(row.exact_weights[i].value()))))
+      throw std::invalid_argument(
+          "HistoryTransfer numerical coefficient differs from exact rounding");
+  }
+}
+
+inline ::pops::ExactWeight history_transfer_exact_weight(
+    const HistoryTransferRow& row, std::size_t column,
+    std::size_t budget = ::pops::ExactWeight::default_max_bytes) {
+  validate_history_transfer_weights(row);
+  if (column >= row.weights.size())
+    throw std::out_of_range("HistoryTransfer coefficient index exceeds source width");
+  return row.exact_weights.empty()
+             ? ::pops::ExactWeight::from_double(static_cast<double>(row.weights[column]), budget)
+             : row.exact_weights[column].with_budget(budget);
+}
+
+/// Append after the existing Real/source contract. Keeping this extension
+/// absent for older native callbacks preserves their existing exact identity.
+inline void append_history_transfer_weight_contract(ExactContractBuilder& contract,
+                                                    const HistoryTransferRow& row) {
+  validate_history_transfer_weights(row);
+  if (!row.exact_weights.empty()) {
+    contract.text("pops.history-transfer-exact-weights.v1").scalar(row.exact_weights.size());
+    for (const auto& weight : row.exact_weights)
+      contract.bytes(weight.encode());
+  }
+}
+struct HistoryTransferResult {
+  std::vector<HistoryTransferRow> rows;
+  bool operator==(const HistoryTransferResult&) const = default;
+};
+using HistoryTransferCallback = std::function<HistoryTransferResult(const HistoryTransferInput&)>;
+using HistoryTransferRegistry =
+    std::map<std::string, std::pair<std::string, HistoryTransferCallback>>;
 
 /// One canonical affected-ring decision prepared by the AMR lane before topology publication.
 struct AmrProgramHistoryRemapEntry {
   std::string key;
   std::string parent_key;
   AmrProgramHistoryRemapSource source = AmrProgramHistoryRemapSource::Removed;
+  std::optional<HistoryTransferResult> temporal_transfer;
 
   bool operator==(const AmrProgramHistoryRemapEntry&) const = default;
 };
@@ -105,8 +178,7 @@ struct AmrProgramHistoryRemapDescriptor {
   // Provenance must use that same accepted source generation when a parent replacement
   // temporarily removes deeper levels before they are published again.
   std::uint64_t source_topology_epoch = std::numeric_limits<std::uint64_t>::max();
-  std::uint64_t source_materialization_generation =
-      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t source_materialization_generation = std::numeric_limits<std::uint64_t>::max();
   /// Geometry/ratio changed independently of a distribution-only ownership rebalance.  The
   /// accepted callback uses this exact engine-prepared fact to choose the same source for both
   /// numeric history slots and their FluxExpression provenance.
@@ -144,25 +216,39 @@ using AcceptedProgramContextSnapshotFactory =
 
 /// Exact publication window and its logical occurrence, independent of a level's lifetime step
 /// count. Unknown legacy provenance differs from an actually allocated zero-start ring.
-enum class HistorySampleKind : std::uint8_t { UnknownLegacy, RegisteredZeroStart, Publication };
+enum class HistorySampleKind : std::uint8_t {
+  UnknownLegacy,
+  RegisteredZeroStart,
+  Publication,
+  Reconstruction
+};
 struct HistorySampleIdentity {
   std::uint64_t start_bits = 0;
   std::uint64_t interval_bits = 0;
   std::uint64_t ordinal = 0;
   HistorySampleKind kind = HistorySampleKind::UnknownLegacy;
+  std::array<std::uint64_t, 4> reconstruction{};
   static HistorySampleIdentity zero_start() {
     return {0, 0, 0, HistorySampleKind::RegisteredZeroStart};
   }
   bool authenticated() const noexcept { return kind != HistorySampleKind::UnknownLegacy; }
   void append_contract(ExactContractBuilder& proof) const {
     proof.scalar(kind).scalar(start_bits).scalar(interval_bits).scalar(ordinal);
+    if (kind == HistorySampleKind::Reconstruction)
+      for (auto word : reconstruction)
+        proof.scalar(word);
   }
 
   void validate() const {
     if (kind != HistorySampleKind::UnknownLegacy &&
-        kind != HistorySampleKind::RegisteredZeroStart && kind != HistorySampleKind::Publication)
+        kind != HistorySampleKind::RegisteredZeroStart && kind != HistorySampleKind::Publication &&
+        kind != HistorySampleKind::Reconstruction)
       throw std::invalid_argument("history sample identity has an invalid kind");
-    if (kind != HistorySampleKind::Publication) {
+    const bool has_reconstruction = std::any_of(reconstruction.begin(), reconstruction.end(),
+                                                [](auto word) { return word != 0; });
+    if ((kind == HistorySampleKind::Reconstruction) != has_reconstruction)
+      throw std::invalid_argument("history sample reconstruction identity is missing or foreign");
+    if (kind != HistorySampleKind::Publication && kind != HistorySampleKind::Reconstruction) {
       if (start_bits != 0 || interval_bits != 0 || ordinal != 0)
         throw std::invalid_argument("unknown history sample identity has nonzero window metadata");
     } else if (ordinal == 0 || !std::isfinite(std::bit_cast<double>(start_bits)) ||
@@ -177,10 +263,45 @@ inline void validate_history_sample_provenance(const HistorySampleIdentity& samp
                                                bool initialized, Real outgoing_dt) {
   sample.validate();
   if ((sample.kind == HistorySampleKind::RegisteredZeroStart && initialized) ||
-      (sample.kind == HistorySampleKind::Publication &&
+      ((sample.kind == HistorySampleKind::Publication ||
+        sample.kind == HistorySampleKind::Reconstruction) &&
        (!initialized ||
         outgoing_dt != static_cast<Real>(std::bit_cast<double>(sample.interval_bits)))))
     throw std::invalid_argument("history sample differs from its publication metadata");
+}
+
+inline HistorySampleIdentity reconstructed_history_sample(
+    std::span<const HistorySampleIdentity> sources, const HistoryTransferRow& row,
+    std::string_view operation, std::string_view ring, std::uint64_t topology,
+    std::uint64_t generation) {
+  if (sources.size() != row.weights.size() || operation.empty() || ring.empty())
+    throw std::invalid_argument("HistoryTransfer provenance has incomplete source authority");
+  ExactContractBuilder contract;
+  contract.text("pops.history-transfer-sample.v1")
+      .text(operation)
+      .text(ring)
+      .scalar(topology)
+      .scalar(generation)
+      .scalar(static_cast<double>(row.time))
+      .scalar(static_cast<double>(row.interval))
+      .scalar(sources.size());
+  for (std::size_t i = 0; i < sources.size(); ++i) {
+    sources[i].validate();
+    if (!sources[i].authenticated())
+      throw std::invalid_argument("HistoryTransfer cannot reconstruct unknown legacy samples");
+    sources[i].append_contract(contract);
+    contract.scalar(static_cast<double>(row.weights[i]));
+  }
+  append_history_transfer_weight_contract(contract, row);
+  const std::string bytes = std::move(contract).release();
+  const auto digest = identity::sha256_hex(std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+  HistorySampleIdentity result{std::bit_cast<std::uint64_t>(static_cast<double>(row.time)),
+                               std::bit_cast<std::uint64_t>(static_cast<double>(row.interval)), 1,
+                               HistorySampleKind::Reconstruction};
+  for (std::size_t i = 0; i < result.reconstruction.size(); ++i)
+    result.reconstruction[i] = std::stoull(digest.substr(16 * i, 16), nullptr, 16);
+  result.validate();
+  return result;
 }
 
 inline HistorySampleIdentity next_history_sample(std::span<const HistorySampleIdentity> slots,
@@ -238,7 +359,7 @@ struct HistoryManager {
   std::map<std::string, int> ghost_depth;
 
   [[nodiscard]] Extent<Dim> declared_ghosts(const std::string& name,
-                                          Extent<Dim> owner_ghosts) const {
+                                            Extent<Dim> owner_ghosts) const {
     const int depth = ghost_depth.at(name);
     if (depth < -1)
       throw std::invalid_argument("history has an invalid declared halo depth");
@@ -255,6 +376,12 @@ struct HistoryManager {
   /// stepper template instantiates) -> MockImpl-safe; empty by default so dense paths never touch it.
   std::map<std::string, std::vector<Real>> slot_dt;
   std::map<std::string, std::vector<HistorySampleIdentity>> slot_sample;
+  // Immutable face evaluations belonging to the retained numerical value. The same native
+  // accepted image owns these references and the corresponding fields/sample identities.
+  std::map<std::string, std::vector<FieldExchangeExpressions::Ref>> slot_exchanges;
+  FieldExchangeExpressions::Limits exchange_limits;
+  HistoryFieldMetadataTable slot_fields;
+  HistoryFieldMetadataBudget field_metadata_budget;
 
   const std::vector<HistorySampleIdentity>& validated_samples(const std::string& name) const {
     const auto& samples = slot_sample.at(name);
@@ -326,6 +453,12 @@ struct HistoryManager {
       if (auto samples = slot_sample.find(name); samples != slot_sample.end())
         for (std::size_t k = samples->second.size(); k-- > 1;)
           std::swap(samples->second[k], samples->second[k - 1]);
+      if (auto exchanges = slot_exchanges.find(name); exchanges != slot_exchanges.end())
+        for (std::size_t k = exchanges->second.size(); k-- > 1;)
+          std::swap(exchanges->second[k], exchanges->second[k - 1]);
+      if (auto fields = slot_fields.find(name); fields != slot_fields.end())
+        for (std::size_t k = fields->second.size(); k-- > 1;)
+          std::swap(fields->second[k], fields->second[k - 1]);
       if (store_pending[name]) {
         fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;
@@ -351,6 +484,12 @@ struct HistoryManager {
       if (auto samples = slot_sample.find(name); samples != slot_sample.end())
         for (std::size_t k = samples->second.size(); k-- > 1;)
           std::swap(samples->second[k], samples->second[k - 1]);
+      if (auto exchanges = slot_exchanges.find(name); exchanges != slot_exchanges.end())
+        for (std::size_t k = exchanges->second.size(); k-- > 1;)
+          std::swap(exchanges->second[k], exchanges->second[k - 1]);
+      if (auto fields = slot_fields.find(name); fields != slot_fields.end())
+        for (std::size_t k = fields->second.size(); k-- > 1;)
+          std::swap(fields->second[k], fields->second[k - 1]);
       if (store_pending[name]) {
         fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;
@@ -449,10 +588,24 @@ struct ProgramRuntimeState {
   /// Weak native-resource hook distinguishes quiescence, region success and revocation.
   /// Attempt identities live in the context cache, outside accepted snapshots.
   std::function<void(PreparedResourceAction)> resource_lifetime_;
+  // Separate from ordinary rejection: only a successful externally published restart changes
+  // the lifetime of domain issuers. The accepted decoded realm is preserved by native possession.
+  using RestartLifetime = std::function<void(const FiniteDomainRealmRef&,
+                                             const std::shared_ptr<distributed::Registry>&)>;
+  RestartLifetime restart_lifetime_;
+  using ContinuationCheckpointPrototypes = typename ContinuationCodec<Dim>::Prototypes;
+  // Installed scientific prototype catalogue, owned by the same artifact as step_.
+  ContinuationCheckpointPrototypes continuation_checkpoint_prototypes_;
   /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
   /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
   /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
   std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted_;
+  /// Artifact-owned complete-Continuation transfer around a native topology transaction.
+  /// begin captures old geometry while it is live; finish runs authored Remap/Assess
+  /// after target materialization, before accepted histories or images are published.
+  std::function<bool()> continuation_regrid_begin_;
+  std::function<void(bool)> continuation_regrid_finish_;
+  HistoryTransferRegistry history_transfers_;
   /// Artifact-owned accepted-boundary hooks used only by the strict AMR restart transaction.
   /// `restart_regrid_preflight_` validates every rank-local prerequisite before peers enter the
   /// scientific regrid; `restart_regrid_` then performs that tag/regrid pass;
@@ -464,8 +617,13 @@ struct ProgramRuntimeState {
   std::function<void()> restart_regrid_;
   std::function<void()> restart_resync_;
   AcceptedProgramContextSnapshotFactory accepted_context_snapshot_;
+  /// AMR complete-image validation, before facade bytes become accepted.  A restart stages a
+  /// decoded forest against candidate fields; an ordinary publication authenticates live stores.
+  std::function<void(std::span<const std::uint8_t>, bool)> continuation_checkpoint_preflight_;
+  AmrContinuationRematerializer continuation_rematerializer_;
   /// Monotone witness incremented only by install_unverified_step. Dynamic artifact loaders use it to
   /// prove that one installer invocation actually replaced the whole-system Program step.
+
   std::uint64_t step_install_generation_ = 0;
   /// OPTIONAL compiled-Program dt bound (ADC-417). The target-specific loader stores a closure here
   /// over ProgramContext (uniform) or AmrProgramContext (AMR); step_cfl tightens dt to
@@ -622,6 +780,7 @@ struct ProgramRuntimeState {
   /// MULTISTEP HISTORY (ADC-406a), UNIFORM ONLY. Ring buffers for multistep schemes; the uniform
   /// checkpoint serializes them. Empty on AMR (history seam not wired).
   HistoryManager<Dim> hist_;
+  ContinuationStore<Dim> continuation_;
 
   // --- self-contained helpers (grid-free, Program-subsystem-worded errors) -------------------------
 
@@ -631,11 +790,20 @@ struct ProgramRuntimeState {
     std::function<void()> resource_refresh;
     bool resource_refresh_pending = false;
     std::function<void(PreparedResourceAction)> resource_lifetime;
+    RestartLifetime restart_lifetime;
+    ContinuationCheckpointPrototypes continuation_checkpoint_prototypes;
     std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
+    std::function<bool()> continuation_regrid_begin;
+    std::function<void(bool)> continuation_regrid_finish;
+    HistoryTransferRegistry history_transfers;
     std::function<void()> restart_regrid_preflight;
     std::function<void()> restart_regrid;
     std::function<void()> restart_resync;
     AcceptedProgramContextSnapshotFactory accepted_context_snapshot;
+    std::function<void(std::span<const std::uint8_t>, bool)> continuation_checkpoint_preflight;
+
+    AmrContinuationRematerializer continuation_rematerializer;
+
     std::function<Real(Real)> dt_bound;
     std::uint64_t generation = 0;
     std::string installed_hash;
@@ -649,6 +817,7 @@ struct ProgramRuntimeState {
     std::map<std::string, MovingIntervalGeometry<Dim>> moving_interval_geometry;
     CacheManager<Dim> cache;
     HistoryManager<Dim> history;
+    ContinuationStore<Dim> continuation;
     bool artifact_backed = false;
   };
 
@@ -693,6 +862,7 @@ struct ProgramRuntimeState {
           block_params_(accepted.block_params_),
           cache_(accepted.cache_),
           hist_(accepted.hist_),
+          continuation_(accepted.continuation_),
           profiler_restore_(owner.profiler_.prepare_restore(accepted.profiler_)) {}
 
     ProgramRuntimeState* owner_ = nullptr;
@@ -722,6 +892,7 @@ struct ProgramRuntimeState {
     std::map<int, RuntimeParams> block_params_;
     CacheManager<Dim> cache_;
     HistoryManager<Dim> hist_;
+    ContinuationStore<Dim> continuation_;
     Profiler::PreparedRestore profiler_restore_;
   };
 
@@ -769,6 +940,7 @@ struct ProgramRuntimeState {
     block_params_.swap(prepared.block_params_);
     std::swap(cache_, prepared.cache_);
     std::swap(hist_, prepared.hist_);
+    continuation_.swap(prepared.continuation_);
     profiler_.publish_prepared_restore(std::move(prepared.profiler_restore_));
   }
 
@@ -804,15 +976,24 @@ struct ProgramRuntimeState {
       throw std::overflow_error("Program step-install generation overflow");
     reject_resource_work();
     resource_lifetime_ = nullptr;
+    restart_lifetime_ = nullptr;
+    continuation_checkpoint_prototypes_ = ContinuationCheckpointPrototypes{};
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
     resource_refresh_ = nullptr;
     resource_refresh_pending_ = false;
     history_remap_accepted_ = nullptr;
+    continuation_regrid_begin_ = nullptr;
+    continuation_regrid_finish_ = nullptr;
+    history_transfers_.clear();
     restart_regrid_preflight_ = nullptr;
     restart_regrid_ = nullptr;
     restart_resync_ = nullptr;
     accepted_context_snapshot_ = nullptr;
+    continuation_checkpoint_preflight_ = nullptr;
+
+    continuation_rematerializer_ = nullptr;
+
     dt_bound_ = nullptr;
     installed_hash_.clear();
     operator_authorities_.clear();
@@ -830,11 +1011,20 @@ struct ProgramRuntimeState {
                                        resource_refresh_,
                                        resource_refresh_pending_,
                                        resource_lifetime_,
+                                       restart_lifetime_,
+                                       continuation_checkpoint_prototypes_,
                                        history_remap_accepted_,
+                                       continuation_regrid_begin_,
+                                       continuation_regrid_finish_,
+                                       history_transfers_,
                                        restart_regrid_preflight_,
                                        restart_regrid_,
                                        restart_resync_,
                                        accepted_context_snapshot_,
+                                       continuation_checkpoint_preflight_,
+
+                                       continuation_rematerializer_,
+
                                        dt_bound_,
                                        step_install_generation_,
                                        installed_hash_,
@@ -848,6 +1038,7 @@ struct ProgramRuntimeState {
                                        moving_interval_geometry_,
                                        cache_,
                                        hist_,
+                                       continuation_,
                                        artifact_backed_};
   }
 
@@ -862,20 +1053,30 @@ struct ProgramRuntimeState {
     moving_interval_geometry_.clear();
     cache_.clear();
     hist_ = HistoryManager<Dim>{};
+    continuation_ = ContinuationStore<Dim>{};
   }
 
   void rollback_artifact_step_install(ArtifactStepInstallSnapshot&& snapshot) noexcept {
     reject_resource_work();
     resource_lifetime_ = std::move(snapshot.resource_lifetime);
+    restart_lifetime_ = std::move(snapshot.restart_lifetime);
+    continuation_checkpoint_prototypes_ = std::move(snapshot.continuation_checkpoint_prototypes);
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
     resource_refresh_ = std::move(snapshot.resource_refresh);
     resource_refresh_pending_ = snapshot.resource_refresh_pending;
     history_remap_accepted_ = std::move(snapshot.history_remap_accepted);
+    continuation_regrid_begin_ = std::move(snapshot.continuation_regrid_begin);
+    continuation_regrid_finish_ = std::move(snapshot.continuation_regrid_finish);
+    history_transfers_ = std::move(snapshot.history_transfers);
     restart_regrid_preflight_ = std::move(snapshot.restart_regrid_preflight);
     restart_regrid_ = std::move(snapshot.restart_regrid);
     restart_resync_ = std::move(snapshot.restart_resync);
     accepted_context_snapshot_ = std::move(snapshot.accepted_context_snapshot);
+    continuation_checkpoint_preflight_ = std::move(snapshot.continuation_checkpoint_preflight);
+
+    continuation_rematerializer_ = std::move(snapshot.continuation_rematerializer);
+
     dt_bound_ = std::move(snapshot.dt_bound);
     step_install_generation_ = snapshot.generation;
     installed_hash_ = std::move(snapshot.installed_hash);
@@ -889,6 +1090,7 @@ struct ProgramRuntimeState {
     moving_interval_geometry_.swap(snapshot.moving_interval_geometry);
     cache_ = std::move(snapshot.cache);
     hist_ = std::move(snapshot.history);
+    continuation_.swap(snapshot.continuation);
     artifact_backed_ = snapshot.artifact_backed;
   }
 
@@ -927,6 +1129,30 @@ struct ProgramRuntimeState {
       throw std::invalid_argument("Program resource lifetime requires an installed step and hook");
     reject_resource_work();
     resource_lifetime_ = std::move(hook);
+  }
+
+  void install_restart_lifetime(RestartLifetime hook) {
+    if (!step_ || !hook)
+      throw std::invalid_argument("Program restart lifetime requires an installed step and hook");
+    restart_lifetime_ = std::move(hook);
+  }
+
+  void install_continuation_checkpoint_prototypes(ContinuationCheckpointPrototypes prototypes) {
+    if (!step_ || !prototypes || continuation_checkpoint_prototypes_)
+      throw std::invalid_argument(
+          "Continuation checkpoint prototypes require a fresh installed Program");
+    continuation_checkpoint_prototypes_ = std::move(prototypes);
+  }
+
+  // All fallible decode/validation/allocation happened before external restart publication.
+  // The installed native hook only revokes flags and releases shared/weak references.
+  void finalize_restart_resources() const noexcept {
+    try {
+      if (restart_lifetime_)
+        restart_lifetime_(continuation_.domain_realm(), continuation_.distributed_registry());
+    } catch (...) {
+      std::terminate();
+    }
   }
 
   /// A snapshot or regrid may proceed only after real queue completion. Drainage
@@ -978,6 +1204,18 @@ struct ProgramRuntimeState {
     history_remap_accepted_ = std::move(refresh);
   }
 
+  /// Install a paired source-capture/candidate callback from the authenticated artifact.
+  void install_continuation_regrid_hooks(std::function<bool()> begin,
+                                         std::function<void(bool)> finish,
+                                         const std::string& runtime) {
+    if (!step_)
+      throw std::logic_error(runtime + " continuation regrid requires an installed Program");
+    if (!begin || !finish)
+      throw std::invalid_argument(runtime + " continuation regrid requires both transaction hooks");
+    continuation_regrid_begin_ = std::move(begin);
+    continuation_regrid_finish_ = std::move(finish);
+  }
+
   /// Attach the restart-only callbacks emitted by the same authenticated AMR artifact.
   /// They participate in artifact-install rollback, so a failed DSO candidate cannot leave a
   /// callable stale context behind.
@@ -999,6 +1237,27 @@ struct ProgramRuntimeState {
     accepted_context_snapshot_ = std::move(accepted_context_snapshot);
   }
 
+  void install_continuation_checkpoint_preflight(
+      std::function<void(std::span<const std::uint8_t>, bool)> preflight,
+      const std::string& runtime) {
+    if (!step_ || !accepted_context_snapshot_)
+      throw std::logic_error(runtime + " continuation preflight requires installed restart hooks");
+    if (!preflight || continuation_checkpoint_preflight_)
+      throw std::invalid_argument(runtime +
+                                  " continuation preflight is empty or already installed");
+    continuation_checkpoint_preflight_ = std::move(preflight);
+  }
+
+  void install_continuation_rematerializer(AmrContinuationRematerializer callback,
+                                           const std::string& runtime) {
+    if (!step_ || !accepted_context_snapshot_ || !continuation_checkpoint_preflight_)
+      throw std::logic_error(runtime + " continuation migration requires installed restart hooks");
+    if (!callback || continuation_rematerializer_)
+      throw std::invalid_argument(runtime +
+                                  " continuation migration is empty or already installed");
+    continuation_rematerializer_ = std::move(callback);
+  }
+
   /// Authenticate every field against the installed DSO shape, before preparing a transfer.
   /// The private space URI is not the physical observation space or its allocation State.
   const ProgramCheckpointHistoryMetadata& require_frozen_output_history_projection(
@@ -1006,14 +1265,16 @@ struct ProgramRuntimeState {
       const std::string& space, const std::string& clock, const std::string& interpolation,
       int depth, int components, int program_owner = -1, int ghost_depth = -1) const {
     if (!artifact_backed_ || installed_hash_.empty() || space != kOutputHistoryProjectionSpace ||
-        name.empty() || state.empty() || clock.empty() || interpolation.empty() ||
-        depth < 2 || components < 1 || runtime_owner < 0 || ghost_depth < -1)
-      throw std::invalid_argument("AMR output history projection lacks its frozen artifact capability");
+        name.empty() || state.empty() || clock.empty() || interpolation.empty() || depth < 2 ||
+        components < 1 || runtime_owner < 0 || ghost_depth < -1)
+      throw std::invalid_argument(
+          "AMR output history projection lacks its frozen artifact capability");
     const ProgramCheckpointHistoryMetadata* issued = nullptr;
     for (const auto& row : checkpoint_metadata_.histories)
       if (row.name == name) {
         if (issued != nullptr)
-          throw std::invalid_argument("AMR output history projection has duplicate frozen metadata");
+          throw std::invalid_argument(
+              "AMR output history projection has duplicate frozen metadata");
         issued = &row;
       }
     if (issued == nullptr || issued->program_owner < 0 ||
@@ -1022,8 +1283,10 @@ struct ProgramRuntimeState {
         (program_owner >= 0 && issued->program_owner != program_owner) ||
         issued->state_identity != state || issued->space_identity != space ||
         issued->clock_identity != clock || issued->interpolation_identity != interpolation ||
-        issued->depth != depth || issued->components != components || issued->ghost_depth != ghost_depth)
-      throw std::invalid_argument("AMR output history projection differs from its frozen DSO tuple");
+        issued->depth != depth || issued->components != components ||
+        issued->ghost_depth != ghost_depth)
+      throw std::invalid_argument(
+          "AMR output history projection differs from its frozen DSO tuple");
     return *issued;
   }
 
@@ -1085,8 +1348,7 @@ struct ProgramRuntimeState {
       throw std::logic_error(runtime + " artifact lacks its accepted history-remap hook");
     if (descriptor.parent_level < 0 || descriptor.child_level != descriptor.parent_level + 1 ||
         descriptor.source_topology_epoch == std::numeric_limits<std::uint64_t>::max() ||
-        descriptor.source_materialization_generation ==
-            std::numeric_limits<std::uint64_t>::max() ||
+        descriptor.source_materialization_generation == std::numeric_limits<std::uint64_t>::max() ||
         descriptor.source_topology_epoch > descriptor.prior_topology_epoch ||
         descriptor.source_materialization_generation >
             descriptor.prior_materialization_generation ||
@@ -1706,25 +1968,28 @@ struct ProgramRuntimeState {
     return result;
   }
 
-  /// Seed a program block's RuntimeParams to its declaration defaults (ADC-510 / ADC-508). Idempotent
-  /// (re-seeding resets to the baseline). Called by install. DEFENCE IN DEPTH (ADC-610): a block with
-  /// more than kMaxRuntimeParams params is REJECTED here with a user-facing error instead of being
-  /// SILENTLY TRUNCATED into the fixed-size device carrier -- the Python codegen enforces the same bound
-  /// upstream, so this only fires for a hand-built .so with bogus pops_program_param_* metadata.
-  void seed_params(int prog_block, const std::vector<double>& defaults) {
-    const int count = static_cast<int>(defaults.size());
-    if (count > kMaxRuntimeParams)
-      throw std::runtime_error(
-          "install_program: program block " + std::to_string(prog_block) + " declares " +
-          std::to_string(count) +
-          " runtime parameters > kMaxRuntimeParams=" + std::to_string(kMaxRuntimeParams) +
-          " (include/pops/runtime/config/runtime_params.hpp); the fixed-size device carrier "
-          "RuntimeParams cannot hold them. Regenerate the problem.so with the current headers.");
-    RuntimeParams rp;
-    rp.count = count;
-    for (int k = 0; k < rp.count; ++k)
-      rp.values[k] = static_cast<Real>(defaults[static_cast<std::size_t>(k)]);
-    block_params_[prog_block] = rp;
+  /// Seed one exact Program block with an immutable parameter incarnation.
+  /// The complete cardinality and storage charge are checked before allocation.
+  /// Facade callers perform their collective preparation vote before publication.
+  void seed_params(int prog_block, const std::vector<double>& defaults,
+                   std::optional<std::uint64_t> byte_capacity = {}) {
+    if (prog_block < 0)
+      throw std::invalid_argument("runtime parameters require a non-negative Program block");
+    auto candidate = RuntimeParams::from_host(
+        defaults, byte_capacity.value_or(RuntimeParams::checked_storage_bytes(defaults.size())));
+    block_params_.insert_or_assign(prog_block, std::move(candidate));
+  }
+
+  RuntimeParams prepare_params(int prog_block, const std::vector<double>& values,
+                               const std::string& runtime) const {
+    const auto it = block_params_.find(prog_block);
+    if (it == block_params_.end())
+      throw std::out_of_range(runtime + "::set_program_params: unknown parameter block");
+    const auto& previous = it->second;
+    previous.require_bound();
+    if (values.size() != static_cast<std::size_t>(previous.count))
+      throw std::runtime_error(runtime + "::set_program_params: parameter cardinality differs");
+    return RuntimeParams::from_host(values, previous.byte_capacity());
   }
 
   /// Overwrite a program block's runtime parameter values (the no-recompile contract). @p runtime
@@ -1732,27 +1997,20 @@ struct ProgramRuntimeState {
   /// block was never seeded (the Program declares no runtime param for it), std::runtime_error on a
   /// value-count mismatch.
   void set_params(int prog_block, const std::vector<double>& values, const std::string& runtime) {
-    auto it = block_params_.find(prog_block);
-    if (it == block_params_.end())
-      throw std::out_of_range(
-          runtime + "::set_program_params: program block " + std::to_string(prog_block) +
-          " has no runtime parameter (the installed compiled Program declares none for it; declare "
-          "dsl.Param(..., kind='runtime') in the model the Program lowers, or omit params=)");
-    RuntimeParams& rp = it->second;
-    if (static_cast<int>(values.size()) != rp.count)
-      throw std::runtime_error(runtime + "::set_program_params: program block " +
-                               std::to_string(prog_block) + " expects " + std::to_string(rp.count) +
-                               " runtime parameters, received " + std::to_string(values.size()));
-    for (int k = 0; k < rp.count; ++k)
-      rp.values[k] = static_cast<Real>(values[static_cast<std::size_t>(k)]);
+    auto candidate = prepare_params(prog_block, values, runtime);
+    block_params_.at(prog_block) = std::move(candidate);
   }
 
-  /// Read a program block's current RuntimeParams. An unseeded block (no runtime param) returns a
-  /// default RuntimeParams (count 0) -- a kernel that reads no param is unaffected. By value:
-  /// device-clean, trivially copyable.
+  /// Read a program block's current RuntimeParams. An unseeded block (no
+  /// runtime param) returns a default RuntimeParams (count 0) -- a kernel that
+  /// reads no param is unaffected. By value: device-callable owned views;
+  /// shallow copies keep the immutable incarnation alive.
   RuntimeParams params(int prog_block) const {
     auto it = block_params_.find(prog_block);
-    return it == block_params_.end() ? RuntimeParams{} : it->second;
+    if (it == block_params_.end())
+      return RuntimeParams{};
+    it->second.require_bound();
+    return it->second;
   }
 };
 

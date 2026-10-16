@@ -246,9 +246,35 @@ class PreparedHierarchyTensorSolver {
   virtual int level_count() const noexcept = 0;
   virtual field_type& assembly_target(std::string_view field_slot_identity, int level) = 0;
   virtual field_type& solution(int level) = 0;
+  /// Reconstruct the consumed solution's requested stencil halo using this
+  /// provider's own coarse/fine transfer and physical boundary operators.
+  /// A raw solution buffer alone never grants neighbouring-cell authority.
+  virtual const field_type& prepare_solution_extension(int, const Extent<Dim>&,
+                                                       const ExecutionLane&) {
+    throw std::logic_error("hierarchy solver has no authenticated solution extension");
+  }
+  void require_consumed_solution_extension(const ExecutionLane& lane) const {
+    if (!prepared_lane_)
+      throw std::logic_error("solution extension requires sealed provider preparation");
+    if (all_reduce_max(
+            &lane != prepared_lane_ || !preparation_sealed_ || publication_active_ ? 1L : 0L,
+            *prepared_lane_) != 0)
+      throw std::logic_error("solution extension requires its consumed publication and exact lane");
+  }
   /// Exact active-domain mask for observations; providers must explicitly supply coverage.
   virtual const field_type& active_cell_mask(int) const {
     throw std::logic_error("hierarchy solver has no authenticated observation coverage");
+  }
+  // Borrow the provider's exact spatial representation, not a State block with
+  // a coincident layout. Null masks explicitly mean a full physical cell.
+  struct RepresentationTopology {
+    const Geometry<Dim>& geometry;
+    const field_type& coverage;
+    const field_type* active = nullptr;
+    const field_type* volume_fraction = nullptr;
+  };
+  virtual RepresentationTopology representation_topology(int) const {
+    throw std::logic_error("hierarchy solver has no authenticated representation topology");
   }
   virtual void stage_initial_guess(int level, const field_type* guess) = 0;
 
@@ -471,8 +497,8 @@ class PreparedHierarchyTensorSolver {
 
   // This stamp is minted only by the original Outcome Accept hook. A solved
   // report, reservation, rejected candidate or a generic solve cannot mint it.
-  std::uint64_t accepted_original_candidate_generation(
-      const std::vector<field_type>* candidate, const ExecutionLane& lane) const {
+  std::uint64_t accepted_original_candidate_generation(const std::vector<field_type>* candidate,
+                                                       const ExecutionLane& lane) const {
     if (&lane != prepared_lane_ || publication_active_ || !candidate ||
         candidate != original_accepted_candidate_ || original_acceptance_generation_ == 0)
       throw std::invalid_argument("original field source has no completed Accept receipt");
@@ -527,11 +553,12 @@ class PreparedHierarchyTensorSolver {
       for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
         const auto values = field.fab(patch).view();
         const int width = field.ncomp();
-        invalid = std::max(invalid,
-                           for_each_cell_reduce_max(
-                               field.fab(patch).grown_box(),
-                               hierarchy_tensor_detail::OriginalCandidateFiniteKernel<
-                                   Dim, decltype(values)>{values, width}));
+        invalid = std::max(
+            invalid,
+            for_each_cell_reduce_max(
+                field.fab(patch).grown_box(),
+                hierarchy_tensor_detail::OriginalCandidateFiniteKernel<Dim, decltype(values)>{
+                    values, width}));
       }
     Kokkos::fence();
     if (invalid != Real(0))

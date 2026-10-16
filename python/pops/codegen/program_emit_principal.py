@@ -22,6 +22,7 @@ def emit_principal_model(entry):
         "  static constexpr std::array<int,%d> component_counts{%s};" % (rows, ",".join(map(str,group.component_counts))),
         "  struct Schema {};", "  using State = pops::StateVec<n_vars>;",
         "  using Primitive = State;", "  std::array<pops::RuntimeParams, %d> parameter_sets{};" % rows,
+        "  using pops_device_capture_members = pops::DeviceCaptureMembers<decltype(parameter_sets)>;",
         "  POPS_HD static State invalid_state() { State result{};",
         "    for (int i=0; i<n_vars; ++i) result[i]=std::numeric_limits<pops::Real>::quiet_NaN();",
         "    return result; }",

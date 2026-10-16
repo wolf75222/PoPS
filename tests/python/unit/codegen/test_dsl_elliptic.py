@@ -13,6 +13,7 @@ from pathlib import Path
 from pops.codegen.module_lowering import lower_and_validate
 from pops.model import ProviderPack
 from pops.physics._facade import Model
+from tests.python.support.native_syntax_toolchain import configured_kokkos_toolchain
 from tests.python.support.requirements import (
     default_cxx,
     missing_compiler_requirement,
@@ -97,12 +98,14 @@ def _compile_and_run(source, stem):
     cxx = _header_only_cxx()
     if cxx is None:
         return None
+    cxx, _root, native_flags, link_flags = configured_kokkos_toolchain()
     with tempfile.TemporaryDirectory() as tmp:
         cpp = os.path.join(tmp, stem + ".cpp")
         exe = os.path.join(tmp, stem)
         with open(cpp, "w") as f:
             f.write(source)
-        subprocess.run([cxx, *_header_only_flags(), cpp, "-o", exe], check=True)
+        subprocess.run([cxx, *_header_only_flags(), *native_flags, cpp, "-o", exe,
+                        *link_flags], check=True)
         return subprocess.run([exe], capture_output=True, text=True, check=True).stdout
 
 

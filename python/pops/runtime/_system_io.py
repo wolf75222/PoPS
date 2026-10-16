@@ -29,6 +29,7 @@ class _PreparedUniformRestart:
     exchange_checkpoint: bytes
     program_diagnostic_checkpoint: bytes
     state_carriers: bytes | None
+    finite_continuation: bytes | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,8 +191,13 @@ class _SystemIO(_System):
         temporal_json = temporal.checkpoint_json(time=time, macro_step=macro_step)
         cadence = capture_program_cadence(self._s, macro_step=macro_step)
         blocks = tuple(str(block) for block in self._s.block_names())
-        if not blocks or len(blocks) != len(set(blocks)):
-            raise ValueError("checkpoint requires a non-empty unique Uniform block order")
+        if len(blocks) != len(set(blocks)):
+            raise ValueError("checkpoint requires a unique Uniform block order")
+        if not blocks:
+            from pops.runtime._checkpoint_finite_continuation import installed_capacity
+            schema, _ = installed_capacity(self)
+            if not schema:
+                raise ValueError("checkpoint without blocks requires an installed finite continuation")
         required_collectives = ["state_global", "checkpoint_state_carriers"]
         if not callable(getattr(self._s, "capture_auxiliary_checkpoint_accepted_state", None)):
             raise TypeError("checkpoint Uniform engine lacks exact auxiliary checkpoint capture")
@@ -200,7 +206,7 @@ class _SystemIO(_System):
             "t": time,
             "macro_step": macro_step,
             "abi_key": abi_key(),
-            "blocks": np.array(blocks),
+            "blocks": np.asarray(blocks, dtype=str),
             "temporal_restart_state": np.array(temporal_json),
         }
         spatial = require_checkpoint_spatial_contract(self)
@@ -376,6 +382,8 @@ class _SystemIO(_System):
         )
         from pops.runtime._checkpoint_exchanges import capture_checkpoint_continuation
         capture_checkpoint_continuation(self, out)
+        from pops.runtime._checkpoint_finite_continuation import capture_finite_continuation
+        capture_finite_continuation(self, out)
         from pops.runtime._checkpoint_program_diagnostics import capture_checkpoint_program_diagnostics
         capture_checkpoint_program_diagnostics(self, out, provisional_capture=True)
         identity = seal_checkpoint_payload(self, out, runtime_kind="uniform")
@@ -694,7 +702,9 @@ class _SystemIO(_System):
         exchanges = prepare_checkpoint_continuation(self, d)
         from pops.runtime._checkpoint_program_diagnostics import prepare_checkpoint_program_diagnostics
         diagnostics = prepare_checkpoint_program_diagnostics(self, d)
-        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges, diagnostics, carrier_bytes)
+        from pops.runtime._checkpoint_finite_continuation import prepare_finite_continuation
+        finite = prepare_finite_continuation(self, d)
+        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges, diagnostics, carrier_bytes, finite)
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
@@ -764,6 +774,8 @@ class _SystemIO(_System):
         self._s._restore_checkpoint_program_diagnostics(prepared.program_diagnostic_checkpoint)
         if prepared.state_carriers is not None:
             self._s.restore_checkpoint_state_carriers(prepared.state_carriers)
+        if prepared.finite_continuation is not None:
+            self._s._restore_checkpoint_continuation_image(prepared.finite_continuation)
         self._temporal_restart_state = prepared.temporal_state
         self._step_controller = None
         self._last_restart_identity = prepared.restart_identity

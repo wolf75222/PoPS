@@ -6,6 +6,7 @@ JSON-ready data.  It is deliberately independent from snapshot lifecycle and has
 from __future__ import annotations
 
 import json
+from pops._structural_data import canonical_json
 import math
 import types
 from collections.abc import Mapping
@@ -24,6 +25,9 @@ from pops.problem._snapshot_callable import (
 )
 from pops.problem._snapshot_mapping import canonical_mapping as _canonical_mapping
 from pops.problem._snapshot_literals import canonical_enum_data as _canonical_enum_data, canonical_literal_data as _canonical_literal_data
+
+
+_NATIVE_ISFINITE = math.isfinite
 
 
 def _canonical(
@@ -98,6 +102,10 @@ def _canonical(
                 item, projection_cache=projection_cache, **kwargs),
             dependency_cache=projection_cache,
         )
+    if isinstance(value, (list, tuple, set, frozenset, Mapping)):
+        return _canonical_containers(
+            value, path=path, active=active, handle_resolver=handle_resolver,
+            artifact=artifact, projection_cache=projection_cache)
     marker = id(value)
     if marker in active:
         raise ValueError("AuthoringSnapshot cannot encode a reference cycle at %s" % path)
@@ -108,6 +116,119 @@ def _canonical(
             artifact=artifact, projection_cache=projection_cache)
     finally:
         active.remove(marker)
+
+
+
+class _ContainerPath:
+    """Local diagnostic spine; canonical payloads never contain these objects."""
+
+    __slots__ = ("parent", "suffix", "depth")
+
+    def __init__(self, parent, suffix):
+        self.parent = parent
+        self.suffix = suffix
+        self.depth = parent.depth + 1 if type(parent) is _ContainerPath else 0
+
+    def __str__(self):
+        parts, node = [], self
+        while isinstance(node, _ContainerPath):
+            parts.append(node.suffix)
+            node = node.parent
+        return str(node) + "".join(reversed(parts))
+
+    def child(self, suffix):
+        return _ContainerPath(self, suffix)
+
+
+def _canonical_containers(value, *, path, active, handle_resolver, artifact, projection_cache):
+    """Walk finite authoring containers with the existing authority/hook context.
+
+    Non-container leaves retain the authenticated object projection below. Work
+    items preserve hook order and check a mapping key before visiting its value.
+    """
+    result: list[Any] = [None]
+    entered = set()
+    pending: list[tuple[str, Any, Any, Any, Any]] = [("visit", value, _ContainerPath(path, ""), result, 0)]
+    try:
+        while pending:
+            action, node, location, destination, index = pending.pop()
+            if action == "leave":
+                active.remove(node)
+                entered.remove(node)
+                continue
+            if action == "sort":
+                destination.sort(key=lambda item: canonical_json(item, allow_nan=False))
+                continue
+            if action == "key":
+                token = canonical_json(node[0], sort_keys=False, allow_nan=False)
+                if token in destination:
+                    raise ValueError(
+                        "AuthoringSnapshot mapping at %s contains distinct keys with the same "
+                        "canonical identity" % location)
+                destination.add(token)
+                continue
+            # This is an optimization depth, never a supported-data limit. At
+            # most four preflights inspect a leaf before ordinary traversal;
+            # protocols still run in their original declaration order.
+            if location.depth < 4 and (type(node) is dict or type(node) is list):
+                copied, output = _canonical_builtin(node, active)
+                if copied:
+                    destination[index] = output
+                    continue
+            if (not isinstance(node, (list, tuple, set, frozenset, Mapping)) or
+                    isinstance(node, (bool, int, Fraction, Decimal, float, str, bytes, complex,
+                                      Enum, types.ModuleType, type, types.FunctionType,
+                                      types.MethodType, types.BuiltinFunctionType))):
+                destination[index] = _canonical(
+                    node, path=(location if type(node) in (type(None), bool, int, float, str, bytes, complex)
+                                else str(location)),
+                    active=active, handle_resolver=handle_resolver,
+                    artifact=artifact, projection_cache=projection_cache)
+                continue
+            if type(node).__module__.split(".", 1)[0] == "numpy":
+                raise TypeError(
+                    "AuthoringSnapshot cannot encode numpy runtime data at %s; declare metadata, not arrays"
+                    % location)
+            marker = id(node)
+            if marker in active:
+                raise ValueError("AuthoringSnapshot cannot encode a reference cycle at %s" % location)
+            active.add(marker)
+            entered.add(marker)
+            # Keep the source object alive until its identity leaves the active set.
+            pending.append(("leave", marker, node, None, None))
+            if isinstance(node, Mapping):
+                if type(node) is dict and all(isinstance(key, str) for key in node):
+                    output = {}
+                    destination[index] = output
+                    for key, child in reversed(tuple(node.items())):
+                        pending.append(("visit", child, location.child(".%s" % key), output, key))
+                else:
+                    items = tuple(node.items())
+                    entries, keys = [[None, None] for _ in items], set()
+                    destination[index] = {"$mapping": {
+                        "type": "%s.%s" % (type(node).__module__, type(node).__qualname__),
+                        "entries": entries}}
+                    for row, (key, child) in reversed(tuple(zip(entries, items, strict=True))):
+                        pending.append(("visit", child, location.child("{%r}" % key), row, 1))
+                        pending.append(("key", row, location, keys, None))
+                        pending.append(("visit", key, location.child("{key}"), row, 0))
+            else:
+                children = list(node)
+                output = [None] * len(children)
+                if isinstance(node, list):
+                    destination[index] = output
+                elif isinstance(node, tuple):
+                    destination[index] = {"$tuple": output}
+                else:
+                    destination[index] = {"$set" if isinstance(node, set) else "$frozenset": output}
+                    pending.append(("sort", None, None, output, None))
+                for n in range(len(children) - 1, -1, -1):
+                    child_path = location.child("{item}" if isinstance(node, (set, frozenset))
+                                                else "[%d]" % n)
+                    pending.append(("visit", children[n], child_path, output, n))
+        return result[0]
+    finally:
+        active.difference_update(entered)
 
 
 def _canonical_compound(
@@ -503,3 +624,46 @@ def _qualified_type(value: Any) -> str:
 
 
 __all__ = ["_canonical"]
+
+
+def _canonical_builtin(value, active):
+    """Project a closed builtin island, or leave the authoritative walk intact.
+
+    The preflight executes no protocols and retains no verdict beyond this call.
+    Tuple/subclass/opaque data is deliberately not part of the C codec language.
+    """
+    # A replaced public scalar check retains its original traversal and calls.
+    if (math.isfinite is not _NATIVE_ISFINITE or
+            type(_NATIVE_ISFINITE) is not types.BuiltinFunctionType):
+        return False, None
+    seen, pending = set(), [value]
+    while pending:
+        node = pending.pop()
+        kind = type(node)
+        if node is None or kind is bool or kind is str or kind is int:
+            continue
+        if kind is float:
+            continue
+        if kind is not dict and kind is not list:
+            return False, None
+        marker = id(node)
+        if marker in active:
+            return False, None
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if kind is dict:
+            if any(type(key) is not str for key in node):
+                return False, None
+            pending.extend(node.values())
+        else:
+            pending.extend(node)
+    try:
+        return True, json.loads(
+            json.dumps(value, allow_nan=False, separators=(",", ":")),
+            parse_int=lambda text: {"$scalar": {"kind": "integer", "value": text}},
+            parse_float=lambda text: {"$scalar": {"kind": "binary64", "value": float(text).hex()}},
+        )
+    except (ValueError, RecursionError):
+        # Cycles, deep inputs and very wide integers retain existing diagnostics.
+        return False, None

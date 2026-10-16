@@ -1,3 +1,4 @@
+#include <pops/runtime/program/field_provider_read_authority.hpp>
 /// @file
 /// @brief Exact owner-qualified auxiliary-provider registry and carrier publication for System.
 
@@ -329,21 +330,24 @@ AuxiliaryPublicationStatus System<Dim>::prepare_program_auxiliary_consumer_for_s
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   const auto auxiliary_point = runtime::system::detail::prepare_auxiliary_consumer_point(
       point, p_->embedded_boundary_generation_, p_->embedded_boundary_generation_,
-      evaluation_sequence, runtime::system::AuxiliaryEvaluationEvent::before_residual,
-      lane, consumer_qid, block, "system-program-residual", [&] {
+      evaluation_sequence, runtime::system::AuxiliaryEvaluationEvent::before_residual, lane,
+      consumer_qid, block, "system-program-residual", [&] {
         if (point.clock.empty() || point.tick != p_->macro_step_ || point.level != 0 ||
             point.substep < 0 || point.stage < 0 || point.stage_fraction.denominator <= 0 ||
             point.stage_fraction.numerator < 0 ||
             point.stage_fraction.numerator > point.stage_fraction.denominator ||
-            amr::Rational(point.stage_fraction.numerator, point.stage_fraction.denominator) != point.stage_fraction || !std::isfinite(point.dt) || point.dt <= 0 ||
-            !std::isfinite(point.physical_time) || evaluation_sequence < 0)
+            amr::Rational(point.stage_fraction.numerator, point.stage_fraction.denominator) !=
+                point.stage_fraction ||
+            !std::isfinite(point.dt) || point.dt <= 0 || !std::isfinite(point.physical_time) ||
+            evaluation_sequence < 0)
           throw std::invalid_argument("Program auxiliary read requires its complete current point");
         const auto& accepted = block_state(block);
         if (stage_state.layout() != accepted.layout() ||
             stage_state.distribution() != accepted.distribution() ||
             stage_state.local_rank() != accepted.local_rank() ||
             stage_state.ncomp() != accepted.ncomp())
-          throw std::invalid_argument("Program auxiliary read SSA state differs from its block layout");
+          throw std::invalid_argument(
+              "Program auxiliary read SSA state differs from its block layout");
         (void)p_->auxiliary_registry_.consumer_plan(consumer_qid);
       });
 
@@ -478,7 +482,8 @@ void System<Dim>::publish_program_field_components(
   const auto refresh_ghosts = [&] { transport.execute(candidate); };
   refresh_ghosts();
   transaction->launch_ready_native(
-      {&*p_->provider_carrier_, &candidate, &p_->geom}, [&](const auto&, std::exception_ptr failure) {
+      {&*p_->provider_carrier_, &candidate, &p_->geom},
+      [&](const auto&, std::exception_ptr failure) {
         runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
             failure, &lane, "Program field prerequisite failed collectively");
         refresh_ghosts();
@@ -542,8 +547,8 @@ AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
     prepared_transaction.emplace(
         p_->auxiliary_registry_.begin_publication(point, forced, consumer_qids));
     auto& transaction = *prepared_transaction;
-    runtime::system::detail::require_stability_auxiliary_permissions(
-        p_->auxiliary_registry_, transaction, point);
+    runtime::system::detail::require_stability_auxiliary_permissions(p_->auxiliary_registry_,
+                                                                     transaction, point);
     std::vector<std::string> published;
     for (std::size_t index = 0; index < p_->auxiliary_registry_.provider_count(); ++index) {
       const auto& provider = p_->auxiliary_registry_.provider(index);
@@ -638,7 +643,8 @@ AuxiliaryPublicationStatus System<Dim>::refresh_auxiliary_(
     // observes a predecessor's valid-only candidate image.
     refresh_candidate_ghosts();
     transaction.launch_ready_native(
-        {&*p_->provider_carrier_, &candidate, &p_->geom}, [&](const auto&, std::exception_ptr local_error) {
+        {&*p_->provider_carrier_, &candidate, &p_->geom},
+        [&](const auto&, std::exception_ptr local_error) {
           runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
               local_error, &*p_->auxiliary_ghost_lane_,
               "System auxiliary native provider launch failed collectively before ghost fill");
@@ -696,6 +702,14 @@ System<Dim>::prepared_auxiliary_consumer_plan(const std::string& consumer_qid) c
 }
 
 template <int Dim>
+std::string System<Dim>::prepared_auxiliary_read_authority(std::string_view consumer,
+                                                           std::size_t slot,
+                                                           std::uint64_t byte_capacity) const {
+  return runtime::program::field_provider_read_authority(p_->auxiliary_registry_, consumer, slot,
+                                                         byte_capacity);
+}
+
+template <int Dim>
 runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
 System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
@@ -706,9 +720,10 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   try {
     if (p_->auxiliary_registry_.has_pending_publication())
       throw std::logic_error("System auxiliary checkpoint refuses pending publication");
-    runtime::system::require_no_pending_auxiliary_input_checkpoint(p_->auxiliary_registry_, p_->dirty_auxiliary_providers_);
-    result = runtime::system::capture_auxiliary_checkpoint_state(
-        p_->auxiliary_registry_, p_->dirty_auxiliary_providers_);
+    runtime::system::require_no_pending_auxiliary_input_checkpoint(p_->auxiliary_registry_,
+                                                                   p_->dirty_auxiliary_providers_);
+    result = runtime::system::capture_auxiliary_checkpoint_state(p_->auxiliary_registry_,
+                                                                 p_->dirty_auxiliary_providers_);
     if (result.groups.empty()) {
       if (p_->provider_carrier_)
         throw std::logic_error("System auxiliary checkpoint has storage without registry groups");
@@ -828,14 +843,15 @@ std::pair<std::size_t, std::size_t> System<Dim>::checkpoint_program_auxiliary_ca
   const auto& program = p_->program_;
   const auto& manifest = program.checkpoint_metadata_.uniform_auxiliary_clocks;
   if (!program.artifact_backed_ || program.installed_hash_.empty() ||
-      manifest.owner_identity != program.installed_hash_ ||
-      manifest.installation_generation == 0 ||
+      manifest.owner_identity != program.installed_hash_ || manifest.installation_generation == 0 ||
       manifest.installation_generation != program.step_install_generation_ ||
       manifest.logical_clock_identities != program.checkpoint_metadata_.logical_clock_identities ||
       manifest.primary_clock_identity != program.checkpoint_metadata_.primary_clock_identity)
-    throw std::logic_error("System future auxiliary capacity requires its installed Program clock owner");
+    throw std::logic_error(
+        "System future auxiliary capacity requires its installed Program clock owner");
   const auto current = checkpoint_auxiliary_capacity();
-  return {runtime::system::program_auxiliary_metadata_capacity(p_->auxiliary_registry_, manifest), current.second};
+  return {runtime::system::program_auxiliary_metadata_capacity(p_->auxiliary_registry_, manifest),
+          current.second};
 }
 
 template <int Dim>
@@ -913,7 +929,8 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state(
   std::exception_ptr candidate_error;
   try {
     candidate_dirty = state.invalidated_providers;
-    candidate_inputs = runtime::system::restored_accepted_auxiliary_inputs(state, domain_cells(p_->dom));
+    candidate_inputs =
+        runtime::system::restored_accepted_auxiliary_inputs(state, domain_cells(p_->dom));
     candidate_registry.emplace(p_->auxiliary_registry_);
     if (p_->provider_carrier_) {
       candidate_carrier.emplace(*p_->provider_carrier_);
@@ -1042,6 +1059,8 @@ template std::vector<double> System<kNativeDimension>::auxiliary_component(
 template std::string System<kNativeDimension>::auxiliary_registry_contract() const;
 template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
 System<kNativeDimension>::prepared_auxiliary_consumer_plan(const std::string&) const;
+template std::string System<kNativeDimension>::prepared_auxiliary_read_authority(
+    std::string_view, std::size_t, std::uint64_t) const;
 template runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>
 System<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
 template std::pair<std::size_t, std::size_t>

@@ -256,6 +256,8 @@ class PreparedAmrGhostFill {
     int source_from_destination[Dim]{};
   };
 
+ public:
+  // CUDA launch stubs name these types outside the enclosing class.
   struct PackKernel {
     device_buffer_type buffer{};
     FieldView<const Real, Dim> source{};
@@ -292,6 +294,7 @@ class PreparedAmrGhostFill {
     }
   };
 
+ private:
   struct PeerStorage {
     Index<Dim> coordinate{};
     int mpi_rank = 0;

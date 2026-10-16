@@ -18,6 +18,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
+  complete continuations and child advances, spatial composition, distributed
+  operators, and graph/implicit derivatives lower from Python into native Program C++.
+  Preserve scientific typing, inventory provenance, transactional publication and
+  explicit backend limits; document the 28-model/12-method CPU reception separately
+  from GitHub CI and full scientific-family qualification.
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.

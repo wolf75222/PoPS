@@ -276,7 +276,7 @@ def validate_dag_key_data(graph, *, root_count=None):
         else: fail()
 
     binary = {"+", "-", "*", "/", "**", "minimum", "maximum", "==", "!=", "<", "<=", ">", ">=", "&", "|"}
-    unary = {"neg", "sqrt", "exp", "abs", "sign", "boolean_not"}
+    unary = {"neg", "sqrt", "exp", "sin", "cos", "log", "expm1", "abs", "sign", "boolean_not"}
     for index, node in enumerate(nodes):
         if not seq(node) or not node or not text(node[0]):
             fail()
@@ -320,15 +320,15 @@ def validate_dag_key_data(graph, *, root_count=None):
             if op == "param_const" and not text(node[1]): fail()
             if not text(node[-1]): fail()
             try:
-                from pops.identity.scalar import ScalarLiteral
+                from pops.identity.scalar import ScalarLiteral, parse_canonical_integer
                 literal = json.loads(node[-1])
                 if type(literal) is not dict or type(literal.get("kind")) is not str: fail()
                 kind = literal["kind"]
                 if kind not in {"integer", "rational", "decimal", "binary64", "algebraic"}: fail()
                 required = {"kind", "numerator", "denominator"} if kind == "rational" else {"kind", "value"}
                 if not required <= set(literal) or set(literal) - required - {"unit", "target", "cpp"}: fail()
-                payload = ((int(literal["numerator"]), int(literal["denominator"])) if kind == "rational"
-                           else int(literal["value"]) if kind == "integer" else literal["value"])
+                payload = ((parse_canonical_integer(literal["numerator"]), parse_canonical_integer(literal["denominator"])) if kind == "rational"
+                           else parse_canonical_integer(literal["value"]) if kind == "integer" else literal["value"])
                 restored = ScalarLiteral(kind, payload, **{key: literal[key] for key in ("unit", "target", "cpp") if key in literal})
                 if restored.to_data() != literal: fail()
             except (TypeError, ValueError, KeyError):

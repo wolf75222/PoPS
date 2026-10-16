@@ -417,16 +417,15 @@ TEST(AmrSpatialMaterialization, PendingProofSurvivesPublicationAndRejectsRankLoc
       EXPECT_NO_THROW(context.with_spatial_reconciliation_attempt(attempt));
     } else {
       std::string refusal;
-      EXPECT_THROW(
-          ([&] {
-            try {
-              context.with_spatial_reconciliation_attempt(attempt);
-            } catch (const std::exception& error) {
-              refusal = error.what();
-              throw;
-            }
-          })(),
-          std::exception);
+      EXPECT_THROW(([&] {
+                     try {
+                       context.with_spatial_reconciliation_attempt(attempt);
+                     } catch (const std::exception& error) {
+                       refusal = error.what();
+                       throw;
+                     }
+                   })(),
+                   std::exception);
       if (fault == 2) {
         // Without any retained proof, the canonical pending ledger must still forbid
         // publishing an empty flux expression. MPI converges this same local refusal.
@@ -450,7 +449,6 @@ TEST(AmrSpatialMaterialization, PendingProofSurvivesPublicationAndRejectsRankLoc
   }
 }
 
-
 TEST(AmrSpatialMaterialization, DeclaredFamilyPreservesMigratedQuadratureAndMetricClosure) {
   TemporalFluxFixture fixture;
   fixture.receive_positive();
@@ -458,8 +456,8 @@ TEST(AmrSpatialMaterialization, DeclaredFamilyPreservesMigratedQuadratureAndMetr
 
 TEST(AmrSpatialMaterialization, DeclaredFamilyRejectsMissingAndForeignFamilies) {
   for (auto fault : {TemporalFluxFault::MissingBasisFamily, TemporalFluxFault::ForeignBasisFamily,
-                    TemporalFluxFault::MissingCoarseFamily, TemporalFluxFault::ForeignCoarseFamily,
-                    TemporalFluxFault::MissingDeclaredProducer}) {
+                     TemporalFluxFault::MissingCoarseFamily, TemporalFluxFault::ForeignCoarseFamily,
+                     TemporalFluxFault::MissingDeclaredProducer}) {
     SCOPED_TRACE(static_cast<int>(fault));
     TemporalFluxFixture fixture(fault, true, false);
     fixture.receive_refusal();
@@ -467,16 +465,27 @@ TEST(AmrSpatialMaterialization, DeclaredFamilyRejectsMissingAndForeignFamilies) 
 }
 
 TEST(AmrSpatialMaterialization, DeclaredFamilyPreservesEveryOperatorOccurrenceDescriptor) {
-  for (auto fault : {TemporalFluxFault::ForeignRhs, TemporalFluxFault::ForeignProvider,
-                    TemporalFluxFault::ForeignBasis, TemporalFluxFault::ForeignStage}) {
+  for (auto fault :
+       {TemporalFluxFault::ForeignRhs, TemporalFluxFault::ForeignProvider,
+        TemporalFluxFault::CoarseUndeclaredProducer, TemporalFluxFault::CoarseStageClockMismatch}) {
     SCOPED_TRACE(static_cast<int>(fault));
     TemporalFluxFixture fixture(fault, true, false);
     fixture.receive_refusal();
   }
 }
 
-TEST(AmrSpatialMaterialization, DeclaredFamilyBindsStageWeightToMeasureAndRetainsPackSize) {
-  for (auto fault : {TemporalFluxFault::WeightMeasureMismatch, TemporalFluxFault::ExtraCoarseStage}) {
+TEST(AmrSpatialMaterialization, DeclaredFamilyAllowsIndependentLocalEvaluationDescriptors) {
+  for (auto difference :
+       {TemporalFluxFault::DifferentLocalBasis, TemporalFluxFault::DifferentLocalStage}) {
+    SCOPED_TRACE(static_cast<int>(difference));
+    TemporalFluxFixture fixture(difference);
+    fixture.receive_positive();
+  }
+}
+
+TEST(AmrSpatialMaterialization, DeclaredFamilyBindsStageWeightAndRejectsNonCanonicalZeroTerm) {
+  for (auto fault :
+       {TemporalFluxFault::WeightMeasureMismatch, TemporalFluxFault::ExtraCoarseStage}) {
     SCOPED_TRACE(static_cast<int>(fault));
     TemporalFluxFixture fixture(fault, true, false);
     fixture.receive_refusal();
@@ -485,7 +494,7 @@ TEST(AmrSpatialMaterialization, DeclaredFamilyBindsStageWeightToMeasureAndRetain
 
 TEST(AmrSpatialMaterialization, DeclaredFamilyRequiresCompletePhysicalTemporalCoverage) {
   for (auto fault : {TemporalFluxFault::IncompleteWindow, TemporalFluxFault::IncompleteFineFaces,
-                    TemporalFluxFault::BadClockDuration, TemporalFluxFault::WeightsDoNotClose}) {
+                     TemporalFluxFault::BadClockDuration, TemporalFluxFault::WeightsDoNotClose}) {
     SCOPED_TRACE(static_cast<int>(fault));
     TemporalFluxFixture fixture(fault);
     fixture.receive_refusal(true);
@@ -501,44 +510,50 @@ TEST(AmrSpatialMaterialization, LegacyStillRequiresTheOriginalExactOperatorPack)
 
 #endif  // POPS_NATIVE_DIM == 2
 
-
 TEST(AmrSpatialNorm, ConvergenceDriftAndOverflowVoteBeforeKrylov) {
   using namespace pops;
   const auto lane = ExecutionLane::world("test.typed-cutoff.rank-local-failure");
   auto state = field(false, false), mask = field(false, false);
-  state.set_val(Real(0)); mask.set_val(Real(1));
+  state.set_val(Real(0));
+  mask.set_val(Real(1));
   for (int attack = 0; attack < 5; ++attack) {
-  FieldNewtonOptions options;
-  if (attack == 0)
-    options.convergence = {FieldNewtonConvergenceKind::kRelative, std::numeric_limits<Real>::max(), Real(0)};
-  else if (attack == 1)
-    options.convergence = {my_rank() == 0 ? FieldNewtonConvergenceKind::kLegacy : FieldNewtonConvergenceKind::kAbsolute, Real(0), my_rank() == 0 ? Real(0) : Real(.1)};
-  else if (attack == 2)
-    options.convergence = {FieldNewtonConvergenceKind::kRelative, my_rank() == 0 ? Real(.1) : Real(.2), Real(0)};
-  else if (attack == 3)
-    options.tolerance = my_rank() == 0 ? Real(.1) : Real(.2);
-  else
-    options.convergence = {FieldNewtonConvergenceKind::kRelative, my_rank() == 0 ? std::numeric_limits<Real>::max() : Real(.1), Real(0)};
-  if (n_ranks() == 1 && attack != 0) continue; // Cross-rank tests require ROOT's actual MPI execution.
+    FieldNewtonOptions options;
+    if (attack == 0)
+      options.convergence = {FieldNewtonConvergenceKind::kRelative,
+                             std::numeric_limits<Real>::max(), Real(0)};
+    else if (attack == 1)
+      options.convergence = {my_rank() == 0 ? FieldNewtonConvergenceKind::kLegacy
+                                            : FieldNewtonConvergenceKind::kAbsolute,
+                             Real(0), my_rank() == 0 ? Real(0) : Real(.1)};
+    else if (attack == 2)
+      options.convergence = {FieldNewtonConvergenceKind::kRelative,
+                             my_rank() == 0 ? Real(.1) : Real(.2), Real(0)};
+    else if (attack == 3)
+      options.tolerance = my_rank() == 0 ? Real(.1) : Real(.2);
+    else
+      options.convergence = {FieldNewtonConvergenceKind::kRelative,
+                             my_rank() == 0 ? std::numeric_limits<Real>::max() : Real(.1), Real(0)};
+    if (n_ranks() == 1 && attack != 0)
+      continue;  // Cross-rank tests require ROOT's actual MPI execution.
 
-  int derivatives = 0;
-  const auto residual = [](const auto&, auto& output, int) { output.set_val(Real(2)); };
-  const auto derivative = [&](const auto&, const auto&, auto&, int) { ++derivatives; };
-  FieldNewtonKrylovWorkspace<2> uniform(state.layout(), state.distribution(), state.local_rank(), options);
-  EXPECT_ANY_THROW(uniform.solve(state, residual, derivative, [](auto&) {}, lane, false));
-  EXPECT_EQ(derivatives, 0);
-  const std::array<const MultiFab<2>*,1> layouts{&state}, masks{&mask};
-  const std::array<Real,1> measures{Real(1)};
-  const std::array<MultiFab<2>*,1> destinations{&state};
-  AmrFieldNewtonKrylovWorkspace<2> amr(layouts,masks,measures,options);
-  EXPECT_ANY_THROW(amr.solve(destinations,
-      [](const auto&, auto& output, int) { output[0].set_val(Real(2)); },
-      derivative, [](auto&) {}, lane, false));
-  EXPECT_EQ(derivatives, 0);
-  EXPECT_EQ(reduce_norm_inf(state), Real(0));
+    int derivatives = 0;
+    const auto residual = [](const auto&, auto& output, int) { output.set_val(Real(2)); };
+    const auto derivative = [&](const auto&, const auto&, auto&, int) { ++derivatives; };
+    FieldNewtonKrylovWorkspace<2> uniform(state.layout(), state.distribution(), state.local_rank(),
+                                          options);
+    EXPECT_ANY_THROW(uniform.solve(state, residual, derivative, [](auto&) {}, lane, false));
+    EXPECT_EQ(derivatives, 0);
+    const std::array<const MultiFab<2>*, 1> layouts{&state}, masks{&mask};
+    const std::array<Real, 1> measures{Real(1)};
+    const std::array<MultiFab<2>*, 1> destinations{&state};
+    AmrFieldNewtonKrylovWorkspace<2> amr(layouts, masks, measures, options);
+    EXPECT_ANY_THROW(amr.solve(
+        destinations, [](const auto&, auto& output, int) { output[0].set_val(Real(2)); },
+        derivative, [](auto&) {}, lane, false));
+    EXPECT_EQ(derivatives, 0);
+    EXPECT_EQ(reduce_norm_inf(state), Real(0));
   }
 }
-
 
 #if POPS_NATIVE_DIM == 2
 namespace {
@@ -714,12 +729,16 @@ TEST(AmrProgramNorm2Ownership, MixedReplicatedCoarsePartitionedFineUsesPerLevelO
         for (int x = box.lo[0]; x <= box.hi[0]; ++x) {
           EXPECT_EQ(values(Index<2>{x, y}, 0), Real(2));
           if (level == 0) {
-            ASSERT_GE(x, 0); ASSERT_LT(x, 4);
-            ASSERT_GE(y, 0); ASSERT_LT(y, 4);
+            ASSERT_GE(x, 0);
+            ASSERT_LT(x, 4);
+            ASSERT_GE(y, 0);
+            ASSERT_LT(y, 4);
             ++coarse_cell_copies[static_cast<std::size_t>(4 * y + x)];
           } else {
-            ASSERT_GE(x, 0); ASSERT_LT(x, 8);
-            ASSERT_GE(y, 0); ASSERT_LT(y, 8);
+            ASSERT_GE(x, 0);
+            ASSERT_LT(x, 8);
+            ASSERT_GE(y, 0);
+            ASSERT_LT(y, 8);
             ++fine_cell_owners[static_cast<std::size_t>(8 * y + x)];
           }
         }
@@ -733,7 +752,8 @@ TEST(AmrProgramNorm2Ownership, MixedReplicatedCoarsePartitionedFineUsesPerLevelO
     EXPECT_EQ(copies, 1);  // Each rank physically stores the complete replicated coarse box.
   EXPECT_GT(local_fine_patches, 0);  // On MPI2, both ranks truly participate in the fine level.
   for (const int local_owners : fine_cell_owners)
-    EXPECT_EQ(all_reduce_sum(static_cast<long>(local_owners), lane), 1);  // Every fine coordinate has one owner.
+    EXPECT_EQ(all_reduce_sum(static_cast<long>(local_owners), lane),
+              1);  // Every fine coordinate has one owner.
   // 16 coarse + 64 fine valid active component-zero samples, each exactly 2.
   // This is the existing per-level sample norm, not an AMR composite-cover/volume norm.
   EXPECT_NEAR(context->norm2(0, context->state(0)), std::sqrt(Real(320)), Real(1e-13));

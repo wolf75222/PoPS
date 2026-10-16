@@ -15,19 +15,23 @@ def original_amr_native_component() -> Any:
 
 
 def original_field_consumer(value: Any) -> Any:
-    """Authenticate an exact prototype/coefficient consumer, without a layout owner fallback."""
+    """Select the canonical storage issuer among exact authenticated consumers.
+
+    Each later solve copies this immutable authored assembly to its own provider
+    during gather. Sharing a request never shares a mutable solver workspace.
+    """
     from pops.fields._program_nonlinear_problem import validate_nonlinear_field_request
 
-    matches = [node for node in value.prog._values if node.op == "solve_spatial_field"
+    from .program_lowerability import all_ops
+    matches = [node for node in all_ops(value.prog) if node.op == "solve_spatial_field"
                and (any(source is value for source in node.inputs[:2]) or
                     (value.op == "scalar_field" and node.attrs.get("seed_index") is not None
                      and node.inputs[-1] is value))]
     if not matches:
         return None
-    if len(matches) != 1:
-        raise NotImplementedError("original AMR field storage requires one consuming barrier")
-    validate_nonlinear_field_request(value.prog, matches[0])
-    return matches[0]
+    for match in matches:
+        validate_nonlinear_field_request(value.prog, match)
+    return min(matches, key=lambda node: node.id)
 
 
 def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: list,
@@ -97,6 +101,15 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
     phase = variables.get(("original_field_hierarchy_phase",))
     if phase == "gather":
         lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        coefficient = value.inputs[1]
+        storage_issuer = original_field_consumer(coefficient)
+        if storage_issuer is None:
+            raise ValueError("original field coefficient lacks its exact assembly issuer")
+        if storage_issuer is not value:
+            lines += ['auto& %s_coefficients = ctx.hierarchy_field_assembly(%d, "pops.general-field.coefficients");'
+                      % (stem, value.id),
+                      "ctx.prepare_spatial_collectively([&] { pops::PureFieldAlgebra::copy(%s_coefficients, %s); Kokkos::fence(); });"
+                      % (stem, variables[coefficient.id])]
         for index, source in enumerate(captures):
             lines += ["auto& %s_capture_%d = ctx.hierarchy_field_scratch(%d, %d, %d, %d, 0);" %
                       (stem, index, value.id, value.id, 2 + index, widths[index]),
@@ -126,7 +139,7 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
               "std::vector<%s_Core::hierarchy_type> %s_captures;" % (stem, stem),
               "%s_Core::hierarchy_type %s_seed;" % (stem, stem),
               "ctx.prepare_spatial_collectively([&] { %s_captures.resize(%d); });" % (stem, len(captures)),
-              "for (int level = 0; level < ctx.nlev(); ++level) ctx.with_program_attempt_level(level, [&] {"]
+              "for (int level = 0; level < ctx.nlev(); ++level) ctx.with_program_attempt_level_or_current(level, [&] {"]
     for index in range(len(captures)):
         lines += ["  auto& input_%d = ctx.hierarchy_field_scratch(%d, %d, %d, %d, 0, false);" %
                   (index, value.id, value.id, 2 + index, widths[index]),
@@ -222,7 +235,12 @@ def emit_amr_original_field(program: Any, value: Any, variables: Any, lines: lis
               "auto %s = %s_provider->stage_original_field_candidate_collectively(std::move(%s), %s_candidate, %d, ctx.prepared_execution_lane(), %s_provider, std::move(%s_validate), std::move(%s_synchronize));" %
               (outcome, stem, report, stem, options["max_iterations"], stem, stem, stem)]
     _append_solve_report_guard(program, value, outcome, lines, label="original_amr_field_residual", phase="solve")
-    closed_sources = [node for node in program._values if node.op == "spatial_interaction"
+    # A CPS segment is an emission view, not the authority for future consumers.
+    # The solved SSA node retains its full immutable Program, including consumers
+    # after a suspension or in a closed region. Exact identity below still ties
+    # every seal binding to this particular solve, never another equal graph.
+    from pops.codegen.program_lowerability import all_ops
+    closed_sources = [node for node in all_ops(value.prog) if node.op == "spatial_interaction"
                       and node.attrs.get("contract") == "pops.spatial-interaction@3"]
     closed_sources = [node for node in closed_sources if node.inputs[0].inputs[0].inputs[0].inputs[0] is value]
     if closed_sources:

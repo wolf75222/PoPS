@@ -27,6 +27,8 @@ class _PreparedAMRRestart:
     cadence_state: Any
     program_state: Any
     source_program_state: bytes
+    source_program_states: tuple[bytes, ...]
+    workspace_byte_capacity: int
     source_level_distribution_modes: tuple[str, ...]
     source_level_owner_ranks: tuple[tuple[int, ...], ...]
     source_program_authority: bytes
@@ -612,9 +614,8 @@ def _capture_v3(owner, sim, prepared, *, prepared_capture=None):
         if prepared.topology.distributed
         else (prepared.local_program_state,)
     )
-    if any(state != program_states[0] for state in program_states[1:]):
-        raise ValueError("checkpoint AMR accepted Program image differs across source ranks")
-    canonical_program_state = program_states[0]
+    if any(bool(state) != bool(prepared.local_program_state) for state in program_states):
+        raise ValueError("checkpoint AMR accepted Program presence differs across source ranks")
     from pops.runtime._checkpoint_history_flux_snapshots import capture_history_flux_snapshots
     snapshot_canonicalizer = getattr(sim, "canonical_program_history_flux_snapshots", None)
     capture_history_flux_snapshots(
@@ -671,11 +672,10 @@ def _capture_v3(owner, sim, prepared, *, prepared_capture=None):
         source_authority = bytes(raw_source_authority)
         if not source_authority:
             raise RuntimeError("checkpoint AMR engine returned an empty source authority")
-        # Re-materializing onto the unchanged ownership is a non-mutating validation pass. It
-        # authenticates every rank-independent accepted field, including persistent tagging,
-        # before any rank may seal or publish a checkpoint.
+        # Re-materializing onto unchanged ownership validates the exact local image
+        # against its ranked native authority and the shared collective metadata.
         rematerialize(
-            canonical_program_state,
+            prepared.local_program_state,
             prepared.topology.size,
             canonical_dmaps,
             canonical_dmaps,
@@ -686,7 +686,8 @@ def _capture_v3(owner, sim, prepared, *, prepared_capture=None):
         out["program_accepted_state_source_authority"] = np.frombuffer(
             source_authority, dtype=np.uint8
         ).copy()
-    out["program_accepted_state"] = np.frombuffer(canonical_program_state, dtype=np.uint8).copy()
+    from pops.runtime._amr_checkpoint_program_shards import capture_program_shards
+    capture_program_shards(out, program_states)
     for level, (mode, ranks) in enumerate(zip(rank_modes, canonical_dmaps, strict=True)):
         out["distribution_mode_%d" % level] = np.asarray(mode)
         out["dmap_%d" % level] = np.asarray(ranks, dtype=np.int64)
@@ -820,6 +821,7 @@ def prepare_v3(
     bit_identical=False,
     hierarchy_mode="restore_recorded_hierarchy",
     hierarchy_identity=None,
+    workspace_byte_capacity=64 * 1024 * 1024,
 ):
     """Validate an accepted-state v12 AMR payload without mutating the native engine.
 
@@ -835,6 +837,8 @@ def prepare_v3(
     from pops.runtime._program_cadence_checkpoint import prepare_program_cadence
     from pops.runtime._temporal_restart import TemporalRestartState
 
+    if type(workspace_byte_capacity) is not int or not 1 <= workspace_byte_capacity <= (1 << 63) - 1:
+        raise ValueError("restart: workspace_byte_capacity must be an exact positive Int64")
     topology = checkpoint_topology(owner)
     spatial = authenticate_checkpoint_spatial_contract(owner, d)
     current_ranks = topology.size
@@ -885,6 +889,19 @@ def prepare_v3(
     checkpoint_levels, checkpoint_configured_levels = _checkpoint_amr_level_envelope(sim, d)
     from pops.runtime._amr_checkpoint_topology import recorded_rank_topology
 
+    from pops.runtime._amr_checkpoint_program_shards import select_program_shard
+    d = select_program_shard(
+        d, source_ranks=checkpoint_ranks, target_ranks=current_ranks, target_rank=topology.rank,
+        allow_native_migration=callable(getattr(sim, "rematerialize_program_accepted_state_ranked", None)),
+    )
+    source_program_states = ()
+    if checkpoint_ranks != current_ranks and bytes(d["program_accepted_state"]).startswith(b"POPSANDF"):
+        source_program_states = tuple(
+            np.asarray(d["program_accepted_state_rank_%d" % rank]).tobytes()
+            for rank in range(checkpoint_ranks)
+        )
+        if sum(map(len, source_program_states)) > workspace_byte_capacity:
+            raise ValueError("restart: ranked Program images exceed workspace_byte_capacity")
     recorded_topology = recorded_rank_topology(d, checkpoint_levels, checkpoint_ranks)
     source_program_authority = b""
     if recorded_topology.program_state:
@@ -1161,6 +1178,8 @@ def prepare_v3(
         cadence_state=cadence,
         program_state=program_state,
         source_program_state=recorded_topology.program_state,
+        source_program_states=source_program_states,
+        workspace_byte_capacity=workspace_byte_capacity,
         source_level_distribution_modes=recorded_topology.level_distribution_modes,
         source_level_owner_ranks=recorded_topology.level_owner_ranks,
         source_program_authority=source_program_authority,
@@ -1398,8 +1417,18 @@ def apply_v3(owner, sim, prepared):
             target_level_modes = tuple(
                 sim.level_distribution_mode(level) for level in range(prepared.levels)
             )
-            program_state = bytes(
-                sim.rematerialize_program_accepted_state(
+            if prepared.source_program_states:
+                program_state = bytes(sim.rematerialize_program_accepted_state_ranked(
+                    prepared.source_program_states,
+                    prepared.source_level_owner_ranks,
+                    target_level_owners,
+                    prepared.source_level_distribution_modes,
+                    target_level_modes,
+                    prepared.source_program_authority,
+                    prepared.workspace_byte_capacity,
+                ))
+            else:
+                program_state = bytes(sim.rematerialize_program_accepted_state(
                     prepared.source_program_state,
                     prepared.checkpoint_ranks,
                     prepared.source_level_owner_ranks,
@@ -1407,8 +1436,7 @@ def apply_v3(owner, sim, prepared):
                     prepared.source_level_distribution_modes,
                     target_level_modes,
                     prepared.source_program_authority,
-                )
-            )
+                ))
             if not program_state:
                 raise RuntimeError(
                     "restart: compiled Program rematerialization returned an empty image"
@@ -1603,6 +1631,15 @@ def apply_v3(owner, sim, prepared):
     sim._restore_checkpoint_program_diagnostics(prepared.program_diagnostic_checkpoint)
     owner._temporal_restart_state = prepared.temporal_state
     owner._step_controller = None
+    owner._last_restart_migration_receipt = {
+        "schema_version": 1,
+        "source_ranks": prepared.checkpoint_ranks,
+        "target_ranks": current_ranks,
+        "workspace_byte_capacity": prepared.workspace_byte_capacity,
+        "complete_rank_table": bool(prepared.source_program_states),
+        "source_shards_sha256": tuple(hashlib.sha256(s).hexdigest() for s in prepared.source_program_states),
+        "target_program_state_sha256": hashlib.sha256(program_state).hexdigest(),
+    }
     return report
 
 

@@ -1,9 +1,10 @@
-"""Exact metadata authority for an explicitly selected native platform SDK.
+"""Exact file authority for the native compiler and a declared platform SDK.
 
 An SDK directory is never an include authority.  Darwin's compiler reports its
 SDKSettings.json alongside headers in a depfile; authenticate that one declared
 input before compiling, include its bytes in artifact identity, and check again
-before publication.  Other platforms retain their existing compiler flags.
+before publication. Compiler implicit headers have independent build-time tree
+digests and exact-file authority; they never become new include search flags.
 """
 from __future__ import annotations
 
@@ -66,7 +67,7 @@ class CapturedNativeToolchain:
         }
 
 
-def capture_native_toolchain(environment: Any = None) -> CapturedNativeToolchain | None:
+def _capture_platform_sdk(environment: Any = None) -> CapturedNativeToolchain | None:
     """Capture declared SDK metadata, never infer authority from observed dependencies."""
     if _platform_name() != "darwin":
         return None
@@ -90,10 +91,41 @@ def capture_native_toolchain(environment: Any = None) -> CapturedNativeToolchain
     return capture
 
 
+@dataclass(frozen=True, slots=True)
+class CapturedNativeToolchainBundle:
+    """Independent platform metadata and native compiler file authorities."""
+
+    sdk: CapturedNativeToolchain | None
+    compiler: Any
+
+    def verify(self) -> frozenset[str]:
+        from pops.codegen._compiler_include_contract import CapturedCompilerIncludes
+
+        if self.sdk is not None and type(self.sdk) is not CapturedNativeToolchain:
+            raise TypeError("native toolchain bundle requires an exact platform proof")
+        if type(self.compiler) is not CapturedCompilerIncludes:
+            raise TypeError("native toolchain bundle requires an exact compiler proof")
+        return self.compiler.verify() | (frozenset() if self.sdk is None else self.sdk.verify())
+
+    def to_data(self) -> dict[str, Any]:
+        return {"contract": "pops.native-toolchain@2",
+                "compiler": self.compiler.to_data(),
+                "platform_sdk": None if self.sdk is None else self.sdk.to_data()}
+
+
+def capture_native_toolchain(environment: Any = None) -> Any:
+    """Capture declared authorities before observing any generated depfile."""
+    from pops.codegen._compiler_include_contract import capture_compiler_includes
+
+    sdk = _capture_platform_sdk(environment)
+    compiler = capture_compiler_includes()
+    return sdk if compiler is None else CapturedNativeToolchainBundle(sdk, compiler)
+
+
 def verify_native_toolchain(capture: Any) -> frozenset[str]:
     if capture is None:
         return frozenset()
-    if type(capture) is not CapturedNativeToolchain:
+    if type(capture) not in (CapturedNativeToolchain, CapturedNativeToolchainBundle):
         raise TypeError("native toolchain authority must be an exact captured SDK proof")
     return capture.verify()
 
@@ -102,6 +134,11 @@ def native_toolchain_flags(capture: Any, flags: Any) -> list[str]:
     """Pin the captured sysroot explicitly without opening an SDK include directory."""
     if type(flags) not in (list, tuple) or any(type(flag) is not str for flag in flags):
         raise TypeError("native compiler flags must be an exact text sequence")
+    if type(capture) is CapturedNativeToolchainBundle:
+        # This pure flag transformation changes only the platform SDK selection.
+        # Compiler files are verified at capture, artifact identity, and the
+        # before-compile / before-publication boundaries, never granted by flags.
+        capture = capture.sdk
     verify_native_toolchain(capture)
     if capture is None:
         return list(flags)

@@ -132,6 +132,10 @@ def history_space_identity(program: Any, name: str) -> str:
             continue
         seen.add(id(value))
         if value.attrs.get("history") == name:
+            if value.op == "history" and value.attrs.get("global_field_history_read"):
+                from pops.time._program.global_history_reads import validate_read
+                validate_read(program, value)
+                continue
             if (value.op != "store_history" or len(value.inputs) != 1
                     or value.inputs[0].vtype != "scalar_field" or value.block != owner):
                 return "scalar-field"

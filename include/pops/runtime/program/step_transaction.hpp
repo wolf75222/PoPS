@@ -66,13 +66,19 @@ class POPS_RUNTIME_EXCEPTION_ABI StepAttemptRejected final : public std::runtime
         phase_(std::move(phase)),
         detail_(std::move(detail)) {}
   StepAttemptRejected(SolveStatus status, StepAttemptDisposition disposition,
-                      std::uint32_t reason_code, std::string phase, std::string detail = {})
+                      std::uint32_t reason_code, std::string phase, std::string detail = {},
+                      std::string typed_failure_schema = {}, std::string typed_failure_payload = {})
       : std::runtime_error(message(status, disposition, reason_code, phase, detail)),
         status_(status),
         phase_(std::move(phase)),
         detail_(std::move(detail)),
         disposition_(disposition),
-        reason_code_(reason_code) {}
+        reason_code_(reason_code),
+        typed_failure_schema_(std::move(typed_failure_schema)),
+        typed_failure_payload_(std::move(typed_failure_payload)) {
+    if (typed_failure_schema_.empty() != typed_failure_payload_.empty())
+      throw std::invalid_argument("typed failure requires both schema and payload");
+  }
   ~StepAttemptRejected() noexcept override;
 
   SolveStatus status() const noexcept { return status_; }
@@ -80,6 +86,8 @@ class POPS_RUNTIME_EXCEPTION_ABI StepAttemptRejected final : public std::runtime
   const std::string& detail() const noexcept { return detail_; }
   StepAttemptDisposition disposition() const noexcept { return disposition_; }
   std::uint32_t reason_code() const noexcept { return reason_code_; }
+  const std::string& typed_failure_schema() const noexcept { return typed_failure_schema_; }
+  const std::string& typed_failure_payload() const noexcept { return typed_failure_payload_; }
 
  private:
   static std::string message(SolveStatus status, const std::string& phase,
@@ -106,6 +114,8 @@ class POPS_RUNTIME_EXCEPTION_ABI StepAttemptRejected final : public std::runtime
   std::string detail_;
   StepAttemptDisposition disposition_ = StepAttemptDisposition::kReject;
   std::uint32_t reason_code_ = 0;
+  std::string typed_failure_schema_;
+  std::string typed_failure_payload_;
 };
 
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI)

@@ -20,6 +20,7 @@ from pops.physics._facade import Model
 from pops.time import Program
 from tests.python.unit.runtime._typed_program import (
     _source_model_for_owner,
+    typed_compiled_artifact,
     typed_program_state,
 )
 
@@ -322,3 +323,10 @@ def test_source_model_for_owner_refuses_unrelated_detached_program() -> None:
 
     with pytest.raises(ValueError, match="matching the supplied Program"):
         _source_model_for_owner(module.owner_path, program=Program("unrelated_program"))
+
+
+def test_explicit_artifact_source_must_match_the_sealed_program() -> None:
+    sealed, *_ = typed_program_state("sealed_source")
+    unrelated, *_ = typed_program_state("unrelated_source")
+    with pytest.raises(ValueError, match="source differs from its sealed Program"):
+        typed_compiled_artifact(SimpleNamespace(program=sealed), {}, source_program=unrelated)

@@ -356,6 +356,10 @@ def resolve(
     blocks = compose_shared_interfaces(blocks, layout_plan=layout_plan)
     from pops.codegen._resolved_block_operations import build_block_resolved_operations
 
+    from pops.codegen.program_realization import validate_program_realizations
+    for block in blocks:
+        validate_program_realizations(block.numerics, resolved_time)
+
     blocks = tuple(replace(block, resolved_operations=build_block_resolved_operations(
         block, resolved_time)) for block in blocks)
     from .provider_instances import qualify_publication_instances

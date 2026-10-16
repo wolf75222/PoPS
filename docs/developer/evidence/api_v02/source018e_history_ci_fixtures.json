@@ -1,0 +1,669 @@
+{
+  "source": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/receiver-source018e",
+  "build": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/cpp-source018e",
+  "scope": "test-only fixture overlay over immutable full PoPS CMake018e, MPI1/2/3",
+  "distinct_cases": 15,
+  "rank_observations": 90,
+  "skips": 0,
+  "passed": true,
+  "receipts": [
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/cpp-history-ci-d17-020-0001/receipt.json",
+      "sha256": "0816140eed0ebde3283c3d18490456e600c3d540d553f9a87143ac79a31acb69",
+      "passed": false,
+      "checks": {
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "overlay_unchanged": true
+      }
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/cpp-history-ci-d17-020-0002/receipt.json",
+      "sha256": "6a0ce40d6b8d4688345725959f5a6c207a2cfd89c26cfef8a40e973d328467d9",
+      "passed": true,
+      "checks": {
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "overlay_unchanged": true
+      }
+    }
+  ],
+  "observations": [
+    {
+      "case": "test_amr_history_ring.RetainsAndInterpolatesExactRankedState",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RetainsAndInterpolatesExactRankedState",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RetainsAndInterpolatesExactRankedState",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RetainsAndInterpolatesExactRankedState",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RetainsAndInterpolatesExactRankedState",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RetainsAndInterpolatesExactRankedState",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FacadeTransactionRestoresAcceptedHistoryImage",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.RestartRegridImageRejectsPendingStoreAndEndsWithItsTransaction",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "test_amr_history_ring.FrozenRestartImageRefusesLaterStoreRotationAndRestore",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/0",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/1",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/2",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/3",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/0",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/1",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/2",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/3",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/0",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/1",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/2",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/3",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/0",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/1",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/2",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/3",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/0",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/1",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/2",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/3",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/0",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/1",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/2",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "Contracts/AmrScalarOutputHistory.ExpansionPreservesOnlyAuthenticatedOutputOverlap/3",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ScalarParentPreparationRefreshesSparsePeriodicGhosts",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.ProgramContextRetainsAndInterpolatesExactLevelHistory",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.AlignedFourSlotHistoryProjectsEarnedSamplesAtomically",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.PreparedHistoryRemapAcceptsPublishedReplacement",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "GeneratedAmrSystemBlock.NoopPreparedRegridPreservesInitializedHistory",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "ProgramContextContract.SeamSurfaceIsConsistent",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "ProgramContextContract.AmrHistoryDeclaredScalarHaloPreservesExactStorageContract",
+      "ranks": 1,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "ProgramContextContract.SeamSurfaceIsConsistent",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "ProgramContextContract.AmrHistoryDeclaredScalarHaloPreservesExactStorageContract",
+      "ranks": 2,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "ProgramContextContract.SeamSurfaceIsConsistent",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "ProgramContextContract.AmrHistoryDeclaredScalarHaloPreservesExactStorageContract",
+      "ranks": 2,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "ProgramContextContract.SeamSurfaceIsConsistent",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "ProgramContextContract.AmrHistoryDeclaredScalarHaloPreservesExactStorageContract",
+      "ranks": 3,
+      "rank": 0,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "ProgramContextContract.SeamSurfaceIsConsistent",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "ProgramContextContract.AmrHistoryDeclaredScalarHaloPreservesExactStorageContract",
+      "ranks": 3,
+      "rank": 1,
+      "passed": true,
+      "receipt": "0001"
+    },
+    {
+      "case": "ProgramContextContract.SeamSurfaceIsConsistent",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0002"
+    },
+    {
+      "case": "ProgramContextContract.AmrHistoryDeclaredScalarHaloPreservesExactStorageContract",
+      "ranks": 3,
+      "rank": 2,
+      "passed": true,
+      "receipt": "0001"
+    }
+  ],
+  "production_edits": false,
+  "elf_export_qualification": "not claimed; macOS link includes export_dynamic; Linux CI remains required"
+}

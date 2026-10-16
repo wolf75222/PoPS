@@ -6,7 +6,7 @@ small and explicit: ``Model / Program / Case -> validate -> resolve -> compile -
 """
 from __future__ import annotations
 
-from ._api import bind, compile, resolve, run, validate
+from ._api import bind, compile, resolve, run, step, validate
 from ._inspect import explain, inspect
 from ._version import __version__
 from .physics.board import Model
@@ -32,5 +32,6 @@ __all__ = [
     "compile",
     "bind",
     "run",
+    "step",
     "__version__",
 ]

@@ -9,7 +9,7 @@ can be reached, so no rank can wait forever behind a rank-local exception.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol, TypeVar
@@ -146,4 +146,143 @@ def compile_resolved_plan_once(
         raise RuntimeError("authenticated artifact cache load failed: " + details)
     if artifact is None:
         raise RuntimeError("rank did not obtain the compiled AMR artifact")
+    return artifact
+
+
+def compile_resolved_plan_cached(
+    comm: object,
+    resolved: PlanT,
+    *,
+    route: str,
+    compile_artifact: Callable[[PlanT], ArtifactT],
+) -> ArtifactT:
+    """Prepare public cached compilations concurrently, then authenticate together.
+
+    Only the public compiler's ordinary content-addressed cache route opts in.
+    Every other route keeps the historical rank-zero-first protocol. Model and
+    Program cache locks serialize each successful cache entry's publication;
+    Python preparation still happens independently on every rank. External
+    source components retain their own separate compilation protocol, so this
+    helper does not promise one compiler invocation for those components.
+    """
+    native = require_world(comm)
+
+    def converge(error: str, phase: str) -> None:
+        errors = allgather_value(native, error)
+        if any(errors):
+            details = "; ".join(
+                "rank %d: %s" % (peer_rank, item)
+                for peer_rank, item in enumerate(errors) if item)
+            raise RuntimeError(phase + " failed: " + details)
+
+    eligible = False
+    eligibility_error = ""
+    try:
+        import pops
+
+        # A callback may contain collectives or choose an uncached output. Do not
+        # change its schedule merely because it returns the same Protocol type.
+        if compile_artifact is pops.compile and not os.environ.get("POPS_CODEGEN_DIR"):
+            options = getattr(resolved, "compile_options", None)
+            eligible = (isinstance(options, Mapping)
+                        and options.get("so_path") is None
+                        and not options.get("force", False)
+                        and options.get("model_source_policy", "allow_missing") != "recompile")
+    except Exception as exc:  # noqa: BLE001 -- agree on the route before any branch
+        eligibility_error = "%s: %s" % (type(exc).__name__, exc)
+    decisions = allgather_value(native, (eligibility_error, eligible))
+    if any(row[0] for row in decisions):
+        details = "; ".join("rank %d: %s" % (rank, row[0])
+                            for rank, row in enumerate(decisions) if row[0])
+        raise RuntimeError("cached compilation eligibility failed: " + details)
+    if not all(row[1] for row in decisions):
+        return compile_resolved_plan_once(
+            comm, resolved, route=route, compile_artifact=compile_artifact)
+
+    identity = ""
+    identity_error = ""
+    try:
+        identity = resolved.plan_identity.hexdigest
+        if type(identity) is not str or not identity:
+            raise RuntimeError("resolved plan has no exact identity")
+    except Exception as exc:  # noqa: BLE001 -- even a failed identity getter must converge
+        identity_error = "%s: %s" % (type(exc).__name__, exc)
+    identities = allgather_value(native, (identity_error, identity))
+    if any(row[0] for row in identities):
+        details = "; ".join("rank %d: %s" % (rank, row[0])
+                            for rank, row in enumerate(identities) if row[0])
+        raise RuntimeError("resolved plan authentication failed: " + details)
+    if len({row[1] for row in identities}) != 1:
+        raise RuntimeError("resolved AMR plan identity differs across MPI ranks")
+
+    rank = int(native.rank)
+    publication: tuple[bool, str, str, str] | None = None
+    if rank == 0:
+        try:
+            import secrets
+            import tempfile
+            from pops.codegen.cache import pops_cache_dir
+
+            cache = str(Path(pops_cache_dir()).resolve())
+            nonce = secrets.token_hex(32)
+            # Directory equality alone does not prove that ranks see the same
+            # filesystem. Keep a unique, closed marker for this test's lifetime.
+            with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="ascii", prefix=".pops-mpi-cache-",
+                    suffix=".publication", dir=cache, delete=False) as marker:
+                marker.write(nonce)
+                marker_name = Path(marker.name).name
+            publication = (True, cache, marker_name, nonce)
+        except Exception as exc:  # noqa: BLE001 -- publish setup failure before compilation
+            publication = (False, "%s: %s" % (type(exc).__name__, exc), "", "")
+    publication = broadcast_value(native, publication, root=0)
+    resource_error = ""
+    try:
+        if not publication[0]:
+            raise RuntimeError("rank 0 cache publication failed: " + publication[1])
+        cache_path = Path(publication[1])
+        if not cache_path.is_dir():
+            raise RuntimeError("published MPI test cache is not visible on this rank")
+        if (cache_path / publication[2]).read_text(encoding="ascii") != publication[3]:
+            raise RuntimeError("published MPI test cache marker differs on this rank")
+    except Exception as exc:  # noqa: BLE001 -- no rank compiles behind a failed peer
+        resource_error = "%s: %s" % (type(exc).__name__, exc)
+    converge(resource_error, "shared MPI cache publication")
+
+    artifact: ArtifactT | None = None
+    prepared_identity = ""
+    compile_error = ""
+    try:
+        with _published_cache(publication[1]):
+            _phase(comm, route + ": concurrent cached preparation start")
+            artifact = compile_artifact(resolved)
+            if artifact is None:
+                raise RuntimeError("compiler returned no artifact")
+            artifact.verify()
+            # Read this potentially failing property before the error collective,
+            # not on rank zero between that collective and the next broadcast.
+            prepared_identity = artifact.artifact_identity.hexdigest
+            if type(prepared_identity) is not str or not prepared_identity:
+                raise RuntimeError("compiled artifact has no exact identity")
+            _phase(comm, route + ": concurrent cached preparation done")
+    except Exception as exc:  # noqa: BLE001 -- restore the environment, then converge
+        compile_error = "%s: %s" % (type(exc).__name__, exc)
+    converge(compile_error, "concurrent cached artifact preparation")
+
+    published_identity = broadcast_value(
+        native, prepared_identity if rank == 0 else None, root=0)
+    verification_error = ""
+    try:
+        if artifact is None:
+            raise RuntimeError("rank did not obtain the compiled artifact")
+        # Recompute the complete evidence after every rank has finished preparing;
+        # a late publication or tampering must not escape the pre-bind frontier.
+        artifact.verify()
+        if artifact.artifact_identity.hexdigest != published_identity:
+            raise RuntimeError("compiled artifact differs from rank zero's exact publication")
+    except Exception as exc:  # noqa: BLE001 -- every rank leaves on the same failure schedule
+        verification_error = "%s: %s" % (type(exc).__name__, exc)
+    converge(verification_error, "authenticated concurrent artifact publication")
+    if artifact is None:
+        raise RuntimeError("rank did not obtain the compiled artifact")
     return artifact

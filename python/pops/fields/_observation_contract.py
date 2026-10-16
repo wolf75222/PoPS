@@ -6,12 +6,51 @@ from typing import Any
 from pops.identity import Identity, canonical_bytes
 
 
+def field_provider_authority(problem_identity: str, unknown: Any, space: Any) -> dict[str, Any]:
+    """Durable scientific producer, independent of a solve invocation and State owner."""
+    return {"kind": "field_problem", "version": 1, "problem": problem_identity,
+            "unknown": unknown, "components": 1,
+            "space": None if space is None else space.to_data(), "projection": "component"}
+
+
+def field_gradient_authority(source, dimension, space):
+    """Scientific storage identity of the authored observation's realized gradient."""
+    return {**source, "components": dimension,
+            "space": None if space is None else space.to_data(),
+            "projection": {"kind": "gradient", "dimension": dimension,
+                           "differentiation": "cell_centered_second_order", "sampling": "cell"}}
+
+
+def direct_native_field_operations(solve: Any) -> tuple[Any, ...]:
+    # The solve owns one load and one native apply closure. State inputs can
+    # legitimately contain other field problems from previous RK stages; those
+    # ancestors are dependencies, not producers of this observation. Traversing
+    # the whole State graph would incorrectly merge their physical identities.
+    try:
+        operator, load = solve.inputs[0], solve.inputs[1]
+        body = tuple(operator.attrs["apply_block"])
+        applies = tuple(node for node in body if node.op == "field_problem_apply")
+        if (solve.op != "solve_linear" or operator.op != "matrix_free_operator"
+                or load.op != "field_problem_load" or len(applies) != 1):
+            raise ValueError("field observation lost its direct native producer")
+        apply = applies[0]
+        coefficients = apply.inputs[2]
+        if coefficients.op != "field_problem_coefficients":
+            raise ValueError("field observation lost its direct coefficient producer")
+    except (IndexError, KeyError, AttributeError, TypeError) as exc:
+        raise ValueError("field observation lost its direct native producer") from exc
+    return load, apply, coefficients
+
+
 def validate_field_observation(value: Any) -> tuple[int, int, Any]:
     """Return packed width, selected component and solve after authenticating the observation."""
     if value.op != "field_component" or value.vtype != "scalar_field" \
             or type(value.attrs.get("ncomp")) is not int or value.attrs["ncomp"] != 1 \
             or len(value.inputs) != 1:
         raise ValueError("field observation requires one consumed packed source")
+    byte_capacity = value.attrs.get("observation_byte_capacity", 64 * 1024 * 1024)
+    if type(byte_capacity) is not int or not 1 <= byte_capacity <= (1 << 63) - 1:
+        raise ValueError("field observation byte capacity must be a positive int64 ceiling")
     identity = Identity.from_token(value.attrs.get("field_problem_identity"))
     if identity.domain != "field-problem":
         raise ValueError("field observation lost its physical field-problem identity")
@@ -47,7 +86,10 @@ def validate_field_observation(value: Any) -> tuple[int, int, Any]:
     elif value.space is not None:
         raise ValueError("field observation has no declared physical space authority")
 
-    from pops.codegen.program_field_plan import _nodes, _reachable
+    authority = field_provider_authority(identity.token, unknown.canonical_identity(), value.space)
+    if canonical_bytes(strict_data(value.attrs.get("field_authority"), where="field authority")) != \
+            canonical_bytes(strict_data(authority, where="declared field authority")):
+        raise ValueError("field observation changed its independent provider authority")
 
     if solve.op == "solve_spatial_field":
         from ._program_nonlinear_problem import validate_nonlinear_field_request
@@ -56,10 +98,9 @@ def validate_field_observation(value: Any) -> tuple[int, int, Any]:
             raise ValueError("field observation belongs to a different original residual")
         return width, selected, solve
 
-    native_sources = tuple(node for node in _reachable(solve, _nodes(value.prog))
-                           if node.op in ("field_problem_load", "field_problem_apply"))
-    if not native_sources or any(node.attrs.get("field_problem_identity") != identity.token
-                                 for node in native_sources):
+    operations = direct_native_field_operations(solve)
+    if any(node.attrs.get("field_problem_identity") != identity.token
+           for node in operations):
         raise ValueError("field observation belongs to a different native field problem")
     return width, selected, solve
 
@@ -110,6 +151,11 @@ def validate_field_gradient(value: Any) -> tuple[int, Any]:
             raise ValueError("field gradient changed its physical units, support or sampling")
     elif value.space is not None:
         raise ValueError("field gradient has no declared physical space authority")
+    from pops.time._graph.base import strict_data
+    expected = field_gradient_authority(source.attrs["field_authority"], dimension, value.space)
+    if canonical_bytes(strict_data(value.attrs.get("field_authority"), where="gradient authority")) != \
+            canonical_bytes(strict_data(expected, where="declared gradient authority")):
+        raise ValueError("field gradient changed its independent provider authority")
     return dimension, solve
 
 

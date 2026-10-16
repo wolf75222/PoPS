@@ -308,17 +308,42 @@ struct ProgramCheckpointMetadata {
   std::string temporal_provider_identity;
   std::size_t temporal_cell_capacity = 0;
   std::size_t temporal_cells_per_topology_cell = 0;
+  std::string continuation_root_schema_identity;
+  std::size_t continuation_root_byte_capacity = 0;
+  std::string continuation_level_schema_identity;
+  std::size_t continuation_level_byte_capacity = 0;
+  std::size_t history_field_metadata_storage_bytes = 0;
+  std::size_t history_field_metadata_workspace_bytes = 0;
 
   friend bool operator==(const ProgramCheckpointMetadata&,
                          const ProgramCheckpointMetadata&) = default;
 };
 
-/// Read the mandatory, frozen POPSAND4 shape metadata.  Unlike selective-replay authority this
-/// family has no legacy-absence meaning: an AMR artifact without it cannot prove a pre-allocation
-/// checkpoint resource bound and is rejected before its installer runs.
-inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::handle dl_handle) {
+/// Read the complete frozen history descriptor family.
+/// Uniform legacy artifacts may omit the entire history descriptor family. A partial
+/// family is always rejected; it cannot authorize a retained independent Field.
+inline std::vector<ProgramCheckpointHistoryMetadata> read_program_checkpoint_histories(
+    pops::dynlib::handle dl_handle, bool allow_absent = false) {
   if (!pops::dynlib::valid(dl_handle))
     throw std::runtime_error("compiled Program checkpoint metadata requires a valid module handle");
+  if (allow_absent) {
+    constexpr std::array<const char*, 10> symbols{
+        "pops_program_checkpoint_history_count",
+        "pops_program_checkpoint_history_name",
+        "pops_program_checkpoint_history_owner",
+        "pops_program_checkpoint_history_state_identity",
+        "pops_program_checkpoint_history_space_identity",
+        "pops_program_checkpoint_history_clock_identity",
+        "pops_program_checkpoint_history_interpolation_identity",
+        "pops_program_checkpoint_history_depth",
+        "pops_program_checkpoint_history_components",
+        "pops_program_checkpoint_history_ghost_depth"};
+    bool present = false;
+    for (const auto* symbol : symbols)
+      present = pops::dynlib::sym(dl_handle, symbol) != nullptr || present;
+    if (!present)
+      return {};
+  }
   using StringFn = const char* (*)(int);
   using IntegerFn = int (*)(int);
   const int history_count =
@@ -342,8 +367,8 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
   const IntegerFn history_ghost_depth = detail::require_module_symbol<IntegerFn>(
       dl_handle, "pops_program_checkpoint_history_ghost_depth");
 
-  ProgramCheckpointMetadata metadata;
-  metadata.histories.reserve(static_cast<std::size_t>(history_count));
+  std::vector<ProgramCheckpointHistoryMetadata> histories;
+  histories.reserve(static_cast<std::size_t>(history_count));
   std::set<std::string> history_names;
   for (int index = 0; index < history_count; ++index) {
     ProgramCheckpointHistoryMetadata row;
@@ -364,14 +389,27 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
     if (row.program_owner < 0 || row.depth < 2 || row.components == 0 || row.components < -1 ||
         row.ghost_depth < -1)
       throw std::runtime_error(
-          "compiled Program checkpoint history metadata has an invalid owner/depth/components/halo");
+          "compiled Program checkpoint history metadata has an invalid "
+          "owner/depth/components/halo");
     if (!history_names.insert(row.name).second)
       throw std::runtime_error(
           "compiled Program checkpoint metadata contains a duplicate history identity");
-    metadata.histories.push_back(std::move(row));
+    histories.push_back(std::move(row));
   }
-  std::sort(metadata.histories.begin(), metadata.histories.end(),
+  std::sort(histories.begin(), histories.end(),
             [](const auto& left, const auto& right) { return left.name < right.name; });
+
+  return histories;
+}
+
+/// Read the mandatory, frozen POPSAND4 shape metadata. An AMR artifact without
+/// this family cannot prove a pre-allocation bound and is rejected before installation.
+inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::handle dl_handle) {
+  if (!pops::dynlib::valid(dl_handle))
+    throw std::runtime_error("compiled Program checkpoint metadata requires a valid module handle");
+  using StringFn = const char* (*)(int);
+  ProgramCheckpointMetadata metadata;
+  metadata.histories = read_program_checkpoint_histories(dl_handle);
 
   const int clock_count =
       detail::require_module_count(dl_handle, "pops_program_checkpoint_logical_clock_count");
@@ -434,6 +472,56 @@ inline ProgramCheckpointMetadata read_program_checkpoint_metadata(pops::dynlib::
       (!global && metadata.temporal_cells_per_topology_cell == 0))
     throw std::runtime_error(
         "compiled Program temporal checkpoint metadata has an inconsistent shape family");
+  // Older artifacts have no continuation forest.  The quartet is optional only as a whole;
+  // a partly exported schema/capacity pair cannot authorize storage or a restart.
+  const auto root_schema = reinterpret_cast<TemporalProviderFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_continuation_root_schema_identity"));
+  const auto root_bytes = reinterpret_cast<TemporalCellCapacityFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_continuation_root_byte_capacity"));
+  const auto level_schema = reinterpret_cast<TemporalProviderFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_continuation_level_schema_identity"));
+  const auto level_bytes = reinterpret_cast<TemporalCellCapacityFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_checkpoint_continuation_level_byte_capacity"));
+  if (root_schema || root_bytes || level_schema || level_bytes) {
+    if (!root_schema || !root_bytes || !level_schema || !level_bytes)
+      throw std::runtime_error("compiled Program continuation metadata is incomplete");
+    const char* root_identity = root_schema();
+    const char* level_identity = level_schema();
+    if (!root_identity || !level_identity)
+      throw std::runtime_error("compiled Program continuation schema identity is null");
+    const auto root_capacity = root_bytes();
+    const auto level_capacity = level_bytes();
+    if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t))
+      if (root_capacity > std::numeric_limits<std::size_t>::max() ||
+          level_capacity > std::numeric_limits<std::size_t>::max())
+        throw std::overflow_error("compiled Program continuation capacity exceeds size_t");
+    const bool enabled = root_capacity != 0;
+    if (enabled != (level_capacity != 0) || enabled != (root_identity[0] != '\0') ||
+        enabled != (level_identity[0] != '\0') ||
+        (enabled && (root_capacity < 32 || level_capacity < 32)))
+      throw std::runtime_error("compiled Program continuation metadata has an incomplete forest");
+    metadata.continuation_root_schema_identity = root_identity;
+    metadata.continuation_root_byte_capacity = static_cast<std::size_t>(root_capacity);
+    metadata.continuation_level_schema_identity = level_identity;
+    metadata.continuation_level_byte_capacity = static_cast<std::size_t>(level_capacity);
+  }
+  const auto history_storage = reinterpret_cast<TemporalCellCapacityFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_history_field_metadata_storage_bytes"));
+  const auto history_workspace = reinterpret_cast<TemporalCellCapacityFn>(
+      pops::dynlib::sym(dl_handle, "pops_program_history_field_metadata_workspace_bytes"));
+  if (history_storage || history_workspace) {
+    if (!history_storage || !history_workspace)
+      throw std::runtime_error("compiled Program history Field metadata budget is incomplete");
+    const auto retained = history_storage(), workspace = history_workspace();
+    if ((retained == 0) != (workspace == 0))
+      throw std::runtime_error("compiled Program history Field metadata budget is unpaired");
+    if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t))
+      if (retained > std::numeric_limits<std::size_t>::max() ||
+          workspace > std::numeric_limits<std::size_t>::max())
+        throw std::overflow_error("compiled Program history Field metadata budget exceeds size_t");
+    metadata.history_field_metadata_storage_bytes = static_cast<std::size_t>(retained);
+    metadata.history_field_metadata_workspace_bytes = static_cast<std::size_t>(workspace);
+  }
   return metadata;
 }
 

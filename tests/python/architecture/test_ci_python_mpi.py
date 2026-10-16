@@ -3,7 +3,6 @@ import copy
 import hashlib
 import json
 import os
-from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
 
@@ -43,14 +42,14 @@ if reports:
             'FAIL_PATH': failed_path, 'FAIL_STATUS': str(failed_status)}
 
 
-def test_exact_thirty_seven_groups_cover_all_thirty_eight_contracts_and_sixty_two_nodes_with_existing_caps():
+def test_exact_groups_cover_all_declared_contracts_and_nodes_with_existing_caps():
     plan = runner.make_plan()
     assert (len(plan['groups']), plan['contract_count'], plan['orchestrator_count'],
-            plan['entrypoint_count']) == (37, 38, 28, 10)
-    assert plan['parent_launch_count'] == 62
+            plan['entrypoint_count']) == (130, 131, 29, 102)
+    assert plan['parent_launch_count'] == 155
     launches = [launch for group in plan['groups'] for launch in group['launches']]
-    assert len({(launch['path'], launch.get('parent_node', '')) for launch in launches}) == 62
-    assert len({launch['path'] for launch in launches}) == 38
+    assert len({(launch['path'], launch.get('parent_node', '')) for launch in launches}) == 155
+    assert len({launch['path'] for launch in launches}) == 131
     pairs = [row for row in plan['groups'] if row['group'].startswith('worlds-')]
     assert len(pairs) == 25
     for pair in pairs:
@@ -163,7 +162,7 @@ def test_plan_cli_exports_the_same_complete_dynamic_matrix(tmp_path):
     values = dict(line.split('=', 1) for line in outputs.read_text().splitlines())
     matrix = json.loads(values['matrix'])
     assert matrix['include'] == [{'group': row['group']} for row in plan['groups']]
-    assert values['group_count'] == '37'
+    assert values['group_count'] == '130'
 
 
 def wheel_artifact(tmp_path):
@@ -273,3 +272,30 @@ def test_required_workflow_produces_one_wheel_and_all_matrix_groups_with_same_bo
     assert 'mpi-dim1, mpi-python, kokkos-openmp' in gate
     assert '--gate mpi-python "${{ needs.mpi-python.result }}"' in gate
     assert '${{ needs.set-mode.outputs.mpi_required }}' in gate
+
+
+def test_mpi_sdk_producer_and_consumers_install_identical_header_packages_and_policy():
+    import re
+    import shlex
+
+    workflow = (runner.ROOT / '.github/workflows/ci.yml').read_text()
+    action = (runner.ROOT / '.github/actions/setup-kokkos/action.yml').read_text()
+    producer = workflow.split('\n  mpi:\n', 1)[1].split('\n  mpi-python:\n', 1)[0]
+    consumer = workflow.split('\n  mpi-python:\n', 1)[1].split('\n  # PREWARM OPENMP NATIF.', 1)[0]
+    command = re.search(r'sudo apt-get install ([^\n]+)', producer.replace('\\\n', ' ')).group(1)
+    producer_tokens = shlex.split(command)
+    action_command = re.search(r'sudo apt-get install ([^\n]+)', action).group(1)
+    action_tokens = shlex.split(action_command.split('${{ inputs.extra-apt }}')[0])
+    consumer_extra = re.search(r'^          extra-apt: (.+)$', consumer, re.MULTILINE).group(1)
+    # Default Serial means OMP_DEP is empty. The exact literal apt policy is
+    # part of the compiler-header authority shared with this one MPI wheel.
+    assert 'exec-space: openmp' not in consumer
+    action_tokens = [token for token in action_tokens if token != '$OMP_DEP']
+    producer_flags = [token for token in producer_tokens if token.startswith('-')]
+    action_flags = [token for token in action_tokens if token.startswith('-')]
+    assert producer_flags == action_flags == ['-y']
+    producer_packages = {token for token in producer_tokens if not token.startswith('-')}
+    consumer_packages = {token for token in action_tokens if not token.startswith('-')} | set(shlex.split(consumer_extra))
+    assert producer_packages == consumer_packages
+    assert producer.index('sudo apt-get install') < producer.index('cmake ')
+    assert consumer.index('uses: ./.github/actions/setup-kokkos') < consumer.index('Download the unique authenticated MPI Dim2 wheel')

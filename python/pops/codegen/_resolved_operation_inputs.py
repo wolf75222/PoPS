@@ -44,6 +44,9 @@ def native_route(module: Any, operator: Any) -> tuple[str | None, str | None]:
     if operator.lowering.get("diffusive_law") is not None or operator.lowering.get("drift_law") is not None:
         return "program:constitutive_flux", None
     if operator.lowering.get("native_unsupported"):
+        from pops.physics._balance_composition import balance_composition
+        if balance_composition(module.operator_registry(),operator):
+            return "program:balance_composition", None
         return None, "unsupported_physical_balance"
     if operator.lowering.get("joint_balance"):
         from pops.physics.interactions import joint_balance_supported
@@ -411,7 +414,7 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
     """
     from pops._ir.application import OperatorApplication
     from pops._ir.native_call import NativeCall
-    from pops._ir.expr import Const, Div, Exp, Expr, Pow, Sqrt, Var
+    from pops._ir.expr import Const, Div, Exp, UnaryMath, Expr, Pow, Sqrt, Var
     from pops._ir.visitors import _children
     from pops.model.handles import Handle
 
@@ -441,7 +444,7 @@ def _derive_effects(module: Any, operator: Any, boundary_data: Any) -> tuple[str
             # A precise read footprint does not establish purity or successful evaluation.
             retain("opaque", "fallible")
         elif isinstance(value, Expr):
-            if isinstance(value, (Div, Exp, Sqrt, Pow)):
+            if isinstance(value, (Div, Exp, UnaryMath, Sqrt, Pow)):
                 retain("fallible")
             if isinstance(value, OperatorApplication):
                 retain(*value.effects)

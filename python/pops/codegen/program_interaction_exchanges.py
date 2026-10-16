@@ -30,10 +30,16 @@ def accepted_interaction_quadrature(program):
     """
     records, memo = {}, {}
 
-    def propagate(value):
-        value = program._canonical_value(value)
-        if value.id in memo:
-            return memo[value.id]
+    def dependencies(value):
+        if value.attrs.get("interaction_occurrences") or value.op in (
+                "state", "rhs", "source", "coupled_rate", "coupled_rate_out") or (
+                value.op == "apply" and value.vtype == "rhs"):
+            return ()
+        if value.op in ("acceptance_guard", "solve_outcome"):
+            return value.inputs[:1]
+        return value.inputs
+
+    def evaluate(value):
         rows = value.attrs.get("interaction_occurrences")
         result = {}
         if rows:
@@ -44,7 +50,7 @@ def accepted_interaction_quadrature(program):
                 result[key] = {0: Fraction(row["coefficient"])}
         elif value.op == "linear_combine":
             for source, coefficient in zip(value.inputs, value.attrs["coeffs"], strict=True):
-                for key, weights in propagate(source).items():
+                for key, weights in memo[program._canonical_value(source).id].items():
                     destination = result.setdefault(key, defaultdict(Fraction))
                     for power, amount in _multiply(weights, _polynomial(coefficient)).items():
                         destination[power] += amount
@@ -52,13 +58,33 @@ def accepted_interaction_quadrature(program):
                 value.op == "apply" and value.vtype == "rhs"):
             result = {}
         elif value.op in ("acceptance_guard", "solve_outcome") and value.inputs:
-            result = propagate(value.inputs[0])
+            result = memo[program._canonical_value(value.inputs[0]).id]
         elif value.inputs:
-            if any(propagate(source) for source in value.inputs):
+            if any(memo[program._canonical_value(source).id] for source in value.inputs):
                 raise ValueError("accepted interaction inventory crosses an unproved %s quadrature" % value.op)
         memo[value.id] = {key: {power: weight for power, weight in weights.items() if weight}
                           for key, weights in result.items() if any(weights.values())}
-        return memo[value.id]
+
+    def propagate(root):
+        # Field ancestry may cross arbitrarily nested products/arrays. The compiler
+        # budget bounds graph storage; the Python call stack is not an API limit.
+        root = program._canonical_value(root)
+        stack, active = [(root, False)], set()
+        while stack:
+            value, ready = stack.pop()
+            if value.id in memo:
+                continue
+            if ready:
+                evaluate(value)
+                active.remove(value.id)
+                continue
+            if value.id in active:
+                raise ValueError("accepted interaction inventory contains a cyclic SSA dependency")
+            active.add(value.id)
+            stack.append((value, True))
+            stack.extend((program._canonical_value(source), False)
+                         for source in reversed(dependencies(value)))
+        return memo[root.id]
 
     accepted = {}
     for endpoint, value in program._commits.items():

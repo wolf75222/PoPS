@@ -1,14 +1,14 @@
 #include "../bindings_detail.hpp"
-#include <pops/parallel/execution_lane.hpp>
-#include <pops/parallel/world_communicator.hpp>
 #include "boundary_component_install.hpp"
 #include "checkpoint_spatial_binding.hpp"
 #include "output_geometry_binding.hpp"
 
+#include <pops/parallel/execution_lane.hpp>
+#include <pops/parallel/world_communicator.hpp>
+
+#include "amr_layout_transfer_binding.hpp"
 #include <pops/runtime/amr/prepared_tagging_execution.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
-#include "amr_layout_transfer_binding.hpp"
-
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -761,10 +761,11 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
            py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
            py::arg("minimum_step"))
-      .def("set_field_newton_convergence_plan", &AmrSystem::set_field_newton_convergence_plan, py::arg("provider_slot"),
-           py::arg("tolerance"), py::arg("max_iterations"), py::arg("linear_tolerance"),
-           py::arg("linear_max_iterations"), py::arg("restart"), py::arg("armijo"),
-           py::arg("minimum_step"), py::arg("convergence_kind"), py::arg("relative"), py::arg("absolute"))
+      .def("set_field_newton_convergence_plan", &AmrSystem::set_field_newton_convergence_plan,
+           py::arg("provider_slot"), py::arg("tolerance"), py::arg("max_iterations"),
+           py::arg("linear_tolerance"), py::arg("linear_max_iterations"), py::arg("restart"),
+           py::arg("armijo"), py::arg("minimum_step"), py::arg("convergence_kind"),
+           py::arg("relative"), py::arg("absolute"))
       // Runtime-private lowering seam for the normalized analytic LevelSet.  The exact-ranked AMR
       // hierarchy owns compilation, collective validation, and per-level rematerialization; no
       // Python callback reaches a cell kernel.
@@ -851,7 +852,8 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
            "Collective-free exact rank-local carrier and auxiliary-registry rollback witness.")
       .def("dirty_auxiliary_provider_identities", &AmrSystem::dirty_auxiliary_provider_identities,
            "Exact pending auxiliary-provider identities retained by rollback.")
-      .def("_checkpoint_state_carriers_byte_capacity", &AmrSystem::checkpoint_state_carriers_byte_capacity,
+      .def("_checkpoint_state_carriers_byte_capacity",
+           &AmrSystem::checkpoint_state_carriers_byte_capacity,
            "Configured full-grown POPSCAR1 byte capacity@1, exact sealed storage authority.")
       .def("_checkpoint_auxiliary_level_capacity", &AmrSystem::checkpoint_auxiliary_level_capacity,
            "Return the sealed AMR per-level auxiliary metadata/scalar checkpoint capacity.")
@@ -974,42 +976,56 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
            py::arg("subject_id"), py::arg("action"), py::arg("action_route"), py::arg("level"))
       .def("_recompute_bootstrap_field", &AmrSystem::recompute_bootstrap_field,
            py::arg("subject_id"), py::arg("provider_slot"))
-      .def("_stage_bootstrap_initial_program_seed", &AmrSystem::stage_bootstrap_initial_program_seed,
-           py::arg("subject_id"), py::arg("runtime_block"), py::arg("opcodes"), py::arg("literals"))
+      .def("_stage_bootstrap_initial_program_seed",
+           &AmrSystem::stage_bootstrap_initial_program_seed, py::arg("subject_id"),
+           py::arg("runtime_block"), py::arg("opcodes"), py::arg("literals"))
       .def("_solve_bootstrap_initial_field", &AmrSystem::solve_bootstrap_initial_field,
            py::arg("subject_id"), py::arg("provider_slot"), py::arg("ordinal"))
-      .def("_map_bootstrap_state_hierarchy", [](AmrSystem& system, const std::string& subject,
-          const pops::analytic::AnalyticOpcodeRows& opcodes, const pops::analytic::AnalyticLiteralRows& literals,
-          const std::vector<py::dict>& rows, const std::string& consumer, const std::string& field) {
-        std::vector<pops::runtime::system::AnalyticMappedInput> inputs;
-        inputs.reserve(rows.size());
-        for(const auto& row:rows) {
-          if(!row.contains("source")) throw std::invalid_argument("initial map input has no exact source");
-          const auto kind=py::cast<std::string>(row["source"]);
-          if(kind=="state") {
-            if(row.size()!=2 || !row.contains("component"))
-              throw std::invalid_argument("initial map State input requires exactly source/component");
-            inputs.push_back(pops::runtime::system::AnalyticMappedInput::state(py::cast<int>(row["component"])));
-            continue;
-          }
-          const bool derivative=kind=="provider_derivative";
-          if((kind!="provider" && !derivative) || row.size()!=(derivative?4:2) || !row.contains("key") ||
-              (derivative && (!row.contains("axis") || !row.contains("edge_order"))))
-            throw std::invalid_argument("initial map provider input changed its exact shape");
-          const auto key=py::cast<py::dict>(row["key"]);
-          if(key.size()!=4 || !key.contains("owner_qid") || !key.contains("space_kind") ||
-             !key.contains("space_name") || !key.contains("component"))
-            throw std::invalid_argument("initial map provider input requires an exact ComponentKey");
-          pops::runtime::system::AuxiliaryComponentKey component{
-            py::cast<std::string>(key["owner_qid"]),py::cast<std::string>(key["space_kind"]),
-            py::cast<std::string>(key["space_name"]),py::cast<std::string>(key["component"])};
-          inputs.push_back(derivative ? pops::runtime::system::AnalyticMappedInput::derivative(
-            std::move(component),py::cast<int>(row["axis"]),py::cast<int>(row["edge_order"])) :
-            pops::runtime::system::AnalyticMappedInput::provider(std::move(component)));
-        }
-        return system.map_bootstrap_state_hierarchy(subject,opcodes,literals,inputs,consumer,field);
-      }, py::arg("subject_id"),py::arg("opcodes"),py::arg("literals"),py::arg("inputs"),
-         py::arg("consumer_qid"),py::arg("provider_slot"))
+      .def(
+          "_map_bootstrap_state_hierarchy",
+          [](AmrSystem& system, const std::string& subject,
+             const pops::analytic::AnalyticOpcodeRows& opcodes,
+             const pops::analytic::AnalyticLiteralRows& literals, const std::vector<py::dict>& rows,
+             const std::string& consumer, const std::string& field) {
+            std::vector<pops::runtime::system::AnalyticMappedInput> inputs;
+            inputs.reserve(rows.size());
+            for (const auto& row : rows) {
+              if (!row.contains("source"))
+                throw std::invalid_argument("initial map input has no exact source");
+              const auto kind = py::cast<std::string>(row["source"]);
+              if (kind == "state") {
+                if (row.size() != 2 || !row.contains("component"))
+                  throw std::invalid_argument(
+                      "initial map State input requires exactly source/component");
+                inputs.push_back(pops::runtime::system::AnalyticMappedInput::state(
+                    py::cast<int>(row["component"])));
+                continue;
+              }
+              const bool derivative = kind == "provider_derivative";
+              if ((kind != "provider" && !derivative) || row.size() != (derivative ? 4 : 2) ||
+                  !row.contains("key") ||
+                  (derivative && (!row.contains("axis") || !row.contains("edge_order"))))
+                throw std::invalid_argument("initial map provider input changed its exact shape");
+              const auto key = py::cast<py::dict>(row["key"]);
+              if (key.size() != 4 || !key.contains("owner_qid") || !key.contains("space_kind") ||
+                  !key.contains("space_name") || !key.contains("component"))
+                throw std::invalid_argument(
+                    "initial map provider input requires an exact ComponentKey");
+              pops::runtime::system::AuxiliaryComponentKey component{
+                  py::cast<std::string>(key["owner_qid"]), py::cast<std::string>(key["space_kind"]),
+                  py::cast<std::string>(key["space_name"]),
+                  py::cast<std::string>(key["component"])};
+              inputs.push_back(derivative ? pops::runtime::system::AnalyticMappedInput::derivative(
+                                                std::move(component), py::cast<int>(row["axis"]),
+                                                py::cast<int>(row["edge_order"]))
+                                          : pops::runtime::system::AnalyticMappedInput::provider(
+                                                std::move(component)));
+            }
+            return system.map_bootstrap_state_hierarchy(subject, opcodes, literals, inputs,
+                                                        consumer, field);
+          },
+          py::arg("subject_id"), py::arg("opcodes"), py::arg("literals"), py::arg("inputs"),
+          py::arg("consumer_qid"), py::arg("provider_slot"))
       .def("_synchronize_bootstrap_state", &AmrSystem::synchronize_bootstrap_state,
            py::arg("subject_id"), py::arg("fine_level"))
       .def("_begin_bootstrap_plan", &AmrSystem::begin_bootstrap_plan)
@@ -1058,9 +1074,8 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
              const std::string_view bytes(
                  PyBytes_AS_STRING(payload.ptr()),
                  static_cast<std::size_t>(PyBytes_GET_SIZE(payload.ptr())));
-             system.validate_checkpoint_program_exchanges(
-                 std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()),
-                                               bytes.size()));
+             system.validate_checkpoint_program_exchanges(std::span<const std::uint8_t>(
+                 reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
            })
       .def("_restore_checkpoint_program_exchanges",
            [](AmrSystem& system, py::bytes payload) {
@@ -1253,6 +1268,7 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
                 history_flux_snapshot_shards_from_python(payloads), source_rank_count);
           },
           py::arg("payloads"), py::arg("source_rank_count"))
+      .def("program_manifest_snapshot", &AmrSystem::program_manifest_snapshot)
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
       .def("program_temporal_partition_manifest", &AmrSystem::program_temporal_partition_manifest)
@@ -1270,13 +1286,16 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       .def("program_diagnostic", &AmrSystem::program_diagnostic, py::arg("name"))
       .def("_program_integral", &AmrSystem::program_integral, py::arg("identity"))
       .def("program_diagnostics", &AmrSystem::program_diagnostics)
-      .def("checkpoint_state_carriers", [](const AmrSystem& s) {
-        const auto bytes = s.checkpoint_state_carriers();
-        return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-      })
+      .def("checkpoint_state_carriers",
+           [](const AmrSystem& s) {
+             const auto bytes = s.checkpoint_state_carriers();
+             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+           })
       .def("_prepare_checkpoint_capture", &AmrSystem::prepare_checkpoint_capture)
-      .def("_validate_prepared_checkpoint_capture", &AmrSystem::validate_prepared_checkpoint_capture)
-      .def("_validate_committed_checkpoint_capture", &AmrSystem::validate_committed_checkpoint_capture)
+      .def("_validate_prepared_checkpoint_capture",
+           &AmrSystem::validate_prepared_checkpoint_capture)
+      .def("_validate_committed_checkpoint_capture",
+           &AmrSystem::validate_committed_checkpoint_capture)
       .def("_prepared_checkpoint_state_carriers",
            [](const AmrSystem& s, const AmrSystem::PreparedCheckpointCapture& capture) {
              const auto bytes = s.prepared_checkpoint_state_carriers(capture);
@@ -1287,30 +1306,42 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
              const auto bytes = s.prepared_checkpoint_program_diagnostics(capture);
              return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
            })
-      .def("validate_checkpoint_state_carriers", [](const AmrSystem& s, py::object payload) {
-        s.validate_checkpoint_state_carriers(
-            +[](const void* context) -> std::span<const std::uint8_t> {
-              const auto& value = *static_cast<const py::object*>(context);
-              if (!PyBytes_CheckExact(value.ptr()))
-                throw py::type_error("state carrier checkpoint payload must be exact bytes");
-              char* data = nullptr; Py_ssize_t size = 0;
-              if (PyBytes_AsStringAndSize(value.ptr(), &data, &size) != 0)
-                throw py::error_already_set();
-              return {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)};
-            }, &payload);
-      }, py::arg("payload"))
-      .def("restore_checkpoint_state_carriers", [](AmrSystem& s, py::object payload) {
-        s.restore_checkpoint_state_carriers(
-            +[](const void* context) -> std::span<const std::uint8_t> {
-              const auto& value = *static_cast<const py::object*>(context);
-              if (!PyBytes_CheckExact(value.ptr()))
-                throw py::type_error("state carrier checkpoint payload must be exact bytes");
-              char* data = nullptr; Py_ssize_t size = 0;
-              if (PyBytes_AsStringAndSize(value.ptr(), &data, &size) != 0)
-                throw py::error_already_set();
-              return {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)};
-            }, &payload);
-      }, py::arg("payload"))
+      .def(
+          "validate_checkpoint_state_carriers",
+          [](const AmrSystem& s, py::object payload) {
+            s.validate_checkpoint_state_carriers(
+                +[](const void* context) -> std::span<const std::uint8_t> {
+                  const auto& value = *static_cast<const py::object*>(context);
+                  if (!PyBytes_CheckExact(value.ptr()))
+                    throw py::type_error("state carrier checkpoint payload must be exact bytes");
+                  char* data = nullptr;
+                  Py_ssize_t size = 0;
+                  if (PyBytes_AsStringAndSize(value.ptr(), &data, &size) != 0)
+                    throw py::error_already_set();
+                  return {reinterpret_cast<const std::uint8_t*>(data),
+                          static_cast<std::size_t>(size)};
+                },
+                &payload);
+          },
+          py::arg("payload"))
+      .def(
+          "restore_checkpoint_state_carriers",
+          [](AmrSystem& s, py::object payload) {
+            s.restore_checkpoint_state_carriers(
+                +[](const void* context) -> std::span<const std::uint8_t> {
+                  const auto& value = *static_cast<const py::object*>(context);
+                  if (!PyBytes_CheckExact(value.ptr()))
+                    throw py::type_error("state carrier checkpoint payload must be exact bytes");
+                  char* data = nullptr;
+                  Py_ssize_t size = 0;
+                  if (PyBytes_AsStringAndSize(value.ptr(), &data, &size) != 0)
+                    throw py::error_already_set();
+                  return {reinterpret_cast<const std::uint8_t*>(data),
+                          static_cast<std::size_t>(size)};
+                },
+                &payload);
+          },
+          py::arg("payload"))
       .def("_checkpoint_program_diagnostics",
            [](const AmrSystem& s) {
              const auto bytes = s.checkpoint_program_diagnostics();
@@ -1403,9 +1434,8 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       // coarse transport); replicated / single-box -> local == total. Query between steps, no hot cost.
       .def("coarse_local_boxes", &AmrSystem::coarse_local_boxes)
       .def("coarse_total_boxes", &AmrSystem::coarse_total_boxes)
-      .def("coarse_local_box_bounds", [](AmrSystem& s) {
-        return ranked_boxes_to_python(s.coarse_local_box_bounds());
-      })
+      .def("coarse_local_box_bounds",
+           [](AmrSystem& s) { return ranked_boxes_to_python(s.coarse_local_box_bounds()); })
       // mass / density: overload by BLOCK NAME (multi-block; empty name -> 1st block, mono-block
       // compat or cosmetic name). The name INDEXES the block in multi-block (each block has its mass /
       // density, conserved PER BLOCK at reflux). Without argument -> 1st block (mono-block back-compat).
@@ -1653,6 +1683,70 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
           py::arg("target_level_modes"), py::arg("source_authority"),
           "Rematerialize one canonical Program image under current ownership.")
       .def(
+
+          "rematerialize_program_accepted_state_ranked",
+          [](AmrSystem& s, const std::vector<py::bytes>& source_rank_states,
+             const std::vector<std::vector<int>>& source_level_owners,
+             const std::vector<std::vector<int>>& target_level_owners,
+             const std::vector<std::string>& source_level_modes,
+             const std::vector<std::string>& target_level_modes, const py::bytes& source_authority,
+             std::uint64_t workspace_byte_capacity) {
+            std::vector<std::vector<std::uint8_t>> states;
+            std::vector<std::uint8_t> authority_bytes;
+            bool conversion_failed = false;
+            try {
+              if (source_rank_states.empty() ||
+                  source_rank_states.size() >
+                      static_cast<std::size_t>(std::numeric_limits<int>::max()))
+                throw std::invalid_argument(
+                    "ranked Program migration requires a complete rank table");
+              if (source_rank_states.size() > workspace_byte_capacity / sizeof(states.front()))
+                throw std::length_error(
+                    "ranked Program migration table "
+                    "exceeds workspace capacity");
+              std::uint64_t used = source_rank_states.size() * sizeof(states.front());
+              states.reserve(source_rank_states.size());
+              for (const auto& source : source_rank_states) {
+                const auto size = static_cast<std::uint64_t>(PyBytes_GET_SIZE(source.ptr()));
+                if (size > workspace_byte_capacity - used)
+                  throw std::length_error(
+                      "ranked Program migration input "
+                      "exceeds workspace capacity");
+                used += size;
+                const auto* data =
+                    reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(source.ptr()));
+                states.emplace_back(data, data + size);
+              }
+              const auto size =
+                  static_cast<std::uint64_t>(PyBytes_GET_SIZE(source_authority.ptr()));
+              if (size > workspace_byte_capacity - used)
+                throw std::length_error("ranked Program authority exceeds workspace capacity");
+              const auto* data =
+                  reinterpret_cast<const std::uint8_t*>(PyBytes_AS_STRING(source_authority.ptr()));
+              authority_bytes.assign(data, data + size);
+            } catch (...) {
+              conversion_failed = true;
+              states.clear();
+              authority_bytes.clear();
+            }
+            // Even a local conversion/allocation failure enters the native
+            // converged validation phase; another rank must never wait inside
+            // its first collective.
+            const std::vector<std::uint8_t> empty;
+            const auto result = s.rematerialize_program_accepted_state(
+                states.empty() ? empty : states.front(),
+                conversion_failed ? -1 : static_cast<int>(states.size()), source_level_owners,
+                target_level_owners, source_level_modes, target_level_modes, authority_bytes,
+                states, workspace_byte_capacity);
+            return py::bytes(reinterpret_cast<const char*>(result.data()), result.size());
+          },
+          py::arg("source_rank_states"), py::arg("source_level_owners"),
+          py::arg("target_level_owners"), py::arg("source_level_modes"),
+          py::arg("target_level_modes"), py::arg("source_authority"),
+          py::arg("workspace_byte_capacity") = 64ULL * 1024 * 1024,
+          "Authenticate all old ranks and rematerialize a complete native "
+          "continuation forest.")
+      .def(
           "_prepare_checkpoint_spatial_contract",
           [](const AmrSystem&, const py::dict& data) {
             return pops::python::detail::prepare_checkpoint_spatial_contract<kNativeDimension>(
@@ -1674,50 +1768,63 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("_arm_accepted_halo_test_failure", &AmrSystem::arm_accepted_halo_test_failure,
            py::arg("request"))
       .def("_accepted_halo_test_failure_receipt", &AmrSystem::accepted_halo_test_failure_receipt)
-      .def("_enable_field_candidate_observation", [](AmrSystem& s, py::handle version) {
-        // Malformed local values enter the same Native preflight vote as valid peers;
-        // never throw on one Python rank while another enters the activation collective.
-        std::uint32_t parsed = 0;
-        if (PyLong_CheckExact(version.ptr()) && !PyBool_Check(version.ptr())) {
-          const auto value = PyLong_AsUnsignedLongLong(version.ptr());
-          if (PyErr_Occurred()) PyErr_Clear();
-          else if (value <= UINT32_MAX) parsed = static_cast<std::uint32_t>(value);
-        }
-        s.enable_field_candidate_observation(parsed);
-      }, py::arg("version"))
-      .def("_field_candidate_observations", [](const AmrSystem& s) {
-        py::list result;
-        for (const auto& witness : s.field_candidate_observations()) {
-          py::dict row, point;
-          row["schema"] = "pops.amr.field-candidate-observation@1";
-          row["status"] = "producer-completed-consumer-preparation-completed";
-          row["accepted_publication"] = false;
-          row["provider_slot"] = witness.provider_slot;
-          row["consumer_block"] = witness.consumer_block;
-          row["consumer_level"] = witness.consumer_level;
-          row["owner_macro_step"] = witness.owner_macro_step; row["owner_time"] = witness.owner_time;
-          row["configuration_identity"] = witness.configuration_identity;
-          row["provider_identity"] = witness.provider_identity; row["plan_identity"] = witness.plan_identity;
-          row["output_owner_identity"] = witness.output_owner_identity;
-          row["output_block"] = witness.output_block; row["output_key"] = witness.output_key;
-          row["topology_epoch"] = witness.topology_epoch;
-          row["materialization_generation"] = witness.materialization_generation;
-          point["clock"] = witness.point.clock; point["tick"] = witness.point.tick;
-          point["level"] = witness.point.level; point["substep"] = witness.point.substep;
-          point["stage"] = witness.point.stage;
-          point["fraction_numerator"] = witness.point.stage_fraction.numerator;
-          point["fraction_denominator"] = witness.point.stage_fraction.denominator;
-          point["dt"] = witness.point.dt; point["physical_time"] = witness.point.physical_time;
-          point["graph_identity"] = witness.point.graph_identity;
-          point["rate_identity"] = witness.point.rate_identity;
-          point["application_identity"] = witness.point.application_identity;
-          row["point"] = std::move(point);
-          row["carrier_bytes"] = py::bytes(reinterpret_cast<const char*>(witness.carrier_bytes.data()),
-                                           witness.carrier_bytes.size());
-          result.append(std::move(row));
-        }
-        return result;
-      })
+      .def(
+          "_enable_field_candidate_observation",
+          [](AmrSystem& s, py::handle version) {
+            // Malformed local values enter the same Native preflight vote as valid peers;
+            // never throw on one Python rank while another enters the activation collective.
+            std::uint32_t parsed = 0;
+            if (PyLong_CheckExact(version.ptr()) && !PyBool_Check(version.ptr())) {
+              const auto value = PyLong_AsUnsignedLongLong(version.ptr());
+              if (PyErr_Occurred())
+                PyErr_Clear();
+              else if (value <= UINT32_MAX)
+                parsed = static_cast<std::uint32_t>(value);
+            }
+            s.enable_field_candidate_observation(parsed);
+          },
+          py::arg("version"))
+      .def("_field_candidate_observations",
+           [](const AmrSystem& s) {
+             py::list result;
+             for (const auto& witness : s.field_candidate_observations()) {
+               py::dict row, point;
+               row["schema"] = "pops.amr.field-candidate-observation@1";
+               row["status"] = "producer-completed-consumer-preparation-completed";
+               row["accepted_publication"] = false;
+               row["provider_slot"] = witness.provider_slot;
+               row["consumer_block"] = witness.consumer_block;
+               row["consumer_level"] = witness.consumer_level;
+               row["owner_macro_step"] = witness.owner_macro_step;
+               row["owner_time"] = witness.owner_time;
+               row["configuration_identity"] = witness.configuration_identity;
+               row["provider_identity"] = witness.provider_identity;
+               row["plan_identity"] = witness.plan_identity;
+               row["output_owner_identity"] = witness.output_owner_identity;
+               row["output_block"] = witness.output_block;
+               row["output_key"] = witness.output_key;
+               row["topology_epoch"] = witness.topology_epoch;
+               row["materialization_generation"] = witness.materialization_generation;
+               point["clock"] = witness.point.clock;
+               point["tick"] = witness.point.tick;
+               point["level"] = witness.point.level;
+               point["substep"] = witness.point.substep;
+               point["stage"] = witness.point.stage;
+               point["fraction_numerator"] = witness.point.stage_fraction.numerator;
+               point["fraction_denominator"] = witness.point.stage_fraction.denominator;
+               point["dt"] = witness.point.dt;
+               point["physical_time"] = witness.point.physical_time;
+               point["graph_identity"] = witness.point.graph_identity;
+               point["rate_identity"] = witness.point.rate_identity;
+               point["application_identity"] = witness.point.application_identity;
+               row["point"] = std::move(point);
+               row["carrier_bytes"] =
+                   py::bytes(reinterpret_cast<const char*>(witness.carrier_bytes.data()),
+                             witness.carrier_bytes.size());
+               result.append(std::move(row));
+             }
+             return result;
+           })
       .def("checkpoint_tag_selection_contract", &AmrSystem::checkpoint_tag_selection_contract)
       .def("checkpoint_temporal_relations", &AmrSystem::checkpoint_temporal_relations)
       .def("set_temporal_relations", &AmrSystem::set_temporal_relations, py::arg("numerators"),
@@ -1801,24 +1908,30 @@ void init_amr(py::module_& m) {
   using NativeAmrSystem = pops::AmrSystem<pops::kNativeDimension>;
   using NativeAmrSystemConfig = pops::AmrSystemConfig<pops::kNativeDimension>;
   py::enum_<pops::AcceptedHaloTestFailurePhase>(m, "_AcceptedHaloTestFailurePhase")
-      .value("after_block_level_preparation", pops::AcceptedHaloTestFailurePhase::after_block_level_preparation);
-  py::class_<pops::AcceptedHaloTestFailureRequest>(m, "_AcceptedHaloTestFailureRequest", py::is_final())
+      .value("after_block_level_preparation",
+             pops::AcceptedHaloTestFailurePhase::after_block_level_preparation);
+  py::class_<pops::AcceptedHaloTestFailureRequest>(m, "_AcceptedHaloTestFailureRequest",
+                                                   py::is_final())
       .def(py::init([](const py::handle& version, pops::AcceptedHaloTestFailurePhase phase,
                        const py::handle& block, const py::handle& level, const py::handle& rank) {
-        for (const auto value : {version, block, level, rank})
-          if (!PyLong_CheckExact(value.ptr()))
-            throw py::type_error("accepted halo test request integers must be exact Python int values");
-        return pops::AcceptedHaloTestFailureRequest{py::cast<std::uint32_t>(version), phase,
-            py::cast<int>(block), py::cast<int>(level), py::cast<int>(rank)};
-      }), py::kw_only(), py::arg("version") = 1,
-          py::arg("phase") = pops::AcceptedHaloTestFailurePhase::after_block_level_preparation,
-          py::arg("block"), py::arg("level"), py::arg("rank"))
+             for (const auto value : {version, block, level, rank})
+               if (!PyLong_CheckExact(value.ptr()))
+                 throw py::type_error(
+                     "accepted halo test request integers must be exact Python int values");
+             return pops::AcceptedHaloTestFailureRequest{py::cast<std::uint32_t>(version), phase,
+                                                         py::cast<int>(block), py::cast<int>(level),
+                                                         py::cast<int>(rank)};
+           }),
+           py::kw_only(), py::arg("version") = 1,
+           py::arg("phase") = pops::AcceptedHaloTestFailurePhase::after_block_level_preparation,
+           py::arg("block"), py::arg("level"), py::arg("rank"))
       .def_readonly("version", &pops::AcceptedHaloTestFailureRequest::version)
       .def_readonly("phase", &pops::AcceptedHaloTestFailureRequest::phase)
       .def_readonly("block", &pops::AcceptedHaloTestFailureRequest::block)
       .def_readonly("level", &pops::AcceptedHaloTestFailureRequest::level)
       .def_readonly("rank", &pops::AcceptedHaloTestFailureRequest::rank);
-  py::class_<pops::AcceptedHaloTestFailureReceipt>(m, "_AcceptedHaloTestFailureReceipt", py::is_final())
+  py::class_<pops::AcceptedHaloTestFailureReceipt>(m, "_AcceptedHaloTestFailureReceipt",
+                                                   py::is_final())
       .def_readonly("request", &pops::AcceptedHaloTestFailureReceipt::request)
       .def_readonly("requested", &pops::AcceptedHaloTestFailureReceipt::requested)
       .def_readonly("reached", &pops::AcceptedHaloTestFailureReceipt::reached)
@@ -1832,6 +1945,8 @@ void init_amr(py::module_& m) {
       .def_readonly("dt", &pops::AcceptedHaloTestFailureReceipt::dt);
   py::class_<NativeAmrSystemConfig>(m, "AmrSystemConfig")
       .def(py::init<>())
+      .def_readwrite("runtime_parameter_byte_capacity",
+                     &NativeAmrSystemConfig::runtime_parameter_byte_capacity)
       .def_property(
           "shape",
           [](const NativeAmrSystemConfig& config) { return ranked_extent_to_python(config.shape); },
@@ -1904,8 +2019,10 @@ void init_amr(py::module_& m) {
             config.transition_lookaheads = ranked_extents_from_python<kNativeDimension>(
                 value, "AmrSystemConfig.transition_lookaheads", 0);
           })
-      .def_readwrite("accepted_halo_contract_version", &NativeAmrSystemConfig::accepted_halo_contract_version)
-      .def_property("accepted_halo_extent",
+      .def_readwrite("accepted_halo_contract_version",
+                     &NativeAmrSystemConfig::accepted_halo_contract_version)
+      .def_property(
+          "accepted_halo_extent",
           [](const NativeAmrSystemConfig& config) {
             return ranked_extent_to_python(config.accepted_halo_extent);
           },
@@ -1913,8 +2030,10 @@ void init_amr(py::module_& m) {
             config.accepted_halo_extent = ranked_extent_from_python<kNativeDimension>(
                 value, "AmrSystemConfig.accepted_halo_extent");
           })
-      .def_readwrite("tag_selection_contract_version", &NativeAmrSystemConfig::tag_selection_contract_version)
-      .def_property("tag_selection_buffer",
+      .def_readwrite("tag_selection_contract_version",
+                     &NativeAmrSystemConfig::tag_selection_contract_version)
+      .def_property(
+          "tag_selection_buffer",
           [](const NativeAmrSystemConfig& config) {
             return ranked_extent_to_python(config.tag_selection_buffer);
           },

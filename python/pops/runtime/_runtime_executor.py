@@ -326,6 +326,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
 
         normalized_layout, = plan.artifact.layout_plan.layouts
         config = system_config_from_layout(normalized_layout.native_spatial_layout)
+        config.runtime_parameter_byte_capacity = plan.runtime_parameter_storage["byte_capacity"]
         engine = System(config)
         from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
 
@@ -383,12 +384,14 @@ def _install_adaptive_native_engine(plan: Any) -> Any:
     assert artifact.program is not None, \
         "resolved single-layout AMR artifact lost its compiled Program"
     normalized_layout, = artifact.layout_plan.layouts
-    engine = AmrSystem(amr_config_from_layout(
+    config = amr_config_from_layout(
         plan.layout,
         hierarchy=plan.resolved_hierarchy,
         tagging=plan.resolved_tagging,
         native_layout=normalized_layout.native_spatial_layout,
-    ))
+    )
+    config.runtime_parameter_byte_capacity = plan.runtime_parameter_storage["byte_capacity"]
+    engine = AmrSystem(config)
     from pops.runtime._checkpoint_spatial import install_checkpoint_spatial_contract
 
     install_checkpoint_spatial_contract(

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .expr import Sqrt, Exp, Abs, Sign, Minimum, Maximum, _wrap
+from .expr import Sqrt, Exp, Sin, Cos, Log, Expm1, Abs, Sign, Minimum, Maximum, _wrap
 from .expr import Gradient, Partial, Laplacian, Divergence, TimeDerivative, Unknown, Integral
 from .elliptic import CoeffGradient, DivCoeffGrad
 from .values import EigWitness, StateRef
@@ -31,36 +31,72 @@ from .values import EigWitness, StateRef
 # FLUX-DSL OPS
 # =============================================================================
 
+def _elementary(constructor, *arguments):
+    """Use one equation DAG for model expressions and temporal scalar values."""
+    from pops.time.value_support import _ProgramValueBase
+    native = [x for x in arguments if isinstance(x, _ProgramValueBase)]
+    if native:
+        if any(x.vtype != "scalar" for x in native):
+            raise TypeError("elementary temporal functions require a Scalar or an explicit field component")
+        from pops.time.expressions import ProgramScalar, encode_expressions
+        expression = constructor(*(ProgramScalar(x) if isinstance(x, _ProgramValueBase) else _wrap(x)
+                                   for x in arguments))
+        _, _, reads = encode_expressions((expression,), native[0].prog)
+        if any(value.vtype != "scalar" for value in reads):
+            return expression
+        return native[0].prog.scalar_expression(constructor.__name__.lower(), expression)
+    return constructor(*(_wrap(x) for x in arguments))
+
 def sqrt(x: Any) -> Any:
     """Symbolic square root."""
-    return Sqrt(_wrap(x))
+    return _elementary(Sqrt, x)
 
 
 def exp(x: Any) -> Any:
     """Symbolic pointwise exponential for native numerical expressions."""
-    return Exp(_wrap(x))
+    return _elementary(Exp, x)
+
+
+def sin(x: Any) -> Any:
+    """Symbolic sine (radians)."""
+    return _elementary(Sin, x)
+
+
+def cos(x: Any) -> Any:
+    """Symbolic cosine (radians)."""
+    return _elementary(Cos, x)
+
+
+def log(x: Any) -> Any:
+    """Symbolic natural logarithm; its real domain is x > 0."""
+    return _elementary(Log, x)
+
+
+def expm1(x: Any) -> Any:
+    """Symbolic exp(x)-1 with the backend's cancellation-safe elementary function."""
+    return _elementary(Expm1, x)
 
 
 def abs_(x: Any) -> Any:
     """Symbolic absolute value (equivalent of abs(expr); suffixed name so as not to shadow abs)."""
-    return Abs(_wrap(x))
+    return _elementary(Abs, x)
 
 
 def sign(x: Any) -> Any:
     """Signe symbolique (-1 / 0 / 1) : selections par masques sans branche par cellule."""
-    return Sign(_wrap(x))
+    return _elementary(Sign, x)
 
 
 def minimum(left: Any, right: Any) -> Any:
     """Pointwise IEEE minimum, lowered directly to the native device backend."""
 
-    return Minimum(_wrap(left), _wrap(right))
+    return _elementary(Minimum, left, right)
 
 
 def maximum(left: Any, right: Any) -> Any:
     """Pointwise IEEE maximum, lowered directly to the native device backend."""
 
-    return Maximum(_wrap(left), _wrap(right))
+    return _elementary(Maximum, left, right)
 
 
 def eig_max_im(rows: Any) -> Any:

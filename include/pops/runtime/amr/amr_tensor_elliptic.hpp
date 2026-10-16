@@ -135,7 +135,9 @@ inline TensorFacControls decode_controls(const PreparedProviderOptions& options)
       else if (name == "tensor_diagonal_mg")
         controls.coarse_preconditioner = tensor_fac::CoarsePreconditionerKind::tensor_diagonal_mg;
       else
-        throw std::invalid_argument("tensor FAC coarse preconditioner must be diagonal, polar_poisson or tensor_diagonal_mg");
+        throw std::invalid_argument(
+            "tensor FAC coarse preconditioner must be diagonal, polar_poisson or "
+            "tensor_diagonal_mg");
     } else if (key == "fac.interface_coupling") {
       if (!std::holds_alternative<std::string>(value))
         throw std::invalid_argument("tensor FAC interface coupling has the wrong wire type");
@@ -145,7 +147,8 @@ inline TensorFacControls decode_controls(const PreparedProviderOptions& options)
       else if (name == "fine_flux")
         controls.interface_coupling = tensor_fac::InterfaceCoupling::fine_flux;
       else
-        throw std::invalid_argument("tensor FAC interface coupling must be level_stencil or fine_flux");
+        throw std::invalid_argument(
+            "tensor FAC interface coupling must be level_stencil or fine_flux");
     } else if (key == "fac.coarse_rel_tol" || key == "fac.coarse_abs_tol") {
       if (!std::holds_alternative<double>(value))
         throw std::invalid_argument("tensor FAC tolerance option has the wrong wire type");
@@ -172,13 +175,14 @@ inline TensorFacControls decode_controls(const PreparedProviderOptions& options)
       if (count != 2 && count != 4 && count != 6)
         throw std::invalid_argument("tensor boundary count must be twice its spatial rank");
       controls.boundary_count = static_cast<int>(count);
-    } else if (key.size() == 15 && key.starts_with("boundary.face.") &&
-               key.back() >= '0' && key.back() <= '5') {
+    } else if (key.size() == 15 && key.starts_with("boundary.face.") && key.back() >= '0' &&
+               key.back() <= '5') {
       if (!std::holds_alternative<std::int64_t>(value))
         throw std::invalid_argument("tensor boundary kind has the wrong wire type");
       const auto kind = std::get<std::int64_t>(value);
       if (kind < 0 || kind > 2)
-        throw std::invalid_argument("tensor boundary must be periodic, homogeneous Dirichlet or zero flux");
+        throw std::invalid_argument(
+            "tensor boundary must be periodic, homogeneous Dirichlet or zero flux");
       controls.boundary_kinds[static_cast<std::size_t>(key.back() - '0')] = static_cast<int>(kind);
     } else {
       throw std::invalid_argument("unknown tensor FAC option '" + key + "'");
@@ -314,7 +318,8 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
       throw std::invalid_argument("dimension-generic tensor elliptic preparation is incomplete");
     if (controls_.boundary_count != 0) {
       if (controls_.boundary_count != 2 * Dim)
-        throw std::invalid_argument("tensor boundary option rank differs from the prepared hierarchy");
+        throw std::invalid_argument(
+            "tensor boundary option rank differs from the prepared hierarchy");
       for (const auto& level : request_.levels)
         for (int axis = 0; axis < Dim; ++axis)
           for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
@@ -322,9 +327,12 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
             const int declared = controls_.boundary_kinds[static_cast<std::size_t>(face.ordinal())];
             const auto law = level.boundary.at(face);
             if ((declared == 0) != level.boundary.topology().is_periodic(face) ||
-                (declared == 1 && (law.kind != PhysicalBoundaryKind::dirichlet || law.value != Real(0))) ||
-                (declared == 2 && (law.kind != PhysicalBoundaryKind::neumann || law.value != Real(0))))
-              throw std::invalid_argument("tensor face options disagree with the prepared physical boundary");
+                (declared == 1 &&
+                 (law.kind != PhysicalBoundaryKind::dirichlet || law.value != Real(0))) ||
+                (declared == 2 &&
+                 (law.kind != PhysicalBoundaryKind::neumann || law.value != Real(0))))
+              throw std::invalid_argument(
+                  "tensor face options disagree with the prepared physical boundary");
           }
     }
     levels_.reserve(request_.levels.size());
@@ -365,6 +373,30 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
           controls_.coarse_restart.value_or(64),
           controls_.coarse_preconditioner.value_or(tensor_fac::CoarsePreconditionerKind::diagonal),
           controls_.interface_coupling.value_or(tensor_fac::InterfaceCoupling::level_stencil));
+    }
+    if (!tensor_fac_) {
+      // Flat Krylov and explicitly supplied kernels use this exact request too.
+      // Build the same geometric coverage without inventing a State owner.
+      representation_coverage_.reserve(request_.levels.size());
+      for (const auto& level : request_.levels) {
+        representation_coverage_.emplace_back(level.layout, level.distribution, level.local_rank, 1,
+                                              Extent<Dim>{});
+        representation_coverage_.back().set_val(Real(1));
+      }
+      for (std::size_t level = 0; level + 1 < request_.levels.size(); ++level) {
+        auto& active = representation_coverage_[level];
+        const auto ratio = hierarchy_tensor_detail::ratio_extent(request_.ratios[level]);
+        for (const auto& fine_patch : request_.levels[level + 1].layout.boxes()) {
+          const auto footprint = coarsen(fine_patch, ratio);
+          for (std::size_t local = 0; local < active.local_size(); ++local) {
+            const auto region = active.box(local).intersect(footprint);
+            if (!region.empty())
+              for_each_cell(region, tensor_fac::detail::SetKernel<Dim, Real>{
+                                        active.fab(local).view(), Real(0)});
+          }
+        }
+      }
+      Kokkos::fence();
     }
   }
 
@@ -409,6 +441,19 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
   }
 
   field_type& solution(int level) override { return level_at_(level).solution; }
+
+  const field_type& active_cell_mask(int level) const override {
+    if (level < 0 || static_cast<std::size_t>(level) >= levels_.size())
+      throw std::out_of_range("tensor observation level is outside its prepared hierarchy");
+    return tensor_fac_ ? tensor_fac_->active_cell_mask(level)
+                       : representation_coverage_.at(static_cast<std::size_t>(level));
+  }
+  typename PreparedHierarchyTensorSolver<Dim, MemorySpace>::RepresentationTopology
+  representation_topology(int level) const override {
+    const auto& coverage = active_cell_mask(level);
+    return {request_.levels.at(static_cast<std::size_t>(level)).geometry, coverage, nullptr,
+            nullptr};
+  }
 
   void stage_initial_guess(int level, const field_type* guess) override {
     LevelBuffers& storage = level_at_(level);
@@ -490,6 +535,7 @@ class AmrTensorElliptic final : public PreparedHierarchyTensorSolver<Dim, Memory
   std::string prepared_contract_;
   std::vector<std::string> slots_;
   std::vector<LevelBuffers> levels_;
+  std::vector<field_type> representation_coverage_;
   std::vector<level_fields_type> invocation_levels_;
   std::unique_ptr<tensor_fac::FullTensorCompositeFac<Dim, MemorySpace>> tensor_fac_{};
 };

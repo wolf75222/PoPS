@@ -68,7 +68,6 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kPhysicalDefaultFourPiG": "public_knob",
     "kPhysicalDefaultGravityRho0": "public_knob",
     "kCflSpeedFloor": "public_knob",
-    "kMaxRuntimeParams": "hard_limit",
 }
 
 
@@ -130,7 +129,7 @@ def _static_report() -> dict:
             "refinement_disabled_threshold": 1e30,
             "phi_refinement_disabled_threshold": 0.0,
         },
-        "runtime": {"max_runtime_params": 32},
+        "runtime": {"max_runtime_params": None, "runtime_parameter_budget_scope": "immutable_incarnation"},
         "diagnostics": {"fft_direct_dft_fallback_count": 0},
         # ADC-618: the classification fence (mirror of numerical_defaults_report_to_dict). The
         # source-scanning architecture test asserts every user-visible inline constexpr numeric

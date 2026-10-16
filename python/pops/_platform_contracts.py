@@ -634,6 +634,52 @@ def _validate_field_capabilities(
     _require_field_capability(view, "ownership", view.ownership, ownership)
 
 
+def validate_initial_state_import(
+    platform: PlatformManifest,
+    context: ExecutionContext,
+    fields: Sequence[FieldViewDescriptor],
+) -> None:
+    """Validate copied input arrays separately from native kernel field views.
+
+    The native System/AmrSystem import path copies a host array into native field
+    storage through host mirrors. The input remains a host view; it is never
+    relabelled as device memory or passed to a device kernel.
+    """
+    validate_launch(platform, context, ())
+    actual = tuple(fields)
+    if not actual:
+        return
+    backend = context.backend
+    for name in ("initial_state_import_mode", "initial_state_import_memory_spaces"):
+        _require_same(
+            "capabilities.%s" % name,
+            _field_capability(platform, name, owner="artifact"),
+            _field_capability(backend, name, owner="runtime"),
+        )
+    mode = _field_capability(backend, "initial_state_import_mode", owner="runtime").require(
+        "runtime.capabilities.initial_state_import_mode")
+    if mode != "copy_to_native_field":
+        raise PlatformContractError(
+            "initial-state import has no supported native copy contract",
+            field="initial_state_import_mode", expected="copy_to_native_field", actual=mode)
+    spaces = tuple(_field_capability(
+        backend, "initial_state_import_memory_spaces", owner="runtime").require(
+            "runtime.capabilities.initial_state_import_memory_spaces"))
+    _require_unique_field_names(actual, owner="initial-state import")
+    def supported(name: str) -> tuple[Any, ...]:
+        return tuple(_field_capability(backend, name, owner="runtime").require(
+            "runtime.capabilities.%s" % name))
+    for view in actual:
+        _validate_field_capabilities(
+            view, dimensions=supported("supported_dimensions"),
+            centerings=supported("centerings"), scalars=supported("scalars"),
+            memory_spaces=spaces, layouts=supported("layouts"), ownership=supported("ownership"))
+        if view.scalar != context.datatype.identity:
+            raise PlatformContractError(
+                "initial-state scalar does not match ExecutionContext datatype", field="datatype",
+                expected=view.scalar, actual=context.datatype.identity)
+
+
 def launch_checked(platform: PlatformManifest, context: ExecutionContext,
                    fields: Sequence[FieldViewDescriptor], kernel: Callable[..., Any],
                    *, expected_fields: Sequence[FieldViewDescriptor] = ()) -> Any:
@@ -679,6 +725,8 @@ def proven_serial_manifest(*, backend: str, target: str, abi: str,
                    "layouts": proof(("right", "left", "strided")),
                    "ownership": proof(("borrowed", "owned", "shared")),
                    "generic_field_view": proof(True),
+                   "initial_state_import_mode": proof("copy_to_native_field"),
+                   "initial_state_import_memory_spaces": proof(("host",)),
                    "execution_backend": proof("host"),
                    "shared_space": proof("HostSpace"),
                    "stream_identity": proof("host::synchronous"),
@@ -745,6 +793,8 @@ def artifact_platform_manifest(
             "layouts": proof(("right", "left", "strided")),
             "ownership": proof(("borrowed", "owned", "shared")),
             "generic_field_view": proof(True),
+                   "initial_state_import_mode": proof("copy_to_native_field"),
+                   "initial_state_import_memory_spaces": proof(("host",)),
             "execution_backend": proof("host"),
             "shared_space": proof("HostSpace"),
             "stream_identity": proof("host::synchronous"),
@@ -774,7 +824,7 @@ def serial_execution_context(platform: PlatformManifest) -> ExecutionContext:
 __all__ = [
     "PLATFORM_CONTRACT_SCHEMA_VERSION", "CapabilityProof", "PrecisionPolicy",
     "PlatformManifest", "RuntimeBackendManifest", "ExecutionResource", "ExecutionContext",
-    "FieldViewDescriptor", "PlatformContractError", "validate_launch",
+    "FieldViewDescriptor", "PlatformContractError", "validate_launch", "validate_initial_state_import",
     "validate_component_launch", "validate_component_runtime", "launch_checked",
     "proven_serial_manifest", "artifact_platform_manifest", "serial_execution_context",
 ]

@@ -64,19 +64,23 @@ def _flux_expression_linear_combine(
 
 
 def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
-    """Derive exact finite per-block FluxExpression bounds from the frozen Program IR.
+    """Choose per-block resource ceilings for exact FluxExpression bookkeeping.
 
-    Every flux-producing RHS evaluation creates one distinct native basis. Fixed ``range`` and
-    ``subcycle`` regions are interpreted the authored number of times, and lazy branches are
-    explored independently. Coefficients use the same rational polynomial multiplication,
-    addition, and exact cancellation as ``AmrProgramContext``. An unbounded ``while`` may remain in
-    a source/local-solve region, but is refused when it can create or carry a flux expression.
+    An explicit ceiling admits dynamic support, including repeated dense history
+    remaps. Exceeding it must reject the native transaction before publication.
+    Without one, estimate the current invocation and declared retained windows;
+    that estimate is not a proof that arbitrary histories fit for unlimited steps.
     """
     blocks = program._block_indices()
     ordered_blocks = sorted(blocks, key=blocks.get)
+    from pops.time._program.resource_budgets import validate_flux_expression_budget
+    explicit = program.flux_expression_budget
+    validate_flux_expression_budget(explicit)
+    if explicit is not None:
+        return tuple(explicit for _ in ordered_blocks)
 
     def flux_basis_count(value: Any) -> int:
-        if value.op in {"rhs", "principal_rate"}:
+        if value.op in {"rhs", "principal_rate", "stencil_flux_divergence"}:
             return 1 if value.attrs.get("flux", True) else 0
         if value.op == "diffusive_rhs":
             from pops.codegen.program_emit_diffusion import diffusive_flux_basis_count
@@ -84,26 +88,56 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
             return diffusive_flux_basis_count(value)
         return 0
 
+    def accepted_flux_polynomials(value: Any) -> list[dict[int, Fraction]]:
+        # Newton residual probes only evaluate faces; the consumed solve publishes
+        # each prepared diffusive provider once. Budget that exact publication,
+        # including its authenticated temporal polynomial, independently of the
+        # nonlinear iteration limit. Branch/range traversal below still counts
+        # actual possible solve invocations on each execution path.
+        if value.op == "solve_spatial_nonlinear":
+            from pops.time._program.spatial_solve import spatial_rate_weight
+
+            return [
+                _flux_polynomial(spatial_rate_weight(value, rate))
+                for rate in value.attrs["residual_block"]
+                if rate.op == "diffusive_rhs"
+                for _ in range(flux_basis_count(rate))
+            ]
+        return [{0: Fraction(1)} for _ in range(flux_basis_count(value))]
+
+    def region_values(values: Any) -> Any:
+        # Preserve lexical order and repeated region occurrences. A completed
+        # region may be shared; only an active ancestor constitutes a cycle.
+        pending = [("enter", values)]
+        active_regions: set[int] = set()
+        while pending:
+            action, item = pending.pop()
+            if action == "exit":
+                active_regions.remove(item)
+                continue
+            if action == "enter":
+                identity = id(item)
+                if identity in active_regions:
+                    raise ValueError("AMR flux budget contains a cyclic region")
+                active_regions.add(identity)
+                pending.append(("exit", identity))
+                pending.extend(("value", value) for value in reversed(item))
+                continue
+            yield item
+            for key in reversed((
+                "cond_block", "body_block", "apply_block", "residual_block",
+                "true_block", "false_block",
+            )):
+                nested = item.attrs.get(key)
+                if isinstance(nested, (list, tuple)):
+                    pending.append(("enter", nested))
+
     def contains_rhs(values: Any, block: Any, *, flux_only: bool = False) -> bool:
-        for value in values:
-            if value.op in {"rhs", "diffusive_rhs", "principal_rate"} and value.block == block and (
-                not flux_only or flux_basis_count(value) != 0
-            ):
-                return True
-            for key in (
-                "cond_block",
-                "body_block",
-                "apply_block",
-                "residual_block",
-                "true_block",
-                "false_block",
-            ):
-                nested = value.attrs.get(key)
-                if isinstance(nested, (list, tuple)) and contains_rhs(
-                    nested, block, flux_only=flux_only
-                ):
-                    return True
-        return False
+        return any(
+            value.op in {"rhs", "diffusive_rhs", "principal_rate", "stencil_flux_divergence"}
+            and value.block == block and (not flux_only or flux_basis_count(value) != 0)
+            for value in region_values(values)
+        )
 
     alias_input = {
         "acceptance_guard": 0,
@@ -120,10 +154,23 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
         # environment clone is sufficient when a branch forks.
         paths: list[tuple[dict[int, Any], int, int, int]] = [({}, 0, 0, 0)]
 
-        def note(expression: Any, maximum: int) -> int:
-            return max(maximum, *(len(polynomial) for polynomial in expression.values()), 0)
+        def leaf_expressions(expression: Any) -> Any:
+            # Products carry independent field expressions. Traverse the abstract
+            # carrier iteratively; its depth is not a resource ceiling.
+            pending = [expression]
+            while pending:
+                current = pending.pop()
+                if isinstance(current, tuple):
+                    pending.extend(member for _, member in current)
+                else:
+                    yield current
 
-        def execute(values: Any, active: Any) -> Any:
+        def note(expression: Any, maximum: int) -> int:
+            for leaf in leaf_expressions(expression):
+                maximum = max(maximum, *(len(polynomial) for polynomial in leaf.values()), 0)
+            return maximum
+
+        def execute_region(values: Any, active: Any) -> Any:
             for value in values:
                 next_paths = []
                 for environment, basis_count, maximum_terms, next_basis in active:
@@ -132,38 +179,47 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                             ("true_block", "true_result"),
                             ("false_block", "false_result"),
                         ):
-                            fork = execute(
+                            fork = yield (
                                 value.attrs[arm_key],
                                 [(dict(environment), basis_count, maximum_terms, next_basis)],
                             )
                             for arm_env, arm_count, arm_maximum, arm_next in fork:
                                 arm_result = arm_env.get(value.attrs[result_key].id, {})
-                                arm_env[value.id] = arm_result if value.block == block else {}
+                                arm_env[value.id] = arm_result
                                 next_paths.append(
                                     (arm_env, arm_count, note(arm_result, arm_maximum), arm_next)
                                 )
                         continue
 
-                    if value.op in ("range", "subcycle"):
+                    if value.op in ("range", "subcycle", "structured_fold"):
                         loop_paths = [(dict(environment), basis_count, maximum_terms, next_basis)]
                         loop_input = value.inputs[0]
-                        for _ in range(int(value.attrs["count"])):
+                        if value.op == "structured_fold":
+                            bound = value.inputs[2]
+                            if bound.op != "int64_constant":
+                                if (contains_rhs(value.attrs["body_block"], block, flux_only=True)
+                                        or any(leaf_expressions(environment.get(loop_input.id, {})))):
+                                    raise ValueError("AMR dynamic fold flux storage requires an explicit flux_expression_budget")
+                                iterations = 1
+                            else:
+                                iterations = int(bound.attrs["value"])
+                            argument = value.attrs["body_argument"]
+                        else:
+                            iterations = int(value.attrs["count"])
+                            argument = loop_input
+                        for _ in range(iterations):
                             seeded = []
                             for loop_env, loop_count, loop_maximum, loop_next in loop_paths:
                                 loop_env = dict(loop_env)
-                                if value.block == block:
-                                    loop_env[loop_input.id] = loop_env.get(loop_input.id, {})
+                                loop_env[argument.id] = loop_env.get(loop_input.id, {})
                                 seeded.append((loop_env, loop_count, loop_maximum, loop_next))
-                            loop_paths = execute(value.attrs["body_block"], seeded)
+                            loop_paths = yield value.attrs["body_block"], seeded
                             for loop_env, _, _, _ in loop_paths:
-                                if value.block == block:
-                                    loop_env[loop_input.id] = loop_env.get(
-                                        value.attrs["body"].id, {}
-                                    )
+                                loop_env[loop_input.id] = loop_env.get(
+                                    value.attrs["body"].id, {}
+                                )
                         for loop_env, loop_count, loop_maximum, loop_next in loop_paths:
-                            expression = (
-                                loop_env.get(loop_input.id, {}) if value.block == block else {}
-                            )
+                            expression = loop_env.get(loop_input.id, {})
                             loop_env[value.id] = expression
                             next_paths.append(
                                 (loop_env, loop_count, note(expression, loop_maximum), loop_next)
@@ -175,7 +231,7 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                         if (
                             contains_rhs(value.attrs["cond_block"], block, flux_only=True)
                             or contains_rhs(value.attrs["body_block"], block, flux_only=True)
-                            or (value.block == block and expression)
+                            or any(leaf_expressions(expression))
                         ):
                             raise ValueError(
                                 "AMR FluxExpression budget is unbounded: while node %r can create "
@@ -186,23 +242,34 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                         # iteration sees the same captured flux expressions. Interpret each region
                         # once to retain its exact finite coefficient maximum; its local results do
                         # not escape the while region or feed the other block's loop carrier.
-                        probes = execute(
+                        probes = yield (
                             value.attrs["cond_block"],
                             [(dict(environment), basis_count, maximum_terms, next_basis)],
                         )
-                        probes = execute(value.attrs["body_block"], probes)
+                        probes = yield value.attrs["body_block"], probes
                         for probe_env, probe_count, probe_maximum, probe_next in probes:
                             probe_env[value.id] = {}
                             next_paths.append((probe_env, probe_count, probe_maximum, probe_next))
                         continue
 
                     expression = {}
-                    if value.block == block:
-                        multiplicity = flux_basis_count(value)
+                    if value.op == "product":
+                        expression = tuple(
+                            (name, environment.get(source.id, {}))
+                            for name, source in zip(value.attrs["fields"], value.inputs, strict=True)
+                        )
+                    elif value.op == "product_get":
+                        source = environment.get(value.inputs[0].id, ())
+                        expression = dict(source).get(value.attrs["field"], {})
+                    elif value.op == "region_argument":
+                        expression = environment.get(value.id, {})
+                    elif value.block == block:
+                        polynomials = accepted_flux_polynomials(value)
+                        multiplicity = len(polynomials)
                         if multiplicity:
                             expression = {
-                                (value.id, next_basis + offset): {0: Fraction(1)}
-                                for offset in range(multiplicity)
+                                (value.id, next_basis + offset): polynomial
+                                for offset, polynomial in enumerate(polynomials)
                             }
                             next_basis += multiplicity
                             basis_count += multiplicity
@@ -236,6 +303,27 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                 active = next_paths
             return active
 
+        def execute(values: Any, active: Any) -> Any:
+            # Trampoline the exact same path interpreter: no recursion limit,
+            # branch merge, sampling, or loss of loop multiplicity.
+            stack = [(id(values), execute_region(values, active))]
+            active_regions = {id(values)}
+            result = None
+            while stack:
+                try:
+                    nested, nested_paths = stack[-1][1].send(result)
+                except StopIteration as completed:
+                    result = completed.value
+                    active_regions.remove(stack.pop()[0])
+                else:
+                    identity = id(nested)
+                    if identity in active_regions:
+                        raise ValueError("AMR flux budget contains a cyclic region")
+                    active_regions.add(identity)
+                    stack.append((identity, execute_region(nested, nested_paths)))
+                    result = None
+            return result
+
         paths = execute(program._values, paths)
         return (
             max(
@@ -243,8 +331,8 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                     max(
                         basis_count,
                         max(
-                            (len(expression) for expression in environment.values()
-                             if isinstance(expression, dict)),
+                            (len(leaf) for expression in environment.values()
+                             for leaf in leaf_expressions(expression)),
                             default=0,
                         ),
                     )
@@ -266,21 +354,18 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
         stores: dict[tuple[Any, str], Any],
         reads: set[tuple[Any, str]],
     ) -> None:
-        for value in values:
+        for value in region_values(values):
             if value.op == "store_history" and value.inputs:
                 stores[(value.block, value.attrs["history"])] = value.inputs[0]
             elif value.op == "history":
                 reads.add((value.block, value.attrs["history"]))
-            for key in (
-                "cond_block", "body_block", "apply_block", "residual_block", "true_block", "false_block"
-            ):
-                nested = value.attrs.get(key)
-                if isinstance(nested, (list, tuple)):
-                    history_flux_blocks(nested, stores, reads)
 
     stored_histories: dict[tuple[Any, str], Any] = {}
     read_histories: set[tuple[Any, str]] = set()
     history_flux_blocks(program._values, stored_histories, read_histories)
+    history_manifest = {
+        row["name"]: row for row in program.temporal_manifest()["histories"]
+    }
     for index, block in enumerate(ordered_blocks):
         stored = {name: source for (candidate, name), source in stored_histories.items()
                   if candidate == block}
@@ -297,6 +382,7 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
             # basis bound from the frozen AB2 program.
             retained = 0
             live = 0
+            temporal_slots = 1
             for name, source in stored.items():
                 if name not in read:
                     continue
@@ -304,23 +390,48 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                 # source may be an aliased/combined expression, so count every distinct RHS
                 # ancestor conservatively before multiplying by the readable lag window.
                 def source_bases(value: Any, seen: set[int]) -> int:
-                    if value.id in seen:
-                        return 0
-                    seen.add(value.id)
-                    multiplicity = flux_basis_count(value)
-                    if multiplicity:
-                        return multiplicity
-                    return sum(source_bases(input_value, seen) for input_value in value.inputs)
+                    pending = [value]
+                    count = 0
+                    while pending:
+                        current = pending.pop()
+                        if current.id in seen:
+                            continue
+                        seen.add(current.id)
+                        multiplicity = flux_basis_count(current)
+                        if multiplicity:
+                            count += multiplicity
+                        else:
+                            pending.extend(reversed(current.inputs))
+                    return count
 
                 source_count = max(1, source_bases(source, set()))
+                interpolation = history_manifest[name]["interpolation"]
+                slots = (int(interpolation["slots"])
+                         if interpolation.get("kind") == "history_transfer" else 1)
+                # An affine macro publication binds the complete immutable entry
+                # and candidate rings, plus explicitly authorized state endpoints.
+                # Its rectangular row can select every source; scalar parameters
+                # are runtime values, so no branch/weight is assumed to be zero.
+                from pops.codegen.program_lowerability import all_ops
+                for operation in all_ops(program):
+                    if operation.op != "accept_increment":
+                        continue
+                    row = operation.attrs.get("histories", {}).get(name)
+                    if row is not None:
+                        from pops.time._history.transfer import transfer_dimensions
+                        sources, _targets, _parameters = transfer_dimensions(row["transfer"])
+                        slots = max(slots, sources)
+                temporal_slots = max(temporal_slots, slots)
                 live += source_count
-                retained += source_count * int(program._histories[name])
-            budgets[index] = (max(bases, live, 1) + retained, max(terms, 1))
+                retained += source_count * int(program._histories[name]) * slots
+            budgets[index] = (max(bases, live, 1) + retained, max(terms, 1) * temporal_slots)
     return tuple(budgets)
 
 
 def _emit_flux_expression_budget(program: Any) -> str:
     budgets = _flux_expression_budgets(program)
+    from pops.time._program.resource_budgets import validate_flux_expression_abi
+    validate_flux_expression_abi(budgets)
     rhs_bounds = ", ".join("UINT64_C(%d)" % rhs for rhs, _ in budgets)
     coefficient_bounds = ", ".join("UINT64_C(%d)" % coefficient for _, coefficient in budgets)
     count = len(budgets)
@@ -350,6 +461,8 @@ def _emit_flux_expression_budget(program: Any) -> str:
         f'extern "C" int pops_program_flux_expression_budget_count() {{ return {count}; }}\n'
         + lookup("pops_program_flux_rhs_basis_bound", rhs_bounds)
         + lookup("pops_program_flux_coefficient_term_bound", coefficient_bounds)
+        + 'extern "C" std::uint64_t pops_program_flux_exact_coefficient_bytes() { return '
+        f"UINT64_C({program.max_exact_coefficient_bytes}); }}\n"
         + 'extern "C" std::uint64_t '
         f"pops_program_interface_coupling_application_bound() {{ return UINT64_C({interface_samples}); }}\n"
         + 'extern "C" std::uint64_t '
@@ -360,45 +473,10 @@ def _emit_flux_expression_budget(program: Any) -> str:
 
 def _emit_checkpoint_shape_metadata(program: Any) -> str:
     """Emit the frozen checkpoint shape before any native prelude allocation."""
+    from .program_history_metadata import emit_checkpoint_history_metadata
+
     block_idx = program._block_indices()
     temporal = program.temporal_manifest()
-    history_manifest = {row["name"]: row for row in temporal["histories"]}
-    histories = []
-    for name, lag in sorted(program._histories.items()):
-        owner = getattr(program, "_history_blocks", {}).get(name)
-        owner_index = block_idx.get(owner) if owner is not None else None
-        if owner_index is None:
-            raise ValueError("AMR history %r requires explicit block owner provenance" % name)
-        state_ref = getattr(program, "_history_state_refs", {}).get(name)
-        state_identity = (
-            state_ref.qualified_id if state_ref is not None else "scalar-history:" + name
-        )
-        # Match the exact IR16 storage authority registered by the live prelude.
-        # The scalar observation keeps its own space; its storage owner is not
-        # permission to replace it by that owner's physical State identity.
-        from pops.time._program.global_history_storage import descriptor
-        storage_descriptor = descriptor(program, name)
-        if storage_descriptor is not None:
-            state_identity = storage_descriptor
-        from pops.codegen.program_history_identity import history_space_identity, history_ghost_depth
-        space_identity = history_space_identity(program, name)
-        row = history_manifest[name]
-        interpolation = json.dumps(row["interpolation"], sort_keys=True, separators=(",", ":"))
-        component = getattr(program, "_histories_ncomp", {}).get(name)
-        histories.append(
-            (
-                str(name),
-                int(owner_index),
-                str(state_identity),
-                str(space_identity),
-                str(row["clock"]),
-                interpolation,
-                int(lag) + 1,
-                -1 if component is None else int(component),
-                history_ghost_depth(program, name),
-            )
-        )
-
     def string_accessor(symbol: str, column: int, rows: Any) -> str:
         cases = "".join(
             "    case %d: return %s;\n" % (index, json.dumps(row[column]))
@@ -411,31 +489,10 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
             "}\n"
         )
 
-    def integer_accessor(symbol: str, column: int) -> str:
-        cases = "".join(
-            "    case %d: return %d;\n" % (index, row[column])
-            for index, row in enumerate(histories)
-        )
-        return (
-            f'extern "C" int {symbol}(int index) {{\n'
-            "  switch (index) {\n" + cases + "    default: return 0;\n"
-            "  }\n"
-            "}\n"
-        )
-
     clocks = tuple((str(row["id"]),) for row in temporal["clocks"])
     return (
         "// Frozen Program checkpoint descriptors and logical-clock authority.\n"
-        f'extern "C" int pops_program_checkpoint_history_count() {{ return {len(histories)}; }}\n'
-        + string_accessor("pops_program_checkpoint_history_name", 0, histories)
-        + integer_accessor("pops_program_checkpoint_history_owner", 1)
-        + string_accessor("pops_program_checkpoint_history_state_identity", 2, histories)
-        + string_accessor("pops_program_checkpoint_history_space_identity", 3, histories)
-        + string_accessor("pops_program_checkpoint_history_clock_identity", 4, histories)
-        + string_accessor("pops_program_checkpoint_history_interpolation_identity", 5, histories)
-        + integer_accessor("pops_program_checkpoint_history_depth", 6)
-        + integer_accessor("pops_program_checkpoint_history_components", 7)
-        + integer_accessor("pops_program_checkpoint_history_ghost_depth", 8)
+        + emit_checkpoint_history_metadata(program, require_owner=True)
         + f'extern "C" int pops_program_checkpoint_logical_clock_count() {{ return {len(clocks)}; }}\n'
         + string_accessor("pops_program_checkpoint_logical_clock_identity", 0, clocks)
         + 'extern "C" const char* pops_program_checkpoint_primary_clock_identity() {\n'
@@ -579,6 +636,9 @@ def _emit_flux_temporal_family_install(program: Any) -> str:
                          _rhs_flux_temporal_family(value, named)))
         elif value.op == "principal_rate":
             rows.append((blocks[value.block], value.id, 1, _rhs_flux_temporal_family(value)))
+        elif value.op == "stencil_flux_divergence":
+            from pops.codegen.program_emit_stencil_flux import stencil_temporal_family
+            rows.append((blocks[value.block], value.id, 5, stencil_temporal_family(value)))
         elif value.op == "diffusive_rhs":
             constitutive, transport = _diffusive_flux_families(value)
             rows.append((blocks[value.block], value.id, 4, constitutive))
@@ -633,12 +693,22 @@ def _emit_amr_install(
     flux_temporal_families = _emit_flux_temporal_family_install(program)
     provider_register = _emit_amr_program_provider_register(provider_plan_install)
     if cell_local_time is not None:
+        from .program_source_map import operation_group
+
         cell_local_contract, cell_local_routes = cell_local_time
         clock_identity = json.dumps(program.clock.qualified_id)
         route_rows = ", ".join(
             "{%d, -1, %d}" % (program_block, rhs_id) for program_block, rhs_id in cell_local_routes
         )
         route_count = len(cell_local_routes)
+        # The bounded-shape check above proves that this native provider owns
+        # every state read, default-flux RHS and U + dt*RHS update in the IR.
+        # They execute together in this call, with no separate generated SSA
+        # variables. Record the coalesced call, not the discarded global body.
+        advance_lines = []
+        with operation_group(program._values, advance_lines, environment={},
+                             channel="cell_local_provider_advance"):
+            advance_lines.append("    ctx_owner->advance_same_level_cell_temporal(dt);")
         return (
             flux_expression_budget + "\n#include <pops/runtime/program/amr_program_context.hpp>\n"
             + provider_register
@@ -654,20 +724,37 @@ def _emit_amr_install(
             f"{clock_identity}, {cell_local_contract.tick_denominator}, "
             f"{cell_local_contract.rung}, cell_temporal_routes);\n"
             "  ctx.install([ctx_owner](double dt) {\n"
-            "    ctx_owner->advance_same_level_cell_temporal(dt);\n"
-            "  }, ctx_owner);\n"
+            + "\n".join(advance_lines) + "\n"
+            + "  }, ctx_owner);\n"
             "}\n"
         )
 
-    post_sync_src = post_synchronization if post_synchronization else ""
+    from .program_amr_finite_scope import scope_body, uses_finite_values
+    from .program_amr_continuation import configuration_install, checkpoint_exports
+    from pops.time._program.continuation_forest import forest_node
+    continuation_forest = forest_node(program)
+    regrid_forest = bool(continuation_forest is not None and
+                         continuation_forest.attrs["continuation_forest"].get("regrid"))
+    finite_scopes = uses_finite_values(program)
+    body = scope_body(body, finite_scopes)
+    if hierarchy_bodies is not None:
+        hierarchy_bodies = tuple(scope_body(part, finite_scopes) for part in hierarchy_bodies)
+    if regrid_forest and post_synchronization:
+        post_synchronization = ("if (ctx.continuation_regrid_phase()) ctx.continuation_regrid_bind_target_();\n"
+                                + post_synchronization)
+    post_sync_src = scope_body(post_synchronization, finite_scopes) if post_synchronization else ""
+    from pops.codegen.program_lowerability import all_ops
+    affine_finalization = any(value.op == "accept_increment" for value in all_ops(program))
     post_sync_field = (
         "    std::function<void(double)> post_synchronization;\n" if post_sync_src else ""
     )
     post_sync_initializer = (
         "      , [=](double dt) {\n"
         "        auto& ctx = *ctx_owner;\n"
-        "        ctx.begin_step(dt);\n"
-        "        ctx.set_stage_time(1, 1);\n"
+        + ("        if (ctx.continuation_regrid_phase()) ctx.begin_regrid_invocation();\n"
+           "        else { ctx.begin_step(dt); ctx.set_stage_time(1, 1); }\n"
+           if regrid_forest else
+           "        ctx.begin_step(dt);\n        ctx.set_stage_time(1, 1);\n")
         + post_sync_src
         + "\n"
         "      }\n"
@@ -685,6 +772,23 @@ def _emit_amr_install(
         if post_sync_src
         else ""
     )
+    if affine_finalization:
+        post_sync_driver = (
+            "    ctx.prepare_affine_finalization();\n"
+            "    ctx.with_program_resource_level(0, [&]() {\n"
+            "      _level_programs->front().post_synchronization(dt);\n"
+            "    });\n"
+            "    ctx.finish_affine_finalization();\n"
+        )
+    if continuation_forest is not None:
+        if affine_finalization:
+            raise ValueError("AMR forest must express its complete transformation before parent assessment")
+        post_sync_driver += (
+            "    ctx.begin_continuation_parent();\n"
+            "    ctx.with_program_resource_level(0, [&]() {\n"
+            "      _level_programs->front().post_synchronization(dt);\n"
+            "    });\n"
+        )
 
     transform_guard = ""
     transform_refresh_guard = ""
@@ -835,6 +939,13 @@ def _emit_amr_install(
             + post_sync_driver
         )
 
+    if affine_finalization:
+        blocks = ", ".join(str(index) for index in program._block_indices().values())
+        installed_driver = ("    ctx.begin_affine_finalization(dt, {%s});\n" % blocks) + installed_driver
+    if continuation_forest is not None:
+        blocks = ", ".join(str(index) for index in program._block_indices().values())
+        installed_driver = ("    ctx.begin_continuation_forest(dt, {%s});\n" % blocks) + installed_driver
+
     # Every generated prelude allocation is layout-bound. Materialize one complete closure bundle
     # per level before the first advance, and rebuild the set exactly once after a topology epoch or
     # process-local materialization-generation change. This is deliberately generic: scalar scratch,
@@ -885,14 +996,15 @@ def _emit_amr_install(
         "      pops::collectively_rethrow_exception(level_error, lane,\n"
         '          "AMR Program level resource capture failed collectively");\n'
         "    });\n"
-        "    _level_programs->swap(next);\n"
+        + configuration_install(program)
+        + "    _level_programs->swap(next);\n"
         "    *_level_program_epoch = epoch;\n"
         "    *_level_program_generation = generation;\n"
         "  };\n"
         "  _refresh_level_programs();\n"
     )
     return (
-        flux_expression_budget
+        flux_expression_budget + checkpoint_exports(program)
         + "\n#include <pops/runtime/program/amr_program_context.hpp>  // registers the AmrSystem provider\n"
         "// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target='amr_system' counterpart\n"
         "// of pops_install_program. AmrSystem::install_program resolves + calls it after binding the\n"
@@ -915,5 +1027,19 @@ def _emit_amr_install(
         + installed_driver
         + "  }, ctx_owner, [=]() { _refresh_level_programs(); },\n"
         "     [=]() { _refresh_level_programs(true); });\n"
-        "}\n"
+        + ("  ctx.install_continuation_regrid_graph([=]() {\n"
+           "    auto& ctx = *ctx_owner;\n"
+           "    _refresh_level_programs(true);\n"
+           "    const int _levels = ctx.program_resource_topology().levels;\n"
+           "    for (int _k = 0; _k < _levels; ++_k) {\n"
+           "      ctx.with_program_resource_level(_k, [&]() {\n"
+           "        _level_programs->at(static_cast<std::size_t>(_k)).post_synchronization(0.);\n"
+           "      });\n"
+           "    }\n"
+           "    ctx.begin_continuation_parent();\n"
+           "    ctx.with_program_resource_level(0, [&]() {\n"
+           "      _level_programs->front().post_synchronization(0.);\n"
+           "    });\n"
+           "  });\n" if regrid_forest else "")
+        + "}\n"
     )

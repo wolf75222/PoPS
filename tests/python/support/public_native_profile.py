@@ -38,7 +38,7 @@ def native_profile(*, dimension=2, scope="public native fixture",
         world = require_world(native.mpi_world())
     expected = os.environ.get(expected_rank_env)
     if expected is not None:
-        if expected not in {"1", "2"} or world is None or int(world.size) != int(expected):
+        if expected not in {"1", "2", "3"} or world is None or int(world.size) != int(expected):
             raise AssertionError(scope + " MPI profile differs from its requested world")
     return native, world
 
@@ -68,9 +68,9 @@ def compile_profile_plan_once(world, resolved, *, route, compile_artifact):
             raise RuntimeError("compiler returned no artifact")
         artifact.verify()
         return artifact
-    from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
-    return compile_resolved_plan_once(world, resolved, route=route,
-                                      compile_artifact=compile_artifact)
+    from tests.python.integration.mpi._compile_once import compile_resolved_plan_cached
+    return compile_resolved_plan_cached(world, resolved, route=route,
+                                        compile_artifact=compile_artifact)
 
 
 __all__ = ["native_profile", "rank_and_size", "profile_gather_value", "profile_gather_bytes",

@@ -11,17 +11,20 @@ DENSE_BYTES = 256 * 1024**2
 
 
 def published_history_image(name, level, raw_slots, durations, sample, step):
-    """Label the two raw slots after publication, authenticated by real POPSHID1 bytes.
+    """Label the two raw slots after publication, authenticated by real HID1/HID2 bytes.
 
     This is the bounded two-step fixture protocol, not a numerical runtime or a
     general history decoder. Store writes slot zero; publication rotates it to one.
     """
     if type(step) is not int or step not in (1, 2) or len(raw_slots) != 2:
         raise ValueError("published history fixture requires its two-step, two-slot protocol")
-    header = b"POPSHID1"+struct.pack("<Q", len(name.encode()))+name.encode()+struct.pack("<qQ", level, 2)
+    magic = bytes(sample)[:8]
+    if magic not in (b"POPSHID1", b"POPSHID2"):
+        raise ValueError("published history sample differs from its exact name/level/window/slot authority")
+    header = magic+struct.pack("<Q", len(name.encode()))+name.encode()+struct.pack("<qQ", level, 2)
     expected = header+b"".join(struct.pack("<QQQQ", 2,
         int.from_bytes(struct.pack("<d", start), "little"),
-        int.from_bytes(struct.pack("<d", DT), "little"), 1)
+        int.from_bytes(struct.pack("<d", DT), "little"), 1)+(b"\0"*32 if magic==b"POPSHID2" else b"")
         for start in (0., (step-1)*DT))
     if bytes(sample) != expected or tuple(float(value).hex() for value in durations) != (DT.hex(), DT.hex()):
         raise ValueError("published history sample differs from its exact name/level/window/slot authority")

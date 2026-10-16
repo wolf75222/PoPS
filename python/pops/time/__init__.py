@@ -22,6 +22,8 @@ from pops.time._history.contracts import (  # noqa: F401
     DenseOutput, HistoryContract, HistoryValidity, InterpolationCapability,
     LinearInterpolation, NoInterpolation, PiecewiseConstant,
 )
+from pops.time._history.transfer import HistoryTransfer, HistorySample
+from pops.time._history.evaluation import TemporalEvaluation, TemporalSample
 from pops.time._history.persistence import (  # noqa: F401
     Dense, HistoryPersistence, Interval, Revolve,
 )
@@ -108,6 +110,7 @@ __all__ = ["Program", "ProgramValue", "MovingFieldProjection", "StageStateSet", 
            "TimeState", "StageHandle", "HistoryHandle", "StateEndpointHandle", "CopyCurrent",
            "HistoryContract", "HistoryValidity", "InterpolationCapability",
            "NoInterpolation", "PiecewiseConstant", "LinearInterpolation", "DenseOutput",
+           "HistoryTransfer", "HistorySample", "TemporalEvaluation", "TemporalSample",
            "HistoryPersistence", "Dense", "Interval", "Revolve",
            "Domain", "AcceptedStep", "Attempt", "Stage", "ClockTick", "AMRLevel",
            "EventHandle", "Event", "WallOutput", "Trigger", "Always", "Every", "EveryDt",

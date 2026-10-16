@@ -28,7 +28,7 @@ def test_m3_uses_the_complete_canonical_mpi_orchestrator_inventory():
     runner = _load_runner()
     data = runner.tomllib.loads(runner.TEST_MANIFEST.read_text(encoding="utf-8"))
     rows = runner.selection.manifest_python_mpi_orchestrators(data)
-    assert len(rows) == 28
+    assert len(rows) == 29
     assert sum("partitions" in row for row in rows) == 6
     assert runner._python_mpi_orchestrators() == {row["path"] for row in rows}
 
@@ -42,18 +42,24 @@ def test_m3_canonical_orchestrator_errors_stay_fail_closed(monkeypatch, mutation
         suite = next(row for row in data["python"]["suite"] if row.get("mpi_orchestrators"))
         rows = suite["mpi_orchestrators"]
         row = next(row for row in rows if "partitions" in row)
-        if mutation == "extra_field": row["nproc"] = 2
-        elif mutation == "missing_id": row["partitions"].pop()
-        elif mutation == "duplicate_id": row["partitions"].append(dict(row["partitions"][0]))
+        if mutation == "extra_field":
+            row["nproc"] = 2
+        elif mutation == "missing_id":
+            row["partitions"].pop()
+        elif mutation == "duplicate_id":
+            row["partitions"].append(dict(row["partitions"][0]))
         elif mutation == "unknown_id":
             part = row["partitions"][0]
             part["id"] = "unowned"
             part["parent_node"] = part["parent_node"].split("[", 1)[0] + "[unowned]"
-        elif mutation == "foreign_parent": row["partitions"][0]["parent_node"] = "test_unowned[saved_restart]"
-        elif mutation == "no_partitions": row.pop("partitions")
+        elif mutation == "foreign_parent":
+            row["partitions"][0]["parent_node"] = "test_unowned[saved_restart]"
+        elif mutation == "no_partitions":
+            row.pop("partitions")
         elif mutation == "legacy_partitions":
             next(row for row in rows if "partitions" not in row)["partitions"] = row["partitions"]
-        elif mutation == "duplicate_path": rows.append(dict(row))
+        elif mutation == "duplicate_path":
+            rows.append(dict(row))
         return canonical(data)
     monkeypatch.setattr(runner.selection, "manifest_python_mpi_orchestrators", validate_mutation)
     with pytest.raises(ValueError) as caught:
@@ -231,11 +237,15 @@ def test_m3_gate_pins_transactional_persistent_hysteresis_proofs():
         "all parent levels in one hierarchy sweep must share one hysteresis cycle" in native_source
     )
     assert "restored.restore_checkpoint_accepted_state(accepted)" in native_source
-    # The fixture authenticates both the serial exception and collective MPI refusal.
-    assert "expect_restore_refusal([&] { restored.restore_checkpoint_accepted_state(invalid); }" in native_source
+    # Ordinary restore keeps its local/collective exception contract. Checkpoint
+    # requalification preserves the rank and exact semantic cause on every lane.
     assert "EXPECT_THROW(restore(), std::invalid_argument)" in native_source
     assert "EXPECT_STREQ(error.what(), collective_message)" in native_source
-    assert "AMR checkpoint post-requalification validation failed collectively" in native_source
+    assert 'expect_checkpoint_refusal(invalid, "AMR checkpoint tagging hysteresis record is invalid")' in native_source
+    assert "AMR checkpoint has an unsupported tagging hysteresis schema" in native_source
+    assert "AMR checkpoint post-requalification validation failed on rank " in native_source
+    assert "std::to_string(pops::my_rank())" in native_source
+    assert "EXPECT_EQ(std::string(error.what()), expected)" in native_source
 
 
 def test_m3_final_gate_has_no_deferred_requirement():
@@ -402,6 +412,7 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
         ),
     } in checks
     assert runner._python_mpi_orchestrators() == {
+        "tests/python/integration/mpi/test_api_v02_continuation_migration.py",
         "tests/python/integration/mpi/test_amr_rank_change_restart.py",
         "tests/python/integration/mpi/test_initial_field_ghost_mpi.py",
         "tests/python/integration/mpi/test_public_accepted_halo_mpi1.py",

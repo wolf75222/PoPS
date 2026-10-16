@@ -6,6 +6,7 @@
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/rank_space.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <stdexcept>
 #include <utility>
@@ -70,7 +71,10 @@ class Distribution {
     if (!rank_space_.contains(rank))
       throw std::out_of_range("Distribution rank coordinate is outside the process space");
     std::vector<std::size_t> result;
-    result.reserve(replicated() ? layout_.size() : owners_.size());
+    const std::size_t local_count =
+        replicated() ? layout_.size()
+                     : static_cast<std::size_t>(std::count(owners_.begin(), owners_.end(), rank));
+    result.reserve(local_count);
     for (std::size_t global_box = 0; global_box < layout_.size(); ++global_box)
       if (replicated() || owners_[global_box] == rank)
         result.push_back(global_box);

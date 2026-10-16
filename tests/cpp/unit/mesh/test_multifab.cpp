@@ -2,9 +2,12 @@
 
 #include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/runtime/program/host_face_publication.hpp>
 
 #include <Kokkos_Core.hpp>
 
+#include <bit>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -35,6 +38,29 @@ void expect_all_values(const MultiFab<Dim, MemorySpace>& fields, Real expected) 
 }
 
 }  // namespace
+
+TEST(test_multifab, face_publication_is_host_accessible_and_detached_on_every_axis) {
+  const Box<3> cells{Index<3>{-2, 1, 4}, Index<3>{0, 2, 5}};
+  pops::nd::FaceField<3> faces(cells, 2);
+  faces.field<0>().set_val(Real{2});
+  faces.field<1>().set_val(Real{3});
+  faces.field<2>().set_val(Real{5});
+  const pops::runtime::program::HostFacePublication<3> publication(faces);
+  faces.set_val(Real{-7});
+  Kokkos::fence();
+  const auto view = publication.view();
+  EXPECT_EQ(view.cells, cells);
+  EXPECT_EQ(view.ncomp, 2);
+  const std::array<Real, 3> expected{2, 3, 5};
+  for (int axis = 0; axis < 3; ++axis) {
+    auto upper_face = cells.hi;
+    ++upper_face[axis];
+    for (int component = 0; component < 2; ++component) {
+      EXPECT_DOUBLE_EQ(view.axes[axis](cells.lo, component), expected[axis]);
+      EXPECT_DOUBLE_EQ(view.axes[axis](upper_face, component), expected[axis]);
+    }
+  }
+}
 
 TEST(test_multifab, exact_metadata_and_local_global_index_spaces_are_explicit) {
   const BoxArray<2> layout =
@@ -128,4 +154,88 @@ TEST(test_multifab, communication_is_explicitly_unavailable_and_fails_closed) {
     EXPECT_NE(std::string(error.what()).find("no halo, parallel-copy, or MPI schedule"),
               std::string::npos);
   }
+}
+
+TEST(test_multifab, empty_rank_storage_identity_survives_values_but_not_replacement) {
+  using Field = MultiFab<2, Kokkos::HostSpace>;
+  const auto layout =
+      BoxArray<2>::from_domain(Box<2>{Index<2>{0, 0}, Index<2>{3, 3}}, Extent<2>{4, 4});
+  const RankSpace<2> ranks{Index<2>{0, 0}, Extent<2>{2, 1}};
+  const auto distribution = Distribution<2>::partitioned(layout, ranks, {Index<2>{0, 0}});
+  Field empty(layout, distribution, Index<2>{1, 0}, 1, Extent<2>{1, 1});
+  ASSERT_EQ(empty.local_size(), 0U);
+  EXPECT_EQ(empty.local_global_indices().capacity(), 0U);
+  EXPECT_EQ(distribution.local_box_indices(Index<2>{1, 0}).capacity(), 0U);
+  const auto issued = empty.storage_identity();
+  ASSERT_TRUE(issued);
+  empty.set_val(7);
+  EXPECT_EQ(empty.storage_identity(), issued);
+  Field copied(empty);
+  EXPECT_NE(copied.storage_identity(), issued);
+  const auto copy_identity = copied.storage_identity();
+  Field moved(std::move(copied));
+  EXPECT_EQ(moved.storage_identity(), copy_identity);
+  EXPECT_FALSE(copied.storage_identity());
+  empty = moved;
+  EXPECT_NE(empty.storage_identity(), issued);
+  EXPECT_NE(empty.storage_identity(), moved.storage_identity());
+  empty = std::move(moved);
+  EXPECT_EQ(empty.storage_identity(), copy_identity);
+  EXPECT_FALSE(moved.storage_identity());
+  EXPECT_NE(empty.storage_identity(), issued);
+  Field default_field;
+  ASSERT_TRUE(default_field.storage_identity());
+  EXPECT_NE(default_field.storage_identity(), issued);
+  static_assert(std::is_nothrow_move_constructible_v<Field>);
+  static_assert(std::is_nothrow_move_assignable_v<Field>);
+}
+
+namespace {
+template <int Dim, class MemorySpace>
+void check_ieee_zero_fill_and_copy() {
+  Extent<Dim> cells{}, ghosts{};
+  for (int d = 0; d < Dim; ++d) {
+    cells[d] = d + 2;
+    ghosts[d] = 1;
+  }
+  pops::Fab<Dim, MemorySpace> original(Box<Dim>::from_extents(cells), 2, ghosts);
+  using Bits = pops::RealBits;
+  constexpr Bits negative_bits = Bits{1} << (8 * sizeof(Real) - 1);
+  const auto negative_zero = std::bit_cast<Real>(negative_bits);
+  const auto check = [](const auto& fab, Bits expected) {
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    ASSERT_GT(host.size(), 0u);
+    for (std::size_t i = 0; i < host.size(); ++i) {
+      EXPECT_EQ(std::bit_cast<Bits>(host(i)), expected);
+      EXPECT_EQ(std::signbit(host(i)), expected == negative_bits);
+      EXPECT_EQ(std::signbit(Real{1} / host(i)), expected == negative_bits);
+    }
+  };
+  original.set_val(Real{-3});
+  original.set_val(negative_zero);
+  check(original, negative_bits);
+  const pops::Fab<Dim, MemorySpace> copied(original);
+  original.set_val(Real{0});
+  check(original, Bits{0});
+  check(copied, negative_bits);
+  pops::Fab<Dim, MemorySpace> assigned;
+  assigned = copied;
+  check(assigned, negative_bits);
+  pops::Fab<Dim, MemorySpace> empty;
+  EXPECT_NO_THROW(empty.set_val(negative_zero));
+}
+}  // namespace
+
+TEST(test_multifab, ieee_zero_fill_and_copy_default_memory) {
+  using Memory = typename Kokkos::DefaultExecutionSpace::memory_space;
+  check_ieee_zero_fill_and_copy<1, Memory>();
+  check_ieee_zero_fill_and_copy<2, Memory>();
+  check_ieee_zero_fill_and_copy<3, Memory>();
+}
+
+TEST(test_multifab, ieee_zero_fill_and_copy_host_memory) {
+  check_ieee_zero_fill_and_copy<1, Kokkos::HostSpace>();
+  check_ieee_zero_fill_and_copy<2, Kokkos::HostSpace>();
+  check_ieee_zero_fill_and_copy<3, Kokkos::HostSpace>();
 }

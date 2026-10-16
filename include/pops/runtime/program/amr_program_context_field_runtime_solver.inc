@@ -111,6 +111,25 @@ field_type& linear_solution(field_type& fallback) const {
   require_same_layout_(fallback, solution, "AMR Program linear solution");
   return solution;
 }
+field_type& linear_solution(std::int64_t value_id, int program_block, int components,
+                            int ghost_depth) const {
+  if (value_id < 0 || ghost_depth < 0)
+    throw std::invalid_argument("hierarchy solution requires its non-negative storage identity");
+  require_hierarchy_tensor_binding_(program_block, components);
+  hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
+  if (solver.execution_path() == HierarchyTensorSolverExecutionPath::DirectProvider) {
+    field_type& solution = solver.solution(active_level_);
+    if (solution.ncomp() != components || solution.ghosts() != uniform_ghosts_(ghost_depth))
+      throw std::invalid_argument("hierarchy solution changed its declared field storage");
+    return solution;
+  }
+  if (solver.execution_path() != HierarchyTensorSolverExecutionPath::PreparedKrylovFallback)
+    throw std::logic_error("hierarchy solution has an unknown prepared execution path");
+  // No allocation or owner inference from the solver's private buffer: the
+  // successful generated solve must already have delivered this exact scratch.
+  return persistent_scratch_(ScratchKind::Scalar, value_id, 0, state(program_block), components,
+                             uniform_ghosts_(ghost_depth), false);
+}
 void stage_linear_initial_guess() const {
   hierarchy_tensor_solver_type& solver = configured_hierarchy_tensor_solver_();
   if (solver.execution_path() != HierarchyTensorSolverExecutionPath::DirectProvider)
@@ -397,30 +416,28 @@ void rhs_jacvec_pair_into_at(const runtime::multiblock::BoundaryEvaluationPoint&
   // Falling back to accepted hierarchy parents would differentiate another stage.
   const bool active = !active_attempt_states_.empty();
   const auto& first_evaluation =
-      first_flux_only
-          ? (active ? facade_->evaluate_prepared_amr_block_level_flux_at(
-                          first_runtime, point, first_state, active_level_ - 1,
-                          staged_parent_for_block_(first_runtime))
-                    : facade_->evaluate_prepared_amr_block_level_flux_at(
-                          first_runtime, point, first_state))
-          : (active ? facade_->evaluate_prepared_amr_block_level_at(
-                          first_runtime, point, first_state, active_level_ - 1,
-                          staged_parent_for_block_(first_runtime))
-                    : facade_->evaluate_prepared_amr_block_level_at(
-                          first_runtime, point, first_state));
+      first_flux_only ? (active ? facade_->evaluate_prepared_amr_block_level_flux_at(
+                                      first_runtime, point, first_state, active_level_ - 1,
+                                      staged_parent_for_block_(first_runtime))
+                                : facade_->evaluate_prepared_amr_block_level_flux_at(
+                                      first_runtime, point, first_state))
+                      : (active ? facade_->evaluate_prepared_amr_block_level_at(
+                                      first_runtime, point, first_state, active_level_ - 1,
+                                      staged_parent_for_block_(first_runtime))
+                                : facade_->evaluate_prepared_amr_block_level_at(
+                                      first_runtime, point, first_state));
   copy_valid_(first_evaluation.residual, first_candidate);
   const auto& second_evaluation =
-      second_flux_only
-          ? (active ? facade_->evaluate_prepared_amr_block_level_flux_at(
-                          second_runtime, point, second_state, active_level_ - 1,
-                          staged_parent_for_block_(second_runtime))
-                    : facade_->evaluate_prepared_amr_block_level_flux_at(
-                          second_runtime, point, second_state))
-          : (active ? facade_->evaluate_prepared_amr_block_level_at(
-                          second_runtime, point, second_state, active_level_ - 1,
-                          staged_parent_for_block_(second_runtime))
-                    : facade_->evaluate_prepared_amr_block_level_at(
-                          second_runtime, point, second_state));
+      second_flux_only ? (active ? facade_->evaluate_prepared_amr_block_level_flux_at(
+                                       second_runtime, point, second_state, active_level_ - 1,
+                                       staged_parent_for_block_(second_runtime))
+                                 : facade_->evaluate_prepared_amr_block_level_flux_at(
+                                       second_runtime, point, second_state))
+                       : (active ? facade_->evaluate_prepared_amr_block_level_at(
+                                       second_runtime, point, second_state, active_level_ - 1,
+                                       staged_parent_for_block_(second_runtime))
+                                 : facade_->evaluate_prepared_amr_block_level_at(
+                                       second_runtime, point, second_state));
   copy_valid_(second_evaluation.residual, second_candidate);
 
   if (!interface_flux_ledger_ || !interface_flux_ledger_->in_transaction())

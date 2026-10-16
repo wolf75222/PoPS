@@ -153,7 +153,7 @@ void check_shifted_projection() {
 TEST(AmrHistoryFluxSnapshot, ZeroTermRegistryRetainsItsWireShape) {
   struct Term {
     std::shared_ptr<const hf::Basis<2>> basis;
-    std::map<int, Rational> coefficient;
+    std::map<int, ::pops::ExactWeight> coefficient;
   };
   using Expression = std::map<std::uint64_t, Term>;
   std::map<std::string, std::vector<Expression>> histories;
@@ -165,7 +165,7 @@ TEST(AmrHistoryFluxSnapshot, ZeroTermRegistryRetainsItsWireShape) {
   const auto bytes = hf::serialize_expressions<2>(histories, 2, no_shared_samples);
   ASSERT_FALSE(bytes.empty());
   pops::runtime::program::checkpoint_detail::Reader in(bytes);
-  EXPECT_EQ(in.u64(), UINT64_C(0x504f5053464c5833));
+  EXPECT_EQ(in.u64(), UINT64_C(0x504f5053464c5835));
   EXPECT_EQ(in.size(), 1U);
   EXPECT_EQ(in.string(), "0:tracer.prior");
   EXPECT_EQ(in.size(), 2U);

@@ -86,6 +86,10 @@ def _author(program, problem, prepared, name, provider):
         "hierarchy_solver_identity": prepared.identity.token, "solver_identity": prepared.identity.token,
         "hierarchy_block_index": -1, "hierarchy_field_identity": apply.attrs["field_problem_identity"],
         "problem_kind": "general_field_hierarchy", "hierarchy_use_facts": {}}
+    if rhs.attrs.get("temporal_evaluation") is not None:
+        if guess is not None:
+            raise ValueError("TemporalEvaluation initial guesses require their own explicit level source bundle")
+        attrs["temporal_evaluation"] = rhs.attrs["temporal_evaluation"]
     token = program._new("scalar_field", "solve_linear", (operator, rhs) if guess is None else (operator, rhs, guess),
         attrs, name, None, space=rhs.space, point=rhs.point, inherit_state_ref=False)
     def project(outcome):

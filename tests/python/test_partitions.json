@@ -1,0 +1,282 @@
+{
+  "schema": 1,
+  "files": {
+    "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py": {
+      "basis": "CI run38820819452 SHA47b2: complete reported phases x1.25 plus30s rounded to15s; missing native nodes reserve900s, source-only nodes10s. Phase sums are not end-to-end timing.",
+      "nodes": [
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T01]",
+          "seconds": 135
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T02]",
+          "seconds": 120
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T03]",
+          "seconds": 120
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T04]",
+          "seconds": 405
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T05]",
+          "seconds": 90
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T06]",
+          "seconds": 105
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T07]",
+          "seconds": 90
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T08]",
+          "seconds": 165
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T09]",
+          "seconds": 90
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T10]",
+          "seconds": 150
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T11]",
+          "seconds": 945
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_api_v02_native_method_profile[T12]",
+          "seconds": 150
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t07_real_history_survives_strict_restart",
+          "seconds": 90
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t07_nonzero_finite_solve_defect_is_delivered_once_and_retained",
+          "seconds": 90
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t01_native_temporal_order_on_fixed_spatial_operator",
+          "seconds": 300
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t03_native_second_order_against_continuous_solution",
+          "seconds": 120
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t08_composite_transport_improves_on_stationary_state",
+          "seconds": 180
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t08_requested_regrid_refuses_deep_subcycled_history_remap",
+          "seconds": 180
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t08_parent_refusal_restores_entire_native_envelope",
+          "seconds": 45
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t09_interval_body_reexecutes_for_changed_duration",
+          "seconds": 900
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t10_retry_uses_new_request_and_publishes_actual_time",
+          "seconds": 900
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t11_equal_net_ode_distinct_directed_schemes_and_empty_species[initial0]",
+          "seconds": 900
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t11_equal_net_ode_distinct_directed_schemes_and_empty_species[initial1]",
+          "seconds": 900
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t11_equal_net_ode_distinct_directed_schemes_and_empty_species[initial2]",
+          "seconds": 900
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_t11_equal_net_ode_distinct_directed_schemes_and_empty_species[initial3]",
+          "seconds": 900
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T01]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T02]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T03]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T04]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T05]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T06]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T07]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T08]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T09]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T10]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T11]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unestablished_scientific_properties_remain_explicit[T12]",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py::test_unknown_method_does_not_fall_back",
+          "seconds": 10
+        }
+      ]
+    },
+    "tests/python/integration/runtime/test_public_evolved_original_stage.py": {
+      "basis": "CI run38820819452 SHA47b2: complete reported phases x1.25 plus30s rounded to15s; missing native nodes reserve900s, source-only nodes10s. Phase sums are not end-to-end timing.",
+      "nodes": [
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_evolved_original_stage.py::test_public_evolved_original_stage_saved_and_exact_replay[1-False-0.01-8]",
+          "seconds": 180
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_evolved_original_stage.py::test_public_evolved_original_stage_saved_and_exact_replay[1-False-0.01-16]",
+          "seconds": 180
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_evolved_original_stage.py::test_public_evolved_original_stage_saved_and_exact_replay[1-False-0.02-8]",
+          "seconds": 180
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_evolved_original_stage.py::test_public_evolved_original_stage_saved_and_exact_replay[1-False-0.02-16]",
+          "seconds": 180
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_evolved_original_stage.py::test_public_evolved_original_stage_saved_and_exact_replay[2-True-0.01-8]",
+          "seconds": 225
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_evolved_original_stage.py::test_public_evolved_original_stage_saved_and_exact_replay[2-True-0.01-16]",
+          "seconds": 225
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_evolved_original_stage.py::test_public_evolved_original_stage_saved_and_exact_replay[2-True-0.02-8]",
+          "seconds": 225
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_evolved_original_stage.py::test_public_evolved_original_stage_saved_and_exact_replay[2-True-0.02-16]",
+          "seconds": 225
+        }
+      ]
+    },
+    "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py": {
+      "basis": "CI38820819452 SHA47b2 timing artefacts. Completed phases x1.25+30 rounded15; incomplete nonlinear diffusion reserves900, nonlinear gyro2550. No test/assertion/watchdog changed. Exact collections checked.",
+      "nodes": [
+        {
+          "nodeid": "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py::test_composite_implicit_matches_conservative_reference_and_converges[constant-False]",
+          "seconds": 525
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py::test_composite_implicit_matches_conservative_reference_and_converges[constant-True]",
+          "seconds": 855
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py::test_composite_implicit_matches_conservative_reference_and_converges[variable-False]",
+          "seconds": 525
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py::test_composite_implicit_matches_conservative_reference_and_converges[variable-True]",
+          "seconds": 870
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py::test_composite_implicit_matches_conservative_reference_and_converges[diagonal-False]",
+          "seconds": 525
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py::test_composite_implicit_matches_conservative_reference_and_converges[diagonal-True]",
+          "seconds": 870
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py::test_composite_implicit_matches_conservative_reference_and_converges[nonlinear_accumulation-False]",
+          "seconds": 555
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py::test_composite_implicit_matches_conservative_reference_and_converges[nonlinear_accumulation-True]",
+          "seconds": 900
+        }
+      ]
+    },
+    "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py": {
+      "basis": "CI38820819452 SHA47b2 timing artefacts. Completed phases x1.25+30 rounded15; incomplete nonlinear diffusion reserves900, nonlinear gyro2550. No test/assertion/watchdog changed. Exact collections checked.",
+      "nodes": [
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py::test_native_global_nonsymmetric_schur",
+          "seconds": 450
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py::test_native_global_selected_roots[frozen-1]",
+          "seconds": 120
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py::test_native_global_selected_roots[unknown-1]",
+          "seconds": 120
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py::test_native_global_selected_roots[unknown--1]",
+          "seconds": 120
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py::test_native_imex_second_order",
+          "seconds": 345
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py::test_native_mprk22_network[0.0-False]",
+          "seconds": 1080
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py::test_native_mprk22_network[1.5-True]",
+          "seconds": 1080
+        }
+      ]
+    },
+    "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": {
+      "basis": "CI38820819452 SHA47b2 timing artefacts. Completed phases x1.25+30 rounded15; incomplete nonlinear diffusion reserves900, nonlinear gyro2550. No test/assertion/watchdog changed. Exact collections checked.",
+      "nodes": [
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[False]",
+          "seconds": 2550
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[True]",
+          "seconds": 2550
+        }
+      ]
+    }
+  }
+}

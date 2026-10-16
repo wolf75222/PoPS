@@ -248,5 +248,132 @@ TEST(test_interface_flux_fragment_ledger,
   EXPECT_DOUBLE_EQ(accepted.begin()->second, 1.0);
 }
 
+TEST(test_interface_flux_fragment_ledger,
+     affine_publication_keeps_evaluation_quadrature_and_opposite_consumers) {
+  amr::TransactionalInterfaceFluxLedger<double> ledger(9, test_budget());
+  const auto coarse = fragment_key(amr::InterfaceFluxOrientation::CoarseOutward);
+  const auto fine = fragment_key(amr::InterfaceFluxOrientation::FineOutward);
+  ledger.begin();
+  ledger.accumulate(coarse, {amr::Rational(1, 2), .5, .25}, 4.);
+  ledger.accumulate(fine, {amr::Rational(1, 2), .5, .25}, 4.);
+  EXPECT_THROW(ledger.finalize_affine_publication({0., .25, .2, .8}), std::logic_error);
+  ledger.commit();
+  const auto original = ledger;
+  EXPECT_THROW(ledger.finalize_affine_publication({0., .25, .21, .8}), std::invalid_argument);
+  EXPECT_THROW(ledger.finalize_affine_publication({1., .25, .2, .8}), std::invalid_argument);
+  EXPECT_FALSE(ledger.published_entries().front().measure.affine_publication);
+  ledger.finalize_affine_publication({0., .25, .2, .8});
+  for (std::size_t index = 0; index < 2; ++index) {
+    const auto& a = original.published_entries()[index];
+    const auto& b = ledger.published_entries()[index];
+    EXPECT_EQ(a.key.clock, b.key.clock);
+    EXPECT_EQ(a.key.interval.begin, b.key.interval.begin);
+    EXPECT_EQ(a.key.interval.end, b.key.interval.end);
+    EXPECT_EQ(a.measure.stage_weight, b.measure.stage_weight);
+    EXPECT_EQ(a.measure.substep_duration, b.measure.substep_duration);
+    EXPECT_EQ(a.payload, b.payload);
+    ASSERT_TRUE(b.measure.affine_publication);
+  }
+  const auto accepted = ledger.aggregate(scalar_axpy);
+  EXPECT_DOUBLE_EQ(accepted.at(amr::interface_flux_accumulation_key(coarse)), -.4);
+  EXPECT_DOUBLE_EQ(accepted.at(amr::interface_flux_accumulation_key(fine)), .4);
+  EXPECT_THROW(ledger.finalize_affine_publication({0., .25, .2, .8}), std::logic_error);
+  ledger = original;  // The enclosing accepted snapshot restores this entire object.
+  EXPECT_FALSE(ledger.published_entries().front().measure.affine_publication);
+  EXPECT_DOUBLE_EQ(ledger.aggregate(scalar_axpy).at(amr::interface_flux_accumulation_key(fine)),
+                   .5);
+}
+
 }  // namespace
 }  // namespace pops
+
+// Generic arithmetic/codec receivers share the real native ledger target.
+TEST(test_interface_flux_fragment_ledger, exact_weight_ieee_extremes_and_non_dyadic_ratios) {
+  using pops::ExactWeight;
+  for (double x : {0.0, -0.0, 1e-6, -1e-6, 1.0, std::numeric_limits<double>::denorm_min(),
+                   std::numeric_limits<double>::min(), std::numeric_limits<double>::max()}) {
+    const auto weight = ExactWeight::from_double(x, 512);
+    EXPECT_EQ(weight.value(), x);
+    EXPECT_EQ(ExactWeight::decode(weight.encode(), 512), weight);
+  }
+  const auto tiny = ExactWeight::from_double(1e-6, 512);
+  EXPECT_FALSE(tiny.fits_int64());
+  const auto a = ExactWeight::from_double(.1, 512), b = ExactWeight::from_double(.3, 512);
+  EXPECT_EQ((a / b) * b, a);
+  EXPECT_EQ((tiny + -tiny), ExactWeight(0));
+  EXPECT_EQ((a / b).value(), .1 / .3);
+  const auto huge = ExactWeight::from_double(std::numeric_limits<double>::max(), 512);
+  const auto small = ExactWeight::from_double(std::numeric_limits<double>::denorm_min(), 512);
+  EXPECT_EQ((huge / small) * small, huge);
+}
+
+TEST(test_interface_flux_fragment_ledger, exact_weight_rounding_and_canonical_wire) {
+  using pops::ExactWeight;
+  EXPECT_EQ(ExactWeight(1, 3).value(), 1.0 / 3.0);
+  EXPECT_EQ(ExactWeight::from_hex("-0x100000000000000000000", "0x3", 512),
+            ExactWeight::from_decimal("-1208925819614629174706176", "3", 512));
+  EXPECT_THROW(ExactWeight::from_hex("0x02", "0x1", 512), std::invalid_argument);
+  EXPECT_EQ(ExactWeight(9007199254740993LL).value(), 9007199254740992.0);
+  EXPECT_EQ(ExactWeight(9007199254740995LL).value(), 9007199254740996.0);
+  auto negative_zero = ExactWeight(0).encode();
+  negative_zero[3] = 1;
+  EXPECT_THROW(ExactWeight::decode(negative_zero, 512), std::invalid_argument);
+  auto nonreduced = ExactWeight(1).encode();
+  nonreduced[20] = 2;
+  nonreduced[24] = 2;
+  EXPECT_THROW(ExactWeight::decode(nonreduced, 512), std::invalid_argument);
+  auto truncated = ExactWeight(1).encode();
+  truncated.pop_back();
+  EXPECT_THROW(ExactWeight::decode(truncated, 512), std::invalid_argument);
+  EXPECT_THROW(ExactWeight::from_decimal("02", "1", 512), std::invalid_argument);
+  EXPECT_THROW(ExactWeight::from_decimal("2", "2", 512), std::invalid_argument);
+  EXPECT_EQ(ExactWeight::from_decimal("10000000000000000000000000000000000000000", "3", 512).text(),
+            "10000000000000000000000000000000000000000/3");
+}
+
+TEST(test_interface_flux_fragment_ledger, exact_weight_budget_failure_keeps_source_and_ledger) {
+  using pops::ExactWeight;
+  const auto small = ExactWeight::from_double(1e-6, 512);
+  const auto before = small.encode();
+  EXPECT_THROW(ExactWeight(0, 1, 4), std::invalid_argument);
+  EXPECT_THROW(ExactWeight(1, 1, 4), std::invalid_argument);
+  EXPECT_THROW(ExactWeight(0, 1, 8) + small, std::length_error);
+  EXPECT_THROW(ExactWeight(0, 1, 8) / small, std::length_error);
+  EXPECT_THROW(small.with_budget(8), std::length_error);
+  EXPECT_THROW(ExactWeight::decode(before, 8), std::length_error);
+  EXPECT_THROW(ExactWeight::from_double(1e-6, 8), std::length_error);
+  EXPECT_EQ(small.encode(), before);
+  const auto bounded = ExactWeight(2147483647, 1, 8);
+  EXPECT_THROW(bounded * bounded, std::length_error);
+  EXPECT_EQ(bounded, ExactWeight(2147483647));
+  EXPECT_THROW(small / ExactWeight(0), std::domain_error);
+  pops::amr::TransactionalInterfaceFluxLedger<double> ledger(9, pops::test_budget());
+  auto key = pops::fragment_key();
+  key.clock.physical_time = .035;
+  key.interval.end.physical_time = .07;
+  ledger.begin();
+  ledger.accumulate(key, {ExactWeight(0), 1., .07, false}, 2.);
+  EXPECT_THROW(ledger.resolve_pending_stage_weight(0, ExactWeight(1, 1, 8)), std::length_error);
+  EXPECT_FALSE(ledger.pending_entries().front().measure.stage_weight_resolved);
+  EXPECT_EQ(ledger.pending_entries().front().measure.stage_weight, ExactWeight(0));
+  EXPECT_EQ(ledger.pending_entries().front().payload, 2.);
+}
+
+TEST(test_interface_flux_fragment_ledger, exact_ratio_is_rounded_once_with_its_duration) {
+  const auto numerator = pops::ExactWeight::from_double(.3, 512);
+  const auto duration = pops::ExactWeight::from_double(.07, 512);
+  const auto ratio = numerator / duration;
+  ASSERT_NE((.3 / .07) * .07, .3);
+  pops::amr::InterfaceFluxFragmentKey key;
+  key.orientation = pops::amr::InterfaceFluxOrientation::FineOutward;
+  const pops::amr::InterfaceFluxFragmentMeasure measure{ratio, 1., .07, true};
+  EXPECT_EQ(pops::amr::interface_flux_fragment_scale(key, measure), .3);
+  const pops::amr::reflux::FaceFluxFragmentMeasure face{ratio, {0, 1}, {1, 1}, .07, 1.};
+  EXPECT_EQ(pops::amr::reflux::weighted_face_flux_scale(face), .3);
+  const double least = std::numeric_limits<double>::denorm_min();
+  const auto wide_ratio = numerator / pops::ExactWeight::from_double(least, 512);
+  ASSERT_FALSE(std::isfinite(wide_ratio.value()));
+  const pops::amr::reflux::FaceFluxFragmentMeasure tiny_interval{
+      wide_ratio, {0, 1}, {1, 1}, least, 1.};
+  EXPECT_EQ(pops::amr::reflux::weighted_face_flux_scale(tiny_interval), .3);
+}

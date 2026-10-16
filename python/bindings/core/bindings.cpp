@@ -41,6 +41,8 @@ void translate_step_attempt_rejected(std::exception_ptr error) {
     instance.attr("disposition") =
         py::str(pops::runtime::program::step_attempt_disposition_name(rejected.disposition()));
     instance.attr("reason_code") = py::int_(rejected.reason_code());
+    instance.attr("typed_failure_schema") = py::str(rejected.typed_failure_schema());
+    instance.attr("typed_failure_payload") = py::bytes(rejected.typed_failure_payload());
     PyErr_SetObject(error_type.ptr(), instance.ptr());
   }
 }

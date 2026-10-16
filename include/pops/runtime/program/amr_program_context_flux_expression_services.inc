@@ -56,7 +56,7 @@ static void require_rate_identity_(int rate_id) {
 
 static void erase_zero_terms_(ExactPolynomial& polynomial) {
   for (auto term = polynomial.begin(); term != polynomial.end();) {
-    if (term->second.numerator == 0)
+    if (term->second.zero())
       term = polynomial.erase(term);
     else
       ++term;
@@ -72,7 +72,7 @@ static ExactPolynomial multiply_exact_polynomials_(const ExactPolynomial& left,
         throw std::overflow_error("AMR Program flux coefficient dt power exceeds int");
       const int power = left_power + right_power;
       const auto found = result.find(power);
-      const ::pops::amr::Rational product = left_factor * right_factor;
+      const ::pops::ExactWeight product = left_factor * right_factor;
       if (found == result.end())
         result.emplace(power, product);
       else
@@ -113,8 +113,13 @@ ExactPolynomial exact_coefficient_unchecked_(
   for (const ExactCoefficientTerm& term : terms) {
     if (term.dt_power < 0 || term.denominator <= 0)
       throw std::invalid_argument("AMR Program flux coefficient metadata is invalid");
-    const ::pops::amr::Rational coefficient{term.numerator, term.denominator};
-    if (coefficient.numerator != term.numerator || coefficient.denominator != term.denominator)
+    const bool wide = !term.numerator_text.empty() || !term.denominator_text.empty();
+    const ::pops::ExactWeight coefficient =
+        wide ? ::pops::ExactWeight::from_hex(term.numerator_text, term.denominator_text,
+                                             max_exact_coefficient_bytes_)
+             : ::pops::ExactWeight(term.numerator, term.denominator, max_exact_coefficient_bytes_);
+    if (!wide && (coefficient.numerator_int64() != term.numerator ||
+                  coefficient.denominator_int64() != term.denominator))
       throw std::invalid_argument("AMR Program flux coefficient metadata is not canonical");
     const auto found = polynomial.find(term.dt_power);
     if (found == polynomial.end())
@@ -129,29 +134,8 @@ ExactPolynomial exact_coefficient_unchecked_(
   return polynomial;
 }
 
-static ::pops::amr::Rational exact_binary_rational_(Real value) {
-  if (!std::isfinite(static_cast<double>(value)))
-    throw std::invalid_argument("AMR Program coefficient is not finite");
-  if (value == Real(0))
-    return {0, 1};
-  int exponent = 0;
-  const double fraction = std::frexp(std::abs(static_cast<double>(value)), &exponent);
-  constexpr int digits = std::numeric_limits<double>::digits;
-  const auto mantissa = static_cast<std::uint64_t>(std::ldexp(fraction, digits));
-  const int binary_power = exponent - digits;
-  if (binary_power >= 0) {
-    if (binary_power >= 63 ||
-        mantissa >
-            (static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) >> binary_power))
-      throw std::overflow_error("AMR Program coefficient exceeds exact int64 metadata");
-    const std::int64_t numerator = static_cast<std::int64_t>(mantissa << binary_power);
-    return {value < Real(0) ? -numerator : numerator, 1};
-  }
-  if (-binary_power >= 63)
-    throw std::overflow_error("AMR Program coefficient denominator exceeds exact int64 metadata");
-  const std::int64_t numerator = static_cast<std::int64_t>(mantissa);
-  const std::int64_t denominator = std::int64_t{1} << (-binary_power);
-  return {value < Real(0) ? -numerator : numerator, denominator};
+::pops::ExactWeight exact_binary_rational_(Real value) const {
+  return ::pops::ExactWeight::from_double(static_cast<double>(value), max_exact_coefficient_bytes_);
 }
 
 ExactPolynomial exact_runtime_coefficient_unchecked_(Real factor) const {
@@ -202,11 +186,8 @@ ExactPolynomial exact_runtime_axpy_coefficient_(Real factor, const field_type& s
           return ExactPolynomial{};
         if (!std::isfinite(current_dt_) || !(current_dt_ > 0.0))
           throw std::logic_error("AMR Program flux axpy lacks its active dt");
-        const Real quotient = factor / static_cast<Real>(current_dt_);
-        if (quotient * static_cast<Real>(current_dt_) != factor)
-          throw std::invalid_argument(
-              "AMR Program flux axpy factor has no exact symbolic dt coefficient");
-        return ExactPolynomial{{1, exact_binary_rational_(quotient)}};
+        return ExactPolynomial{{1, exact_binary_rational_(factor) /
+                                       exact_binary_rational_(static_cast<Real>(current_dt_))}};
       },
       "AMR Program runtime flux axpy coefficient failed collectively");
 }
@@ -316,9 +297,11 @@ void rehydrate_history_flux_expression_(const std::string& key, int lag,
 }
 
 std::vector<std::uint8_t> serialize_history_flux_payload_() const {
-  return history_flux::serialize_expressions<Dim>(
+  auto flux = history_flux::serialize_expressions<Dim>(
       history_flux_expressions_, facade_->configured_n_levels(),
       [&](auto& out, const auto& sample) { write_shared_flux_sample_(out, sample); });
+  return encode_amr_history_field_metadata(std::move(flux), runtime_state().hist_,
+                                           facade_->program_runtime_state_().installed_hash_);
 }
 
 std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_restore_(
@@ -343,8 +326,11 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
   checkpoint_detail::Reader in(bytes);
   const std::uint64_t version = in.u64();
   const bool legacy = version == UINT64_C(0x504f5053464c5832);
-  const bool snapshots = version == UINT64_C(0x504f5053464c5834);
-  if (!legacy && !snapshots && version != UINT64_C(0x504f5053464c5833))
+  const bool wide =
+      version == UINT64_C(0x504f5053464c5835) || version == UINT64_C(0x504f5053464c5836);
+  const bool snapshots =
+      version == UINT64_C(0x504f5053464c5834) || version == UINT64_C(0x504f5053464c5836);
+  if (!legacy && !snapshots && !wide && version != UINT64_C(0x504f5053464c5833))
     throw std::invalid_argument("history flux checkpoint lacks explicit shared-sample format");
   constexpr std::size_t coefficient_record_bytes = 3 * checkpoint_detail::kEncodedScalarBytes;
   constexpr std::size_t face_record_bytes =
@@ -371,12 +357,19 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
         const std::size_t coefficient_count = in.size(coefficient_record_bytes);
         for (std::size_t term_index = 0; term_index < coefficient_count; ++term_index) {
           const int power = in.i32();
-          const std::int64_t numerator = in.i64();
-          const std::int64_t denominator = in.i64();
-          const ::pops::amr::Rational rational{numerator, denominator};
-          if (power < 0 || rational.denominator <= 0 ||
-              ::pops::amr::Rational{rational.numerator, rational.denominator} != rational ||
-              !coefficient.emplace(power, rational).second)
+          ::pops::ExactWeight rational;
+          if (wide) {
+            rational = ::pops::ExactWeight::decode(in.string(max_exact_coefficient_bytes_ + 20),
+                                                   max_exact_coefficient_bytes_);
+          } else {
+            const auto numerator = in.i64();
+            const auto denominator = in.i64();
+            rational = ::pops::ExactWeight(numerator, denominator, max_exact_coefficient_bytes_);
+            if (denominator <= 0 || rational.numerator_int64() != numerator ||
+                rational.denominator_int64() != denominator)
+              throw std::invalid_argument("AMR Program history flux coefficient is noncanonical");
+          }
+          if (power < 0 || rational.zero() || !coefficient.emplace(power, rational).second)
             throw std::invalid_argument("AMR Program history flux payload has invalid coefficient");
         }
         if (coefficient.empty())
@@ -387,7 +380,7 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
         basis.level = in.i32();
         basis.rhs_identity = in.i32();
         const std::uint64_t provider = in.u64();
-        if (provider > static_cast<std::uint64_t>(FluxBasisProvider::DiffusiveFace))
+        if (provider > static_cast<std::uint64_t>(FluxBasisProvider::GeneratedFace))
           throw std::invalid_argument("AMR Program history flux payload has an invalid provider");
         basis.provider = static_cast<FluxBasisProvider>(provider);
         if (!legacy)
@@ -501,7 +494,8 @@ std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_
 
 void require_flux_expression_budget_(const FluxExpression& expression) const {
   history_flux::require_expression_budget(expression, prepared_rhs_basis_bounds_,
-                                          prepared_coefficient_term_bounds_);
+                                          prepared_coefficient_term_bounds_,
+                                          max_exact_coefficient_bytes_);
 }
 
 static FluxExpression scaled_flux_expression_(const FluxExpression& expression,

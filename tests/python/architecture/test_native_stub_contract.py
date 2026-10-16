@@ -21,14 +21,14 @@ PUBLIC_METADATA = {
     "__version__", "__abi_version__", "__release_contract_sha256__", "__public_api_version__",
     "__semantic_ir_version__", "__normalization_version__", "__component_registry_version__",
     "__checkpoint_schema_version__", "__cxx_std__", "__cxx_compiler__", "__has_kokkos__",
-    "__kokkos_contract__", "__native_dimension__",
+    "__kokkos_contract__", "__native_dimension__", "__compiler_include_contract__",
     "__has_mpi__", "__has_parallel_hdf5__", "__native_loader_contract__", "__mpi_contract__",
     "__max_runtime_params__",
 }
 PUBLIC_CALLABLES = {
     "abi_key", "my_rank", "n_ranks", "mpi_world", "module_capabilities", "capability_report",
     "runtime_environment_report", "runtime_backend_manifest", "native_execution_resource",
-    "numerical_defaults_report",
+    "numerical_defaults_report", "runtime_parameter_storage_bytes",
     "fallback_diagnostics_report", "reset_fallback_diagnostics", "kokkos_is_initialized",
 }
 INTERNAL_BOOTSTRAP_TYPES = {"SystemConfig", "AmrSystemConfig", "ModelSpec", "System", "AmrSystem"}
@@ -38,12 +38,14 @@ SYSTEM_CONFIG_FIELDS = {
     "periodicity": "tuple[bool, ...]",
     "boxes": "tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]",
     "coordinate_system": "str",
+    "runtime_parameter_byte_capacity": "int | None",
 }
 AMR_CONFIG_FIELDS = {
     "shape": "tuple[int, ...]", "lower": "tuple[float, ...]",
     "upper": "tuple[float, ...]",
     "boxes": "tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]",
     "coordinate_system": "str",
+    "runtime_parameter_byte_capacity": "int | None",
     "regrid_every": "int", "level_count": "int",
     "transition_ratios": "tuple[tuple[int, ...], ...]",
     "transition_buffers": "tuple[tuple[int, ...], ...]",

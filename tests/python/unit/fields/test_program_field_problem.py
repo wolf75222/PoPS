@@ -13,7 +13,7 @@ from pops.solvers import CG
 from pops.time import FailRun
 
 
-def field_case(*, joint=False, duplicate_input=False, component_transforms=False, publication_fields=False, publication_source=False, problem_override=None, solver=None):
+def field_case(*, joint=False, duplicate_input=False, component_transforms=False, publication_fields=False, publication_source=False, problem_override=None, solver=None, history_field_metadata_budget=None):
     case = pops.Case("general fields")
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
@@ -73,7 +73,8 @@ def field_case(*, joint=False, duplicate_input=False, component_transforms=False
             boundaries=problem_override.boundaries, gauge=problem_override.gauge)
     field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(), boundaries=(),
         solver=CG(max_iter=4000, rel_tol=1e-11, abs_tol=1e-12) if solver is None else solver))
-    program = pops.Program("field stage")
+    program = pops.Program("field stage",
+        history_field_metadata_budget=history_field_metadata_budget)
     first_time, second_time = program.state(first_block[first_state]), program.state(second_block[second_state])
     values = {first_block[first_state]: first_time.n,
               second_block[second_state]: first_time.n if duplicate_input else second_time.n}
@@ -396,15 +397,18 @@ def test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_ph
     for value in program._values:
         if value.op in ("field_problem_load", "field_problem_coefficients", "field_component"):
             solve_id = hierarchy_field_solve(value).id
+            if value.op == "field_component":
+                assert ("auto program_field_%d_snapshot = ctx.capture_hierarchy_field_observation(%d, %d,"
+                        % (value.id, solve_id, value.id)) in code
+                continue
             assert ("auto* program_field_%d_status = &ctx.hierarchy_field_scratch(%d, %d, 1, 1, 0);"
                     % (value.id, solve_id, value.id)) in code
-            if value.op == "field_component":
-                assert ("auto& program_field_%d = ctx.hierarchy_field_scratch(%d, %d, 0, 1, 1);"
-                        % (value.id, solve_id, value.id)) in code
-    assert ("auto& field_gradient_%d = ctx.hierarchy_field_scratch(%d, %d, 0, 2, 1);"
-            % (gradient.id, hierarchy_field_solve(gradient.inputs[0]).id, gradient.id)) in code
+    assert "auto field_gradient_%d = ctx.allocate_hierarchy_continuation_field_observation(" % gradient.id in code
+    assert "ctx.seal_hierarchy_continuation_field_observation(" in code
+    assert "*field_gradient_%d" % gradient.id in code
     for kind in ("sum", "min", "max", "abs_sum"):
-        assert 'ctx.reduce_hierarchy_field_component(8, 2, "%s")' % kind in code
+        assert 'ctx.reduce_hierarchy_field_observation(program_field_%d_snapshot, "%s")' % (observed_third.id, kind) in code
+    assert "ctx.observe_hierarchy_field_gradient(program_field_%d_snapshot," % gradient.inputs[0].id in code
     assert any(node.op == "rhs" and node.field_context == context.field_context for node in program._values)
     assert code.index("ctx.stage_field_components(") < code.index("ctx.publish_staged_field_components();")
 

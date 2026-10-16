@@ -3,6 +3,7 @@ from fractions import Fraction
 
 from pops.codegen.program_emit_kernels import _coeff_metadata_terms, _model_impl
 from pops.identity.scalar import scalar_cpp
+from pops.time._program.affine_expressions import affine_field_terms
 
 
 _DIAGNOSTIC = (
@@ -76,11 +77,22 @@ def _affine_terms(value, stops=()):
 
 
 def _is_rate(value):
-    return value.op in {"diffusive_rhs", "principal_rate"} or (
-        value.op == "rhs" and value.attrs.get("flux", True))
+    return value.op in {"diffusive_rhs", "principal_rate", "stencil_flux_divergence", "source", "rhs"} or _is_pointwise_rate(value)
 
 
-def explicit_update_consumers(program):
+def _is_pointwise_rate(value):
+    if "numerical_pointwise_rate" not in value.attrs:
+        return False
+    from pops.time._program.expressions import validate_pointwise_rate
+    validate_pointwise_rate(value)
+    return True
+
+
+def _is_local_source(value):
+    return value.op == "source" or (value.op == "rhs" and not value.attrs.get("flux", True)) or _is_pointwise_rate(value)
+
+
+def explicit_update_consumption(program):
     """Identify state combinations that can advance accepted explicit state.
 
     An RHS is an observation until a state combination consumes it. Follow the
@@ -88,6 +100,7 @@ def explicit_update_consumers(program):
     interpret a nonlinear solver's residual or predictor as an explicit step.
     """
     updates, seen = set(), set()
+    protected, unprotected, protected_rates, unprotected_rates = set(), set(), set(), set()
     observed_rates = {}
 
     def only_rate_observations(node):
@@ -100,54 +113,76 @@ def explicit_update_consumers(program):
                 and all(only_rate_observations(child) for child in node.inputs)))
         return observed_rates[node.id]
 
-    def walk(node, *, state_consumer=True):
+    def walk(node, *, state_consumer=True, admitted=False):
         # The same scratch can first contribute to a state sum and later be sampled
         # as a State. Its actual State consumption must still receive a budget.
-        role = (node.id, state_consumer)
+        role = (node.id, state_consumer, admitted)
         if role in seen:
             return
         seen.add(role)
-        if node.op == "linear_combine":
+        affine = affine_field_terms(node)
+        if node.op == "linear_combine" or affine is not None:
             if node.vtype == "state" and (
                     state_consumer or not only_rate_observations(node)):
                 updates.add(node.id)
-            for child in node.inputs:
-                walk(child, state_consumer=False)
+                (protected if admitted else unprotected).add(node.id)
+            for child in (node.inputs if affine is None else (item[0] for item in affine)):
+                walk(child, state_consumer=False, admitted=admitted)
         elif node.op == "principal_rate":
+            (protected_rates if admitted else unprotected_rates).add(node.id)
             # Coupled groups may sample a predictor from another block while
             # advancing the target block; each sampled explicit stage matters.
             for sampled in node.inputs:
-                walk(sampled)
+                walk(sampled, admitted=admitted)
         elif _is_rate(node):
+            (protected_rates if admitted else unprotected_rates).add(node.id)
             index = node.attrs.get("target_input", 0)
             if type(index) is int and 0 <= index < len(node.inputs):
-                walk(node.inputs[index])
+                walk(node.inputs[index], admitted=admitted)
         elif node.op in {"while", "range"}:
-            walk(node.inputs[0])
+            walk(node.inputs[0], admitted=admitted)
             body = node.attrs.get("body")
             if body is None or not hasattr(body, "op"):
                 raise ValueError("explicit loop has no authenticated body result")
-            walk(body)
+            walk(body, admitted=admitted)
         elif node.op == "branch":
             for key in ("true_result", "false_result"):
                 child = node.attrs.get(key)
                 if hasattr(child, "op"):
-                    walk(child)
+                    walk(child, admitted=admitted)
         elif node.op == "solve_spatial_nonlinear":
             from pops.time._program.spatial_solve import validate_spatial_commit
             validate_spatial_commit(program, node)
-            walk(node.inputs[0])
+            walk(node.inputs[0], admitted=admitted)
+        elif node.op == "solve_outcome":
+            # Consuming a typed successful result must retain the explicit
+            # stage inputs of the solver behind that outcome wrapper.
+            walk(node.inputs[0], admitted=admitted)
         elif node.op in {"solve_local_nonlinear", "solve_coupled_implicit",
                          "solve_implicit_source"}:
             return
         elif node.op == "acceptance_guard":
-            walk(node.inputs[0], state_consumer=state_consumer)
+            from pops.time._program.stability_admission import is_stability_admission_guard
+            authored = is_stability_admission_guard(program, node)
+            walk(node.inputs[0], state_consumer=state_consumer, admitted=admitted or authored)
         elif node.vtype == "state" and len(node.inputs) == 1:
-            walk(node.inputs[0], state_consumer=state_consumer)
+            walk(node.inputs[0], state_consumer=state_consumer, admitted=admitted)
 
     for value in program._commits.values():
         walk(value)
-    return frozenset(updates)
+    return (frozenset(updates), frozenset(protected-unprotected),
+            frozenset(protected_rates-unprotected_rates),
+            frozenset(protected_rates | unprotected_rates))
+
+
+def explicit_update_consumers(program):
+    return explicit_update_consumption(program)[0]
+
+
+def consumes_deferred_diffusion(value, var):
+    """Whether an affine consumer spends an as-yet consumer-owned rate budget."""
+    deferred = var.get(("partition_stability_deferred",), frozenset())
+    return any(node.id in deferred for node, _ in _affine_terms(value))
 
 
 def _retain_convex_stage_values(terms):
@@ -210,6 +245,12 @@ def partition_stability_groups(value, *, include_transport=False):
     if not include_transport and not (any(node.op == "rhs" for node in rates)
                                       and any(node.op == "diffusive_rhs" for node in rates)):
         return ()
+    if not include_transport and any(_is_local_source(node) for node in rates):
+        # Preserve the stronger existing transport/diffusion contract. The
+        # numerical-face Courant envelope below is explicitly spatial only.
+        raise ValueError(_DIAGNOSTIC + "; separate sources need their own certificate")
+    # Local source stability is a separate authored obligation. Its sampled
+    # state does not spend the spatial Courant budget of this update.
     bases = {_rate_state(node).id: _rate_state(node) for node in rates}
     terms = _affine_terms(value, bases)
     terms = _retain_convex_stage_values(terms)
@@ -230,6 +271,8 @@ def partition_stability_groups(value, *, include_transport=False):
     groups = {}
     for rate, weight in rates:
         state = _rate_state(rate)
+        if include_transport and _is_local_source(rate) and budgets.get(state.id, 0) <= 0:
+            continue
         if budgets.get(state.id, 0) <= 0 or rate.block != state.block:
             raise ValueError(_DIAGNOSTIC)
         if rate.attrs.get("schedule") is not None:
@@ -258,14 +301,22 @@ def emit_transport_frequency(value, var, lines, *, model, block_index, target="s
 
 
 def emit_partition_stability(value, var, lines, *, block_index, include_transport=False):
+    if value.id in var.get(("authored_stability_updates",), ()):
+        return
     groups = partition_stability_groups(value, include_transport=include_transport)
     for index, (_, alpha, rates) in enumerate(groups):
         terms = []
         for rate, beta in rates:
+            if _is_local_source(rate):
+                # This certificate bounds spatial transport/diffusion only.
+                # A local source retains its own admissibility/stability duties.
+                continue
             token = var.get(("partition_frequency", rate.id))
             if token is None:
                 raise ValueError(_DIAGNOSTIC + "; rate frequency is unavailable in this region")
             terms.append("%s * %s" % (scalar_cpp(beta), token))
+        if not terms:
+            continue
         frequency = "partition_frequency_%d_%d" % (value.id, index)
         lines.append("const pops::Real %s = %s;" % (frequency, " + ".join(terms)))
         lines.append(
@@ -283,6 +334,8 @@ def emit_partition_stability(value, var, lines, *, block_index, include_transpor
 
 def emit_user_face_stability(value, var, lines, *, block_index):
     """Check explicit consumers of numerical faces with one shared convex budget."""
+    if value.id in var.get(("authored_stability_updates",), ()):
+        return
     def selected(node):
         return any((kind, node.id) in var for kind in (
             "user_face_frequency", "principal_frequency", "path_frequency"))
@@ -296,6 +349,8 @@ def emit_user_face_stability(value, var, lines, *, block_index):
             continue
         terms = []
         for rate, beta in rates:
+            if _is_local_source(rate):
+                continue
             token = var.get(("partition_frequency", rate.id))
             if token is None:
                 raise ValueError(_DIAGNOSTIC + "; numerical face frequency is unavailable")
@@ -311,7 +366,9 @@ def emit_user_face_stability(value, var, lines, *, block_index):
             % (block_index, value.id, frequency, frequency, frequency, scalar_cpp(alpha)))
 
 
-def require_deferred_partition_bounds(var):
-    if not var.get(("partition_stability_deferred",), frozenset()) <= var.get(
-            ("partition_stability_checked",), frozenset()):
+def require_deferred_partition_bounds(var, *, inherited=()):
+    admitted = var.get(("authored_stability_rates",), frozenset())
+    pending = var.get(("partition_stability_deferred",), frozenset()) - frozenset(inherited)
+    if not pending <= (var.get(
+            ("partition_stability_checked",), frozenset()) | admitted):
         raise ValueError(_DIAGNOSTIC + "; an explicit diffusion rate lacks its consuming bound")

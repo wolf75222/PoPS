@@ -66,6 +66,7 @@ enum class BasisProvider : std::uint8_t {
   ExactFace = 2,
   NamedCell = 3,
   DiffusiveFace = 4,
+  GeneratedFace = 5,
 };
 
 template <int Dim>
@@ -423,8 +424,9 @@ SnapshotMap<Dim> decode_shards(const std::vector<std::vector<std::uint8_t>>& sha
 
 // These read-only graph operations neither own a history registry nor publish accepted state.
 template <class Expression, class Bounds>
-void require_expression_budget(const Expression& expression, const Bounds& rhs_bounds,
-                               const Bounds& coefficient_bounds) {
+void require_expression_budget(
+    const Expression& expression, const Bounds& rhs_bounds, const Bounds& coefficient_bounds,
+    std::size_t max_coefficient_bytes = ::pops::ExactWeight::default_max_bytes) {
   std::map<std::size_t, std::size_t> bases_by_block;
   for (const auto& [identity, term] : expression) {
     (void)identity;
@@ -432,6 +434,12 @@ void require_expression_budget(const Expression& expression, const Bounds& rhs_b
         term.basis->runtime_block >= coefficient_bounds.size())
       throw std::logic_error("AMR Program flux expression has a foreign basis identity");
     const std::size_t block = term.basis->runtime_block;
+    for (const auto& [power, value] : term.coefficient) {
+      (void)power;
+      if (value.storage_bytes() > max_coefficient_bytes)
+        throw std::length_error(
+            "AMR Program exact coefficient exceeds its authenticated byte budget");
+    }
     if (++bases_by_block[block] > rhs_bounds[block] ||
         term.coefficient.size() > coefficient_bounds[block])
       throw std::length_error(
@@ -529,7 +537,7 @@ std::vector<std::uint8_t> serialize_expressions(const Registry& histories, int m
     });
   });
   checkpoint_detail::Writer out;
-  out.u64(snapshots ? UINT64_C(0x504f5053464c5834) : UINT64_C(0x504f5053464c5833));
+  out.u64(snapshots ? UINT64_C(0x504f5053464c5836) : UINT64_C(0x504f5053464c5835));
   out.size(histories.size());
   for (const auto& [key, slots] : histories) {
     out.string(key);
@@ -543,8 +551,7 @@ std::vector<std::uint8_t> serialize_expressions(const Registry& histories, int m
         out.size(term.coefficient.size());
         for (const auto& [power, coefficient] : term.coefficient) {
           out.i32(power);
-          out.i64(coefficient.numerator);
-          out.i64(coefficient.denominator);
+          out.string(coefficient.encode());
         }
         const auto& basis = *term.basis;
         out.u64(basis.runtime_block);

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import inspect
-import json
 import math
 import types
 from collections.abc import Mapping
@@ -13,49 +12,42 @@ from typing import Any
 
 def canonical_hash_data(value: Any, *, where: str = "module hash") -> Any:
     """Return deterministic JSON data, refusing every opaque/address repr fallback."""
-    hook = getattr(value, "to_data", None)
-    if callable(hook):
-        return canonical_hash_data(hook(), where=where)
+    from pops._structural_data import canonical_json, transform_tree_context
 
-    if _is_expr(value):
-        from pops._ir.visitors import _dag_key_data
-
-        return canonical_hash_data(
-            _dag_key_data((value,)), where="%s expression DAG" % where)
-    if isinstance(value, (tuple, list)) and value and all(_is_expr(item) for item in value):
-        from pops._ir.visitors import _dag_key_data
-
-        return canonical_hash_data(
-            _dag_key_data(value), where="%s expression DAG" % where)
-    if isinstance(value, Mapping):
-        if any(not isinstance(key, str) or not key for key in value):
-            raise TypeError("%s mapping keys must be non-empty strings" % where)
-        return {
-            key: canonical_hash_data(value[key], where="%s.%s" % (where, key))
-            for key in sorted(value)
-        }
-    if isinstance(value, (tuple, list)):
-        return [canonical_hash_data(item, where=where) for item in value]
-    if isinstance(value, (set, frozenset)):
-        items = [canonical_hash_data(item, where=where) for item in value]
-        return sorted(
-            items,
-            key=lambda item: json.dumps(
-                item, sort_keys=True, separators=(",", ":"), allow_nan=False),
-        )
-    if isinstance(value, (Fraction, Decimal)):
-        from pops.identity.scalar import scalar_literal
-
-        return {"protocol": "pops.scalar.v1", "value": scalar_literal(value).to_data()}
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("%s contains a non-finite float" % where)
-        return value
-    if value is None or isinstance(value, (bool, int, str)):
-        return value
-    raise TypeError(
-        "%s contains opaque %s; provide strict JSON data or implement to_data()"
-        % (where, type(value).__name__))
+    def describe(value, where):
+        hook = getattr(value, "to_data", None)
+        if callable(hook):
+            return ((hook(), where),), lambda items: items[0]
+        if _is_expr(value):
+            from pops._ir.visitors import _dag_key_data
+            return ((_dag_key_data((value,)), "%s expression DAG" % where),), lambda items: items[0]
+        if isinstance(value, (tuple, list)) and value and all(_is_expr(item) for item in value):
+            from pops._ir.visitors import _dag_key_data
+            return ((_dag_key_data(value), "%s expression DAG" % where),), lambda items: items[0]
+        if isinstance(value, Mapping):
+            if any(not isinstance(key, str) or not key for key in value):
+                raise TypeError("%s mapping keys must be non-empty strings" % where)
+            keys = sorted(value)
+            return tuple((value[key], "%s.%s" % (where, key)) for key in keys), \
+                lambda items: dict(zip(keys, items, strict=True))
+        if isinstance(value, (tuple, list)):
+            return tuple((item, where) for item in value), list
+        if isinstance(value, (set, frozenset)):
+            return tuple((item, where) for item in value), \
+                lambda items: sorted(items, key=lambda item: canonical_json(item, allow_nan=False))
+        if isinstance(value, (Fraction, Decimal)):
+            from pops.identity.scalar import scalar_literal
+            return None, {"protocol": "pops.scalar.v1", "value": scalar_literal(value).to_data()}
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("%s contains a non-finite float" % where)
+            return None, value
+        if value is None or isinstance(value, (bool, int, str)):
+            return None, value
+        raise TypeError(
+            "%s contains opaque %s; provide strict JSON data or implement to_data()"
+            % (where, type(value).__name__))
+    return transform_tree_context(value, describe, where)
 
 
 def body_identity(body: Any) -> Any:
@@ -91,7 +83,7 @@ def _body_identity(body: Any, active: frozenset[int]) -> Any:
     if callable(body):
         if isinstance(body, type):
             raise TypeError("operator body classes are opaque; pass an instance or strict data")
-        implementation = getattr(type(body), "__call__", None)
+        implementation = getattr(type(body), "__call__", None)  # noqa: B004 -- inspect the actual inherited method
         if not inspect.isfunction(implementation):
             raise TypeError(
                 "callable operator body %s has no stable Python __call__ code"

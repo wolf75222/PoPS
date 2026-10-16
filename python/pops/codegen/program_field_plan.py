@@ -179,9 +179,8 @@ class ResolvedProgramFieldPlan:
                 if {_canonical(canonical_handle(value.state_ref).canonical_identity()) for value in captures} != expected_dependencies:
                     raise ValueError("native residual captures differ from the physical dependencies")
                 continue
-            reachable = _reachable(solve, all_nodes)
-            operations = tuple(node for node in reachable if node.op in (
-                "field_problem_load", "field_problem_coefficients", "field_problem_apply"))
+            from pops.fields._observation_contract import direct_native_field_operations
+            operations = direct_native_field_operations(solve)
             if not {"field_problem_load", "field_problem_apply"}.issubset(
                     {node.op for node in operations}):
                 raise ValueError("Program field metadata has no executable load and apply graph")
@@ -242,7 +241,8 @@ def capture_program_field_plans(problem: Any, detach: Any, *, target: str,
                     raise ValueError("typed field observation hidden storage axes must be singleton")
         if target == "amr_system":
             resolved_layout = next(row for row in layout_plan.layouts if row.handle == storage.layout)
-            if resolved_layout.capabilities.get("execution") != "synchronous":
+            if resolved_layout.capabilities.get("execution") != "synchronous" and any(
+                    node.attrs.get("temporal_evaluation") is None for node in solves):
                 raise ValueError("general field hierarchy coupling requires explicit synchronous AMR execution; asynchronous or subcycled policies have no declared field-time transfer")
         registration = detach(registration)
         coverage = LoweringCoverageReport((LoweringCoverageRow(

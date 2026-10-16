@@ -6,6 +6,8 @@ enum class HierarchyBarrierKind : std::uint8_t {
   spatial_rhs = 3,
   named_field_solve = 4,
   field_warm_start = 5,
+  nonlinear_solve = 6,
+  control = 7,
 };
 
 template <class Once, class Next>
@@ -18,8 +20,11 @@ void suspend_hierarchy_barrier(HierarchyBarrierKind kind, std::int64_t operation
       static_cast<std::size_t>(active_level_) >= mapping_continuation_->ports.size())
     throw std::logic_error("AMR hierarchy barrier requires an executing level region");
   if (kind != HierarchyBarrierKind::linear_solve &&
-      kind != HierarchyBarrierKind::field_publication && kind != HierarchyBarrierKind::spatial_rhs &&
-      kind != HierarchyBarrierKind::named_field_solve && kind != HierarchyBarrierKind::field_warm_start)
+      kind != HierarchyBarrierKind::field_publication &&
+      kind != HierarchyBarrierKind::spatial_rhs &&
+      kind != HierarchyBarrierKind::named_field_solve &&
+      kind != HierarchyBarrierKind::field_warm_start &&
+      kind != HierarchyBarrierKind::nonlinear_solve && kind != HierarchyBarrierKind::control)
     throw std::invalid_argument("AMR hierarchy barrier kind is unknown");
   if (operation_id < 0 || compiled_program_hash.empty() ||
       compiled_program_hash != mapping_continuation_->program_hash ||
@@ -56,15 +61,16 @@ void suspend_hierarchy_barrier(HierarchyBarrierKind kind, std::int64_t operation
   if (root.empty())
     throw std::logic_error("AMR hierarchy barrier has no root clock authority");
   port.identity = PreparedHierarchyBarrier::operation_contract(
-      static_cast<std::uint8_t>(kind),operation_id,compiled_program_hash,exact_dependency_contract,
-      numerator,denominator,active_subcycling_attempt_,frame.internal_sequence,
-      frame.hierarchy_authority,root.front().window);
-  port.kind = kind == HierarchyBarrierKind::linear_solve ? MappingPortKind::linear_solve
-              : kind == HierarchyBarrierKind::field_publication
-                  ? MappingPortKind::field_publication
-                  : kind == HierarchyBarrierKind::spatial_rhs ? MappingPortKind::spatial_rhs
-                  : kind == HierarchyBarrierKind::named_field_solve ? MappingPortKind::named_field_solve
-                  : MappingPortKind::field_warm_start;
+      static_cast<std::uint8_t>(kind), operation_id, compiled_program_hash,
+      exact_dependency_contract, numerator, denominator, active_subcycling_attempt_,
+      frame.internal_sequence, frame.hierarchy_authority, root.front().window);
+  port.kind = kind == HierarchyBarrierKind::linear_solve        ? MappingPortKind::linear_solve
+              : kind == HierarchyBarrierKind::field_publication ? MappingPortKind::field_publication
+              : kind == HierarchyBarrierKind::spatial_rhs       ? MappingPortKind::spatial_rhs
+              : kind == HierarchyBarrierKind::named_field_solve ? MappingPortKind::named_field_solve
+              : kind == HierarchyBarrierKind::control           ? MappingPortKind::control
+              : kind == HierarchyBarrierKind::nonlinear_solve   ? MappingPortKind::nonlinear_solve
+                                                                : MappingPortKind::field_warm_start;
   port.once = std::move(once);
   port.next = std::move(next);
 }
@@ -84,14 +90,18 @@ void detach_qualified_hierarchy_barrier_group_() const {
   const auto kind = frame.ports.front().kind;
   if (kind != MappingPortKind::map && kind != MappingPortKind::linear_solve &&
       kind != MappingPortKind::field_publication && kind != MappingPortKind::spatial_rhs &&
-      kind != MappingPortKind::named_field_solve && kind != MappingPortKind::field_warm_start)
+      kind != MappingPortKind::named_field_solve && kind != MappingPortKind::field_warm_start &&
+      kind != MappingPortKind::nonlinear_solve && kind != MappingPortKind::control)
     throw std::logic_error("AMR SSA retention requires an intermediate typed hierarchy barrier");
-  if (frame.program_hash != facade_->installed_program_hash() || frame.hierarchy_authority.empty() ||
+  if (frame.program_hash != facade_->installed_program_hash() ||
+      frame.hierarchy_authority.empty() ||
       multiblock_subcycling_epoch_ != hierarchy.topology_runtime().topology_epoch() ||
-      multiblock_subcycling_generation_ != hierarchy.topology_runtime().materialization_generation() ||
+      multiblock_subcycling_generation_ !=
+          hierarchy.topology_runtime().materialization_generation() ||
       frame.ports.size() != static_cast<std::size_t>(nlev()) ||
       synchronized_level_envelopes_.size() != frame.ports.size())
-    throw std::logic_error("AMR SSA continuation lost its Program or hierarchy generation authority");
+    throw std::logic_error(
+        "AMR SSA continuation lost its Program or hierarchy generation authority");
   const auto attempt = multiblock_subcycling_->synchronized_attempt();
   for (std::size_t level = 0; level < frame.ports.size(); ++level) {
     const auto found = synchronized_level_envelopes_.find(static_cast<int>(level));
@@ -135,5 +145,5 @@ void prepare_mapping_barrier_authority_() const {
 
 void agree_continuation_ports_() const {
   auto& frame = *mapping_continuation_;
-  PreparedHierarchyBarrier::agree_ports(frame.ports,frame.fields,prepared_execution_lane());
+  PreparedHierarchyBarrier::agree_ports(frame.ports, frame.fields, prepared_execution_lane());
 }

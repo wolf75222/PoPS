@@ -10,7 +10,7 @@ from pops._platform_contracts import (
     FieldViewDescriptor,
     PlatformContractError,
     PlatformManifest,
-    validate_launch,
+    validate_initial_state_import,
 )
 
 
@@ -31,7 +31,7 @@ def validate_platform_bind(
             _initial_field(name, array, dimension, mesh_shapes)
             for name, array in (initial or {}).items()
         )
-        validate_launch(platform, context, fields)
+        validate_initial_state_import(platform, context, fields)
     except (PlatformContractError, TypeError, ValueError) as exc:
         return [str(exc)]
     return []

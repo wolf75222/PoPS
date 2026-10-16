@@ -14,7 +14,6 @@ from pops.identity.scalar import scalar_cpp
 from pops.model.state_symbols import state_component_symbol
 from pops.codegen.cpp_writer import _cpp_identifier, _cse_emit
 from pops._ir.primitive_expansion import expand_evaluation_boundaries, expand_primitive_recipes
-from pops._ir.visitors import _dependencies
 from pops.codegen.module_emit_helpers import _checked_inline_expr
 
 from pops.codegen.program_emit_kernels import (
@@ -37,9 +36,12 @@ def _provider_binding(impl: Any, roots: Any, provider_plans: Any, consumer_qid: 
 def _emit_local_transform_kernel(
     model: Any, name: Any, state_var: Any, out_var: Any, status_var: Any,
     active_mask_var: Any, block_idx: Any = 0, *, provider_plans: Any, consumer_qid: str,
+    capture_var: str | None = None, coordinate_capture_var: str | None = None,
 ) -> list:
     """Lower one named pointwise State -> State map into a fail-closed device kernel."""
 
+    if coordinate_capture_var is not None and capture_var is None:
+        raise ValueError("a coordinate certificate requires its same-evaluation free-read journal")
     impl = _model_impl(model)
     transforms = getattr(impl, "_local_transforms", {}) or {}
     if name not in transforms:
@@ -53,12 +55,21 @@ def _emit_local_transform_kernel(
         raise ValueError(
             "local transform '%s' has %d outputs for %d conservative components"
             % (name, len(exprs), len(impl.cons_names)))
-    roots = list(expand_evaluation_boundaries(exprs + [valid_if], impl.prim_defs))
+    expansion = expand_primitive_recipes if capture_var is not None else expand_evaluation_boundaries
+    roots = list(expansion(exprs + [valid_if], impl.prim_defs))
     provider_binding = _provider_binding(impl, roots, provider_plans, consumer_qid)
     impl.assign_runtime_indices()
     params_block = block_idx if _has_runtime_param(roots) else None
     body = _kernel_open(out_var, state_var, params_block, provider_binding=provider_binding,
                         program_block=block_idx)
+    read_plan = None
+    if capture_var is not None:
+        from .program_transform_read_plan import transform_read_plan
+        read_plan = transform_read_plan(impl, roots, provider_binding)
+        # Only the cell-local adapters use the public get/operator() spelling.
+        # They forward each executed read exactly once to the real native view.
+        body = [line.replace(" params =", " transform_parameters_ =")
+                .replace(" providers =", " transform_providers_ =") for line in body]
     lambda_index = next(
         index for index, line in enumerate(body) if "pops::for_each_cell" in line)
     body[lambda_index:lambda_index] = [
@@ -71,6 +82,30 @@ def _emit_local_transform_kernel(
         ": pops::FieldView<const pops::Real, pops::kNativeDimension>{};"
         % active_mask_var,
     ]
+    if read_plan is not None:
+        body[lambda_index:lambda_index] = [
+            "  const pops::FieldView<pops::Real, pops::kNativeDimension> transform_readsA_ = "
+            "%s.fab(li).view();" % capture_var,
+        ]
+        body += [
+            "    const pops::runtime::program::FieldReadCapture<pops::kNativeDimension> "
+            "transform_reads_{transform_readsA_, index, %d};" % read_plan.count,
+            "    transform_reads_.initialize();",
+        ]
+    if coordinate_capture_var is not None:
+        body[lambda_index:lambda_index] = [
+            "  const pops::FieldView<pops::Real, pops::kNativeDimension> transform_coordinateA_ = "
+            "%s.fab(li).view();" % coordinate_capture_var,
+        ]
+        body += [
+            "    const pops::runtime::program::FieldReadCapture<pops::kNativeDimension> "
+            "transform_coordinate_{transform_coordinateA_, index, %d};" % len(exprs),
+            "    transform_coordinate_.initialize();",
+            "    transform_coordinate_.activate();",
+        ]
+        for component in range(len(exprs)):
+            body.append("    transform_coordinate_.record(%d, %sA(index, %d));"
+                        % (component, state_var, component))
     body += [
         "    if (transform_has_active_mask_ && "
         "!(transform_activeA_(index, 0) >= pops::Real(0.5))) {",
@@ -84,10 +119,33 @@ def _emit_local_transform_kernel(
         "      return;",
         "    }",
     ]
+    if read_plan is not None:
+        body.append("    transform_reads_.activate();")
+        if read_plan.parameter_indices:
+            indices = ", ".join(map(str, read_plan.parameter_indices))
+            body.append(
+                "    const pops::runtime::program::CapturedParameterReads<"
+                "decltype(transform_parameters_), %d, pops::kNativeDimension> params{"
+                "transform_parameters_, {{%s}}, transform_reads_};"
+                % (len(read_plan.parameter_indices), indices))
+        body.append(
+            "    const pops::runtime::program::CapturedProviderReads<"
+            "decltype(transform_providers_), pops::kNativeDimension> providers{"
+            "transform_providers_, transform_reads_, %d, %d};"
+            % (len(read_plan.parameter_indices), read_plan.provider_count))
     body += ["    " + line for line in _cell_locals(
-        impl, roots, state_var, with_cons=True, with_prim=True, provider_binding=provider_binding)]
+        impl, roots, state_var, with_cons=True, with_prim=True, provider_binding=provider_binding,
+        with_providers=read_plan is None)]
+    # Eager auxiliary aliases would turn an unselected lazy branch into a read.
+    # Bind the exact native read at its expression leaf so the ordinary guarded
+    # CSE emitter preserves the Python equation's evaluation boundary.
+    scalar_bindings = None if read_plan is None else {
+        ("aux", name): "providers(index, %d)" % slot
+        for name, slot in provider_binding["slots"].items()
+    }
     temporaries, rendered, temporary_names = _cse_emit(
-        roots, "pops::Real", "    ", materialize_all=True, return_names=True)
+        roots, "pops::Real", "    ", materialize_all=True, return_names=True,
+        scalar_bindings=scalar_bindings)
     body.append("    pops::Real transform_failed_ = pops::Real(0);")
     body.extend(temporaries)
     for temporary_name in temporary_names:
@@ -111,6 +169,10 @@ def _emit_local_transform_kernel(
             % component)
         body.append(
             "    outA(index, %d) = transformed_%d_;" % (component, component))
+    if read_plan is not None:
+        body.append("    if (!transform_reads_.valid()) transform_failed_ = pops::Real(1);")
+    if coordinate_capture_var is not None:
+        body.append("    if (!transform_coordinate_.valid()) transform_failed_ = pops::Real(1);")
     body.append("    statusA(index, 0) = transform_failed_;")
     body += _kernel_close()
     return body
@@ -761,82 +823,84 @@ def _emit_local_residual_nodes(block, initial_components, residual_width, physic
     from pops.time.expressions import component_names
     comps = dict(initial_components)
     lines = []
+    from .program_source_map import operation
     for w in block:
-        if w.id in comps:
-            continue
-        if w.op == "linear_source":
-            continue  # immutable operator descriptor, consumed by typed apply
-        if w.op in ("state", "input_fields"):
-            raise ValueError("local residual contains an unbound argument")
-        n = len(component_names(w))
-        if w.op in ("source", "apply"):
-            impl, setup = physical_environment(w)
-            exprs = _residual_term_exprs(impl, w)
-            if len(exprs) != n:
-                raise ValueError("local residual operator output Space changed")
-            # Bind the actual argument of every call, including frozen captures and
-            # earlier derived values. Using Ueval unconditionally changes the equation.
-            source = comps[w.inputs[0].id]
-            target = "residual_value_%d" % w.id
-            lines.append("pops::Real %s[%d];" % (target, n))
-            lines.append("{")
-            lines.extend(setup)
-            # Use the same checked evaluation policy as Program expressions. A
-            # final finite residual alone cannot detect sqrt(-u) hidden by fmin.
-            # Bind leaves, too: otherwise a non-finite captured argument could
-            # disappear behind a finite min/max. The common emitter keeps where
-            # branches lazy and rounded barriers intact.
-            from .cpp_symbols import variable_bindings
-            bindings = variable_bindings(exprs)
-            bindings.update({('cons',name):value for name,value in zip(impl.cons_names, source, strict=True)})
-            temporaries, rendered, observed = _cse_emit(
-                exprs, "pops::Real", "  ", materialize_all=True, return_names=True,
-                scalar_bindings=bindings)
-            lines.extend(temporaries)
-            invalid = " || ".join("!Kokkos::isfinite(%s)" % name
-                                   for name in dict.fromkeys([*observed, *rendered])) or "false"
-            lines.append("  if (%s) {" % invalid)
-            for c in range(residual_width):
-                lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
-            lines.extend(["    return;", "  }"])
-            for c, expression in enumerate(rendered):
-                lines.append("  %s[%d] = %s;" % (target, c, expression))
-            lines.append("}")
-            comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
-        elif w.op == "pointwise_expression":
-            from pops.codegen.program_emit_expressions import checked_pointwise_rows
-            temporaries, rendered, invalid = checked_pointwise_rows(
-                w, [comps[item.id] for item in w.inputs])
-            target = "residual_expression_%d" % w.id
-            lines.extend(["pops::Real %s[%d];" % (target, n), "{"])
-            lines.extend("  " + line for line in temporaries)
-            lines.append("  if (%s) {" % invalid)
-            for c in range(residual_width):
-                lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
-            lines.extend(["    return;", "  }"])
-            lines.extend("  %s[%d] = %s;" % (target, c, expression)
-                         for c, expression in enumerate(rendered))
-            lines.append("}")
-            comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
-        elif w.op == "linear_combine":
-            # An affine sum over earlier terms: comps[w] = sum_k coeff_k(dt) * comps[input_k].
-            coeffs = w.attrs["coeffs"]  # aligned with w.inputs; each a dt-polynomial power->float dict
-            for inp in w.inputs:
-                if inp.id not in comps:  # an input outside the residual sub-block (validate() guards this)
-                    raise NotImplementedError(
-                        "emit_cpp_program: residual combine reads value '%s' which is not produced "
-                        "inside the residual (only the iterate / guess and earlier residual ops are "
-                        "available to a per-cell Newton kernel)" % inp.name)
-            row = []
-            for c in range(n):
-                parts = []
-                for inp, coeff in zip(w.inputs, coeffs, strict=True):
-                    parts.append("%s * (%s)" % (_coeff_cpp(coeff), comps[inp.id][c]))
-                row.append(" + ".join(parts) if parts else "static_cast<pops::Real>(0)")
-            comps[w.id] = row
-        else:  # builder guards _RESIDUAL_LOCAL_OPS; this is belt-and-suspenders
-            raise NotImplementedError(
-                "emit_cpp_program: residual op '%s' is not lowerable in a local Newton kernel" % w.op)
+        with operation(w, lines, environment=comps, channel="local_residual"):
+            if w.id in comps:
+                continue
+            if w.op == "linear_source":
+                continue  # immutable operator descriptor, consumed by typed apply
+            if w.op in ("state", "input_fields"):
+                raise ValueError("local residual contains an unbound argument")
+            n = len(component_names(w))
+            if w.op in ("source", "apply"):
+                impl, setup = physical_environment(w)
+                exprs = _residual_term_exprs(impl, w)
+                if len(exprs) != n:
+                    raise ValueError("local residual operator output Space changed")
+                # Bind the actual argument of every call, including frozen captures and
+                # earlier derived values. Using Ueval unconditionally changes the equation.
+                source = comps[w.inputs[0].id]
+                target = "residual_value_%d" % w.id
+                lines.append("pops::Real %s[%d];" % (target, n))
+                lines.append("{")
+                lines.extend(setup)
+                # Use the same checked evaluation policy as Program expressions. A
+                # final finite residual alone cannot detect sqrt(-u) hidden by fmin.
+                # Bind leaves, too: otherwise a non-finite captured argument could
+                # disappear behind a finite min/max. The common emitter keeps where
+                # branches lazy and rounded barriers intact.
+                from .cpp_symbols import variable_bindings
+                bindings = variable_bindings(exprs)
+                bindings.update({('cons',name):value for name,value in zip(impl.cons_names, source, strict=True)})
+                temporaries, rendered, observed = _cse_emit(
+                    exprs, "pops::Real", "  ", materialize_all=True, return_names=True,
+                    scalar_bindings=bindings)
+                lines.extend(temporaries)
+                invalid = " || ".join("!Kokkos::isfinite(%s)" % name
+                                       for name in dict.fromkeys([*observed, *rendered])) or "false"
+                lines.append("  if (%s) {" % invalid)
+                for c in range(residual_width):
+                    lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
+                lines.extend(["    return;", "  }"])
+                for c, expression in enumerate(rendered):
+                    lines.append("  %s[%d] = %s;" % (target, c, expression))
+                lines.append("}")
+                comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
+            elif w.op == "pointwise_expression":
+                from pops.codegen.program_emit_expressions import checked_pointwise_rows
+                temporaries, rendered, invalid = checked_pointwise_rows(
+                    w, [comps[item.id] for item in w.inputs])
+                target = "residual_expression_%d" % w.id
+                lines.extend(["pops::Real %s[%d];" % (target, n), "{"])
+                lines.extend("  " + line for line in temporaries)
+                lines.append("  if (%s) {" % invalid)
+                for c in range(residual_width):
+                    lines.append("    rout[%d] = std::numeric_limits<pops::Real>::quiet_NaN();" % c)
+                lines.extend(["    return;", "  }"])
+                lines.extend("  %s[%d] = %s;" % (target, c, expression)
+                             for c, expression in enumerate(rendered))
+                lines.append("}")
+                comps[w.id] = ["%s[%d]" % (target, c) for c in range(n)]
+            elif w.op == "linear_combine":
+                # An affine sum over earlier terms: comps[w] = sum_k coeff_k(dt) * comps[input_k].
+                coeffs = w.attrs["coeffs"]  # aligned with w.inputs; each a dt-polynomial power->float dict
+                for inp in w.inputs:
+                    if inp.id not in comps:  # an input outside the residual sub-block (validate() guards this)
+                        raise NotImplementedError(
+                            "emit_cpp_program: residual combine reads value '%s' which is not produced "
+                            "inside the residual (only the iterate / guess and earlier residual ops are "
+                            "available to a per-cell Newton kernel)" % inp.name)
+                row = []
+                for c in range(n):
+                    parts = []
+                    for inp, coeff in zip(w.inputs, coeffs, strict=True):
+                        parts.append("%s * (%s)" % (_coeff_cpp(coeff), comps[inp.id][c]))
+                    row.append(" + ".join(parts) if parts else "static_cast<pops::Real>(0)")
+                comps[w.id] = row
+            else:  # builder guards _RESIDUAL_LOCAL_OPS; this is belt-and-suspenders
+                raise NotImplementedError(
+                    "emit_cpp_program: residual op '%s' is not lowerable in a local Newton kernel" % w.op)
     return lines, comps
 
 

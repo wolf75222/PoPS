@@ -391,8 +391,21 @@ def _determinism(
     manifests: Mapping[str, ComponentManifest],
     context: ExecutionContext,
     communication: CommunicationPlan,
+    *,
+    program_identities: tuple[Any, ...] = (),
 ) -> DeterminismGuarantee:
     classifications = [manifest.determinism["classification"] for manifest in manifests.values()]
+    if not classifications:
+        if calls or not program_identities:
+            refuse("missing_runtime_determinism_evidence", "component_manifests.determinism",
+                   "a component-free runtime needs an authenticated compiled Program")
+        # The finite Program is executable without inventing a field component.
+        # Absence of component manifests proves no floating-point reproducibility
+        # guarantee. Record the exact Programs and deliberately grant none.
+        return DeterminismGuarantee("nondeterministic", (), {}, {
+            "compiled_programs": [identity.to_data() for identity in program_identities],
+            "basis": "no_component_reproducibility_guarantee",
+        }, context.identity)
     if "unspecified" in classifications:
         refuse(
             "unspecified_component_determinism",
@@ -505,7 +518,8 @@ def build_runtime_plans(install_plan: Any, component_manifests: Any) -> RuntimeP
         tuple(row.identity.token for row in fences),
         tuple(declared),
     )
-    determinism = _determinism(call_rows, manifests, context, communication)
+    determinism = _determinism(call_rows, manifests, context, communication,
+                              program_identities=tuple(row.identity for row in plan.artifact.layout_programs))
     return RuntimePlanBundle(
         plan.bind_identity,
         platform.identity,

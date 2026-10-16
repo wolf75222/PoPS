@@ -13,17 +13,17 @@
 #include <pops/core/foundation/kokkos_env.hpp>  // Kokkos_Core under POPS_HAS_KOKKOS (kokkos_is_initialized)
 #include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/mesh/boundary/periodicity.hpp>
-#include <pops/parallel/comm.hpp>  // pops::my_rank / n_ranks: rank-0 guard of the multi-rank IO facade
-#include <pops/runtime/dynamic/abi_key.hpp>  // pops::abi_key: ABI key exposed to the DSL ("production" path)
-#include <pops/runtime/config/runtime_params.hpp>          // kMaxRuntimeParams (ADC-618 hard_limit)
 #include <pops/numerics/elliptic/poisson/poisson_fft.hpp>  // DFT-fallback counter (ADC-618 diagnostic)
+#include <pops/parallel/comm.hpp>  // pops::my_rank / n_ranks: rank-0 guard of the multi-rank IO facade
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/config/runtime_params.hpp>  // immutable parameter carrier
+#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/system.hpp>
 
-#include <cstring>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -468,11 +468,11 @@ inline py::dict numerical_defaults_report_to_dict() {
   physical["cs2_note"] =
       "FluidState defaults to 0.5 while the raw native IsothermalFlux brick defaults to 1.0.";
 
-  // ADC-618: hard limits + diagnostics. kMaxRuntimeParams is a fixed-size device carrier bound
-  // (native_loader fails fast above it); the DFT-fallback counter records each time the FFT Poisson
-  // falls back to the O(n^2) direct DFT on a non-power-of-two grid.
+  // Runtime parameters use a per-incarnation byte budget. The DFT diagnostic
+  // records each direct-DFT fallback on a non-power-of-two grid.
   py::dict runtime;
-  runtime["max_runtime_params"] = kMaxRuntimeParams;
+  runtime["max_runtime_params"] = py::none();
+  runtime["runtime_parameter_budget_scope"] = "immutable_incarnation";
 
   py::dict diagnostics;
   diagnostics["fft_direct_dft_fallback_count"] =
@@ -545,7 +545,6 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kPhysicalDefaultFourPiG", "public_knob");
   klass("kPhysicalDefaultGravityRho0", "public_knob");
   klass("kCflSpeedFloor", "public_knob");  // ADC-645: step_cfl(speed_floor=) is wired end to end
-  klass("kMaxRuntimeParams", "hard_limit");
 
   py::dict out;
   out["schema_version"] = 1;

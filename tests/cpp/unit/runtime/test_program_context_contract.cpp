@@ -32,7 +32,9 @@
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/numerics/diffusion/prepared_diffusion.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
+#include <pops/runtime/program/uniform_history_exchange_checkpoint.hpp>
 #include <pops/runtime/accelerator/prepared_stream_executor.hpp>
 #include <pops/runtime/program/program_context.hpp>  // NativeProgramContext (the contract under test)
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
@@ -92,12 +94,13 @@ std::vector<double> eval_single_box_rhs_global(NativeSystem& system, std::size_t
   const auto local = system.eval_rhs("gas");
   const auto& lane = system.prepared_boundary_execution_lane();
   const long invalid = !local.empty() && local.size() != cells ? 1L : 0L;
-  if (all_reduce_max(invalid, lane) != 0 ||
-      all_reduce_sum(local.empty() ? 0L : 1L, lane) != 1)
+  if (all_reduce_max(invalid, lane) != 0 || all_reduce_sum(local.empty() ? 0L : 1L, lane) != 1)
     throw std::logic_error("single-box reference RHS fixture has a different owner/layout");
   std::vector<double> result(cells, 0.0);
-  if (!local.empty()) result = local;
-  for (double& value : result) value = all_reduce_sum(value, lane);
+  if (!local.empty())
+    result = local;
+  for (double& value : result)
+    value = all_reduce_sum(value, lane);
   return result;
 }
 
@@ -140,7 +143,8 @@ Real first_value(const NativeField& field, int component = 0) {
 
 void expect_owned_first_value(const NativeField& field, Real expected) {
   // Empty participants still execute every later collective phase; only owners read a Fab.
-  if (field.local_size() != 0) EXPECT_EQ(first_value(field), expected);
+  if (field.local_size() != 0)
+    EXPECT_EQ(first_value(field), expected);
 }
 
 const Real* first_owned_storage(const NativeField& field) {
@@ -313,7 +317,7 @@ std::vector<double> ic(int n) {
 namespace {
 
 void install_scalar_field_boundary_plan(NativeSystem& system, const std::string& slot,
-                                       const std::string& block, const std::string& field) {
+                                        const std::string& block, const std::string& field) {
   PreparedProviderOptions options;
   options.schema_identity = "pops.system.cartesian-cg-options@1";
   options.values.emplace("rel_tol", 1e-10);
@@ -321,7 +325,7 @@ void install_scalar_field_boundary_plan(NativeSystem& system, const std::string&
   options.values.emplace("max_iterations", std::int64_t{100});
   system.register_configured_field_solver_provider("cartesian_cg", slot, options);
   system.set_field_solver_plan(slot, slot + "/plan", slot + "/provider", slot + "/owner", block,
-                                field, {slot + "/rhs"}, {block}, {"density"}, {1.0}, slot);
+                               field, {slot + "/rhs"}, {block}, {"density"}, {1.0}, slot);
   system.set_field_boundary_plan(slot, std::vector<std::string>(2 * kTestDimension, "dirichlet"),
                                  std::vector<double>(2 * kTestDimension, 1.0),
                                  std::vector<double>(2 * kTestDimension, 0.0),
@@ -330,7 +334,8 @@ void install_scalar_field_boundary_plan(NativeSystem& system, const std::string&
 
 }  // namespace
 
-TEST(ProgramContextContract, FieldPotentialUsesInstalledDirichletWhileCoefficientsKeepExtrapolation) {
+TEST(ProgramContextContract,
+     FieldPotentialUsesInstalledDirichletWhileCoefficientsKeepExtrapolation) {
   ensure_kokkos();
   comm_init();
   auto config = native_config(4, Real(4));
@@ -375,7 +380,8 @@ TEST(ProgramContextContract, FieldPotentialUsesInstalledDirichletWhileCoefficien
         const auto extent = box.hi[axis] - box.lo[axis] + 1;
         cell[axis] = box.lo[axis] + static_cast<int>(index % extent);
         index /= extent;
-        if (cell[axis] == 0 || cell[axis] == 3) expected_lap -= Real(2);
+        if (cell[axis] == 0 || cell[axis] == 3)
+          expected_lap -= Real(2);
       }
       EXPECT_EQ(lap.fab(local).view()(cell, 0), expected_lap);
       for (int axis = 0; axis < kTestDimension; ++axis) {
@@ -396,12 +402,14 @@ TEST(ProgramContextContract, FieldPotentialUsesInstalledDirichletWhileCoefficien
         const auto extent = box.hi[axis] - box.lo[axis] + 1;
         cell[axis] = box.lo[axis] + static_cast<int>(index % extent);
         index /= extent;
-        if (cell[axis] == 0 || cell[axis] == 3) expected -= Real(2 * (2 + axis));
+        if (cell[axis] == 0 || cell[axis] == 3)
+          expected -= Real(2 * (2 + axis));
       }
       EXPECT_EQ(lap.fab(local).view()(cell, 0), expected);
     }
   }
-  auto transport_boundary = context.prepare_mesh_boundary_session(phi, context.prepared_execution_lane());
+  auto transport_boundary =
+      context.prepare_mesh_boundary_session(phi, context.prepared_execution_lane());
   context.laplacian(lap, phi, *transport_boundary);
   EXPECT_EQ(::norm_inf(lap), Real(0));
 }
@@ -423,7 +431,8 @@ TEST(ProgramContextContract, FieldBoundaryRefusesAmbiguousMissingAndForeignSlots
   EXPECT_ANY_THROW((void)context.field_boundary_conditions(0, "field/missing"));
   EXPECT_ANY_THROW((void)context.field_boundary_conditions(0, "field/other"));
   EXPECT_ANY_THROW((void)context.field_boundary_conditions(my_rank() == 0 ? -1 : 0, "field/phi"));
-  EXPECT_ANY_THROW((void)context.field_boundary_conditions(0, my_rank() == 0 ? "field/missing" : "field/phi"));
+  EXPECT_ANY_THROW(
+      (void)context.field_boundary_conditions(0, my_rank() == 0 ? "field/missing" : "field/phi"));
   EXPECT_NO_THROW((void)context.field_boundary_conditions(0, "field/phi"));
 }
 
@@ -559,6 +568,19 @@ TEST(ProgramContextContract, ProviderFreeViewDoesNotRequireAPlanOrStorageCarrier
   EXPECT_TRUE(providers.storage_components.empty());
 }
 
+TEST(ProgramContextContract, InvocationLevelRequiresAnAttemptAndIsZeroForUniform) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(2));
+  install_execution_lane(sim, "pops.test.program-context.invocation-level");
+  NativeProgramContext context(&sim);
+  EXPECT_THROW((void)context.invocation_level(), std::logic_error);
+  context.begin_step(.1);
+  EXPECT_EQ(context.invocation_level(), 0);
+  const auto& lane = context.prepared_execution_lane();
+  EXPECT_EQ(pops::all_reduce_min(static_cast<long>(context.invocation_level()), lane), 0);
+  EXPECT_EQ(pops::all_reduce_max(static_cast<long>(context.invocation_level()), lane), 0);
+}
+
 TEST(ProgramContextContract, LocalLinearConsumerPublishesStagedInputAndRejectsNanAtomically) {
   using namespace runtime::system;
   ensure_kokkos();
@@ -631,8 +653,9 @@ TEST(ProgramContextContract, LocalLinearConsumerPublishesStagedInputAndRejectsNa
   EXPECT_EQ(sim.time(), time);
   EXPECT_EQ(sim.macro_step(), step);
   EXPECT_EQ(sim.auxiliary_component(key), accepted);
-  expect_collective_exception<std::logic_error>(sim.prepared_boundary_execution_lane(),
-      [&] { (void)sim.capture_auxiliary_checkpoint_accepted_state(); });
+  expect_collective_exception<std::logic_error>(sim.prepared_boundary_execution_lane(), [&] {
+    (void)sim.capture_auxiliary_checkpoint_accepted_state();
+  });
   sim.stage_auxiliary_input(key, std::vector<double>(cells, 0.0));
   EXPECT_NO_THROW(sim.step(0.1));
   EXPECT_EQ(sim.get_state("gas"), solved);
@@ -723,10 +746,12 @@ TEST(ProgramContextContract, AuxiliaryReadClosureKeepsUnrelatedDirtyInputsAndDer
   EXPECT_THROW(context.prepare_provider_values("read-unrelated", 0, stage, 24), std::runtime_error);
   EXPECT_EQ(sim.auxiliary_component(derived), accepted);
   EXPECT_EQ(sim.auxiliary_component(unrelated), untouched);
-  expect_collective_exception<std::logic_error>(context.prepared_execution_lane(),
-      [&] { context.prepare_provider_values("read-field", 0, stage, 25); });
-  expect_collective_exception<std::out_of_range>(context.prepared_execution_lane(),
-      [&] { context.prepare_provider_values("foreign", 0, stage, 25); });
+  expect_collective_exception<std::logic_error>(context.prepared_execution_lane(), [&] {
+    context.prepare_provider_values("read-field", 0, stage, 25);
+  });
+  expect_collective_exception<std::out_of_range>(context.prepared_execution_lane(), [&] {
+    context.prepare_provider_values("foreign", 0, stage, 25);
+  });
   EXPECT_EQ(launches.size(), 1U);
   sim.stage_auxiliary_input(input, std::vector<double>(cells, 4.0));
   context.prepare_provider_values("read-input", 0, stage, 26);
@@ -941,8 +966,8 @@ TEST(ProgramContextContract, PreparedLinearSolveAcceptsDistinctCongruentWorkspac
   EXPECT_TRUE(workspace_lane.congruent_with(context.prepared_execution_lane()));
   expect_collective_exception<std::invalid_argument>(context.prepared_execution_lane(), [&] {
     (void)context.solve_prepared_linear(
-                   problem, legacy_workspace, solution, rhs,
-                   KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4});
+        problem, legacy_workspace, solution, rhs,
+        KrylovControls<kTestDimension>{method, Real(1e-12), Real(0), 4});
   });
   sim.begin_step_transaction();
   SolveOutcome outcome = context.solve_prepared_linear(
@@ -1339,6 +1364,8 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
   add_gas_block(sim, "b");
   sim.set_program_block_map({0, 1});
   NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("primary");
+  ctx.begin_step(Real(.01));
 
   NativeField& first = ctx.state(0);
   NativeField& second = ctx.state(1);
@@ -1347,21 +1374,23 @@ TEST(ProgramContextContract, CommitManySnapshotsSourcesThatAreAlsoTargets) {
 
   ctx.commit_many({{&first, &second}, {&second, &first}});
 
-  ASSERT_GT(all_reduce_sum(static_cast<long>(first.local_size()), ctx.prepared_execution_lane()), 0);
-  ASSERT_GT(all_reduce_sum(static_cast<long>(second.local_size()), ctx.prepared_execution_lane()), 0);
+  ASSERT_GT(all_reduce_sum(static_cast<long>(first.local_size()), ctx.prepared_execution_lane()),
+            0);
+  ASSERT_GT(all_reduce_sum(static_cast<long>(second.local_size()), ctx.prepared_execution_lane()),
+            0);
   expect_owned_first_value(first, Real(7));
   expect_owned_first_value(second, Real(3));
 
   NativeField different_ghost_width =
       native_field_like(first, first.ncomp(), enlarged_ghosts(first, 1));
   different_ghost_width.set_val(Real(13));
-  expect_collective_exception<std::invalid_argument>(ctx.prepared_execution_lane(),
-      [&] { ctx.commit_many({{&first, &different_ghost_width}}); });
+  expect_collective_exception<std::invalid_argument>(
+      ctx.prepared_execution_lane(), [&] { ctx.commit_many({{&first, &different_ghost_width}}); });
   expect_owned_first_value(first, Real(7));
 
   NativeField wrong_components = native_field_like(first, first.ncomp() + 1, first.ghosts());
-  expect_collective_exception<std::invalid_argument>(ctx.prepared_execution_lane(),
-      [&] { ctx.commit_many({{&first, &wrong_components}}); });
+  expect_collective_exception<std::invalid_argument>(
+      ctx.prepared_execution_lane(), [&] { ctx.commit_many({{&first, &wrong_components}}); });
   expect_owned_first_value(first, Real(7));
   expect_owned_first_value(second, Real(3));
 }
@@ -1454,7 +1483,7 @@ TEST(ProgramContextContract, HistoryDeclaredScalarHaloDoesNotInheritWiderStateSt
   ctx.begin_step(.01);
   ctx.register_history("full_state", 1);
   ctx.register_history("potential", 1, 1, 0, "potential-state", "scalar-field",
-                         "clock.scalar-history", "none", 1);
+                       "clock.scalar-history", "none", 1);
   {
     auto& state_ring = ctx.history_zero_start("full_state", 0);
     auto& scalar_ring = ctx.history_zero_start("potential", 0, 1);
@@ -1473,7 +1502,8 @@ TEST(ProgramContextContract, HistoryDeclaredScalarHaloDoesNotInheritWiderStateSt
   wider_phi.set_val(Real(10));
   EXPECT_ANY_THROW(ctx.store_history("potential", wider_phi));
   EXPECT_THROW(ctx.register_history("potential", 1, 1, 0, "potential-state", "scalar-field",
-                                   "clock.scalar-history", "none", 2), std::runtime_error);
+                                    "clock.scalar-history", "none", 2),
+               std::runtime_error);
   EXPECT_THROW(ctx.register_history("invalid", 1, 1, 0, "state", "space", "clock", "none", -2),
                std::invalid_argument);
   EXPECT_EQ(difference_sum_sq_all(ctx.history("potential", 0, 1), phi), Real(0));
@@ -1539,8 +1569,10 @@ TEST(ProgramContextContract,
   NativeField stage_b = native_field_like(live_b, live_b.ncomp(), live_b.ghosts());
   stage_a.set_val(Real(7));
   stage_b.set_val(Real(9));
-  ASSERT_GT(all_reduce_sum(static_cast<long>(live_a.local_size()), ctx.prepared_execution_lane()), 0);
-  ASSERT_GT(all_reduce_sum(static_cast<long>(live_b.local_size()), ctx.prepared_execution_lane()), 0);
+  ASSERT_GT(all_reduce_sum(static_cast<long>(live_a.local_size()), ctx.prepared_execution_lane()),
+            0);
+  ASSERT_GT(all_reduce_sum(static_cast<long>(live_b.local_size()), ctx.prepared_execution_lane()),
+            0);
   const Real* const live_a_storage = first_owned_storage(live_a);
   const Real* const live_b_storage = first_owned_storage(live_b);
 
@@ -1717,6 +1749,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
 // The remaining host-validatable seams return sane, consistent results.
 TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   ensure_kokkos();
+  comm_init();
   const int n = 16;
   const double dt = 1e-3;
   NativeSystemConfig cfg = native_config(n);
@@ -1840,7 +1873,7 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
       << "an undeclared projection capability must fail loud";
 
   // history register/store/read/rotate through the context seam.
-  ctx.register_history("h", 2);
+  ctx.register_history("h", 2, -1, 0, "gas.U", "cell.conservative", "clock.macro", "dense.linear");
   NativeField hv = ctx.rhs_scratch_like(U);
   hv.set_val(Real(3));
   ctx.store_history("h", hv);
@@ -2397,58 +2430,261 @@ TEST(ProgramContextContract, AcceptedExchangeIdentityRetainsMathematicalMultipli
   EXPECT_EQ(snapshot.records().size(), 1u);
 }
 
+TEST(ProgramContextContract, ScopedFaceExpressionsRetainRepeatedEvaluationsAndAliasedWeights) {
+  using Expressions = runtime::program::FieldExchangeExpressions;
+  Expressions expressions;
+  expressions.configure({4, 1, 16, 65536});
+  int first = 0, second = 0, accumulator = 0;
+  runtime::multiblock::BoundaryEvaluationPoint point;
+  point.clock = "macro";
+  point.dt = .1;
+  point.physical_time = 0.;
+  const auto capture = [&](const void* output, double flux) {
+    runtime::program::ExchangeRecord record{
+        "authored.face", "face.0", "same.ssa", "cell:0/axis:0/side:0", 1, 1., flux, 1., 1, 0, 0, 0};
+    const auto sequence = expressions.next_capture_sequence();
+    Expressions::qualify_capture(record, point, sequence);
+    EXPECT_EQ(record.source_evaluation_identity, "same.ssa");
+    expressions.capture(output, {record}, sequence, record.evaluation_context, 0, {{0}});
+  };
+  capture(&first, 2.);
+  capture(&second, 3.);
+  expressions.copy(&accumulator, &first);
+  const std::array<const void*, 2> inputs{&accumulator, &second};
+  expressions.prepare_write(&accumulator, inputs);
+  const std::array<Expressions::WeightedField, 2> terms{{{&accumulator, .25}, {&second, .75}}};
+  expressions.combine(&accumulator, terms);
+  expressions.finish_write(&accumulator);
+  auto publication = expressions.prepare_publication(0, &accumulator);
+  ASSERT_EQ(publication.records.size(), 2u);
+  runtime::program::AcceptedExchangeLedger ledger;
+  for (const auto& record : publication.records)
+    ledger.stage(record);
+  EXPECT_DOUBLE_EQ(publication.records[0].integrated_amount(), .5);
+  EXPECT_DOUBLE_EQ(publication.records[1].integrated_amount(), 2.25);
+  EXPECT_NE(publication.records[0].evaluation_context, publication.records[1].evaluation_context);
+  expressions.commit_publication(std::move(publication));
+  EXPECT_TRUE(expressions.prepare_publication(0, &accumulator).records.empty());
+  // Resetting a rejected attempt releases both the issued ordinals and deduplication state.
+  expressions.clear();
+  EXPECT_EQ(expressions.next_capture_sequence(), 1u);
+  EXPECT_TRUE(expressions.prepare_publication(0, &accumulator).records.empty());
+}
+
+TEST(ProgramContextContract, ScopedFaceExpressionsRejectUnprovedTransformsAndRevokedStorage) {
+  using Expressions = runtime::program::FieldExchangeExpressions;
+  Expressions expressions;
+  expressions.configure({4, 1, 16, 65536});
+  int source = 0, transformed = 0, packed = 0;
+  runtime::program::ExchangeRecord record{
+      "authored.face", "face.0", "eval", "cell:0/axis:0/side:0", 1, 1., 2., .1, 1, 0, 0, 0};
+  expressions.capture(&source, {record}, expressions.next_capture_sequence(), "source.1", 0, {{0}});
+  const std::array<const void*, 1> input{&source};
+  expressions.prepare_write(&transformed, input);
+  expressions.finish_write(&transformed);
+  EXPECT_THROW(expressions.prepare_publication(0, &transformed), std::invalid_argument);
+  auto lifetime = std::make_shared<int>(1);
+  expressions.copy_retained(&packed, &source, lifetime);
+  EXPECT_EQ(expressions.prepare_publication(0, &packed).records.size(), 1u);
+  lifetime.reset();
+  EXPECT_TRUE(expressions.prepare_publication(0, &packed).records.empty());
+  // A fresh RHS evaluation resets its numerical input's face lineage deliberately.
+  expressions.prepare_write(&transformed, {});
+  expressions.finish_write(&transformed);
+  EXPECT_TRUE(expressions.prepare_publication(0, &transformed).records.empty());
+  const std::array<Expressions::WeightedField, 1> invalid{
+      {{&source, std::numeric_limits<double>::infinity()}}};
+  EXPECT_THROW(expressions.combine(&packed, invalid), std::invalid_argument);
+}
+
 TEST(ProgramContextContract, ExtendedAcceptedMetadataWithoutIntegralHasExactRoundtrip) {
-  using Ledger=runtime::program::AcceptedExchangeLedger;
+  using Ledger = runtime::program::AcceptedExchangeLedger;
   Ledger ledger;
-  const auto default_image=ledger.checkpoint();
-  const auto empty_extended=ledger.checkpoint(true);
-  ASSERT_EQ(default_image.size(),16u);
-  ASSERT_EQ(empty_extended.size(),32u);
-  EXPECT_EQ(default_image[7],'1');
-  EXPECT_EQ(empty_extended[7],'2');
-  auto restored=Ledger::from_checkpoint(empty_extended);
-  EXPECT_EQ(restored.checkpoint(),default_image);
-  EXPECT_EQ(restored.checkpoint(true),empty_extended);
-  runtime::program::ExchangeRecord record{"mesh","volume","geometry","endpoint",1,1.,.04,.2,1};
-  record.source_evaluation_identity="mesh-original-evaluation";
+  const auto default_image = ledger.checkpoint();
+  const auto empty_extended = ledger.checkpoint(true);
+  ASSERT_EQ(default_image.size(), 16u);
+  ASSERT_EQ(empty_extended.size(), 32u);
+  EXPECT_EQ(default_image[7], '1');
+  EXPECT_EQ(empty_extended[7], '2');
+  auto restored = Ledger::from_checkpoint(empty_extended);
+  EXPECT_EQ(restored.checkpoint(), default_image);
+  EXPECT_EQ(restored.checkpoint(true), empty_extended);
+  runtime::program::ExchangeRecord record{"mesh", "volume", "geometry", "endpoint", 1,
+                                          1.,     .04,      .2,         1};
+  record.source_evaluation_identity = "mesh-original-evaluation";
   ledger.stage(record);
-  const auto qualified=ledger.checkpoint(true);
-  restored=Ledger::from_checkpoint(qualified);
-  ASSERT_EQ(restored.records().size(),1u);
-  EXPECT_EQ(restored.records()[0].source_evaluation_identity,record.source_evaluation_identity);
-  EXPECT_EQ(restored.checkpoint(true),qualified);
-  auto oversized=empty_extended;
-  for(unsigned byte=16;byte<24;++byte) oversized[byte]=255;
-  EXPECT_THROW(Ledger::from_checkpoint(oversized),std::invalid_argument);
-  auto truncated=empty_extended;
+  const auto qualified = ledger.checkpoint(true);
+  restored = Ledger::from_checkpoint(qualified);
+  ASSERT_EQ(restored.records().size(), 1u);
+  EXPECT_EQ(restored.records()[0].source_evaluation_identity, record.source_evaluation_identity);
+  EXPECT_EQ(restored.checkpoint(true), qualified);
+  auto oversized = empty_extended;
+  for (unsigned byte = 16; byte < 24; ++byte)
+    oversized[byte] = 255;
+  EXPECT_THROW(Ledger::from_checkpoint(oversized), std::invalid_argument);
+  auto truncated = empty_extended;
   truncated.resize(24);
-  EXPECT_THROW(Ledger::from_checkpoint(truncated),std::invalid_argument);
-  auto invented_consumption=empty_extended;
-  invented_consumption.back()=1;
-  EXPECT_THROW(Ledger::from_checkpoint(invented_consumption),std::invalid_argument);
+  EXPECT_THROW(Ledger::from_checkpoint(truncated), std::invalid_argument);
+  auto invented_consumption = empty_extended;
+  invented_consumption.back() = 1;
+  EXPECT_THROW(Ledger::from_checkpoint(invented_consumption), std::invalid_argument);
   // Keep a valid pending exterior metadata positive before inventing its exact
   // consumption key. Without an IntegralState no writer can consume this key.
   Ledger pending;
-  record.trace_axis=0; record.trace_side=1; record.trace_component=0; record.exterior_trace=true;
+  record.trace_axis = 0;
+  record.trace_side = 1;
+  record.trace_component = 0;
+  record.exterior_trace = true;
   pending.stage(record);
-  const auto pending_image=pending.checkpoint(true);
-  ASSERT_NO_THROW(restored=Ledger::from_checkpoint(pending_image));
-  ASSERT_EQ(restored.checkpoint(true),pending_image);
-  auto synthetic_consumption=pending_image;
-  synthetic_consumption[synthetic_consumption.size()-8]=1;
-  const auto append_text=[&](const std::string& value) {
-    for(unsigned byte=0;byte<8;++byte)
-      synthetic_consumption.push_back(static_cast<std::uint8_t>(value.size()>>(8*byte)));
-    synthetic_consumption.insert(synthetic_consumption.end(),value.begin(),value.end());
+  const auto pending_image = pending.checkpoint(true);
+  ASSERT_NO_THROW(restored = Ledger::from_checkpoint(pending_image));
+  ASSERT_EQ(restored.checkpoint(true), pending_image);
+  auto synthetic_consumption = pending_image;
+  synthetic_consumption[synthetic_consumption.size() - 8] = 1;
+  const auto append_text = [&](const std::string& value) {
+    for (unsigned byte = 0; byte < 8; ++byte)
+      synthetic_consumption.push_back(static_cast<std::uint8_t>(value.size() >> (8 * byte)));
+    synthetic_consumption.insert(synthetic_consumption.end(), value.begin(), value.end());
   };
-  append_text(record.operation_identity); append_text(record.occurrence_identity);
-  append_text(record.evaluation_context); append_text(record.quadrature_identity);
+  append_text(record.operation_identity);
+  append_text(record.occurrence_identity);
+  append_text(record.evaluation_context);
+  append_text(record.quadrature_identity);
   try {
     (void)Ledger::from_checkpoint(synthetic_consumption);
-    FAIL()<<"synthetic consumption without an integral was accepted";
-  } catch(const std::invalid_argument& error) {
-    EXPECT_STREQ(error.what(),"accepted exchange checkpoint consumes trace without an integral state");
+    FAIL() << "synthetic consumption without an integral was accepted";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(),
+                 "accepted exchange checkpoint consumes trace without an integral state");
   }
+}
+
+TEST(ProgramContextContract, RetainedFaceSourcesSurviveAttemptResetWithNewDeliveryIdentity) {
+  using E = runtime::program::FieldExchangeExpressions;
+  const E::Limits limits{3, 1, 16, 65536};
+  E expressions;
+  expressions.configure(limits);
+  int old = 0, current = 0, result = 0;
+  runtime::multiblock::BoundaryEvaluationPoint point;
+  point.clock = "macro";
+  point.dt = .1;
+  point.physical_time = 0.;
+  const auto capture = [&](int* value, double flux) {
+    runtime::program::ExchangeRecord record{
+        "flux", "incidence", "rhs", "cell:0/axis:0/side:0", 1, 1., flux, 1., 1, 0, 0, 0};
+    const auto ordinal = expressions.next_capture_sequence();
+    E::qualify_capture(record, point, ordinal);
+    expressions.capture(value, {record}, ordinal, record.evaluation_context, 0, {{0}});
+  };
+  capture(&old, 2.);
+  auto retained = expressions.expression(&old);
+  const std::array<E::Ref, 3> roots{retained, retained, {}};
+  const auto bytes = E::encode_roots(roots, limits);
+  auto restored = E::decode_roots(bytes, limits);
+  ASSERT_EQ(restored.size(), 3u);
+  EXPECT_EQ(restored[0], restored[1]);
+  EXPECT_FALSE(restored[2]);
+  EXPECT_EQ(E::encode_roots(restored, limits), bytes);
+  EXPECT_GT(E::decoded_storage_bound(bytes, limits), bytes.size());
+  expressions.clear();
+  expressions.restore(&old, restored[0]);
+  point.tick = 1;
+  point.physical_time = .1;
+  capture(&current, 3.);
+  const std::array<E::WeightedField, 2> coefficients{{{&current, .15}, {&old, -.05}}};
+  expressions.combine(&result, coefficients);
+  auto delivered = expressions.prepare_publication(0, &result, &point);
+  ASSERT_EQ(delivered.records.size(), 2u);
+  EXPECT_NE(delivered.records[1].evaluation_context,
+            retained->terms[0].basis->records[0].evaluation_context);
+  EXPECT_EQ(delivered.records[1].source_evaluation_identity, "rhs");
+  EXPECT_NEAR(delivered.records[0].integrated_amount() + delivered.records[1].integrated_amount(),
+              .35, 1.e-16);
+  const auto before = E::encode_roots(std::array{expressions.expression(&result)}, limits);
+  const E::Limits insufficient{1, 1, 16, 65536};
+  EXPECT_THROW(E::encode_roots(std::array{expressions.expression(&result)}, insufficient),
+               std::length_error);
+  EXPECT_EQ(E::encode_roots(std::array{expressions.expression(&result)}, limits), before);
+  auto tampered = bytes;
+  tampered.push_back(0);
+  EXPECT_THROW(E::decode_roots(tampered, limits), std::invalid_argument);
+}
+
+TEST(ProgramContextContract, RetainedHistoryFaceMigrationPreservesAliasesAndExactSamples) {
+  using namespace runtime::program;
+  using E = FieldExchangeExpressions;
+  using Ledger = AcceptedExchangeLedger;
+  HistoryManager<kTestDimension> manager;
+  manager.exchange_limits = {3, 1, 16, 131072};
+  manager.histories["rhs"].resize(2);
+  manager.slot_dt["rhs"] = {.1, .1};
+  manager.slot_sample["rhs"] = {
+      HistorySampleIdentity{0, std::bit_cast<std::uint64_t>(.1), 1, HistorySampleKind::Publication},
+      HistorySampleIdentity{0, std::bit_cast<std::uint64_t>(.1), 1,
+                            HistorySampleKind::Publication}};
+  auto basis = std::make_shared<E::Basis>();
+  basis->identity = "source";
+  basis->program_block = 0;
+  Ledger mailbox;
+  for (int cell = 0; cell < 4; ++cell) {
+    ExchangeRecord record{
+        "flux", "incidence", "source",  "cell:" + std::to_string(cell) + "/axis:0/side:0",
+        1,      1.,          1. + cell, .1,
+        1,      0,           0,         0};
+    record.source_evaluation_identity = "rhs";
+    basis->records.push_back(record);
+    basis->cells.push_back({cell});
+    mailbox.stage(record);
+  }
+  E::canonicalize_basis(*basis);
+  auto expression = std::make_shared<const E::Expression>(E::Expression{true, {{basis, 1.}}});
+  manager.slot_exchanges["rhs"] = {expression, expression};
+  auto original = checkpoint_uniform_history_exchanges(mailbox.checkpoint(true), manager);
+  std::vector<std::vector<std::uint8_t>> storage{original};
+  for (int target_size : {2, 3, 1}) {
+    std::vector<std::span<const std::uint8_t>> views;
+    for (const auto& source : storage)
+      views.push_back(source);
+    std::vector<std::vector<std::uint8_t>> next;
+    for (int rank = 0; rank < target_size; ++rank)
+      next.push_back(rematerialize_uniform_history_exchanges<kTestDimension>(
+          views, manager,
+          [&](int block, const E::Cell& cell) {
+            EXPECT_EQ(block, 0);
+            return cell[0] % target_size == rank;
+          },
+          rank, target_size));
+    storage.swap(next);
+    std::size_t records = 0;
+    for (const auto& image : storage) {
+      const auto decoded = read_uniform_history_exchanges(image, manager, true);
+      EXPECT_EQ(decoded.samples.at("rhs"), manager.slot_sample.at("rhs"));
+      EXPECT_EQ(decoded.histories.at("rhs")[0]->terms[0].basis,
+                decoded.histories.at("rhs")[1]->terms[0].basis);
+      records += Ledger::from_checkpoint(decoded.exchanges).records().size();
+    }
+    EXPECT_EQ(records, 4u);
+  }
+  EXPECT_EQ(storage.front(), original);
+  const auto saved = manager.slot_exchanges;
+  auto altered = manager;
+  altered.slot_sample.at("rhs")[0].ordinal = 2;
+  EXPECT_THROW(read_uniform_history_exchanges(original, altered, true), std::invalid_argument);
+  EXPECT_EQ(manager.slot_exchanges, saved);
+  // The bounded preflight must reject a forged cell count before constructing the larger ledger.
+  auto bytes = E::encode_roots(std::array{expression}, manager.exchange_limits);
+  field_exchange_detail::Reader root{bytes};
+  (void)root.word();
+  (void)root.word();
+  auto row_bytes = root.blob();
+  field_exchange_detail::Reader row{row_bytes};
+  (void)row.blob();
+  (void)row.word();
+  (void)row.blob();
+  const auto cell_count_offset = static_cast<std::size_t>(row_bytes.data() - bytes.data()) + row.at;
+  std::fill_n(bytes.begin() + cell_count_offset, 8, std::uint8_t{0});
+  EXPECT_THROW(E::decoded_storage_bound(bytes, manager.exchange_limits), std::invalid_argument);
+  EXPECT_THROW(E::decode_roots(bytes, manager.exchange_limits), std::invalid_argument);
 }
 
 TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBackParent) {
@@ -2474,8 +2710,7 @@ TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBack
     if (my_rank() == 0) {
       for (const auto& [evaluation, weight] :
            std::vector<std::pair<std::string, double>>{{"stage/a", 0.1}, {"stage/b", 0.2}}) {
-        Record record{"flux", "balance/occurrence", evaluation, "face/x+", -1, 1.0,
-                      2.0, weight, 1};
+        Record record{"flux", "balance/occurrence", evaluation, "face/x+", -1, 1.0, 2.0, weight, 1};
         record.trace_axis = 0;
         record.trace_side = 1;
         record.trace_component = 0;
@@ -2490,13 +2725,13 @@ TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBack
   sim.begin_step_transaction();
   sim.begin_nested_step_transaction();
   stage(sim);
-  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
-      "program/integral/q", selector("stage/a"), -1.0), 0.9);
-  EXPECT_THROW(sim.consume_program_external_trace(
-      "program/integral/q", selector("stage/a"), -1.0), std::invalid_argument);
+  EXPECT_DOUBLE_EQ(
+      sim.consume_program_external_trace("program/integral/q", selector("stage/a"), -1.0), 0.9);
+  EXPECT_THROW(sim.consume_program_external_trace("program/integral/q", selector("stage/a"), -1.0),
+               std::invalid_argument);
   EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 0.9);
-  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
-      "program/integral/q", selector("stage/b"), -1.0), 1.3);
+  EXPECT_DOUBLE_EQ(
+      sim.consume_program_external_trace("program/integral/q", selector("stage/b"), -1.0), 1.3);
   sim.commit_step_transaction();
   sim.finalize_step_transaction();
   EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 1.3);
@@ -2508,10 +2743,10 @@ TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBack
 
   sim.begin_step_transaction();
   stage(sim);
-  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
-      "program/integral/q", selector("stage/a"), -1.0), 0.9);
-  EXPECT_DOUBLE_EQ(sim.consume_program_external_trace(
-      "program/integral/q", selector("stage/b"), -1.0), 1.3);
+  EXPECT_DOUBLE_EQ(
+      sim.consume_program_external_trace("program/integral/q", selector("stage/a"), -1.0), 0.9);
+  EXPECT_DOUBLE_EQ(
+      sim.consume_program_external_trace("program/integral/q", selector("stage/b"), -1.0), 1.3);
   sim.commit_step_transaction();
   sim.finalize_step_transaction();
   EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 1.3);
@@ -2523,8 +2758,8 @@ TEST(ProgramContextContract, IntegralStateConsumesExactAcceptedTraceAndRollsBack
   sim.commit_restart_transaction();
   sim.finalize_restart_transaction();
   EXPECT_DOUBLE_EQ(sim.program_integral("program/integral/q"), 1.3);
-  EXPECT_THROW(sim.consume_program_external_trace(
-      "program/integral/q", selector("stage/a"), -1.0), std::invalid_argument);
+  EXPECT_THROW(sim.consume_program_external_trace("program/integral/q", selector("stage/a"), -1.0),
+               std::invalid_argument);
 }
 
 TEST(ProgramContextContract, IntegralStateCollectiveRefusalsPreserveValueAndConsumption) {
@@ -2556,12 +2791,14 @@ TEST(ProgramContextContract, IntegralStateCollectiveRefusalsPreserveValueAndCons
   const Ledger::TraceSelection selector{"flux", "occurrence", 0, 1, 0, "stage"};
   sim.begin_step_transaction();
   std::vector<Record> records;
-  if (my_rank() == 0) records.push_back(face());
+  if (my_rank() == 0)
+    records.push_back(face());
   sim.stage_program_exchanges(records);
   const auto staged = sim.checkpoint_program_exchanges();
   if (n_ranks() > 1) {
     auto divergent = selector;
-    if (my_rank() != 0) divergent.side = 0;
+    if (my_rank() != 0)
+      divergent.side = 0;
     EXPECT_THROW(sim.consume_program_external_trace("q", divergent, -0.5), std::runtime_error);
     EXPECT_EQ(sim.checkpoint_program_exchanges(), staged);
   }
@@ -2778,14 +3015,14 @@ TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageCo
   context->begin_step(.01);
   // This Program-readable ring checks its own scalar storage halo. Output-only history
   // read prohibitions are covered by the scalar-output-history suite.
-  context->register_history("scalar_observation", 1, 1, 0,
-      "scalar-history:scalar_observation", "scalar-field", "clock.topology", "none", 0);
+  context->register_history("scalar_observation", 1, 1, 0, "scalar-history:scalar_observation",
+                            "scalar-field", "clock.topology", "none", 0);
   {
     const auto& slot = context->history_zero_start("scalar_observation", 0, 1, 0);
     for (int axis = 0; axis < kTestDimension; ++axis)
       EXPECT_EQ(slot.ghosts()[axis], 0);
   }
-  auto value = context->alloc_scalar_field(1, 0);
+  auto& value = context->scalar_scratch(940102, 0, context->state(0), 1, 0);
   value.set_val(Real(5));
   EXPECT_NO_THROW(context->store_history("scalar_observation", value, 0));
   const auto& stored = context->history("scalar_observation", 0, 0);
@@ -2797,9 +3034,8 @@ TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageCo
   const std::array<std::vector<double>, 2> before_values{
       system->history_global("scalar_observation", 0, 0),
       system->history_global("scalar_observation", 0, 1)};
-  const std::array<double, 2> before_dts{
-      system->history_slot_dt("scalar_observation", 0, 0),
-      system->history_slot_dt("scalar_observation", 0, 1)};
+  const std::array<double, 2> before_dts{system->history_slot_dt("scalar_observation", 0, 0),
+                                         system->history_slot_dt("scalar_observation", 0, 1)};
   const auto require_unchanged = [&] {
     EXPECT_EQ(context->history("scalar_observation", 0, 0).ghosts(), value.ghosts());
     EXPECT_EQ(system->history_initialized("scalar_observation", 0), before_initialized);
@@ -2810,20 +3046,29 @@ TEST(ProgramContextContract, AmrHistoryDeclaredScalarHaloPreservesExactStorageCo
       EXPECT_EQ(system->history_slot_dt("scalar_observation", 0, slot), before_dts[slot]);
     }
   };
-  auto wider = context->alloc_scalar_field(1, 1);
+  // Equal shape and values do not give an unissued clone producer authority.
+  auto unissued = value;
+  expect_collective_exception<std::invalid_argument>(context->prepared_execution_lane(), [&] {
+    context->store_history("scalar_observation", unissued, 0);
+  });
+  require_unchanged();
+  auto& wider = context->scalar_scratch(940103, 0, context->state(0), 1, 1);
   wider.set_val(Real(6));
-  expect_collective_exception<std::invalid_argument>(context->prepared_execution_lane(),
-      [&] { context->store_history("scalar_observation", wider, 0); });
+  expect_collective_exception<std::invalid_argument>(context->prepared_execution_lane(), [&] {
+    context->store_history("scalar_observation", wider, 0);
+  });
   require_unchanged();
   // One participant's wrong halo must refuse every participant before any ring slot moves.
   const auto& lane = context->prepared_execution_lane();
-  auto rank_local_mismatch = context->alloc_scalar_field(1, lane.rank() == 0 ? 1 : 0);
+  auto& rank_local_mismatch =
+      context->scalar_scratch(940104, 0, context->state(0), 1, lane.rank() == 0 ? 1 : 0);
   rank_local_mismatch.set_val(Real(11));
-  expect_collective_exception<std::invalid_argument>(lane,
-      [&] { context->store_history("scalar_observation", rank_local_mismatch, 0); });
+  expect_collective_exception<std::invalid_argument>(
+      lane, [&] { context->store_history("scalar_observation", rank_local_mismatch, 0); });
   require_unchanged();
-  EXPECT_THROW(context->register_history("scalar_observation", 1, 1, 0,
-      "scalar-history:scalar_observation", "scalar-field", "clock.topology", "none", 1),
+  EXPECT_THROW(
+      context->register_history("scalar_observation", 1, 1, 0, "scalar-history:scalar_observation",
+                                "scalar-field", "clock.topology", "none", 1),
       std::runtime_error);
   require_unchanged();
 }
@@ -3125,3 +3370,647 @@ TEST(ProgramContextContract,
 }
 
 #include "solve_outcome_attempt_review.inc"
+
+TEST(ProgramContextContract, DomainIssuersChangeOnlyAfterSuccessfulRestartFinalization) {
+  namespace distributed = runtime::program::distributed;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.restart-domain-lifetime");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(8));
+  sim.set_program_block_map({0});
+  NativeProgramContext context(&sim);  // stack ownership must remain supported
+  context.install([](double) {});
+  auto finite = context.continuation_new_domain(1, 4, 91);
+  const auto ordinal = finite->version;
+  std::vector<std::int64_t> offsets(n_ranks() + 1, 1);
+  offsets.front() = 0;
+  auto domain = context.distributed_registry().issue(91, 4, offsets);
+  sim.begin_step_transaction();
+  sim.rollback_step_transaction();
+  EXPECT_TRUE(finite->visible());
+  EXPECT_TRUE(domain->visible());
+  sim.begin_restart_transaction();
+  sim.rollback_restart_transaction();
+  EXPECT_TRUE(finite->visible());
+  EXPECT_TRUE(domain->visible());
+  sim.begin_restart_transaction();
+  sim.commit_restart_transaction();
+  // Commit remains rollbackable while external restart publication may still fail.
+  EXPECT_TRUE(finite->visible());
+  EXPECT_TRUE(domain->visible());
+  sim.finalize_restart_transaction();
+  EXPECT_FALSE(finite->visible());
+  EXPECT_FALSE(domain->visible());
+  EXPECT_THROW(finite->require_live(), std::logic_error);
+  EXPECT_THROW(domain->size(), distributed::Failure);
+  auto fresh = context.continuation_new_domain(1, 4, 91);
+  EXPECT_TRUE(fresh->visible());
+  EXPECT_GT(fresh->version, ordinal);
+  auto new_domain = context.distributed_registry().issue(91, 4, offsets);
+  EXPECT_TRUE(new_domain->visible());
+  // Calling finalize without an active, committed restart has no revocation effect.
+  sim.finalize_restart_transaction();
+  EXPECT_TRUE(fresh->visible());
+  EXPECT_TRUE(new_domain->visible());
+}
+
+TEST(ProgramContextContract, StructuralFieldOwnsCompleteStorageAndExactFaceExpression) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.owned-structural-field");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(8));
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.structural");
+  ctx.begin_step(.125);
+  ctx.set_stage_time(0, 1);
+  ctx.configure_stencil_expressions(4, 4, 256);
+  std::shared_ptr<NativeField> owned;
+  {
+    auto source = ctx.scratch_state_like(ctx.state(0));
+    source.set_val(Real(7));
+    ctx.capture_stencil_exchanges(source, 0, "source.structural", [&](auto&& append) {
+      for (std::size_t local = 0; local < source.local_size(); ++local) {
+        std::string incidence = "cell";
+        for (int axis = 0; axis < kTestDimension; ++axis)
+          incidence += ":" + std::to_string(source.box(local).lo[axis]);
+        incidence += "/axis:0/side:0";
+        runtime::program::ExchangeRecord record{"authored.face",
+                                                "face." + std::to_string(source.box(local).lo[0]),
+                                                "source.structural",
+                                                incidence,
+                                                1,
+                                                1.,
+                                                2.,
+                                                1.,
+                                                1,
+                                                0,
+                                                0,
+                                                0};
+        append(std::move(record), source.box(local).lo);
+      }
+    });
+    owned = ctx.own_structural_field(source);
+    ASSERT_TRUE(owned);
+    EXPECT_FALSE(owned->shares_storage_with(source));
+    EXPECT_EQ(owned->ghosts(), source.ghosts());
+    EXPECT_EQ(owned->ncomp(), source.ncomp());
+    source.set_val(Real(99));
+    expect_owned_first_value(*owned, Real(7));
+  }
+  // The source and its lexical frame are gone. Copies retain both complete
+  // storage and the same immutable evaluated face bases, not a re-evaluation.
+  auto second = ctx.own_structural_field(*owned);
+  auto probe = std::make_shared<NativeField>(*second);
+  const auto expression = ctx.continuation_bind_field_provenance(*second, *probe, probe);
+  ASSERT_TRUE(expression);
+  ASSERT_EQ(expression->terms.size(), 1u);
+  const auto basis = expression->terms.front().basis;
+  owned.reset();
+  expect_owned_first_value(*second, Real(7));
+  const auto again = ctx.continuation_bind_field_provenance(*second, *probe, probe);
+  ASSERT_TRUE(again);
+  EXPECT_EQ(again->terms.front().basis, basis);
+  EXPECT_EQ(again->terms.front().coefficient, expression->terms.front().coefficient);
+  EXPECT_EQ(again->terms.front().basis->records.size(), second->local_size());
+}
+
+TEST(ProgramContextContract, StructuralFieldCannotEraseForeignSupportDuringRestore) {
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.owned-structural-support");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  auto source = ctx.scratch_state_like(ctx.state(0));
+  source.set_val(Real(5));
+  auto target = ctx.own_structural_field(source);
+  auto support = std::make_shared<const runtime::program::ContinuationFieldSupport>(
+      runtime::program::ContinuationFieldSupport{"other.program", "fine.accepted", 0, 1, 0, 0, {}});
+  const runtime::program::ContinuationFieldMetadata metadata{{}, support};
+  EXPECT_THROW(ctx.continuation_bind_field_provenance(source, *target, target, metadata),
+               std::invalid_argument);
+  expect_owned_first_value(*target, Real(5));
+}
+
+TEST(ProgramContextContract, DiffusiveRateCaptureDefersExactFacesUntilAffineDelivery) {
+  using namespace runtime::program;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.retained-diffusive-rate");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.diffusive-capture");
+  ctx.begin_step(.125);
+  ctx.set_stage_time(0, 1);
+  ctx.configure_stencil_expressions(2, 2, 256);
+  auto q = ctx.scratch_state_like(ctx.state(0));
+  auto rate = ctx.scratch_state_like(q);
+  auto accepted = ctx.scratch_state_like(q);
+  for (std::size_t local = 0; local < q.local_size(); ++local) {
+    const auto values = q.fab(local).view();
+    for_each_cell(q.box(local), [=] POPS_HD(const Index<kTestDimension>& cell) {
+      Real value = 1;
+      for (int axis = 0; axis < kTestDimension; ++axis)
+        value += Real(.01) * (axis + 1) * cell[axis] * cell[axis];
+      for (int component = 0; component < kNcomp; ++component)
+        values(cell, component) = (component + 1) * value;
+    });
+  }
+  PreparedDiffusion<kTestDimension, kNcomp> prepared(ctx, q, {});
+  EXPECT_THROW(prepared.capture_exchanges(ctx, rate, 0, "diffusion", "rate", "eval", 1.),
+               std::logic_error);
+  EXPECT_TRUE(ctx.runtime_state().accepted_exchanges_.records().empty());
+  const auto law = [&q](std::size_t local) {
+    const auto values = std::as_const(q).fab(local).view();
+    return [=] POPS_HD(const Index<kTestDimension>& cell) {
+      std::array<Real, kNcomp*(kTestDimension + 2)> law{};
+      for (int component = 0; component < kNcomp; ++component) {
+        const int offset = component * (kTestDimension + 2);
+        law[offset] = values(cell, component);
+        for (int axis = 0; axis < kTestDimension; ++axis)
+          law[offset + 1 + axis] = Real(.1);
+        law[offset + 1 + kTestDimension] = Real(1);
+      }
+      return law;
+    };
+  };
+  prepared.apply(q, rate, law);
+  prepared.capture_exchanges(ctx, rate, 0, "diffusion", "rate", "eval", 1.);
+  // A completed nonlinear solve's rate is not yet an accepted delivery.
+  EXPECT_TRUE(ctx.runtime_state().accepted_exchanges_.records().empty());
+  auto retained = ctx.own_structural_field(rate);
+  auto probe = std::make_shared<NativeField>(*retained);
+  const auto expression = ctx.continuation_bind_field_provenance(*retained, *probe, probe);
+  ASSERT_TRUE(expression);
+  ASSERT_EQ(expression->terms.size(), 1u);
+  const auto& basis = *expression->terms[0].basis;
+  std::size_t owned_cells = 0;
+  for (std::size_t local = 0; local < q.local_size(); ++local)
+    owned_cells += q.box(local).numPts();
+  ASSERT_EQ(basis.records.size(), owned_cells * 2 * kTestDimension * kNcomp);
+  ASSERT_EQ(basis.cells.size(), basis.records.size());
+  bool nonzero = false;
+  for (std::size_t index = 0; index < basis.records.size(); ++index) {
+    const auto& record = basis.records[index];
+    const auto& cell = basis.cells[index];
+    const int axis = record.trace_axis;
+    const int center = static_cast<int>(cell[axis]);
+    const int neighbor = (center + (record.trace_side == 0 ? -1 : 1) + 4) % 4;
+    const Real difference = Real(.01) * (axis + 1) * (record.trace_component + 1) *
+                            (neighbor * neighbor - center * center);
+    const Real expected = Real(.4) * (record.trace_side == 0 ? -difference : difference);
+    EXPECT_NEAR(record.numerical_flux, expected, 2e-14);
+    EXPECT_DOUBLE_EQ(record.temporal_weight, 1.);
+    EXPECT_DOUBLE_EQ(record.face_measure, std::pow(.25, kTestDimension - 1));
+    EXPECT_FALSE(record.exterior_trace);
+    nonzero |= std::abs(record.numerical_flux) > Real(1e-6);
+  }
+  EXPECT_GT(all_reduce_sum(nonzero ? 1L : 0L, ctx.prepared_execution_lane()), 0);
+  // Reusing the mutable provider must not change the retained rate's face basis.
+  q.set_val(19);
+  prepared.apply(q, rate, law);
+  ctx.lincomb(accepted, 1., ctx.state(0), .03125, *retained);
+  EXPECT_TRUE(ctx.runtime_state().accepted_exchanges_.records().empty());
+  ctx.publish_stencil_exchanges(0, accepted);
+  const auto& delivered = ctx.runtime_state().accepted_exchanges_.records();
+  ASSERT_EQ(delivered.size(), basis.records.size());
+  for (std::size_t index = 0; index < delivered.size(); ++index) {
+    EXPECT_EQ(delivered[index].quadrature_identity, basis.records[index].quadrature_identity);
+    EXPECT_DOUBLE_EQ(delivered[index].numerical_flux, basis.records[index].numerical_flux);
+    EXPECT_DOUBLE_EQ(delivered[index].temporal_weight, .03125);
+  }
+  const auto delivered_count = delivered.size();
+  ctx.publish_stencil_exchanges(0, accepted);
+  EXPECT_EQ(ctx.runtime_state().accepted_exchanges_.records().size(), delivered_count);
+}
+
+TEST(ProgramContextContract, IndependentFieldProviderRequiresItsExactLiveAllocation) {
+  using namespace runtime::program;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.independent-fields");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(4));
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  // The fixture installs a genuine immutable continuation schema identity. Generated
+  // artifacts use their installed Program hash instead of this direct native context.
+  ContinuationType type(ContinuationKind::Field);
+  type.field_owner = -1;
+  type.field_provider = "problem-a/unknown-u";
+  type.field_components = 1;
+  type.scientific_contract = "test.independent-field.value";
+  ContinuationConfiguration configuration;
+  configuration.type = ContinuationType(ContinuationKind::Product);
+  configuration.type.children = {ContinuationType(ContinuationKind::Float64),
+                                 ContinuationType(ContinuationKind::Int64), type};
+  configuration.type.names = {"time", "step", "field"};
+  configuration.identity = "test.independent-fields.schema";
+  configuration.byte_capacity = 1 << 20;
+  configuration.time_path = {0};
+  configuration.step_path = {1};
+  ctx.runtime_state().continuation_.configure(configuration);
+  ctx.configure_continuation_field_provider("problem-a/unknown-u", 1, 1);
+  ctx.configure_continuation_field_provider("problem-b/unknown-u", 1, 1);
+  EXPECT_THROW(ctx.allocate_continuation_field_observation("problem-a/unknown-u", 1 << 20),
+               std::logic_error);
+  ctx.begin_step(0.125);
+  auto replaced_fab = ctx.allocate_continuation_field_observation(type.field_provider, 1 << 20);
+  for (std::size_t local = 0; local < replaced_fab->local_size(); ++local) {
+    auto& fab = replaced_fab->fab(local);
+    const auto box = fab.box();
+    const auto ghosts = fab.ghosts();
+    const auto components = fab.ncomp();
+    const auto allocation = fab.storage();
+    EXPECT_GE(allocation.use_count(), 3);  // Fab + issued registry + this observer
+    fab = NativeField::fab_type{};
+    EXPECT_GE(allocation.use_count(), 2);  // registry pins the old allocation after replacement
+    fab = NativeField::fab_type(box, components, ghosts);
+    EXPECT_NE(fab.storage().data(), allocation.data());
+  }
+  // An empty rank still has a distinct whole-storage incarnation.
+  if (replaced_fab->local_size() == 0)
+    *replaced_fab = NativeField(*replaced_fab);
+  EXPECT_ANY_THROW(ctx.seal_continuation_field_observation(type.field_provider, 93, replaced_fab));
+  auto field = ctx.allocate_continuation_field_observation(type.field_provider, 1 << 20);
+  field->set_val(Real(7));
+  EXPECT_THROW(ctx.continuation_preflight_field(*field, type), std::invalid_argument);
+  ctx.seal_continuation_field_observation(type.field_provider, 3, field);
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(*field, type));
+  EXPECT_ANY_THROW(ctx.seal_continuation_field_observation(type.field_provider, 3, field));
+  auto other_type = type;
+  other_type.field_provider = "problem-b/unknown-u";
+  EXPECT_THROW(ctx.continuation_preflight_field(*field, other_type), std::invalid_argument);
+  NativeField lookalike(*field);
+  EXPECT_THROW(ctx.continuation_preflight_field(lookalike, type), std::invalid_argument);
+  auto owned = ctx.own_structural_field(*field);
+  const auto metadata = ctx.continuation_bind_field_provenance(*field, *owned, owned, type);
+  EXPECT_EQ(metadata.support->field_provider, type.field_provider);
+  EXPECT_EQ(metadata.support->program_owner, -1);
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(*owned, type, metadata));
+  field.reset();
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(*owned, type, metadata));
+  expect_owned_first_value(*owned, Real(7));
+  EXPECT_THROW(ctx.continuation_preflight_field(lookalike, type, metadata), std::invalid_argument);
+  EXPECT_ANY_THROW(ctx.continuation_local_phase(
+      [&] { return ctx.allocate_continuation_field_observation(type.field_provider, 0); },
+      "independent Field observation byte budget"));
+  EXPECT_THROW(ctx.configure_continuation_field_provider(type.field_provider, 2, 1),
+               std::invalid_argument);
+  using Value = ContinuationValue<kTestDimension>;
+  auto accepted = Value::field(*owned, -1, type.scientific_contract, metadata.expression,
+                               metadata.support, type.field_provider);
+  ctx.continuation_bind_field_provenance(*owned, accepted->field(), accepted->field_storage_owner(),
+                                         metadata);
+  auto& store = ctx.runtime_state().continuation_;
+  // The actual Store, rather than the support metadata, reauthorizes accepted
+  // storage when its producer attempt is revoked by the next step.
+  const auto prototypes = [&](const ContinuationType&,
+                              const ContinuationFieldSupport::Ref&) -> const NativeField& {
+    return *owned;
+  };
+  store.publish(store.prepare(Value::product({Value::real(0), Value::integer(0), accepted}),
+                              prototypes, true));
+  auto unreplaced = ctx.own_structural_field(*owned);
+  *owned = NativeField(lookalike);
+  EXPECT_THROW(ctx.continuation_preflight_field(*owned, type), std::invalid_argument);
+  ctx.begin_step(0.0625);
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(accepted->field(), type, metadata));
+  expect_owned_first_value(accepted->field(), Real(7));
+  EXPECT_THROW(ctx.continuation_preflight_field(*unreplaced, type), std::invalid_argument);
+  store.publish(store.prepare(
+      Value::product({Value::real(.0625), Value::integer(1),
+                      Value::field(*unreplaced, -1, type.scientific_contract, metadata.expression,
+                                   metadata.support, type.field_provider)}),
+      prototypes));
+  EXPECT_THROW(ctx.continuation_preflight_field(accepted->field(), type), std::invalid_argument);
+}
+TEST(RuntimeParameterCarrier, OwnedViewsExecuteBeyond32AndKeepOldIncarnations) {
+  constexpr int count = 129;
+  std::vector<double> values(count);
+  for (int i = 0; i < count; ++i)
+    values[i] = double(i + 1) / 8;
+  auto params = RuntimeParams::from_host(values, RuntimeParams::checked_storage_bytes(count));
+  const auto old = params;
+  std::fill(values.begin(), values.end(), -4.0);
+  params = RuntimeParams::from_host(values, RuntimeParams::checked_storage_bytes(count));
+  values.clear();  // neither carrier borrows the input storage
+  Kokkos::View<Real*> output("runtime_parameter_output", count);
+  Kokkos::parallel_for(
+      "runtime_parameter_129", Kokkos::RangePolicy<>(0, count),
+      KOKKOS_LAMBDA(int i) { output(i) = old.get(i) + params.get(i); });
+  auto host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, output);
+  for (int i = 0; i < count; ++i) {
+    EXPECT_EQ(old.get(i), Real(i + 1) / 8);
+    EXPECT_EQ(params.get(i), Real(-4));
+    EXPECT_EQ(host(i), Real(i + 1) / 8 - 4);
+  }
+}
+
+TEST(RuntimeParameterCarrier, BudgetAndDeclarationFailBeforeReplacingLiveValues) {
+  const std::vector<double> values(65, 3.0);
+  const auto required = RuntimeParams::checked_storage_bytes(values.size());
+  auto current = RuntimeParams::from_host(values, required);
+  EXPECT_THROW(current = RuntimeParams::from_host(values, required - 1), std::length_error);
+  EXPECT_EQ(current.count, 65);
+  for (int i = 0; i < current.count; ++i)
+    EXPECT_EQ(current.get(i), Real(3));
+  auto declared = RuntimeParams::declaration(65);
+  EXPECT_FALSE(declared.bound());
+  EXPECT_THROW(declared.require_bound(), std::invalid_argument);
+  EXPECT_THROW(RuntimeParams::declaration(-1), std::invalid_argument);
+  EXPECT_THROW(
+      RuntimeParams::checked_storage_bytes(std::size_t(std::numeric_limits<int>::max()) + 1),
+      std::length_error);
+  EXPECT_EQ(RuntimeParams::from_host({}, 0).storage_bytes(), 0U);
+}
+
+TEST(RuntimeParameterCarrier, ProgramReplacementIsCollectiveAndSnapshotsAreImmutable) {
+  NativeSystemConfig config;
+  for (int axis = 0; axis < pops::kNativeDimension; ++axis)
+    config.shape[axis] = 4;
+  config.runtime_parameter_byte_capacity = RuntimeParams::checked_storage_bytes(65);
+  NativeSystem system(config);
+  install_execution_lane(system, "runtime-params-65");
+  const auto& lane = system.prepared_boundary_execution_lane();
+  system.seed_program_params(0, std::vector<double>(65, 2.0));
+  const auto accepted = system.program_params(0);
+  system.set_program_params(0, std::vector<double>(65, 7.0));
+  for (int i = 0; i < 65; ++i) {
+    EXPECT_EQ(accepted.get(i), Real(2));
+    EXPECT_EQ(system.program_params(0).get(i), Real(7));
+  }
+  expect_collective_exception<std::runtime_error>(lane, [&] {
+    system.set_program_params(0, std::vector<double>(lane.rank() == 0 ? 64 : 65, 8.0));
+  });
+  for (int i = 0; i < 65; ++i)
+    EXPECT_EQ(system.program_params(0).get(i), Real(7));
+  expect_collective_exception<std::length_error>(
+      lane, [&] { system.seed_program_params(1, std::vector<double>(66, 9.0)); });
+  EXPECT_EQ(system.program_params(1).count, 0);
+}
+
+namespace {
+struct RuntimeParameterCaptureAggregate {
+  using pops_device_capture_members = DeviceCaptureMembers<RuntimeParams>;
+  RuntimeParams params;
+};
+struct UnownedHostCapture {
+  std::vector<Real> values;
+};
+struct DeclaredHostCapture {
+  using pops_device_capture_members = DeviceCaptureMembers<std::vector<Real>>;
+  std::vector<Real> values;
+};
+static_assert(device_capture_v<RuntimeParams>);
+static_assert(!device_capture_v<Kokkos::View<Real*, Kokkos::MemoryTraits<Kokkos::Unmanaged>>>);
+static_assert(device_capture_v<RuntimeParameterCaptureAggregate>);
+static_assert(!device_capture_v<UnownedHostCapture>);
+static_assert(!device_capture_v<DeclaredHostCapture>);
+}  // namespace
+
+TEST(ProgramContextContract, IndependentProviderCheckpointUsesItsInstalledCatalogueAcrossRestart) {
+  using namespace runtime::program;
+  using Value = ContinuationValue<kTestDimension>;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.independent-field-checkpoint");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(4));
+  NativeProgramContext ctx(&sim);
+  ContinuationType type(ContinuationKind::Field);
+  type.field_owner = -1;
+  type.field_provider = "checkpoint.problem/unknown-u";
+  type.field_components = 1;
+  type.scientific_contract = "test.independent-checkpoint.value";
+  ContinuationConfiguration configuration;
+  configuration.type = ContinuationType(ContinuationKind::Product);
+  configuration.type.names = {"time", "step", "field"};
+  configuration.type.children = {ContinuationType(ContinuationKind::Float64),
+                                 ContinuationType(ContinuationKind::Int64), type};
+  configuration.identity = "test.independent-checkpoint.schema";
+  configuration.byte_capacity = 1 << 20;
+  configuration.time_path = {0};
+  configuration.step_path = {1};
+  ctx.runtime_state().continuation_.configure(configuration);
+  sim.set_program_block_map({0});
+  ctx.configure_continuation_field_provider(type.field_provider, 1, 1);
+  ctx.install([](double) {});
+  sim.set_program_block_map({0});
+  ctx.begin_step(0.125);
+  auto observed = ctx.allocate_continuation_field_observation(type.field_provider, 1 << 20);
+  observed->set_val(Real(7));
+  ctx.seal_continuation_field_observation(type.field_provider, 3, observed);
+  auto retained = ctx.own_structural_field(*observed);
+  const auto metadata =
+      ctx.continuation_bind_field_provenance(*observed, *retained, retained, type);
+  auto field = Value::field(*retained, -1, type.scientific_contract, metadata.expression,
+                            metadata.support, type.field_provider);
+  const auto initial_prototype = [&](const ContinuationType&,
+                                     const ContinuationFieldSupport::Ref&) -> const NativeField& {
+    return *retained;
+  };
+  auto& store = ctx.runtime_state().continuation_;
+  store.publish(store.prepare(Value::product({Value::real(0), Value::integer(0), field}),
+                              initial_prototype, true));
+  const auto bytes = sim.checkpoint_continuation_image();
+  EXPECT_NO_THROW(sim.validate_checkpoint_continuation_image(bytes, 0, 0));
+  auto changed = bytes;
+  const auto key = configuration.identity;
+  auto at = std::search(changed.begin(), changed.end(), key.begin(), key.end());
+  ASSERT_NE(at, changed.end());
+  *at ^= 1;
+  EXPECT_ANY_THROW(sim.validate_checkpoint_continuation_image(changed, 0, 0));
+  EXPECT_EQ(sim.checkpoint_continuation_image(), bytes);
+  sim.begin_restart_transaction();
+  EXPECT_ANY_THROW(sim.restore_checkpoint_continuation_image(changed));
+  sim.rollback_restart_transaction();
+  EXPECT_EQ(sim.checkpoint_continuation_image(), bytes);
+  sim.begin_restart_transaction();
+  sim.restore_checkpoint_continuation_image(bytes);
+  sim.commit_restart_transaction();
+  sim.finalize_restart_transaction();
+  EXPECT_EQ(sim.checkpoint_continuation_image(), bytes);
+  ctx.begin_step(0.0625);
+  const auto restored = store.read()->members()[2];
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(restored->field(), type));
+  expect_owned_first_value(restored->field(), Real(7));
+  // A failed replacement restores the exact prior catalogue; a successful raw
+  // replacement cannot inherit independent provider authority from its predecessor.
+  auto install = ctx.runtime_state().capture_artifact_step_install();
+  ctx.runtime_state().install_unverified_step([](double) {});
+  EXPECT_FALSE(bool(ctx.runtime_state().continuation_checkpoint_prototypes_));
+  EXPECT_ANY_THROW(sim.checkpoint_continuation_image());
+  ctx.runtime_state().install_continuation_checkpoint_prototypes(
+      [](const ContinuationType&, const ContinuationFieldSupport::Ref&) -> const NativeField& {
+        throw std::invalid_argument("replacement catalogue has no provider from the old Program");
+      });
+  EXPECT_ANY_THROW(sim.checkpoint_continuation_image());
+  ctx.runtime_state().rollback_artifact_step_install(std::move(install));
+  EXPECT_EQ(sim.checkpoint_continuation_image(), bytes);
+}
+
+TEST(ProgramContextContract, HistoryFieldMetadataCodecRetainsAliasesAndRejectsMalformedTables) {
+  using namespace runtime::program;
+  const HistoryFieldMetadataBudget budget{65536, 65536};
+  const auto support = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"program", "original-point", 0, 0, 0, 0, {}});
+  const auto obligation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"closed-python-transform", "exact-original-coordinate"});
+  const HistoryFieldMetadataTable fields{{"raw", {{support, obligation}, {support, obligation}}}};
+  const std::map<std::string, std::vector<int>> rings{{"raw", {0, 0}}};
+  const auto bytes = encode_history_field_metadata(fields, budget);
+  const auto decoded = decode_history_field_metadata(bytes, rings, budget);
+  EXPECT_EQ(decoded.at("raw")[0].support, decoded.at("raw")[1].support);
+  EXPECT_EQ(decoded.at("raw")[0].representation, decoded.at("raw")[1].representation);
+  EXPECT_EQ(*decoded.at("raw")[0].support, *support);
+  EXPECT_EQ(*decoded.at("raw")[0].representation, *obligation);
+  EXPECT_EQ(encode_history_field_metadata(decoded, budget), bytes);
+  auto trailing = bytes;
+  trailing.push_back(0);
+  EXPECT_THROW(decode_history_field_metadata(trailing, rings, budget), std::invalid_argument);
+  auto orphan = bytes;
+  // Last two slots are four indices; dropping both references leaves undeclared table roots.
+  std::fill(orphan.end() - 32, orphan.end(), 0);
+  EXPECT_THROW(decode_history_field_metadata(orphan, rings, budget), std::invalid_argument);
+  const HistoryFieldMetadataBudget no_scratch{budget.retained_bytes, bytes.size()};
+  EXPECT_THROW(decode_history_field_metadata(bytes, rings, no_scratch), std::length_error);
+  const HistoryFieldMetadataBudget no_retention{1, budget.workspace_bytes};
+  EXPECT_THROW(decode_history_field_metadata(bytes, rings, no_retention), std::length_error);
+  EXPECT_THROW(encode_history_field_metadata(fields, no_retention), std::length_error);
+}
+
+TEST(ProgramContextContract, HistoryFieldMetadataRotatesAndRollsBackWithTheNumericalImage) {
+  using namespace runtime::program;
+  HistoryManager<kTestDimension> manager;
+  manager.histories["raw"].resize(3);
+  manager.slot_fields["raw"].resize(3);
+  manager.store_pending["raw"] = true;
+  manager.fill_count["raw"] = 1;
+  for (int slot = 0; slot < 3; ++slot) {
+    manager.slot_fields["raw"][slot].support = std::make_shared<const ContinuationFieldSupport>(
+        ContinuationFieldSupport{"program", "point-" + std::to_string(slot), 0, 0, 0, 0, {}});
+    manager.slot_fields["raw"][slot].representation =
+        std::make_shared<const FieldRepresentationObligation>(
+            FieldRepresentationObligation{"transform", "raw-" + std::to_string(slot)});
+  }
+  const auto accepted = manager;
+  const auto initial_fields = manager.slot_fields;
+  manager.rotate();
+  EXPECT_EQ(manager.slot_fields["raw"][1].representation,
+            initial_fields.at("raw")[0].representation);
+  EXPECT_EQ(manager.slot_fields["raw"][2].representation,
+            initial_fields.at("raw")[1].representation);
+  manager = accepted;
+  for (int slot = 0; slot < 3; ++slot) {
+    EXPECT_EQ(manager.slot_fields["raw"][slot].support, initial_fields.at("raw")[slot].support);
+    EXPECT_EQ(manager.slot_fields["raw"][slot].representation,
+              initial_fields.at("raw")[slot].representation);
+  }
+}
+
+TEST(ProgramContextContract, NoFluxHistoryFieldCheckpointMigratesWithoutChangingItsOrigin) {
+  using namespace runtime::program;
+  HistoryManager<kTestDimension> manager;
+  manager.field_metadata_budget = {65536, 262144};
+  manager.histories["raw"].resize(2);
+  manager.slot_dt["raw"] = {.1, .1};
+  const HistorySampleIdentity sample{0, std::bit_cast<std::uint64_t>(.1), 1,
+                                     HistorySampleKind::Publication};
+  manager.slot_sample["raw"] = {sample, sample};
+  const auto support = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"program", "exact-past-point", 0, 0, 0, 0, {}});
+  const auto obligation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"closed-transform", "original-untransformed-values"});
+  manager.slot_fields["raw"] = {{support, obligation}, {support, obligation}};
+  AcceptedExchangeLedger empty;
+  const auto original = checkpoint_uniform_history_exchanges(empty.checkpoint(true), manager);
+  EXPECT_EQ(std::string(original.begin(), original.begin() + 8), "POPSEX06");
+  std::vector<std::vector<std::uint8_t>> shards{original};
+  for (int target_size : {2, 3, 1}) {
+    std::vector<std::span<const std::uint8_t>> views;
+    for (const auto& shard : shards)
+      views.emplace_back(shard);
+    std::vector<std::vector<std::uint8_t>> next;
+    for (int rank = 0; rank < target_size; ++rank) {
+      next.push_back(rematerialize_uniform_history_exchanges<kTestDimension>(
+          views, manager, [](int, const FieldExchangeExpressions::Cell&) { return true; }, rank,
+          target_size));
+      const auto decoded = read_uniform_history_exchanges(next.back(), manager, true);
+      EXPECT_TRUE(decoded.histories.empty());
+      EXPECT_EQ(*decoded.fields.at("raw")[0].support, *support);
+      EXPECT_EQ(*decoded.fields.at("raw")[0].representation, *obligation);
+      EXPECT_EQ(decoded.fields.at("raw")[0].representation,
+                decoded.fields.at("raw")[1].representation);
+    }
+    shards.swap(next);
+  }
+  EXPECT_EQ(shards.front(), original);
+  auto wrong = manager;
+  wrong.slot_sample.at("raw")[0].ordinal += 1;
+  EXPECT_THROW(read_uniform_history_exchanges(original, wrong, true), std::invalid_argument);
+  wrong = manager;
+  wrong.field_metadata_budget = {};
+  EXPECT_THROW(read_uniform_history_exchanges(original, wrong), std::invalid_argument);
+}
+
+TEST(ProgramContextContract, HistoryInterpolationPreservesEndpointsAndRejectsRawMixing) {
+  using namespace runtime::program;
+  const HistoryFieldMetadataBudget budget{65536, 65536};
+  const auto support = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"program", "original-point", 0, 0, 2, 3, {}});
+  const auto obligation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"Q-closed", "q-original"});
+  const HistoryFieldMetadata raw{support, obligation};
+  const auto endpoint = history_field_detail::interpolated_metadata(raw, raw, 0, .1, budget);
+  EXPECT_EQ(endpoint.support, support);
+  EXPECT_EQ(endpoint.representation, obligation);
+  const auto other_endpoint = history_field_detail::interpolated_metadata({}, raw, 1, .2, budget);
+  EXPECT_EQ(other_endpoint.representation, obligation);
+  EXPECT_THROW(history_field_detail::interpolated_metadata(raw, raw, .5, .15, budget),
+               std::invalid_argument);
+  const HistoryFieldMetadata physical{support, {}};
+  const auto midpoint =
+      history_field_detail::interpolated_metadata(physical, physical, .5, .15, budget);
+  EXPECT_FALSE(midpoint.representation);
+  ASSERT_TRUE(midpoint.support);
+  EXPECT_NE(midpoint.support->origin_point, support->origin_point);
+  EXPECT_EQ(midpoint.support->program_identity, support->program_identity);
+  EXPECT_EQ(midpoint.support->producer_level, support->producer_level);
+  EXPECT_EQ(midpoint.support->topology_epoch, support->topology_epoch);
+  EXPECT_NE(history_field_detail::interpolated_metadata(physical, physical, .25, .125, budget)
+                .support->origin_point,
+            midpoint.support->origin_point);
+  EXPECT_THROW(history_field_detail::interpolated_metadata(physical, {}, .5, .15, budget),
+               std::invalid_argument);
+  const std::array<double, 3> nonuniform{.04, .08, .12};
+  const auto bracket = history_field_detail::linear_bracket(-1, .24, nonuniform, 2);
+  EXPECT_TRUE(bracket.endpoint());
+  EXPECT_EQ(bracket.selected(), 1U);
+  const auto interior = history_field_detail::linear_bracket(-1.5, .24, nonuniform, 2);
+  EXPECT_FALSE(interior.endpoint());
+  EXPECT_EQ(interior.older, 2U);
+  EXPECT_EQ(interior.newer, 1U);
+  EXPECT_DOUBLE_EQ(interior.target_time, .1);
+  const auto older_physical = history_field_detail::reconstructed_metadata(
+      std::array{physical}, "remap/target-slot-0", 1, 4, 5, budget);
+  const auto newer_physical = history_field_detail::reconstructed_metadata(
+      std::array{physical}, "remap/target-slot-1", 1, 4, 5, budget);
+  EXPECT_NE(older_physical.support->origin_point, newer_physical.support->origin_point);
+  EXPECT_EQ(older_physical.support->producer_level, 1);
+  EXPECT_THROW(history_field_detail::reconstructed_metadata(
+                   std::array{raw}, "nonidentity-spatial-remap", 1, 4, 5, budget),
+               std::invalid_argument);
+}

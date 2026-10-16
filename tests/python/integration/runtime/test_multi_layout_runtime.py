@@ -475,9 +475,15 @@ def test_uniform_amr_and_multi_layout_share_complete_runtime_instance_contract(
             range(len(runtime.block_names()))
         )
         assert all(
-            type(row["count"]) is int and 0 <= row["count"] <= row["limit"]
+            type(row["count"]) is int and row["count"] >= 0 and row["limit"] is None
             for row in program["params"]
         )
+        storage = instance["runtime_parameter_storage"]
+        assert storage["contract"] == "pops.runtime-parameter-storage@1"
+        assert storage["scope"] == "immutable_incarnation"
+        assert storage["initial_storage_bytes"] == sum(storage["carrier_bytes"].values())
+        assert storage["byte_capacity"] >= max(storage["carrier_bytes"].values(), default=0)
+        assert all(type(n) is int and n >= 0 for n in storage["cardinalities"].values())
         assert inspection["program"]["installed"] == program["installed"]
         assert inspection["program"]["hash"] == program["program_hash"]
         for name in (

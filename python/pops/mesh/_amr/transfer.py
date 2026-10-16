@@ -394,6 +394,7 @@ class AMRTransfer:
     ) -> tuple[int, tuple[int, ...]] | None:
         from pops.numerics.diffusion import Diffusion, TensorDiffusion
         from pops.numerics.named_flux import NamedCenteredDivergence
+        from pops.numerics.program_realization import ProgramRealization
         from pops.numerics.plan import ResolvedRateMethod
         from pops.model.signatures import Signature
         from pops.model.spaces import RateSpace, StateSpace
@@ -405,6 +406,10 @@ class AMRTransfer:
                 variables = getattr(method, "variables", None)
                 state = getattr(variables, "options", {}).get("state") \
                     if variables is not None else None
+                if type(method) is ProgramRealization:
+                    # The resolved contribution uses authenticate the state and
+                    # declared stencil storage without a built-in residual.
+                    state = method.target
                 if type(method) is Diffusion or type(method) is TensorDiffusion:
                     state = method.law.state
                     if method.transport is not None:

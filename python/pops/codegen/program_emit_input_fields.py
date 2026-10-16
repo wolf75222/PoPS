@@ -14,10 +14,9 @@ def emit_input_fields(value, var, lines, model, provider_plans, block_index, tar
     if pack is None:
         raise ValueError("input_fields emitter is missing its exact source ProviderPack")
     selected = runtime_input_pack(pack, value.attrs["field"], value.space)
-    if target == "amr_system" and len(selected):
-        raise NotImplementedError(
-            "nonempty input_fields requires Uniform runtime-input publication; "
-            "refined AMR needs a hierarchy-qualified producer")
+    # Both native contexts publish on the exact prepared consumer lane. AMR
+    # additionally authenticates the active level, topology epoch and generation;
+    # its hierarchy owns the declared runtime-input transfer and halo publication.
     # An empty FieldSpace only authenticates this SSA stage. Analytic AuxSpaces
     # have their own exact hierarchy providers and are not runtime input fields.
     binding = provider_plans.bind_pack(

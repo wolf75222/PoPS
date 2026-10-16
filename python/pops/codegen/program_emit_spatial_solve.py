@@ -71,14 +71,18 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
             lines.append("(void)ctx.%s(%d, 0, *%s);" % (allocator, node.id, trial))
     body = ["pops::PureFieldAlgebra::copy(*%s, q);" % trial,
             "auto& %s_iterate = *%s;" % (stem, trial)]
+    from .program_source_map import operation
     for node in value.attrs["residual_block"]:
         if node is value.attrs["iterate"]:
-            continue
-        if node.op == "diffusive_rhs":
-            _emit_diffusive_rhs(
-                node, subvars, body, model_for_node(model, node),
-                variables.get(("program_provider_plans",)), owner, target,
-                prepared_var=preparations[node.id])
+            with operation(node, body, environment=subvars, channel="spatial_residual",
+                           binding_role="lexical_formal"):
+                pass
+        elif node.op == "diffusive_rhs":
+            with operation(node, body, environment=subvars, channel="spatial_residual"):
+                _emit_diffusive_rhs(
+                    node, subvars, body, model_for_node(model, node),
+                    variables.get(("program_provider_plans",)), owner, target,
+                    prepared_var=preparations[node.id])
         else:
             emit_node(node, value.attrs["iterate"], subvars, body, prelude)
     body.append("pops::PureFieldAlgebra::copy(result, %s);" % subvars[value.attrs["residual"].id])
@@ -133,3 +137,5 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
         % (json.dumps(stem + ".finite_difference_jvps"), workspace),
     ]
     variables[value.id] = result
+    from .program_emit_spatial_representation import emit_spatial_representation
+    emit_spatial_representation(program, value, variables, model, lines, block_indices, target)

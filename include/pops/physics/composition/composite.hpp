@@ -14,6 +14,7 @@
 #include <limits>
 #include <string_view>
 #include <type_traits>
+#include <pops/core/foundation/device_capture.hpp>
 
 /// @file
 /// @brief Exact-ranked composition of hyperbolic, source, and elliptic physics bricks.
@@ -227,6 +228,7 @@ struct FluxProviderRequirementAlias<Hyperbolic,
 template <class Hyperbolic, class Source, class Elliptic>
 struct CompositeModel : composite_detail::ConservationLawAliases<Hyperbolic>,
                         composite_detail::FluxProviderRequirementAlias<Hyperbolic> {
+  using pops_device_capture_members = DeviceCaptureMembers<Hyperbolic, Source, Elliptic>;
   static constexpr int dimension = composite_detail::hyperbolic_dimension<Hyperbolic>();
   static_assert(dimension >= 1 && dimension <= 3,
                 "CompositeModel hyperbolic rank must be 1, 2, or 3");

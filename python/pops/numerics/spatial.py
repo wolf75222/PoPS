@@ -309,6 +309,10 @@ class FiniteVolume(Descriptor):
         """Grouped transport owns its native face evaluation; installation supplies storage."""
         return {"ghost_depth": self.ghost_depth} if self.sampling else None
 
+    def boundary_stencil_requirements(self):
+        return {"state": self.variables.options.get("state"),
+                "ghost_depth": self.ghost_depth, "formal_order": self.formal_order}
+
     def runtime_configuration(self) -> dict[str, Any]:
         """Return the exact per-block native method identity, excluding physical ownership.
 

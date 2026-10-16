@@ -74,7 +74,8 @@ struct ExchangeRecord {
       const auto suffix = "/" + std::to_string(source_evaluation_identity.size()) + ":" +
                           source_evaluation_identity;
       if (!evaluation_context.ends_with(suffix))
-        throw std::invalid_argument("external exchange trace conflicts with its runtime evaluation frame");
+        throw std::invalid_argument(
+            "external exchange trace conflicts with its runtime evaluation frame");
     }
   }
 
@@ -116,10 +117,12 @@ class AcceptedExchangeLedger {
 
   void declare_integral(std::string identity, double initial) {
     if (identity.empty() || !std::isfinite(initial))
-      throw std::invalid_argument("integral state requires an exact identity and finite initial value");
-    const auto [it, inserted] = integrals_.try_emplace(std::move(identity), IntegralState{initial, initial});
-    if (!inserted && std::bit_cast<std::uint64_t>(it->second.initial) !=
-                         std::bit_cast<std::uint64_t>(initial))
+      throw std::invalid_argument(
+          "integral state requires an exact identity and finite initial value");
+    const auto [it, inserted] =
+        integrals_.try_emplace(std::move(identity), IntegralState{initial, initial});
+    if (!inserted &&
+        std::bit_cast<std::uint64_t>(it->second.initial) != std::bit_cast<std::uint64_t>(initial))
       throw std::invalid_argument("integral state was redeclared with a different initial value");
   }
 
@@ -131,13 +134,14 @@ class AcceptedExchangeLedger {
   }
 
   bool same_integral_declarations(const AcceptedExchangeLedger& other) const noexcept {
-    if (integrals_.size() != other.integrals_.size()) return false;
+    if (integrals_.size() != other.integrals_.size())
+      return false;
     auto left = integrals_.begin();
     auto right = other.integrals_.begin();
     for (; left != integrals_.end(); ++left, ++right)
-      if (left->first != right->first ||
-          std::bit_cast<std::uint64_t>(left->second.initial) !=
-              std::bit_cast<std::uint64_t>(right->second.initial)) return false;
+      if (left->first != right->first || std::bit_cast<std::uint64_t>(left->second.initial) !=
+                                             std::bit_cast<std::uint64_t>(right->second.initial))
+        return false;
     return true;
   }
 
@@ -247,10 +251,10 @@ class AcceptedExchangeLedger {
 
   /// Canonical accepted mailbox image. It is independent of diagnostic projections and retains
   /// binary64 weights/fluxes exactly; the enclosing restart transaction remains the sole publisher.
-  std::vector<std::uint8_t> checkpoint(bool force_extended=false) const {
+  std::vector<std::uint8_t> checkpoint(bool force_extended = false) const {
     const bool extended = force_extended || !integrals_.empty();
-    std::vector<std::uint8_t> bytes{'P', 'O', 'P', 'S', 'E', 'X', '0',
-                                    static_cast<std::uint8_t>(extended ? '2' : '1')};
+    std::vector<std::uint8_t> bytes{'P', 'O', 'P', 'S',
+                                    'E', 'X', '0', static_cast<std::uint8_t>(extended ? '2' : '1')};
     const auto word = [&](std::uint64_t value) {
       for (unsigned byte = 0; byte < 8; ++byte)
         bytes.push_back(static_cast<std::uint8_t>(value >> (8 * byte)));
@@ -347,9 +351,8 @@ class AcceptedExchangeLedger {
         const auto side = word();
         const auto component = word();
         const auto exterior = word();
-        if (axis > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
-            side > 2 || component > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
-            exterior > 1)
+        if (axis > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) || side > 2 ||
+            component > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) || exterior > 1)
           throw std::invalid_argument("accepted exchange checkpoint has invalid trace support");
         record.trace_axis = static_cast<int>(axis) - 1;
         record.trace_side = static_cast<int>(side) - 1;
@@ -371,18 +374,22 @@ class AcceptedExchangeLedger {
         const double initial = std::bit_cast<double>(word());
         const double value = std::bit_cast<double>(word());
         if (identity.empty() || !std::isfinite(initial) || !std::isfinite(value) ||
-            !candidate.integrals_.emplace(std::move(identity), IntegralState{initial, value}).second)
+            !candidate.integrals_.emplace(std::move(identity), IntegralState{initial, value})
+                 .second)
           throw std::invalid_argument("accepted exchange checkpoint has invalid integral state");
       }
       const auto consumed_count = word();
       if (integral_count == 0 && consumed_count != 0)
-        throw std::invalid_argument("accepted exchange checkpoint consumes trace without an integral state");
+        throw std::invalid_argument(
+            "accepted exchange checkpoint consumes trace without an integral state");
       if (consumed_count > count || consumed_count > (bytes.size() - cursor) / 36)
-        throw std::invalid_argument("accepted exchange checkpoint has invalid consumed trace count");
+        throw std::invalid_argument(
+            "accepted exchange checkpoint has invalid consumed trace count");
       for (std::uint64_t index = 0; index < consumed_count; ++index) {
         Key key{text(), text(), text(), text()};
-        const auto record = std::find_if(candidate.records_.begin(), candidate.records_.end(),
-                                         [&](const ExchangeRecord& item) { return item.key() == key; });
+        const auto record =
+            std::find_if(candidate.records_.begin(), candidate.records_.end(),
+                         [&](const ExchangeRecord& item) { return item.key() == key; });
         if (record == candidate.records_.end() || !record->exterior_trace ||
             !candidate.consumed_.insert(std::move(key)).second)
           throw std::invalid_argument("accepted exchange checkpoint has an unknown consumed trace");
@@ -391,6 +398,39 @@ class AcceptedExchangeLedger {
     if (cursor != bytes.size())
       throw std::invalid_argument("accepted exchange checkpoint has trailing bytes");
     return candidate;
+  }
+
+  /// A mailbox is a distributed set of immutable accepted incidences, not a Field storage
+  /// layout. Repartition its canonical keys while preserving each consumed bit and replicated
+  /// integral value. The caller authenticates source images and reserves bounded workspace.
+  static AcceptedExchangeLedger rematerialize(std::span<const AcceptedExchangeLedger> sources,
+                                              int rank, int size) {
+    if (sources.empty() || size <= 0 || rank < 0 || rank >= size)
+      throw std::invalid_argument("accepted exchange migration has invalid source/target ranks");
+    AcceptedExchangeLedger result;
+    result.integrals_ = sources.front().integrals_;
+    std::map<Key, std::pair<const ExchangeRecord*, bool>> records;
+    const auto integral_contract = sources.front().integral_value_contract();
+    for (const auto& source : sources) {
+      if (source.integral_value_contract() != integral_contract)
+        throw std::invalid_argument(
+            "accepted exchange migration changes replicated integral state");
+      for (const auto& record : source.records_) {
+        record.validate();
+        const auto key = record.key();
+        if (!records.emplace(key, std::pair{&record, source.consumed_.contains(key)}).second)
+          throw std::invalid_argument("accepted exchange migration duplicates source ownership");
+      }
+    }
+    std::size_t ordinal = 0;
+    for (const auto& [key, record] : records) {
+      if (ordinal++ % static_cast<std::size_t>(size) != static_cast<std::size_t>(rank))
+        continue;
+      result.stage(*record.first);
+      if (record.second)
+        result.consumed_.insert(key);
+    }
+    return result;
   }
 
  private:
@@ -402,7 +442,7 @@ class AcceptedExchangeLedger {
 };
 
 inline void require_integral_values_agree_collectively(const AcceptedExchangeLedger& ledger,
-                                                        const ExecutionLane& lane) {
+                                                       const ExecutionLane& lane) {
   std::string payload;
   std::exception_ptr error;
   try {
@@ -411,17 +451,16 @@ inline void require_integral_values_agree_collectively(const AcceptedExchangeLed
     error = std::current_exception();
   }
   if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && error) std::rethrow_exception(error);
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
     throw std::runtime_error("integral state contract preparation failed collectively");
   }
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"accepted-integral-state", payload}}, lane))
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"accepted-integral-state", payload}}, lane))
     throw std::runtime_error("integral state values differ across MPI ranks");
 }
 
-inline void declare_integral_collectively(AcceptedExchangeLedger& ledger,
-                                          std::string_view identity, double initial,
-                                          const ExecutionLane& lane) {
+inline void declare_integral_collectively(AcceptedExchangeLedger& ledger, std::string_view identity,
+                                          double initial, const ExecutionLane& lane) {
   AcceptedExchangeLedger candidate;
   std::exception_ptr error;
   std::string contract_payload;
@@ -435,11 +474,11 @@ inline void declare_integral_collectively(AcceptedExchangeLedger& ledger,
     error = std::current_exception();
   }
   if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && error) std::rethrow_exception(error);
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
     throw std::runtime_error("integral state declaration failed collectively");
   }
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"integral-declaration", contract_payload}}, lane))
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"integral-declaration", contract_payload}}, lane))
     throw std::runtime_error("integral state declaration differs across MPI ranks");
   require_integral_values_agree_collectively(candidate, lane);
   ledger.swap(candidate);
@@ -460,21 +499,25 @@ inline double consume_external_trace_collectively(
     trace = candidate.prepare_trace(selection);
     ExactContractBuilder contract;
     contract.text("pops.integral-trace-consumption.v1")
-        .text(integral_identity).text(selection.operation).text(selection.occurrence)
+        .text(integral_identity)
+        .text(selection.operation)
+        .text(selection.occurrence)
         .text(selection.evaluation)
         .scalar(static_cast<std::int32_t>(selection.axis))
         .scalar(static_cast<std::int32_t>(selection.side))
-        .scalar(static_cast<std::int32_t>(selection.component)).scalar(scale);
+        .scalar(static_cast<std::int32_t>(selection.component))
+        .scalar(scale);
     contract_payload = std::move(contract).release();
   } catch (...) {
     error = std::current_exception();
   }
   if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && error) std::rethrow_exception(error);
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
     throw std::runtime_error("accepted external trace preparation failed collectively");
   }
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{"integral-trace-consumption", contract_payload}}, lane))
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"integral-trace-consumption", contract_payload}},
+                                                lane))
     throw std::runtime_error("accepted external trace selector differs across MPI ranks");
   require_integral_values_agree_collectively(candidate, lane);
   const auto count = all_reduce_sum(static_cast<long>(trace.indices.size()), lane);
@@ -489,7 +532,8 @@ inline double consume_external_trace_collectively(
     error = std::current_exception();
   }
   if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-    if (lane.size() == 1 && error) std::rethrow_exception(error);
+    if (lane.size() == 1 && error)
+      std::rethrow_exception(error);
     throw std::runtime_error("accepted external trace publication failed collectively");
   }
   ledger.swap(candidate);

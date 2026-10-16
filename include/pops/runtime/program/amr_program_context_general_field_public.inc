@@ -95,6 +95,13 @@ std::shared_ptr<hierarchy_tensor_solver_type> retain_hierarchy_field_solver(
   return hierarchy_field_resources_.at(key).solver;
 }
 
+/// Borrow an already checked-out level, or select its exact synchronized envelope.
+/// Composite callbacks may visit every level while the barrier owns the root envelope.
+template <class Function>
+void with_program_attempt_level_or_current(int selected, Function&& function) const {
+  with_current_or_prepared_attempt_level_(selected, std::forward<Function>(function));
+}
+
 /// Build authority by visiting the synchronized attempt envelopes themselves.
 /// Resource-only level selection is insufficient to authenticate a physical point.
 AmrFieldResidualAuthority original_hierarchy_field_authority(
@@ -166,6 +173,8 @@ SolveOutcome solve_hierarchy_field(std::int64_t key, Real relative, Real absolut
       HierarchyTensorSolveControls{relative, absolute, maximum}, prepared_execution_lane());
 }
 
+#include <pops/runtime/program/amr_program_context_field_observation.inc>
+
 using ProgramFieldComponent = typename facade_type::ProgramFieldComponent;
 using ProgramFieldLevel = typename facade_type::ProgramFieldLevel;
 
@@ -176,10 +185,26 @@ void stage_field_components(int evaluation_id, const std::string& identity,
                             std::initializer_list<ProgramFieldComponent> components) const {
   std::exception_ptr error;
   try {
-    auto& levels = staged_field_publications_[identity];
+    auto& publication = staged_field_publications_[identity];
+    auto& levels = publication.levels;
     if (identity.empty() || levels.size() != static_cast<std::size_t>(active_level_))
       throw std::invalid_argument(
           "hierarchy field publication levels must be staged once in order");
+    for (const auto& component : components) {
+      if (!component.values)
+        throw std::invalid_argument("hierarchy field publication has an empty source");
+      require_program_field_access(*component.values);
+      // A CPS segment may end immediately after staging. Retain the exact producer
+      // storage, not just the raw pointer in the publication descriptor.
+      if (const auto snapshot = hierarchy_field_observation_source(*component.values))
+        publication.retained.push_back(snapshot);
+      else if (const auto authority = continuation_field_storage_authority_(*component.values)) {
+        auto owner = authority->lifetime.lock();
+        if (!owner)
+          throw std::invalid_argument("hierarchy field publication lost its immutable source");
+        publication.retained.push_back(std::move(owner));
+      }
+    }
     levels.push_back(
         {boundary_evaluation_point(evaluation_id), std::vector<ProgramFieldComponent>(components)});
   } catch (...) {
@@ -199,8 +224,8 @@ void publish_staged_field_components() const {
     try {
       ExactContractBuilder contract;
       contract.text("pops.hierarchy.field-publications");
-      for (const auto& [identity, levels] : staged_field_publications_)
-        contract.text(identity).scalar(static_cast<std::uint64_t>(levels.size()));
+      for (const auto& [identity, publication] : staged_field_publications_)
+        contract.text(identity).scalar(static_cast<std::uint64_t>(publication.levels.size()));
       bytes = std::move(contract).release();
     } catch (...) {
       error = std::current_exception();
@@ -213,8 +238,8 @@ void publish_staged_field_components() const {
     if (!all_ranks_agree_exact_ordered_byte_pairs({{"hierarchy-field-publications", bytes}},
                                                   prepared_execution_lane()))
       throw std::invalid_argument("hierarchy field publication identities differ between ranks");
-    for (const auto& [identity, levels] : staged_field_publications_)
-      facade_->publish_program_field_components(identity, levels);
+    for (const auto& [identity, publication] : staged_field_publications_)
+      facade_->publish_program_field_components(identity, publication.levels);
     staged_field_publications_.clear();
   } catch (...) {
     staged_field_publications_.clear();
@@ -224,6 +249,11 @@ void publish_staged_field_components() const {
 
 void observe_hierarchy_field_gradient(std::int64_t key, field_type& output, int component) const {
   const auto& input = configured_hierarchy_field_solver_(key).solution(active_level_);
+  observe_hierarchy_field_gradient_(input, output, component);
+}
+
+void observe_hierarchy_field_gradient_(const field_type& input, field_type& output,
+                                       int component) const {
   long invalid = component < 0 || component >= input.ncomp() || output.ncomp() != Dim ||
                  output.layout() != input.layout() ||
                  output.distribution() != input.distribution() ||

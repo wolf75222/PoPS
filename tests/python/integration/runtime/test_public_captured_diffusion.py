@@ -73,10 +73,12 @@ def capture(world, runtime, cells, width, *, step, first_solution=None):
             assert durations == (DT, DT)
             previous = slots[1] if step == 1 else first_solution[index]
             assert slots[0].tobytes() == previous.tobytes()
-            header = b"POPSHID1"+struct.pack("<Q", len(name))+name.encode()+struct.pack("<qQ", -1, depth)
+            magic = sample[:8]
+            assert magic in (b"POPSHID1", b"POPSHID2")
+            header = magic+struct.pack("<Q", len(name))+name.encode()+struct.pack("<qQ", -1, depth)
             expected_sample = header+b"".join(struct.pack("<QQQQ", 2,
                 int.from_bytes(struct.pack("<d", start), "little"),
-                int.from_bytes(struct.pack("<d", DT), "little"), 1)
+                int.from_bytes(struct.pack("<d", DT), "little"), 1)+(b"\0"*32 if magic==b"POPSHID2" else b"")
                 for start in (0., (step-1)*DT))
             assert sample == expected_sample
             fields.append(slots[1])

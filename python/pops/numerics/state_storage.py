@@ -53,6 +53,10 @@ class StateStorage(Descriptor):
         """Pointwise Program rates can share storage with a native transport operator."""
         return {"ghost_depth": self.ghost_depth}
 
+    def boundary_stencil_requirements(self) -> None:
+        """Local source storage does not require a transport boundary stencil."""
+        return None
+
     def runtime_configuration(self) -> dict[str, Any]:
         return self.to_data()
 

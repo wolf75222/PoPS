@@ -83,12 +83,11 @@ struct Model : test_fan_li15::Kernel {
     Real raw[15];
     for (int component = 0; component < 15; ++component)
       raw[component] = state[component];
-    return test_fan_li15::Kernel::admissibility(raw) ==
-           pops::PathStatus::Success;
+    return test_fan_li15::Kernel::admissibility(raw) == pops::PathStatus::Success;
   }
   POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
     return path_admissible(state) ? pops::nd::StateConversionStatus::Success
-                                 : pops::nd::StateConversionStatus::NonPositivePressure;
+                                  : pops::nd::StateConversionStatus::NonPositivePressure;
   }
   POPS_HD pops::nd::StateConversion<State> recover(const State& state) const {
     return {state, admissibility(state)};
@@ -101,8 +100,8 @@ struct Model : test_fan_li15::Kernel {
     Real raw[15];
     for (int component = 0; component < 15; ++component)
       raw[component] = state[component];
-    const auto result = test_fan_li15::flux(
-        raw, Axis == 0 ? Real(1) : Real(0), Axis == 1 ? Real(1) : Real(0));
+    const auto result =
+        test_fan_li15::flux(raw, Axis == 0 ? Real(1) : Real(0), Axis == 1 ? Real(1) : Real(0));
     State flux{};
     for (int component = 0; component < 15; ++component)
       flux[component] = result.flux.values[component];
@@ -113,8 +112,8 @@ struct Model : test_fan_li15::Kernel {
     Real raw[15];
     for (int component = 0; component < 15; ++component)
       raw[component] = state[component];
-    const auto result = test_fan_li15::path_integral(
-        raw, raw, Axis == 0 ? Real(1) : Real(0), Axis == 1 ? Real(1) : Real(0));
+    const auto result = test_fan_li15::path_integral(raw, raw, Axis == 0 ? Real(1) : Real(0),
+                                                     Axis == 1 ? Real(1) : Real(0));
     return result.succeeded() ? result.speed_bound : std::numeric_limits<Real>::quiet_NaN();
   }
   POPS_HD State source(const State&, const pops::ProviderValues<0>&) const { return {}; }
@@ -132,10 +131,8 @@ Raw accepted_state(int level) {
   return level == 0 ? gaussian(1, 0, 0) : gaussian(Real(1.125), Real(0.125), 0);
 }
 Raw trace_state(int level, bool hot = false) {
-  Raw result = gaussian(level == 0 ? Real(1) : Real(1.25),
-                        level == 0 ? Real(0.25) : Real(-0.5),
-                        level == 0 ? Real(-0.125) : Real(0.25),
-                        hot ? Real(1e8) : Real(1));
+  Raw result = gaussian(level == 0 ? Real(1) : Real(1.25), level == 0 ? Real(0.25) : Real(-0.5),
+                        level == 0 ? Real(-0.125) : Real(0.25), hot ? Real(1e8) : Real(1));
   // A finite third raw moment changes the nonconservative fourth-order residual while leaving
   // the strict rho/Theta domain unchanged. This makes an equal/opposite NCP ledger observable.
   result[3] += level == 0 ? Real(0.125) : Real(-0.25);
@@ -195,8 +192,8 @@ void expect_cells(const Field& field, Expected expected, bool active_coarse_only
           continue;
         const Raw reference = expected(i, j);
         for (int component = 0; component < 15; ++component) {
-          const auto offset = static_cast<std::size_t>(component * grown.numPts() +
-              i - grown.lo[0] + (j - grown.lo[1]) * grown.length(0));
+          const auto offset = static_cast<std::size_t>(
+              component * grown.numPts() + i - grown.lo[0] + (j - grown.lo[1]) * grown.length(0));
           EXPECT_NEAR(host(offset), reference[component],
                       Real(2e-11) * (Real(1) + std::abs(reference[component])))
               << "cell=" << i << ',' << j << " component=" << component;
@@ -211,8 +208,8 @@ pops::PathInterfaceResult<15> tuple(const Raw& left, const Raw& right, int axis 
     l[component] = left[component];
     r[component] = right[component];
   }
-  auto result = test_fan_li15::interface(
-      l, r, axis == 0 ? Real(1) : Real(0), axis == 1 ? Real(1) : Real(0));
+  auto result =
+      test_fan_li15::interface(l, r, axis == 0 ? Real(1) : Real(0), axis == 1 ? Real(1) : Real(0));
   if (!result.succeeded())
     throw std::runtime_error("independent path test tuple failed its strict domain");
   return result;
@@ -223,11 +220,11 @@ pops::PathInterfaceResult<15> tuple(const Raw& left, const Raw& right, int axis 
 Raw expected_rhs(int level, int x, int y = 0, bool nonconstant = false) {
   const Raw center = trace_at(level, x, y, nonconstant);
   const Raw left = level == 0 ? trace_at(0, (x + 7) % 8, y, nonconstant)
-      : x == 0 ? trace_at(0, 7, y / 2, nonconstant)
-               : trace_at(1, x - 1, y, nonconstant);
+                   : x == 0   ? trace_at(0, 7, y / 2, nonconstant)
+                              : trace_at(1, x - 1, y, nonconstant);
   const Raw right = level == 0 ? trace_at(0, (x + 1) % 8, y, nonconstant)
-      : x == 3 ? trace_at(0, 2, y / 2, nonconstant)
-               : trace_at(1, x + 1, y, nonconstant);
+                    : x == 3   ? trace_at(0, 2, y / 2, nonconstant)
+                               : trace_at(1, x + 1, y, nonconstant);
   auto lower0 = tuple(left, center), lower1 = lower0;
   auto upper0 = tuple(center, right), upper1 = upper0;
   if (level == 0 && x == 2) {
@@ -241,25 +238,33 @@ Raw expected_rhs(int level, int x, int y = 0, bool nonconstant = false) {
   const Real inverse_spacing = level == 0 ? Real(8) : Real(16);
   Raw result{};
   for (int component = 0; component < 15; ++component) {
-    result[component] = inverse_spacing * Real(0.5) * (
-        lower0.conservative_flux.values[component] + lower0.right_ncp.values[component] +
-        lower1.conservative_flux.values[component] + lower1.right_ncp.values[component] -
-        upper0.conservative_flux.values[component] + upper0.left_ncp.values[component] -
-        upper1.conservative_flux.values[component] + upper1.left_ncp.values[component]);
+    result[component] =
+        inverse_spacing * Real(0.5) *
+        (lower0.conservative_flux.values[component] + lower0.right_ncp.values[component] +
+         lower1.conservative_flux.values[component] + lower1.right_ncp.values[component] -
+         upper0.conservative_flux.values[component] + upper0.left_ncp.values[component] -
+         upper1.conservative_flux.values[component] + upper1.left_ncp.values[component]);
   }
   if (level == 1) {
     const auto lower = tuple(trace_at(1, x, (y + 15) % 16, nonconstant), center, 1);
     const auto upper = tuple(center, trace_at(1, x, (y + 1) % 16, nonconstant), 1);
     for (int component = 0; component < 15; ++component)
-      result[component] += inverse_spacing * (
-          lower.conservative_flux.values[component] + lower.right_ncp.values[component] -
-          upper.conservative_flux.values[component] + upper.left_ncp.values[component]);
+      result[component] +=
+          inverse_spacing *
+          (lower.conservative_flux.values[component] + lower.right_ncp.values[component] -
+           upper.conservative_flux.values[component] + upper.left_ncp.values[component]);
   }
   return result;
 }
 
 enum class Failure {
-  None, HotTrace, InvalidTrace, ForeignOutput, ForeignSource, LegacyResidual, AfterPublication
+  None,
+  HotTrace,
+  InvalidTrace,
+  ForeignOutput,
+  ForeignSource,
+  LegacyResidual,
+  AfterPublication
 };
 struct Evidence {
   Failure failure = Failure::None;
@@ -295,27 +300,30 @@ Fixture prepare_fixture(TransferPolicy prolongation = TransferPolicy::Injection,
   const auto install_transfer = [&](const std::string& operation, TransferPolicy policy) {
     if (policy == TransferPolicy::Omitted)
       return;
-    const bool injection = policy == TransferPolicy::Injection ||
-                           policy == TransferPolicy::WideInjection;
+    const bool injection =
+        policy == TransferPolicy::Injection || policy == TransferPolicy::WideInjection;
     const int order = injection ? 1 : policy == TransferPolicy::Polynomial5 ? 5 : 2;
-    const std::string kernel = injection ? "conservative_injection"
-        : operation == "prolongation" ? "conservative_linear"
-        : policy == TransferPolicy::Polynomial5 ? "conservative_polynomial5_coarse_fine"
-                                                : "conservative_coarse_fine";
+    const std::string kernel = injection                     ? "conservative_injection"
+                               : operation == "prolongation" ? "conservative_linear"
+                               : policy == TransferPolicy::Polynomial5
+                                   ? "conservative_polynomial5_coarse_fine"
+                                   : "conservative_coarse_fine";
     pops::Extent<2> ghosts{};
     for (int axis = 0; axis < 2; ++axis)
-      ghosts[axis] = operation == "prolongation" && injection ? 0
-          : policy == TransferPolicy::WideInjection ? 2 : policy == TransferPolicy::Polynomial5 ? 3 : 1;
+      ghosts[axis] = operation == "prolongation" && injection  ? 0
+                     : policy == TransferPolicy::WideInjection ? 2
+                     : policy == TransferPolicy::Polynomial5   ? 3
+                                                               : 1;
     system->register_bootstrap_transfer_route(
         "tests.amr-path-rhs/" + operation, {"tests.amr-path-rhs/state"},
-        "tests.amr-path-rhs/" + kernel + "@1", "cell", "cell", "conservative", "dense",
-        operation, kernel, order, ghosts, config.transition_ratios.front());
+        "tests.amr-path-rhs/" + kernel + "@1", "cell", "cell", "conservative", "dense", operation,
+        kernel, order, ghosts, config.transition_ratios.front());
   };
   install_transfer("prolongation", prolongation);
   install_transfer("coarse_fine_fill", coarse_fine);
-  pops::add_compiled_model<2>(*system, "raw15", BlockModel{}, "none", "rusanov",
-      "conservative", "explicit", 1.4, 1, 1, {}, {}, 0.0,
-      static_cast<double>(pops::kWenoEpsilon), false, "tests.amr-path-rhs/physical-flux");
+  pops::add_compiled_model<2>(
+      *system, "raw15", BlockModel{}, "none", "rusanov", "conservative", "explicit", 1.4, 1, 1, {},
+      {}, 0.0, static_cast<double>(pops::kWenoEpsilon), false, "tests.amr-path-rhs/physical-flux");
   std::vector<double> initial(15 * 64);
   const auto root_state = accepted_state(0);
   for (int component = 0; component < 15; ++component)
@@ -327,58 +335,71 @@ Fixture prepare_fixture(TransferPolicy prolongation = TransferPolicy::Injection,
   auto evidence = std::make_shared<Evidence>();
   System* facade = system.get();
   context->configure_primary_clock("tests.amr-path-rhs/clock");
-  context->install([context, evidence, facade](double dt) {
-    context->advance_mapping_hierarchy(dt, [context, evidence, facade](double level_dt) {
-      ++evidence->gathered;
-      context->set_stage_time(0, 1);
-      const int level = context->level();
-      auto& state = context->state(0);
-      auto& input = context->scratch_state(100, 0, state);
-      fill_trace(input, level, evidence->failure == Failure::HotTrace, evidence->nonconstant);
-      if (evidence->failure == Failure::InvalidTrace && level == 1 && input.local_size() != 0)
-        input.fab(0).set_val(Real(-1));
-      auto& rhs = context->rhs_scratch(kRate, 0, state);
-      if (evidence->failure == Failure::LegacyResidual)
-        context->rhs_into(0, input, rhs, kRate);
-      const auto source = evidence->failure == Failure::ForeignSource && level == 1 ? 99 : 100;
-      const auto trace = context->capture_rhs_input_trace(0, input, kRate, source);
-      context->stage_path_rhs(0, input,
-          evidence->failure == Failure::ForeignOutput ? state : rhs,
-          kRate, kFamily, &trace, context->path_rhs_courant());
-      // The producer may reuse its live scratch after the immutable SSA trace is captured.
-      // Both the current level and the parent fill must read the retained stage, not this value.
-      input.set_val(Real(-123));
-      context->suspend_hierarchy_barrier(Context::HierarchyBarrierKind::spatial_rhs, kRate,
-          kProgram, "raw15/input100/path101", 0, 1,
-          [context, evidence, facade] {
-            EXPECT_EQ(evidence->gathered, facade->n_levels());
-            EXPECT_EQ(evidence->continued, 0);
-            EXPECT_EQ(facade->time(), 0.0);
-            for (int level = 0; level < facade->n_levels(); ++level)
-              expect_cells(facade->engine()->hierarchy().state(level),
-                           [level](int, int) { return accepted_state(level); });
-            context->publish_staged_path_rhs(kRate);
-            ++evidence->published;
-            for (int level = 0; level < facade->n_levels(); ++level) {
-              const auto& evaluation = facade->prepared_amr_level_evaluation(level);
-              ASSERT_TRUE(evaluation.path_faces);
-              EXPECT_EQ(evaluation.path_faces->operator_identity, Model::path_operator_identity());
-              expect_cells(evaluation.residual,
-                           [level, evidence](int x, int y) {
-                             return expected_rhs(level, x, y, evidence->nonconstant);
-                           }, level == 0);
-            }
-            if (evidence->failure == Failure::AfterPublication &&
-                context->prepared_execution_lane().rank() == 0)
-              throw std::runtime_error("injected path barrier failure after tuple publication");
-          },
-          [context, evidence, &state, &rhs, level_dt] {
-            ++evidence->continued;
-            EXPECT_EQ(evidence->published, 1);
-            context->axpy(state, Real(level_dt), rhs);
-          });
-    }, context, [evidence] { ++evidence->completed; });
-  }, context);
+  context->install(
+      [context, evidence, facade](double dt) {
+        context->advance_mapping_hierarchy(
+            dt,
+            [context, evidence, facade](double level_dt) {
+              ++evidence->gathered;
+              context->set_stage_time(0, 1);
+              const int level = context->level();
+              auto& state = context->state(0);
+              auto& input = context->scratch_state(100, 0, state);
+              fill_trace(input, level, evidence->failure == Failure::HotTrace,
+                         evidence->nonconstant);
+              if (evidence->failure == Failure::InvalidTrace && level == 1 &&
+                  input.local_size() != 0)
+                input.fab(0).set_val(Real(-1));
+              auto& rhs = context->rhs_scratch(kRate, 0, state);
+              if (evidence->failure == Failure::LegacyResidual)
+                context->rhs_into(0, input, rhs, kRate);
+              const auto source =
+                  evidence->failure == Failure::ForeignSource && level == 1 ? 99 : 100;
+              const auto trace = context->capture_rhs_input_trace(0, input, kRate, source);
+              context->stage_path_rhs(0, input,
+                                      evidence->failure == Failure::ForeignOutput ? state : rhs,
+                                      kRate, kFamily, &trace, context->path_rhs_courant());
+              // The producer may reuse its live scratch after the immutable SSA trace is captured.
+              // Both the current level and the parent fill must read the retained stage, not this value.
+              input.set_val(Real(-123));
+              context->suspend_hierarchy_barrier(
+                  Context::HierarchyBarrierKind::spatial_rhs, kRate, kProgram,
+                  "raw15/input100/path101", 0, 1,
+                  [context, evidence, facade] {
+                    EXPECT_EQ(evidence->gathered, facade->n_levels());
+                    EXPECT_EQ(evidence->continued, 0);
+                    EXPECT_EQ(facade->time(), 0.0);
+                    for (int level = 0; level < facade->n_levels(); ++level)
+                      expect_cells(facade->engine()->hierarchy().state(level),
+                                   [level](int, int) { return accepted_state(level); });
+                    context->publish_staged_path_rhs(kRate);
+                    ++evidence->published;
+                    for (int level = 0; level < facade->n_levels(); ++level) {
+                      const auto& evaluation = facade->prepared_amr_level_evaluation(level);
+                      ASSERT_TRUE(evaluation.path_faces);
+                      EXPECT_EQ(evaluation.path_faces->operator_identity,
+                                Model::path_operator_identity());
+                      expect_cells(
+                          evaluation.residual,
+                          [level, evidence](int x, int y) {
+                            return expected_rhs(level, x, y, evidence->nonconstant);
+                          },
+                          level == 0);
+                    }
+                    if (evidence->failure == Failure::AfterPublication &&
+                        context->prepared_execution_lane().rank() == 0)
+                      throw std::runtime_error(
+                          "injected path barrier failure after tuple publication");
+                  },
+                  [context, evidence, &state, &rhs, level_dt] {
+                    ++evidence->continued;
+                    EXPECT_EQ(evidence->published, 1);
+                    context->axpy(state, Real(level_dt), rhs);
+                  });
+            },
+            context, [evidence] { ++evidence->completed; });
+      },
+      context);
   system->set_program_block_map({0});
   context->install_flux_temporal_families({{0, kRate, 1, kFamily}});
   using Budget = System::PreparedAmrProgramFluxExpressionBlockBudget;
@@ -394,8 +415,8 @@ void add_fine_level(Fixture& fixture) {
   auto& system = fixture.system;
   auto& context = fixture.context;
   const auto& parent = system->engine()->hierarchy().layout(0);
-  const pops::mesh::BoxArray<2> boxes(std::vector<pops::Box<2>>{
-      pops::Box<2>{pops::Index<2>{0, 0}, pops::Index<2>{1, 7}}});
+  const pops::mesh::BoxArray<2> boxes(
+      std::vector<pops::Box<2>>{pops::Box<2>{pops::Index<2>{0, 0}, pops::Index<2>{1, 7}}});
   pops::amr::tagging::ClusterOptions<2> options;
   options.min_efficiency = 0.7;
   options.min_box_size.fill(1);
@@ -404,15 +425,80 @@ void add_fine_level(Fixture& fixture) {
   pops::amr::tagging::ClusterResultIdentity<2> identity{
       "tests.amr-path-rhs/cluster", parent.exact_identity(), options, {}, boxes.boxes()};
   const std::array<int, 2> ratio{2, 2};
-  auto prepared = context->prepare_regrid(0, pops::amr::RefinementRatio<2>(ratio),
-      {boxes, std::move(identity)}, {.clustered_parent_layout = {16, 120},
-       .fine_layout = {16, 120},
-       .load_balance = {16, 16, std::numeric_limits<std::int64_t>::max()}});
+  auto prepared =
+      context->prepare_regrid(0, pops::amr::RefinementRatio<2>(ratio), {boxes, std::move(identity)},
+                              {.clustered_parent_layout = {16, 120},
+                               .fine_layout = {16, 120},
+                               .load_balance = {16, 16, std::numeric_limits<std::int64_t>::max()}});
   const auto& accepted = system->engine()->hierarchy().state(0);
   Field child(prepared.fine_layout()->patches(), prepared.fine_layout()->distribution(),
               accepted.local_rank(), accepted.ncomp(), accepted.ghosts());
   fill_uniform(child, accepted_state(1));
   context->publish_regrid(std::move(prepared), std::move(child));
+}
+
+enum class TraceProbeFailure { None, Duplicate, PreviousInvocation };
+struct RepeatedTraceEvidence {
+  TraceProbeFailure failure = TraceProbeFailure::None;
+  std::vector<std::optional<Context::RhsInputTrace>> retained;
+  int publications = 0, completed = 0;
+};
+
+void repeated_trace_stage(const std::shared_ptr<Context>& context,
+                          const std::shared_ptr<RepeatedTraceEvidence>& evidence, int occurrence,
+                          double dt) {
+  context->set_stage_time(0, 1);
+  const int level = context->level();
+  auto& state = context->state(0);
+  auto& input = context->scratch_state(100, 0, state);
+  fill_trace(input, level, false, true);
+  auto& rhs = context->rhs_scratch(kRate, 0, state);
+  const auto current = context->capture_rhs_input_trace(0, input, kRate, 100);
+  if (evidence->failure == TraceProbeFailure::Duplicate)
+    (void)context->capture_rhs_input_trace(0, input, kRate, 100);
+  if (occurrence == 0)
+    evidence->retained.at(static_cast<std::size_t>(level)).emplace(current);
+  const auto* selected =
+      occurrence == 1 && evidence->failure == TraceProbeFailure::PreviousInvocation
+          ? &*evidence->retained.at(static_cast<std::size_t>(level))
+          : &current;
+  context->stage_path_rhs(0, input, rhs, kRate, kFamily, selected, context->path_rhs_courant());
+  input.set_val(Real(-123));
+  context->suspend_hierarchy_barrier(
+      Context::HierarchyBarrierKind::spatial_rhs, kRate, kProgram,
+      "raw15/repeated-input100/path101", 0, 1,
+      [context, evidence] {
+        context->publish_staged_path_rhs(kRate);
+        ++evidence->publications;
+      },
+      [context, evidence, occurrence, dt, &state, &rhs] {
+        // Two invocations contribute half of this same accepted interval each.
+        context->axpy(state, Real(dt / 2), rhs);
+        if (occurrence == 0)
+          repeated_trace_stage(context, evidence, 1, dt);
+      });
+}
+
+std::shared_ptr<RepeatedTraceEvidence> install_repeated_trace(Fixture& fixture) {
+  auto evidence = std::make_shared<RepeatedTraceEvidence>();
+  evidence->retained.resize(static_cast<std::size_t>(fixture.system->n_levels()));
+  const auto context = fixture.context;
+  context->install(
+      [context, evidence](double dt) {
+        context->advance_mapping_hierarchy(
+            dt,
+            [context, evidence](double level_dt) {
+              repeated_trace_stage(context, evidence, 0, level_dt);
+            },
+            context, [evidence] { ++evidence->completed; });
+      },
+      context);
+  fixture.system->set_program_block_map({0});
+  context->install_flux_temporal_families({{0, kRate, 1, kFamily}});
+  using Budget = System::PreparedAmrProgramFluxExpressionBlockBudget;
+  fixture.system->install_prepared_amr_program_flux_expression_budget(kProgram, {Budget{2, 1}}, 0,
+                                                                      0);
+  return evidence;
 }
 
 void expect_success(const Fixture& fixture) {
@@ -422,16 +508,79 @@ void expect_success(const Fixture& fixture) {
   EXPECT_EQ(fixture.evidence->completed, 1);
   EXPECT_DOUBLE_EQ(fixture.system->time(), kDt);
   for (int level = 0; level < 2; ++level)
-    expect_cells(fixture.system->engine()->hierarchy().state(level), [level, &fixture](int x, int y) {
-      Raw expected = accepted_state(level);
-      const Raw rhs = expected_rhs(level, x, y, fixture.evidence->nonconstant);
-      for (int component = 0; component < 15; ++component)
-        expected[component] += Real(kDt) * rhs[component];
-      return expected;
-    }, level == 0);
+    expect_cells(
+        fixture.system->engine()->hierarchy().state(level),
+        [level, &fixture](int x, int y) {
+          Raw expected = accepted_state(level);
+          const Raw rhs = expected_rhs(level, x, y, fixture.evidence->nonconstant);
+          for (int component = 0; component < 15; ++component)
+            expected[component] += Real(kDt) * rhs[component];
+          return expected;
+        },
+        level == 0);
   EXPECT_EQ(fixture.context->path_rhs_courant(), Real(1));
 }
 }  // namespace
+
+TEST(AmrPathRhsBarrier, RepeatedSsaUsesDistinctNativeBarrierInvocations) {
+  // Install the complete two-evaluation Program before publishing the initial hierarchy.
+  auto fixture = prepare_fixture(TransferPolicy::Injection, TransferPolicy::Injection, false);
+  auto evidence = install_repeated_trace(fixture);
+  add_fine_level(fixture);
+  evidence->retained.resize(static_cast<std::size_t>(fixture.system->n_levels()));
+  EXPECT_DOUBLE_EQ(fixture.system->step_cfl(0.3, 1e-12, kDt, 0), kDt);
+  EXPECT_EQ(evidence->publications, 2);
+  EXPECT_EQ(evidence->completed, 1);
+  for (int level = 0; level < 2; ++level)
+    expect_cells(
+        fixture.system->engine()->hierarchy().state(level),
+        [level](int x, int y) {
+          Raw expected = accepted_state(level);
+          const Raw rhs = expected_rhs(level, x, y, true);
+          for (int component = 0; component < 15; ++component)
+            expected[component] += Real(kDt) * rhs[component];
+          return expected;
+        },
+        level == 0);
+}
+
+TEST(AmrPathRhsBarrier, DuplicateAndPreviousInvocationTracesRejectAndRollback) {
+  for (const auto failure : {TraceProbeFailure::Duplicate, TraceProbeFailure::PreviousInvocation}) {
+    auto fixture = prepare_fixture(TransferPolicy::Injection, TransferPolicy::Injection, false);
+    auto evidence = install_repeated_trace(fixture);
+    add_fine_level(fixture);
+    evidence->retained.resize(static_cast<std::size_t>(fixture.system->n_levels()));
+    evidence->failure = failure;
+    const auto accepted = fixture.system->program_accepted_state();
+    std::string message;
+    try {
+      fixture.system->step_cfl(0.3, 1e-12, kDt, 0);
+    } catch (const std::exception& error) {
+      message = error.what();
+    }
+    ASSERT_FALSE(message.empty());
+    EXPECT_NE(message.find(failure == TraceProbeFailure::Duplicate
+                               ? "unique SSA evaluation in its exact invocation"
+                               : "stale or has a different exact stage"),
+              std::string::npos);
+    EXPECT_EQ(evidence->publications, failure == TraceProbeFailure::Duplicate ? 0 : 1);
+    EXPECT_EQ(evidence->completed, 0);
+    EXPECT_DOUBLE_EQ(fixture.system->time(), 0);
+    EXPECT_EQ(fixture.system->macro_step(), 0);
+    EXPECT_EQ(fixture.system->program_accepted_state(), accepted);
+    for (int level = 0; level < 2; ++level)
+      expect_cells(fixture.system->engine()->hierarchy().state(level),
+                   [level](int, int) { return accepted_state(level); });
+    // A new attempt may reuse the SSA slots, but not an old immutable token.
+    evidence->failure = TraceProbeFailure::None;
+    evidence->publications = 0;
+    for (auto& trace : evidence->retained)
+      trace.reset();
+    EXPECT_DOUBLE_EQ(fixture.system->step_cfl(0.3, 1e-12, kDt, 0), kDt);
+    EXPECT_EQ(evidence->publications, 2);
+    EXPECT_EQ(evidence->completed, 1);
+  }
+}
 
 TEST(AmrPathRhsBarrier, CanonicalSubfacesAndIndependentSidesPrecedeUpdatesAtPeriodicSeam) {
   const auto nonconservative = tuple(trace_state(0), trace_state(1));
@@ -459,8 +608,9 @@ TEST(AmrPathRhsBarrier, NonconstantParentMeansAndUnequalSubfacesUseExactInjectio
   const auto other_subface = tuple(trace_at(1, 3, 1, true), parent);
   ASSERT_GT(std::abs(injected.conservative_flux.values[0] - linear.conservative_flux.values[0]),
             Real(1e-5));
-  ASSERT_GT(std::abs(injected.conservative_flux.values[0] -
-                     other_subface.conservative_flux.values[0]), Real(1e-5));
+  ASSERT_GT(
+      std::abs(injected.conservative_flux.values[0] - other_subface.conservative_flux.values[0]),
+      Real(1e-5));
   auto fixture = prepare_fixture();
   fixture.evidence->nonconstant = true;
   EXPECT_DOUBLE_EQ(fixture.system->step_cfl(0.3, 1e-12, kDt, 0), kDt);
@@ -469,14 +619,13 @@ TEST(AmrPathRhsBarrier, NonconstantParentMeansAndUnequalSubfacesUseExactInjectio
 
 TEST(AmrPathRhsBarrier, ReconstructedOrMissingTransferRoutesRefuseBeforeHierarchyPublication) {
   using Policy = TransferPolicy;
-  const std::array policies{
-      std::pair{Policy::Omitted, Policy::Omitted},
-      std::pair{Policy::Omitted, Policy::Injection},
-      std::pair{Policy::Injection, Policy::Omitted},
-      std::pair{Policy::LimitedLinear, Policy::Injection},
-      std::pair{Policy::Injection, Policy::LimitedLinear},
-      std::pair{Policy::Injection, Policy::Polynomial5},
-      std::pair{Policy::Injection, Policy::WideInjection}};
+  const std::array policies{std::pair{Policy::Omitted, Policy::Omitted},
+                            std::pair{Policy::Omitted, Policy::Injection},
+                            std::pair{Policy::Injection, Policy::Omitted},
+                            std::pair{Policy::LimitedLinear, Policy::Injection},
+                            std::pair{Policy::Injection, Policy::LimitedLinear},
+                            std::pair{Policy::Injection, Policy::Polynomial5},
+                            std::pair{Policy::Injection, Policy::WideInjection}};
   for (const auto& [prolongation, coarse_fine] : policies) {
     SCOPED_TRACE(std::to_string(static_cast<int>(prolongation)) + "/" +
                  std::to_string(static_cast<int>(coarse_fine)));
@@ -517,9 +666,9 @@ TEST(AmrPathRhsBarrier, OrdinaryBlocksRetainDefaultAndLimitedLinearTransferAdmis
 TEST(AmrPathRhsBarrier, ActualStageCflDomainAndIdentityFailuresRollbackThenPermitRetry) {
   auto fixture = prepare_fixture();
   const auto accepted = fixture.system->program_accepted_state();
-  for (Failure failure : {Failure::HotTrace, Failure::InvalidTrace, Failure::ForeignOutput,
-                          Failure::ForeignSource, Failure::LegacyResidual,
-                          Failure::AfterPublication}) {
+  for (Failure failure :
+       {Failure::HotTrace, Failure::InvalidTrace, Failure::ForeignOutput, Failure::ForeignSource,
+        Failure::LegacyResidual, Failure::AfterPublication}) {
     *fixture.evidence = Evidence{};
     fixture.evidence->failure = failure;
     EXPECT_THROW(fixture.system->step_cfl(0.3, 1e-12, kDt, 0), std::exception);
@@ -549,8 +698,7 @@ TEST(AmrPathRhsBarrier, FixedDtEnforcesTheUnitBudgetAndFailedAttemptCanRetry) {
   } catch (const std::exception& error) {
     refusal = error.what();
   }
-  EXPECT_NE(refusal.find("actual face CFL exceeds authored Courant"), std::string::npos)
-      << refusal;
+  EXPECT_NE(refusal.find("actual face CFL exceeds authored Courant"), std::string::npos) << refusal;
   EXPECT_EQ(fixture.evidence->published, 0);
   EXPECT_EQ(fixture.evidence->continued, 0);
   EXPECT_DOUBLE_EQ(fixture.system->time(), 0.0);

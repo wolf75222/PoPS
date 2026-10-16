@@ -122,6 +122,13 @@ struct Fixture {
     return result;
   }
 
+  pops::MultiFab<Dim>& sample(pops::Real value) {
+    // Retain the exact Context-owned SSA allocation; a shape-only copy is not a producer.
+    auto& result = context->scratch_state(940100, 0, context->state(0));
+    result.set_val(value);
+    return result;
+  }
+
   void register_history() {
     context->register_history("tracer.rate", 2, 1, 0, "tracer.U", "cell.conservative",
                               "clock.macro", "dense.linear");
@@ -154,16 +161,13 @@ TEST(test_amr_history_ring, RetainsAndInterpolatesExactRankedState) {
   Fixture<Dim> fixture;
   fixture.register_history();
 
-  pops::MultiFab<Dim> sample = fixture.context->scratch_state_like(fixture.context->state(0));
   fixture.context->begin_step(0.2);
-  sample.set_val(pops::Real(10));
-  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->store_history("tracer.rate", fixture.sample(pops::Real(10)), 0);
   fixture.context->rotate_histories("clock.macro");
 
   fixture.context->begin_step(0.4);
-  sample.set_val(pops::Real(20));
-  fixture.context->store_history("tracer.rate", sample, 0);
-  pops::MultiFab<Dim> interpolated = fixture.context->scratch_state_like(sample);
+  fixture.context->store_history("tracer.rate", fixture.sample(pops::Real(20)), 0);
+  pops::MultiFab<Dim> interpolated = fixture.context->scratch_state_like(fixture.context->state(0));
   interpolated.set_val(pops::Real(-1));
   fixture.context->interpolate_history_linear(interpolated, "tracer.rate", 2, 0, "clock.macro",
                                               "clock.fast", -1, pops::Real(0));
@@ -177,16 +181,13 @@ TEST(test_amr_history_ring, FacadeTransactionRestoresAcceptedHistoryImage) {
   Fixture<Dim> fixture;
   fixture.register_history();
 
-  pops::MultiFab<Dim> sample = fixture.context->scratch_state_like(fixture.context->state(0));
   fixture.context->begin_step(0.1);
-  sample.set_val(pops::Real(3));
-  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->store_history("tracer.rate", fixture.sample(pops::Real(3)), 0);
   fixture.context->rotate_histories("clock.macro");
   ASSERT_EQ(pops::reduce_min_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(3));
 
   fixture.system.begin_step_transaction();
-  sample.set_val(pops::Real(9));
-  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->store_history("tracer.rate", fixture.sample(pops::Real(9)), 0);
   fixture.context->rotate_histories("clock.macro");
   ASSERT_EQ(pops::reduce_max_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(9));
   fixture.system.rollback_step_transaction();
@@ -199,13 +200,11 @@ TEST(test_amr_history_ring, RestartRegridImageRejectsPendingStoreAndEndsWithItsT
   constexpr int Dim = pops::kNativeDimension;
   Fixture<Dim> fixture(true);
   fixture.register_history();
-  auto sample = fixture.context->scratch_state_like(fixture.context->state(0));
-  sample.set_val(pops::Real(7));
   const auto epoch = fixture.system.checkpoint_topology_epoch();
 
   fixture.system.begin_restart_transaction();
   fixture.context->begin_step(0.125);
-  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->store_history("tracer.rate", fixture.sample(pops::Real(7)), 0);
   EXPECT_ANY_THROW(fixture.system.begin_restart_regrid_history_sequence());
   fixture.system.rollback_restart_transaction();
   EXPECT_EQ(fixture.system.checkpoint_topology_epoch(), epoch);
@@ -214,7 +213,7 @@ TEST(test_amr_history_ring, RestartRegridImageRejectsPendingStoreAndEndsWithItsT
   // An accepted sample is a valid source. Aborting its restart must release the frozen image;
   // the next restart is a new authority even when its topology epoch is numerically identical.
   fixture.context->begin_step(0.125);
-  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->store_history("tracer.rate", fixture.sample(pops::Real(7)), 0);
   fixture.context->rotate_histories("clock.macro");
   fixture.system.begin_restart_transaction();
   ASSERT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
@@ -235,10 +234,8 @@ TEST(test_amr_history_ring, FrozenRestartImageRefusesLaterStoreRotationAndRestor
   constexpr int Dim = pops::kNativeDimension;
   Fixture<Dim> fixture(true);
   fixture.register_history();
-  auto sample = fixture.context->scratch_state_like(fixture.context->state(0));
   fixture.context->begin_step(0.125);
-  sample.set_val(pops::Real(7));
-  fixture.context->store_history("tracer.rate", sample, 0);
+  fixture.context->store_history("tracer.rate", fixture.sample(pops::Real(7)), 0);
   fixture.context->rotate_histories("clock.macro");
   const auto accepted = fixture.system.history_global("tracer.rate", 0, 0);
   const auto fill = fixture.system.history_fill_count("tracer.rate", 0);
@@ -246,18 +243,17 @@ TEST(test_amr_history_ring, FrozenRestartImageRefusesLaterStoreRotationAndRestor
   fixture.system.begin_restart_transaction();
   ASSERT_NO_THROW(fixture.system.begin_restart_regrid_history_sequence());
   fixture.context->begin_step(0.125);
-  sample.set_val(pops::Real(19));
-  EXPECT_THROW(fixture.context->store_history("tracer.rate", sample, 0), std::logic_error);
-  EXPECT_THROW(fixture.context->rotate_histories("clock.macro"), std::logic_error);
-  EXPECT_THROW(fixture.system.restore_history_fill_count("tracer.rate", 0, fill),
+  EXPECT_THROW(fixture.context->store_history("tracer.rate", fixture.sample(pops::Real(19)), 0),
                std::logic_error);
+  EXPECT_THROW(fixture.context->rotate_histories("clock.macro"), std::logic_error);
+  EXPECT_THROW(fixture.system.restore_history_fill_count("tracer.rate", 0, fill), std::logic_error);
   EXPECT_EQ(fixture.system.history_global("tracer.rate", 0, 0), accepted);
   EXPECT_EQ(fixture.system.history_fill_count("tracer.rate", 0), fill);
   ASSERT_NO_THROW(fixture.system.rollback_restart_transaction());
 
   // Normal authoring resumes once rollback releases the frozen-image authority.
   fixture.context->begin_step(0.125);
-  EXPECT_NO_THROW(fixture.context->store_history("tracer.rate", sample, 0));
+  EXPECT_NO_THROW(fixture.context->store_history("tracer.rate", fixture.sample(pops::Real(19)), 0));
   EXPECT_NO_THROW(fixture.context->rotate_histories("clock.macro"));
   EXPECT_EQ(pops::reduce_min_local(fixture.context->history("tracer.rate", 1, 0)), pops::Real(19));
 }
@@ -374,7 +370,6 @@ TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutExactFluxExpressi
     EXPECT_EQ(pops::reduce_max_local(runtime->hierarchy().state(level)), pops::Real(1));
   }
 }
-
 
 namespace {
 constexpr int M2Dim = pops::kNativeDimension;

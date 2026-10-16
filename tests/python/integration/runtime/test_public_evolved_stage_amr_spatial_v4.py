@@ -186,7 +186,7 @@ def test_public_evolved_stage_amr_nonconstant_Q_restriction_and_flux_v4(isolated
                     "kappa":"declared no embedded boundary, exactly one; not a native getter",
                     "native_shape":initial[0][0]["native_base_shape"].tolist(),
                     "native_patch_boxes":initial[0][0]["native_patch_boxes"].tolist()},
-                "history_protocol":{"wire":"POPSHID1", "raw_slots_after_publication":True,
+                "history_protocol":{"wire":"POPSHID2", "raw_slots_after_publication":True,
                     "latest_slot":1, "previous_slot":0, "depth":2},
                 "newton":CONTROLS, "fd_step":FD_STEP, "acceptance":ACCEPTANCE, "dt":DT,
                 "realization":"FullResidualBasisLU@1", "max_dense_bytes":DENSE_BYTES,

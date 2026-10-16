@@ -1,0 +1,100 @@
+{
+  "schema": 1,
+  "kind": "real_pops_cpu_m19_pilot",
+  "job": 748183,
+  "state": "COMPLETED",
+  "exit_code": 0,
+  "elapsed": "00:39:08",
+  "receiver_budget_seconds": 2400,
+  "passed": true,
+  "oracle": "independent; unchanged atol2e-11 rtol2e-10",
+  "options": {
+    "byte_capacity": 1073741824,
+    "charges": [
+      -1.0
+    ],
+    "configuration_shape": [
+      16,
+      16,
+      16
+    ],
+    "dt": 1e-05,
+    "frequency": 0.2,
+    "masses": [
+      1.0
+    ],
+    "model": "M19",
+    "ranks": 1,
+    "steps": 3,
+    "storage_bytes": 17179869184,
+    "storage_versions": 65536,
+    "velocity_shape": [
+      4,
+      4,
+      4
+    ]
+  },
+  "phase_cells_global": 262144,
+  "source_after": {
+    "manifest_sha256": "45e010ab00142ac8f24d2c68390a18ffb75299d6a2720c5539cb72736f216617",
+    "source_files": 7376,
+    "source_unchanged": true
+  },
+  "rehash": {
+    "retained_files": {
+      "reception/actual-compiler-inputs/process-romeo-a041-3799574/bc4ffc9bfa0740fb99a59d56d52f1f0767ae253f0633a603a2b4c8b5386e5407.compiler-input.cpp": "bc4ffc9bfa0740fb99a59d56d52f1f0767ae253f0633a603a2b4c8b5386e5407",
+      "reception/actual-compiler-inputs/process-romeo-a041-3799574/3e8c8b00db4512c45acc9a3efface0779d1c45048145a1a4080dce2c0a37cf34.loaded-library.so": "3e8c8b00db4512c45acc9a3efface0779d1c45048145a1a4080dce2c0a37cf34"
+    },
+    "native_sha256": "25217668338eb93936a068724df1ec348cef066a884bca06524a9a0372979d96",
+    "passed": true
+  },
+  "native_sha256": "25217668338eb93936a068724df1ec348cef066a884bca06524a9a0372979d96",
+  "program_hash": "c68d2e836caa60d2feddf44ee84fc87d5331c30c97b420460e334a5d113c4470",
+  "actual_compiler_input_sha256": "bc4ffc9bfa0740fb99a59d56d52f1f0767ae253f0633a603a2b4c8b5386e5407",
+  "loaded_dso_sha256": "3e8c8b00db4512c45acc9a3efface0779d1c45048145a1a4080dce2c0a37cf34",
+  "driver_sha256": "4730fbe9d48094c3ba5eabc5084b72a3ed27a0920721013452b01fe19655a605",
+  "receiver_manifest_sha256": "d4cc567f6668493799a1c819e080677429a19b6ec32c2a07211647d49e115b53",
+  "compile_or_load_seconds": 270.62949610874057,
+  "native_run_seconds": [
+    694.7506590262055,
+    683.5657911989838,
+    668.0324683263898
+  ],
+  "kokkos_launches_per_repetition": [
+    325,
+    325,
+    325
+  ],
+  "max_error_per_repetition": [
+    3.469446951953614e-18,
+    3.469446951953614e-18,
+    3.469446951953614e-18
+  ],
+  "node": "romeo-a041",
+  "resources": "cpu=8,mem=192G,node=1; GPU allocated by partition but CPU OpenMP backend executed",
+  "scalar_leaf_patch_sha256": "ec513f4714429b96206201dc9189549bfa187b21f1b5733023edc89995dd6092",
+  "baseline": {
+    "job": 748110,
+    "status": "FAILED124; rep2 interrupted",
+    "clean_repetition_seconds": [
+      707.3488060785457
+    ],
+    "instrumented_repetition_seconds": [
+      715.164
+    ],
+    "same_node_resources": true,
+    "same_generated_cpp_sha256": true
+  },
+  "comparison": {
+    "median_seconds": 683.5657911989838,
+    "individual_fraction_of_baseline": [
+      0.9821896256216466,
+      0.9663772460274415,
+      0.9444173264812294
+    ],
+    "speedup_demonstrated": false,
+    "scalability_demonstrated": false,
+    "qualification": "three candidate runs passed, one clean baseline; modest monotone timing change does not isolate a robust speedup. No host-marshalling or zero-host-work claim."
+  },
+  "raw_receipt_sha256": "e3eeebbb120c131d5b502215b26977c6ab58a240a42dac0185db0135bfda8fb1"
+}

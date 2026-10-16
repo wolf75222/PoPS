@@ -97,6 +97,9 @@ def detach_compiled_program(program: Any, *, physical_global_sources: Any = None
         physical_global_sources = prepare_source_globals(program)
     else:
         require_source_global_plan(physical_global_sources, program)
+    from .scientific_compile_proof import prepare_scientific_contracts
+
+    scientific_contracts = prepare_scientific_contracts(program)
     expected_hash = program._ir_hash()
     references = _DetachedReferences()
     detached = program._rebuild(
@@ -107,6 +110,9 @@ def detach_compiled_program(program: Any, *, physical_global_sources: Any = None
     )
     object.__setattr__(detached, "_compiled_detached", True)
     detached.freeze()
+    if scientific_contracts is not None:
+        object.__setattr__(detached, "_scientific_compile_binding",
+                           scientific_contracts.bind(detached))
     if physical_global_sources is not None:
         object.__setattr__(detached, "_physical_global_source_bindings",
                            physical_global_sources.bind(detached))

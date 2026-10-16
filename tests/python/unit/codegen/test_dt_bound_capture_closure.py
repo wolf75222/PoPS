@@ -83,17 +83,54 @@ def test_existing_graph_identity_and_source_remain_exact(kind):
     resolved = pops.resolve(pops.validate(case), layout=layout)
     graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
     source = emit_cpp_program(resolved.time, model_graph=graph)
-    semantic = json.dumps(program._semantic_serialize(), sort_keys=True, separators=(",", ":"))
-    actual = (program._ir_hash(), hashlib.sha256(semantic.encode()).hexdigest(),
-              hashlib.sha256(source.encode()).hexdigest())
-    # Preserve the pre-fix graph and semantic receipts. Historical emitted bytes predate
-    # current native protocols; read-only emission still must preserve every current byte.
-    assert actual[:2] == BASELINE[kind][:2]
+    ir = program._serialize(include_provenance=False)
+    semantic = program._semantic_serialize()
+
+    def digest(data):
+        encoded = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    # IR v28 discriminates scalar-op nonfinite rejection. The legacy CFL product uses it;
+    # the unbounded identity has no scalar op and retains v5. Check this explicit
+    # transition and the six explicit resource contracts added since 5d97b7a5.
+    # Compare every remaining byte with the historical v5 receipts. In particular,
+    # preserve all node metadata and the old hashes; resources stay in today's hash.
+    version = 28 if kind == "legacy" else 5
+    assert ir["version"] == semantic["version"] == version
+    resources = {
+        "flux_expression_budget": None,
+        "history_field_metadata_budget": None,
+        "max_exact_coefficient_bytes": 65536,
+        "representation_workspace_byte_capacity": 67108864,
+        "terminal_failure_aggregate_byte_capacity": 268435456,
+        "terminal_failure_byte_capacity": 67108864,
+    }
+    for data in (ir, semantic):
+        assert {key: data[key] for key in resources} == resources
+    historical = tuple(dict({key: value for key, value in data.items()
+                             if key not in resources}, version=5)
+                       for data in (ir, semantic))
+    assert tuple(digest(data) for data in historical) == BASELINE[kind][:2]
+    # Current identities include every resource contract, without projection.
+    assert (digest(ir), digest(semantic)) == CURRENT[kind]
+    assert program._ir_hash() == CURRENT[kind][0]
+    from pops.codegen.program_source_map import source_map
+    mapping = source_map(source)
+    assert mapping["complete"]
+    assert {row["program_hash"] for row in mapping["inventories"]} == {program._ir_hash()}
+    source_hash = hashlib.sha256(source.encode()).hexdigest()
+    # Historical emitted bytes predate current native protocols; read-only
+    # emission still must preserve every current byte and the current IR version.
     before = program._serialize(), program._next_id
-    _emit_dt_bound(resolved.time, graph)
+    _, bound, _ = _emit_dt_bound(resolved.time, graph)
+    if kind == "legacy":
+        assert "!std::isfinite(" in bound
+        assert "nonfinite scalar arithmetic or invalid division" in bound
+    else:
+        assert "std::numeric_limits<pops::Real>::infinity()" in bound
     repeated = emit_cpp_program(resolved.time, model_graph=graph)
     assert repeated == source
-    assert hashlib.sha256(repeated.encode()).hexdigest() == actual[2]
+    assert hashlib.sha256(repeated.encode()).hexdigest() == source_hash
     assert (program._serialize(), program._next_id) == before
 
 
@@ -189,6 +226,17 @@ def test_callback_cannot_add_a_hidden_commit_of_a_preexisting_candidate():
     assert len(program.commits()) == 1 and not program.has_dt_bound()
     program.set_dt_bound(lambda P, cfl: cfl / (1 + P.norm2(passive.n)))
     assert len(program.commits()) == 1
+
+
+# Current complete IR and semantic receipts, including all six resources.
+CURRENT = {
+    "legacy": (
+        "863031c7021e5250469eb09beee03ed80bb12a8c9b4e07305eba778ba5775e8b",
+        "4adc62491248b359cb116d3a18dff7b4759c132f620814f3092f43a49c3e60a0"),
+    "unbounded": (
+        "b17f4be3dfdd802d04899fe97b396159cc0429893aec39a65c61347902e5c4fd",
+        "2fb78950b14f8afdc8ea6798677ee1c3f7442aa7310299d75b3ea647ba80d613"),
+}
 
 
 # Filled from public source-only emission on the exact pre-fix 5d97b7a5 tree.

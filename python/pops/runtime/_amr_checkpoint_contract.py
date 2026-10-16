@@ -131,8 +131,10 @@ def contract_for(sim):
         )
     halo_report = getattr(sim, "checkpoint_accepted_halo_contract", None)
     accepted_halo = _rows(halo_report()) if callable(halo_report) else []
-    flux_ledger = _rows(sim.program_flux_ledger_manifest())
-    interface_flux_ledger = _rows(sim.program_interface_flux_ledger_manifest())
+    from pops.runtime._program_manifest_snapshot import program_manifest_reader
+    manifest = program_manifest_reader(sim)
+    flux_ledger = _rows(manifest("program_flux_ledger_manifest"))
+    interface_flux_ledger = _rows(manifest("program_interface_flux_ledger_manifest"))
     return {
         "schema_version": 9 if accepted_halo else _SCHEMA,
         **({"accepted_halo": accepted_halo} if accepted_halo else {}),
@@ -148,10 +150,10 @@ def contract_for(sim):
             "transaction_depth": 0,
             "entries": interface_flux_ledger,
         },
-        "clocks": _rows(sim.program_clock_manifest()),
-        "temporal_partition": _rows(sim.program_temporal_partition_manifest()),
-        "synchronization": _rows(sim.program_sync_manifest()),
-        "history_qualifications": _rows(sim.program_accepted_state_manifest()),
+        "clocks": _rows(manifest("program_clock_manifest")),
+        "temporal_partition": _rows(manifest("program_temporal_partition_manifest")),
+        "synchronization": _rows(manifest("program_sync_manifest")),
+        "history_qualifications": _rows(manifest("program_accepted_state_manifest")),
         "level_relations": relations,
         "transfer_routes": _rows(sim.checkpoint_transfer_routes()),
         "tag_selection": _rows(sim.checkpoint_tag_selection_contract()),

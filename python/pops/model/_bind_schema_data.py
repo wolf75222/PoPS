@@ -1,5 +1,6 @@
 """Strict wire-data validation shared by model BindSlot and BindSchema."""
 from __future__ import annotations
+from pops.identity.scalar import parse_canonical_integer
 
 from collections.abc import Mapping
 from decimal import Decimal
@@ -62,14 +63,14 @@ def literal_value(data: Any, *, where: str) -> Any:
             raise TypeError("%s has an invalid integer literal shape" % where)
         if not isinstance(data["value"], str):
             raise TypeError("%s integer literal value must be a decimal string" % where)
-        return int(data["value"])
+        return parse_canonical_integer(data["value"])
     if kind == "rational":
         required = {"kind", "numerator", "denominator"}
         if not required <= set(data) or set(data) - common - required:
             raise TypeError("%s has an invalid rational literal shape" % where)
         if not isinstance(data["numerator"], str) or not isinstance(data["denominator"], str):
             raise TypeError("%s rational numerator/denominator must be decimal strings" % where)
-        return Fraction(int(data["numerator"]), int(data["denominator"]))
+        return Fraction(parse_canonical_integer(data["numerator"]), parse_canonical_integer(data["denominator"]))
     if kind == "decimal":
         if not {"kind", "value"} <= set(data) or set(data) - common - {"value"}:
             raise TypeError("%s has an invalid decimal literal shape" % where)

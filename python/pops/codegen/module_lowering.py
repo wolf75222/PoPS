@@ -399,6 +399,10 @@ def _module_to_model(module: Any, state_space: Any = None,
             coverage_rows.append(LoweringCoverageRow(source, "lowered", ("program:constitutive_flux",)))
             continue
         if refusal:
+            from pops.physics._balance_composition import balance_composition
+            if balance_composition(module.operator_registry(),op):
+                coverage_rows.append(LoweringCoverageRow(source,"lowered",("program:balance_composition",)))
+                continue
             _reject(source, "unsupported_balance_realization",
                     "operator %r retains a physical balance without a native realization: %s"
                     % (op.name, refusal))
@@ -650,6 +654,14 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             prepare_user_face_carrier(emit_model, numerics)
             from pops.codegen.principal_lowering import prepare_principal_carrier
             prepare_principal_carrier(emit_model, lowering.source_module, numerics)
+            from pops.codegen.program_realization import prepare_program_realization_carrier
+            emit_model = prepare_program_realization_carrier(
+                emit_model, lowering.source_module, numerics, emitter_is_private=True,
+                frame=getattr(lowering.facade, "frame", None))
+            from pops.codegen.state_storage_lowering import prepare_state_storage_requirements
+            emit_model = prepare_state_storage_requirements(
+                emit_model, lowering.source_module, resolved_operations,
+                emitter_is_private=True, numerics=numerics)
             emit_model.check()
             return emit_model, lowering.source_module
         if resolved_operations is not None:
@@ -669,6 +681,7 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
                 lowering.source_module,
                 resolved_operations,
                 emitter_is_private=lowering.owns_emitter or emit_model is not lowering.emit_model,
+                numerics=numerics,
             )
             if emit_model is not lowering.emit_model:
                 lowering = CompilerLowering(
@@ -680,6 +693,14 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None,
             object.__setattr__(lowering.emit_model, "_resolved_operations", resolved_operations)
             object.__setattr__(getattr(lowering.emit_model, "_m", lowering.emit_model),
                                "_resolved_operations", resolved_operations)
+        from pops.codegen.program_realization import prepare_program_realization_carrier
+        emit_model = prepare_program_realization_carrier(
+            lowering.emit_model, lowering.source_module, numerics,
+            emitter_is_private=lowering.owns_emitter, frame=getattr(lowering.facade, "frame", None))
+        if emit_model is not lowering.emit_model:
+            from pops.codegen._compiler_lowering import CompilerLowering
+            lowering = CompilerLowering(emit_model=emit_model, source_module=lowering.source_module,
+                                        facade=lowering.facade, owns_emitter=True)
         from pops.codegen.nonconservative_lowering import prepare_path_carrier
         prepare_path_carrier(lowering.emit_model, lowering.source_module, resolved_operations, numerics)
         from pops.codegen.user_reconstruction_lowering import prepare_user_reconstruction_carrier

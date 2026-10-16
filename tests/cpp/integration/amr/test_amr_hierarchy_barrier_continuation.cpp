@@ -7,6 +7,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 
 #include <array>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -25,7 +26,8 @@ struct Model : pops::nd::ScalarAdvection<Dim> {
 };
 struct Evidence {
   int mode = 0;
-  int gathered = 0, continued = 0, solves = 0, publications = 0, completed = 0;
+  int gathered = 0, continued = 0, solves = 0, publications = 0, completed = 0, recovered = 0;
+  std::function<void()> spatial_gather, spatial_solve;
 };
 struct Fixture {
   std::unique_ptr<System> system;
@@ -40,7 +42,7 @@ void expect_value(const Field& field, pops::Real value) {
   }
 }
 
-Fixture prepare_fixture() {
+Fixture prepare_fixture(bool refined = true) {
   pops::comm_init();
   pops::AmrSystemConfig<Dim> config;
   config.explicit_bootstrap = true;
@@ -78,49 +80,96 @@ Fixture prepare_fixture() {
         context->advance_mapping_hierarchy(
             dt,
             [context, evidence, facade](double) {
-              ++evidence->gathered;
-              context->set_stage_time(1, 2);
-              const auto rank = context->prepared_execution_lane().rank();
-              auto kind = Context::HierarchyBarrierKind::linear_solve;
-              if (evidence->mode == 4 && rank == 0)
-                kind = static_cast<Context::HierarchyBarrierKind>(99);
-              const std::string hash =
-                  evidence->mode == 2 && rank == 0 ? "foreign-program" : kProgram;
-              const std::string dependencies = evidence->mode == 1 && context->level() == 1
-                                                   ? "different-level-inputs"
-                                                   : "gather/state/half-step";
-              if (evidence->mode == 3 && rank == 0)
+              auto evaluate = [context, evidence, facade] {
+                ++evidence->gathered;
+                if (evidence->mode == 9 && context->level() == 1)
+                  throw pops::runtime::program::hierarchy_control_failure(
+                      std::numeric_limits<std::int64_t>::min(), 1);
+                context->set_stage_time(1, 2);
+                if (evidence->spatial_gather)
+                  evidence->spatial_gather();
+                const auto rank = context->prepared_execution_lane().rank();
+                auto kind = evidence->mode == 6 ? Context::HierarchyBarrierKind::nonlinear_solve
+                                                : Context::HierarchyBarrierKind::linear_solve;
+                if (evidence->mode == 4 && rank == 0)
+                  kind = static_cast<Context::HierarchyBarrierKind>(99);
+                const std::string hash =
+                    evidence->mode == 2 && rank == 0 ? "foreign-program" : kProgram;
+                const std::string dependencies = evidence->mode == 1 && context->level() == 1
+                                                     ? "different-level-inputs"
+                                                     : "gather/state/half-step";
+                if (evidence->mode == 3 && rank == 0)
+                  context->set_stage_time(0, 1);
+                context->suspend_hierarchy_barrier(
+                    kind, 101, hash, dependencies, 1, 2,
+                    [context, evidence, facade] {
+                      ++evidence->solves;
+                      EXPECT_EQ(context->level(), 0);
+                      EXPECT_EQ(evidence->gathered, facade->n_levels());
+                      EXPECT_EQ(facade->time(), 0.0);
+                      if (evidence->spatial_solve)
+                        evidence->spatial_solve();
+                      if (evidence->mode == 6)
+                        for (int level = 0; level < facade->n_levels(); ++level)
+                          context->with_program_attempt_level_or_current(level, [&] {
+                            EXPECT_EQ(context->level(), level);
+                            expect_value(context->state(0), pops::Real(7));
+                          });
+                      EXPECT_EQ(context->level(), 0);
+                      for (int level = 0; level < facade->n_levels(); ++level)
+                        expect_value(facade->engine()->hierarchy().state(level), pops::Real(7));
+                      if (evidence->mode == 5) {
+                        context->state(0).set_val(pops::Real(19));
+                        if (context->prepared_execution_lane().rank() == 0)
+                          throw std::runtime_error("injected unique barrier callback failure 91");
+                      }
+                      // engine() above may enter a native collective. Inject a local
+                      // failure only after that common phase; the surrounding rejection
+                      // frontier then converges it before any later collective.
+                      if (evidence->mode == 7 && context->prepared_execution_lane().rank() == 0)
+                        throw pops::runtime::program::hierarchy_control_failure(
+                            std::numeric_limits<std::int64_t>::min(), 1);
+                      if (evidence->mode == 8 && context->prepared_execution_lane().rank() == 0)
+                        throw std::runtime_error(
+                            "terminal failure must not become a captured Result");
+                    },
+                    [context, evidence, facade] {
+                      ++evidence->continued;
+                      EXPECT_EQ(evidence->solves, 1);
+                      context->set_stage_time(3, 4);
+                      context->suspend_hierarchy_barrier(
+                          Context::HierarchyBarrierKind::field_publication, 102, kProgram,
+                          "field/publication/three-quarter-step", 3, 4,
+                          [context, evidence, facade] {
+                            ++evidence->publications;
+                            EXPECT_EQ(context->level(), 0);
+                            EXPECT_EQ(evidence->continued, facade->n_levels());
+                            EXPECT_EQ(facade->time(), 0.0);
+                          },
+                          [context] { context->state(0).set_val(pops::Real(11)); });
+                    });
+              };
+              if (evidence->mode >= 7) {
+                context->push_hierarchy_failure_handler(
+                    100, kProgram, "capture/exact-root",
+                    [context, evidence](std::exception_ptr error) {
+                      try {
+                        std::rethrow_exception(error);
+                      } catch (const pops::runtime::program::StepAttemptRejected& failure) {
+                        const auto words =
+                            pops::runtime::program::hierarchy_control_failure_words(failure);
+                        EXPECT_EQ(words.first, std::numeric_limits<std::int64_t>::min());
+                        EXPECT_EQ(words.second, 1);
+                      }
+                      ++evidence->recovered;
+                      context->state(0).set_val(pops::Real(17));
+                    });
                 context->set_stage_time(0, 1);
-              context->suspend_hierarchy_barrier(
-                  kind, 101, hash, dependencies, 1, 2,
-                  [context, evidence, facade] {
-                    ++evidence->solves;
-                    EXPECT_EQ(context->level(), 0);
-                    EXPECT_EQ(evidence->gathered, facade->n_levels());
-                    EXPECT_EQ(facade->time(), 0.0);
-                    for (int level = 0; level < facade->n_levels(); ++level)
-                      expect_value(facade->engine()->hierarchy().state(level), pops::Real(7));
-                    if (evidence->mode == 5) {
-                      context->state(0).set_val(pops::Real(19));
-                      if (context->prepared_execution_lane().rank() == 0)
-                        throw std::runtime_error("injected unique barrier callback failure 91");
-                    }
-                  },
-                  [context, evidence, facade] {
-                    ++evidence->continued;
-                    EXPECT_EQ(evidence->solves, 1);
-                    context->set_stage_time(3, 4);
-                    context->suspend_hierarchy_barrier(
-                        Context::HierarchyBarrierKind::field_publication, 102, kProgram,
-                        "field/publication/three-quarter-step", 3, 4,
-                        [context, evidence, facade] {
-                          ++evidence->publications;
-                          EXPECT_EQ(context->level(), 0);
-                          EXPECT_EQ(evidence->continued, facade->n_levels());
-                          EXPECT_EQ(facade->time(), 0.0);
-                        },
-                        [context] { context->state(0).set_val(pops::Real(11)); });
-                  });
+                context->suspend_hierarchy_barrier(
+                    Context::HierarchyBarrierKind::control, 100, kProgram, "capture/entry", 0, 1,
+                    [] {}, std::move(evaluate));
+              } else
+                evaluate();
             },
             context, [evidence] { ++evidence->completed; });
       },
@@ -128,6 +177,9 @@ Fixture prepare_fixture() {
   system->set_program_block_map({0});
   using Budget = System::PreparedAmrProgramFluxExpressionBlockBudget;
   system->install_prepared_amr_program_flux_expression_budget(kProgram, {Budget{0, 0}}, 0, 0);
+
+  if (!refined)
+    return {std::move(system), std::move(context), std::move(evidence)};
 
   const auto& parent = system->engine()->hierarchy().layout(0);
   pops::Index<Dim> upper{};
@@ -210,4 +262,138 @@ TEST(AmrHierarchyBarrierContinuation, RankLocalUniqueCallbackFailureRollsBackAnd
   *fixture.evidence = Evidence{};
   fixture.system->step(0.125);
   expect_success(fixture);
+}
+
+TEST(AmrHierarchyBarrierContinuation, NonlinearCallbackBorrowsRootAndVisitsOtherExactEnvelopes) {
+  auto fixture = prepare_fixture();
+  fixture.evidence->mode = 6;
+  fixture.system->step(0.125);
+  expect_success(fixture);
+}
+
+TEST(AmrHierarchyBarrierContinuation, CompositeResidualBorrowsCheckedOutRootForPredictorAndJvp) {
+  // The spatial residual and predictor visit the same checked-out root as the
+  // CPS once callback. No-interface geometry isolates authority from flux laws;
+  // the Python convergence matrix separately exercises true diffusion faces.
+  auto fixture = prepare_fixture(false);
+  auto* context = fixture.context.get();
+  fixture.evidence->mode = 6;
+  ASSERT_EQ(fixture.system->n_levels(), 1);
+  EXPECT_THROW(context->with_program_attempt_level_or_current(0, [] {}), std::logic_error);
+  pops::FieldNewtonOptions options;
+  options.tolerance = 1e-12;
+  auto workspace = context->prepare_spatial_hierarchy(901, 0, options, pops::Real(1e-6));
+  auto* coordinates = &context->scratch_state(902, 0, context->state(0));
+  workspace->mappings[0] = [coordinates](const Field& q) {
+    pops::PureFieldAlgebra::copy(*coordinates, q);
+    return coordinates;
+  };
+  workspace->evaluations[0] = [context](Field& q, const Field& previous, Field& residual,
+                                        const Field*) {
+    context->require_program_field_access(q);
+    context->require_program_field_access(previous);
+    pops::lincomb(residual, pops::Real(1), q, pops::Real(-1), previous);
+    return &q;
+  };
+  fixture.evidence->spatial_gather = [context] {
+    context->stage_spatial_hierarchy_previous(901, 0, context->state(0), nullptr);
+  };
+  fixture.evidence->spatial_solve = [context, workspace] {
+    context->reconcile_spatial_hierarchy_previous(901);
+    const auto report = context->solve_spatial_hierarchy(*workspace);
+    EXPECT_EQ(report.status, pops::SolveStatus::kSolved);
+    EXPECT_GT(workspace->derivative_evaluations(), 0);
+    EXPECT_GT(workspace->residual_evaluations(), 1);
+    if (workspace->candidate(0).local_size() != 0) {
+      EXPECT_NEAR(pops::reduce_min_local(workspace->candidate(0)), 7., 1e-11);
+      EXPECT_NEAR(pops::reduce_max_local(workspace->candidate(0)), 7., 1e-11);
+    }
+    EXPECT_EQ(context->level(), 0);
+    expect_value(context->state(0), pops::Real(7));
+  };
+  fixture.system->step(0.125);
+  EXPECT_EQ(fixture.evidence->solves, 1);
+  EXPECT_EQ(fixture.evidence->publications, 1);
+  EXPECT_EQ(fixture.evidence->completed, 1);
+  EXPECT_EQ(fixture.evidence->gathered, 1);
+  EXPECT_EQ(fixture.evidence->continued, 1);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0.125);
+  expect_value(fixture.system->engine()->hierarchy().state(0), pops::Real(11));
+  EXPECT_THROW(context->with_program_attempt_level_or_current(0, [] {}), std::logic_error);
+}
+
+TEST(AmrHierarchyBarrierContinuation, RecoverableOnceAndLaterLevelFailuresResumeEveryExactHandler) {
+  for (int mode : {7, 9}) {
+    auto fixture = prepare_fixture();
+    fixture.evidence->mode = mode;
+    fixture.system->step(0.125);
+    EXPECT_EQ(fixture.evidence->recovered, 2);
+    EXPECT_EQ(fixture.evidence->solves, mode == 7 ? 1 : 0);
+    EXPECT_EQ(fixture.evidence->continued, 0);
+    EXPECT_EQ(fixture.evidence->completed, 1);
+    EXPECT_DOUBLE_EQ(fixture.system->time(), 0.125);
+    for (int level = 0; level < fixture.system->n_levels(); ++level)
+      expect_value(fixture.system->engine()->hierarchy().state(level), pops::Real(17));
+  }
+}
+
+TEST(AmrHierarchyBarrierContinuation, TerminalFailureDoesNotInvokeRecoveryAndRollsBack) {
+  auto fixture = prepare_fixture();
+  const auto before = fixture.system->program_accepted_state();
+  fixture.evidence->mode = 8;
+  EXPECT_THROW(fixture.system->step(0.125), std::exception);
+  EXPECT_EQ(fixture.evidence->recovered, 0);
+  EXPECT_EQ(fixture.evidence->completed, 0);
+  EXPECT_EQ(fixture.system->program_accepted_state(), before);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0);
+  for (int level = 0; level < fixture.system->n_levels(); ++level)
+    expect_value(fixture.system->engine()->hierarchy().state(level), pops::Real(7));
+}
+
+TEST(AmrHierarchyBarrierContinuation, PreviousStageAuthorityIsExactLevelAttemptAndRollsBack) {
+  auto fixture = prepare_fixture();
+  auto* context = fixture.context.get();
+  fixture.evidence->mode = 6;
+  ASSERT_EQ(fixture.system->n_levels(), 2);
+  pops::FieldNewtonOptions options;
+  auto workspace = context->prepare_spatial_hierarchy(911, 0, options, pops::Real(1e-6));
+  EXPECT_THROW(context->require_program_field_access(workspace->previous(0)),
+               std::invalid_argument);
+  int visits = 0;
+  fixture.evidence->spatial_gather = [context, workspace, &visits] {
+    const int level = context->level();
+    EXPECT_THROW(context->require_program_field_access(workspace->previous(level)),
+                 std::invalid_argument);
+    Field lookalike(context->state(0));
+    EXPECT_THROW(context->require_program_field_access(lookalike), std::invalid_argument);
+    context->stage_spatial_hierarchy_previous(911, 0, context->state(0), nullptr);
+    EXPECT_NO_THROW(context->require_program_field_access(workspace->previous(level)));
+    EXPECT_THROW(context->require_program_field_access(workspace->previous(1 - level)),
+                 std::invalid_argument);
+    ++visits;
+  };
+  bool reject = true;
+  fixture.evidence->spatial_solve = [context, workspace, &reject] {
+    for (int level = 0; level < 2; ++level)
+      context->with_program_attempt_level_or_current(level, [&] {
+        EXPECT_NO_THROW(context->require_program_field_access(workspace->previous(level)));
+        expect_value(workspace->previous(level), pops::Real(7));
+      });
+    if (reject)
+      throw std::runtime_error("late previous-stage authority rollback witness");
+  };
+  const auto accepted = fixture.system->program_accepted_state();
+  EXPECT_THROW(fixture.system->step(0.125), std::runtime_error);
+  EXPECT_EQ(fixture.system->program_accepted_state(), accepted);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0.0);
+  EXPECT_THROW(context->require_program_field_access(workspace->previous(0)),
+               std::invalid_argument);
+  EXPECT_EQ(visits, 2);
+  reject = false;
+  fixture.evidence->gathered = fixture.evidence->solves = 0;
+  fixture.system->step(0.125);
+  EXPECT_EQ(visits, 4);
+  EXPECT_DOUBLE_EQ(fixture.system->time(), 0.125);
+  EXPECT_THROW(context->require_program_field_access(workspace->previous(0)),
+               std::invalid_argument);
 }

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 def accepted_tagging_hysteresis_span(encoded: bytes, *, dimension: int) -> tuple[bytes, int]:
     version = encoded[:8]
-    if version not in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7", b"POPSAND8", b"POPSAND9", b"POPSANDA"):
-        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4/v5/v6/v7/v8/v9/vA")
+    if version not in (b"POPSAND4", b"POPSAND5", b"POPSAND6", b"POPSAND7", b"POPSAND8", b"POPSAND9", b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE", b"POPSANDF"):
+        raise AssertionError("checkpoint does not contain exact-ranked accepted-state v4/v5/v6/v7/v8/v9/vA/vB/vC/vD/vE/vF")
     cursor = 8
 
     def take(size: int, field: str) -> bytes:
@@ -31,7 +31,7 @@ def accepted_tagging_hysteresis_span(encoded: bytes, *, dimension: int) -> tuple
         raise AssertionError("accepted-state native dimension differs from the probe")
     framed("spatial contract")
     take(2 * 8, "topology epoch and materialization generation")
-    if version in (b"POPSAND8", b"POPSAND9", b"POPSANDA"):
+    if version in (b"POPSAND8", b"POPSAND9", b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE", b"POPSANDF"):
         # AND8 carries committed authority even when the accepted face ledger is empty.
         # Legacy inspection must not invent this field or upgrade a continuation image.
         take(8, "committed attempt")
@@ -45,19 +45,21 @@ def accepted_tagging_hysteresis_span(encoded: bytes, *, dimension: int) -> tuple
         for _identity in range(4):
             framed("history identity")
         take(2 * 8, "history depth and component count")
-        if version == b"POPSANDA":
+        if version in (b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE", b"POPSANDF"):
             take(8, "history declared ghost depth")
     for _ in range(word()):
         framed("history slot name")
         take(5 * 8, "history slot provenance")
-        if version in (b"POPSAND7", b"POPSAND8", b"POPSAND9", b"POPSANDA"):
+        if version in (b"POPSAND7", b"POPSAND8", b"POPSAND9", b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE", b"POPSANDF"):
             # AND7/8 carry kind, start_bits, interval_bits and ordinal. AND4/5/6
             # have no sample identity; these are not interchangeable layouts.
             take(4 * 8, "history sample identity")
+        if version in (b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE", b"POPSANDF"):
+            take(4 * 8, "history reconstruction digest")
     for _ in range(word()):
         framed("pending history remap key")
         take(12 * 8, "pending history remap")
-        if version in (b"POPSAND9", b"POPSANDA"):
+        if version in (b"POPSAND9", b"POPSANDA", b"POPSANDB", b"POPSANDC", b"POPSANDD", b"POPSANDE", b"POPSANDF"):
             take(6 * 8, "pending qualification and source sample")
             framed("pending retained ring contract")
     framed("history flux payload")
