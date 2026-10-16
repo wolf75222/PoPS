@@ -952,6 +952,8 @@ class AmrSystem {
   prepared_amr_provider_storage_groups(int level) const;
   [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
   prepared_amr_auxiliary_consumer_plan(const std::string& consumer_qid, int level) const;
+  [[nodiscard]] POPS_EXPORT std::string prepared_amr_auxiliary_read_authority(
+      std::string_view consumer, int level, std::size_t slot, std::uint64_t byte_capacity) const;
 
   using ProgramFieldComponent = runtime::system::ProgramFieldComponent<Dim>;
   using ProgramFieldLevel = runtime::system::ProgramFieldLevel<Dim>;

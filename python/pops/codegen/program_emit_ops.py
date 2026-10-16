@@ -442,6 +442,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             lines.append("ctx.prepare_spatial_collectively([&]() {")
             lines.extend("  ctx.require_program_field_access(%s);" % var[item.id] for item in reads)
             lines.append("}); // Program numerical Field input authority")
+    from .program_emit_transform_obligation import emit_physical_input_guards
+    lines += emit_physical_input_guards(v, var)
     bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
             if v.block is not None else None)
     if v.id in var.get(("moving_deferred_rates",), ()):
@@ -548,14 +550,13 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 raise ValueError(
                     "LinearInterpolation target %s lies outside retained history [-%d, 0]"
                     % (coordinate, depth))
-            var[v.id] = "u%d" % v.id
+            owned = "history_interpolation_%d" % v.id
+            var[v.id] = "(*%s)" % owned
+            var[("field_pointer", v.id)] = owned
             lines.append(
-                "pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
-                % (var[v.id], int(v.id), var[source.id]))
-            lines.append(
-                "ctx.interpolate_history_linear(%s, %s, %d, %d, %s, %s, %d, %s);"
+                "auto %s = ctx.interpolate_history_linear_owned(%s, %d, %d, %s, %s, %d, %s);"
                 % (
-                    var[v.id],
+                    owned,
                     json.dumps(source.attrs["history"]),
                     depth,
                     bidx,
@@ -806,7 +807,17 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         # ctx.history byte-identical (a store-first scheme reading before its store is a config error).
         var[v.id] = "h%d" % v.id
         from .program_emit_intervals import emit_authenticated_history_read
-        if emit_authenticated_history_read(program, v, var, lines, target=target):
+        if v.attrs.get("global_field_history_read"):
+            from pops.time._program.global_history_reads import validate_read
+            from pops.time._program.global_history_storage import descriptor
+            store = validate_read(program, v)
+            owner = block_idx[store.block]
+            lines.append("auto& %s = ctx.history_observation(%s, %d, %d, %d, %s);"
+                         % (var[v.id], json.dumps(v.attrs["history"]), int(v.attrs["lag"]),
+                            int(v.attrs["ncomp"]), owner,
+                            json.dumps(descriptor(program, v.attrs["history"]))))
+            output_setup_end = len(lines)
+        elif emit_authenticated_history_read(program, v, var, lines, target=target):
             output_setup_end = len(lines)
         elif "ncomp" in v.attrs:
             if target == "amr_system" and bidx is not None:
@@ -942,12 +953,35 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 status, active_mask, bidx, provider_plans=provider_plans,
                 consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
         else:
-            lines += _emit_local_transform_kernel(
+            from .program_emit_transform_obligation import emit_closed_transform, emit_pending_presence
+            from pops.time.value_signatures import value_signature
+            pending_lines, pending = emit_pending_presence(var[state_in.id], "transform_%d" % v.id)
+            lines += pending_lines
+            closed_owner = "transform_closed_owner_%d" % v.id
+            lines.append("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % closed_owner)
+            lines.append("if (%s) {" % pending)
+            closed, owned = emit_closed_transform(
+                model=node_model, name=v.attrs["transform"], source=var[state_in.id],
+                output=var[v.id], status=status, mask=active_mask, owner=bidx,
+                signature=value_signature(state_in), block_indices=block_idx,
+                provider_plans=provider_plans,
+                consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+                stem="closed_transform_%d" % v.id,
+                capacity=program.representation_workspace_byte_capacity,
+                target=target, issue=False)
+            lines += ["  " + line for line in closed]
+            lines.append("  %s = std::move(%s);" % (closed_owner, owned))
+            lines.append("} else {")
+            lines += ["  " + line for line in _emit_local_transform_kernel(
                 node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
                 active_mask, bidx,
                 provider_plans=provider_plans,
                 consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
-            )
+            )]
+            lines.append("}")
+            alias = "transform_observed_%d" % v.id
+            lines.append("auto& %s = %s ? *%s : %s;" % (alias, closed_owner, closed_owner, var[v.id]))
+            var[v.id] = alias
         reduced = "transform_failed_%d" % v.id
         # AMR transforms (including after-synchronization and composite Q maps) are
         # produced and checked collectively one level at a time. Sibling statuses
@@ -1845,6 +1879,14 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             from pops.codegen.program_partition_stability import emit_user_face_stability
             emit_user_face_stability(v, var, lines, block_index=bidx)
         if v.id in committed_ids:
+            # A direct identity commit is still a physical publication. Inspect
+            # its selected source before any in-place write to the block state.
+            if len(v.inputs) == 1 and dict(v.attrs["coeffs"][0]) == {0: 1}:
+                from .program_emit_transform_obligation import emit_pending_presence
+                pending_lines, pending = emit_pending_presence(
+                    var[v.inputs[0].id], "commit_identity_%d" % v.id)
+                lines += pending_lines
+                lines.append('if (%s) throw std::invalid_argument("conservative identity commit has a pending representation");' % pending)
             # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
             c_base = {0: 0}
             acc = "acc%d" % v.id
@@ -1884,6 +1926,22 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             if "cell_field_projection" in v.attrs:
                 from pops.codegen.program_emit_stencil_inputs import emit_cell_sample_extension
                 emit_cell_sample_extension(v,var,lines,block=bidx,target=target)
+    if (v.op == "linear_combine" and len(v.inputs) == 1
+            and dict(v.attrs["coeffs"][0]) == {0: 1} and v.id not in committed_ids):
+        from .program_emit_transform_obligation import emit_pending_presence
+        source = var[v.inputs[0].id]
+        pending_lines, pending = emit_pending_presence(source, "identity_%d" % v.id)
+        lines += pending_lines
+        owner = "identity_owner_%d" % v.id
+        alias = "identity_observed_%d" % v.id
+        lines.append("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % owner)
+        lines.append("if (%s) {" % pending)
+        lines.append("  pops::runtime::program::field_read_detail::phase(ctx.prepared_execution_lane(), [&] {")
+        lines.append("    %s = ctx.own_structural_field(%s);" % (owner, source))
+        lines.append('  }, "identity Field metadata copy rejected");')
+        lines.append("}")
+        lines.append("auto& %s = %s ? *%s : %s;" % (alias, owner, owner, var[v.id]))
+        var[v.id] = alias
     # UNIFIED SCHEDULER (ADC-458, Spec 3 sections 17-18): if this op carries a non-always schedule,
     # wrap the statements it just emitted (lines[_profile_start:]) in the due-test guard + policy
     # branch. Done HERE, after the op lowered itself, so EVERY schedulable node (field solve, rhs,

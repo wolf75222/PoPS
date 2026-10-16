@@ -220,16 +220,22 @@ class _ProgramSerialization(_ProgramBase):
             raise ValueError("max_exact_coefficient_bytes must be an integer in [8, INT64_MAX]")
         from .resource_budgets import validate_flux_expression_budget
         validate_flux_expression_budget(self.flux_expression_budget)
+        from .resource_budgets import validate_history_field_metadata_budget
+        validate_history_field_metadata_budget(self.history_field_metadata_budget)
         from .resource_budgets import validate_terminal_failure_capacities
         validate_terminal_failure_capacities(
             self.terminal_failure_byte_capacity, self.terminal_failure_aggregate_byte_capacity)
+        from .resource_budgets import validate_representation_workspace_capacity
+        validate_representation_workspace_capacity(self.representation_workspace_byte_capacity)
         order = self._block_indices()
         result: dict[str, Any] = {
             "name": self.name,
             "max_exact_coefficient_bytes": self.max_exact_coefficient_bytes,
             "flux_expression_budget": self.flux_expression_budget,
+            "history_field_metadata_budget": self.history_field_metadata_budget,
             "terminal_failure_byte_capacity": self.terminal_failure_byte_capacity,
             "terminal_failure_aggregate_byte_capacity": self.terminal_failure_aggregate_byte_capacity,
+            "representation_workspace_byte_capacity": self.representation_workspace_byte_capacity,
             # Version 6 extends persistent trace selectors to prepared constitutive faces.
             # Keep existing transport-only program identities/restart authorities unchanged.
             "version": 6 if any(

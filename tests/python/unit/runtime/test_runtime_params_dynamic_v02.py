@@ -148,3 +148,34 @@ def test_invalid_parameter_storage_budget_rejects_before_native_lookup(monkeypat
         binding.execution_context_for_bind(_platform(), {
             "execution_context": _context(), "runtime_parameter_byte_capacity": capacity,
         })
+
+
+
+def test_parameter_storage_uses_only_the_authenticated_selected_variant(monkeypatch):
+    from types import SimpleNamespace
+    from pops import _native_selector as selector
+    from pops.runtime._runtime_parameter_storage import resolve_runtime_parameter_storage
+
+    calls = []
+    def selected(*, required):
+        calls.append(required)
+        return SimpleNamespace(runtime_parameter_storage_bytes=lambda count: 64+16*count)
+    monkeypatch.setattr(selector, "selected_native_module", selected)
+    result = resolve_runtime_parameter_storage(_artifact_routes(count=3), {})
+    assert calls == [True]
+    assert result["carrier_bytes"] == {"model:fluid": 112, "program:layout:0": 112}
+    assert result["initial_storage_bytes"] == 224
+
+
+def test_parameter_storage_never_selects_a_default_native_dimension(monkeypatch):
+    from pops import _native_selector as selector
+    from pops.runtime._runtime_parameter_storage import resolve_runtime_parameter_storage
+
+    def absent(*, required):
+        assert required
+        raise RuntimeError("no native dimension was selected")
+    monkeypatch.setattr(selector, "selected_native_module", absent)
+    with pytest.raises(RuntimeError, match="no native dimension was selected"):
+        resolve_runtime_parameter_storage(_artifact_routes(count=3), {})
+    # A parameter-free artifact needs no native sizeof or module selection.
+    assert resolve_runtime_parameter_storage(_artifact_routes(count=0), {})["initial_storage_bytes"] == 0

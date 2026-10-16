@@ -190,14 +190,17 @@ class FixedDt(StepStrategy):
 class ComputedDt(StepStrategy):
     """Request ``dt``; the Program must return its effective Scalar duration.
 
-    The requested interval is not clipped by the run frontier. The reached point
-    must respect that frontier (up to the explicitly authored binary64 neighbours).
+    By default the requested interval is not clipped by the run frontier.
+    ``clip_to_frontier=True`` caps each initial proposal by ``limit - start``;
+    retries shrink that capped proposal. In both modes the computed reached point
+    must respect the frontier (up to the authored binary64 neighbours).
     """
 
     dt: float
     endpoint_ulps: int = 0
     shrink: float = .5
     max_rejections: int = 0
+    clip_to_frontier: bool = False
     kind: ClassVar[str] = "computed_dt"
 
     def __post_init__(self) -> None:
@@ -210,21 +213,38 @@ class ComputedDt(StepStrategy):
         if type(self.endpoint_ulps) is not int or not 0 <= self.endpoint_ulps <= 1024:
             raise ValueError("ComputedDt.endpoint_ulps must be an integer in [0, 1024]")
 
+        if type(self.clip_to_frontier) is not bool:
+            raise TypeError("ComputedDt.clip_to_frontier must be bool")
+
+    def initial_request(self, start: float, limit: float) -> float:
+        """Reproduce the authenticated first proposal, before any retry shrink."""
+        if not math.isfinite(start) or not math.isfinite(limit) or not limit > start:
+            raise ValueError("ComputedDt request requires finite start and future limit")
+        return min(self.dt, limit - start) if self.clip_to_frontier else self.dt
+
     def to_data(self) -> dict[str, Any]:
-        return {"kind": self.kind, "schema_version": 1, "dt": scalar_data(self.dt),
-                "endpoint_ulps": self.endpoint_ulps, "interval_rule": "no_spatial_exchanges",
-                "shrink": scalar_data(self.shrink), "max_rejections": self.max_rejections}
+        payload = {"kind": self.kind, "schema_version": 1, "dt": scalar_data(self.dt),
+                   "endpoint_ulps": self.endpoint_ulps, "interval_rule": "no_spatial_exchanges",
+                   "shrink": scalar_data(self.shrink), "max_rejections": self.max_rejections}
+        if self.clip_to_frontier:
+            payload.update(schema_version=2, request_limit="remaining")
+        return payload
 
     @classmethod
     def from_data(cls, payload: Mapping[str, Any]) -> ComputedDt:
-        if not isinstance(payload, Mapping) or set(payload) != {
-            "kind", "schema_version", "dt", "endpoint_ulps", "interval_rule", "shrink", "max_rejections",
-        } or payload.get("kind") != cls.kind or type(payload["schema_version"]) is not int \
-                or payload["schema_version"] != 1 \
-                or payload["interval_rule"] != "no_spatial_exchanges":
+        keys = {"kind", "schema_version", "dt", "endpoint_ulps", "interval_rule", "shrink", "max_rejections"}
+        clipped = isinstance(payload, Mapping) and payload.get("schema_version") == 2
+        if clipped:
+            keys.add("request_limit")
+        if not isinstance(payload, Mapping) or set(payload) != keys \
+                or payload.get("kind") != cls.kind or type(payload["schema_version"]) is not int \
+                or payload["schema_version"] != (2 if clipped else 1) \
+                or payload["interval_rule"] != "no_spatial_exchanges" \
+                or (clipped and payload["request_limit"] != "remaining"):
             raise ValueError("ComputedDt strategy manifest has invalid keys")
         return cls(_binary64(payload["dt"], where="ComputedDt.dt"), payload["endpoint_ulps"],
-                   _binary64(payload["shrink"], where="ComputedDt.shrink"), payload["max_rejections"])
+                   _binary64(payload["shrink"], where="ComputedDt.shrink"), payload["max_rejections"],
+                   clip_to_frontier=clipped)
 
 
 @register_step_strategy_type

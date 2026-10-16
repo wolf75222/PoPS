@@ -2,6 +2,8 @@
 /// @brief Exact compile-time-ranked execution boundary for generated Uniform Programs.
 
 #pragma once
+#include <pops/runtime/program/field_transform_support.hpp>
+#include <pops/runtime/program/field_read_transform.hpp>
 
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/program/distributed_array.hpp>
@@ -350,9 +352,16 @@ class ProgramContext {
       if (auto live = algebra.lock())
         live->restart_committed(keep, restored);
     };
+    typename ContinuationCodec<Dim>::Prototypes checkpoint_prototypes =
+        [system = system_, providers = continuation_field_providers_](
+            const ContinuationType& type,
+            const ContinuationFieldSupport::Ref& support) -> const field_type& {
+      return continuation_field_prototype_(system, providers, type, support);
+    };
     system_->install_program_step(std::move(step));
     runtime_state().install_resource_lifetime(std::move(lifetime));
     runtime_state().install_restart_lifetime(std::move(restart));
+    runtime_state().install_continuation_checkpoint_prototypes(std::move(checkpoint_prototypes));
   }
 
   void reached_duration(double duration) const {
@@ -2043,6 +2052,18 @@ class ProgramContext {
     tensor_laplacian(output, input, tensor, boundary);
   }
 
+  void configure_history_field_metadata(std::uint64_t retained_bytes,
+                                        std::uint64_t workspace_bytes) const {
+    HistoryFieldMetadataBudget budget{retained_bytes, workspace_bytes};
+    budget.validate();
+    if (!budget.enabled())
+      throw std::invalid_argument("History Field metadata requires positive explicit capacities");
+    auto& manager = runtime_state().hist_;
+    if (manager.field_metadata_budget.enabled() && manager.field_metadata_budget != budget)
+      throw std::invalid_argument("History Field metadata capacity changed after installation");
+    manager.field_metadata_budget = budget;
+  }
+
   void register_history(const std::string& name, int lag, int ncomp = -1, int program_owner = -1,
                         const std::string& state_identity = {},
                         const std::string& space_identity = {},
@@ -2095,6 +2116,7 @@ class ProgramContext {
     history.slot_sample[name].assign(static_cast<std::size_t>(ring_depth),
                                      HistorySampleIdentity::zero_start());
     history.slot_exchanges[name].resize(static_cast<std::size_t>(ring_depth));
+    history.slot_fields[name].resize(static_cast<std::size_t>(ring_depth));
   }
 
   field_type& history(const std::string& name, int lag, int ncomp = -1) const {
@@ -2110,6 +2132,29 @@ class ProgramContext {
     if (auto metadata = manager.slot_exchanges.find(name); metadata != manager.slot_exchanges.end())
       field_exchanges_->restore(&result, metadata->second.at(static_cast<std::size_t>(lag)));
     return result;
+  }
+
+  field_type& history_observation(const std::string& name, int lag, int components,
+                                  int program_owner, const std::string& descriptor) const {
+    continuation_local_phase(
+        [&] {
+          const auto& manager = runtime_state().hist_;
+          const auto found = manager.histories.find(name);
+          if (found == manager.histories.end() || lag < 1 || lag >= manager.depth.at(name) ||
+              manager.state_identity.at(name) != descriptor ||
+              manager.owner.at(name) != sys_block(program_owner))
+            throw std::invalid_argument("independent Field history has foreign storage authority");
+          runtime_state().require_frozen_output_history_projection(
+              name, manager.owner.at(name), descriptor, manager.space_identity.at(name),
+              manager.clock_identity.at(name), manager.interpolation_identity.at(name),
+              manager.depth.at(name), components, program_owner, manager.ghost_depth.at(name));
+          const auto& metadata = manager.slot_fields.at(name).at(static_cast<std::size_t>(lag));
+          if (!manager.initialized.at(name) || !metadata.support ||
+              metadata.support->program_identity != runtime_state().installed_hash_)
+            throw std::invalid_argument("independent Field history lacks its retained producer");
+        },
+        "read retained independent Field history");
+    return history(name, lag, components);
   }
 
   field_type& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
@@ -2132,6 +2177,10 @@ class ProgramContext {
     }
     // Preserve the direct legacy route when this context has no active generated-step interval:
     // System supplies its accepted last-dt provenance (or its zero-dt pre-step default).
+    const auto instance = continuation_field_instance_(value);
+    if (instance && (instance->metadata.support || instance->metadata.representation))
+      throw std::invalid_argument(
+          "retained Field history store requires an explicit positive interval");
     revoke_program_history_values_();
     system_->store_history(name, value);
   }
@@ -2149,72 +2198,62 @@ class ProgramContext {
     runtime_state().hist_.rotate(clock);
   }
 
-  /// Reconstruct one retained value at an exact target-clock coordinate.  The native history
-  /// ledger owns every bracketing interval; no current-state alias or fixed-dt inference is used.
+  // Select the retained numerical slots before allocating an owned result.
+  history_field_detail::LinearBracket history_linear_bracket_(
+      const std::string& name, int max_lag, int program_owner, const std::string& source_clock,
+      const std::string& target_clock, int target_step, Real target_offset) const {
+    const auto& manager = runtime_state().hist_;
+    const auto found = manager.histories.find(name);
+    if (found == manager.histories.end() || manager.depth.at(name) <= max_lag ||
+        manager.owner.at(name) != sys_block(program_owner) || !manager.initialized.at(name) ||
+        manager.clock_identity.at(name) != source_clock)
+      throw std::runtime_error("history interpolation requires its initialized owner/clock ring");
+    const double coordinate = (static_cast<double>(target_step) + target_offset) *
+                              static_cast<double>(clock_schedule_.ticks_per_macro(source_clock)) /
+                              static_cast<double>(clock_schedule_.ticks_per_macro(target_clock));
+    return history_field_detail::linear_bracket(coordinate, physical_time(),
+                                                manager.slot_dt.at(name), max_lag);
+  }
+
+  std::shared_ptr<field_type> interpolate_history_linear_owned(
+      const std::string& name, int max_lag, int program_owner, const std::string& source_clock,
+      const std::string& target_clock, int target_step, Real target_offset) const {
+    const auto bracket = history_linear_bracket_(name, max_lag, program_owner, source_clock,
+                                                 target_clock, target_step, target_offset);
+    if (bracket.endpoint())
+      return own_structural_field(history(name, static_cast<int>(bracket.selected())));
+    const auto& older = history(name, static_cast<int>(bracket.older));
+    const auto& newer = history(name, static_cast<int>(bracket.newer));
+    const auto& manager = runtime_state().hist_;
+    const auto metadata = history_field_detail::interpolated_metadata(
+        manager.slot_fields.at(name).at(bracket.older),
+        manager.slot_fields.at(name).at(bracket.newer), bracket.alpha, bracket.target_time,
+        manager.field_metadata_budget);
+    auto result = own_structural_field(older);
+    lincomb(*result, Real(1) - bracket.alpha, older, bracket.alpha, newer);
+    register_continuation_field_copy_(
+        *result, result,
+        {field_exchanges_->expression(result.get()), metadata.support, metadata.representation});
+    return result;
+  }
+
+  // Legacy borrowed-output callers have no lifetime to retain Field descriptions.
+  // The generated public API always uses the owned route above.
   void interpolate_history_linear(field_type& output, const std::string& name, int max_lag,
                                   int program_owner, const std::string& source_clock,
                                   const std::string& target_clock, int target_step,
                                   Real target_offset) const {
-    const int owner = sys_block(program_owner);
-    if (max_lag < 1 || !std::isfinite(static_cast<double>(target_offset)))
-      throw std::invalid_argument(
-          "ProgramContext linear history interpolation has an invalid target");
-
-    auto& manager = runtime_state().hist_;
-    const auto found = manager.histories.find(name);
-    if (found == manager.histories.end() || manager.depth.at(name) <= max_lag ||
-        manager.owner.at(name) != owner || !manager.initialized.at(name))
-      throw std::runtime_error(
-          "ProgramContext linear history interpolation requires an initialized retained ring");
-    require_same_field_contract_(output, found->second.front(),
-                                 "ProgramContext linear history interpolation");
-
-    const double source_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(source_clock));
-    const double target_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(target_clock));
-    const double coordinate =
-        (static_cast<double>(target_step) + static_cast<double>(target_offset)) * source_ticks /
-        target_ticks;
-    if (!std::isfinite(coordinate) || coordinate > 0.0 ||
-        coordinate < -static_cast<double>(max_lag))
-      throw std::runtime_error(
-          "ProgramContext linear history interpolation target lies outside retained timestamps");
-    if (coordinate == 0.0) {
-      lincomb(output, Real(1), found->second.front(), Real(0), found->second.front());
-      return;
-    }
-
-    const int older_lag = static_cast<int>(std::ceil(-coordinate));
-    if (older_lag < 1 || older_lag > max_lag)
-      throw std::runtime_error(
-          "ProgramContext linear history interpolation could not select bracketing slots");
-    const auto dt_ledger = manager.slot_dt.find(name);
-    if (dt_ledger == manager.slot_dt.end() || dt_ledger->second.size() != found->second.size())
-      throw std::logic_error(
-          "ProgramContext linear history interpolation dt ledger differs from its ring depth");
-
-    double newer_time = static_cast<double>(physical_time());
-    double older_time = newer_time;
-    double bracket_dt = 0.0;
-    for (int lag = 1; lag <= older_lag; ++lag) {
-      const double interval = dt_ledger->second[static_cast<std::size_t>(lag)];
-      if (!std::isfinite(interval) || !(interval > 0.0))
-        throw std::runtime_error(
-            "ProgramContext linear history interpolation requires positive exact slot timestamps");
-      bracket_dt = interval;
-      older_time = newer_time - interval;
-      if (lag != older_lag)
-        newer_time = older_time;
-    }
-    const double logical_fraction = coordinate + static_cast<double>(older_lag);
-    const double target_time = older_time + logical_fraction * bracket_dt;
-    const double alpha = (target_time - older_time) / (newer_time - older_time);
-    if (!std::isfinite(alpha) || alpha < 0.0 || alpha > 1.0)
-      throw std::runtime_error(
-          "ProgramContext linear history interpolation target does not bracket retained "
-          "timestamps");
-    lincomb(output, Real(1) - static_cast<Real>(alpha),
-            found->second[static_cast<std::size_t>(older_lag)], static_cast<Real>(alpha),
-            found->second[static_cast<std::size_t>(older_lag - 1)]);
+    const auto bracket = history_linear_bracket_(name, max_lag, program_owner, source_clock,
+                                                 target_clock, target_step, target_offset);
+    const auto& manager = runtime_state().hist_;
+    if (const auto fields = manager.slot_fields.find(name); fields != manager.slot_fields.end())
+      if (!fields->second.at(bracket.older).empty() || !fields->second.at(bracket.newer).empty())
+        throw std::invalid_argument(
+            "qualified history interpolation requires an owned Field result");
+    const auto& older = history(name, static_cast<int>(bracket.older));
+    const auto& newer = history(name, static_cast<int>(bracket.newer));
+    require_same_field_contract_(output, older, "history interpolation");
+    lincomb(output, Real(1) - bracket.alpha, older, bracket.alpha, newer);
   }
 
   bool cache_should_update(int node_id, int every_n) const {
@@ -2296,6 +2335,7 @@ class ProgramContext {
   runtime_state_type& runtime_state() const { return system_->program_runtime_state_(); }
 
 #include <pops/runtime/program/program_context_continuation_fields.inc>
+#include <pops/runtime/program/program_context_field_representation_obligation.inc>
 
  public:
   /// Own opaque structural storage without performing a numerical Field operation.
@@ -2995,6 +3035,7 @@ class ProgramContext {
     std::vector<Real> prepared_dts;
     std::vector<HistorySampleIdentity> prepared_samples;
     std::vector<FieldExchangeExpressions::Ref> prepared_exchanges;
+    std::vector<HistoryFieldMetadata> prepared_metadata;
     std::string contract;
     std::exception_ptr error;
     try {
@@ -3002,6 +3043,21 @@ class ProgramContext {
       if (found == manager.histories.end() || found->second.empty())
         throw std::out_of_range("ProgramContext history is not registered");
       require_same_field_contract_(found->second.front(), value, "ProgramContext history store");
+      const auto instance = continuation_field_instance_(value);
+      const HistoryFieldMetadata incoming =
+          instance
+              ? HistoryFieldMetadata{instance->metadata.support, instance->metadata.representation}
+              : HistoryFieldMetadata{};
+      if (!incoming.empty() && !manager.field_metadata_budget.enabled())
+        throw std::length_error(
+            "retaining Field metadata requires "
+            "Program(history_field_metadata_budget=(retained_bytes, workspace_bytes))");
+      if (manager.field_metadata_budget.enabled()) {
+        std::uint64_t required = 0;
+        history_field_detail::charge(required, found->second.size(), sizeof(HistoryFieldMetadata),
+                                     manager.field_metadata_budget.workspace_bytes);
+      }
+      prepared_metadata = manager.slot_fields.at(name);
       prepared_dts = manager.slot_dt.at(name);
       prepared_samples =
           manager.prepare_sample_store(name, system_->time() + logical_physical_time_offset_, dt);
@@ -3014,6 +3070,16 @@ class ProgramContext {
         prepared_fields.push_back(value);
         prepared_dts[slot] = static_cast<Real>(dt);
         prepared_exchanges[slot] = expression;
+        prepared_metadata[slot] = incoming;
+      }
+      if (manager.field_metadata_budget.enabled()) {
+        auto budget = manager.field_metadata_budget;
+        std::uint64_t staging_bytes = 0;
+        history_field_detail::charge(staging_bytes, prepared_metadata.size(),
+                                     sizeof(HistoryFieldMetadata), budget.workspace_bytes);
+        budget.workspace_bytes -= staging_bytes;
+        history_field_detail::Tables tables(budget.workspace_bytes);
+        tables.collect(manager.slot_fields, budget, name, prepared_metadata);
       }
       if (field_exchanges_->limits().max_bases) {
         std::vector<FieldExchangeExpressions::Ref> roots;
@@ -3032,6 +3098,19 @@ class ProgramContext {
       if (field_exchanges_->limits().max_bases)
         proof.text(
             FieldExchangeExpressions::collective_identity(expression, field_exchanges_->limits()));
+      proof.presence(incoming.support != nullptr).presence(incoming.representation != nullptr);
+      if (incoming.support) {
+        const auto& source = *incoming.support;
+        proof.text(source.program_identity)
+            .text(source.origin_point)
+            .scalar(source.program_owner)
+            .scalar(source.producer_level)
+            .scalar(source.topology_epoch)
+            .scalar(source.materialization_generation)
+            .text(source.field_provider);
+      }
+      if (incoming.representation)
+        proof.text(incoming.representation->contract).text(incoming.representation->origin);
       for (std::size_t slot = 0; slot < prepared_samples.size(); ++slot) {
         const auto& identity = prepared_samples[slot];
         proof.scalar(identity.kind)
@@ -3061,6 +3140,7 @@ class ProgramContext {
     manager.slot_dt.at(name).swap(prepared_dts);
     manager.slot_sample.at(name).swap(prepared_samples);
     manager.slot_exchanges.at(name).swap(prepared_exchanges);
+    manager.slot_fields.at(name).swap(prepared_metadata);
     manager.initialized.at(name) = true;
     manager.store_pending.at(name) = true;
   }

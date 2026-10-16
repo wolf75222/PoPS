@@ -22,8 +22,42 @@ ContinuationFieldAllocations continuation_field_allocations_(const field_type& f
   return result;
 }
 
+#include <pops/runtime/program/amr_program_context_history_deferred_authority.inc>
+
 std::optional<ContinuationFieldStorageAuthority> continuation_field_storage_authority_(
     const field_type& field) const {
+  const auto& manager = runtime_state().hist_;
+  for (const auto& [key, ring] : manager.histories)
+    for (std::size_t slot = 0; slot < ring.size(); ++slot)
+      if (&ring[slot] == &field) {
+        const auto decoded = decode_history_key_(key);
+        if (!decoded)
+          throw std::invalid_argument("retained History Field has no exact level key");
+        HistoryFieldMetadata metadata;
+        if (const auto entry = manager.slot_fields.find(key); entry != manager.slot_fields.end())
+          metadata = entry->second.at(slot);
+        const auto& support = metadata.support;
+        if (support) {
+          support->validate();
+          if (support->program_identity != facade_->installed_program_hash())
+            throw std::invalid_argument("retained History Field has a foreign Program support");
+        }
+        const int owner =
+            support ? (support->field_provider.empty() ? sys_block(support->program_owner) : -1)
+                    : manager.owner.at(key);
+        return ContinuationFieldStorageAuthority{field.storage_identity(),
+                                                 owner,
+                                                 support ? support->producer_level : decoded->first,
+                                                 runtime_->topology_epoch(),
+                                                 runtime_->materialization_generation(),
+                                                 support,
+                                                 continuation_field_allocations_(field),
+                                                 false,
+                                                 std::nullopt,
+                                                 metadata.representation};
+      }
+  if (auto cached = deferred_history_field_authority_(field))
+    return cached;
   if (const auto found = continuation_field_storage_.find(&field);
       found != continuation_field_storage_.end()) {
     if (found->second.lifetime.expired()) {
@@ -44,7 +78,8 @@ std::optional<ContinuationFieldStorageAuthority> continuation_field_storage_auth
   // A decoded/restarted Store already validated every Field against its exact
   // native level prototype. Match the actual immutable leaf, never its shape.
   std::optional<ContinuationFieldStorageAuthority> result;
-  const auto inspect = [&](const auto& stores, std::uint64_t epoch, std::uint64_t generation) {
+  const auto inspect = [&](const auto& stores, std::uint64_t epoch, std::uint64_t generation,
+                           int producer_levels) {
     for (const auto& [level, store] : stores) {
       if (!store.initialized())
         continue;
@@ -56,7 +91,7 @@ std::optional<ContinuationFieldStorageAuthority> continuation_field_storage_auth
                   value.field_provider().empty() ? sys_block(value.field_owner()) : -1;
               const auto& support = value.field_support();
               const int producer = support ? support->producer_level : level;
-              if (producer < 0 || producer >= nlev() ||
+              if (producer < 0 || producer >= producer_levels ||
                   (support && (support->program_identity != facade_->installed_program_hash() ||
                                support->program_owner != value.field_owner() ||
                                support->field_provider != value.field_provider())))
@@ -85,16 +120,17 @@ std::optional<ContinuationFieldStorageAuthority> continuation_field_storage_auth
   // geometry is being built. Presence in an accepted Store is not a remap.
   if (continuation_regrid_ && continuation_regrid_->attempt.visible()) {
     const auto& frame = *continuation_regrid_;
-    inspect(frame.sources, frame.source_epoch, frame.source_generation);
+    inspect(frame.sources, frame.source_epoch, frame.source_generation,
+            static_cast<int>(frame.sources.size()) - 1);
     if (result)
       return result;
   }
   inspect(amr_continuation_accepted_, runtime_->topology_epoch(),
-          runtime_->materialization_generation());
+          runtime_->materialization_generation(), nlev());
   inspect(level_continuation_working_, runtime_->topology_epoch(),
-          runtime_->materialization_generation());
+          runtime_->materialization_generation(), nlev());
   inspect(level_continuation_macro_bases_, runtime_->topology_epoch(),
-          runtime_->materialization_generation());
+          runtime_->materialization_generation(), nlev());
   if (!result) {
     if (const auto snapshot = hierarchy_field_observation_source(field))
       result = ContinuationFieldStorageAuthority{snapshot,
@@ -193,16 +229,15 @@ ContinuationFieldStorageAuthority continuation_source_field_authority_(
       const bool old = qualified->side == FieldTopology::Side::Source;
       auto authority = continuation_field_storage_authority_(source);
       return {{},
-              qualified->block < 0 && authority ? authority->runtime_owner
-                                                : sys_block(qualified->block),
+              qualified->provider.empty() ? sys_block(qualified->block) : -1,
               qualified->level,
               old ? frame.source_epoch : runtime_->topology_epoch(),
               old ? frame.source_generation : runtime_->materialization_generation(),
-              authority ? authority->support : nullptr,
+              qualified->support ? qualified->support : (authority ? authority->support : nullptr),
               continuation_field_allocations_(source),
               false,
               std::nullopt,
-              authority ? authority->representation : nullptr};
+              qualified->representation};
     }
   }
   if (auto authority = continuation_field_storage_authority_(source))

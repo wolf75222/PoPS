@@ -49,10 +49,21 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
     typename Context::AffineMacroFinalization frame;
     frame.entry = context.copy_affine_tower_();
     frame.provisional = context.copy_affine_tower_();
+    frame.measures = context.capture_affine_measures_();
     frame.topology_epoch = context.runtime_->topology_epoch();
     frame.materialization_generation = context.runtime_->materialization_generation();
     frame.ready = true;
     context.affine_finalization_.emplace(std::move(frame));
+  }
+  static void set_affine_measure(Context& context, int level, Real active, Real fraction) {
+    auto& measure = context.affine_finalization_->measures.at(0).at(level);
+    const auto& source = context.affine_finalization_->entry.at(0).at(level);
+    measure.active.emplace(source.layout(), source.distribution(), source.local_rank(), 1,
+                           source.ghosts());
+    measure.fraction.emplace(source.layout(), source.distribution(), source.local_rank(), 1,
+                             source.ghosts());
+    measure.active->set_val(active);
+    measure.fraction->set_val(fraction);
   }
   static Field& affine_entry(Context& context, int level) {
     return context.affine_finalization_->entry.at(0).at(level);
@@ -498,8 +509,65 @@ TEST(AmrContinuationFieldStorage, InvocationLevelRequiresTheExactPreparedHierarc
     const auto level = fixture.context->invocation_level();
     EXPECT_EQ(level, fixture.context->level());
     const auto& lane = fixture.context->prepared_execution_lane();
-    EXPECT_EQ(pops::all_reduce_min(level, lane), level);
-    EXPECT_EQ(pops::all_reduce_max(level, lane), level);
+    EXPECT_EQ(pops::all_reduce_min(static_cast<long>(level), lane), level);
+    EXPECT_EQ(pops::all_reduce_max(static_cast<long>(level), lane), level);
   });
 }
+// The production integrator traverses real prepared AMR measures and snapshots.
+struct UnitCompositeIntegrand {
+  pops::FieldView<const pops::Real, Dim> entry{}, current{};
+  POPS_HD pops::Real operator()(const pops::Index<Dim>&) const { return pops::Real(1); }
+};
+
+TEST(AmrCompositeIntegral, SelectedLevelsPartitionPhysicalCompositeMeasure) {
+  Fixture fixture;
+  fixture.regrid(false);
+  Access::capture_affine_fields(*fixture.context);
+  const auto all = fixture.context->composite_integral(0, UnitCompositeIntegrand{});
+  const auto coarse = fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 0);
+  const auto fine = fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 1);
+  EXPECT_NEAR(all, 1., 1.e-13);
+  EXPECT_GT(coarse, 0.);
+  EXPECT_GT(fine, 0.);
+  EXPECT_NEAR(coarse + fine, all, 1.e-13);
+  // A domain selection intersects the existing support; it cannot re-activate
+  // covered cells or replace active/cut-cell fractions by a geometric box.
+  Access::set_affine_measure(*fixture.context, 0, 1., .25);
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 0), coarse * .25,
+              1.e-13);
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}), coarse * .25 + fine,
+              1.e-13);
+  Access::set_affine_measure(*fixture.context, 0, 0., .25);
+  EXPECT_EQ(fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 0), 0.);
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}), fine, 1.e-13);
+}
+
+TEST(AmrCompositeIntegral, InvalidSelectedLevelConvergesBeforeReduction) {
+  Fixture fixture;
+  Access::capture_affine_fields(*fixture.context);
+  const auto& lane = fixture.context->prepared_execution_lane();
+  EXPECT_THROW(fixture.context->composite_integral(0, UnitCompositeIntegrand{}, -1),
+               std::exception);
+  // Only rank zero supplies the invalid value. All ranks must leave the same
+  // preflight before any healthy peer starts its numerical reduction.
+  EXPECT_THROW(
+      fixture.context->composite_integral(0, UnitCompositeIntegrand{}, lane.rank() == 0 ? 2 : 0),
+      std::exception);
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}), 1., 1.e-13);
+}
+
+TEST(AmrCompositeIntegral, DistinctValidRankSelectionsCannotMixDomains) {
+  Fixture fixture;
+  Access::capture_affine_fields(*fixture.context);
+  const auto& lane = fixture.context->prepared_execution_lane();
+  if (lane.size() > 1) {
+    EXPECT_THROW(
+        fixture.context->composite_integral(0, UnitCompositeIntegrand{}, lane.rank() == 0 ? 0 : 1),
+        std::invalid_argument);
+  } else {
+    EXPECT_NO_THROW(fixture.context->composite_integral(0, UnitCompositeIntegrand{}, 0));
+  }
+  EXPECT_NEAR(fixture.context->composite_integral(0, UnitCompositeIntegrand{}), 1., 1.e-13);
+}
+
 }  // namespace

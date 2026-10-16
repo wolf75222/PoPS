@@ -600,6 +600,7 @@ std::vector<std::uint8_t> System<Dim>::checkpoint_program_exchanges(
 template <int Dim>
 void System<Dim>::validate_checkpoint_program_exchanges(std::span<const std::uint8_t> bytes) const {
   const auto history = runtime::program::read_uniform_history_exchanges(bytes, p_->program_.hist_);
+  runtime::program::require_history_field_program(history.fields, p_->program_.installed_hash_);
   (void)runtime::program::read_moving_checkpoint(
       history.exchanges, p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
       [&](int block) -> const MultiFab<Dim>& {
@@ -642,6 +643,7 @@ template <int Dim>
 void System<Dim>::validate_checkpoint_moving_geometry(std::span<const std::uint8_t> bytes,
                                                       double accepted_time, int macro_step) const {
   const auto history = runtime::program::read_uniform_history_exchanges(bytes, p_->program_.hist_);
+  runtime::program::require_history_field_program(history.fields, p_->program_.installed_hash_);
   const auto candidate = runtime::program::read_moving_checkpoint(
       history.exchanges, p_->program_.accepted_exchanges_, p_->program_.moving_interval_geometry_,
       [&](int block) -> const MultiFab<Dim>& {
@@ -661,6 +663,7 @@ void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint
       throw std::logic_error("accepted exchange restore requires the native restart transaction");
     history.emplace(
         runtime::program::read_uniform_history_exchanges(bytes, p_->program_.hist_, true));
+    runtime::program::require_history_field_program(history->fields, p_->program_.installed_hash_);
     candidate.emplace(runtime::program::read_moving_checkpoint(
         history->exchanges, p_->program_.accepted_exchanges_,
         p_->program_.moving_interval_geometry_, [&](int block) -> const MultiFab<Dim>& {
@@ -698,6 +701,22 @@ void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint
       std::rethrow_exception(error);
     throw std::runtime_error("accepted exchange restore preparation failed collectively");
   }
+  if (!history->fields.empty()) {
+    std::vector<std::uint8_t> metadata;
+    std::exception_ptr metadata_error;
+    try {
+      metadata = runtime::program::encode_history_field_metadata(
+          history->fields, p_->program_.hist_.field_metadata_budget);
+    } catch (...) {
+      metadata_error = std::current_exception();
+    }
+    collectively_rethrow_exception(metadata_error, lane, "history Field metadata restart identity");
+    const std::array<std::pair<std::string_view, std::string_view>, 1> contract{
+        {{"pops.history.field-metadata",
+          std::string_view(reinterpret_cast<const char*>(metadata.data()), metadata.size())}}};
+    if (!all_ranks_agree_exact_ordered_byte_pairs(contract, lane))
+      throw std::invalid_argument("history Field metadata differs between restart ranks");
+  }
   runtime::program::require_integral_values_agree_collectively(candidate->exchanges, lane);
   if (!candidate->geometry.empty())
     runtime::program::require_moving_checkpoint_agrees_collectively(*candidate, lane);
@@ -705,6 +724,8 @@ void System<Dim>::restore_checkpoint_program_exchanges(std::span<const std::uint
   p_->program_.moving_interval_geometry_.swap(candidate->geometry);
   if (!history->histories.empty())
     p_->program_.hist_.slot_exchanges.swap(history->histories);
+  if (!history->fields.empty())
+    p_->program_.hist_.slot_fields.swap(history->fields);
 }
 
 template <int Dim>

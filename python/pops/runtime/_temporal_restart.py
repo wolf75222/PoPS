@@ -454,7 +454,8 @@ def _validate_controller_events(
         if descriptor["kind"] != "computed_dt":
             raise ValueError("computed Program frontier requires its ComputedDt policy")
         policy = ComputedDt.from_data(descriptor)
-        request = policy.dt
+        request = policy.initial_request(float.fromhex(program_frontier["start"]),
+                                         float.fromhex(program_frontier["limit"]))
         if program_frontier["rejections"] > policy.max_rejections:
             raise ValueError("computed Program frontier exceeds its retry budget")
         for _ in range(program_frontier["rejections"]):

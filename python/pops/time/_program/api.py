@@ -104,8 +104,10 @@ class Program(
 
     def __init__(self, name: Any, *, max_exact_coefficient_bytes: int = 64 * 1024,
                  flux_expression_budget: tuple[int, int] | None = None,
+                 history_field_metadata_budget: tuple[int, int] | None = None,
                  terminal_failure_byte_capacity: int = 64 * 1024 * 1024,
-                 terminal_failure_aggregate_byte_capacity: int = 256 * 1024 * 1024) -> None:
+                 terminal_failure_aggregate_byte_capacity: int = 256 * 1024 * 1024,
+                 representation_workspace_byte_capacity: int = 64 * 1024 * 1024) -> None:
         if not isinstance(name, str) or not name:
             raise ValueError("Program name must be a non-empty string")
         if type(max_exact_coefficient_bytes) is not int or not 8 <= max_exact_coefficient_bytes <= (1 << 63) - 1:
@@ -113,12 +115,18 @@ class Program(
         from .resource_budgets import validate_flux_expression_budget
         validate_flux_expression_budget(flux_expression_budget)
         self.flux_expression_budget = flux_expression_budget
+        from .resource_budgets import validate_history_field_metadata_budget
+        validate_history_field_metadata_budget(history_field_metadata_budget)
+        self.history_field_metadata_budget = history_field_metadata_budget
         self.max_exact_coefficient_bytes = max_exact_coefficient_bytes
         from .resource_budgets import validate_terminal_failure_capacities
         validate_terminal_failure_capacities(
             terminal_failure_byte_capacity, terminal_failure_aggregate_byte_capacity)
         self.terminal_failure_byte_capacity = terminal_failure_byte_capacity
         self.terminal_failure_aggregate_byte_capacity = terminal_failure_aggregate_byte_capacity
+        from .resource_budgets import validate_representation_workspace_capacity
+        validate_representation_workspace_capacity(representation_workspace_byte_capacity)
+        self.representation_workspace_byte_capacity = representation_workspace_byte_capacity
         self.name = name
         self._owner_path = OwnerPath.fresh(OwnerKind.CONSUMER, name)
         # Exact live CASE authority selected by the first block. Runtime block indices have meaning

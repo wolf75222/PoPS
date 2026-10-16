@@ -60,7 +60,8 @@ def _fv(flux, state, face=None):
 
 def _ssprk2(case, block, state, evaluate, dt, *, name, trace_quantity=False):
     """Two explicitly authored stages; evaluate constructs native rate graphs."""
-    program = pops.Program(name)
+    program = pops.Program(name,
+        history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
     temporal = program.state(block[state])
     u0 = temporal.n
     k0 = evaluate(program, u0, program.stage(name + "_stage0", c=0), "stage0")

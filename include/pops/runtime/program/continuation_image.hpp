@@ -542,6 +542,45 @@ struct ContinuationDistributedArray {
   std::vector<ContinuationValueRef<Dim>> values;
   distributed::Identity version{};
   distributed::DomainRef index_domain;  // exact target witness, including empty Index shards
+
+  // An aggregate remains usable for native staging. Copying or moving its
+  // opaque proof never grants a mutable object the immutable-publication fact.
+  class PublicationProof {
+   public:
+    PublicationProof() = default;
+    PublicationProof(const PublicationProof&) noexcept {}
+    PublicationProof& operator=(const PublicationProof&) noexcept {
+      scalar_only_ = false;
+      return *this;
+    }
+
+   private:
+    friend struct ContinuationDistributedArray;
+    explicit PublicationProof(bool scalar_only) : scalar_only_(scalar_only) {}
+    bool scalar_only_ = false;
+  } publication_proof;
+
+  bool has_immutable_scalar_values() const noexcept { return publication_proof.scalar_only_; }
+  static std::shared_ptr<const ContinuationDistributedArray> immutable_publication(
+      const ContinuationDistributedArray& source, distributed::Identity identity,
+      std::uint64_t workspace_capacity) {
+    // The old vector remains owned by pending. Charge the additional pointer
+    // table against the operation workspace before allocating it; shared Value
+    // payloads retain their existing registry charge and are not duplicated.
+    if (source.values.size() > workspace_capacity / sizeof(ContinuationValueRef<Dim>))
+      throw std::length_error("immutable Array publication exceeds its pointer workspace");
+    bool scalar_only = true;
+    for (const auto& value : source.values)
+      scalar_only = scalar_only && value && value->is_scalar_structure();
+    // Copy the vector even when source is uniquely owned: native callers can
+    // retain references to its elements. Only immutable Value leaves are shared.
+    // Direct aggregate initialization elides the proof copy into an actually
+    // const object; every subsequent copy/move of that object drops the proof.
+    return std::shared_ptr<const ContinuationDistributedArray>(
+        new const ContinuationDistributedArray{source.domain, source.element, source.values,
+                                               identity, source.index_domain,
+                                               PublicationProof{scalar_only}});
+  }
 };
 template <int Dim>
 using ContinuationDistributedArrayRef = std::shared_ptr<const ContinuationDistributedArray<Dim>>;
@@ -1217,12 +1256,16 @@ class ContinuationCodec {
           "continuation image has a different schema, dimension or wire version");
     Decoded out;
     out.publication = in.word();
-    out.realm = FiniteDomainRealmRef(new FiniteDomainRealm);
-    out.realm->replicated_ = true;
-    out.realms.push_back(out.realm);
     const auto count = in.word();
     if (count > (bytes.size() - in.at) / 32)
       throw std::invalid_argument("continuation domain count exceeds its byte image");
+    // CONT1 carries an allocator only through its domain table. An empty table
+    // must not invent a realm which a later read would synchronize and persist.
+    if (count != 0) {
+      out.realm = FiniteDomainRealmRef(new FiniteDomainRealm);
+      out.realm->replicated_ = true;
+      out.realms.push_back(out.realm);
+    }
     std::vector<FiniteDomainRef> domains;
     domains.reserve(static_cast<std::size_t>(count));
     for (std::uint64_t n = 0; n < count; ++n) {

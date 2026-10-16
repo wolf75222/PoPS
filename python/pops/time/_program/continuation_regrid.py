@@ -40,8 +40,8 @@ def topology(program, field, *, level, side, dimension):
     signature = value_signature(field)
     if signature["vtype"] not in ("state", "scalar_field"):
         raise TypeError("regrid topology requires an immutable native Field template")
-    if signature.get("block") not in context["blocks"]:
-        raise ValueError("regrid Field has no declared State storage owner")
+    if signature.get("field_authority") is None and signature.get("block") not in context["blocks"]:
+        raise ValueError("regrid Field has no declared scientific storage owner")
     if side not in ("source", "target"):
         raise ValueError("regrid topology side must be source or target")
     if type(dimension) is not int or not 1 <= dimension <= 3:

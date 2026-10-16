@@ -19,12 +19,13 @@ import tomllib
 import ci_route_mode
 import ci_select_tests as select
 import ci_shard_binpack
+import ci_python_test_units
 import ci_python_dimensions
 from ci_pytest_timings import SHARD_TOTAL as PYTHON_SHARDS
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "scripts/ci_components.toml"
-CPP_SHARDS = 14
+CPP_SHARDS = 15
 UNKNOWN_DIFF = "__unresolved_pr_change_scope__"
 
 
@@ -119,9 +120,10 @@ def make_plan(changed: list[str], *, event_name: str, output_dir: Path,
 
     excluded = set(ci_shard_binpack.EXCLUDED_FROM_SHARDS)
     ordinary_python = [path for path in python.selected_tests if path not in excluded]
+    python_units = ci_python_test_units.expand(ordinary_python)
     python_shards = ci_shard_binpack.assign_shards(
-        ordinary_python, PYTHON_SHARDS, ci_shard_binpack.load_durations())
-    ci_shard_binpack.verify_partition(ordinary_python, python_shards)
+        python_units, PYTHON_SHARDS, ci_python_test_units.weights(ci_shard_binpack.load_durations()))
+    ci_shard_binpack.verify_partition(python_units, python_shards)
     compile_cache = sorted(set(python.selected_tests) & excluded)
     dimensions = ci_python_dimensions.partition(
         python.selected_tests, json.loads(ci_python_dimensions.CONTRACT.read_text()))

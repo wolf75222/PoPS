@@ -122,7 +122,8 @@ def _build_meshface(*, cells, cfl, field_input=None):
                 bcs.AllPhysicalBoundaries(), bcs.Periodic())),))
         field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(),
             boundaries=(), solver=CG(max_iter=2000, rel_tol=1.e-12, abs_tol=1.e-13)))
-    p = pops.Program("T12_predict_detect_replace")
+    p = pops.Program("T12_predict_detect_replace",
+        history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
     q = p.state(block[U]); old=q.n
     duration = p.requested_dt()
     high = p.stencil_flux_divergence("provisional_high_flux",old,flux=authored_flux(corrected=False),

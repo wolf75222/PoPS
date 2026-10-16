@@ -186,62 +186,6 @@ Real composite_pair(int program_block, bool left_entry, bool right_entry,
   return pops::collective_finite_compensated_sum(accumulated, lane.communicator());
 }
 
-template <class Integrand>
-Real composite_integral(int program_block, Integrand integrand) const {
-  const auto& lane = prepared_execution_lane();
-  FiniteCompensatedSum accumulated;
-  std::exception_ptr error;
-  try {
-    require_affine_finalization_("composite_integral");
-    const auto& frame = *affine_finalization_;
-    const int owner = sys_block(program_block);
-    const auto& entry = frame.entry.at(owner);
-    const auto& current = frame.provisional.at(owner);
-    for (std::size_t level = 0; level < entry.size(); ++level) {
-      const auto& a = entry[level];
-      const auto& b = current.at(level);
-      require_same_field_contract_(a, b, "composite_integral");
-      const auto& measure = frame.measures.at(owner).at(level);
-      const auto* active = measure.active ? &*measure.active : nullptr;
-      const auto* fraction = measure.fraction ? &*measure.fraction : nullptr;
-      const auto& coverage = measure.coverage;
-      mf_arith_detail::validate_measure(a, {active, nullptr}, "composite_integral");
-      mf_arith_detail::validate_measure(a, {fraction, nullptr},
-                                        "composite_integral volume fraction");
-      mf_arith_detail::validate_measure(a, {&coverage, nullptr}, "composite_integral");
-      const auto& geometry = measure.geometry;
-      double volume = 1.;
-      for (int axis = 0; axis < Dim; ++axis)
-        volume *= geometry.spacing(axis);
-      if (!(volume > 0.) || !std::isfinite(volume))
-        throw std::invalid_argument("composite_integral requires finite positive cell volumes");
-      for (std::size_t local = 0; local < a.local_size(); ++local) {
-        integrand.entry = a.fab(local).view();
-        integrand.current = b.fab(local).view();
-        const auto sum = pops::for_each_cell_reduce_finite_sum(
-            a.box(local),
-            detail::CompositeIntegralKernel<Dim, Integrand>{
-                integrand, active ? active->fab(local).view() : FieldView<const Real, Dim>{},
-                coverage.fab(local).view(),
-                fraction ? fraction->fab(local).view() : FieldView<const Real, Dim>{}, Real(volume),
-                active != nullptr, fraction != nullptr});
-        if (!sum.finite())
-          throw std::overflow_error("composite_integral has nonfinite active values");
-        if (!a.distribution().replicated() || lane.rank() == 0) {
-          accumulated.add(sum.high);
-          accumulated.add(sum.low);
-        }
-      }
-    }
-    if (!accumulated.finite())
-      throw std::overflow_error("composite_integral has nonfinite accumulation");
-  } catch (...) {
-    error = std::current_exception();
-  }
-  converge_owner_reduction_(error, lane, "authored physical composite integral");
-  return pops::collective_finite_compensated_sum(accumulated, lane.communicator());
-}
-
 void accept_increment(double scale, double duration) const {
   const auto& lane = prepared_execution_lane();
   std::exception_ptr error;

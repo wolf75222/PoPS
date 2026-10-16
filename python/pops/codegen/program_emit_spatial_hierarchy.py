@@ -267,3 +267,5 @@ def emit_amr_spatial_solve(
         "ctx.record_scalar(%s,static_cast<pops::Real>(%s->derivative_evaluations()));"
         % (json.dumps(stem + ".finite_difference_jvps"), workspace),
     ]
+    from .program_emit_spatial_representation import emit_spatial_representation
+    emit_spatial_representation(program, value, variables, model, lines, block_indices, "amr_system")

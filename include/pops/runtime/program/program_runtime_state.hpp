@@ -1,4 +1,5 @@
 #pragma once
+#include <pops/runtime/program/history_field_metadata.hpp>
 #include <pops/runtime/program/continuation_migration_request.hpp>
 
 // Compiled time-Program RUNTIME STATE, extracted out of System::Impl / AmrSystem::Impl (ADC-594). A
@@ -379,6 +380,8 @@ struct HistoryManager {
   // accepted image owns these references and the corresponding fields/sample identities.
   std::map<std::string, std::vector<FieldExchangeExpressions::Ref>> slot_exchanges;
   FieldExchangeExpressions::Limits exchange_limits;
+  HistoryFieldMetadataTable slot_fields;
+  HistoryFieldMetadataBudget field_metadata_budget;
 
   const std::vector<HistorySampleIdentity>& validated_samples(const std::string& name) const {
     const auto& samples = slot_sample.at(name);
@@ -453,6 +456,9 @@ struct HistoryManager {
       if (auto exchanges = slot_exchanges.find(name); exchanges != slot_exchanges.end())
         for (std::size_t k = exchanges->second.size(); k-- > 1;)
           std::swap(exchanges->second[k], exchanges->second[k - 1]);
+      if (auto fields = slot_fields.find(name); fields != slot_fields.end())
+        for (std::size_t k = fields->second.size(); k-- > 1;)
+          std::swap(fields->second[k], fields->second[k - 1]);
       if (store_pending[name]) {
         fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;
@@ -481,6 +487,9 @@ struct HistoryManager {
       if (auto exchanges = slot_exchanges.find(name); exchanges != slot_exchanges.end())
         for (std::size_t k = exchanges->second.size(); k-- > 1;)
           std::swap(exchanges->second[k], exchanges->second[k - 1]);
+      if (auto fields = slot_fields.find(name); fields != slot_fields.end())
+        for (std::size_t k = fields->second.size(); k-- > 1;)
+          std::swap(fields->second[k], fields->second[k - 1]);
       if (store_pending[name]) {
         fill_count[name] = std::min(static_cast<int>(ring.size()), fill_count[name] + 1);
         store_pending[name] = false;
@@ -584,6 +593,9 @@ struct ProgramRuntimeState {
   using RestartLifetime = std::function<void(const FiniteDomainRealmRef&,
                                              const std::shared_ptr<distributed::Registry>&)>;
   RestartLifetime restart_lifetime_;
+  using ContinuationCheckpointPrototypes = typename ContinuationCodec<Dim>::Prototypes;
+  // Installed scientific prototype catalogue, owned by the same artifact as step_.
+  ContinuationCheckpointPrototypes continuation_checkpoint_prototypes_;
   /// AMR-only, artifact-owned remap boundary. Unlike hierarchy_refresh_, this callback is reached
   /// only after AmrSystem published a topology and atomically exchanged a prepared history manager.
   /// Keeping it distinct prevents a generic hierarchy refresh from accepting stale history storage.
@@ -779,6 +791,7 @@ struct ProgramRuntimeState {
     bool resource_refresh_pending = false;
     std::function<void(PreparedResourceAction)> resource_lifetime;
     RestartLifetime restart_lifetime;
+    ContinuationCheckpointPrototypes continuation_checkpoint_prototypes;
     std::function<void(const AmrProgramHistoryRemapDescriptor&)> history_remap_accepted;
     std::function<bool()> continuation_regrid_begin;
     std::function<void(bool)> continuation_regrid_finish;
@@ -964,6 +977,7 @@ struct ProgramRuntimeState {
     reject_resource_work();
     resource_lifetime_ = nullptr;
     restart_lifetime_ = nullptr;
+    continuation_checkpoint_prototypes_ = ContinuationCheckpointPrototypes{};
     step_ = std::move(step);
     hierarchy_refresh_ = nullptr;
     resource_refresh_ = nullptr;
@@ -998,6 +1012,7 @@ struct ProgramRuntimeState {
                                        resource_refresh_pending_,
                                        resource_lifetime_,
                                        restart_lifetime_,
+                                       continuation_checkpoint_prototypes_,
                                        history_remap_accepted_,
                                        continuation_regrid_begin_,
                                        continuation_regrid_finish_,
@@ -1045,6 +1060,7 @@ struct ProgramRuntimeState {
     reject_resource_work();
     resource_lifetime_ = std::move(snapshot.resource_lifetime);
     restart_lifetime_ = std::move(snapshot.restart_lifetime);
+    continuation_checkpoint_prototypes_ = std::move(snapshot.continuation_checkpoint_prototypes);
     step_ = std::move(snapshot.step);
     hierarchy_refresh_ = std::move(snapshot.hierarchy_refresh);
     resource_refresh_ = std::move(snapshot.resource_refresh);
@@ -1119,6 +1135,13 @@ struct ProgramRuntimeState {
     if (!step_ || !hook)
       throw std::invalid_argument("Program restart lifetime requires an installed step and hook");
     restart_lifetime_ = std::move(hook);
+  }
+
+  void install_continuation_checkpoint_prototypes(ContinuationCheckpointPrototypes prototypes) {
+    if (!step_ || !prototypes || continuation_checkpoint_prototypes_)
+      throw std::invalid_argument(
+          "Continuation checkpoint prototypes require a fresh installed Program");
+    continuation_checkpoint_prototypes_ = std::move(prototypes);
   }
 
   // All fallible decode/validation/allocation happened before external restart publication.

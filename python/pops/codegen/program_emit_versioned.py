@@ -285,10 +285,16 @@ def emit_versioned_op(program, value, var, model, lines, prelude, block_idx, fie
         raise ValueError("AMR forest operation lacks its closed parent/child graph")
     if op in ("continuation_source_topology", "continuation_target_topology"):
         dimension = signature["dimension"]
-        block = block_idx[signature["field_signature"]["block"]]
+        field = signature["field_signature"]
+        if field.get("field_authority") is None:
+            owner = str(block_idx[field["block"]])
+        else:
+            from pops._structural_data import canonical_json
+            from pops.time.canonical_data import _json_ready
+            owner = json.dumps(canonical_json(_json_ready(field["field_authority"])))
         lines.append('static_assert(pops::kNativeDimension == %d, "regrid topology dimension mismatch");' % dimension)
         method = "continuation_source_topology" if op == "continuation_source_topology" else "continuation_target_topology"
-        expression = "ctx.%s(%d, %s, %s)" % (method, block, args[1], args[0])
+        expression = "ctx.%s(%s, %s, %s)" % (method, owner, args[1], args[0])
         _checked(lines, token, finite_cpp_type(signature), [], expression,
                  message="authenticated regrid topology view")
         var[value.id] = token

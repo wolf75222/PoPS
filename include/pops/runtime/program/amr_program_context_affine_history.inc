@@ -13,6 +13,7 @@ struct AffineHistoryCandidate {
   std::vector<Real> intervals;
   std::vector<HistorySampleIdentity> samples;
   std::vector<FluxExpression> expressions;
+  std::vector<HistoryFieldMetadata> metadata;
   int fill_count = 0;
 };
 using AffineHistories = std::map<std::string, AffineHistoryCandidate>;
@@ -63,6 +64,12 @@ AffineHistories prepare_affine_histories_(
     std::vector<field_type> fields;
     std::vector<TemporalSampleSource> sources;
     std::vector<FluxExpression> expressions;
+    std::vector<HistoryFieldMetadata> metadata;
+    if (candidate.field_metadata_budget.enabled()) {
+      std::uint64_t bytes = 0;
+      history_field_detail::charge(bytes, transfer.slots, 4 * sizeof(HistoryFieldMetadata),
+                                   candidate.field_metadata_budget.workspace_bytes);
+    }
     const auto append = [&](const auto& manager, const auto& flux) {
       const auto& ring = manager.histories.at(key);
       const auto& identities = manager.validated_samples(key);
@@ -71,6 +78,10 @@ AffineHistories prepare_affine_histories_(
         sources.push_back(TemporalSampleSource::history(
             identities[slot], manager.initialized.at(key), manager.slot_dt.at(key)[slot]));
         expressions.push_back(flux.at(key).at(slot));
+        const auto found_metadata = manager.slot_fields.find(key);
+        metadata.push_back(found_metadata == manager.slot_fields.end()
+                               ? HistoryFieldMetadata{}
+                               : found_metadata->second.at(slot));
       }
     };
     append(entry, frame.entry_history_flux);
@@ -96,7 +107,30 @@ AffineHistories prepare_affine_histories_(
         const double time =
             publication.source_start + (endpoint == 0 ? 0. : publication.accepted_duration);
         fields.emplace_back(endpoint == 0 ? initial : accepted);
-        sources.push_back(TemporalSampleSource::point(time, std::move(authority).release()));
+        const auto native_authority = std::move(authority).release();
+        sources.push_back(TemporalSampleSource::point(time, native_authority));
+        HistoryFieldMetadata endpoint_metadata;
+        const auto supported =
+            std::find_if(metadata.begin(), metadata.end(),
+                         [](const auto& field) { return field.support != nullptr; });
+        if (supported != metadata.end()) {
+          const auto& support = *supported->support;
+          if (!support.field_provider.empty() ||
+              sys_block(support.program_owner) != candidate.owner.at(key))
+            throw std::invalid_argument("State history endpoint has a foreign scientific owner");
+          const auto origin = std::string("pops.native-state-temporal-point@1:sha256:") +
+                              identity::sha256_hex(std::vector<std::uint8_t>(
+                                  native_authority.begin(), native_authority.end()));
+          endpoint_metadata.support = std::make_shared<const ContinuationFieldSupport>(
+              ContinuationFieldSupport{facade_->installed_program_hash(),
+                                       origin,
+                                       support.program_owner,
+                                       level,
+                                       runtime_->topology_epoch(),
+                                       runtime_->materialization_generation(),
+                                       {}});
+        }
+        metadata.push_back(std::move(endpoint_metadata));
         // A newly accepted State point is a new base value. Its integrated
         // transport belongs to the separately authenticated accepted flux ledger.
         expressions.emplace_back();
@@ -139,9 +173,35 @@ AffineHistories prepare_affine_histories_(
           reconstructed_temporal_sample(sources, row, invocation, key, runtime_->topology_epoch(),
                                         runtime_->materialization_generation()));
       output.intervals.push_back(row.interval);
+      std::optional<std::size_t> exact_source;
+      std::vector<HistoryFieldMetadata> active_metadata;
+      bool identity_row = true;
+      for (std::size_t column = 0; column < fields.size(); ++column) {
+        const auto weight =
+            history_transfer_exact_weight(row, column, max_exact_coefficient_bytes_);
+        if (weight == ::pops::ExactWeight{0, 1})
+          continue;
+        active_metadata.push_back(metadata.at(column));
+        if (exact_source || weight != ::pops::ExactWeight{1, 1})
+          identity_row = false;
+        exact_source = column;
+      }
+      if (identity_row && exact_source) {
+        output.metadata.push_back(metadata.at(*exact_source));
+      } else {
+        ExactContractBuilder operation;
+        operation.bytes(invocation).scalar(slot).scalar(row.time).scalar(row.interval);
+        append_history_transfer_weight_contract(operation, row);
+        output.metadata.push_back(history_field_detail::reconstructed_metadata(
+            active_metadata, operation.view(), level, runtime_->topology_epoch(),
+            runtime_->materialization_generation(), candidate.field_metadata_budget));
+      }
       output.fields.emplace_back(provisional[slot]);
       auto& target = output.fields.back();
-      target.set_val(Real(0));
+      if (identity_row && exact_source)
+        copy_valid_(fields[*exact_source], target);
+      else
+        target.set_val(Real(0));
       FluxExpression expression;
       for (std::size_t column = 0; column < fields.size(); ++column) {
         const auto weight =
@@ -149,7 +209,8 @@ AffineHistories prepare_affine_histories_(
         if (weight == ::pops::ExactWeight{0, 1})
           continue;
         require_same_field_contract_(target, fields[column], "affine history source field");
-        pops::saxpy(target, row.weights[column], fields[column]);
+        if (!(identity_row && exact_source))
+          pops::saxpy(target, row.weights[column], fields[column]);
         if (!distinct[column].empty())
           add_flux_expression_(
               expression, scaled_flux_expression_(distinct[column], ExactPolynomial{{0, weight}}));
@@ -164,7 +225,22 @@ AffineHistories prepare_affine_histories_(
                       std::as_const(target).fab(local).view(), component}) > Real(0))
             throw std::overflow_error("affine history reconstruction produced nonfinite values");
     }
+    if (candidate.field_metadata_budget.enabled()) {
+      history_field_detail::Tables table(candidate.field_metadata_budget.workspace_bytes);
+      table.collect(candidate.slot_fields, candidate.field_metadata_budget, key, output.metadata);
+    }
     result.emplace(key, std::move(output));
+  }
+  if (candidate.field_metadata_budget.enabled()) {
+    history_field_detail::Tables table(candidate.field_metadata_budget.workspace_bytes);
+    table.collect_selected(
+        candidate.slot_fields, candidate.field_metadata_budget,
+        [&](const auto& key, const auto& original) -> std::span<const HistoryFieldMetadata> {
+          const auto replacement = result.find(key);
+          return replacement == result.end()
+                     ? std::span<const HistoryFieldMetadata>(original)
+                     : std::span<const HistoryFieldMetadata>(replacement->second.metadata);
+        });
   }
   return result;
 }
@@ -186,6 +262,7 @@ void publish_affine_histories_(AffineHistories& histories) const {
   for (auto& [key, candidate] : histories) {
     manager.slot_dt.at(key).swap(candidate.intervals);
     manager.slot_sample.at(key).swap(candidate.samples);
+    manager.slot_fields.at(key).swap(candidate.metadata);
     history_flux_expressions_.at(key).swap(candidate.expressions);
     manager.initialized.at(key) = true;
     manager.fill_count.at(key) = candidate.fill_count;

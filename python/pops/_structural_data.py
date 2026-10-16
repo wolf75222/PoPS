@@ -10,6 +10,25 @@ from collections.abc import Mapping
 from typing import Any
 
 
+class StructuralPath:
+    """Diagnostic spine; successful traversals do not copy ancestor strings."""
+
+    __slots__ = ("parent", "suffix")
+
+    def __init__(self, parent, suffix=""):
+        self.parent, self.suffix = parent, suffix
+
+    def child(self, suffix):
+        return StructuralPath(self, suffix)
+
+    def __str__(self):
+        parts, node = [], self
+        while isinstance(node, StructuralPath):
+            parts.append(node.suffix)
+            node = node.parent
+        return str(node) + "".join(reversed(parts))
+
+
 def transform(value, describe) -> Any:
     """Apply ``describe(node) -> (children, build)`` postorder without recursion.
 
@@ -162,7 +181,80 @@ def _plain_json_data(value, *, nonempty_keys=False, finite_floats=False):
     return True
 
 
+def _plain_json_depths(value):
+    """Measure inert builtin containers without running any extension protocol."""
+    depths, active, pending = {}, set(), [(False, value)]
+    while pending:
+        leaving, node = pending.pop()
+        kind = type(node)
+        if leaving:
+            children = node.values() if kind is dict else node
+            depths[id(node)] = 1 + max((depths.get(id(child), 0) for child in children), default=0)
+            active.remove(id(node))
+            continue
+        if node is None or kind in (str, int, bool, float):
+            continue
+        if kind not in (dict, list, tuple):
+            return None
+        marker = id(node)
+        if marker in active:
+            return None
+        if marker in depths:
+            continue
+        if kind is dict and any(type(key) is not str for key in node):
+            return None
+        active.add(marker)
+        pending.append((True, node))
+        pending.extend((False, child) for child in (node.values() if kind is dict else node))
+    return depths
+
+
 def canonical_json_chunks(value, *, allow_nan=True, sort_keys=True):
+    """Stream exact JSON using bounded C-codec chunks for inert builtin trees.
+
+    Chunk height controls only the optimization. Arbitrary finite depth and
+    extension protocols retain the complete iterative encoder below.
+    """
+    depths = _plain_json_depths(value)
+    if depths is None:
+        yield from _canonical_json_protocol_chunks(value, allow_nan=allow_nan, sort_keys=sort_keys)
+        return
+    pending = [(False, value)]
+    while pending:
+        literal, node = pending.pop()
+        if literal:
+            yield node
+            continue
+        if depths.get(id(node), 0) <= 64:
+            try:
+                encoded = json.dumps(node, allow_nan=allow_nan, sort_keys=sort_keys,
+                                     separators=(",", ":"))
+            except (RecursionError, ValueError):
+                yield from _canonical_json_protocol_chunks(
+                    node, allow_nan=allow_nan, sort_keys=sort_keys)
+            else:
+                yield encoded
+            continue
+        if type(node) is dict:
+            entries = sorted(node.items()) if sort_keys else list(node.items())
+            yield "{"
+            pending.append((True, "}"))
+            for i in range(len(entries)-1, -1, -1):
+                key, item = entries[i]
+                pending.append((False, item))
+                pending.append((True, json.encoder.encode_basestring_ascii(key) + ":"))
+                if i:
+                    pending.append((True, ","))
+        else:
+            yield "["
+            pending.append((True, "]"))
+            for i in range(len(node)-1, -1, -1):
+                pending.append((False, node[i]))
+                if i:
+                    pending.append((True, ","))
+
+
+def _canonical_json_protocol_chunks(value, *, allow_nan=True, sort_keys=True):
     """Stream exact JSON tokens; scalar spellings use stdlib's C string codec."""
     import math
     encode_string = json.encoder.encode_basestring_ascii

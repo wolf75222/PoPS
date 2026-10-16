@@ -509,6 +509,8 @@ class System {
   [[nodiscard]] POPS_EXPORT std::string auxiliary_registry_contract() const;
   [[nodiscard]] POPS_EXPORT const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>&
   prepared_auxiliary_consumer_plan(const std::string& consumer_qid) const;
+  [[nodiscard]] POPS_EXPORT std::string prepared_auxiliary_read_authority(
+      std::string_view consumer, std::size_t slot, std::uint64_t byte_capacity) const;
   /// Durable accepted auxiliary metadata for the Uniform runtime.  Rank-local group payloads are
   /// staged by the checkpoint backend; this image authenticates exact group identities,
   /// owner-qualified ComponentKeys, shapes, and accepted provider generations before publication.

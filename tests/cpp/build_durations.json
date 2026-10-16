@@ -42,6 +42,9 @@
       "test_distributed_gc_v14",
       "test_elliptic_named_device_kernels",
       "test_external_field_backend_preparation",
+      "test_field_provider_read_authority",
+      "test_field_read_transport",
+      "test_field_transform_support",
       "test_float32_poisson_residual",
       "test_generated_amr_system_block",
       "test_generated_stability_speed",
@@ -93,7 +96,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 213,
+    "target_count": 216,
     "v12_estimate_source": "No per-target cold-build receipt exists. History snapshot and AMR transition use the 300 s heavy-template tier; collective rejection uses the 2 s parallel-share floor. Replace from the next complete cold-CI build timing artifact.",
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor",
     "v18_estimate_source": "Unmeasured scheduling estimates: AMR publication and general composite solver use the existing 300 s heavy-template tier; small runtime contracts use the 2 s parallel-share floor. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -128,7 +131,8 @@
     "api_v14_estimate_source": "Unmeasured standalone structural codec/domain runtime contract allowance; 120 s cold build and 10 s runtime per new target. No local or CI timing is claimed; replace from complete receipts.",
     "api_v14_zero_block_estimate_source": "Unmeasured scheduling estimate: native codec-only target with three serial GTests; declared ranks 1/2/3 are archive data, not MPI execution. Same conservative seed as other v14 structural codec tests; replace only from an authenticated cold-CI measurement.",
     "composite_physical_measure_estimate_source": "Unmeasured scheduling estimate added 2026-10-15 for two Kokkos Fab metric/mask/finite-value contracts: 30 s build and 1 s test. Native local correctness receipts are separate and do not measure cold-CI duration. Existing watchdogs are unchanged.",
-    "api_v02_migration_estimate_source": "Unmeasured cold-CI scheduling estimate: test_continuation_field_migration, test_continuation_distributed_migration use the test_continuation_image tier (60.0 seconds). These compile native continuation codecs and exercise Kokkos/MPI storage, without provider DSO compilation. Local incremental native receipts are separate and are not cold-CI timings. Existing weights and watchdogs remain unchanged."
+    "api_v02_migration_estimate_source": "Unmeasured cold-CI scheduling estimate: test_continuation_field_migration, test_continuation_distributed_migration use the test_continuation_image tier (60.0 seconds). These compile native continuation codecs and exercise Kokkos/MPI storage, without provider DSO compilation. Local incremental native receipts are separate and are not cold-CI timings. Existing weights and watchdogs remain unchanged.",
+    "field_read_contracts017_basis": "Unmeasured analogous-target seeds: field_read_transport uses distributed_array; pure Field transform support and provider publication authority use continuation_image. Covers three explicit targets and MPI2/3 variants; no executed duration or watchdog change is inferred."
   },
   "test_amr_compiled_model": 2.0,
   "test_amr_composite_poisson": 2.0,
@@ -342,5 +346,8 @@
   "test_state_carriers_zero_block_v14": 120.0,
   "test_composite_physical_measure": 30.0,
   "test_continuation_field_migration": 60.0,
-  "test_continuation_distributed_migration": 60.0
+  "test_continuation_distributed_migration": 60.0,
+  "test_field_read_transport": 60.0,
+  "test_field_transform_support": 60.0,
+  "test_field_provider_read_authority": 60.0
 }

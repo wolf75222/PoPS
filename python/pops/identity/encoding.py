@@ -54,15 +54,20 @@ def _encode_buffer(value: Any) -> bytearray:
     # Repeated schema keys dominate finite metadata. This is a bounded encoding
     # cache, not a restriction on values: cache misses always encode normally.
     strings: dict[str, bytes] = {}
+    # Only layouts of exact built-in dictionaries/keys are cached. Values and
+    # cycle/error verdicts are always traversed afresh; subclass hooks keep the
+    # general path. The budget bounds retained layout keys, not accepted input.
+    layouts: dict[tuple[str, ...], tuple[bytes, tuple[tuple[bytes, str, str], ...]]] = {}
+    layout_keys = 0
     pending: list[tuple[str, Any, Any, bytearray]] = [("value", value, None, chunks)]
     while pending:
         action, value, path, output = pending.pop()
         if action == "leave":
             active.remove(id(value))
             continue
-        if action == "bytes":
-            output.extend(value)
-            continue
+        if action == "member":
+            key_bytes, value = value
+            output.extend(key_bytes)
         if action == "set":
             items = [bytes(parts) for parts in value]
             items.sort(key=lambda item: (len(item), item))
@@ -77,6 +82,8 @@ def _encode_buffer(value: Any) -> bytearray:
             output.append(0xf4)
         elif value is True:
             output.append(0xf5)
+        elif type(value) is int and -24 <= value < 24:
+            output.append(value if value >= 0 else 31 - value)
         elif isinstance(value, int):
             if value < _INT64_MIN or value > _INT64_MAX:
                 raise OverflowError("canonical CBOR integer at %s is outside signed int64" % _diagnostic_path(path))
@@ -102,6 +109,27 @@ def _encode_buffer(value: Any) -> bytearray:
                 for index in range(len(value) - 1, -1, -1):
                     pending.append(("value", value[index], (path, "[%d]" % index), output))
             elif isinstance(value, dict):
+                keys = tuple(value) if type(value) is dict else None
+                if keys is not None and all(type(key) is str for key in keys):
+                    layout = layouts.get(keys)
+                    if layout is None:
+                        fields = []
+                        for key in keys:
+                            encoded = strings.get(key)
+                            if encoded is None:
+                                encoded = _encode_string(key, (path, "{key}"))
+                                if len(strings) < 4096:
+                                    strings[key] = encoded
+                            fields.append((encoded, key, "." + key))
+                        fields.sort(key=lambda field: (len(field[0]), field[0]))
+                        layout = (_head(5, len(fields)), tuple(fields))
+                        if layout_keys + max(1, len(keys)) <= 4096:
+                            layouts[keys] = layout
+                            layout_keys += max(1, len(keys))
+                    output.extend(layout[0])
+                    for key_bytes, key, suffix in reversed(layout[1]):
+                        pending.append(("member", (key_bytes, value[key]), (path, suffix), output))
+                    continue
                 entries = []
                 for key, item in value.items():
                     if not isinstance(key, str):
@@ -115,8 +143,7 @@ def _encode_buffer(value: Any) -> bytearray:
                 entries.sort(key=lambda entry: (len(entry[0]), entry[0]))
                 output.extend(_head(5, len(entries)))
                 for key_bytes, key, item in reversed(entries):
-                    pending.append(("value", item, (path, ".%s" % key), output))
-                    pending.append(("bytes", key_bytes, path, output))
+                    pending.append(("member", (key_bytes, item), (path, ".%s" % key), output))
             else:
                 # Set ordering depends on complete member encodings. These
                 # members alone need separate buffers until the set closes.

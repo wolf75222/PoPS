@@ -116,8 +116,14 @@ ArrayRef<Dim> publish_array(Registry& registry, std::shared_ptr<Array<Dim>> pend
     // independent of whether the caller needed a persistent transport session.
     charge = continuation_distributed_array_charge<Dim>(pending, registry, capacity, {}, transport);
   });
-  pending->version = registry.publish_value(pending, std::move(type), charge);
-  return std::move(pending);
+  ArrayRef<Dim> published;
+  registry.publish_value_with_identity(
+      [&](Identity identity) {
+        published = Array<Dim>::immutable_publication(*pending, identity, capacity);
+        return published;
+      },
+      std::move(type), charge);
+  return published;
 }
 template <int Dim>
 ContinuationValueRef<Dim> at_local(const ArrayRef<Dim>& a, const Index& i) {

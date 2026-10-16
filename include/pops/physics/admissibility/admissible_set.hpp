@@ -4,6 +4,7 @@
 /// @brief Model-declared, device-clean admissibility constraints without physical-name policy.
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/foundation/device_capture.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 
 #include <concepts>
@@ -80,6 +81,7 @@ struct ConstraintPack;
 template <std::size_t... Indices, class... Constraints>
 struct ConstraintPack<std::index_sequence<Indices...>, Constraints...>
     : ConstraintSlot<Indices, Constraints>... {
+  using pops_device_capture_members = DeviceCaptureMembers<Constraints...>;
   explicit ConstraintPack(Constraints... constraints)
       : ConstraintSlot<Indices, Constraints>{std::move(constraints)}... {}
 
@@ -170,6 +172,7 @@ template <AdmissibilityConstraintKind Kind, class Predicate>
            Kind == AdmissibilityConstraintKind::kCustomInequality)
 class ModelInequality final {
  public:
+  using pops_device_capture_members = DeviceCaptureMembers<Predicate, std::uint32_t>;
   static constexpr AdmissibilityConstraintKind kind = Kind;
 
   ModelInequality(Predicate predicate, std::uint32_t diagnostic_code)
@@ -220,12 +223,15 @@ using CustomInequality = ModelInequality<AdmissibilityConstraintKind::kCustomIne
 template <class... Constraints>
 class AdmissibleSet final {
  public:
+  using constraint_pack_type =
+      admissibility_detail::ConstraintPack<std::index_sequence_for<Constraints...>, Constraints...>;
+  using pops_device_capture_members = DeviceCaptureMembers<constraint_pack_type>;
   static_assert(sizeof...(Constraints) > 0, "an admissible set must declare a constraint");
   static_assert(std::tuple_element_t<0, std::tuple<Constraints...>>::kind ==
                     AdmissibilityConstraintKind::kFinite,
                 "an admissible set must run a finite constraint before model predicates");
-  static_assert((std::is_trivially_copyable_v<Constraints> && ...),
-                "device admissibility constraints must be trivially copyable");
+  static_assert((device_capture_v<Constraints> && ...),
+                "device admissibility constraints require an exhaustive owned capture contract");
 
   explicit AdmissibleSet(Constraints... constraints) : constraints_(std::move(constraints)...) {
     validate_codes_<0>();
@@ -293,8 +299,7 @@ class AdmissibleSet final {
     }
   }
 
-  admissibility_detail::ConstraintPack<std::index_sequence_for<Constraints...>, Constraints...>
-      constraints_;
+  constraint_pack_type constraints_;
 };
 
 template <class... Constraints>

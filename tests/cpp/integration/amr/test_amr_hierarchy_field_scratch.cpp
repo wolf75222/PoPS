@@ -397,6 +397,41 @@ TEST(AmrHierarchyFieldScratch, AssemblyReadRequiresExactLiveProviderLevelAndAllo
   });
 }
 
+TEST(AmrHierarchyFieldScratch, RepresentationQueryAuthenticatesNativeProviderWithoutStateOwner) {
+  auto fixture = prepare_fixture();
+  auto& context = *fixture.context;
+  std::array<Field*, 2> solutions{};
+  auto retained_provider = context.retain_hierarchy_field_solver(701);
+  context.for_each_program_resource_level([&](int level) {
+    auto& solution = context.hierarchy_field_solution(701);
+    auto& rhs = context.hierarchy_field_assembly(701, general::rhs_slot);
+    auto& coefficients = context.hierarchy_field_assembly(701, general::coefficient_slot);
+    auto& scratch = context.hierarchy_field_scratch(701, 995, 0, 1, 1);
+    solutions[level] = &solution;
+    for (const auto* field : {&solution, &rhs, &coefficients, &scratch}) {
+      EXPECT_EQ(context.field_representation_obligation(*field), nullptr);
+      EXPECT_NO_THROW(context.require_discharged_field_representation(*field));
+      Field lookalike(*field);
+      EXPECT_THROW(context.field_representation_obligation(lookalike), std::invalid_argument);
+      EXPECT_THROW(context.require_discharged_field_representation(lookalike),
+                   std::invalid_argument);
+      // Reading metadata must not grant a State-owned allocation/projection.
+      EXPECT_THROW(context.scalar_scratch(996, 0, *field), std::invalid_argument);
+    }
+  });
+  context.for_each_program_resource_level([&](int level) {
+    EXPECT_THROW(context.field_representation_obligation(*solutions[1 - level]),
+                 std::invalid_argument);
+  });
+  replace_child(fixture, 2);
+  context.with_program_resource_level(1, [&] {
+    EXPECT_THROW(context.field_representation_obligation(*solutions[1]), std::invalid_argument);
+    auto& current = context.hierarchy_field_solution(701);
+    EXPECT_NO_THROW(context.require_discharged_field_representation(current));
+    EXPECT_THROW(context.field_representation_obligation(*solutions[1]), std::invalid_argument);
+  });
+}
+
 TEST(AmrHierarchyFieldScratch, RetainedInputsPreserveBytesAndVoteBeforeAnyReset) {
   auto fixture = prepare_fixture();
   auto& context = *fixture.context;
@@ -673,6 +708,16 @@ TEST(AmrHierarchyFieldScratch, IndependentProviderAuthenticatesIssuedObservation
   auto lookalike = std::make_shared<Field>(*retained);
   EXPECT_THROW(context.continuation_preflight_field(*lookalike, component), std::invalid_argument);
 
+  auto obligation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"test.closed-transform", "test.exact-production"});
+  auto raw = context.own_field_representation(*retained, component, obligation, 1 << 20, 945);
+  EXPECT_EQ(context.field_representation_obligation(*raw), obligation);
+  EXPECT_THROW(context.require_discharged_field_representation(*raw), std::invalid_argument);
+  auto raw_copy = context.own_structural_field(*raw);
+  EXPECT_EQ(context.field_representation_obligation(*raw_copy), obligation);
+  EXPECT_THROW(context.require_discharged_field_representation(*raw_copy), std::invalid_argument);
+  EXPECT_EQ(context.field_representation_obligation(*retained), nullptr);
+
   auto replaced = context.own_structural_field(*retained);
   EXPECT_NO_THROW(context.continuation_preflight_field(*replaced, component));
   *replaced = Field(*retained);
@@ -742,6 +787,8 @@ TEST(AmrHierarchyFieldScratch, IndependentProviderAuthenticatesIssuedObservation
   EXPECT_THROW(context.continuation_preflight_field(*retained, component), std::invalid_argument);
   EXPECT_THROW(context.continuation_preflight_field(*gradient, derived), std::invalid_argument);
   EXPECT_THROW(context.own_structural_field(*gradient), std::invalid_argument);
+  EXPECT_THROW(context.field_representation_obligation(*raw), std::invalid_argument);
+  EXPECT_THROW(context.field_representation_obligation(*raw_copy), std::invalid_argument);
   std::remove(source.c_str());
   std::remove(library.c_str());
 }

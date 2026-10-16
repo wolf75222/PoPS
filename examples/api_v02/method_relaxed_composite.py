@@ -28,7 +28,8 @@ from .models_M01_M14 import _domain, _initial
 
 
 def build_t10_composite(*, cells=(32, 16), temporal_ratio=1, relaxed=True,
-                         reject_parent=False):
+                         reject_parent=False, requested_dt=1., t_end=1.,
+                         clip_to_frontier=False):
     """Whole-macro RRK: no fine history is used as the macro-entry state.
 
     Requires the generic attempt-entry/composite-pair/finalization contracts.
@@ -84,12 +85,27 @@ def build_t10_composite(*, cells=(32, 16), temporal_ratio=1, relaxed=True,
             old = builder.attempt_start(q.n)
             metric = (1., 1., 0.)
             old_energy = builder.composite_pair(old, old, weights=metric)
-            mixed = builder.composite_pair(old, q.n, weights=metric)
             new_energy = builder.composite_pair(q.n, q.n, weights=metric)
-            squared_increment = new_energy-2*mixed+old_energy
+            # This witness declares the rotation polynomial of its own Heun map.
+            # Evaluate R(h)-1 before addition to the state: subtracting two
+            # rounded endpoint fields loses the O(h**2) radial increment near
+            # the run frontier. The core only integrates these Python equations.
+            h = builder.requested_dt()
+            norm = old[0]*old[0]+old[1]*old[1]
+            radial, squared = [], []
+            for level, count in ((0, 1), (1, temporal_ratio)):
+                real = -.5*h*h if count == 1 else -.5*h*h+h*h*h*h/64.
+                imag = h if count == 1 else h-h*h*h/8.
+                selected = builder.int64(level)
+                radial.append(builder.composite_integral("radial_increment_%d" % level,
+                    norm*real, over=q.n, level=selected))
+                squared.append(builder.composite_integral("squared_increment_%d" % level,
+                    norm*(real*real+imag*imag), over=q.n, level=selected))
+            mixed_increment = radial[0]+radial[1]
+            squared_increment = squared[0]+squared[1]
             gamma = builder.branch(squared_increment > 0,
-                lambda b: -2*(mixed-old_energy)/squared_increment,
-                lambda b: old_energy*0+1)
+                lambda b: -2*mixed_increment/squared_increment,
+                lambda b: squared_increment*0+1)
             builder.guard("positive_finite_macro_factor", q.n, gamma > 0, action=RejectAttempt())
             builder.record_scalar("rrk.gamma", gamma)
             builder.record_scalar("rrk.energy_before", old_energy)
@@ -100,11 +116,13 @@ def build_t10_composite(*, cells=(32, 16), temporal_ratio=1, relaxed=True,
             if reject_parent:
                 builder.guard("reject_relaxed_parent", q.n, gamma < 0, action=RejectAttempt())
         program.after_synchronization(finalize)
-        program.step_strategy(ComputedDt(1., max_rejections=0, endpoint_ulps=4))
+        program.step_strategy(ComputedDt(requested_dt, max_rejections=0, endpoint_ulps=4,
+                                         clip_to_frontier=clip_to_frontier))
     else:
-        program.step_strategy(FixedDt(1.))
+        program.step_strategy(FixedDt(requested_dt))
     case.program(program)
-    transfer = AMRTransfer(); transfer.state(block[state], StateTransfer())
+    transfer = AMRTransfer()
+    transfer.state(block[state], StateTransfer())
     threshold = case.param(RuntimeParam("refine_threshold", default=.65))
     execution = (AMRExecution.synchronous() if temporal_ratio == 1 else
                  AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)))
@@ -120,8 +138,18 @@ def build_t10_composite(*, cells=(32, 16), temporal_ratio=1, relaxed=True,
         arrays = [runtime.block_level_state_global("method", i) for i in range(runtime.n_levels())]
         if arrays[0] is None:
             return non_owner_metrics()
+        if clip_to_frontier:
+            from .relaxed_composite_reference import trajectory_metrics
+            metrics = trajectory_metrics(arrays, runtime.patch_boxes(), cells=cells,
+                ratio=temporal_ratio, requested=requested_dt, end=t_end,
+                initial_passive=float(initial[2].mean()))
+            metrics["time_error"] = abs(runtime.time()-metrics["reference_time"])
+            metrics["accepted_steps"] = runtime.macro_step()
+            metrics["passed"] = bool(metrics["passed"] and metrics["time_error"] < 2.e-13
+                and runtime.macro_step() == len(metrics["reference_requests"]))
+            return metrics
         return dict(passed=runtime.n_levels() == 2 and runtime.macro_step() == 1,
                     metrics_owner=True, frontier_only=True)
     return CaseSpec(case, layout, _initial(case, block[state], initial), {"method": block[state]},
-        1., 1., assess, "T10: global volume metric, macro-entry snapshot, one factor on the complete "
+        t_end, requested_dt, assess, "T10: global volume metric, macro-entry snapshot, one factor on the complete "
         "refluxed increment and published face measures; requested stage dates retained")

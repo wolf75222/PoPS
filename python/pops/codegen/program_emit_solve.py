@@ -1368,6 +1368,11 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         or not hierarchy_provider.flat_execution.uses_prepared_krylov_fallback
     )
     uses_prepared_krylov = not direct_provider_execution
+    fallback_owner = None
+    if uses_prepared_krylov and hierarchy_provider is not None:
+        fallback_owner = program._block_indices().get(v.block)
+        if fallback_owner is None or fallback_owner != v.attrs["hierarchy_block_index"]:
+            raise ValueError("hierarchy Krylov solution lost its exact declared block owner")
     sol_sp = "sf_sol%d" % v.id
     # The solution carries the operator's component count: a vector / state solve writes an ncomp
     # iterate (the Krylov scratch r/p/Ap is co-allocated from it, so the whole loop is ncomp-wide).
@@ -1391,8 +1396,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         var[v.id] = ("ctx.hierarchy_field_solution(%d)" % v.id if "hierarchy_field_identity" in v.attrs
                      else "ctx.hierarchy_solution()")
     else:
-        var[v.id] = ("ctx.linear_solution(*%s)" % sol_sp
-                     if target == "amr_system" and v.attrs.get("scope") == "hierarchy"
+        var[v.id] = ("ctx.linear_solution(%d, %d, %d, %d)" %
+                     (v.id, fallback_owner, op_ncomp, input_ghosts)
+                     if fallback_owner is not None
                      else "(*%s)" % sol_sp)
     # Initial guess: zero (default) or a copy of the guess field.
     if uses_prepared_krylov:
@@ -1642,6 +1648,17 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
     _append_solve_report_guard(
         program, v, kr, lines, label="solve_linear", phase="solve")
+    if fallback_owner is not None:
+        # A successful Krylov solve owns a private allocation. Deliver its complete
+        # value to storage issued from the declared block before downstream History
+        # or field operations read it. The direct hierarchy phase selects its own
+        # provider solution without touching this fallback-only scratch.
+        lines.append("ctx.prepare_spatial_collectively([&]() {")
+        lines.append("  auto& delivered = ctx.scalar_scratch(%d, 0, ctx.state(%d), %d, %d);"
+                     % (v.id, fallback_owner, op_ncomp, input_ghosts))
+        lines.append("  pops::PureFieldAlgebra::copy_allocated(delivered, *%s);" % sol_sp)
+        lines.append("  Kokkos::fence();")
+        lines.append("}); // exact owner-issued Krylov solution delivery")
     publish_field_solve(v, var, lines, target=target)
     if v.vtype == "state" and v.attrs.get("scope") != "hierarchy":
         # Krylov coordinates carry the operator's exact stencil halo, which may be

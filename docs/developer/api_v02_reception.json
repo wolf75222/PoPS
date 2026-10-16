@@ -1074,7 +1074,7 @@
         }
       ],
       "assumptions": [
-        "Stationary periodic planar magnetic geometry with b·curl(b)=0, J=B and actual three-dimensional spatial operators.",
+        "Stationary periodic planar magnetic geometry with b\u00b7curl(b)=0, J=B and actual three-dimensional spatial operators.",
         "Declared FV/Euler, finite zero-flux velocity box and explicit collision moment projection."
       ],
       "unestablished_properties": [
@@ -1783,7 +1783,7 @@
             "symbol": "examples.api_v02.methods_T01_T12:build_t06",
             "parameters": []
           },
-          "scope": "Local F(a,b)=a*b versus b² distinction."
+          "scope": "Local F(a,b)=a*b versus b\u00b2 distinction."
         }
       ],
       "companion_profiles": [],
@@ -1992,6 +1992,10 @@
       "builder": {
         "symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
         "parameters": [
+          [
+            "clip_to_frontier",
+            true
+          ],
           [
             "temporal_ratio",
             2
@@ -4717,6 +4721,1134 @@
             "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 12
           }
         }
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-integral-feedback-0016/receipt.json",
+      "sha256": "d634ea7b254e421e7fd50817da865bc5360b2f12f19576682c9dc958ebae7edc",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Explicitly selected native cases on the authenticated snapshot and installed SDK recorded by this receiver; partial successes do not qualify its failed cases or later source.",
+        "selected_cases_passed": 6,
+        "selected_case_names": [
+          "tests.python.integration.runtime.test_public_integral_feedback.test_public_feedback_original_source_real_exterior_and_byte_exact_restart[False-8]",
+          "tests.python.integration.runtime.test_public_integral_feedback.test_public_feedback_original_source_real_exterior_and_byte_exact_restart[False-16]",
+          "tests.python.integration.runtime.test_public_integral_feedback.test_public_feedback_original_source_real_exterior_and_byte_exact_restart[True-8]",
+          "tests.python.integration.runtime.test_public_integral_feedback.test_public_feedback_original_source_real_exterior_and_byte_exact_restart[True-16]",
+          "tests.python.integration.runtime.test_public_integral_feedback.test_feedback_rejected_transport_preserves_capture_integral_and_safe_retry[False]",
+          "tests.python.integration.runtime.test_public_integral_feedback.test_feedback_rejected_transport_preserves_capture_integral_and_safe_retry[True]"
+        ],
+        "failed_cases": [],
+        "overall_receipt_passed": true,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "seconds": 316.2286120830104
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-implicit-frontier-0016/receipt.json",
+      "sha256": "fa9412af3ddbd4f15b5bbbc2d947da132fb216f983cd42bb6f8f9fbdfdd977de",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Explicitly selected native cases on the authenticated snapshot and installed SDK recorded by this receiver; partial successes do not qualify its failed cases or later source.",
+        "selected_cases_passed": 13,
+        "selected_case_names": [
+          "tests.python.integration.runtime.test_api_v02_path_hierarchy_native.test_nested_path_matches_explicit_composition_and_accepted_face_integrals[branch-straight]",
+          "tests.python.integration.runtime.test_api_v02_original_field_typed_recovery_native.test_original_typed_recovery_keeps_array_values_code_and_restart[capture_typed-3.45]",
+          "tests.python.integration.runtime.test_api_v02_original_field_typed_recovery_native.test_original_typed_recovery_keeps_array_values_code_and_restart[iterate_typed_success-0.32]",
+          "tests.python.integration.runtime.test_api_v02_original_field_typed_recovery_native.test_original_typed_recovery_keeps_array_values_code_and_restart[iterate_typed_error-3.9]",
+          "tests.python.integration.runtime.test_api_v02_original_field_typed_recovery_native.test_original_typed_recovery_keeps_array_values_code_and_restart[iterate_typed_budget--7]",
+          "tests.python.integration.runtime.test_amr_implicit_diffusion_convergence.test_composite_implicit_matches_conservative_reference_and_converges[constant-False]",
+          "tests.python.integration.runtime.test_amr_implicit_diffusion_convergence.test_composite_implicit_matches_conservative_reference_and_converges[constant-True]",
+          "tests.python.integration.runtime.test_amr_implicit_diffusion_convergence.test_composite_implicit_matches_conservative_reference_and_converges[variable-False]",
+          "tests.python.integration.runtime.test_amr_implicit_diffusion_convergence.test_composite_implicit_matches_conservative_reference_and_converges[variable-True]",
+          "tests.python.integration.runtime.test_amr_implicit_diffusion_convergence.test_composite_implicit_matches_conservative_reference_and_converges[diagonal-False]",
+          "tests.python.integration.runtime.test_amr_implicit_diffusion_convergence.test_composite_implicit_matches_conservative_reference_and_converges[diagonal-True]",
+          "tests.python.integration.runtime.test_amr_implicit_diffusion_convergence.test_composite_implicit_matches_conservative_reference_and_converges[nonlinear_accumulation-False]",
+          "tests.python.integration.runtime.test_amr_implicit_diffusion_convergence.test_composite_implicit_matches_conservative_reference_and_converges[nonlinear_accumulation-True]"
+        ],
+        "failed_cases": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_path_hierarchy_native",
+            "name": "test_nested_path_matches_explicit_composition_and_accepted_face_integrals[fold-unrolled]",
+            "outcome": "failure",
+            "seconds": "60.846"
+          }
+        ],
+        "overall_receipt_passed": false,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "seconds": 2890.1232427079813
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-provider-path-0017a/receipt.json",
+      "sha256": "a772ecf6bb21cb6627ab06d810a93602362a53b6d77ad3b59455ad66e2b454fd",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Explicitly selected native cases on the authenticated snapshot and installed SDK recorded by this receiver; partial successes do not qualify its failed cases or later source.",
+        "selected_cases_passed": 6,
+        "selected_case_names": [
+          "tests.python.integration.runtime.test_api_v02_runtime_parameter_family_native.test_runtime_parameter_family_executes_bind_overrides_and_restart[33]",
+          "tests.python.integration.runtime.test_api_v02_runtime_parameter_family_native.test_runtime_parameter_family_executes_bind_overrides_and_restart[65]",
+          "tests.python.integration.runtime.test_api_v02_runtime_parameter_family_native.test_runtime_parameter_family_executes_bind_overrides_and_restart[129]",
+          "tests.python.integration.runtime.test_api_v02_independent_uniform_continuation_native.test_uniform_field_and_gradient_keep_prior_observation_and_restart",
+          "tests.python.integration.runtime.test_api_v02_independent_uniform_continuation_native.test_uniform_rejected_assessment_restores_complete_provider_image",
+          "tests.python.integration.runtime.test_api_v02_path_hierarchy_native.test_nested_path_matches_explicit_composition_and_accepted_face_integrals[branch-straight]"
+        ],
+        "failed_cases": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_python_remap_moves_independent_solved_history_and_survives_restart",
+            "outcome": "failure",
+            "seconds": "145.751"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_late_regrid_rejection_restores_independent_field_and_complete_forest",
+            "outcome": "failure",
+            "seconds": "153.191"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_path_hierarchy_native",
+            "name": "test_nested_path_matches_explicit_composition_and_accepted_face_integrals[fold-unrolled]",
+            "outcome": "failure",
+            "seconds": "75.800"
+          }
+        ],
+        "overall_receipt_passed": false,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "seconds": 711.7676322499756
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-checkpoint017-blockmap/receipt.json",
+      "sha256": "618a1315690672f59ea2176cbf3ba6e0ba2f70b34987b4a085e317675460a583",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Corrected Uniform independent-provider fixture installs the actual block map before configuration; same source017a native core. Exact checkpoint/next-step receiver passes on MPI1/2/3.",
+        "selected_cases_passed": 1,
+        "rank_observations": 6,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "passed": true,
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0018-isolated-dim2/receipt.json",
+      "sha256": "98c84ee53ac8bcfcb1802fa9c0bdb515d30b9c167a2d310929051e7f51b73e78",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official PoPS build against authenticated unchanged source; build success alone does not qualify numerical receivers.",
+        "command": [
+          "bash",
+          "scripts/build_python.sh",
+          "--dim",
+          "2",
+          "--mpi"
+        ],
+        "cwd": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/worktree",
+        "base_head": "47b2ea9427a557be925a689211435f392aa5a87f",
+        "source_status": "authorized dirty source identified by complete SHA256 manifest",
+        "seconds": 22.560899167030584,
+        "exit_code": 1,
+        "source_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0018a-isolated-dim2/receipt.json",
+      "sha256": "17e6a061cf96a316e635982ac7601f001a7591057d4b7ee4c1c03a975408cd35",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official PoPS build against authenticated unchanged source; build success alone does not qualify numerical receivers.",
+        "command": [
+          "bash",
+          "scripts/build_python.sh",
+          "--dim",
+          "2",
+          "--mpi"
+        ],
+        "cwd": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/worktree",
+        "base_head": "47b2ea9427a557be925a689211435f392aa5a87f",
+        "source_status": "authorized dirty source identified by complete SHA256 manifest",
+        "seconds": 113.39662862505065,
+        "exit_code": 1,
+        "source_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0018b-isolated-dim2/receipt.json",
+      "sha256": "7e31e1487712c655b1eae7946e1c3593696fff40a78b799ac6e713e124619685",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official PoPS build against authenticated unchanged source; build success alone does not qualify numerical receivers.",
+        "command": [
+          "bash",
+          "scripts/build_python.sh",
+          "--dim",
+          "2",
+          "--mpi"
+        ],
+        "cwd": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/worktree",
+        "base_head": "47b2ea9427a557be925a689211435f392aa5a87f",
+        "source_status": "authorized dirty source identified by complete SHA256 manifest",
+        "seconds": 199.356277666986,
+        "exit_code": 0,
+        "source_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-source018b-reception/receipt.json",
+      "sha256": "28b6c8c23dd8016b9b30d5241427d972d0843393f354fbc99667199a3541b26a",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Native source018b core and 40 selected C++ contracts, MPI1/2/3. Thirty-five cases pass all six rank observations; five failed fixture groups remain failed and are not qualified.",
+        "selected_cases_passed": 35,
+        "rank_observations": 210,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "selected_case_names": [
+          "AmrHistoryFieldMetadata.BudgetAndAlteredImageRejectBeforePublication",
+          "AmrHistoryFieldMetadata.EmptyTableAndVerbatimLegacyFluxHaveDistinctContracts",
+          "AmrHistoryFieldMetadata.NoFluxRoundTripKeepsForeignSupportAndExactSamples",
+          "DistributedGcV14.CorruptNativeCycleIsRejectedBeforeAnySweep",
+          "DistributedGcV14.DeepRemoteRootAndSharedEdgesSurviveClosureAndCollectExactly",
+          "DistributedGcV14.ImmutableFactoryFailureIsCollectiveAndDoesNotPublish",
+          "DistributedGcV14.ImmutablePublicationIsolatesMutablePendingAndDropsCopiedProof",
+          "DistributedGcV14.ImmutableScalarProductCensusDoesNotVisitElementPayloads",
+          "DistributedGcV14.ImmutableSummaryUsesActualLeavesAndKeepsResourceCharges",
+          "DistributedGcV14.LeafTraversalPreservesCallbacksWithoutFrameStorage",
+          "DistributedGcV14.OneRankPreparationFailureLeavesEveryVaultUnchanged",
+          "DistributedGcV14.RemoteOnlyRootAndFailureRetainEveryShard",
+          "DistributedGcV14.RepeatedStepsReuseBudgetAndProtectRollbackAndFailure",
+          "DistributedGcV14.RequestsKeepIndexOwnershipAndRemoteRootsWithoutLeafFrames",
+          "DistributedGcV14.ScalarProofIsClosedOverActualValuesAndKeepsOpaqueKinds",
+          "DistributedGcV14.SharedIndexDagFitsUniqueEdgeBudgetAndRechecksRevocation",
+          "DistributedGcV14.SharedProductEdgesAreCountedOncePerOwnershipEdge",
+          "DistributedGcV14.StructuralMemoChecksRequestedBytesBeforeAllocation",
+          "FieldProviderReadAuthority.ChangedUsedPublicationDiffersButOtherProviderIsIrrelevant",
+          "FieldProviderReadAuthority.DerivedReadClosesItsActualDependencyPublication",
+          "FieldProviderReadAuthority.PointProjectionMustBeCertifiedByCompiledProducer",
+          "FieldReadTransport.ActualKokkosReadsArePartitionInvariantIncludingEmptyRanks",
+          "FieldReadTransport.EqualLayoutDoesNotAuthenticateAReplacedSourceAllocation",
+          "FieldReadTransport.HighestRankIncarnationAndNestedFabReplacementAreNotLayoutAliases",
+          "FieldReadTransport.MissingKernelRowsAndInsufficientWorkspaceRejectCollectively",
+          "FieldReadTransport.ReplicasMustAgreeExactlyBeforeCanonicalSelection",
+          "FieldReadTransport.TransformJournalsAndClosuresShareAnExplicitWorkspace",
+          "FieldReadTransport.TransformSeparatesActualCoordinatesFromOnlyUsedBindings",
+          "FieldTransformSupport.FirstProductionBindsTheNativePointAndKeepsZeroTimeRemap",
+          "FieldTransformSupport.IndependentProvidersAndInvalidAuthorityRejectExactly",
+          "FieldTransformSupport.OriginAndActualGeometryAreExactAndPartitionFree",
+          "ProgramContextContract.HistoryFieldMetadataCodecRetainsAliasesAndRejectsMalformedTables",
+          "ProgramContextContract.HistoryFieldMetadataRotatesAndRollsBackWithTheNumericalImage",
+          "ProgramContextContract.HistoryInterpolationPreservesEndpointsAndRejectsRawMixing",
+          "ProgramContextContract.NoFluxHistoryFieldCheckpointMigratesWithoutChangingItsOrigin"
+        ],
+        "overall_receipt_passed": false,
+        "failed_observations": [
+          {
+            "file": "test_amr_path_rhs_barrier-mpi1-rank0.xml",
+            "case": "AmrPathRhsBarrier.RepeatedSsaUsesDistinctNativeBarrierInvocations",
+            "message": "unknown file\nC++ exception with description \"ND metric reflux stage weights do not close one accepted substep\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi1-rank0.xml",
+            "case": "AmrPathRhsBarrier.DuplicateAndPreviousInvocationTracesRejectAndRollback",
+            "message": "unknown file\nC++ exception with description \"AMR Program accepted state lacks its exact live flux-budget contract\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi1-rank0.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences",
+            "message": "unknown file\nC++ exception with description \"AMR Program scratch prototype has no authenticated runtime block owner\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi1-rank0.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryMetadataCacheKeepsExactStorageAndSnapshot",
+            "message": "unknown file\nC++ exception with description \"Continuation Field has an incomplete producer support\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi1-rank0.xml",
+            "case": "GeneratedAmrSystemBlock.PreparedKrylovDeliveryKeepsExactOwnerAndRejectsUnissuedClones",
+            "message": "unknown file\nC++ exception with description \"AmrSystem state routes must be installed before any compiled package\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi3-rank0.xml",
+            "case": "AmrPathRhsBarrier.RepeatedSsaUsesDistinctNativeBarrierInvocations",
+            "message": "unknown file\nC++ exception with description \"Program cadence phase failed collectively; rank 0: AMR synchronized reflux failed collectively; rank 0: ND metric reflux stage weights do not close one accepted substep\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi3-rank0.xml",
+            "case": "AmrPathRhsBarrier.DuplicateAndPreviousInvocationTracesRejectAndRollback",
+            "message": "unknown file\nC++ exception with description \"AMR Program accepted state lacks its exact live flux-budget contract\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi3-rank1.xml",
+            "case": "AmrPathRhsBarrier.RepeatedSsaUsesDistinctNativeBarrierInvocations",
+            "message": "unknown file\nC++ exception with description \"Program cadence phase failed collectively; rank 0: AMR synchronized reflux failed collectively; rank 0: ND metric reflux stage weights do not close one accepted substep\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi3-rank1.xml",
+            "case": "AmrPathRhsBarrier.DuplicateAndPreviousInvocationTracesRejectAndRollback",
+            "message": "unknown file\nC++ exception with description \"AMR Program accepted state lacks its exact live flux-budget contract\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi2-rank1.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences",
+            "message": "unknown file\nC++ exception with description \"multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: AMR Program history store preparation failed collectively; rank 0: AMR Program scratch prototype has no authenticated runtime block owner\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi2-rank1.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryMetadataCacheKeepsExactStorageAndSnapshot",
+            "message": "unknown file\nC++ exception with description \"Continuation Field has an incomplete producer support\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi2-rank1.xml",
+            "case": "GeneratedAmrSystemBlock.PreparedKrylovDeliveryKeepsExactOwnerAndRejectsUnissuedClones",
+            "message": "unknown file\nC++ exception with description \"AmrSystem state routes must be installed before any compiled package\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi2-rank0.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences",
+            "message": "unknown file\nC++ exception with description \"multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: AMR Program history store preparation failed collectively; rank 0: AMR Program scratch prototype has no authenticated runtime block owner\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi2-rank0.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryMetadataCacheKeepsExactStorageAndSnapshot",
+            "message": "unknown file\nC++ exception with description \"Continuation Field has an incomplete producer support\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi2-rank0.xml",
+            "case": "GeneratedAmrSystemBlock.PreparedKrylovDeliveryKeepsExactOwnerAndRejectsUnissuedClones",
+            "message": "unknown file\nC++ exception with description \"AmrSystem state routes must be installed before any compiled package\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi3-rank2.xml",
+            "case": "AmrPathRhsBarrier.RepeatedSsaUsesDistinctNativeBarrierInvocations",
+            "message": "unknown file\nC++ exception with description \"Program cadence phase failed collectively; rank 0: AMR synchronized reflux failed collectively; rank 0: ND metric reflux stage weights do not close one accepted substep\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi3-rank2.xml",
+            "case": "AmrPathRhsBarrier.DuplicateAndPreviousInvocationTracesRejectAndRollback",
+            "message": "unknown file\nC++ exception with description \"AMR Program accepted state lacks its exact live flux-budget contract\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi2-rank0.xml",
+            "case": "AmrPathRhsBarrier.RepeatedSsaUsesDistinctNativeBarrierInvocations",
+            "message": "unknown file\nC++ exception with description \"Program cadence phase failed collectively; rank 0: AMR synchronized reflux failed collectively; rank 0: ND metric reflux stage weights do not close one accepted substep\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi2-rank0.xml",
+            "case": "AmrPathRhsBarrier.DuplicateAndPreviousInvocationTracesRejectAndRollback",
+            "message": "unknown file\nC++ exception with description \"AMR Program accepted state lacks its exact live flux-budget contract\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi3-rank2.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences",
+            "message": "unknown file\nC++ exception with description \"multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: AMR Program history store preparation failed collectively; rank 0: AMR Program scratch prototype has no authenticated runtime block owner\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi3-rank2.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryMetadataCacheKeepsExactStorageAndSnapshot",
+            "message": "unknown file\nC++ exception with description \"Continuation Field has an incomplete producer support\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi3-rank2.xml",
+            "case": "GeneratedAmrSystemBlock.PreparedKrylovDeliveryKeepsExactOwnerAndRejectsUnissuedClones",
+            "message": "unknown file\nC++ exception with description \"AmrSystem state routes must be installed before any compiled package\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi2-rank1.xml",
+            "case": "AmrPathRhsBarrier.RepeatedSsaUsesDistinctNativeBarrierInvocations",
+            "message": "unknown file\nC++ exception with description \"Program cadence phase failed collectively; rank 0: AMR synchronized reflux failed collectively; rank 0: ND metric reflux stage weights do not close one accepted substep\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_amr_path_rhs_barrier-mpi2-rank1.xml",
+            "case": "AmrPathRhsBarrier.DuplicateAndPreviousInvocationTracesRejectAndRollback",
+            "message": "unknown file\nC++ exception with description \"AMR Program accepted state lacks its exact live flux-budget contract\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi3-rank1.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences",
+            "message": "unknown file\nC++ exception with description \"multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: AMR Program history store preparation failed collectively; rank 0: AMR Program scratch prototype has no authenticated runtime block owner\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi3-rank1.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryMetadataCacheKeepsExactStorageAndSnapshot",
+            "message": "unknown file\nC++ exception with description \"Continuation Field has an incomplete producer support\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi3-rank1.xml",
+            "case": "GeneratedAmrSystemBlock.PreparedKrylovDeliveryKeepsExactOwnerAndRejectsUnissuedClones",
+            "message": "unknown file\nC++ exception with description \"AmrSystem state routes must be installed before any compiled package\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi3-rank0.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryReadsPreservePublishedReferences",
+            "message": "unknown file\nC++ exception with description \"multi-block AMR level-group callback failed collectively; rank 0: AMR Program level body failed collectively; rank 0: AMR Program history store preparation failed collectively; rank 0: AMR Program scratch prototype has no authenticated runtime block owner\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi3-rank0.xml",
+            "case": "GeneratedAmrSystemBlock.DeferredHistoryMetadataCacheKeepsExactStorageAndSnapshot",
+            "message": "unknown file\nC++ exception with description \"Continuation Field has an incomplete producer support\" thrown in the test body.\n"
+          },
+          {
+            "file": "test_generated_amr_system_block-mpi3-rank0.xml",
+            "case": "GeneratedAmrSystemBlock.PreparedKrylovDeliveryKeepsExactOwnerAndRejectsUnissuedClones",
+            "message": "unknown file\nC++ exception with description \"AmrSystem state routes must be installed before any compiled package\" thrown in the test body.\n"
+          }
+        ],
+        "sources_unchanged": true,
+        "binaries_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-representation-history-0018/receipt.json",
+      "sha256": "c681f9f1db38c8f6c5da5f0600d03ef5b9b01e4cf08e71bd2cdcc59ca1762114",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Native source018b Python compositions: nonlinear equation and workspace rollback plus Continuation/History rollback pass. Two raw History stores and next-step restart image equality fail and remain open.",
+        "selected_cases_passed": 3,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_nonlinear_representation_native",
+            "name": "test_exact_nonlinear_representation[executed-equation]",
+            "outcome": "passed",
+            "seconds": "25.179"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_nonlinear_representation_native",
+            "name": "test_exact_nonlinear_representation[workspace-atomic-rejection]",
+            "outcome": "passed",
+            "seconds": "23.966"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_nonlinear_representation_history_native",
+            "name": "test_coordinate_history_keeps_origin_across_restart_and_next_q",
+            "outcome": "failure",
+            "seconds": "27.390"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_nonlinear_representation_history_native",
+            "name": "test_failure_after_retaining_coordinate_restores_every_slot_and_obligation",
+            "outcome": "failure",
+            "seconds": "27.126"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_continuation_history_native",
+            "name": "test_history_and_continuation_restart_and_next_step",
+            "outcome": "failure",
+            "seconds": "33.467"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_continuation_history_native",
+            "name": "test_rejected_continuation_restores_every_history_slot",
+            "outcome": "passed",
+            "seconds": "31.709"
+          }
+        ],
+        "overall_receipt_passed": false,
+        "inputs_unchanged": true,
+        "installed_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-fixtures018b-r2/receipt.json",
+      "sha256": "7960f8e713d46d3697e28e11535e2562274ad5f5fc62c3a853e0f6452d61cced",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Five corrected C++ fixtures pass MPI1/2/3 against unchanged source018b core; real Field RHS fixture DSO installed, exact issuer-owned scratch and original guards retained.",
+        "selected_cases_passed": 5,
+        "rank_observations": 30,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "passed": true,
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-mapped-0018b/receipt.json",
+      "sha256": "ac434ecd5d09650ba03bf6e140326996d5a8254a933786fe0a99475212d79574",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Named Python receivers on the authenticated installed source018b SDK; passing subsets do not qualify failed cases or later source.",
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_mapped_condensed_disk_runtime",
+            "name": "test_generated_mapped_disk_schur_uses_actual_auxiliary_geometry_and_converges[1]",
+            "outcome": "passed",
+            "seconds": "155.068"
+          }
+        ],
+        "selected_cases_passed": 1,
+        "overall_receipt_passed": true,
+        "inputs_unchanged": true,
+        "installed_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-independent-history-0018b/receipt.json",
+      "sha256": "1cb0cceff8156a8a07af8bade8e5df71dbb2bf7034cdd244a753355a3e533b2f",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Named Python receivers on the authenticated installed source018b SDK; passing subsets do not qualify failed cases or later source.",
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_history_native",
+            "name": "test_independent_uniform_history_reads_old_provider_and_restarts",
+            "outcome": "failure",
+            "seconds": "28.013"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_history_native",
+            "name": "test_independent_amr_history_keeps_provider_through_authored_regrid_and_restart[False]",
+            "outcome": "failure",
+            "seconds": "71.387"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_history_native",
+            "name": "test_independent_amr_history_keeps_provider_through_authored_regrid_and_restart[True]",
+            "outcome": "failure",
+            "seconds": "72.970"
+          }
+        ],
+        "selected_cases_passed": 0,
+        "overall_receipt_passed": false,
+        "inputs_unchanged": true,
+        "installed_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-regrid-path-0018/receipt.json",
+      "sha256": "58f48e8a4ef7f68afa8f543134f995d2a3af28fcc6eb087f6b14fca1188b2775",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Named Python receivers on the authenticated installed source018b SDK; passing subsets do not qualify failed cases or later source.",
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_python_remap_moves_independent_solved_history_and_survives_restart",
+            "outcome": "failure",
+            "seconds": "143.688"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_late_regrid_rejection_restores_independent_field_and_complete_forest",
+            "outcome": "failure",
+            "seconds": "138.219"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_path_hierarchy_native",
+            "name": "test_nested_path_matches_explicit_composition_and_accepted_face_integrals[branch-straight]",
+            "outcome": "passed",
+            "seconds": "118.024"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_path_hierarchy_native",
+            "name": "test_nested_path_matches_explicit_composition_and_accepted_face_integrals[fold-unrolled]",
+            "outcome": "passed",
+            "seconds": "117.527"
+          }
+        ],
+        "selected_cases_passed": 2,
+        "overall_receipt_passed": false,
+        "inputs_unchanged": true,
+        "installed_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-admissible018b/receipt.json",
+      "sha256": "1a1fe937825b2fc63f64f378bf21e5b9322ec351b27afbff519f80c868b63a44",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Owned runtime parameters in AdmissibleSet, actual Kokkos kernel; immutable source018b core with exactly hashed new admissibility header and fixture.",
+        "selected_cases": 4,
+        "mpi_sizes": [
+          1,
+          2,
+          3
+        ],
+        "rank_observations": 24,
+        "passed": true,
+        "sources_unchanged": true,
+        "header_overlay_unchanged": true,
+        "native_inputs_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0018c-isolated-dim2/receipt.json",
+      "sha256": "e6dc1561844639b8033d35a4662c16165a89994a33600013509ba048305aa955",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official incremental Dim2/MPI build with frozen source018c; build and identity evidence only.",
+        "exit_code": 0,
+        "seconds": 282.2155006249668,
+        "sources_unchanged": true,
+        "identity": {
+          "dimension": 2,
+          "has_kokkos": true,
+          "has_mpi": true,
+          "has_parallel_hdf5": true,
+          "native_extension": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/envs006/pops/lib/python3.12/site-packages/pops/_native/dim2/_pops.cpython-312-darwin.so",
+          "sha256": "b986326a3a457e4f1f5f2701b3c062e32e0124be73b2d832141bb036cb88e671"
+        },
+        "source_manifest_sha256": "bda6758eb19da0bb8cd18fd3715ac8925a8e53b71f2580787945da0a817bf0e3"
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-source018c-reception/receipt.json",
+      "sha256": "f75ea10d0d1472e90c62016930be5a0332cf1c1297cb79c43ef11289df012258",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Five new history/representation authority cases on immutable source018c core, MPI1/2/3",
+        "selected_cases": 5,
+        "mpi_sizes": [
+          1,
+          2,
+          3
+        ],
+        "rank_observations": 30,
+        "passed": true,
+        "source_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-history-regrid-0018c/receipt.json",
+      "sha256": "d8831deca52ce0f05b5fca3aad53f4757ae33123002c2a370fe3a0d8e43b1901",
+      "availability": "local_archive",
+      "result": {
+        "exit_code": 1,
+        "seconds": 565.607392542006,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_nonlinear_representation_history_native",
+            "name": "test_coordinate_history_keeps_origin_across_restart_and_next_q",
+            "outcome": "failure",
+            "seconds": "26.837"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_nonlinear_representation_history_native",
+            "name": "test_failure_after_retaining_coordinate_restores_every_slot_and_obligation",
+            "outcome": "passed",
+            "seconds": "26.536"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_continuation_history_native",
+            "name": "test_history_and_continuation_restart_and_next_step",
+            "outcome": "passed",
+            "seconds": "33.340"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_history_native",
+            "name": "test_independent_uniform_history_reads_old_provider_and_restarts",
+            "outcome": "passed",
+            "seconds": "31.129"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_history_native",
+            "name": "test_independent_amr_history_keeps_provider_through_authored_regrid_and_restart[False]",
+            "outcome": "failure",
+            "seconds": "74.869"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_history_native",
+            "name": "test_independent_amr_history_keeps_provider_through_authored_regrid_and_restart[True]",
+            "outcome": "failure",
+            "seconds": "78.084"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_python_remap_moves_independent_solved_history_and_survives_restart",
+            "outcome": "failure",
+            "seconds": "153.538"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_late_regrid_rejection_restores_independent_field_and_complete_forest",
+            "outcome": "failure",
+            "seconds": "138.313"
+          }
+        ],
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": false,
+        "scope": "Exact named receivers on immutable source018c SDK. Any fixture or Python overlay belongs only to this receipt; a passing subset does not qualify failed cases."
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-coordinate-history-0018c-r2/receipt.json",
+      "sha256": "bfa5c6adedcfb871c4f7c69714cd11633f225efbedc5cee013572cd993fa1678",
+      "availability": "local_archive",
+      "result": {
+        "exit_code": 0,
+        "seconds": 28.874957708001602,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_nonlinear_representation_history_native",
+            "name": "test_coordinate_history_keeps_origin_across_restart_and_next_q",
+            "outcome": "passed",
+            "seconds": "26.460"
+          }
+        ],
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "fixture_unchanged": true,
+        "fixture_sha256": "7fb38371fb6c06ba16dfa1cab90aa90adc11acea343793fa85baf528624cc88d",
+        "scope": "Exact named receivers on immutable source018c SDK. Any fixture or Python overlay belongs only to this receipt; a passing subset does not qualify failed cases."
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-t10-frontier-0018c-0001/receipt.json",
+      "sha256": "f4c9fb48134480d6d6067de8801876734e738e05b4575a778b2bc3687f4f786b",
+      "availability": "local_archive",
+      "result": {
+        "exit_code": 0,
+        "seconds": 60.85712591698393,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_methods_T01_T12",
+            "name": "test_api_v02_native_method_profile[T10]",
+            "outcome": "passed",
+            "seconds": "55.776"
+          }
+        ],
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "scope": "Exact named receivers on immutable source018c SDK. Any fixture or Python overlay belongs only to this receipt; a passing subset does not qualify failed cases."
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-t10-frontier-0018c-0002/receipt.json",
+      "sha256": "20f6b88faf8a73471eb57b42f1956d84640fc166bb1c8e8c9e4ec2467d238997",
+      "availability": "local_archive",
+      "result": {
+        "exit_code": 1,
+        "seconds": 57.05862858402543,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_methods_T01_T12",
+            "name": "test_api_v02_native_method_profile[T10]",
+            "outcome": "failure",
+            "seconds": "54.666"
+          }
+        ],
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": false,
+        "scope": "Exact named receivers on immutable source018c SDK. Any fixture or Python overlay belongs only to this receipt; a passing subset does not qualify failed cases."
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-t10-frontier-0018c-0004/receipt.json",
+      "sha256": "1cd8594beb339ff4d4937f7998712d52931185cb296c21905ef5caa9e895c99a",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Explicit native receiver and recorded fixture overlay on authenticated source018c and its installed SDK; failures remain unqualified.",
+        "selected_cases_passed": 0,
+        "failed_cases": [
+          {
+            "classname": "methods.computed-frontier019.freeze0004.overlay.tests.python.integration.runtime.test_api_v02_computed_frontier_clipping_native",
+            "name": "test_clipped_computed_frontier_restarts_with_exact_state_clock_and_receipt[0.4-0.7]",
+            "outcome": "failure",
+            "seconds": "54.145"
+          },
+          {
+            "classname": "methods.computed-frontier019.freeze0004.overlay.tests.python.integration.runtime.test_api_v02_computed_frontier_clipping_native",
+            "name": "test_clipped_computed_frontier_restarts_with_exact_state_clock_and_receipt[0.75-1.3]",
+            "outcome": "failure",
+            "seconds": "53.396"
+          }
+        ],
+        "overall_receipt_passed": false,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "seconds": 110.47327379201306
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-independent-regrid-0018c-r2/receipt.json",
+      "sha256": "fed02128050ec03b3c515929abace4f8c6e71a85ddd8d1190acfe535775d219f",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Explicit native receiver and recorded fixture overlay on authenticated source018c and its installed SDK; failures remain unqualified.",
+        "selected_cases_passed": 0,
+        "failed_cases": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_python_remap_moves_independent_solved_history_and_survives_restart",
+            "outcome": "failure",
+            "seconds": "130.538"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_late_regrid_rejection_restores_independent_field_and_complete_forest",
+            "outcome": "failure",
+            "seconds": "130.545"
+          }
+        ],
+        "overall_receipt_passed": false,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "seconds": 263.7491554999724
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0018d-dim2/receipt.json",
+      "sha256": "1894baadde75b187719e7b471ae136c7f39c42a5a68b2d2c5ff9adbfd40e219b",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official Dim2/MPI build with exact source manifest and installed identity; no numerical assertion follows from compilation alone.",
+        "command": [
+          "bash",
+          "scripts/build_python.sh",
+          "--dim",
+          "2",
+          "--mpi"
+        ],
+        "cwd": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/worktree",
+        "base_head": "47b2ea9427a557be925a689211435f392aa5a87f",
+        "source_status": "authorized dirty source identified by complete SHA256 manifest",
+        "seconds": 278.47875587496674,
+        "exit_code": 0,
+        "source_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-dual-ledger019/receipt.json",
+      "sha256": "be2e84d07d724177a5a17c96f767cab0f8046ce1df3e7284436dae6c8708be77",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Six signed remainder and exact destination base contracts on MPI1/2/3 against unchanged source018c core and explicit four-header overlay; not the complete deferred publication/CONT7 implementation.",
+        "passed": true,
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "overlay_unchanged": true,
+        "selected_cases_passed": 6,
+        "rank_observations": 36,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-amr-history-0018d/receipt.json",
+      "sha256": "28263a844f648344b78e1cae250f1a4bfb20efebd2f015c6abf6aa4411f4abe2",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Two native regrid/restart cases remain failed during provisional hierarchy reconstruction, before accepted history materialization.",
+        "exit_code": 1,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": false,
+        "seconds": 146.68388433300424,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_history_native",
+            "name": "test_independent_amr_history_keeps_provider_through_authored_regrid_and_restart[False]",
+            "outcome": "failure",
+            "seconds": "71.056"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_history_native",
+            "name": "test_independent_amr_history_keeps_provider_through_authored_regrid_and_restart[True]",
+            "outcome": "failure",
+            "seconds": "72.253"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-amr-history-0018d-trace/receipt.json",
+      "sha256": "c7a12a58305f7d654237931c21d4ea31f68d4bf0715c549c1e372da37a9f5b5e",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Diagnostic Python exception tracing localizes the same failure to native rebuild_hierarchy; not a performance measurement.",
+        "exit_code": 1,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": false,
+        "seconds": 107.44850395899266,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_history_native",
+            "name": "test_independent_amr_history_keeps_provider_through_authored_regrid_and_restart[False]",
+            "outcome": "failure",
+            "seconds": "103.263"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-independent-regrid-0018d-r3/receipt.json",
+      "sha256": "31ed3d43b7319f1cc5a7df7ae19eb3e455b06a6ab93b91666959742cbfdf936a",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Both complete independent solved-field regrid receivers pass with reviewed affine finite-difference step one and unchanged equation/tolerances; exact checkpoint, next step and late rollback are checked.",
+        "exit_code": 0,
+        "fixture_sha256": "960f7495fa2bd1c8c1fd265760f869254199b2a1225cd775c99e03983f496e77",
+        "fixture_unchanged": true,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "seconds": 298.7215304579586,
+        "tests": [
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_python_remap_moves_independent_solved_history_and_survives_restart",
+            "outcome": "passed",
+            "seconds": "146.262"
+          },
+          {
+            "classname": "tests.python.integration.runtime.test_api_v02_independent_field_regrid_native",
+            "name": "test_late_regrid_rejection_restores_independent_field_and_complete_forest",
+            "outcome": "passed",
+            "seconds": "149.539"
+          }
+        ]
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-scalar-leaves019/receipt.json",
+      "sha256": "afbb57b99b832704bc3aca5d142db1b3aafa55d81474cc3c343ffc26621dbd02",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Three scalar coallocation contracts on MPI1/2/3 against unchanged source018c core with exact header overlay. Not yet integrated and no performance claim.",
+        "selected_cases_passed": 3,
+        "rank_observations": 18,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "passed": true,
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "overlay_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-composite-integral019-0001/receipt.json",
+      "sha256": "d3fd1630f0203021cbaa35ad249331a219b538efe15d8dea17d3951dd188c51d",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Three composite domain integration contracts on MPI1/2/3 against unchanged source018c core with exact header overlay; full-domain partition, masks and rank-divergent rejection checked.",
+        "selected_cases_passed": 3,
+        "rank_observations": 18,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "passed": true,
+        "sources_unchanged": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "overlay_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/build-0018e-dim2/receipt.json",
+      "sha256": "f67cd1e5b55886b39d1710472e7f1a5c1c1abdb2ad1af231c92a0655ff4a4663",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Official Dim2/MPI SDK build from source018e; authenticated installed Kokkos/MPI identity; no final-source qualification.",
+        "exit_code": 0,
+        "seconds": 324.3231645000051,
+        "source_unchanged": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-history-restart018e/receipt.json",
+      "sha256": "02cb09779bd5ee97b2b6b2fdddd264fb8363d09abeb22494bbcf9b6f8ce87da2",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Original source018e cold-history countertest: build passes; incorrect empty-FLX assertion fails on every MPI rank. Preserved failure.",
+        "sources_unchanged": true,
+        "binaries_unchanged": true,
+        "xml_complete": false,
+        "selected_cases": 1,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "rank_observations": 6,
+        "passed": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-history-restart018e-r2/receipt.json",
+      "sha256": "fa4afb0df8764e2707c7a151cbc792ab265b87f5f5e86b6f34f1a937b6ac6707",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Corrected test-only cold-history decoder linked to unchanged source018e native runtime; MPI1/2/3, six rank observations; metadata, missing/extra rings and rollback unchanged.",
+        "sources_unchanged": true,
+        "passed": true,
+        "fixtures_unchanged": true,
+        "core_inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "overlay_unchanged": true,
+        "selected_cases": 1,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "rank_observations": 6
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-amr-history-0018e/receipt.json",
+      "sha256": "04107023518708022e89ccd2b3a770bba9d74b61a195d7f65f2948c9adcc0d69",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Independent AMR Field histories survive authored regridding, checkpoint/restart and the subsequent step in actual source018e SDK, without source overlays.",
+        "exit_code": 0,
+        "seconds": 155.63071612501517,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "selected_cases": 2
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-t10-frontier-0018e-0001/receipt.json",
+      "sha256": "e65b99ec6236c011ca885c5abe38da5447c42bf45f2a05f144cb1e70082eec56",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Principal T10 complete composed macro-step on actual source018e SDK.",
+        "exit_code": 0,
+        "seconds": 62.76940804097103,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "selected_cases": 1
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-t10-restart-0018e-0001/receipt.json",
+      "sha256": "061a9ef22a4ffb9249734b85851ee5b138c68900698643701807a24f782c1df4",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Two independent T10 parameter variants: exact original/restart state, clock, step, frontier receipt and unchanged trajectory oracle on source018e SDK.",
+        "exit_code": 0,
+        "seconds": 128.49174533301266,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "selected_cases": 2
+      }
+    },
+    {
+      "archive_key": "completion-v02/native-t10-nominal-0018e-0001/receipt.json",
+      "sha256": "01120f21ffc8041f2907014529618e26b1d2fe5731b48268ff95c784be92f31a",
+      "availability": "local_archive",
+      "result": {
+        "scope": "T10 one/two-level affine finalization and late rejection restore all levels and measures on source018e SDK.",
+        "exit_code": 0,
+        "seconds": 270.65333925001323,
+        "inputs_unchanged": true,
+        "installed_unchanged": true,
+        "listed_cases_qualified": true,
+        "selected_cases": 3
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-cont7-source019/receipt.json",
+      "sha256": "5fccedb9fda8625982c4f07029c834145fcaef258843a8224ffe6a54e4265210",
+      "availability": "local_archive",
+      "result": {
+        "scope": "CONT7 protocol with native validator: three cases pass, one signed-zero fixture fails on each rank; physical AMR archive not qualified.",
+        "exit_code": 1,
+        "inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "listed_cases_qualified": false,
+        "selected_cases": 4,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "rank_observations": 24,
+        "integrated": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-cont7-source019-r2/receipt.json",
+      "sha256": "8a24759d36d1ad8a560ab77e0a49fa58a4cf46d935e3dbe913f62e7f374c79a4",
+      "availability": "local_archive",
+      "result": {
+        "scope": "CONT7 immutable payload, validation/budget, migration and control contracts; exact host initialization preserves IEEE input bits. This isolated protocol receipt does not qualify physical AMR persistence.",
+        "exit_code": 0,
+        "inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "listed_cases_qualified": true,
+        "selected_cases": 4,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "rank_observations": 24,
+        "integrated": false
+      }
+    },
+    {
+      "archive_key": "completion-v02/cpp-fab-ieee019/receipt.json",
+      "sha256": "8d76349fd2a5a02220820c017ba612c8342929ad0e9dc5e1d722b377dfab7378",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Actual Kokkos Fab::set_val preserves negative zero through default/Host memory, ghost cells and copies in dimensions1/2/3. CPU MPI1/2/3 only; CUDA and Float32 pending.",
+        "exit_code": 0,
+        "inputs_unchanged": true,
+        "binaries_unchanged": true,
+        "listed_cases_qualified": true,
+        "selected_cases": 2,
+        "mpi_ranks": [
+          1,
+          2,
+          3
+        ],
+        "rank_observations": 12,
+        "integrated": true
+      }
+    },
+    {
+      "archive_key": "completion-v02/depth019-candidate-0001/receipt.json",
+      "sha256": "fc62ab88ed26b64f68019df2bae330a4bcd170f0ec4e3d1675b1e11a52c4f71c",
+      "availability": "local_archive",
+      "result": {
+        "scope": "Depth160 preparation diagnostic; authoring19.34s, validation205.45s, resolve still preparing snapshots at450s. No native compilation or execution reached. Structural JSON optimization alone is insufficient.",
+        "exit_code": 124,
+        "seconds": 450.43017616699217,
+        "inputs_unchanged": true,
+        "listed_cases_qualified": false,
+        "native_executed": false
       }
     }
   ],

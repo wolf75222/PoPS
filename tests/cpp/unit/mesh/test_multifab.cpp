@@ -6,6 +6,8 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <bit>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -186,4 +188,54 @@ TEST(test_multifab, empty_rank_storage_identity_survives_values_but_not_replacem
   EXPECT_NE(default_field.storage_identity(), issued);
   static_assert(std::is_nothrow_move_constructible_v<Field>);
   static_assert(std::is_nothrow_move_assignable_v<Field>);
+}
+
+namespace {
+template <int Dim, class MemorySpace>
+void check_ieee_zero_fill_and_copy() {
+  Extent<Dim> cells{}, ghosts{};
+  for (int d = 0; d < Dim; ++d) {
+    cells[d] = d + 2;
+    ghosts[d] = 1;
+  }
+  pops::Fab<Dim, MemorySpace> original(Box<Dim>::from_extents(cells), 2, ghosts);
+  using Bits = pops::RealBits;
+  constexpr Bits negative_bits = Bits{1} << (8 * sizeof(Real) - 1);
+  const auto negative_zero = std::bit_cast<Real>(negative_bits);
+  const auto check = [](const auto& fab, Bits expected) {
+    auto host = fab.create_host_mirror();
+    fab.copy_to_host(host);
+    ASSERT_GT(host.size(), 0u);
+    for (std::size_t i = 0; i < host.size(); ++i) {
+      EXPECT_EQ(std::bit_cast<Bits>(host(i)), expected);
+      EXPECT_EQ(std::signbit(host(i)), expected == negative_bits);
+      EXPECT_EQ(std::signbit(Real{1} / host(i)), expected == negative_bits);
+    }
+  };
+  original.set_val(Real{-3});
+  original.set_val(negative_zero);
+  check(original, negative_bits);
+  const pops::Fab<Dim, MemorySpace> copied(original);
+  original.set_val(Real{0});
+  check(original, Bits{0});
+  check(copied, negative_bits);
+  pops::Fab<Dim, MemorySpace> assigned;
+  assigned = copied;
+  check(assigned, negative_bits);
+  pops::Fab<Dim, MemorySpace> empty;
+  EXPECT_NO_THROW(empty.set_val(negative_zero));
+}
+}  // namespace
+
+TEST(test_multifab, ieee_zero_fill_and_copy_default_memory) {
+  using Memory = typename Kokkos::DefaultExecutionSpace::memory_space;
+  check_ieee_zero_fill_and_copy<1, Memory>();
+  check_ieee_zero_fill_and_copy<2, Memory>();
+  check_ieee_zero_fill_and_copy<3, Memory>();
+}
+
+TEST(test_multifab, ieee_zero_fill_and_copy_host_memory) {
+  check_ieee_zero_fill_and_copy<1, Kokkos::HostSpace>();
+  check_ieee_zero_fill_and_copy<2, Kokkos::HostSpace>();
+  check_ieee_zero_fill_and_copy<3, Kokkos::HostSpace>();
 }

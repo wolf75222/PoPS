@@ -85,6 +85,18 @@ void register_history_transfer(const std::string& name, const std::string& ident
   history_transfers_.emplace(name, std::make_pair(identity, std::move(callback)));
 }
 
+void configure_history_field_metadata(std::uint64_t retained_bytes,
+                                      std::uint64_t workspace_bytes) const {
+  HistoryFieldMetadataBudget budget{retained_bytes, workspace_bytes};
+  budget.validate();
+  if (!budget.enabled())
+    throw std::invalid_argument("History Field metadata requires positive explicit capacities");
+  auto& manager = runtime_state().hist_;
+  if (manager.field_metadata_budget.enabled() && manager.field_metadata_budget != budget)
+    throw std::invalid_argument("History Field metadata capacity changed after installation");
+  manager.field_metadata_budget = budget;
+}
+
 void register_history(const std::string& name, int lag, int ncomp, int program_owner,
                       const std::string& state_identity, const std::string& space_identity,
                       const std::string& clock_identity, const std::string& interpolation_identity,
@@ -138,6 +150,7 @@ void register_history(const std::string& name, int lag, int ncomp, int program_o
   manager.interpolation_identity[key] = interpolation_identity;
   manager.ghost_depth[key] = ghost_depth;
   manager.slot_dt[key] = std::vector<Real>(static_cast<std::size_t>(depth), Real(0));
+  manager.slot_fields[key].resize(static_cast<std::size_t>(depth));
   manager.slot_sample[key].assign(static_cast<std::size_t>(depth),
                                   HistorySampleIdentity::zero_start());
   history_flux_expressions_.emplace(key,
@@ -164,6 +177,31 @@ field_type& history(const std::string& name, int lag, int program_owner) const {
 field_type& history(const std::string& name, int lag = 1) const {
   return history_slot_(name, lag, /*zero_start=*/false, /*components=*/-1);
 }
+field_type& history_observation(const std::string& name, int lag, int components, int program_owner,
+                                const std::string& descriptor) const {
+  continuation_local_phase(
+      [&] {
+        require_history_owner_(program_owner);
+        const auto key = history_key_(name, active_level_);
+        const auto& manager = runtime_state().hist_;
+        const auto found = manager.histories.find(key);
+        if (found == manager.histories.end() || lag < 1 || lag >= manager.depth.at(key) ||
+            manager.state_identity.at(key) != descriptor ||
+            manager.owner.at(key) != sys_block(program_owner))
+          throw std::invalid_argument("independent Field history has foreign storage authority");
+        runtime_state().require_frozen_output_history_projection(
+            name, manager.owner.at(key), descriptor, manager.space_identity.at(key),
+            manager.clock_identity.at(key), manager.interpolation_identity.at(key),
+            manager.depth.at(key), components, program_owner, manager.ghost_depth.at(key));
+        const auto& metadata = manager.slot_fields.at(key).at(static_cast<std::size_t>(lag));
+        if (!manager.initialized.at(key) || !metadata.support ||
+            metadata.support->program_identity != runtime_state().installed_hash_)
+          throw std::invalid_argument("independent Field history lacks its retained producer");
+      },
+      "read retained independent Field history");
+  return history_slot_(name, lag, false, components, true);
+}
+
 field_type& history_zero_start(const std::string& name, int lag, int ncomp,
                                int program_owner) const {
   require_history_owner_(program_owner);
@@ -272,74 +310,69 @@ void rotate_histories(const std::string& clock_identity) const {
   rotate_histories_(clock_identity);
 }
 
+// Select the retained numerical slots before allocating an owned result.
+history_field_detail::LinearBracket history_linear_bracket_(
+    const std::string& name, int max_lag, int program_owner, const std::string& source_clock,
+    const std::string& target_clock, int target_step, Real target_offset) const {
+  const auto& manager = runtime_state().hist_;
+  const auto key = history_key_(name, active_level_);
+  require_history_owner_(program_owner);
+  if (pending_history_remaps_.contains(key))
+    throw std::runtime_error("history interpolation requires completed regrid reconstruction");
+  const auto found = manager.histories.find(key);
+  if (found == manager.histories.end() || manager.depth.at(key) <= max_lag ||
+      manager.owner.at(key) != sys_block(program_owner) || !manager.initialized.at(key) ||
+      manager.clock_identity.at(key) != source_clock)
+    throw std::runtime_error("history interpolation requires its initialized owner/clock ring");
+  const double coordinate = (static_cast<double>(target_step) + target_offset) *
+                            static_cast<double>(clock_schedule_.ticks_per_macro(source_clock)) /
+                            static_cast<double>(clock_schedule_.ticks_per_macro(target_clock));
+  return history_field_detail::linear_bracket(coordinate, physical_time(), manager.slot_dt.at(key),
+                                              max_lag);
+}
+
+std::shared_ptr<field_type> interpolate_history_linear_owned(
+    const std::string& name, int max_lag, int program_owner, const std::string& source_clock,
+    const std::string& target_clock, int target_step, Real target_offset) const {
+  const auto bracket = history_linear_bracket_(name, max_lag, program_owner, source_clock,
+                                               target_clock, target_step, target_offset);
+  if (bracket.endpoint())
+    return own_structural_field(history(name, static_cast<int>(bracket.selected())));
+  const auto& older = history(name, static_cast<int>(bracket.older));
+  const auto& newer = history(name, static_cast<int>(bracket.newer));
+  const auto& manager = runtime_state().hist_;
+  const auto key = history_key_(name, active_level_);
+  const auto metadata = history_field_detail::interpolated_metadata(
+      manager.slot_fields.at(key).at(bracket.older), manager.slot_fields.at(key).at(bracket.newer),
+      bracket.alpha, bracket.target_time, manager.field_metadata_budget);
+  require_program_field_access(older);
+  require_program_field_access(newer);
+  auto result = own_structural_field(older);
+  lincomb(*result, Real(1) - bracket.alpha, older, bracket.alpha, newer);
+  auto& authority = continuation_field_storage_.at(result.get());
+  authority.support = metadata.support;
+  authority.representation = metadata.representation;
+  return result;
+}
+
+// Legacy borrowed-output callers have no lifetime to retain Field descriptions.
+// The generated public API always uses the owned route above.
 void interpolate_history_linear(field_type& output, const std::string& name, int max_lag,
                                 int program_owner, const std::string& source_clock,
                                 const std::string& target_clock, int target_step,
                                 Real target_offset) const {
-  require_history_owner_(program_owner);
-  if (max_lag < 1 || !std::isfinite(static_cast<double>(target_offset)))
-    throw std::invalid_argument("AMR linear history interpolation has an invalid target");
-  const std::string key = history_key_(name, active_level_);
-  auto& manager = runtime_state().hist_;
-  const auto found = manager.histories.find(key);
-  if (found == manager.histories.end() || manager.depth.at(key) <= max_lag ||
-      !manager.initialized.at(key))
-    throw std::runtime_error(
-        "AMR linear history interpolation requires an initialized retained ring");
-  if (manager.owner.at(key) != sys_block(program_owner) ||
-      manager.clock_identity.at(key) != source_clock)
-    throw std::invalid_argument(
-        "AMR linear history interpolation has a foreign owner or source clock");
-  // Parent-projected AB2 samples remain invalid on the child clock until the declared
-  // deferred reconstruction is consumed.  Reading raw slots here must not bypass the
-  // authority enforced by history_slot_, including when the query requests slot zero.
-  if (pending_history_remaps_.contains(key))
-    throw std::runtime_error(
-        "AMR linear history interpolation requires completed history reconstruction after regrid");
-  require_same_field_contract_(output, found->second.front(), "AMR linear history interpolation");
-
-  const double source_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(source_clock));
-  const double target_ticks = static_cast<double>(clock_schedule_.ticks_per_macro(target_clock));
-  const double coordinate =
-      (static_cast<double>(target_step) + static_cast<double>(target_offset)) * source_ticks /
-      target_ticks;
-  if (!std::isfinite(coordinate) || coordinate > 0.0 || coordinate < -static_cast<double>(max_lag))
-    throw std::runtime_error(
-        "AMR linear history interpolation target lies outside retained timestamps");
-  if (coordinate == 0.0) {
-    copy_valid_(found->second.front(), output);
-    count_kernel_();
-    return;
-  }
-
-  const int older_lag = static_cast<int>(std::ceil(-coordinate));
-  if (older_lag < 1 || older_lag > max_lag)
-    throw std::runtime_error("AMR linear history interpolation could not select bracketing slots");
-  double newer_time = static_cast<double>(physical_time());
-  double older_time = newer_time;
-  double bracket_dt = 0.0;
-  for (int selected_lag = 1; selected_lag <= older_lag; ++selected_lag) {
-    const double interval =
-        static_cast<double>(manager.slot_dt.at(key)[static_cast<std::size_t>(selected_lag)]);
-    if (!std::isfinite(interval) || !(interval > 0.0))
-      throw std::runtime_error(
-          "AMR linear history interpolation requires positive exact slot timestamps");
-    bracket_dt = interval;
-    older_time = newer_time - interval;
-    if (selected_lag != older_lag)
-      newer_time = older_time;
-  }
-  const double logical_fraction = coordinate + static_cast<double>(older_lag);
-  const double target_time = older_time + logical_fraction * bracket_dt;
-  const double alpha = (target_time - older_time) / (newer_time - older_time);
-  if (!std::isfinite(alpha) || alpha < 0.0 || alpha > 1.0)
-    throw std::runtime_error(
-        "AMR linear history interpolation target does not bracket retained timestamps");
-  lincomb(output, Real(1) - static_cast<Real>(alpha),
-          found->second[static_cast<std::size_t>(older_lag)], static_cast<Real>(alpha),
-          found->second[static_cast<std::size_t>(older_lag - 1)]);
+  const auto bracket = history_linear_bracket_(name, max_lag, program_owner, source_clock,
+                                               target_clock, target_step, target_offset);
+  const auto& manager = runtime_state().hist_;
+  const auto key = history_key_(name, active_level_);
+  if (const auto fields = manager.slot_fields.find(key); fields != manager.slot_fields.end())
+    if (!fields->second.at(bracket.older).empty() || !fields->second.at(bracket.newer).empty())
+      throw std::invalid_argument("qualified history interpolation requires an owned Field result");
+  const auto& older = history(name, static_cast<int>(bracket.older));
+  const auto& newer = history(name, static_cast<int>(bracket.newer));
+  require_same_field_contract_(output, older, "history interpolation");
+  lincomb(output, Real(1) - bracket.alpha, older, bracket.alpha, newer);
 }
-
 /// The exact-ranked AMR cache is deliberately unavailable until its per-level values and elapsed
 /// windows participate in the AMR checkpoint/regrid transaction.  A cache-backed schedule is
 /// rejected at its decision seam, before its node body can mutate auxiliary or live storage.

@@ -649,7 +649,7 @@ def _has_runtime_param(exprs: Any) -> bool:
 
 
 def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_prim: Any,
-                 provider_binding: Any = None) -> list:
+                 provider_binding: Any = None, with_providers: bool = True) -> list:
     """C++ local declarations binding the names the @p exprs reference to per-cell values:
       - provider fields -> ``const pops::Real <name> = providers(index, <local-slot>);``;
       - conservative vars -> ``const pops::Real <name> = <state>A(index, <idx>);`` (when @p with_cons);
@@ -727,8 +727,9 @@ def _cell_locals(impl: Any, exprs: Any, state_var: Any, *, with_cons: Any, with_
             raise ValueError(
                 "Program provider plan does not cover its emitted expressions"
             )
-        for name in sorted(used_provider_names, key=lambda item: slots[item]):
-            lines.append("const pops::Real %s = providers(index, %d);" % (variable_identifier(name,'aux'), slots[name]))
+        if with_providers:
+            for name in sorted(used_provider_names, key=lambda item: slots[item]):
+                lines.append("const pops::Real %s = providers(index, %d);" % (variable_identifier(name,'aux'), slots[name]))
     return lines
 
 

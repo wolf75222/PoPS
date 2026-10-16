@@ -12,9 +12,11 @@
     "tests/python/integration/runtime/test_api_v02_amr_input_fields_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_authored_stability_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_composite_integral_native.py": 2,
+    "tests/python/integration/runtime/test_api_v02_computed_frontier_clipping_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_continuation_auxiliary_regrid_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_continuation_capture_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_continuation_forest_native.py": 2,
+    "tests/python/integration/runtime/test_api_v02_continuation_history_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_continuation_regrid_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_continuum_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_corrected_field_native.py": 2,
@@ -36,6 +38,8 @@
     "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 1,
     "tests/python/integration/runtime/test_api_v02_implicit_derivatives_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_independent_field_continuation_native.py": 2,
+    "tests/python/integration/runtime/test_api_v02_independent_field_regrid_native.py": 2,
+    "tests/python/integration/runtime/test_api_v02_independent_history_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_independent_uniform_continuation_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_interval_regions_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_interval_transport_native.py": 2,
@@ -47,6 +51,8 @@
     "tests/python/integration/runtime/test_api_v02_models_M15_M21.py": 2,
     "tests/python/integration/runtime/test_api_v02_models_M19_M21.py": 2,
     "tests/python/integration/runtime/test_api_v02_nonlinear_interval_transport_native.py": 2,
+    "tests/python/integration/runtime/test_api_v02_nonlinear_representation_history_native.py": 2,
+    "tests/python/integration/runtime/test_api_v02_nonlinear_representation_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_original_field_recovery_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_original_field_regions_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_original_field_sequence_native.py": 2,
@@ -126,6 +132,8 @@
     "tests/python/integration/runtime/test_stencil_flux_v02_native.py": 2,
     "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": 1,
     "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py": 3,
+    "tests/python/unit/runtime/test_computed_frontier_clipping.py": 2,
+    "tests/python/unit/runtime/test_computed_program_frontier.py": 2,
     "tests/python/unit/runtime/test_step_strategy.py": 2
   }
 }

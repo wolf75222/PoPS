@@ -303,10 +303,12 @@ sdk-support pops/runtime/output_piece.hpp
 sdk-support pops/runtime/output_piece_collective.hpp
 sdk-support pops/runtime/program/amr_history_flux_snapshot.hpp
 sdk-support pops/runtime/program/amr_history_flux_snapshot_codec.hpp
+sdk-support pops/runtime/program/amr_history_field_metadata_codec.hpp
 sdk-support pops/runtime/program/amr_history_flux_snapshot_execution.hpp
 sdk-support pops/runtime/program/amr_program_checkpoint.hpp
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_runtime.inc
 sdk-support pops/runtime/program/amr_program_context_affine_finalization.inc
+sdk-support pops/runtime/program/amr_program_context_composite_integral.inc
 sdk-support pops/runtime/program/amr_program_context_affine_measure.inc
 sdk-support pops/runtime/program/amr_program_context_affine_history.inc
 sdk-support pops/runtime/program/composite_integral_kernel.hpp
@@ -336,6 +338,7 @@ sdk-support pops/runtime/program/amr_program_context_history_checkpoint_public.i
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_runtime.inc
 sdk-support pops/runtime/program/amr_program_context_history_checkpoint_services.inc
+sdk-support pops/runtime/program/amr_program_context_history_deferred_authority.inc
 sdk-root pops/runtime/program/amr_program_context.hpp
 sdk-support pops/runtime/program/amr_program_context_value_authority.inc
 sdk-support pops/runtime/program/prepared_program_field_stages.hpp
@@ -441,6 +444,8 @@ sdk-support pops/runtime/program/finite_structural_storage.hpp
 sdk-root pops/runtime/program/host_face_publication.hpp
 sdk-support pops/runtime/program/amr_program_context_stencil_flux.inc
 sdk-support pops/runtime/program/amr_program_context_stencil_input.inc
+sdk-support pops/runtime/program/history_field_metadata.hpp
+sdk-support pops/runtime/program/history_field_metadata_temporal.inc
 sdk-support pops/runtime/program/history_transfer_expression.hpp
 sdk-support pops/runtime/program/temporal_sample_source.hpp
 
@@ -455,6 +460,7 @@ sdk-support pops/runtime/program/continuation_decode_context.inc
 sdk-support pops/runtime/program/field_topology_view.hpp
 sdk-support pops/runtime/program/amr_program_context_continuation_regrid.inc
 sdk-support pops/runtime/program/amr_program_context_continuation_regrid_child.inc
+sdk-support pops/runtime/program/amr_program_context_continuation_regrid_topology.inc
 sdk-support pops/runtime/program/amr_program_context_field_allocation.inc
 sdk-support pops/runtime/program/amr_program_context_continuation_field_storage.inc
 sdk-support pops/runtime/program/amr_program_context_continuation_field_provider.inc
@@ -476,3 +482,11 @@ sdk-support pops/runtime/program/field_exchange_expression_codec.inc
 sdk-support pops/runtime/program/uniform_history_exchange_checkpoint.hpp
 sdk-support pops/core/foundation/device_capture.hpp
 sdk-support pops/runtime/program/finite_collective_execution.hpp
+sdk-support pops/runtime/program/field_read_capture.hpp
+sdk-support pops/runtime/program/field_read_closure.hpp
+sdk-support pops/runtime/program/field_read_transport.hpp
+sdk-support pops/runtime/program/field_read_transform.hpp
+sdk-support pops/runtime/program/field_transform_support.hpp
+sdk-support pops/runtime/program/field_provider_read_authority.hpp
+sdk-support pops/runtime/program/program_context_field_representation_obligation.inc
+sdk-support pops/runtime/program/amr_program_context_field_representation_obligation.inc

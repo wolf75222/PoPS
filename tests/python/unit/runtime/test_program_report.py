@@ -162,7 +162,7 @@ def test_accepted_program_report_preserves_owned_metadata():
     assert report.block_map == ["fluid"]
     assert report.params[0]["program_block"] == 0
     assert report.params[0]["count"] == 2
-    assert report.params[0]["limit"] > 0
+    assert report.params[0]["limit"] is None  # no arbitrary parameter-count ceiling
     assert report.diagnostics == {"mass": 3.5}
     assert report.histories == [
         {

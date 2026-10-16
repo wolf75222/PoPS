@@ -88,26 +88,56 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
             return diffusive_flux_basis_count(value)
         return 0
 
+    def accepted_flux_polynomials(value: Any) -> list[dict[int, Fraction]]:
+        # Newton residual probes only evaluate faces; the consumed solve publishes
+        # each prepared diffusive provider once. Budget that exact publication,
+        # including its authenticated temporal polynomial, independently of the
+        # nonlinear iteration limit. Branch/range traversal below still counts
+        # actual possible solve invocations on each execution path.
+        if value.op == "solve_spatial_nonlinear":
+            from pops.time._program.spatial_solve import spatial_rate_weight
+
+            return [
+                _flux_polynomial(spatial_rate_weight(value, rate))
+                for rate in value.attrs["residual_block"]
+                if rate.op == "diffusive_rhs"
+                for _ in range(flux_basis_count(rate))
+            ]
+        return [{0: Fraction(1)} for _ in range(flux_basis_count(value))]
+
+    def region_values(values: Any) -> Any:
+        # Preserve lexical order and repeated region occurrences. A completed
+        # region may be shared; only an active ancestor constitutes a cycle.
+        pending = [("enter", values)]
+        active_regions: set[int] = set()
+        while pending:
+            action, item = pending.pop()
+            if action == "exit":
+                active_regions.remove(item)
+                continue
+            if action == "enter":
+                identity = id(item)
+                if identity in active_regions:
+                    raise ValueError("AMR flux budget contains a cyclic region")
+                active_regions.add(identity)
+                pending.append(("exit", identity))
+                pending.extend(("value", value) for value in reversed(item))
+                continue
+            yield item
+            for key in reversed((
+                "cond_block", "body_block", "apply_block", "residual_block",
+                "true_block", "false_block",
+            )):
+                nested = item.attrs.get(key)
+                if isinstance(nested, (list, tuple)):
+                    pending.append(("enter", nested))
+
     def contains_rhs(values: Any, block: Any, *, flux_only: bool = False) -> bool:
-        for value in values:
-            if value.op in {"rhs", "diffusive_rhs", "principal_rate", "stencil_flux_divergence"} and value.block == block and (
-                not flux_only or flux_basis_count(value) != 0
-            ):
-                return True
-            for key in (
-                "cond_block",
-                "body_block",
-                "apply_block",
-                "residual_block",
-                "true_block",
-                "false_block",
-            ):
-                nested = value.attrs.get(key)
-                if isinstance(nested, (list, tuple)) and contains_rhs(
-                    nested, block, flux_only=flux_only
-                ):
-                    return True
-        return False
+        return any(
+            value.op in {"rhs", "diffusive_rhs", "principal_rate", "stencil_flux_divergence"}
+            and value.block == block and (not flux_only or flux_basis_count(value) != 0)
+            for value in region_values(values)
+        )
 
     alias_input = {
         "acceptance_guard": 0,
@@ -124,10 +154,23 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
         # environment clone is sufficient when a branch forks.
         paths: list[tuple[dict[int, Any], int, int, int]] = [({}, 0, 0, 0)]
 
-        def note(expression: Any, maximum: int) -> int:
-            return max(maximum, *(len(polynomial) for polynomial in expression.values()), 0)
+        def leaf_expressions(expression: Any) -> Any:
+            # Products carry independent field expressions. Traverse the abstract
+            # carrier iteratively; its depth is not a resource ceiling.
+            pending = [expression]
+            while pending:
+                current = pending.pop()
+                if isinstance(current, tuple):
+                    pending.extend(member for _, member in current)
+                else:
+                    yield current
 
-        def execute(values: Any, active: Any) -> Any:
+        def note(expression: Any, maximum: int) -> int:
+            for leaf in leaf_expressions(expression):
+                maximum = max(maximum, *(len(polynomial) for polynomial in leaf.values()), 0)
+            return maximum
+
+        def execute_region(values: Any, active: Any) -> Any:
             for value in values:
                 next_paths = []
                 for environment, basis_count, maximum_terms, next_basis in active:
@@ -136,38 +179,47 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                             ("true_block", "true_result"),
                             ("false_block", "false_result"),
                         ):
-                            fork = execute(
+                            fork = yield (
                                 value.attrs[arm_key],
                                 [(dict(environment), basis_count, maximum_terms, next_basis)],
                             )
                             for arm_env, arm_count, arm_maximum, arm_next in fork:
                                 arm_result = arm_env.get(value.attrs[result_key].id, {})
-                                arm_env[value.id] = arm_result if value.block == block else {}
+                                arm_env[value.id] = arm_result
                                 next_paths.append(
                                     (arm_env, arm_count, note(arm_result, arm_maximum), arm_next)
                                 )
                         continue
 
-                    if value.op in ("range", "subcycle"):
+                    if value.op in ("range", "subcycle", "structured_fold"):
                         loop_paths = [(dict(environment), basis_count, maximum_terms, next_basis)]
                         loop_input = value.inputs[0]
-                        for _ in range(int(value.attrs["count"])):
+                        if value.op == "structured_fold":
+                            bound = value.inputs[2]
+                            if bound.op != "int64_constant":
+                                if (contains_rhs(value.attrs["body_block"], block, flux_only=True)
+                                        or any(leaf_expressions(environment.get(loop_input.id, {})))):
+                                    raise ValueError("AMR dynamic fold flux storage requires an explicit flux_expression_budget")
+                                iterations = 1
+                            else:
+                                iterations = int(bound.attrs["value"])
+                            argument = value.attrs["body_argument"]
+                        else:
+                            iterations = int(value.attrs["count"])
+                            argument = loop_input
+                        for _ in range(iterations):
                             seeded = []
                             for loop_env, loop_count, loop_maximum, loop_next in loop_paths:
                                 loop_env = dict(loop_env)
-                                if value.block == block:
-                                    loop_env[loop_input.id] = loop_env.get(loop_input.id, {})
+                                loop_env[argument.id] = loop_env.get(loop_input.id, {})
                                 seeded.append((loop_env, loop_count, loop_maximum, loop_next))
-                            loop_paths = execute(value.attrs["body_block"], seeded)
+                            loop_paths = yield value.attrs["body_block"], seeded
                             for loop_env, _, _, _ in loop_paths:
-                                if value.block == block:
-                                    loop_env[loop_input.id] = loop_env.get(
-                                        value.attrs["body"].id, {}
-                                    )
+                                loop_env[loop_input.id] = loop_env.get(
+                                    value.attrs["body"].id, {}
+                                )
                         for loop_env, loop_count, loop_maximum, loop_next in loop_paths:
-                            expression = (
-                                loop_env.get(loop_input.id, {}) if value.block == block else {}
-                            )
+                            expression = loop_env.get(loop_input.id, {})
                             loop_env[value.id] = expression
                             next_paths.append(
                                 (loop_env, loop_count, note(expression, loop_maximum), loop_next)
@@ -179,7 +231,7 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                         if (
                             contains_rhs(value.attrs["cond_block"], block, flux_only=True)
                             or contains_rhs(value.attrs["body_block"], block, flux_only=True)
-                            or (value.block == block and expression)
+                            or any(leaf_expressions(expression))
                         ):
                             raise ValueError(
                                 "AMR FluxExpression budget is unbounded: while node %r can create "
@@ -190,23 +242,34 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                         # iteration sees the same captured flux expressions. Interpret each region
                         # once to retain its exact finite coefficient maximum; its local results do
                         # not escape the while region or feed the other block's loop carrier.
-                        probes = execute(
+                        probes = yield (
                             value.attrs["cond_block"],
                             [(dict(environment), basis_count, maximum_terms, next_basis)],
                         )
-                        probes = execute(value.attrs["body_block"], probes)
+                        probes = yield value.attrs["body_block"], probes
                         for probe_env, probe_count, probe_maximum, probe_next in probes:
                             probe_env[value.id] = {}
                             next_paths.append((probe_env, probe_count, probe_maximum, probe_next))
                         continue
 
                     expression = {}
-                    if value.block == block:
-                        multiplicity = flux_basis_count(value)
+                    if value.op == "product":
+                        expression = tuple(
+                            (name, environment.get(source.id, {}))
+                            for name, source in zip(value.attrs["fields"], value.inputs, strict=True)
+                        )
+                    elif value.op == "product_get":
+                        source = environment.get(value.inputs[0].id, ())
+                        expression = dict(source).get(value.attrs["field"], {})
+                    elif value.op == "region_argument":
+                        expression = environment.get(value.id, {})
+                    elif value.block == block:
+                        polynomials = accepted_flux_polynomials(value)
+                        multiplicity = len(polynomials)
                         if multiplicity:
                             expression = {
-                                (value.id, next_basis + offset): {0: Fraction(1)}
-                                for offset in range(multiplicity)
+                                (value.id, next_basis + offset): polynomial
+                                for offset, polynomial in enumerate(polynomials)
                             }
                             next_basis += multiplicity
                             basis_count += multiplicity
@@ -240,6 +303,27 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                 active = next_paths
             return active
 
+        def execute(values: Any, active: Any) -> Any:
+            # Trampoline the exact same path interpreter: no recursion limit,
+            # branch merge, sampling, or loss of loop multiplicity.
+            stack = [(id(values), execute_region(values, active))]
+            active_regions = {id(values)}
+            result = None
+            while stack:
+                try:
+                    nested, nested_paths = stack[-1][1].send(result)
+                except StopIteration as completed:
+                    result = completed.value
+                    active_regions.remove(stack.pop()[0])
+                else:
+                    identity = id(nested)
+                    if identity in active_regions:
+                        raise ValueError("AMR flux budget contains a cyclic region")
+                    active_regions.add(identity)
+                    stack.append((identity, execute_region(nested, nested_paths)))
+                    result = None
+            return result
+
         paths = execute(program._values, paths)
         return (
             max(
@@ -247,8 +331,8 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                     max(
                         basis_count,
                         max(
-                            (len(expression) for expression in environment.values()
-                             if isinstance(expression, dict)),
+                            (len(leaf) for expression in environment.values()
+                             for leaf in leaf_expressions(expression)),
                             default=0,
                         ),
                     )
@@ -270,17 +354,11 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
         stores: dict[tuple[Any, str], Any],
         reads: set[tuple[Any, str]],
     ) -> None:
-        for value in values:
+        for value in region_values(values):
             if value.op == "store_history" and value.inputs:
                 stores[(value.block, value.attrs["history"])] = value.inputs[0]
             elif value.op == "history":
                 reads.add((value.block, value.attrs["history"]))
-            for key in (
-                "cond_block", "body_block", "apply_block", "residual_block", "true_block", "false_block"
-            ):
-                nested = value.attrs.get(key)
-                if isinstance(nested, (list, tuple)):
-                    history_flux_blocks(nested, stores, reads)
 
     stored_histories: dict[tuple[Any, str], Any] = {}
     read_histories: set[tuple[Any, str]] = set()
@@ -312,13 +390,19 @@ def _flux_expression_budgets(program: Any) -> tuple[tuple[int, int], ...]:
                 # source may be an aliased/combined expression, so count every distinct RHS
                 # ancestor conservatively before multiplying by the readable lag window.
                 def source_bases(value: Any, seen: set[int]) -> int:
-                    if value.id in seen:
-                        return 0
-                    seen.add(value.id)
-                    multiplicity = flux_basis_count(value)
-                    if multiplicity:
-                        return multiplicity
-                    return sum(source_bases(input_value, seen) for input_value in value.inputs)
+                    pending = [value]
+                    count = 0
+                    while pending:
+                        current = pending.pop()
+                        if current.id in seen:
+                            continue
+                        seen.add(current.id)
+                        multiplicity = flux_basis_count(current)
+                        if multiplicity:
+                            count += multiplicity
+                        else:
+                            pending.extend(reversed(current.inputs))
+                    return count
 
                 source_count = max(1, source_bases(source, set()))
                 interpolation = history_manifest[name]["interpolation"]
@@ -389,45 +473,10 @@ def _emit_flux_expression_budget(program: Any) -> str:
 
 def _emit_checkpoint_shape_metadata(program: Any) -> str:
     """Emit the frozen checkpoint shape before any native prelude allocation."""
+    from .program_history_metadata import emit_checkpoint_history_metadata
+
     block_idx = program._block_indices()
     temporal = program.temporal_manifest()
-    history_manifest = {row["name"]: row for row in temporal["histories"]}
-    histories = []
-    for name, lag in sorted(program._histories.items()):
-        owner = getattr(program, "_history_blocks", {}).get(name)
-        owner_index = block_idx.get(owner) if owner is not None else None
-        if owner_index is None:
-            raise ValueError("AMR history %r requires explicit block owner provenance" % name)
-        state_ref = getattr(program, "_history_state_refs", {}).get(name)
-        state_identity = (
-            state_ref.qualified_id if state_ref is not None else "scalar-history:" + name
-        )
-        # Match the exact IR16 storage authority registered by the live prelude.
-        # The scalar observation keeps its own space; its storage owner is not
-        # permission to replace it by that owner's physical State identity.
-        from pops.time._program.global_history_storage import descriptor
-        storage_descriptor = descriptor(program, name)
-        if storage_descriptor is not None:
-            state_identity = storage_descriptor
-        from pops.codegen.program_history_identity import history_space_identity, history_ghost_depth
-        space_identity = history_space_identity(program, name)
-        row = history_manifest[name]
-        interpolation = json.dumps(row["interpolation"], sort_keys=True, separators=(",", ":"))
-        component = getattr(program, "_histories_ncomp", {}).get(name)
-        histories.append(
-            (
-                str(name),
-                int(owner_index),
-                str(state_identity),
-                str(space_identity),
-                str(row["clock"]),
-                interpolation,
-                int(lag) + 1,
-                -1 if component is None else int(component),
-                history_ghost_depth(program, name),
-            )
-        )
-
     def string_accessor(symbol: str, column: int, rows: Any) -> str:
         cases = "".join(
             "    case %d: return %s;\n" % (index, json.dumps(row[column]))
@@ -440,31 +489,10 @@ def _emit_checkpoint_shape_metadata(program: Any) -> str:
             "}\n"
         )
 
-    def integer_accessor(symbol: str, column: int) -> str:
-        cases = "".join(
-            "    case %d: return %d;\n" % (index, row[column])
-            for index, row in enumerate(histories)
-        )
-        return (
-            f'extern "C" int {symbol}(int index) {{\n'
-            "  switch (index) {\n" + cases + "    default: return 0;\n"
-            "  }\n"
-            "}\n"
-        )
-
     clocks = tuple((str(row["id"]),) for row in temporal["clocks"])
     return (
         "// Frozen Program checkpoint descriptors and logical-clock authority.\n"
-        f'extern "C" int pops_program_checkpoint_history_count() {{ return {len(histories)}; }}\n'
-        + string_accessor("pops_program_checkpoint_history_name", 0, histories)
-        + integer_accessor("pops_program_checkpoint_history_owner", 1)
-        + string_accessor("pops_program_checkpoint_history_state_identity", 2, histories)
-        + string_accessor("pops_program_checkpoint_history_space_identity", 3, histories)
-        + string_accessor("pops_program_checkpoint_history_clock_identity", 4, histories)
-        + string_accessor("pops_program_checkpoint_history_interpolation_identity", 5, histories)
-        + integer_accessor("pops_program_checkpoint_history_depth", 6)
-        + integer_accessor("pops_program_checkpoint_history_components", 7)
-        + integer_accessor("pops_program_checkpoint_history_ghost_depth", 8)
+        + emit_checkpoint_history_metadata(program, require_owner=True)
         + f'extern "C" int pops_program_checkpoint_logical_clock_count() {{ return {len(clocks)}; }}\n'
         + string_accessor("pops_program_checkpoint_logical_clock_identity", 0, clocks)
         + 'extern "C" const char* pops_program_checkpoint_primary_clock_identity() {\n'

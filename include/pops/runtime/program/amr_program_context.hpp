@@ -2,6 +2,8 @@
 /// @brief Exact compile-time-ranked execution boundary for generated AMR Programs.
 
 #pragma once
+#include <pops/runtime/program/field_transform_support.hpp>
+#include <pops/runtime/program/field_read_transform.hpp>
 
 #include <pops/runtime/program/history_transfer_expression.hpp>
 #include <pops/runtime/program/temporal_sample_source.hpp>
@@ -30,6 +32,7 @@
 #include <pops/runtime/builders/compiled/generated_amr_system_block.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/amr_history_field_metadata_codec.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot_execution.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/continuation_authority.hpp>
@@ -549,14 +552,16 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_affine_history.inc>
 #include <pops/runtime/program/amr_program_context_affine_measure.inc>
 #include <pops/runtime/program/amr_program_context_affine_finalization.inc>
+#include <pops/runtime/program/amr_program_context_composite_integral.inc>
 #include <pops/runtime/program/amr_program_context_continuation_level.inc>
 #include <pops/runtime/program/amr_program_context_continuation_forest.inc>
+#include <pops/runtime/program/amr_program_context_continuation_field_provider.inc>
 #include <pops/runtime/program/amr_program_context_continuation_regrid.inc>
 #include <pops/runtime/program/amr_program_context_continuation_regrid_child.inc>
 #include <pops/runtime/program/amr_program_context_field_bundle.inc>
 #include <pops/runtime/program/amr_program_context_field_allocation.inc>
-#include <pops/runtime/program/amr_program_context_continuation_field_provider.inc>
 #include <pops/runtime/program/amr_program_context_continuation_field_storage.inc>
+#include <pops/runtime/program/amr_program_context_field_representation_obligation.inc>
 #include <pops/runtime/program/amr_program_context_continuation_checkpoint.inc>
 #include <pops/runtime/program/amr_program_context_history_checkpoint_definitions.inc>
 
@@ -660,6 +665,7 @@ class AmrProgramContext {
   mutable std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
   HistoryTransferRegistry history_transfers_;
   mutable DeferredHistoryLagScratches deferred_history_lag_scratches_;
+  mutable DeferredHistoryLagAuthorities deferred_history_lag_authorities_;
   mutable std::vector<std::size_t> active_flux_basis_counts_;
   mutable std::uint64_t next_active_flux_basis_identity_ = 0;
   mutable std::vector<std::size_t> prepared_rhs_basis_bounds_;

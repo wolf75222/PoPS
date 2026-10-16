@@ -358,7 +358,8 @@ def _emit_cpp_program_impl(
         operator_authorities=_emit_operator_authorities(operator_authorities),
         has_dt_bound=has_dt_bound,
         dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
-        module_metadata=_emit_module_metadata(program, authority),
+        module_metadata=(_emit_module_metadata(program, authority)
+                         + _emit_uniform_history_metadata(program, target)),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
         model_helpers=(finite_helpers + uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
@@ -822,3 +823,10 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
                     "unknown source_term '%s' in rhs '%s'; declared source_terms: %s"
                     % (s, v.name, sorted(impl._source_terms))
                 )
+
+
+def _emit_uniform_history_metadata(program: Any, target: str) -> str:
+    if target != "system":
+        return ""
+    from .program_history_metadata import emit_checkpoint_history_metadata
+    return emit_checkpoint_history_metadata(program, require_owner=False)

@@ -297,9 +297,11 @@ void rehydrate_history_flux_expression_(const std::string& key, int lag,
 }
 
 std::vector<std::uint8_t> serialize_history_flux_payload_() const {
-  return history_flux::serialize_expressions<Dim>(
+  auto flux = history_flux::serialize_expressions<Dim>(
       history_flux_expressions_, facade_->configured_n_levels(),
       [&](auto& out, const auto& sample) { write_shared_flux_sample_(out, sample); });
+  return encode_amr_history_field_metadata(std::move(flux), runtime_state().hist_,
+                                           facade_->program_runtime_state_().installed_hash_);
 }
 
 std::map<std::string, std::vector<FluxExpression>> prepare_history_flux_payload_restore_(

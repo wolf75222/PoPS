@@ -26,7 +26,7 @@ def decode_exact_weight(payload: bytes) -> Fraction:
     return Fraction(-numerator if sign else numerator, denominator)
 
 
-def accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], bytes]:
+def accepted_state_history_flux(payload: bytes, *, metadata_output=None) -> tuple[list[dict[str, Any]], bytes]:
     """Inspect the versioned POPSAND + POPSFLX4 envelope, retaining exact byte boundaries.
 
     This is deliberately a test-side reader: it proves the wire image contains actual retained
@@ -88,6 +88,10 @@ def accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], b
     history_flux_offset = cursor
     skip(history_flux_size)
     history_flux = payload[history_flux_offset:cursor]
+    from tests.python.support.history_field_metadata_receipts import unwrap_history_field_metadata
+    history_flux, fields, samples = unwrap_history_field_metadata(history_flux)
+    if metadata_output is not None:
+        metadata_output.update(fields=fields, samples=samples)
 
     flux_cursor = 0
 
@@ -155,7 +159,8 @@ def accepted_state_history_flux(payload: bytes) -> tuple[list[dict[str, Any]], b
                     for _coefficient in range(coefficients):
                         power = flux_i64()
                         if wide:
-                            size = flux_u64(); start = flux_cursor
+                            size = flux_u64()
+                            start = flux_cursor
                             flux_skip(size)
                             weight = decode_exact_weight(history_flux[start:flux_cursor])
                         else:

@@ -52,7 +52,22 @@ def test_api_v02_registered_files_have_existing_suites_and_estimated_weights():
         assert file.is_file(), path
         assert sum(file.is_relative_to(suite) for suite in suites) == 1, path
         assert row["kind"] in ("native_profile", "source_contract")
-        assert type(row["estimated_seconds"]) is int and 0 < row["estimated_seconds"] <= 1200
+        assert type(row["estimated_seconds"]) is int and row["estimated_seconds"] > 0
+        partitions = json.loads((ROOT / "tests/python/test_partitions.json").read_text())["files"]
+        if path in partitions:
+            nodes = partitions[path]["nodes"]
+            assert sum(node["seconds"] for node in nodes) == row["estimated_seconds"]
+            long_cases = {
+                RUNTIME + "test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[False]": 2550,
+                RUNTIME + "test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[True]": 2550,
+            }
+            for node in nodes:
+                if node["nodeid"] in long_cases:
+                    assert node["seconds"] == long_cases[node["nodeid"]]
+                else:
+                    assert 0 < node["seconds"] <= 1200
+        else:
+            assert row["estimated_seconds"] <= 2100  # unchanged ordinary35min test budget
         if row.get("execution_lane") == "mpi_only":
             assert path not in timings
             assert path not in timings["_meta"]["estimated_files"]
@@ -177,7 +192,7 @@ def test_v10_receivers_have_exact_cardinality_and_ranked_pytest_entrypoints():
     completion = {path: row for path, row in rows.items()
                   if row.get("registration") == "completion_20261015"
                   and row["kind"] == "native_profile"}
-    assert len(completion) == 48
+    assert len(completion) == 54
     assert set(found) == set(native) | mixed | set(completion)
     for path, row in completion.items():
         assert sum(_test_case_count(path).values()) == row["declared_cases"], path

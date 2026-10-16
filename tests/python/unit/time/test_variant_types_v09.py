@@ -214,8 +214,14 @@ def test_array_of_variants_snapshots_fields_and_preserves_exact_instance():
     snapshot = re.search(r"(\w+_snapshot) = ctx.own_structural_field\(", source)
     assert snapshot is not None
     assert "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> " + snapshot.group(1) in source
-    store = source.index("std::any(" + snapshot.group(1) + ")", snapshot.end())
+    stored = re.search(
+        r"finite_collective::assign_any\(\w+, " + re.escape(snapshot.group(1))
+        + r", ctx\.prepared_execution_lane\(\)\);", source[snapshot.end():])
+    assert stored is not None
+    store = snapshot.end() + stored.start()
     assert snapshot.end() < store
+    assert source.index("collectively_rethrow_exception(" + snapshot.group(1) + "_error",
+                        snapshot.end()) < store
     assert "array_read_" in source
     assert "std::any_cast<std::int64_t>" in source
     assert "replicated Variant has an invalid discriminant" in source

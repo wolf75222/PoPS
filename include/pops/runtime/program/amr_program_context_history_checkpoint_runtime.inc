@@ -226,10 +226,15 @@ void import_accepted_state_(bool force) const {
                              std::string(exception.what()));
   }
   std::map<std::string, std::vector<FluxExpression>> restored_history_flux;
+  HistoryFieldMetadataTable restored_history_fields;
   try {
-    restored_history_flux = prepare_history_flux_payload_restore_(state.history_flux_payload);
+    auto restored =
+        prepare_amr_history_field_metadata(state.history_flux_payload, runtime_state().hist_,
+                                           facade_->program_runtime_state_().installed_hash_);
+    restored_history_flux = prepare_history_flux_payload_restore_(restored.flux);
+    restored_history_fields = std::move(restored.fields);
   } catch (const std::exception& exception) {
-    throw std::runtime_error("AMR Program accepted-state import cannot restore history flux: " +
+    throw std::runtime_error("AMR Program accepted-state import cannot restore history payload: " +
                              std::string(exception.what()));
   }
   std::map<std::string, AmrProgramPendingHistoryRemap> restored_pending;
@@ -332,13 +337,17 @@ void import_accepted_state_(bool force) const {
   static_assert(std::is_nothrow_swappable_v<decltype(accepted_coupling_contract_)>);
   static_assert(std::is_nothrow_swappable_v<decltype(accepted_face_flux_)>);
   static_assert(std::is_nothrow_swappable_v<decltype(accepted_synchronization_events_)>);
+  static_assert(std::is_nothrow_swappable_v<HistoryFieldMetadataTable>);
   history_flux_expressions_.swap(restored_history_flux);
+  if (runtime_state().hist_.field_metadata_budget.enabled())
+    runtime_state().hist_.slot_fields.swap(restored_history_fields);
   history_flux_regrid_sources_.clear();
   history_flux_regrid_source_epoch_ = std::numeric_limits<std::uint64_t>::max();
   history_flux_regrid_source_generation_ = std::numeric_limits<std::uint64_t>::max();
   std::swap(accepted_temporal_partition_, state.temporal_partition);
   pending_history_remaps_.swap(restored_pending);
   deferred_history_lag_scratches_.clear();
+  deferred_history_lag_authorities_.clear();
   for (const auto& diagnostic : cell_temporal_diagnostics_)
     if (diagnostic)
       diagnostic->invalidate_accepted_publication(accepted_temporal_partition_.synchronization_tick,
@@ -690,27 +699,7 @@ void validate_accepted_history_remap_metadata_() const {
     throw std::runtime_error(
         "AMR Program accepted history remap requires both prior and remapped history registries");
 
-  const auto require_exact_metadata_keys = [&](const auto& metadata) {
-    if (metadata.size() != manager.histories.size())
-      throw std::runtime_error("AMR Program accepted history remap metadata is incomplete");
-    for (const auto& [key, ring] : manager.histories) {
-      (void)ring;
-      if (!metadata.contains(key))
-        throw std::runtime_error("AMR Program accepted history remap metadata is incomplete");
-    }
-  };
-  require_exact_metadata_keys(manager.depth);
-  require_exact_metadata_keys(manager.initialized);
-  require_exact_metadata_keys(manager.fill_count);
-  require_exact_metadata_keys(manager.store_pending);
-  require_exact_metadata_keys(manager.owner);
-  require_exact_metadata_keys(manager.state_identity);
-  require_exact_metadata_keys(manager.space_identity);
-  require_exact_metadata_keys(manager.clock_identity);
-  require_exact_metadata_keys(manager.interpolation_identity);
-  require_exact_metadata_keys(manager.ghost_depth);
-  require_exact_metadata_keys(manager.slot_dt);
-  require_exact_metadata_keys(manager.slot_sample);
+  amr_history_field_detail::require_manager_metadata(manager, runtime_state().installed_hash_);
 
   const std::size_t live_levels = runtime_->hierarchy().num_levels();
   if (live_levels == 0)
@@ -731,7 +720,8 @@ void validate_accepted_history_remap_metadata_() const {
     (void)manager.validated_samples(key);
     if (depth < 2 || ring.size() != static_cast<std::size_t>(depth) || fill_count < 0 ||
         fill_count > depth || initialized != (fill_count > 0) ||
-        slot_dt.size() != static_cast<std::size_t>(depth))
+        slot_dt.size() != static_cast<std::size_t>(depth) ||
+        manager.slot_fields.at(key).size() != ring.size())
       throw std::runtime_error("AMR Program accepted history remap has invalid ring metadata");
     for (const Real dt : slot_dt) {
       const double value = static_cast<double>(dt);

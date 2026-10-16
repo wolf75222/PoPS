@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "pops/mesh/geometry/geometry.hpp"
@@ -69,6 +71,10 @@ class FieldTopologyView {
     require();
     return data_->program_block;
   }
+  std::string_view field_provider() const {
+    require();
+    return data_->field_provider;
+  }
   std::uint64_t topology_epoch() const {
     require();
     return data_->topology_epoch;
@@ -109,6 +115,7 @@ class FieldTopologyView {
     typename Field::ghost_type ghosts;
     int components;
     std::shared_ptr<const Field> active, fraction, coverage;
+    std::string field_provider;
   };
   explicit FieldTopologyView(std::shared_ptr<const Data> data) : data_(std::move(data)) {}
   std::shared_ptr<const Data> data_;

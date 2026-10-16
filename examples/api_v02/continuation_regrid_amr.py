@@ -117,23 +117,79 @@ def _bundle_mass(p, algebra, bundle):
                           order="global_gid_ascending", byte_capacity=8*1024*1024)
 
 
-def build_continuation_regrid_amr(*, cells=(16, 8), dt=.1, steps=3, reject_regrid_parent=False):
-    parts = _storage("ab2_complete_regrid", ("q",), (1.,), cells=cells)
-    case, _, model, block, state, p, q, data = parts
+def build_continuation_regrid_amr(*, cells=(16, 8), dt=.1, steps=3, reject_regrid_parent=False,
+                                 independent_previous=False):
+    if independent_previous:
+        import pops
+        from pops.model import FieldSpace, PhysicalDimension, PhysicalSupport
+        from .models_M01_M14 import _domain
+        frame, _layout = _domain("ab2_complete_regrid", cells)
+        model = pops.Model("ab2_complete_regrid", frame=frame)
+        support = PhysicalSupport((("x", "ab2_complete_regrid"), ("y", "ab2_complete_regrid")))
+        unit = PhysicalDimension()
+        state = model.state("q", components=("q",), units=(unit,), support=support, sampling="cell")
+        case = pops.Case("ab2_complete_regrid")
+        block = case.block("method", model, states=(state,))
+        p = pops.Program("ab2_complete_regrid_equations")
+        q = p.state(block[state])
+        data = np.ones((1, cells[1], cells[0]))
+    else:
+        parts = _storage("ab2_complete_regrid", ("q",), (1.,), cells=cells)
+        case, _, model, block, state, p, q, data = parts
     data[0] = 1.+.5*np.sin(2*np.pi*(np.arange(cells[0])+.5)/cells[0])[None, :]
     current_field = q.n
+    prior_field = current_field
+    field = phi = None
+    if independent_previous:
+        from pops._ir.elliptic import DivCoeffGrad, Reaction
+        from pops.fields import FieldBoundary, FieldDiscretization, FieldProblem, bcs
+        from pops.fields.methods import CellCenteredNonlinearCoupled
+        from pops.solvers import Newton
+        from pops.time import FailRun
+        phi = model.field("independent_previous")
+        previous_space = FieldSpace("independent_previous_space", ("previous",),
+            units=(unit,), support=support, frame=model.frame.canonical_id,
+            sampling="cell", representation="field")
+        problem = FieldProblem("history_observation", unknowns=(phi,),
+            unknown_spaces={phi: previous_space},
+            equations=(Reaction(phi, 1)-DivCoeffGrad(phi, 0) == state[0],),
+            boundaries=(FieldBoundary(phi, bcs.BoundaryCondition(bcs.AllPhysicalBoundaries(),
+                                                                bcs.Periodic())),))
+        # The equation is local phi=state[0]: its spatial operator is zero.
+        # Identity preconditioning retains the complete reaction Jacobian.
+        solver = Newton(tolerance=1.e-13, max_iterations=20, linear_tolerance=1.e-13,
+            linear_max_iterations=200, restart=60, right_preconditioner=None)
+        # F(phi)=phi-state is affine: its central-difference JVP has no
+        # truncation error for any positive step. A unit step avoids subtracting
+        # nearly equal O(1) residuals at h=1e-6 before a strict 1e-13 check.
+        # This setting belongs only to this affine regrid/retention witness.
+        field = case.field(problem, FieldDiscretization(method=CellCenteredNonlinearCoupled(
+            finite_difference_step=1.), observation_axes=(0, 1), boundaries=(), solver=solver))
+        prior_field = field.observe(p.solve(field, values={block[state]: q.n},
+            at=q.n.point).consume(action=FailRun()))[field[phi]]
     domain = p.range_set(3, capacity=3, ownership="replicated")
     controls = p.map(domain, lambda b, i: b.index_value(i))
-    initial = p.product(state=current_field, previous=current_field, time=p.float64(0),
+    initial = p.product(state=current_field, previous=prior_field, time=p.float64(0),
                         step=p.int64(0), counter=p.int64(0), controls=controls)
     schema = ContinuationSchema(initial, fields=((q.next, ("state",)),),
         retained_fields=(("previous",),), time=("time",), step=("step",))
     base = p.continuation_open(initial, schema)
     entry = p.continuation_read(base)
-    value = p.value("ab2_growth", entry["state"]+p.dt*(1.5*entry["state"]-.5*entry["previous"]),
-                    at=q.next.point)
     proposal = p.product(h=p.requested_dt())
-    trial = p.product(state=value, previous=entry["state"], time=entry["time"]+proposal["h"],
+    if independent_previous:
+        from pops.time.expressions import ProgramScalar
+        increment = ProgramScalar(proposal["h"])*(1.5*entry["state"][0]-.5*entry["previous"][0])
+        from pops.linalg import FiniteSupport
+        value = FiniteSupport("ab2_independent_previous", ("q",)).bind((entry["state"][0]+increment,)).materialize(
+            p, "ab2_growth", template=entry["state"], at=q.next.point)
+    else:
+        value = p.value("ab2_growth", entry["state"]+p.dt*(1.5*entry["state"]-.5*entry["previous"]),
+                        at=q.next.point)
+    previous = entry["state"]
+    if independent_previous:
+        previous = field.observe(p.solve(field, values={block[state]: entry["state"]},
+            at=q.n.point).consume(action=FailRun()))[field[phi]]
+    trial = p.product(state=value, previous=previous, time=entry["time"]+proposal["h"],
                       step=entry["step"]+p.int64(1), counter=entry["counter"]+p.int64(1),
                       controls=entry["controls"])
     approved = _approve(p, base, proposal, trial, p.product(), advancing=True)
@@ -185,7 +241,14 @@ def build_continuation_regrid_amr(*, cells=(16, 8), dt=.1, steps=3, reject_regri
             return b.bundle_field(transferred, template=output_template, topology=new_view), transferred
 
         current, bundle = move(source["state"], template)
-        previous, _ = move(source["previous"], source["previous"], family=bundle)
+        if independent_previous:
+            previous_view = b.regrid_topology(source["previous"], level=proposal["level"],
+                                               side="target", dimension=2)
+            previous_storage = b.scalar_field(like=source["previous"], topology=previous_view,
+                                               initial=b.float64(0))
+            previous, _ = move(source["previous"], previous_storage)
+        else:
+            previous, _ = move(source["previous"], source["previous"], family=bundle)
         result = b.product(state=current, previous=previous, time=old["time"], step=old["step"],
                            counter=old["counter"], controls=old["controls"])
         return _approve(b, base, proposal, result,

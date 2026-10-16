@@ -40,6 +40,9 @@
       "test_distributed_gc_v14",
       "test_elliptic_named_device_kernels",
       "test_external_field_backend_preparation",
+      "test_field_provider_read_authority",
+      "test_field_read_transport",
+      "test_field_transform_support",
       "test_float32_poisson_residual",
       "test_generated_amr_system_block",
       "test_generated_stability_speed",
@@ -91,7 +94,7 @@
     "refresh_source_run": "30190778708",
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 213,
+    "target_count": 216,
     "unit_seconds": "aggregate CTest wall time per build target",
     "v12_estimate_source": "The edd85c10f6184e7b14b048ee16d5cc39bc606b62 full CTest diagnostic observed approximately 0.7 s history-snapshot, 0.52 s AMR-transition, and 0.5 s collective-rejection aggregate work. Each is conservatively scheduled at 1 s; these are scheduling estimates, not controlled performance measurements.",
     "v18_estimate_source": "Unmeasured analogous-target scheduling estimates: AMR publication uses test_amr_program_diffusion; general composite field uses test_composite_fac_variable_k; physical support transfer uses test_nd_transfer; prepared resource cache uses test_cache_manager. Replace from the next complete CI timing artifact; no local timing measurements are claimed.",
@@ -144,7 +147,8 @@
         "test_external_riemann_dispatch": 84.53,
         "test_amr_hierarchy_field_scratch": 54.48
       }
-    }
+    },
+    "field_read_contracts017_basis": "Unmeasured analogous-target seeds: field_read_transport uses distributed_array; pure Field transform support and provider publication authority use continuation_image. Covers three explicit targets and MPI2/3 variants; no executed duration or watchdog change is inferred."
   },
   "test_amr_compiled_model": 0.01,
   "test_amr_composite_poisson": 1.15,
@@ -358,5 +362,8 @@
   "test_state_carriers_zero_block_v14": 10.0,
   "test_composite_physical_measure": 1.0,
   "test_continuation_field_migration": 5.0,
-  "test_continuation_distributed_migration": 5.0
+  "test_continuation_distributed_migration": 5.0,
+  "test_field_read_transport": 5.0,
+  "test_field_transform_support": 5.0,
+  "test_field_provider_read_authority": 5.0
 }

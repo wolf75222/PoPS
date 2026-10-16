@@ -1,11 +1,11 @@
 public:
 /// Invocation-owned input authority for a generated synchronous RHS evaluation.
 class RhsInputTrace {
-public:
+ public:
   RhsInputTrace(const RhsInputTrace&) = default;
   RhsInputTrace(RhsInputTrace&&) = default;
 
-private:
+ private:
   friend class AmrProgramContext;
   RhsInputTrace() = default;
   const AmrProgramContext* owner_ = nullptr;
@@ -23,6 +23,8 @@ struct RhsInputTraceRecord {
   ::pops::amr::Rational stage;
   int block = -1, level = -1, evaluation = -1;
   std::int64_t source = -1;
+  std::optional<std::uint64_t> hierarchy_sequence;
+  std::string hierarchy_authority;
   field_type snapshot;
 };
 using RhsInputTraceKey = std::tuple<int, int, int>;
@@ -31,22 +33,22 @@ using RhsInputTraceRegistry =
 mutable RhsInputTraceRegistry rhs_input_traces_;
 
 static bool same_rhs_input_window_(const RhsInputTraceRecord& left,
-                                    const RhsInputTraceRecord& right) {
+                                   const RhsInputTraceRecord& right) {
   const auto same_clock = [](const auto& a, const auto& b) {
-    return a.macro_step == b.macro_step && a.phase == b.phase &&
-           a.physical_time == b.physical_time;
+    return a.macro_step == b.macro_step && a.phase == b.phase && a.physical_time == b.physical_time;
   };
-  return left.program == right.program && left.clock == right.clock &&
-         left.epoch == right.epoch && left.generation == right.generation &&
-         left.attempt == right.attempt && left.block == right.block &&
-         left.evaluation == right.evaluation && left.source == right.source &&
-         left.stage == right.stage && same_clock(left.window.begin, right.window.begin) &&
+  return left.program == right.program && left.clock == right.clock && left.epoch == right.epoch &&
+         left.generation == right.generation && left.attempt == right.attempt &&
+         left.block == right.block && left.evaluation == right.evaluation &&
+         left.source == right.source && left.hierarchy_sequence == right.hierarchy_sequence &&
+         left.hierarchy_authority == right.hierarchy_authority && left.stage == right.stage &&
+         same_clock(left.window.begin, right.window.begin) &&
          same_clock(left.window.end, right.window.end);
 }
 
 public:
-RhsInputTrace capture_rhs_input_trace(int program_block, const field_type& input,
-                                       int evaluation, std::int64_t source) const {
+RhsInputTrace capture_rhs_input_trace(int program_block, const field_type& input, int evaluation,
+                                      std::int64_t source) const {
   const ExecutionLane& lane = prepared_execution_lane();
   RhsInputTrace trace;
   RhsInputTraceRegistry candidate;
@@ -73,11 +75,31 @@ RhsInputTrace capture_rhs_input_trace(int program_block, const field_type& input
     record->level = active_level_;
     record->evaluation = evaluation;
     record->source = source;
+    if (mapping_continuation_) {
+      if (!mapping_continuation_->executing ||
+          mapping_continuation_->program_hash != record->program ||
+          mapping_continuation_->hierarchy_authority.empty())
+        throw std::invalid_argument("AMR RHS trace has no executing hierarchy invocation");
+      record->hierarchy_sequence = mapping_continuation_->internal_sequence;
+      record->hierarchy_authority = mapping_continuation_->hierarchy_authority;
+    }
     if (record->program.empty() || record->clock.empty())
       throw std::logic_error("AMR RHS input trace has no compiled Program/clock authority");
     const RhsInputTraceKey key{runtime_block, active_level_, evaluation};
-    if (rhs_input_traces_.contains(key))
-      throw std::invalid_argument("AMR RHS input trace requires a unique SSA evaluation per attempt");
+    if (const auto previous = rhs_input_traces_.find(key); previous != rhs_input_traces_.end()) {
+      // The barrier sequence is native and common to every level. A later
+      // invocation may reuse this SSA slot; the previous immutable record stays
+      // owned by its existing tokens, never reinterpreted as this invocation.
+      const auto& old = *previous->second;
+      if (!old.hierarchy_sequence || !record->hierarchy_sequence ||
+          *old.hierarchy_sequence >= *record->hierarchy_sequence ||
+          old.hierarchy_authority != record->hierarchy_authority ||
+          old.program != record->program || old.clock != record->clock ||
+          old.epoch != record->epoch || old.generation != record->generation ||
+          old.attempt != record->attempt || old.source != record->source)
+        throw std::invalid_argument(
+            "AMR RHS input trace requires a unique SSA evaluation in its exact invocation");
+    }
     if (active_level_ > 0) {
       const auto parent = rhs_input_traces_.find({runtime_block, active_level_ - 1, evaluation});
       if (parent == rhs_input_traces_.end() || !parent->second ||
@@ -95,7 +117,7 @@ RhsInputTrace capture_rhs_input_trace(int program_block, const field_type& input
     trace.input_ = &input;
     trace.current_ = record;
     candidate = rhs_input_traces_;
-    candidate.emplace(key, std::move(record));
+    candidate.insert_or_assign(key, std::move(record));
   } catch (...) {
     error = std::current_exception();
   }
@@ -123,6 +145,10 @@ const field_type* rhs_input_parent_(int runtime_block, const field_type& input, 
         record.generation != runtime_->materialization_generation() ||
         record.attempt != active_subcycling_attempt_ || record.level != active_level_ ||
         record.block != runtime_block || record.evaluation != evaluation ||
+        bool(record.hierarchy_sequence) != bool(mapping_continuation_) ||
+        (record.hierarchy_sequence &&
+         (*record.hierarchy_sequence != mapping_continuation_->internal_sequence ||
+          record.hierarchy_authority != mapping_continuation_->hierarchy_authority)) ||
         record.stage != stage_time_ || record.window.begin != active_subcycling_window_.begin ||
         record.window.end != active_subcycling_window_.end)
       throw std::invalid_argument("AMR RHS input trace is stale or has a different exact stage");

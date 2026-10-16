@@ -13,11 +13,15 @@ import math
 import os
 from pathlib import Path
 import time
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_python_test_units  # noqa: E402
 
 ORDINARY_BUDGET_SECONDS = 35 * 60
 # The complete 2026-10-16 catalog retains the 35-minute ordinary budget.
-# 125 bins preserve margin with the three new native composition receivers.
-SHARD_TOTAL = 125
+# 135 bins retain35min for complete case inventories and measured CI47b2 costs.
+SHARD_TOTAL = 135
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
@@ -37,10 +41,10 @@ def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
 
 
 def job_budget(shard: int) -> int:
-    """LPT places the five longest indivisible files first, even for subsets."""
+    """LPT places the six longest indivisible test units first, even for subsets."""
     if not 0 <= shard < SHARD_TOTAL:
         raise ValueError("Python shard index is outside the configured matrix")
-    return {0: 110, 1: 80, 2: 80, 3: 80, 4: 60}.get(shard, 50)
+    return {0: 110, 1: 80, 2: 80, 3: 80, 4: 60, 5: 60}.get(shard, 50)
 
 
 class TimingReceipts:
@@ -113,7 +117,7 @@ def main() -> None:
     parser.add_argument("--github-output", type=Path, required=True)
     args = parser.parse_args()
     paths = [line for line in args.selected_file.read_text().splitlines() if line]
-    durations = json.loads(args.durations.read_text())
+    durations = ci_python_test_units.weights(json.loads(args.durations.read_text()))
     minutes = selected_budget(paths, durations)
     if minutes + 5 > job_budget(args.shard_index):
         raise ValueError("selected test budget does not leave artifact/setup margin in this job")

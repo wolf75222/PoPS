@@ -22,6 +22,8 @@ UNCHANGED_CONSUMERS = (
 )
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
+        "pops/runtime/program/amr_program_context_field_representation_obligation.inc",
+        "pops/runtime/program/amr_program_context_history_deferred_authority.inc",
         "pops/runtime/program/amr_program_context_field_observation.inc",
         "pops/runtime/program/amr_program_context_finite_values.inc",
         "pops/runtime/program/amr_program_context_continuation_level.inc",
@@ -29,11 +31,13 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_continuation_checkpoint.inc",
         "pops/runtime/program/amr_program_context_continuation_regrid.inc",
         "pops/runtime/program/amr_program_context_continuation_regrid_child.inc",
+        "pops/runtime/program/amr_program_context_continuation_regrid_topology.inc",
         "pops/runtime/program/amr_program_context_continuation_field_storage.inc",
         "pops/runtime/program/amr_program_context_continuation_field_provider.inc",
         "pops/runtime/program/amr_program_context_field_allocation.inc",
         "pops/runtime/program/amr_program_context_field_bundle.inc",
         "pops/runtime/program/amr_program_context_affine_finalization.inc",
+        "pops/runtime/program/amr_program_context_composite_integral.inc",
         "pops/runtime/program/amr_program_context_affine_history.inc",
         "pops/runtime/program/amr_program_context_affine_measure.inc",
         "pops/runtime/program/amr_program_context_temporal_field.inc",
@@ -85,6 +89,8 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
     }
 )
 PROGRAM_RESPONSIBILITY_AUTHORITIES = {
+    "field_representation_obligation": frozenset({"pops/runtime/program/amr_program_context_field_representation_obligation.inc"}),
+    "history_deferred_authority": frozenset({"pops/runtime/program/amr_program_context_history_deferred_authority.inc"}),
     "field_observation": frozenset({
         "pops/runtime/program/amr_program_context_field_observation.inc",
     }),
@@ -104,6 +110,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
         "pops/runtime/program/amr_program_context_continuation_regrid.inc",
         "pops/runtime/program/amr_program_context_continuation_regrid_child.inc",
     }),
+    "continuation_regrid_topology": frozenset({
+        "pops/runtime/program/amr_program_context_continuation_regrid_topology.inc",
+    }),
     "continuation_field_storage": frozenset({
         "pops/runtime/program/amr_program_context_continuation_field_storage.inc",
         "pops/runtime/program/amr_program_context_field_allocation.inc",
@@ -114,6 +123,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     }),
     "affine_finalization": frozenset({
         "pops/runtime/program/amr_program_context_affine_finalization.inc",
+    }),
+    "composite_integral": frozenset({
+        "pops/runtime/program/amr_program_context_composite_integral.inc",
     }),
     "affine_history": frozenset({
         "pops/runtime/program/amr_program_context_affine_history.inc",
@@ -226,6 +238,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
 # provenance through the same transaction as its numerical image (70 net lines).
 RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET = 80
 PROGRAM_RESPONSIBILITY_BUDGETS = {
+    # Exact representation issuance/discharge and retained lag authority have separate owners.
+    "field_representation_obligation": 176,
+    "history_deferred_authority": 128,
     # Exact snapshot registration now distinguishes opaque transport from live
     # numerical access: weak ownership, attempt, level, epoch and generation.
     "field_observation": 224,
@@ -237,6 +252,8 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "continuation_forest": 320,
     "continuation_checkpoint": 320,
     "continuation_regrid": 512,
+    # Exact provider geometry and coverage capabilities, including route consensus.
+    "continuation_regrid_topology": 144,
     # Producer metadata and exact allocation/lifetime authentication share the
     # copy authority; revoked instances remain tombstones while copies live.
     "continuation_field_storage": 336,
@@ -244,6 +261,8 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     # publication are one new responsibility; State ownership is not synthesized.
     "continuation_field_provider": 240,
     "affine_finalization": 320,
+    # Extraction has its own role cap; the aggregate allowance below is unchanged.
+    "composite_integral": 120,
     "affine_history": 320,
     "temporal_field": 288,
     "stencil_publication": 128,
@@ -295,13 +314,25 @@ PROGRAM_CONTRACT_EXTENSIONS = {
     )),
     # CONT6 authenticates the independent scientific type and complete metadata
     # before structural copies. Existing State-copy allowance remains fixed.
-    "continuation_field_storage": (80, (
+    # Independent regrid ports also preflight scientific authority and retain the
+    # exact imported allocation. These three new bounded regions add 29 lines.
+    "continuation_field_storage": (80 + 32 + 48, (
         ("amr_program_context_continuation_field_storage.inc",
          "  if (!result) {\n    if (const auto snapshot =",
          "  if (!result && continuation_field_storage_.contains"),
         ("amr_program_context_continuation_field_storage.inc",
          "void continuation_require_field_type_(",
          "private:\ntemplate <class Lifetime>"),
+        ("amr_program_context_field_bundle.inc",
+         "  continuation_local_phase(\n      [&] {\n        require_regrid_field_topology",
+         "  return field_bundle::export_field"),
+        ("amr_program_context_field_bundle.inc",
+         "  continuation_local_phase(\n      [&] {\n        require_field_topology(topology);",
+         "  auto field ="),
+        ("amr_program_context_field_bundle.inc",
+         "  continuation_local_phase(\n      [&] {\n        require_continuation_regrid_().allocated_fields.push_back(field);",
+         "  return field;"),
+            ('amr_program_context_continuation_field_storage.inc', '  const auto& manager = runtime_state().hist_;', '  if (const auto found = continuation_field_storage_.find(&field);'),
     )),
     # Observation route validation, metadata budget and canonical origin are
     # distinct from the pre-existing immutable numerical snapshot operation.
@@ -332,10 +363,21 @@ PROGRAM_CONTRACT_EXTENSIONS = {
          "  const auto declared =\n      declared_flux_temporal_families_.find(std::tuple{runtime_block, rhs, source.provider});"),
     )),
     # The checked-out level wrapper now authenticates synchronized envelopes.
-    "joint_field_publication": (64 + 8, (
+    # A staged CPS publication retains each exact source until collective publication.
+    "joint_field_publication": (64 + 8 + 20, (
         ("amr_program_context_general_field_public.inc",
          "/// Retain the actual prepared provider",
          "#include <pops/runtime/program/amr_program_context_general_field_scratch.inc>"),
+        ("amr_program_context_general_field_public.inc",
+         "    for (const auto& component : components) {",
+         "    levels.push_back("),
+    )),
+    # Nonlinear residual staging owns its exact prior allocation and attempt.
+    "field_runtime": (16 + 24, (
+        ("amr_program_context_field_runtime_services.inc",
+         "  // The nonlinear residual owns a copied previous stage, distinct from SSA",
+         "  // This prepared tensor request explicitly binds its solution"),
+            ('amr_program_context_field_runtime_solver.inc', 'field_type& linear_solution(std::int64_t value_id', 'void stage_linear_initial_guess() const {'),
     )),
     "diffusion": (128, (
         ("amr_program_context_diffusion.inc", "double numerical_face_courant()",
@@ -348,7 +390,7 @@ PROGRAM_CONTRACT_EXTENSIONS = {
          "Real max_component(const field_type&"),
     )),
     # Exact HistoryTransfer coefficients retain their budget and authority seal.
-    "history_checkpoint": (416 + 8, (
+    "history_checkpoint": (416 + 8 + 80 + 16, (
         ("amr_program_context_history_checkpoint_public.inc", "// Opt-in storage scope",
          "void rotate_histories()"),
         ("amr_program_context_history_checkpoint_public.inc", "/// Finest-owner coverage",
@@ -358,10 +400,23 @@ PROGRAM_CONTRACT_EXTENSIONS = {
         ("amr_program_context_history_checkpoint_runtime.inc",
          "void refresh_resources_after_accepted_history_remap_(",
          None),
+            ('amr_program_context_history_checkpoint_public.inc', 'void configure_history_field_metadata(', 'void register_history('),
+        ('amr_program_context_history_checkpoint_public.inc', 'field_type& history_observation(', 'field_type& history_zero_start(const std::string& name, int lag, int ncomp,\n'),
+        ('amr_program_context_history_checkpoint_services.inc', '        const auto source_metadata = continuation_source_field_authority_(value);', '        staged.rollback_ring = found->second;'),
+        ('amr_program_context_history_checkpoint_services.inc', '        contract.presence(incoming.support != nullptr)', '        for (const auto& identity : staged.samples)'),
     )),
     "subcycling_runtime": (64, (
         ("amr_program_context_subcycling_runtime.inc", "template <class ClockMatrix, class HistoryMatrix>",
          "void stage_prepared_publication_candidates_("),
+    )),
+    # Retained metadata or native invocation authority is counted independently.
+    'affine_history': (64, (
+        ('amr_program_context_affine_history.inc', '        HistoryFieldMetadata endpoint_metadata;', '        // A newly accepted State'),
+        ('amr_program_context_affine_history.inc', '      std::optional<std::size_t> exact_source;', '      output.fields.emplace_back(provisional[slot]);'),
+    )),
+    # Retained metadata or native invocation authority is counted independently.
+    'rhs_input_trace': (40, (
+        ('amr_program_context_rhs_input_trace.inc', '    if (mapping_continuation_) {', '    if (active_level_ > 0) {'),
     )),
 }
 # Measured by formatting the 020872cc source with clang-format19.1.7:
@@ -382,12 +437,15 @@ PROGRAM_NEW_CONTRACT_BUDGET = (
     sum(PROGRAM_FORMATTING_ALLOWANCES.values())
     + sum(PROGRAM_INTEGRATION_ALLOWANCES.values())
     + sum(PROGRAM_RESPONSIBILITY_BUDGETS[name] for name in (
+        "field_representation_obligation",
+        "history_deferred_authority",
         "field_observation",
         "finite_value_lifetime",
         "level_continuation",
         "continuation_forest",
         "continuation_checkpoint",
         "continuation_regrid",
+        "continuation_regrid_topology",
         "continuation_field_storage",
         "continuation_field_provider",
         "affine_finalization",
@@ -503,6 +561,9 @@ SEMANTIC_AUTHORITIES = frozenset(
 COMPATIBILITY_UMBRELLAS = frozenset(ROOTS.values())
 PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
     {
+        "pops/runtime/program/field_transform_support.hpp",
+        "pops/runtime/program/field_read_transform.hpp",
+        "pops/runtime/program/amr_history_field_metadata_codec.hpp",
         "pops/numerics/elliptic/linear/pure_field_algebra.hpp",
         "pops/runtime/program/history_transfer_expression.hpp",
         "pops/runtime/program/temporal_sample_source.hpp",
@@ -1017,3 +1078,30 @@ def test_history_sample_codec_is_bounded_exact_metadata_only() -> None:
     assert set(_local_includes(source)) == {"pops/runtime/program/program_runtime_state.hpp"}
     assert not re.search(r"\b(?:AmrProgramContext|AmrSystem|MultiFab|Kokkos|HistoryManager)\b", source)
     assert "field_values" not in source
+
+
+def test_history_and_closed_field_read_contracts_have_explicit_owners_and_bounds():
+    # These own metadata codecs, device read journals, collective transport and
+    # exact support descriptions. None defines a new scientific equation.
+    contracts = {
+        "history_field_metadata.hpp": (384, "struct HistoryFieldMetadata"),
+        "history_field_metadata_temporal.inc": (144, "reconstructed_metadata"),
+        "amr_history_field_metadata_codec.hpp": (208, "prepare_amr_history_field_metadata"),
+        "field_provider_read_authority.hpp": (176, "field_provider_read_authority"),
+        "field_read_capture.hpp": (160, "struct FieldReadCapture"),
+        "field_read_closure.hpp": (176, "struct FieldReadClosure"),
+        "field_read_transform.hpp": (80, "struct CapturedTransformReads"),
+        "field_read_transport.hpp": (288, "struct CapturedFieldReads"),
+        "field_transform_support.hpp": (176, "struct FieldTransformSupport"),
+        "program_context_field_representation_obligation.inc": (192, "own_discharged_field_representation"),
+    }
+    for name, (budget, owner) in contracts.items():
+        source = (INCLUDE / "pops/runtime/program" / name).read_text()
+        assert owner in source, (name, owner)
+        assert len(source.splitlines()) <= budget, (name, budget)
+        assert not _fixed_rank_authorities(source), name
+        assert not (set(_local_includes(source)) & (COMPATIBILITY_UMBRELLAS | CONTEXT_FRAGMENT_PATHS)), name
+    # The temporal codec remains inside its named metadata owner, not a hidden
+    # ProgramContext body or a separately mutable authority.
+    metadata = (INCLUDE / "pops/runtime/program/history_field_metadata.hpp").read_text()
+    assert '#include <pops/runtime/program/history_field_metadata_temporal.inc>' in metadata

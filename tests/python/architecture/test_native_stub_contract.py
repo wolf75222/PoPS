@@ -28,7 +28,7 @@ PUBLIC_METADATA = {
 PUBLIC_CALLABLES = {
     "abi_key", "my_rank", "n_ranks", "mpi_world", "module_capabilities", "capability_report",
     "runtime_environment_report", "runtime_backend_manifest", "native_execution_resource",
-    "numerical_defaults_report",
+    "numerical_defaults_report", "runtime_parameter_storage_bytes",
     "fallback_diagnostics_report", "reset_fallback_diagnostics", "kokkos_is_initialized",
 }
 INTERNAL_BOOTSTRAP_TYPES = {"SystemConfig", "AmrSystemConfig", "ModelSpec", "System", "AmrSystem"}
@@ -38,12 +38,14 @@ SYSTEM_CONFIG_FIELDS = {
     "periodicity": "tuple[bool, ...]",
     "boxes": "tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]",
     "coordinate_system": "str",
+    "runtime_parameter_byte_capacity": "int | None",
 }
 AMR_CONFIG_FIELDS = {
     "shape": "tuple[int, ...]", "lower": "tuple[float, ...]",
     "upper": "tuple[float, ...]",
     "boxes": "tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]",
     "coordinate_system": "str",
+    "runtime_parameter_byte_capacity": "int | None",
     "regrid_every": "int", "level_count": "int",
     "transition_ratios": "tuple[tuple[int, ...], ...]",
     "transition_buffers": "tuple[tuple[int, ...], ...]",

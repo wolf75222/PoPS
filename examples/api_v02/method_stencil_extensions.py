@@ -101,7 +101,8 @@ def build_stencil_extensions(*, cells=(24, 16), sample="cell", amr=True,
                   if amr else CG(max_iter=2000, rel_tol=1.e-12, abs_tol=1.e-13))
         field = case.field(problem, FieldDiscretization(method=CellCenteredSecondOrder(),
             boundaries=(), observation_axes=(0, 1), solver=solver))
-    program = pops.Program("sampled_stencil_ssprk2")
+    program = pops.Program("sampled_stencil_ssprk2",
+        history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
     current = program.state(block[state])
     flux = upwind_field_flux(sampled=sample != "state")
 

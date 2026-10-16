@@ -106,10 +106,51 @@ void System<Dim>::store_history(const std::string& name, const MultiFab<Dim>& va
                                   "System::store_history");
   // Prepare the typed publication before any numeric mutation; legacy zero-dt stores remain
   // explicitly unauthenticated. Qualified ProgramContext stores use this same producer helper.
+  std::vector<runtime::program::HistoryFieldMetadata> metadata;
+  std::string field_metadata_contract;
+  std::vector<runtime::program::FieldExchangeExpressions::Ref> exchanges;
   std::vector<runtime::program::HistorySampleIdentity> samples;
   std::vector<std::uint8_t> sample_bytes;
   std::exception_ptr sample_error;
   try {
+    auto& history = p_->program_.hist_;
+    runtime::program::HistoryFieldMetadata incoming;
+    runtime::program::FieldExchangeExpressions::Ref incoming_exchange;
+    for (const auto& [source_name, source_ring] : history.histories)
+      for (std::size_t slot = 0; slot < source_ring.size(); ++slot)
+        if (&source_ring[slot] == &value) {
+          if (const auto found = history.slot_fields.find(source_name);
+              found != history.slot_fields.end())
+            incoming = found->second.at(slot);
+          if (const auto found = history.slot_exchanges.find(source_name);
+              found != history.slot_exchanges.end())
+            incoming_exchange = found->second.at(slot);
+        }
+    if (!incoming.empty() && !history.field_metadata_budget.enabled())
+      throw std::length_error(
+          "retaining Field metadata requires an explicit History metadata capacity");
+    std::uint64_t prepared_metadata_bytes = 0;
+    if (history.field_metadata_budget.enabled())
+      runtime::program::history_field_detail::charge(prepared_metadata_bytes,
+                                                     history.slot_fields.at(name).size(),
+                                                     sizeof(runtime::program::HistoryFieldMetadata),
+                                                     history.field_metadata_budget.workspace_bytes);
+    metadata = history.slot_fields.at(name);
+    exchanges = history.slot_exchanges.at(name);
+    const auto count = history.initialized.at(name) ? std::size_t{1} : ring.size();
+    for (std::size_t slot = 0; slot < count; ++slot) {
+      metadata[slot] = incoming;
+      exchanges[slot] = incoming_exchange;
+    }
+    if (history.field_metadata_budget.enabled()) {
+      auto budget = history.field_metadata_budget;
+      budget.workspace_bytes -= prepared_metadata_bytes;
+      runtime::program::history_field_detail::Tables tables(budget.workspace_bytes);
+      tables.collect(history.slot_fields, budget, name, metadata);
+    }
+    ExactContractBuilder field_proof;
+    incoming.append_contract(field_proof);
+    field_metadata_contract = std::move(field_proof).release();
     if (outgoing_dt > 0.0) {
       samples = p_->program_.hist_.prepare_sample_store(name, p_->t, outgoing_dt);
     } else {
@@ -131,6 +172,10 @@ void System<Dim>::store_history(const std::string& name, const MultiFab<Dim>& va
                                          sample_bytes.size());
   if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string_view(name), sample_contract}}))
     throw std::invalid_argument("System::store_history sample identity differs between ranks");
+  const std::array<std::pair<std::string_view, std::string_view>, 1> metadata_contract{
+      {{name, field_metadata_contract}}};
+  if (!all_ranks_agree_exact_ordered_byte_pairs(metadata_contract, world_communicator_view()))
+    throw std::invalid_argument("System::store_history Field metadata differs between MPI ranks");
   // Copy the valid cells of value into the current slot [0] (identical layout: ring slots and the
   // block state share (ba, dm); lincomb(dst, 1, src, 0, src) is a valid-cell deep copy).
   pops::lincomb(ring[0], Real(1), value, Real(0), value);
@@ -155,6 +200,8 @@ void System<Dim>::store_history(const std::string& name, const MultiFab<Dim>& va
     p_->program_.hist_.initialized[name] = true;
   }
   p_->program_.hist_.slot_sample.at(name).swap(samples);
+  p_->program_.hist_.slot_fields.at(name).swap(metadata);
+  p_->program_.hist_.slot_exchanges.at(name).swap(exchanges);
   p_->program_.hist_.store_pending[name] = true;
 }
 
@@ -272,6 +319,8 @@ void System<Dim>::restore_history(const std::string& name, int slot,
   std::vector<MultiFab<Dim>> prepared_ring;
   std::vector<Real> prepared_dts;
   std::vector<runtime::program::HistorySampleIdentity> prepared_samples;
+  std::vector<runtime::program::HistoryFieldMetadata> prepared_fields;
+  std::vector<runtime::program::FieldExchangeExpressions::Ref> prepared_exchanges;
   std::exception_ptr preparation_error;
   const auto old_depth = ring.size();
   const auto required_depth = static_cast<std::size_t>(slot) + 1;
@@ -284,6 +333,10 @@ void System<Dim>::restore_history(const std::string& name, int slot,
       prepared_dts.resize(required_depth, Real(0));
       prepared_samples = manager.slot_sample.at(name);
       prepared_samples.resize(required_depth);
+      prepared_fields = manager.slot_fields.at(name);
+      prepared_fields.resize(required_depth);
+      prepared_exchanges = manager.slot_exchanges.at(name);
+      prepared_exchanges.resize(required_depth);
       tail.reserve(required_depth - old_depth);
       for (auto k = old_depth; k < required_depth; ++k) {
         tail.emplace_back(p_->ba, p_->dm, p_->local_rank, ring.front().ncomp(),
@@ -316,9 +369,13 @@ void System<Dim>::restore_history(const std::string& name, int slot,
     ring.swap(prepared_ring);
     manager.slot_dt.at(name).swap(prepared_dts);
     manager.slot_sample.at(name).swap(prepared_samples);
+    manager.slot_fields.at(name).swap(prepared_fields);
+    manager.slot_exchanges.at(name).swap(prepared_exchanges);
     manager.depth.at(name) = static_cast<int>(ring.size());
   }
   manager.slot_sample.at(name).at(static_cast<std::size_t>(slot)) = {};
+  manager.slot_fields.at(name).at(static_cast<std::size_t>(slot)) = {};
+  manager.slot_exchanges.at(name).at(static_cast<std::size_t>(slot)) = {};
 }
 template <int Dim>
 void System<Dim>::set_history_initialized(const std::string& name, bool initialized) {
@@ -869,6 +926,7 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   field_plan_registry candidate_field_plans;
   std::string candidate_boundary_contract;
   runtime::program::ProgramOwnedClockManifest candidate_auxiliary_clocks;
+  std::vector<runtime::program::ProgramCheckpointHistoryMetadata> candidate_history_metadata;
   std::exception_ptr boundary_preparation_error;
 
   // Baseline preparation and stage allocation finish collectively before the DSO entry is invoked.
@@ -880,6 +938,10 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
           "System::install_program: a field-boundary artifact transaction is already active");
     candidate_auxiliary_clocks =
         runtime::program::read_program_owned_clock_manifest(h, installed_hash);
+    candidate_history_metadata = runtime::program::read_program_checkpoint_histories(h, true);
+    for (const auto& history : candidate_history_metadata)
+      if (static_cast<std::size_t>(history.program_owner) >= program_block_map.size())
+        throw std::invalid_argument("System Program history descriptor has a foreign block route");
     auto capture_authorities = [](const field_plan_registry& plans) {
       boundary_registry result;
       for (const auto& [slot, plan] : plans)
@@ -995,6 +1057,18 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
             static_cast<std::uint64_t>(candidate_auxiliary_clocks.logical_clock_identities.size()));
     for (const auto& clock : candidate_auxiliary_clocks.logical_clock_identities)
       contract.text(clock);
+    contract.text("pops.program.frozen-history-tuples")
+        .scalar(static_cast<std::uint64_t>(candidate_history_metadata.size()));
+    for (const auto& history : candidate_history_metadata)
+      contract.text(history.name)
+          .scalar(history.program_owner)
+          .text(history.state_identity)
+          .text(history.space_identity)
+          .text(history.clock_identity)
+          .text(history.interpolation_identity)
+          .scalar(history.depth)
+          .scalar(history.components)
+          .scalar(history.ghost_depth);
     candidate_boundary_contract = std::move(contract).release();
 
     // Pre-copy both materialization images while failure is still harmless.  After the plan-registry
@@ -1077,6 +1151,7 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     p_->program_.block_params_.swap(installed_params);
     p_->program_.operator_authorities_ = std::move(operator_authorities);
     p_->program_.history_replay_authorities_ = std::move(history_replay_authorities);
+    p_->program_.checkpoint_metadata_.histories = std::move(candidate_history_metadata);
     p_->program_.installed_hash_ = installed_hash;
     candidate_auxiliary_clocks.installation_generation = p_->program_.step_install_generation_;
     p_->program_.checkpoint_metadata_.logical_clock_identities =

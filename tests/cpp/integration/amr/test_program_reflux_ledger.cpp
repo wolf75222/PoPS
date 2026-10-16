@@ -11,6 +11,7 @@
 #include <pops/parallel/prepared_load_balance.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/amr_history_field_metadata_codec.hpp>
 #include <pops/runtime/program/continuation_authority.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/program/history_transfer_expression.hpp>
@@ -1187,4 +1188,96 @@ TEST(test_program_reflux_ledger, RankedContinuationSourceAuthorityAuthenticatesR
                std::invalid_argument);
   EXPECT_THROW(program::ranked_program_source_authority({prefix + std::string(64, 'z')}),
                std::invalid_argument);
+}
+
+namespace {
+program::HistoryManager<1> history_metadata_image() {
+  program::HistoryManager<1> manager;
+  manager.field_metadata_budget = {1 << 20, 1 << 20};
+  const std::string key = "level0:retained";
+  manager.histories[key].resize(2);
+  manager.slot_dt[key] = {pops::Real(.25), pops::Real(.25)};
+  manager.slot_sample[key] = {program::next_history_sample({}, false, 1., .25),
+                              program::next_history_sample({}, false, .75, .25)};
+  const auto support =
+      std::make_shared<const program::ContinuationFieldSupport>(program::ContinuationFieldSupport{
+          "metadata.program", "fine.time=.75", -1, 2, 7, 11, "independent.problem/unknown"});
+  const auto representation = std::make_shared<const program::FieldRepresentationObligation>(
+      program::FieldRepresentationObligation{"closed.Q", "exact.origin"});
+  manager.slot_fields[key] = {{support, representation}, {support, representation}};
+  return manager;
+}
+}  // namespace
+
+TEST(AmrHistoryFieldMetadata, NoFluxRoundTripKeepsForeignSupportAndExactSamples) {
+  auto manager = history_metadata_image();
+  const auto wire = program::encode_amr_history_field_metadata({}, manager, "metadata.program");
+  auto restored = program::prepare_amr_history_field_metadata(wire, manager, "metadata.program");
+  EXPECT_TRUE(restored.flux.empty());
+  const auto& original = manager.slot_fields.begin()->second;
+  const auto& slots = restored.fields.begin()->second;
+  ASSERT_EQ(slots.size(), 2u);
+  EXPECT_EQ(*slots[0].support, *original[0].support);
+  EXPECT_EQ(*slots[0].representation, *original[0].representation);
+  EXPECT_EQ(slots[0].support, slots[1].support);
+  EXPECT_EQ(slots[0].representation, slots[1].representation);
+  EXPECT_EQ(slots[0].support->producer_level, 2);  // opaque foreign support is preserved
+  EXPECT_EQ(slots[0].support->origin_point, "fine.time=.75");
+  auto other_sample = manager;
+  ++other_sample.slot_sample.begin()->second[0].ordinal;
+  EXPECT_THROW(program::prepare_amr_history_field_metadata(wire, other_sample, "metadata.program"),
+               std::invalid_argument);
+  EXPECT_THROW(program::prepare_amr_history_field_metadata(wire, manager, "foreign.program"),
+               std::invalid_argument);
+  auto old = manager.slot_fields;
+  manager.slot_fields.swap(restored.fields);
+  EXPECT_EQ(program::encode_amr_history_field_metadata({}, manager, "metadata.program"), wire);
+  manager.slot_fields.swap(old);  // complete accepted-sidecar rollback
+  EXPECT_EQ(manager.slot_fields.begin()->second[0].support, original[0].support);
+  EXPECT_EQ(program::encode_amr_history_field_metadata({}, manager, "metadata.program"), wire);
+}
+
+TEST(AmrHistoryFieldMetadata, BudgetAndAlteredImageRejectBeforePublication) {
+  auto manager = history_metadata_image();
+  const auto wire = program::encode_amr_history_field_metadata({}, manager, "metadata.program");
+  const auto prior = manager.slot_fields.begin()->second[0].support;
+  auto small = manager;
+  small.field_metadata_budget.retained_bytes = 1;
+  EXPECT_THROW(program::encode_amr_history_field_metadata({}, small, "metadata.program"),
+               std::length_error);
+  EXPECT_THROW(program::prepare_amr_history_field_metadata(wire, small, "metadata.program"),
+               std::length_error);
+  small.field_metadata_budget = {1 << 20, wire.size()};
+  EXPECT_THROW(program::prepare_amr_history_field_metadata(wire, small, "metadata.program"),
+               std::length_error);  // borrowed wire leaves no room for decoder scratch
+  auto changed = wire;
+  changed.back() ^= 1;  // reconstruction witness of the last exact sample
+  EXPECT_THROW(program::prepare_amr_history_field_metadata(changed, manager, "metadata.program"),
+               std::invalid_argument);
+  changed = wire;
+  changed.pop_back();
+  EXPECT_THROW(program::prepare_amr_history_field_metadata(changed, manager, "metadata.program"),
+               std::invalid_argument);
+  EXPECT_EQ(manager.slot_fields.begin()->second[0].support, prior);
+  EXPECT_EQ(program::encode_amr_history_field_metadata({}, manager, "metadata.program"), wire);
+}
+
+TEST(AmrHistoryFieldMetadata, EmptyTableAndVerbatimLegacyFluxHaveDistinctContracts) {
+  program::HistoryManager<1> manager;
+  const std::vector<std::uint8_t> opaque_flux{'P', 'O', 'P', 'S', 'F', 'L', 'X', '6', 5, 2, 9};
+  EXPECT_EQ(program::encode_amr_history_field_metadata(opaque_flux, manager, ""), opaque_flux);
+  auto legacy = program::prepare_amr_history_field_metadata(opaque_flux, manager, "");
+  EXPECT_EQ(std::vector(legacy.flux.begin(), legacy.flux.end()), opaque_flux);
+  manager.field_metadata_budget = {256, 4096};
+  const auto empty = program::encode_amr_history_field_metadata({}, manager, "");
+  auto restored_empty = program::prepare_amr_history_field_metadata(empty, manager, "");
+  EXPECT_TRUE(restored_empty.flux.empty());
+  EXPECT_TRUE(restored_empty.fields.empty());
+  EXPECT_THROW(program::prepare_amr_history_field_metadata(opaque_flux, manager, ""),
+               std::invalid_argument);
+  const auto nested = program::encode_amr_history_field_metadata(opaque_flux, manager, "");
+  auto restored_flux = program::prepare_amr_history_field_metadata(nested, manager, "");
+  EXPECT_EQ(std::vector(restored_flux.flux.begin(), restored_flux.flux.end()), opaque_flux);
+  manager.field_metadata_budget = {};
+  EXPECT_THROW(program::prepare_amr_history_field_metadata(empty, manager, ""), std::length_error);
 }

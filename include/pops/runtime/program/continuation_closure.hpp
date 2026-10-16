@@ -56,8 +56,11 @@ std::shared_ptr<const ContinuationClosure<Dim>> continuation_collective_closure(
   };
   auto collect = [&](const Ref& value) {
     std::unordered_set<const ContinuationDistributedArray<Dim>*> active_arrays;
-    continuation_detail::walk_value<Dim>(
-        value, capacity,
+    continuation_detail::StructuralBudget traversal_budget(capacity);
+    using Value = ContinuationValue<Dim>;
+    continuation_detail::walk_structure(
+        value.get(), [](const Value& node) { return node.members().size(); },
+        [](const Value& node, std::size_t index) { return node.members()[index].get(); },
         [&](const ContinuationValue<Dim>& node) {
           // This proof comes from immutable Value constructors, never from an
           // Array's declared element type. A malformed native Array mutation
@@ -89,6 +92,12 @@ std::shared_ptr<const ContinuationClosure<Dim>> continuation_collective_closure(
             }
             if (!arrays.emplace(key(a->version), a).second)
               return false;
+            // Exact registry/domain authorities were checked above. Only an
+            // actually const publication can certify absence of further edges.
+            if (a->has_immutable_scalar_values()) {
+              traversal_budget.consume(a->values.size());
+              return false;
+            }
             active_arrays.insert(a.get());
           }
           return true;
@@ -99,7 +108,8 @@ std::shared_ptr<const ContinuationClosure<Dim>> continuation_collective_closure(
           if (!node.is_scalar_structure() && memoizable(node) && !completed.contains(&node)) {
             completed.insert(&node);
           }
-        });
+        },
+        traversal_budget);
   };
   distributed::phase(lane, [&] { collect(root); });
   if (all_reduce_max(authorities.empty() ? 0L : 1L, lane)) {

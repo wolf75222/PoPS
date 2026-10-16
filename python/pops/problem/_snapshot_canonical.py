@@ -115,6 +115,27 @@ def _canonical(
         active.remove(marker)
 
 
+
+class _ContainerPath:
+    """Local diagnostic spine; canonical payloads never contain these objects."""
+
+    __slots__ = ("parent", "suffix")
+
+    def __init__(self, parent, suffix):
+        self.parent = parent
+        self.suffix = suffix
+
+    def __str__(self):
+        parts, node = [], self
+        while isinstance(node, _ContainerPath):
+            parts.append(node.suffix)
+            node = node.parent
+        return str(node) + "".join(reversed(parts))
+
+    def child(self, suffix):
+        return _ContainerPath(self, suffix)
+
+
 def _canonical_containers(value, *, path, active, handle_resolver, artifact, projection_cache):
     """Walk finite authoring containers with the existing authority/hook context.
 
@@ -123,7 +144,7 @@ def _canonical_containers(value, *, path, active, handle_resolver, artifact, pro
     """
     result: list[Any] = [None]
     entered = set()
-    pending: list[tuple[str, Any, Any, Any, Any]] = [("visit", value, path, result, 0)]
+    pending: list[tuple[str, Any, Any, Any, Any]] = [("visit", value, _ContainerPath(path, ""), result, 0)]
     try:
         while pending:
             action, node, location, destination, index = pending.pop()
@@ -147,7 +168,9 @@ def _canonical_containers(value, *, path, active, handle_resolver, artifact, pro
                                       Enum, types.ModuleType, type, types.FunctionType,
                                       types.MethodType, types.BuiltinFunctionType))):
                 destination[index] = _canonical(
-                    node, path=location, active=active, handle_resolver=handle_resolver,
+                    node, path=(location if type(node) in (type(None), bool, int, float, str, bytes, complex)
+                                else str(location)),
+                    active=active, handle_resolver=handle_resolver,
                     artifact=artifact, projection_cache=projection_cache)
                 continue
             if type(node).__module__.split(".", 1)[0] == "numpy":
@@ -166,7 +189,7 @@ def _canonical_containers(value, *, path, active, handle_resolver, artifact, pro
                     output = {}
                     destination[index] = output
                     for key, child in reversed(tuple(node.items())):
-                        pending.append(("visit", child, "%s.%s" % (location, key), output, key))
+                        pending.append(("visit", child, location.child(".%s" % key), output, key))
                 else:
                     items = tuple(node.items())
                     entries, keys = [[None, None] for _ in items], set()
@@ -174,9 +197,9 @@ def _canonical_containers(value, *, path, active, handle_resolver, artifact, pro
                         "type": "%s.%s" % (type(node).__module__, type(node).__qualname__),
                         "entries": entries}}
                     for row, (key, child) in reversed(tuple(zip(entries, items, strict=True))):
-                        pending.append(("visit", child, "%s{%r}" % (location, key), row, 1))
+                        pending.append(("visit", child, location.child("{%r}" % key), row, 1))
                         pending.append(("key", row, location, keys, None))
-                        pending.append(("visit", key, "%s{key}" % location, row, 0))
+                        pending.append(("visit", key, location.child("{key}"), row, 0))
             else:
                 children = list(node)
                 output = [None] * len(children)
@@ -188,8 +211,8 @@ def _canonical_containers(value, *, path, active, handle_resolver, artifact, pro
                     destination[index] = {"$set" if isinstance(node, set) else "$frozenset": output}
                     pending.append(("sort", None, None, output, None))
                 for n in range(len(children) - 1, -1, -1):
-                    child_path = ("%s{item}" % location if isinstance(node, (set, frozenset))
-                                  else "%s[%d]" % (location, n))
+                    child_path = location.child("{item}" if isinstance(node, (set, frozenset))
+                                                else "[%d]" % n)
                     pending.append(("visit", children[n], child_path, output, n))
         return result[0]
     finally:

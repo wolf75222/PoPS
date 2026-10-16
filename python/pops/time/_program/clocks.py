@@ -69,12 +69,14 @@ class _ProgramClocks(_ProgramBase):
         return self._new("scalar", "composite_pair", (left, right),
                          {"schema_version": 1, "weights": coefficients}, None, left.block)
 
-    def composite_integral(self, name: str, expression: Any, *, over: Any) -> Any:
+    def composite_integral(self, name: str, expression: Any, *, over: Any, level: Any = None) -> Any:
         """Integrate an authored scalar expression over finest active cell volumes.
 
         Field leaves are immutable current/macro-entry towers of ``over``;
         native Scalar leaves permit arbitrary scalar algebra and root iterations.
         A scratch field from one level cannot stand for a hierarchy-wide field.
+        An optional owned Int64 selects one level of the same composite support;
+        its covered, inactive and zero-volume cells remain excluded.
         """
         from pops.time.expressions import encode_expressions
         self._guard_mutable("integrate an authored expression over native macro towers")
@@ -99,9 +101,15 @@ class _ProgramClocks(_ProgramBase):
                 raise ValueError("composite_integral requires the same qualified State space")
         if all(value is not over for value in inputs):
             inputs = (*inputs, over)
-        return self._new("scalar", "composite_integral", inputs,
-                         {"schema_version": 1, "expressions": encoded, "expression_nodes": nodes,
-                          "support_input": next(i for i, value in enumerate(inputs) if value is over)},
+        attrs = {"schema_version": 1, "expressions": encoded, "expression_nodes": nodes,
+                 "support_input": next(i for i, value in enumerate(inputs) if value is over)}
+        if level is not None:
+            level = require_owned(self, _resolve_handle(level), "composite_integral level", vtype="int64")
+            if level.block is not None and level.block != over.block:
+                raise ValueError("composite_integral level belongs to another block")
+            attrs.update(schema_version=2, level_input=len(inputs))
+            inputs = (*inputs, level)
+        return self._new("scalar", "composite_integral", inputs, attrs,
                          name, over.block, inherit_state_ref=False)
 
     def accept_increment(self, *, scale: Any, duration: Any, histories: Any = None) -> Any:

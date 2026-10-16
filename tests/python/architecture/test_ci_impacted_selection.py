@@ -340,6 +340,9 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_bundle_v14": (2, 3),
         "test_distributed_algebra_v14": (2, 3),
         "test_distributed_gc_v14": (2, 3),
+        "test_field_read_transport": (2, 3),
+        "test_field_transform_support": (2, 3),
+        "test_field_provider_read_authority": (2, 3),
         "test_continuation_image": (2,),
         "test_continuation_distributed_migration": (2, 3),
         "test_continuation_field_migration": (2, 3),
@@ -397,7 +400,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 139
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 145
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -503,7 +506,7 @@ def test_cpp_mpi_processor_groups_are_an_exact_disjoint_cover():
 
 
 @pytest.mark.parametrize("launch_contract", ["mpi_nproc", "mpi_variants"])
-def test_cpp_mpi_build_groups_cover_new_manifest_targets(launch_contract):
+def test_cpp_mpi_build_groups_cover_new_manifest_targets(launch_contract, monkeypatch):
     sel = _load("ci_select_tests")
     manifest = sel.load_manifest()
     added = "test_new_mpi_build_contract"
@@ -515,12 +518,15 @@ def test_cpp_mpi_build_groups_cover_new_manifest_targets(launch_contract):
             launch_contract: [2],
         }
     )
+    original = sel.ci_shard_binpack.load_durations
+    monkeypatch.setattr(sel.ci_shard_binpack, "load_durations",
+                        lambda path=None: {**original(path), added: 100.0})
     groups = sel.cpp_mpi_build_groups(manifest)
-    assert [group["name"] for group in groups] == ["isolated", "remaining"]
+    assert [group["name"] for group in groups] == ["isolated", "remaining0", "remaining1"]
     assert len(groups[0]["targets"]) == 4
     assert "test_program_runtime" in groups[0]["targets"]
     assert "test_amr_synthetic_program_loader_transaction" in groups[0]["targets"]
-    assert added in groups[1]["targets"]
+    assert added in set(groups[1]["targets"]) | set(groups[2]["targets"])
     flattened = [target for group in groups for target in group["targets"]]
     assert sorted(flattened) == sel.cpp_targets_with_label(manifest, "mpi")
     assert len(flattened) == len(set(flattened))
@@ -562,16 +568,19 @@ def test_cpp_mpi_label_plan_publishes_both_complete_build_phases(tmp_path):
         )
     ) == 0
     fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
-    assert fields["cpp_label_build_phase_count"] == "2"
+    assert fields["cpp_label_build_phase_count"] == "3"
     isolated = fields["cpp_label_build_isolated_targets"].split()
-    remaining = fields["cpp_label_build_remaining_targets"].split()
-    assert isolated and remaining
+    remaining0 = fields["cpp_label_build_remaining0_targets"].split()
+    remaining1 = fields["cpp_label_build_remaining1_targets"].split()
+    remaining = remaining0 + remaining1
+    assert isolated and remaining0 and remaining1
     assert sorted(isolated + remaining) == fields["cpp_label_targets"].split()
     assert len(set(isolated + remaining)) == int(fields["cpp_label_count"])
     payload = json.loads(explain.read_text())
     assert payload["build_groups"] == [
         {"name": "isolated", "targets": isolated},
-        {"name": "remaining", "targets": remaining},
+        {"name": "remaining0", "targets": remaining0},
+        {"name": "remaining1", "targets": remaining1},
     ]
     assert payload["ctest_count"] == len(sel.cpp_mpi_ctest_plan(sel.load_manifest()))
 
@@ -881,6 +890,12 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_computed_frontier_clipping_native_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_api_v02_continuation_auxiliary_regrid_native_mpi2.py",
             "nproc": 2,
             "native_dimension": 2,
@@ -894,6 +909,12 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         {
             "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_api_v02_continuation_forest_native_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_continuation_history_native_mpi2.py",
             "nproc": 2,
             "native_dimension": 2,
         },
@@ -995,6 +1016,18 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_independent_field_regrid_native_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_independent_history_native_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_api_v02_independent_uniform_continuation_native_mpi2.py",
             "nproc": 2,
             "native_dimension": 2,
@@ -1020,6 +1053,18 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         {
             "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_api_v02_nonlinear_interval_transport_native_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_nonlinear_representation_history_native_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_nonlinear_representation_native_mpi2.py",
             "nproc": 2,
             "native_dimension": 2,
         },
@@ -1662,9 +1707,11 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_api_v02_authored_stability_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_collective_preparation_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_composite_integral_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_computed_frontier_clipping_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_continuation_auxiliary_regrid_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_continuation_capture_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_continuation_forest_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_continuation_history_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_continuation_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_continuation_regrid_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_corrected_field_native_mpi2.py",
@@ -1681,11 +1728,15 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_api_v02_history_transfer_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_implicit_derivatives_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_independent_field_continuation_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_independent_field_regrid_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_independent_history_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_independent_uniform_continuation_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_interval_regions_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_kinetic_nd_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_magnetic_midpoint_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_nonlinear_interval_transport_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_nonlinear_representation_history_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_nonlinear_representation_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_original_field_recovery_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_original_field_regions_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_original_field_sequence_native_mpi2.py",
@@ -1786,8 +1837,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "125"
-    assert outputs["python_mpi_entrypoint_count"] == "96"
+    assert outputs["python_mpi_count"] == "131"
+    assert outputs["python_mpi_entrypoint_count"] == "102"
     assert outputs["python_mpi_orchestrator_count"] == "29"
 
 
@@ -2133,7 +2184,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 40" in cpp_shards_block
     assert "timeout-minutes: 30" in cpp_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.cpp_matrix) }}" in cpp_shards_block
-    assert "--shard-total 14" in cpp_shards_block
+    assert "--shard-total 15" in cpp_shards_block
     assert "needs: [changes, set-mode, gate-cpp-prewarm]" in cpp_shards_block
     assert "actions/download-artifact@v8" in cpp_shards_block
     assert "test \"${#cache_archives[@]}\" -eq 3" in cpp_shards_block
@@ -2194,7 +2245,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "--verify-contracts" in mpi_block
     assert 'run_with_heartbeat "MPI Python module link" 14m' in mpi_block
     assert 'run_with_heartbeat "MPI isolated native test build" 28m' in mpi_block
-    assert 'run_with_heartbeat "MPI remaining native test build" 28m' in mpi_block
+    assert 'run_with_heartbeat "MPI remaining native test build0" 28m' in mpi_block
+    assert 'run_with_heartbeat "MPI remaining native test build1" 28m' in mpi_block
     assert 'run_with_heartbeat "M4 native test build" 10m' in mpi_block
     assert "source scripts/ci_heartbeat.sh" in mpi_block
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
@@ -2206,18 +2258,18 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "--orchestrator-plan-file build-mpi/python-mpi-orchestrators.txt" in mpi_block
     assert "--parallel 1 --target _pops" in mpi_block
     assert '--parallel 1 --target "${isolated_targets[@]}"' in mpi_block
-    assert '--parallel 4 --target "${remaining_targets[@]}"' in mpi_block
-    assert 'test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 2' in mpi_block
+    assert '--parallel 4 --target "${remaining0_targets[@]}"' in mpi_block
+    assert 'test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 3' in mpi_block
     assert "steps.mpi-test-plan.outputs.cpp_label_build_isolated_targets" in mpi_block
-    assert "steps.mpi-test-plan.outputs.cpp_label_build_remaining_targets" in mpi_block
+    assert "steps.mpi-test-plan.outputs.cpp_label_build_remaining0_targets" in mpi_block
     assert 'test "${#isolated_targets[@]}" -gt 0' in mpi_block
-    assert 'test "${#remaining_targets[@]}" -gt 0' in mpi_block
-    assert '${#isolated_targets[@]} + ${#remaining_targets[@]}' in mpi_block
+    assert 'test "${#remaining0_targets[@]}" -gt 0' in mpi_block
+    assert '${#isolated_targets[@]} + ${#remaining0_targets[@]} + ${#remaining1_targets[@]}' in mpi_block
     native_build_step = mpi_block.split(
-        "- name: Build complete native MPI inventory in two phases\n", 1
+        "- name: Build complete native MPI inventory in three phases\n", 1
     )[1].split("\n      - name: Build M4 native tests\n", 1)[0]
     assert "timeout-minutes: 60" in native_build_step
-    assert native_build_step.count('28m \\') == 2
+    assert native_build_step.count('28m \\') == 3
     assert "POPS_HEAVY_TEST_TU_POOL" not in native_build_step
     assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
     assert "ctest --preset ci-mpi -N --show-only=json-v1" in mpi_block
@@ -2324,13 +2376,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert cpp_job_minutes == 70
     assert "needs: [set-mode, gate-openmp-prewarm]" in openmp_block
     assert "fail-fast: false" in openmp_block
-    assert openmp_block.count("- lane: cpp-") == 14
-    for shard in range(14):
+    assert openmp_block.count("- lane: cpp-") == 15
+    for shard in range(15):
         assert (
             f"- lane: cpp-{shard}\n"
             "            kind: cpp\n"
             f"            shard: {shard}\n"
-            "            shard_total: 14\n"
+            "            shard_total: 15\n"
             "            ccache_maxsize: 2G"
         ) in openmp_block
     assert (
@@ -2595,7 +2647,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "Restore prewarm ccache" not in python_prewarm_block
     assert "Save prewarm ccache" not in python_prewarm_block
     assert "CCACHE_CACHE_KEY" not in python_prewarm_block
-    assert "matrix.shard == 0 && 110 || matrix.shard < 4 && 80 || matrix.shard == 4 && 60 || 50" in python_shards_block
+    assert "matrix.shard == 0 && 110 || matrix.shard < 4 && 80 || matrix.shard < 6 && 60 || 50" in python_shards_block
     assert "steps.test-plan.outputs.test_timeout_minutes" in python_shards_block
     assert "scripts/ci_pytest_timings.py" in python_shards_block
     assert "scripts/ci_python_dimensions.py --selected-file" in python_shards_block
@@ -2603,7 +2655,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
-    assert 'SHARD_TOTAL: "125"' in python_shards_block
+    assert 'SHARD_TOTAL: "135"' in python_shards_block
     assert "strategy.job-total" not in python_shards_block
     for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
         assert "name: ci-plan" in block
@@ -2868,3 +2920,17 @@ def test_shared_ci_watchdog_restores_caller_signal_handlers():
         capture_output=True, text=True, timeout=3,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_mpi_build_partition_uses_an_exact_explicit_cost_inventory():
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    weights = sel.ci_shard_binpack.load_durations(REPO_ROOT / "tests/cpp/mpi_build_durations.json")
+    assert set(weights) == set(sel.cpp_targets_with_label(manifest, "mpi"))
+    groups = sel.cpp_mpi_build_groups(manifest)
+    sums = [sum(weights[target] for target in group["targets"]) for group in groups[1:]]
+    assert len(sums) == 2 and abs(sums[0] - sums[1]) <= max(weights.values())
+    manifest["cpp"]["suite"].append({"name": "test_unbudgeted_mpi_target",
+        "sources": ["tests/cpp/unknown.cpp"], "labels": ["mpi"], "mpi_nproc": [2]})
+    with pytest.raises(SystemExit, match="MPI build target costs missing.*test_unbudgeted_mpi_target"):
+        sel.cpp_mpi_build_groups(manifest)

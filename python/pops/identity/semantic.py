@@ -128,8 +128,10 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
     optional = {
         "max_exact_coefficient_bytes",
         "flux_expression_budget",
+        "history_field_metadata_budget",
         "terminal_failure_byte_capacity",
         "terminal_failure_aggregate_byte_capacity",
+        "representation_workspace_byte_capacity",
         "histories",
         "history_contracts",
         "history_persistence",
@@ -164,8 +166,10 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
     for key in (
         "max_exact_coefficient_bytes",
         "flux_expression_budget",
+        "history_field_metadata_budget",
         "terminal_failure_byte_capacity",
         "terminal_failure_aggregate_byte_capacity",
+        "representation_workspace_byte_capacity",
         "histories",
         "history_contracts",
         "history_persistence",
@@ -229,7 +233,7 @@ def _drop_program_presentation(value: Any, program_clock_owner: Any) -> Any:
 
 def semantic_value(value: Any, *, where: str) -> Any:
     """Normalize the closed value language accepted by semantic identities."""
-    from pops._structural_data import transform_tree_context
+    from pops._structural_data import StructuralPath, transform_tree_context
 
     def describe(value, where):
         if value is None or isinstance(value, (bool, int, str, bytes)):
@@ -239,15 +243,15 @@ def semantic_value(value: Any, *, where: str) -> Any:
         if isinstance(value, Mapping):
             if any(not isinstance(key, str) or not key for key in value):
                 raise TypeError("%s mapping keys must be non-empty strings" % where)
-            return tuple((item, "%s.%s" % (where, key)) for key, item in value.items()), \
+            return tuple((item, where.child(".%s" % key)) for key, item in value.items()), \
                 lambda items: dict(zip(value, items, strict=True))
         if isinstance(value, (list, tuple)):
-            return tuple((item, "%s[%d]" % (where, i)) for i, item in enumerate(value)), list
+            return tuple((item, where.child("[%d]" % i)) for i, item in enumerate(value)), list
         if isinstance(value, (set, frozenset)):
-            return tuple((item, "%s{item}" % where) for item in value), \
+            return tuple((item, where.child("{item}")) for item in value), \
                 lambda items: sorted(items, key=lambda item: (len(canonical_bytes(item)), canonical_bytes(item)))
         raise TypeError("%s contains unsupported semantic value %s" % (where, type(value).__name__))
-    return transform_tree_context(value, describe, where)
+    return transform_tree_context(value, describe, StructuralPath(where))
 
 
 def _semantic_node(row: Any) -> dict[str, Any]:

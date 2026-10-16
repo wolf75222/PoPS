@@ -84,3 +84,18 @@ TEST(ModuleMetadata, RequiredSolverAnchorsKeyMatch) {
   EXPECT_TRUE(required_blocks("{\"kind\":\"field_operator\",\"aux\":[\"B_z\"]}").empty())
       << "required_blocks without a block key is empty";
 }
+
+TEST(ModuleMetadata, LegacyHistoryDescriptorAbsenceDoesNotIssueFrozenAuthority) {
+  EXPECT_THROW(read_program_checkpoint_histories(pops::dynlib::handle{}, true), std::runtime_error);
+#if defined(_WIN32)
+  pops::dynlib::handle self = ::GetModuleHandleW(nullptr);
+#else
+  pops::dynlib::handle self = ::dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+#endif
+  ASSERT_TRUE(pops::dynlib::valid(self));
+  EXPECT_TRUE(read_program_checkpoint_histories(self, true).empty());
+  EXPECT_THROW(read_program_checkpoint_histories(self), std::runtime_error);
+#if !defined(_WIN32)
+  pops::dynlib::close(self);
+#endif
+}

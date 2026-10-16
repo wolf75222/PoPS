@@ -14,7 +14,7 @@ from pops.time._program.structured_control import new_typed, product_signature, 
 from pops.time._program.value_validation import require_owned
 from pops.time.value_signatures import same_signature, value_signature
 from pops.time.variant_types import ValueType
-from pops.time.field_topology import validate_topology_signature
+from pops.time.field_topology import field_components, validate_topology_signature
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -116,7 +116,7 @@ def validate_field_representation(value):
     bundle = value_signature(value) if exporting else value_signature(inputs[0])
     cells, patches = _domains(bundle)
     expected = field_bundle_signature(dimension=top["dimension"],
-        components=len(field.space.components), cell_domain=cells, patch_domain=patches)
+        components=field_components(value_signature(field)), cell_domain=cells, patch_domain=patches)
     if not same_signature(bundle, expected):
         raise TypeError("Field representation changed its complete values/geometry/maps schema")
     if exporting and len(inputs) == 3:
@@ -133,23 +133,20 @@ def validate_field_representation(value):
 
 
 def validate_field_storage_allocation(value):
-    from pops.model.spaces import FieldSpace
-
     if value.op != "field_storage_allocate" or len(value.inputs) != 3:
         raise TypeError("Field storage allocation requires prototype, target topology and Float64 initial")
     prototype, topology, initial = value.inputs
     top = validate_topology_signature(value_signature(topology))
     if top["side"] != "target":
         raise TypeError("Field storage allocation requires a target topology")
-    if (prototype.vtype != "scalar_field" or type(prototype.space) is not FieldSpace
-            or prototype.block is None
+    if (prototype.vtype != "scalar_field"
             or not same_signature(value_signature(prototype), top["field_signature"])):
         raise TypeError("Field storage allocation requires its exact scalar-field topology authority")
     if initial.vtype != "scalar":
         raise TypeError("Field storage allocation requires an owned Float64 initial value")
     if (value.attrs.get("storage_allocation") != "pops.field-storage-topology@1"
             or type(value.attrs.get("ncomp")) is not int
-            or value.attrs["ncomp"] != len(prototype.space.components)):
+            or value.attrs["ncomp"] != field_components(value_signature(prototype))):
         raise TypeError("Field storage allocation changed its exact component storage")
     for key in ("scalar_storage", "scalar_storage_component", "spatial_port_storage"):
         expected = prototype.attrs.get(key)
@@ -165,14 +162,13 @@ def validate_field_storage_allocation(value):
 @atomic_authoring
 def allocate_field_storage(program, prototype, topology, initial, *, ncomp=None, name=None):
     """Allocate target storage; the authored initializer is the only numerical input."""
-    from pops.model.spaces import FieldSpace
     from pops.time.stencil import StencilAccess
 
     _field_topology(program, prototype, topology)
     require_owned(program, initial, "Field storage Float64 initial", vtype="scalar")
-    if prototype.vtype != "scalar_field" or type(prototype.space) is not FieldSpace:
+    if prototype.vtype != "scalar_field":
         raise TypeError("Field storage allocation requires a typed scalar-field prototype")
-    width = len(prototype.space.components)
+    width = field_components(value_signature(prototype))
     if ncomp is not None and (type(ncomp) is not int or ncomp != width):
         raise ValueError("Field storage allocation must preserve the exact component shape")
     attrs = {"storage_allocation": "pops.field-storage-topology@1", "ncomp": width,
@@ -336,7 +332,7 @@ class _ProgramFieldRepresentation(_ProgramBase):
         if patch_domain is None:
             patch_domain = fresh(patches, "replicated")
         signature = field_bundle_signature(dimension=top["dimension"],
-            components=len(field.space.components), cell_domain=cell_domain, patch_domain=patch_domain)
+            components=field_components(value_signature(field)), cell_domain=cell_domain, patch_domain=patch_domain)
         inputs = (field, topology) if witness is None else (field, topology, witness)
         return new_typed(self, signature, "field_bundle_export", inputs, attrs, point=field.point)
 

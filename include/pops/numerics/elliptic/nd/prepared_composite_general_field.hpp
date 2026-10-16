@@ -354,6 +354,12 @@ class PreparedCompositeGeneralField final
       copy_field_(*guess, destination);
   }
   const field_type& active_cell_mask(int level) const override { return active_cells(level); }
+  typename runtime::program::PreparedHierarchyTensorSolver<Dim>::RepresentationTopology
+  representation_topology(int level) const override {
+    // This prepared rectangular provider has no embedded physical mask. FAC's
+    // exact active quotient supplies coarse/fine coverage independently of State.
+    return {request_.levels.at(level).geometry, active_cells(level), nullptr, nullptr};
+  }
   std::string_view original_field_contract() const noexcept override { return contract_; }
   const ExecutionLane& original_field_execution_lane() const noexcept override { return *lane_; }
   int original_field_levels() const noexcept override { return level_count(); }

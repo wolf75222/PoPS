@@ -3771,3 +3771,238 @@ static_assert(device_capture_v<RuntimeParameterCaptureAggregate>);
 static_assert(!device_capture_v<UnownedHostCapture>);
 static_assert(!device_capture_v<DeclaredHostCapture>);
 }  // namespace
+
+TEST(ProgramContextContract, IndependentProviderCheckpointUsesItsInstalledCatalogueAcrossRestart) {
+  using namespace runtime::program;
+  using Value = ContinuationValue<kTestDimension>;
+  ensure_kokkos();
+  comm_init();
+  NativeSystem sim(native_config(4));
+  install_execution_lane(sim, "pops.test.independent-field-checkpoint");
+  add_gas_block(sim, "gas");
+  sim.set_state("gas", ic(4));
+  NativeProgramContext ctx(&sim);
+  ContinuationType type(ContinuationKind::Field);
+  type.field_owner = -1;
+  type.field_provider = "checkpoint.problem/unknown-u";
+  type.field_components = 1;
+  type.scientific_contract = "test.independent-checkpoint.value";
+  ContinuationConfiguration configuration;
+  configuration.type = ContinuationType(ContinuationKind::Product);
+  configuration.type.names = {"time", "step", "field"};
+  configuration.type.children = {ContinuationType(ContinuationKind::Float64),
+                                 ContinuationType(ContinuationKind::Int64), type};
+  configuration.identity = "test.independent-checkpoint.schema";
+  configuration.byte_capacity = 1 << 20;
+  configuration.time_path = {0};
+  configuration.step_path = {1};
+  ctx.runtime_state().continuation_.configure(configuration);
+  sim.set_program_block_map({0});
+  ctx.configure_continuation_field_provider(type.field_provider, 1, 1);
+  ctx.install([](double) {});
+  sim.set_program_block_map({0});
+  ctx.begin_step(0.125);
+  auto observed = ctx.allocate_continuation_field_observation(type.field_provider, 1 << 20);
+  observed->set_val(Real(7));
+  ctx.seal_continuation_field_observation(type.field_provider, 3, observed);
+  auto retained = ctx.own_structural_field(*observed);
+  const auto metadata =
+      ctx.continuation_bind_field_provenance(*observed, *retained, retained, type);
+  auto field = Value::field(*retained, -1, type.scientific_contract, metadata.expression,
+                            metadata.support, type.field_provider);
+  const auto initial_prototype = [&](const ContinuationType&,
+                                     const ContinuationFieldSupport::Ref&) -> const NativeField& {
+    return *retained;
+  };
+  auto& store = ctx.runtime_state().continuation_;
+  store.publish(store.prepare(Value::product({Value::real(0), Value::integer(0), field}),
+                              initial_prototype, true));
+  const auto bytes = sim.checkpoint_continuation_image();
+  EXPECT_NO_THROW(sim.validate_checkpoint_continuation_image(bytes, 0, 0));
+  auto changed = bytes;
+  const auto key = configuration.identity;
+  auto at = std::search(changed.begin(), changed.end(), key.begin(), key.end());
+  ASSERT_NE(at, changed.end());
+  *at ^= 1;
+  EXPECT_ANY_THROW(sim.validate_checkpoint_continuation_image(changed, 0, 0));
+  EXPECT_EQ(sim.checkpoint_continuation_image(), bytes);
+  sim.begin_restart_transaction();
+  EXPECT_ANY_THROW(sim.restore_checkpoint_continuation_image(changed));
+  sim.rollback_restart_transaction();
+  EXPECT_EQ(sim.checkpoint_continuation_image(), bytes);
+  sim.begin_restart_transaction();
+  sim.restore_checkpoint_continuation_image(bytes);
+  sim.commit_restart_transaction();
+  sim.finalize_restart_transaction();
+  EXPECT_EQ(sim.checkpoint_continuation_image(), bytes);
+  ctx.begin_step(0.0625);
+  const auto restored = store.read()->members()[2];
+  EXPECT_NO_THROW(ctx.continuation_preflight_field(restored->field(), type));
+  expect_owned_first_value(restored->field(), Real(7));
+  // A failed replacement restores the exact prior catalogue; a successful raw
+  // replacement cannot inherit independent provider authority from its predecessor.
+  auto install = ctx.runtime_state().capture_artifact_step_install();
+  ctx.runtime_state().install_unverified_step([](double) {});
+  EXPECT_FALSE(bool(ctx.runtime_state().continuation_checkpoint_prototypes_));
+  EXPECT_ANY_THROW(sim.checkpoint_continuation_image());
+  ctx.runtime_state().install_continuation_checkpoint_prototypes(
+      [](const ContinuationType&, const ContinuationFieldSupport::Ref&) -> const NativeField& {
+        throw std::invalid_argument("replacement catalogue has no provider from the old Program");
+      });
+  EXPECT_ANY_THROW(sim.checkpoint_continuation_image());
+  ctx.runtime_state().rollback_artifact_step_install(std::move(install));
+  EXPECT_EQ(sim.checkpoint_continuation_image(), bytes);
+}
+
+TEST(ProgramContextContract, HistoryFieldMetadataCodecRetainsAliasesAndRejectsMalformedTables) {
+  using namespace runtime::program;
+  const HistoryFieldMetadataBudget budget{65536, 65536};
+  const auto support = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"program", "original-point", 0, 0, 0, 0, {}});
+  const auto obligation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"closed-python-transform", "exact-original-coordinate"});
+  const HistoryFieldMetadataTable fields{{"raw", {{support, obligation}, {support, obligation}}}};
+  const std::map<std::string, std::vector<int>> rings{{"raw", {0, 0}}};
+  const auto bytes = encode_history_field_metadata(fields, budget);
+  const auto decoded = decode_history_field_metadata(bytes, rings, budget);
+  EXPECT_EQ(decoded.at("raw")[0].support, decoded.at("raw")[1].support);
+  EXPECT_EQ(decoded.at("raw")[0].representation, decoded.at("raw")[1].representation);
+  EXPECT_EQ(*decoded.at("raw")[0].support, *support);
+  EXPECT_EQ(*decoded.at("raw")[0].representation, *obligation);
+  EXPECT_EQ(encode_history_field_metadata(decoded, budget), bytes);
+  auto trailing = bytes;
+  trailing.push_back(0);
+  EXPECT_THROW(decode_history_field_metadata(trailing, rings, budget), std::invalid_argument);
+  auto orphan = bytes;
+  // Last two slots are four indices; dropping both references leaves undeclared table roots.
+  std::fill(orphan.end() - 32, orphan.end(), 0);
+  EXPECT_THROW(decode_history_field_metadata(orphan, rings, budget), std::invalid_argument);
+  const HistoryFieldMetadataBudget no_scratch{budget.retained_bytes, bytes.size()};
+  EXPECT_THROW(decode_history_field_metadata(bytes, rings, no_scratch), std::length_error);
+  const HistoryFieldMetadataBudget no_retention{1, budget.workspace_bytes};
+  EXPECT_THROW(decode_history_field_metadata(bytes, rings, no_retention), std::length_error);
+  EXPECT_THROW(encode_history_field_metadata(fields, no_retention), std::length_error);
+}
+
+TEST(ProgramContextContract, HistoryFieldMetadataRotatesAndRollsBackWithTheNumericalImage) {
+  using namespace runtime::program;
+  HistoryManager<kTestDimension> manager;
+  manager.histories["raw"].resize(3);
+  manager.slot_fields["raw"].resize(3);
+  manager.store_pending["raw"] = true;
+  manager.fill_count["raw"] = 1;
+  for (int slot = 0; slot < 3; ++slot) {
+    manager.slot_fields["raw"][slot].support = std::make_shared<const ContinuationFieldSupport>(
+        ContinuationFieldSupport{"program", "point-" + std::to_string(slot), 0, 0, 0, 0, {}});
+    manager.slot_fields["raw"][slot].representation =
+        std::make_shared<const FieldRepresentationObligation>(
+            FieldRepresentationObligation{"transform", "raw-" + std::to_string(slot)});
+  }
+  const auto accepted = manager;
+  const auto initial_fields = manager.slot_fields;
+  manager.rotate();
+  EXPECT_EQ(manager.slot_fields["raw"][1].representation,
+            initial_fields.at("raw")[0].representation);
+  EXPECT_EQ(manager.slot_fields["raw"][2].representation,
+            initial_fields.at("raw")[1].representation);
+  manager = accepted;
+  for (int slot = 0; slot < 3; ++slot) {
+    EXPECT_EQ(manager.slot_fields["raw"][slot].support, initial_fields.at("raw")[slot].support);
+    EXPECT_EQ(manager.slot_fields["raw"][slot].representation,
+              initial_fields.at("raw")[slot].representation);
+  }
+}
+
+TEST(ProgramContextContract, NoFluxHistoryFieldCheckpointMigratesWithoutChangingItsOrigin) {
+  using namespace runtime::program;
+  HistoryManager<kTestDimension> manager;
+  manager.field_metadata_budget = {65536, 262144};
+  manager.histories["raw"].resize(2);
+  manager.slot_dt["raw"] = {.1, .1};
+  const HistorySampleIdentity sample{0, std::bit_cast<std::uint64_t>(.1), 1,
+                                     HistorySampleKind::Publication};
+  manager.slot_sample["raw"] = {sample, sample};
+  const auto support = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"program", "exact-past-point", 0, 0, 0, 0, {}});
+  const auto obligation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"closed-transform", "original-untransformed-values"});
+  manager.slot_fields["raw"] = {{support, obligation}, {support, obligation}};
+  AcceptedExchangeLedger empty;
+  const auto original = checkpoint_uniform_history_exchanges(empty.checkpoint(true), manager);
+  EXPECT_EQ(std::string(original.begin(), original.begin() + 8), "POPSEX06");
+  std::vector<std::vector<std::uint8_t>> shards{original};
+  for (int target_size : {2, 3, 1}) {
+    std::vector<std::span<const std::uint8_t>> views;
+    for (const auto& shard : shards)
+      views.emplace_back(shard);
+    std::vector<std::vector<std::uint8_t>> next;
+    for (int rank = 0; rank < target_size; ++rank) {
+      next.push_back(rematerialize_uniform_history_exchanges<kTestDimension>(
+          views, manager, [](int, const FieldExchangeExpressions::Cell&) { return true; }, rank,
+          target_size));
+      const auto decoded = read_uniform_history_exchanges(next.back(), manager, true);
+      EXPECT_TRUE(decoded.histories.empty());
+      EXPECT_EQ(*decoded.fields.at("raw")[0].support, *support);
+      EXPECT_EQ(*decoded.fields.at("raw")[0].representation, *obligation);
+      EXPECT_EQ(decoded.fields.at("raw")[0].representation,
+                decoded.fields.at("raw")[1].representation);
+    }
+    shards.swap(next);
+  }
+  EXPECT_EQ(shards.front(), original);
+  auto wrong = manager;
+  wrong.slot_sample.at("raw")[0].ordinal += 1;
+  EXPECT_THROW(read_uniform_history_exchanges(original, wrong, true), std::invalid_argument);
+  wrong = manager;
+  wrong.field_metadata_budget = {};
+  EXPECT_THROW(read_uniform_history_exchanges(original, wrong), std::invalid_argument);
+}
+
+TEST(ProgramContextContract, HistoryInterpolationPreservesEndpointsAndRejectsRawMixing) {
+  using namespace runtime::program;
+  const HistoryFieldMetadataBudget budget{65536, 65536};
+  const auto support = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"program", "original-point", 0, 0, 2, 3, {}});
+  const auto obligation = std::make_shared<const FieldRepresentationObligation>(
+      FieldRepresentationObligation{"Q-closed", "q-original"});
+  const HistoryFieldMetadata raw{support, obligation};
+  const auto endpoint = history_field_detail::interpolated_metadata(raw, raw, 0, .1, budget);
+  EXPECT_EQ(endpoint.support, support);
+  EXPECT_EQ(endpoint.representation, obligation);
+  const auto other_endpoint = history_field_detail::interpolated_metadata({}, raw, 1, .2, budget);
+  EXPECT_EQ(other_endpoint.representation, obligation);
+  EXPECT_THROW(history_field_detail::interpolated_metadata(raw, raw, .5, .15, budget),
+               std::invalid_argument);
+  const HistoryFieldMetadata physical{support, {}};
+  const auto midpoint =
+      history_field_detail::interpolated_metadata(physical, physical, .5, .15, budget);
+  EXPECT_FALSE(midpoint.representation);
+  ASSERT_TRUE(midpoint.support);
+  EXPECT_NE(midpoint.support->origin_point, support->origin_point);
+  EXPECT_EQ(midpoint.support->program_identity, support->program_identity);
+  EXPECT_EQ(midpoint.support->producer_level, support->producer_level);
+  EXPECT_EQ(midpoint.support->topology_epoch, support->topology_epoch);
+  EXPECT_NE(history_field_detail::interpolated_metadata(physical, physical, .25, .125, budget)
+                .support->origin_point,
+            midpoint.support->origin_point);
+  EXPECT_THROW(history_field_detail::interpolated_metadata(physical, {}, .5, .15, budget),
+               std::invalid_argument);
+  const std::array<double, 3> nonuniform{.04, .08, .12};
+  const auto bracket = history_field_detail::linear_bracket(-1, .24, nonuniform, 2);
+  EXPECT_TRUE(bracket.endpoint());
+  EXPECT_EQ(bracket.selected(), 1U);
+  const auto interior = history_field_detail::linear_bracket(-1.5, .24, nonuniform, 2);
+  EXPECT_FALSE(interior.endpoint());
+  EXPECT_EQ(interior.older, 2U);
+  EXPECT_EQ(interior.newer, 1U);
+  EXPECT_DOUBLE_EQ(interior.target_time, .1);
+  const auto older_physical = history_field_detail::reconstructed_metadata(
+      std::array{physical}, "remap/target-slot-0", 1, 4, 5, budget);
+  const auto newer_physical = history_field_detail::reconstructed_metadata(
+      std::array{physical}, "remap/target-slot-1", 1, 4, 5, budget);
+  EXPECT_NE(older_physical.support->origin_point, newer_physical.support->origin_point);
+  EXPECT_EQ(older_physical.support->producer_level, 1);
+  EXPECT_THROW(history_field_detail::reconstructed_metadata(
+                   std::array{raw}, "nonidentity-spatial-remap", 1, 4, 5, budget),
+               std::invalid_argument);
+}

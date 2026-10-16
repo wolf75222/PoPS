@@ -2,6 +2,8 @@
 
 #include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
+#include "field_rhs_value_program_fixture.hpp"
+#include <pops/runtime/dynamic/dynlib.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/amr/reflux/metric_reflux.hpp>
@@ -146,6 +148,105 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
                                                                    int level) {
     return &context.deferred_history_lag_scratches_.at(
         context.history_key_(std::string(name), level));
+  }
+
+  static void require_deferred_read_authority(const context_type& context,
+                                              const typename context_type::field_type& field,
+                                              int owner) {
+    const auto authority = context.deferred_history_field_authority_(field);
+    ASSERT_TRUE(authority.has_value());
+    EXPECT_EQ(authority->runtime_owner, owner);
+    EXPECT_EQ(authority->level, context.active_level_);
+    EXPECT_TRUE(authority->allocations.matches(field));
+    EXPECT_NO_THROW(context.require_program_field_access(field));
+  }
+
+  static void exercise_deferred_metadata_cache(context_type& context) {
+    const auto key = context.history_key_("cache.probe", 0);
+    auto& field =
+        context.deferred_history_lag_scratches_.try_emplace(key, context.state(0)).first->second;
+    const auto support = std::make_shared<const ContinuationFieldSupport>(
+        ContinuationFieldSupport{context.facade_->installed_program_hash(),
+                                 "historical/source-point",
+                                 0,
+                                 0,
+                                 context.runtime_->topology_epoch(),
+                                 context.runtime_->materialization_generation(),
+                                 {}});
+    ASSERT_FALSE(context.facade_->installed_program_hash().empty());
+    ASSERT_NO_THROW(support->validate());
+    const auto obligation =
+        std::make_shared<const FieldRepresentationObligation>("nonlinear.Q", "old-coordinate");
+    context.deferred_history_lag_authorities_.emplace(
+        key,
+        typename context_type::ContinuationFieldStorageAuthority{
+            field.storage_identity(), context.sys_block(0), 0, context.runtime_->topology_epoch(),
+            context.runtime_->materialization_generation(), support,
+            context.continuation_field_allocations_(field), false, std::nullopt, obligation});
+    const HistoryFieldMetadata metadata{support, obligation};
+    auto& manager = context.runtime_state().hist_;
+    manager.field_metadata_budget = {32, 32};
+    const auto identity = field.storage_identity();
+    EXPECT_THROW(context.require_deferred_history_metadata_budget_(key, metadata, field),
+                 std::length_error);
+    EXPECT_EQ(field.storage_identity(), identity);
+    EXPECT_EQ(context.deferred_history_field_authority_(field)->representation, obligation);
+    manager.field_metadata_budget = {UINT64_C(1) << 20, UINT64_C(1) << 20};
+    EXPECT_NO_THROW(context.require_deferred_history_metadata_budget_(key, metadata, field));
+    // A replacement ring can fit by itself while its union with an existing
+    // deferred cache exceeds the same installed retained-metadata budget.
+    const HistoryFieldMetadataTable replacement{{"other.history", {metadata}}};
+    history_field_detail::Tables ring_only(manager.field_metadata_budget.workspace_bytes);
+    ring_only.collect(replacement, manager.field_metadata_budget);
+    const HistoryFieldMetadataBudget union_budget{ring_only.retained,
+                                                  manager.field_metadata_budget.workspace_bytes};
+    history_field_detail::Tables pending_store(union_budget.workspace_bytes);
+    EXPECT_NO_THROW(pending_store.collect(replacement, union_budget));
+    EXPECT_THROW(
+        context.append_current_deferred_history_metadata_budget_(pending_store, union_budget),
+        std::length_error);
+    EXPECT_EQ(field.storage_identity(), identity);
+    EXPECT_EQ(context.deferred_history_field_authority_(field)->representation, obligation);
+    history_field_detail::Tables complete(manager.field_metadata_budget.workspace_bytes);
+    complete.collect(replacement, manager.field_metadata_budget);
+    EXPECT_NO_THROW(context.append_current_deferred_history_metadata_budget_(
+        complete, manager.field_metadata_budget));
+    EXPECT_EQ(complete.supports.size(), 1u);
+    EXPECT_EQ(complete.obligations.size(), 1u);
+
+    EXPECT_EQ(history_field_detail::interpolated_metadata(metadata, {}, 0, 0.5,
+                                                          manager.field_metadata_budget)
+                  .support,
+              support);
+    EXPECT_THROW(history_field_detail::interpolated_metadata(metadata, metadata, 0.5, 0.5,
+                                                             manager.field_metadata_budget),
+                 std::invalid_argument);
+    EXPECT_EQ(field.storage_identity(), identity);
+    auto copied = context.copy_deferred_history_scratches_(
+        context.deferred_history_lag_scratches_, context.deferred_history_lag_authorities_);
+    auto copied_authorities = context.prepare_deferred_history_authorities_(
+        copied, context.deferred_history_lag_authorities_);
+    ASSERT_NE(copied.at(key).storage_identity(), identity);
+    EXPECT_EQ(copied_authorities.at(key).support, support);
+    EXPECT_EQ(copied_authorities.at(key).representation, obligation);
+    EXPECT_TRUE(copied_authorities.at(key).allocations.matches(copied.at(key)));
+    EXPECT_FALSE(copied_authorities.at(key).allocations.matches(field));
+    // Replacing only storage cannot inherit the old cache ticket, even on an empty rank.
+    field = typename context_type::field_type(field);
+    EXPECT_THROW((void)context.deferred_history_field_authority_(field), std::invalid_argument);
+    EXPECT_THROW(
+        (void)context.copy_deferred_history_scratches_(context.deferred_history_lag_scratches_,
+                                                       context.deferred_history_lag_authorities_),
+        std::invalid_argument);
+    context.deferred_history_lag_scratches_.swap(copied);
+    context.deferred_history_lag_authorities_.swap(copied_authorities);
+    const auto restored =
+        context.deferred_history_field_authority_(context.deferred_history_lag_scratches_.at(key));
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->support, support);
+    EXPECT_EQ(restored->representation, obligation);
+    EXPECT_NO_THROW(
+        context.require_program_field_access(context.deferred_history_lag_scratches_.at(key)));
   }
 
   static bool any_rank(const context_type& context, bool predicate) {
@@ -1861,6 +1962,8 @@ TEST(GeneratedAmrSystemBlock, ProgramContextOwnsOneExactHierarchyTensorAuthority
   // Endpoint algebra may allocate a registered scalar from that provider allocation.
   context->for_each_program_resource_level([&](int level) {
     auto& solution = context->hierarchy_solution();
+    // Direct publication must not evaluate or create the unused flat fallback.
+    EXPECT_EQ(&context->linear_solution(62001, 0, 1, 1), &solution);
     auto& endpoint = context->scalar_scratch(36, 0, solution, 1, 1);
     EXPECT_NO_THROW(context->require_scalar_sampling_layout(0, solution, endpoint, 0));
     EXPECT_EQ(endpoint.layout(), solution.layout());
@@ -3589,7 +3692,7 @@ TEST(GeneratedAmrSystemBlock, DeferredHistoryReadsPreservePublishedReferences) {
     context->advance_hierarchy(dt, [&](double) {
       for (int block = 0; block < 2; ++block) {
         auto& state = context->state(block);
-        auto sample = context->rhs_scratch_like(state);
+        auto& sample = context->rhs_scratch(63000 + block, 0, state);
         context->rhs_into(block, state, sample, block);
         context->store_history(histories[block], sample, block);
       }
@@ -3617,20 +3720,24 @@ TEST(GeneratedAmrSystemBlock, DeferredHistoryReadsPreservePublishedReferences) {
   const auto accepted = system.program_accepted_state();
   int deferred_reads = 0;
   context->advance_hierarchy(0.375, [&](double local_dt) {
-    std::array<pops::MultiFab<Dim>, 2> samples{context->rhs_scratch_like(context->state(0)),
-                                               context->rhs_scratch_like(context->state(1))};
+    // Use the same issuer-owned SSA slots as generated Programs. A detached
+    // value copy is not a native Field authority merely because its shape agrees.
+    const std::array<pops::MultiFab<Dim>*, 2> samples{
+        &context->rhs_scratch(63000, 0, context->state(0)),
+        &context->rhs_scratch(63001, 0, context->state(1))};
     for (int block = 0; block < 2; ++block)
-      context->rhs_into(block, context->state(block), samples[block], block);
-    context->store_history(histories[0], samples[0], 0);
+      context->rhs_into(block, context->state(block), *samples[block], block);
+    context->store_history(histories[0], *samples[0], 0);
     if (Access::active_level(*context) == 1 &&
         Access::has_pending_history(*context, histories[0], 1)) {
       ++deferred_reads;
       // This is the generated two-history order: keep the first reference alive while the
       // second history is stored, prepared (including a rank-local refusal), and published.
       const auto& first = context->history(histories[0], 1, 0);
+      Access::require_deferred_read_authority(*context, first, 0);
       const auto* first_address = &first;
       const auto first_copy = first;
-      context->store_history(histories[1], samples[1], 1);
+      context->store_history(histories[1], *samples[1], 1);
       const auto before_failure = Access::deferred_read_image(*context);
       ASSERT_FALSE(before_failure.expressions.at(first_address).empty());
       Access::without_current_history_provenance_on_rank_zero(*context, histories[1], [&] {
@@ -3658,11 +3765,11 @@ TEST(GeneratedAmrSystemBlock, DeferredHistoryReadsPreservePublishedReferences) {
       EXPECT_EQ(pops::difference_sum_sq_all_local(first, first_copy), pops::Real(0));
       EXPECT_EQ(pops::difference_sum_sq_all_local(second, second_copy), pops::Real(0));
       const std::array<const pops::MultiFab<Dim>*, 2> sources{&first, &second};
-      std::array<pops::MultiFab<Dim>, 2> outputs{context->rhs_scratch_like(first),
-                                                 context->rhs_scratch_like(second)};
+      const std::array<pops::MultiFab<Dim>*, 2> outputs{&context->rhs_scratch(63002, 0, first),
+                                                        &context->rhs_scratch(63003, 0, second)};
       for (std::size_t block = 0; block < sources.size(); ++block) {
         const auto* source = sources[block];
-        auto& output = outputs[block];
+        auto& output = *outputs[block];
         output.set_val(pops::Real(0));
         context->axpy(output, static_cast<pops::Real>(local_dt), *source,
                       static_cast<pops::Real>(local_dt), {{1, 1, 1}});
@@ -3671,7 +3778,7 @@ TEST(GeneratedAmrSystemBlock, DeferredHistoryReadsPreservePublishedReferences) {
         EXPECT_EQ(pops::difference_sum_sq_all_local(output, expected), pops::Real(0));
       }
     } else {
-      context->store_history(histories[1], samples[1], 1);
+      context->store_history(histories[1], *samples[1], 1);
     }
     context->rotate_histories("clock.macro");
   });
@@ -4564,4 +4671,76 @@ TEST(GeneratedAmrSystemBlock, RuntimeParameterStorageBudgetAndReplacementAreColl
       [&] { system.seed_program_params(1, std::vector<double>(lane->rank() == 0 ? 66 : 65, 9.0)); },
       "AMR runtime parameter preparation");
   EXPECT_EQ(system.program_params(1).count, 0);
+}
+
+TEST(GeneratedAmrSystemBlock, DeferredHistoryMetadataCacheKeepsExactStorageAndSnapshot) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 4;
+  config.regrid_every = 0;
+  config.explicit_bootstrap = true;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/deferred-metadata");
+  system.install_block_state_route("material", "state/material");
+  pops::add_compiled_model<Dim>(system, "material", advection_model<Dim>());
+  const std::vector<double> initial(cell_count(config.shape), 1.0);
+  system.set_conservative_state("material", initial);
+  system.install_program(POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO);
+  system.set_conservative_state("material", initial);
+  ASSERT_EQ(system.installed_program_hash(), pops::test::field_rhs_value_program::identity);
+  // The actual loader owns the Context and published Program identity. A direct
+  // context.install callback intentionally grants neither artifact qualification.
+  using Context = pops::runtime::program::AmrProgramContext<Dim>;
+  const auto library = pops::dynlib::open(POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO);
+  ASSERT_TRUE(pops::dynlib::valid(library));
+  const auto getter = reinterpret_cast<void* (*)(pops::AmrSystem<Dim>*)>(
+      pops::dynlib::sym(library, "pops_test_field_rhs_amr_context"));
+  auto* context = getter ? static_cast<Context*>(getter(&system)) : nullptr;
+  pops::dynlib::close(library);  // The official installation retains the DSO.
+  ASSERT_NE(context, nullptr);
+  context->with_program_resource_level(0,
+                                       [&] { Access::exercise_deferred_metadata_cache(*context); });
+}
+
+TEST(GeneratedAmrSystemBlock, PreparedKrylovDeliveryKeepsExactOwnerAndRejectsUnissuedClones) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 8;
+  pops::AmrSystem<Dim> system(config);
+  pops::test::install_amr_runtime_authority(system, "tests.generated-amr/prepared-krylov-delivery");
+  for (const auto name : {"other", "solved"})
+    system.install_block_state_route(name, std::string("state/") + name);
+  for (const auto name : {"other", "solved"}) {
+    pops::add_compiled_model<Dim>(system, name, advection_model<Dim>());
+    system.set_conservative_state(name, std::vector<double>(cell_count(config.shape), 1.0));
+  }
+  system.refresh_prepared_amr_levels();
+  system.set_program_block_map({0, 1});
+  auto context = pops::runtime::program::make_program_execution_provider(&system);
+  const auto slots = pops::runtime::program::tensor_elliptic_detail::assembly_slots<Dim>();
+  const auto options = pops::runtime::program::tensor_elliptic_detail::default_options();
+  context->configure_hierarchy_tensor_solver(
+      1, 1, std::string(pops::runtime::program::tensor_elliptic_detail::kCompositeTensorProvider),
+      "test.generated-amr.krylov-delivery-plan",
+      std::string(pops::runtime::program::tensor_elliptic_detail::kScalarTensorEllipticContract),
+      slots, "pops.tensor-elliptic.solution", options);
+  ASSERT_TRUE(context->uses_prepared_krylov_fallback());
+  EXPECT_THROW((void)context->linear_solution(62001, 1, 1, 1), std::logic_error);
+  auto& delivered = context->scalar_scratch(62001, 0, context->state(1), 1, 1);
+  delivered.set_val(pops::Real(2));
+  EXPECT_EQ(&context->linear_solution(62001, 1, 1, 1), &delivered);
+  EXPECT_EQ(&context->linear_solution(62001, 1, 1, 1), &delivered);
+  EXPECT_NO_THROW(context->require_program_field_access(delivered));
+  EXPECT_THROW((void)context->linear_solution(62001, 0, 1, 1), std::logic_error);
+  EXPECT_THROW((void)context->linear_solution(62001, 1, 2, 1), std::logic_error);
+  EXPECT_THROW((void)context->linear_solution(62001, 1, 1, 0), std::runtime_error);
+  pops::MultiFab<Dim> clone(delivered);
+  EXPECT_THROW(context->require_program_field_access(clone), std::invalid_argument);
+  EXPECT_THROW((void)context->scalar_scratch(62002, 0, clone, 1, 1), std::invalid_argument);
+  auto& subsequent = context->scalar_scratch(62003, 0, delivered, 1, 1);
+  EXPECT_NO_THROW(context->require_scalar_sampling_layout(1, delivered, subsequent, 0));
+  EXPECT_ANY_THROW(context->require_scalar_sampling_layout(0, delivered, subsequent, 0));
 }

@@ -28,8 +28,8 @@ struct ContinuationFieldInstances {
 };
 std::shared_ptr<ContinuationFieldInstances> continuation_field_instances_ =
     std::make_shared<ContinuationFieldInstances>();
-mutable std::map<std::string, std::shared_ptr<field_type>, std::less<>>
-    continuation_field_providers_;
+using ContinuationFieldProviders = std::map<std::string, std::shared_ptr<field_type>, std::less<>>;
+mutable ContinuationFieldProviders continuation_field_providers_;
 
 static ContinuationFieldAllocations continuation_field_allocations_(const field_type& value) {
   ContinuationFieldAllocations allocations{value.storage_identity(), {}};
@@ -38,13 +38,17 @@ static ContinuationFieldAllocations continuation_field_allocations_(const field_
     allocations.local.push_back(value.fab(i).storage());
   return allocations;
 }
-std::string continuation_field_program_identity_() const {
-  auto identity = system_->installed_program_hash();
-  if (identity.empty() && runtime_state().continuation_.configured())
-    identity = runtime_state().continuation_.configuration().identity;
+static std::string continuation_field_program_identity_(runtime_type* system) {
+  auto identity = system->installed_program_hash();
+  const auto& store = system->program_runtime_state_().continuation_;
+  if (identity.empty() && store.configured())
+    identity = store.configuration().identity;
   if (identity.empty())
     throw std::logic_error("Field observation requires an installed Program identity");
   return identity;
+}
+std::string continuation_field_program_identity_() const {
+  return continuation_field_program_identity_(system_);
 }
 const field_type& continuation_field_provider_(std::string_view contract) const {
   const auto found = continuation_field_providers_.find(contract);
@@ -52,15 +56,15 @@ const field_type& continuation_field_provider_(std::string_view contract) const 
     throw std::invalid_argument("Continuation Field names an uninstalled independent provider");
   return *found->second;
 }
-void require_continuation_field_support_(const ContinuationType& type,
-                                         const ContinuationFieldSupport::Ref& support) const {
+static void require_continuation_field_support_(runtime_type* system, const ContinuationType& type,
+                                                const ContinuationFieldSupport::Ref& support) {
   if (type.kind != ContinuationKind::Field ||
       !((type.field_owner >= 0 && type.field_provider.empty()) ||
         (type.field_owner == -1 && !type.field_provider.empty())))
     throw std::invalid_argument("Continuation Field has an invalid scientific owner");
   if (support) {
     support->validate();
-    if (support->program_identity != continuation_field_program_identity_() ||
+    if (support->program_identity != continuation_field_program_identity_(system) ||
         support->producer_level != 0 || support->topology_epoch != 0 ||
         support->materialization_generation != 0 || support->program_owner != type.field_owner ||
         support->field_provider != type.field_provider)
@@ -70,18 +74,54 @@ void require_continuation_field_support_(const ContinuationType& type,
     throw std::invalid_argument("Independent Field has no authenticated producer support");
   }
 }
-const field_type& continuation_field_prototype_(
-    const ContinuationType& type, const ContinuationFieldSupport::Ref& support) const {
-  require_continuation_field_support_(type, support);
-  const auto& prototype = type.field_provider.empty()
-                              ? state(type.field_owner)
-                              : continuation_field_provider_(type.field_provider);
-  if (!type.field_provider.empty() && prototype.ncomp() != type.field_components)
+static const field_type& continuation_field_prototype_(
+    runtime_type* system, const ContinuationFieldProviders& providers, const ContinuationType& type,
+    const ContinuationFieldSupport::Ref& support) {
+  require_continuation_field_support_(system, type, support);
+  if (type.field_provider.empty()) {
+    const auto& map = system->program_block_map();
+    return system->block_state(map.at(static_cast<std::size_t>(type.field_owner)));
+  }
+  const auto found = providers.find(type.field_provider);
+  if (found == providers.end())
+    throw std::invalid_argument("Continuation Field names an uninstalled independent provider");
+  const auto& prototype = *found->second;
+  if (prototype.ncomp() != type.field_components)
     throw std::invalid_argument("Continuation Field provider changes its component schema");
   return prototype;
 }
+const field_type& continuation_field_prototype_(
+    const ContinuationType& type, const ContinuationFieldSupport::Ref& support) const {
+  return continuation_field_prototype_(system_, continuation_field_providers_, type, support);
+}
 std::optional<ContinuationFieldInstance> continuation_field_instance_(
     const field_type& value) const {
+  // History owns the current slot incarnation. Its empty metadata is meaningful:
+  // never inherit a prior producer merely because a ring reuses an address.
+  const auto& histories = runtime_state().hist_;
+  for (const auto& [name, ring] : histories.histories)
+    for (std::size_t slot = 0; slot < ring.size(); ++slot)
+      if (&ring[slot] == &value) {
+        ContinuationFieldMetadata metadata;
+        if (const auto fields = histories.slot_fields.find(name);
+            fields != histories.slot_fields.end()) {
+          metadata.support = fields->second.at(slot).support;
+          metadata.representation = fields->second.at(slot).representation;
+        }
+        if (metadata.support) {
+          metadata.support->validate();
+          if (metadata.support->program_identity != continuation_field_program_identity_())
+            throw std::invalid_argument("retained History Field has a foreign Program support");
+        }
+        if (const auto exchanges = histories.slot_exchanges.find(name);
+            exchanges != histories.slot_exchanges.end())
+          metadata.expression = exchanges->second.at(slot);
+        return ContinuationFieldInstance{value.storage_identity(),
+                                         continuation_field_allocations_(value),
+                                         std::move(metadata),
+                                         {},
+                                         true};
+      }
   auto& values = continuation_field_instances_->values;
   bool revoked = false;
   if (const auto found = values.find(&value); found != values.end()) {
@@ -266,7 +306,7 @@ void continuation_preflight_field(const field_type& source, const ContinuationTy
 void continuation_preflight_field(const field_type& source, const ContinuationType& type,
                                   const ContinuationFieldMetadata& metadata) const {
   continuation_preflight_field(source, type);
-  require_continuation_field_support_(type, metadata.support);
+  require_continuation_field_support_(system_, type, metadata.support);
   const auto instance = continuation_field_instance_(source);
   if ((instance && (instance->metadata.support != metadata.support ||
                     instance->metadata.expression != metadata.expression ||

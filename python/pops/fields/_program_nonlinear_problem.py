@@ -245,6 +245,13 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
         source_data["temporal_tau"] = temporal_tau
         from ._evolved_stage_contract import compile_accumulation
         source_data["accumulation"] = compile_accumulation(projection, captures, problem.unknowns)
+    metadata = {key: source_data[key] for key in (
+        "field_problem", "field_handle", "unknown_components")}
+    if problem.unknown_spaces:
+        axes = getattr(numerical, "observation_axes", None)
+        if axes is None or len(axes) != len(next(iter(problem.unknown_spaces.values())).support.coordinates):
+            raise FieldProblemError("field.observation.axes", "typed observation requires an exact physical-support to storage-axis realization")
+        source_data["observation_axes"] = metadata["observation_axes"] = axes
     source = freeze_containers(source_data)
     residual = _SpatialFieldResidual(field, prototype, coefficients, captures, local,
                                      numerical.method.finite_difference_step, boundary, source)
@@ -253,9 +260,7 @@ def bind_nonlinear_field_problem(program: Any, field: Handle, registration: Any,
     return SolveRequest(problem=residual, unknowns=(SolveUnknown("field_tuple", prototype),),
         equation_inputs=inputs, seeds={"field_tuple": None}, outputs=("field_tuple",),
         derivative=DerivativeStrategy("finite_difference"), residual_interpretation="original_field_equations",
-        error_interpretation="spatial_residual_l2", problem_metadata={"field_problem": problem.to_data(),
-            "field_handle": field.canonical_identity(),
-            "unknown_components": tuple(row.canonical_identity() for row in problem.unknowns)})
+        error_interpretation="spatial_residual_l2", problem_metadata=metadata)
 
 
 def _request_data(program: Any, token: Any, unknown: Any, physical: Any) -> dict:
@@ -437,8 +442,10 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
     if (token.attrs.get("coefficient_face_policy") != face_policy or
             token.inputs[1].attrs.get("coefficient_face_policy") != face_policy):
         raise SolveRequestError("equation_identity_drift", "original coefficient face policy changed")
-    expected_physical = CanonicalData({key: source[key] for key in (
-        "field_problem", "field_handle", "unknown_components")}, where="original field authority").to_data()
+    physical_keys = ("field_problem", "field_handle", "unknown_components") + (
+        ("observation_axes",) if "observation_axes" in source else ())
+    expected_physical = CanonicalData({key: source[key] for key in physical_keys},
+                                     where="original field authority").to_data()
     def same(lhs: Any, rhs: Any) -> bool:
         return canonical_bytes(_json_ready(lhs)) == canonical_bytes(_json_ready(rhs))
     checks = {"physical_problem": same(actual["physical_problem"], expected_physical),

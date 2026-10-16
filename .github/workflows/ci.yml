@@ -247,9 +247,9 @@ jobs:
     runs-on: ubuntu-latest
     # Runtime objects are prewarmed in parallel above. Keep an 18-minute bounded final build for
     # contract verification, ccache hits, shard-owned test executables and links, then seven minutes
-    # for tests. A cold common runtime can no longer consume this watchdog independently fourteen times.
-    # Two additional heavy suites require fourteen shards: the unchanged duration catalog models
-    # 901.2175 seconds versus 910.1075 with thirteen, preserving the 906-second scheduling budget.
+    # for tests. A cold common runtime can no longer consume this watchdog independently fifteen times.
+    # Three additional Field contract suites require fifteen shards: fourteen exceed the
+    # unchanged 906-second scheduling budget. Per-job watchdogs and catalog costs are unchanged.
     timeout-minutes: 40
     needs: [changes, set-mode, gate-cpp-prewarm]
     strategy:
@@ -306,7 +306,7 @@ jobs:
             --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
             --shard-index "${{ matrix.shard }}" \
-            --shard-total 14 \
+            --shard-total 15 \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           cpp_shard_summary=$(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
@@ -907,14 +907,14 @@ jobs:
     # tests can legitimately run for tens of minutes on a cold public runner. Duration-weighted
     # shards reserve room below the watchdog; the remaining margin covers setup and
     # transient runner variance without turning a stalled test into an unbounded job.
-    timeout-minutes: ${{ matrix.shard == 0 && 110 || matrix.shard < 4 && 80 || matrix.shard == 4 && 60 || 50 }}
+    timeout-minutes: ${{ matrix.shard == 0 && 110 || matrix.shard < 4 && 80 || matrix.shard < 6 && 60 || 50 }}
     needs: [changes, set-mode, gate-python-build]
     if: needs.set-mode.outputs.python_required == 'true'
     strategy:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 119-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 135-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -927,7 +927,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "125"
+      SHARD_TOTAL: "135"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1706,28 +1706,29 @@ jobs:
           run_with_heartbeat "MPI Python module link" 14m \
             cmake --build --preset ci-mpi --parallel 1 --target _pops
 
-      - name: Build complete native MPI inventory in two phases
-        # The former single 28m watchdog reached only 164/173 build tasks on 4adfddf.
-        # Keep that watchdog per phase; native phases share 60m and the job stays at 180m.
-        # Both phases form an exact disjoint manifest projection; new targets enter
-        # the remaining phase. Cost estimates are documented, not cold-build proof.
+      - name: Build complete native MPI inventory in three phases
+        # SHA47b2 remaining phase hit28m at184/191tasks. Preserve each28m watchdog
+        # and the60m total; split independent targets by the retained build costs.
         timeout-minutes: 60
         run: |
           source scripts/ci_heartbeat.sh
-          test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 2
+          test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 3
           read -r -a isolated_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_build_isolated_targets }}"
-          read -r -a remaining_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_build_remaining_targets }}"
+          read -r -a remaining0_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_build_remaining0_targets }}"
+          read -r -a remaining1_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_build_remaining1_targets }}"
           test "${#isolated_targets[@]}" -gt 0
-          test "${#remaining_targets[@]}" -gt 0
-          test "$(( ${#isolated_targets[@]} + ${#remaining_targets[@]} ))" \
+          test "${#remaining0_targets[@]}" -gt 0
+          test "${#remaining1_targets[@]}" -gt 0
+          test "$(( ${#isolated_targets[@]} + ${#remaining0_targets[@]} + ${#remaining1_targets[@]} ))" \
             -eq "${{ steps.mpi-test-plan.outputs.cpp_label_count }}"
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
-          # The program runtime TU approached the runner's memory limit. Its phase
-          # also prepares all six loader DSOs, with no competing compile or link.
+          # The program runtime and loader DSOs remain isolated for peak memory.
           run_with_heartbeat "MPI isolated native test build" 28m \
             cmake --build --preset ci-mpi --parallel 1 --target "${isolated_targets[@]}"
-          run_with_heartbeat "MPI remaining native test build" 28m \
-            cmake --build --preset ci-mpi --parallel 4 --target "${remaining_targets[@]}"
+          run_with_heartbeat "MPI remaining native test build0" 28m \
+            cmake --build --preset ci-mpi --parallel 4 --target "${remaining0_targets[@]}"
+          run_with_heartbeat "MPI remaining native test build1" 28m \
+            cmake --build --preset ci-mpi --parallel 4 --target "${remaining1_targets[@]}"
 
       - name: Build M4 native tests
         timeout-minutes: 12
@@ -2115,72 +2116,77 @@ jobs:
           - lane: cpp-0
             kind: cpp
             shard: 0
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-1
             kind: cpp
             shard: 1
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-2
             kind: cpp
             shard: 2
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-3
             kind: cpp
             shard: 3
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-4
             kind: cpp
             shard: 4
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-5
             kind: cpp
             shard: 5
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-6
             kind: cpp
             shard: 6
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-7
             kind: cpp
             shard: 7
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-8
             kind: cpp
             shard: 8
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-9
             kind: cpp
             shard: 9
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-10
             kind: cpp
             shard: 10
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-11
             kind: cpp
             shard: 11
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-12
             kind: cpp
             shard: 12
-            shard_total: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: cpp-13
             kind: cpp
             shard: 13
-            shard_total: 14
+            shard_total: 15
+            ccache_maxsize: 2G
+          - lane: cpp-14
+            kind: cpp
+            shard: 14
+            shard_total: 15
             ccache_maxsize: 2G
           - lane: python
             kind: python

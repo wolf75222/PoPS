@@ -266,10 +266,13 @@ def validate_continuations(program, *, target=None):
     from pops.time._program.field_representation import validate_field_representation_program
     validate_field_representation_program(program)
     def walk(values):
-        for value in values:
+        pending = list(reversed(values))
+        keys = ("body_block", "cond_block", "true_block", "false_block", "apply_block", "residual_block")
+        while pending:
+            value = pending.pop()
             yield value
-            for key in ("body_block", "cond_block", "true_block", "false_block", "apply_block", "residual_block"):
-                yield from walk(value.attrs.get(key, ()))
+            for key in reversed(keys):
+                pending.extend(reversed(value.attrs.get(key, ())))
     values = tuple(walk(program._values))
     seen_schemas = set()
     for value in values:
@@ -320,7 +323,8 @@ def validate_continuations(program, *, target=None):
     if len(opened) != 1 or opened[0].region or len(publications) != 1 or publications[0].region:
         raise ValueError("Continuation requires one initialization and one root publication")
     from pops.graph_functions import _PURE, _COLLECTIVE
-    allowed = _PURE | _COLLECTIVE | VERSIONED_OPS | {"state", "requested_dt", "reached_duration"}
+    allowed = _PURE | _COLLECTIVE | VERSIONED_OPS | {
+        "state", "requested_dt", "reached_duration", "history", "store_history"}
     if forest is not None:
         allowed |= {"post_synchronization", "composite_integral", "composite_pair", "attempt_start"}
         metadata = forest.attrs["continuation_forest"]
@@ -350,7 +354,8 @@ def validate_continuations(program, *, target=None):
         # An AMR trial may compose the existing typed spatial/solver operators;
         # their native effects are owned by the enclosing hierarchy attempt.
         # Their own provider/lowerability contracts still run after this check.
-        # Persistent legacy stores and independent commits are rejected below.
+        # History stores retain their top-level effect contract; the enclosing
+        # System attempt owns them together with the continuation image.
         if value.op not in allowed and forest is None:
             raise NotImplementedError("Continuation operation %r is not a qualified pure trial/projection" % value.op)
         if value.op == "reached_duration" and value.id > publications[0].id:
@@ -364,8 +369,13 @@ def validate_continuations(program, *, target=None):
     fields = {state_ref for state_ref, _ in schema["fields"]}
     if fields != set(program._commits):
         raise ValueError("ordinary state commits cannot coexist with the complete continuation publication")
-    if getattr(program, "_histories", None) or getattr(program, "_post_sync_commits", None):
-        raise NotImplementedError("legacy retained history and post-synchronization effects are not Continuation leaves")
+    if getattr(program, "_histories", None):
+        # A retained native ring is not a structural leaf, but both belong to
+        # the same accepted transaction and checkpoint. Authenticate its clock,
+        # storage, depth and persistence rather than prohibit the composition.
+        program.temporal_manifest()
+    if getattr(program, "_post_sync_commits", None):
+        raise NotImplementedError("post-synchronization effects require the AMR publication contract")
     # Authenticate commit roots as exact projections of the one accepted candidate, not merely
     # values with matching shapes. This check is repeated after graph load/rebuild.
     publication = publications[0]

@@ -1,6 +1,24 @@
 # Generated from the reorganized test tree. Keep paths and labels in sync with CMake/pytest.
 
 [[cpp.suite]]
+name = "test_field_provider_read_authority"
+sources = ["tests/cpp/unit/runtime/test_field_provider_read_authority.cpp"]
+labels = ["unit", "runtime", "medium"]
+mpi_variants = [2, 3]
+
+[[cpp.suite]]
+name = "test_field_transform_support"
+sources = ["tests/cpp/unit/runtime/test_field_transform_support.cpp"]
+labels = ["unit", "runtime", "medium"]
+mpi_variants = [2, 3]
+
+[[cpp.suite]]
+name = "test_field_read_transport"
+sources = ["tests/cpp/unit/runtime/test_field_read_transport.cpp"]
+labels = ["unit", "runtime", "medium"]
+mpi_variants = [2, 3]
+
+[[cpp.suite]]
 name = "test_state_carriers_zero_block_v14"
 sources = ["tests/cpp/integration/runtime/test_state_carriers_zero_block_v14.cpp"]
 labels = ["integration", "runtime", "medium"]
@@ -1432,6 +1450,11 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_api_v02_interval_regions_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_field_error_capsule_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_independent_field_continuation_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_independent_field_regrid_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_nonlinear_representation_history_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_computed_frontier_clipping_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_nonlinear_representation_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_independent_history_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_independent_uniform_continuation_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_amr_input_fields_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_runtime_parameter_family_native_mpi2.py", nproc = 2, native_dimension = 2 },
@@ -1446,6 +1469,7 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_api_v02_scoped_stencil_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_auxiliary_regrid_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_distributed_balanced_domain_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_continuation_history_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_regrid_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_forest_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_diffusion_device_publication_native_mpi2.py", nproc = 2, native_dimension = 2 },

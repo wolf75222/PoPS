@@ -104,6 +104,7 @@ def build_temporal_field(
     regrid_observation=False,
     observation_transfer=True,
     hierarchy_companion=False,
+    retained_history_read=False,
     observation_byte_capacity=64 * 1024 * 1024,
 ):
     frame, _ = _domain("temporal_field_domain", cells)
@@ -153,7 +154,8 @@ def build_temporal_field(
             solver=CompositeFieldGMRES(max_iter=3000, restart=60, rel_tol=1.0e-12, abs_tol=1.0e-13),
         ),
     )
-    p = pops.Program("local_clock_composite_field")
+    p = pops.Program("local_clock_composite_field",
+        history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
     q = p.state(block[U])
     if regrid_observation:
         from .method_history_transfer import regular_quadratic_flux_transfer
@@ -199,6 +201,11 @@ def build_temporal_field(
             (candidate[0], candidate[1], ProgramScalar(observed_sum_after - observed_sum_before)),
             at=q.next.point,
         )
+    if retained_history_read:
+        prior = p.history("observed", lag=1)
+        previous_sum = p.sum(prior)
+        candidate = p.value("retained_history_observation_sum",
+            (candidate[0], candidate[1], ProgramScalar(previous_sum)), at=q.next.point)
     p.commit(q.next, candidate)
     marker_model = pops.Model("temporal_mesh_marker", frame=frame)
     marker = marker_model.state("marker", components=("tag",))

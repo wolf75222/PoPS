@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_import_closure  # noqa: E402
 import ci_include_graph  # noqa: E402
 import ci_shard_binpack  # noqa: E402
+import ci_python_test_units  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,8 +60,11 @@ CPP_BROAD_FILES = {
     "scripts/ci_components.toml",
     "scripts/ci_select_tests.py",
     "scripts/ci_shard_binpack.py",
+    "scripts/ci_python_test_units.py",
+    "tests/python/test_partitions.json",
     "tests/CMakeLists.txt",
     "tests/cpp/build_durations.json",
+    "tests/cpp/mpi_build_durations.json",
     "tests/cpp/test_durations.json",
     "src/CMakeLists.txt",
     "tests/cpp/test_sources.cmake",
@@ -91,6 +95,8 @@ PYTHON_BROAD_FILES = {
     "scripts/ci_components.toml",
     "scripts/ci_select_tests.py",
     "scripts/ci_shard_binpack.py",
+    "scripts/ci_python_test_units.py",
+    "tests/python/test_partitions.json",
     "src/CMakeLists.txt",
     "python/pops/__init__.py",
     "tests/python/conftest.py",
@@ -380,15 +386,17 @@ def cpp_targets_with_label(manifest: dict, label: str) -> list[str]:
 
 
 def cpp_mpi_build_groups(manifest: dict) -> list[dict]:
-    """Split the complete MPI build into two bounded sequential phases.
+    """Split the complete MPI build into three bounded sequential phases.
 
     ``test_program_runtime`` needs an isolated compiler because its observed host
     memory headroom falls below 0.5 GiB. The loader target now also builds six
     authenticated DSO fixtures. Move two previously unbuilt I/O targets beside
-    these outliers to reserve space in the remaining phase. This is a scheduling
+    these outliers to reserve space in two cost-balanced remaining phases. This is a scheduling
     partition, not a cold-build duration guarantee; see change_aware_ci.md.
     """
     targets = cpp_targets_with_label(manifest, "mpi")
+    if len(targets) != len(set(targets)):
+        raise SystemExit("MPI build phases are not an exact nonempty disjoint target cover")
     isolated = {
         "test_program_runtime",
         "test_amr_synthetic_program_loader_transaction",
@@ -398,12 +406,15 @@ def cpp_mpi_build_groups(manifest: dict) -> list[dict]:
     missing = sorted(isolated - set(targets))
     if missing:
         raise SystemExit(f"MPI build phase anchors missing from manifest: {missing}")
-    groups = [
-        {"name": "isolated", "targets": tuple(sorted(isolated))},
-        {
-            "name": "remaining",
-            "targets": tuple(target for target in targets if target not in isolated),
-        },
+    remaining = [target for target in targets if target not in isolated]
+    weights = ci_shard_binpack.load_durations(ROOT / "tests/cpp/mpi_build_durations.json")
+    missing_weights = sorted(set(remaining) - weights.keys())
+    if missing_weights:
+        raise SystemExit(f"MPI build target costs missing: {missing_weights}")
+    partitions = ci_shard_binpack.assign_shards(remaining, 2, weights)
+    groups = [{"name": "isolated", "targets": tuple(sorted(isolated))}] + [
+        {"name": f"remaining{index}", "targets": tuple(targets)}
+        for index, targets in enumerate(partitions)
     ]
     flattened = [target for group in groups for target in group["targets"]]
     if (
@@ -646,7 +657,8 @@ def manifest_python_mpi_orchestrators(manifest: dict) -> list[dict]:
                         raise SystemExit("MPI partition names an unowned parent function: " + path)
                     if identity in ids or node in nodes:
                         raise SystemExit("MPI orchestrator partitions have duplicate identities: " + path)
-                    ids.add(identity); nodes.add(node)
+                    ids.add(identity)
+                    nodes.add(node)
                     normalized.append({"id": identity, "parent_node": node})
                 row["partitions"] = normalized
                 function, required_ids = contract
@@ -990,7 +1002,7 @@ def shard(items: list[str], index: int | None, total: int | None) -> list[str]:
     """
     excluded = set(ci_shard_binpack.EXCLUDED_FROM_SHARDS)
     if index is None or total is None:
-        return [item for item in items if item not in excluded]
+        return ci_python_test_units.expand([item for item in items if item not in excluded])
     if total <= 0 or index < 0 or index >= total:
         raise SystemExit(f"invalid shard {index}/{total}")
     try:
@@ -1131,7 +1143,7 @@ def _refine_cpp_target_shards(
                     if candidate_maximum > maximum + 1.0e-9:
                         continue
                     first_change = next((after - before for before, after in
-                                         zip(load_order, candidate_order)
+                                         zip(load_order, candidate_order, strict=True)
                                          if abs(after - before) > 1.0e-9), 0.0)
                     if first_change >= 0.0:
                         continue
@@ -1787,7 +1799,8 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
             "cpp_label_ctest_group_count": str(len(groups)),
             "cpp_label_build_phase_count": str(len(build_groups)),
             "cpp_label_build_isolated_targets": " ".join(build_targets.get("isolated", ())),
-            "cpp_label_build_remaining_targets": " ".join(build_targets.get("remaining", ())),
+            "cpp_label_build_remaining0_targets": " ".join(build_targets.get("remaining0", ())),
+            "cpp_label_build_remaining1_targets": " ".join(build_targets.get("remaining1", ())),
             "cpp_label_summary": summary,
         },
     )
@@ -2162,9 +2175,11 @@ def plan_verify(args: argparse.Namespace) -> int:
     total = args.shard_total
     excluded = set(ci_shard_binpack.EXCLUDED_FROM_SHARDS)
     shardable = [t for t in selected if t not in excluded]
-    shards = ci_shard_binpack.assign_shards(shardable, total)
+    units = ci_python_test_units.expand(shardable)
+    shards = ci_shard_binpack.assign_shards(
+        units, total, ci_python_test_units.weights(ci_shard_binpack.load_durations()))
     try:
-        ci_shard_binpack.verify_partition(selected, shards, ci_shard_binpack.EXCLUDED_FROM_SHARDS)
+        ci_shard_binpack.verify_partition(units, shards, excluded=())
     except ci_shard_binpack.PartitionError as exc:
         print(f"::error::shard partition is not an exact cover: {exc}")
         raise SystemExit(1) from exc

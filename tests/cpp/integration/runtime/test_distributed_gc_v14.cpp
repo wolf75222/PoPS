@@ -190,12 +190,15 @@ TEST(DistributedGcV14, CorruptNativeCycleIsRejectedBeforeAnySweep) {
   auto pending = std::make_shared<A>(A{domain, T{K::Int64}, {}});
   for (auto gid = domain->begin(); gid < domain->end(); ++gid)
     pending->values.push_back(V::integer(gid));
-  auto published = d::publish_array<2>(registry, pending, 4096, nullptr);
+  // Deliberately bypass immutable publication through the raw native Registry.
+  pending->version = registry.publish_value(pending, d::array_type_tag<2>(), 4096);
+  AR published = pending;
+  EXPECT_FALSE(published->has_immutable_scalar_values());
   // A prior successful closure must never cache a verdict into this collection.
   auto root = V::distributed_array(published);
   EXPECT_NO_THROW(p::continuation_collective_closure<2>(root, &registry, lane, 65536));
-  // Only raw C++ can mutate a published object into a recursive graph. The
-  // finite typed frontend cannot construct this; collection still fails closed.
+  // A mutable raw native entry must be inspected again even after a successful
+  // closure. Its declared scalar element type cannot certify the actual graph.
   if (!pending->values.empty())
     pending->values[0] = V::distributed_array(published);
   const auto bytes = registry.retained_bytes();
@@ -209,6 +212,100 @@ TEST(DistributedGcV14, CorruptNativeCycleIsRejectedBeforeAnySweep) {
   root.reset();
   d::collect_garbage<2>(registry);
   EXPECT_EQ(registry.retained_values(), 0);
+}
+
+TEST(DistributedGcV14, ImmutablePublicationIsolatesMutablePendingAndDropsCopiedProof) {
+  auto lane = pops::ExecutionLane::world();
+  d::Registry registry(lane);
+  registry.configure(65536, 4);
+  auto domain = registry.issue(948, 4, offsets(lane));
+  auto pending = std::make_shared<A>(A{domain, T{K::Int64}, {}});
+  for (auto gid = domain->begin(); gid < domain->end(); ++gid)
+    pending->values.push_back(V::integer(gid));
+  auto published = d::publish_array<2>(registry, pending, 4096, nullptr);
+  EXPECT_NE(published.get(), pending.get());
+  EXPECT_TRUE(published->has_immutable_scalar_values());
+  EXPECT_EQ(pending->version.ordinal, 0u);
+  const auto bytes = registry.retained_bytes();
+  if (!pending->values.empty()) {
+    // Neither retained vector references nor the pending object can mutate the
+    // immutable object. A distributed edge added here is not a published cycle.
+    auto& old_element = pending->values.front();
+    old_element = V::distributed_array(published);
+    EXPECT_EQ(published->values.front()->integer(), domain->begin());
+    EXPECT_NE(published->values.data(), pending->values.data());
+  }
+  A copied = *published;
+  A moved = std::move(copied);
+  A assigned;
+  assigned = *published;
+  A move_assigned;
+  move_assigned = std::move(assigned);
+  EXPECT_FALSE(copied.has_immutable_scalar_values());
+  EXPECT_FALSE(moved.has_immutable_scalar_values());
+  EXPECT_FALSE(assigned.has_immutable_scalar_values());
+  EXPECT_FALSE(move_assigned.has_immutable_scalar_values());
+  // Even directly copying/moving the opaque proof cannot install it on staging.
+  pending->publication_proof = published->publication_proof;
+  EXPECT_FALSE(pending->has_immutable_scalar_values());
+  EXPECT_NO_THROW(d::collect_garbage<2>(registry));
+  EXPECT_EQ(registry.retained_values(), 1u);
+  EXPECT_EQ(registry.retained_bytes(), bytes);
+  if (!pending->values.empty())
+    pending->values.front() = V::integer(domain->begin());
+  pending.reset();
+  published.reset();
+  d::collect_garbage<2>(registry);
+  EXPECT_EQ(registry.retained_values(), 0u);
+}
+
+TEST(DistributedGcV14, ImmutableSummaryUsesActualLeavesAndKeepsResourceCharges) {
+  auto lane = pops::ExecutionLane::world();
+  d::Registry registry(lane);
+  registry.configure(65536, 4);
+  std::vector<std::int64_t> partition(static_cast<std::size_t>(lane.size()) + 1);
+  for (int rank = 0; rank <= lane.size(); ++rank)
+    partition[static_cast<std::size_t>(rank)] = 256 * rank;
+  auto domain = registry.issue(949, partition.back(), partition);
+  A staging{domain, T{K::Int64}, {}};
+  staging.values.assign(256, V::integer(1));
+  auto sealed = A::immutable_publication(staging, {registry.issuer(), 1}, 4096);
+  EXPECT_TRUE(sealed->has_immutable_scalar_values());
+  EXPECT_THROW(A::immutable_publication(staging, {registry.issuer(), 1},
+                                        staging.values.size() * sizeof(Ref) - 1),
+               std::length_error);
+  staging.values.front() = V::distributed_domain(domain);
+  auto opaque = A::immutable_publication(staging, {registry.issuer(), 1}, 4096);
+  EXPECT_FALSE(opaque->has_immutable_scalar_values());
+  staging.values.front().reset();
+  EXPECT_FALSE(A::immutable_publication(staging, {registry.issuer(), 1}, 4096)
+                   ->has_immutable_scalar_values());
+  // Skipping payload visits never skips their declared work-resource charge.
+  d::gc_detail::Census<2> bounded(128, registry.issuer());
+  bounded.register_domain(domain->identity().ordinal, domain);
+  bounded.register_array(1, sealed, d::array_type_tag<2>());
+  EXPECT_THROW(bounded.complete(), d::Failure);
+}
+
+TEST(DistributedGcV14, ImmutableFactoryFailureIsCollectiveAndDoesNotPublish) {
+  auto lane = pops::ExecutionLane::world();
+  d::Registry registry(lane);
+  registry.configure(65536, 4);
+  auto domain = registry.issue(950, 4, offsets(lane));
+  auto accepted = make(registry, domain);
+  const auto bytes = registry.retained_bytes();
+  EXPECT_THROW(registry.publish_value_with_identity(
+                   [&](d::Identity identity) -> std::shared_ptr<const void> {
+                     if (lane.rank() == 0)
+                       throw d::Failure(d::Code::capacity);
+                     return A::immutable_publication(*accepted, identity, 4096);
+                   },
+                   d::array_type_tag<2>(), 1024),
+               d::Failure);
+  EXPECT_EQ(registry.retained_values(), 1u);
+  EXPECT_EQ(registry.retained_bytes(), bytes);
+  auto next = make(registry, domain);
+  EXPECT_EQ(next->version.ordinal, accepted->version.ordinal + 2);
 }
 
 TEST(DistributedGcV14, OneRankPreparationFailureLeavesEveryVaultUnchanged) {
@@ -296,7 +393,7 @@ TEST(DistributedGcV14, DeepRemoteRootAndSharedEdgesSurviveClosureAndCollectExact
   EXPECT_EQ(registry.retained_bytes(), 0u);
 }
 
-TEST(DistributedGcV14, ScalarProductCensusScalesWithElementsWithoutOwnershipNodes) {
+TEST(DistributedGcV14, ImmutableScalarProductCensusDoesNotVisitElementPayloads) {
   auto lane = pops::ExecutionLane::world();
   constexpr std::uint64_t storage = 64 * 1024 * 1024;
   constexpr int versions = 4;
@@ -333,8 +430,8 @@ TEST(DistributedGcV14, ScalarProductCensusScalesWithElementsWithoutOwnershipNode
       scalar_values = census.scalar_values();
       ownership_nodes = census.ownership_value_nodes();
     });
-    EXPECT_EQ(inspected, static_cast<std::uint64_t>(domain->local_size()) * versions);
-    EXPECT_EQ(scalar_values, inspected);
+    EXPECT_EQ(inspected, 0u);
+    EXPECT_EQ(scalar_values, static_cast<std::uint64_t>(domain->local_size()) * versions);
     EXPECT_EQ(ownership_nodes, 0u);
     const auto bytes = registry.retained_bytes();
     const auto begin = std::chrono::steady_clock::now();

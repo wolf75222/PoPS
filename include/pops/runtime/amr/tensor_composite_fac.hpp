@@ -672,6 +672,12 @@ class FullTensorCompositeFac {
 
   std::string_view exact_prepared_contract() const noexcept { return exact_contract_; }
 
+  const field_type& active_cell_mask(int level) const {
+    if (level < 0 || static_cast<std::size_t>(level) >= levels_.size())
+      throw std::out_of_range("tensor FAC observation level is outside its prepared hierarchy");
+    return levels_[static_cast<std::size_t>(level)]->active;
+  }
+
   bool borrows_execution_lane() const noexcept { return lane_ != nullptr; }
 
   bool has_remote_same_level_halo() const noexcept {

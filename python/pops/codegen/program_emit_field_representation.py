@@ -1,6 +1,11 @@
 """Lower Field representation ports to the authenticated native topology adapter."""
 from __future__ import annotations
 
+import json
+from pops._structural_data import canonical_json
+from pops.time.canonical_data import _json_ready
+from pops.time.field_topology import field_components
+
 from pops.time._program.field_representation import validate_field_representation
 from pops.time.value_signatures import value_signature
 
@@ -19,15 +24,24 @@ def emit_field_representation(program, value, var, model, lines, prelude,
     allocation = value.op == "field_storage_allocate"
     field_node = value.inputs[0] if allocation or value.op == "field_bundle_export" else value.inputs[1]
     topology_node = value.inputs[1] if allocation or value.op == "field_bundle_export" else value.inputs[2]
-    if field_node.block not in block_idx:
-        raise ValueError("Field representation has no resolved scientific storage owner")
-    owner, components = block_idx[field_node.block], len(field_node.space.components)
+    signature = value_signature(field_node)
+    authority = signature.get("field_authority")
+    components = field_components(signature)
     topology = var[topology_node.id]
-    lines.append('ctx.continuation_local_phase([&] { %s.require(); '
-                 'if (%s.program_block() != %d || %s.components() != %d) '
+    if authority is None:
+        if field_node.block not in block_idx:
+            raise ValueError("Field representation has no resolved scientific storage owner")
+        owner_test = "%s.program_block() != %d || !%s.field_provider().empty()" % (
+            topology, block_idx[field_node.block], topology)
+    else:
+        contract = canonical_json(_json_ready(authority))
+        owner_test = "%s.program_block() != -1 || %s.field_provider() != %s" % (
+            topology, topology, json.dumps(contract))
+    lines.append('ctx.continuation_local_phase([&] { ctx.require_field_topology(%s); '
+                 'if (%s || %s.components() != %d) '
                  'throw std::logic_error("Field representation scientific owner mismatch"); }, '
                  '"Field representation owner validation");'
-                 % (topology, topology, owner, topology, components))
+                 % (topology, owner_test, topology, components))
     if allocation:
         owned = prefix + "_owned"
         lines.append("const auto %s = ctx.allocate_field_storage(%s, %s, %s);"

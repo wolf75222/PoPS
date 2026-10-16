@@ -121,7 +121,8 @@ std::vector<double> initial_state(const pops::Extent<Dim>& shape) {
 std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> prepare_exact_loader_artifact(
     const std::string& source_path, const std::string& shared_object,
     const pops::ExecutionLane& lane, bool interface_blocks = false, bool histories = false,
-    bool attempt_cursor = false, bool with_flux = true, bool mapping = false) {
+    bool attempt_cursor = false, bool with_flux = true, bool mapping = false,
+    bool history_metadata = false) {
   const auto broadcast = [&](std::string& payload) {
     const bool length_overflow =
         lane.rank() == 0 &&
@@ -148,10 +149,10 @@ std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> prepare_exact_loader_arti
         std::ofstream source(source_path);
         source.exceptions(std::ios::badbit | std::ios::failbit);
         source << pops::test::synthetic_loader::source(interface_blocks, histories, attempt_cursor,
-                                                       with_flux, mapping);
+                                                       with_flux, mapping, history_metadata);
       }
       const auto variant = pops::test::synthetic_loader::variant(
-          interface_blocks, histories, attempt_cursor, with_flux, mapping);
+          interface_blocks, histories, attempt_cursor, with_flux, mapping, history_metadata);
       const std::string prepared =
           std::string(POPS_TEST_SYNTHETIC_LOADER_FIXTURES) + "/" + std::to_string(variant) + ".so";
       std::ifstream binary(prepared, std::ios::binary);
@@ -717,6 +718,86 @@ TEST(test_amr_synthetic_program_loader_transaction,
     EXPECT_TRUE(fragments.empty());
   EXPECT_TRUE(source_only.synchronization_events.empty());
   EXPECT_FALSE(source_only.face_evidence_provenance);
+}
+
+TEST(test_amr_synthetic_program_loader_transaction,
+     RestartHierarchyPublishesCompleteColdHistoryMetadataBeforeMaterialization) {
+  using namespace pops::runtime::program;
+  const std::string stem = std::string(POPS_TEST_TMPDIR) + "/amr_history_metadata_restart_" +
+                           std::to_string(pops::my_rank()) + "_" +
+                           std::to_string(static_cast<long>(std::clock()));
+  auto lane = pops::ExecutionLane::duplicate_world_collectively("test.history-metadata-restart");
+  const auto artifact = prepare_exact_loader_artifact(stem + ".cpp", stem + ".so", lane, false,
+                                                      true, false, true, false, true);
+  const auto settings = config();
+  pops::AmrSystem<Dim> system(settings);
+  ASSERT_NO_THROW(build_refined_system(system, stem + ".so", initial_state(settings.shape), true));
+  ASSERT_EQ(system.installed_program_hash(),
+            "tests.synthetic-loader/program/history-metadata-restart-v1");
+  ASSERT_NO_THROW(system.step(0.125));
+  const auto accepted = system.program_accepted_state();
+  const auto boxes = system.patch_boxes();
+  auto owners = system.level_owner_ranks(1);
+  if (system.level_distribution_mode(1) == "replicated")
+    std::fill(owners.begin(), owners.end(), -1);
+
+  system.begin_restart_transaction();
+  // The public restart performs this refresh BEFORE materialize_program_restart_histories.
+  // No later helper may hide an incomplete provisional table at this boundary.
+  ASSERT_NO_THROW(system.rebuild_hierarchy(boxes, owners));
+  const auto cold = deserialize_amr_program_accepted_state<Dim>(system.program_accepted_state());
+  ASSERT_TRUE(amr_history_field_detail::enveloped(cold.history_flux_payload));
+  history_field_detail::Reader envelope{cold.history_flux_payload};
+  envelope.at = amr_history_field_detail::magic.size();
+  const auto cold_flux = amr_history_field_detail::blob(envelope);
+  const auto metadata_wire = amr_history_field_detail::blob(envelope);
+  std::map<std::string, std::vector<int>> expected_rings;
+  for (const auto& name : system.history_names())
+    for (int level = 0; level < system.n_levels(); ++level) {
+      expected_rings.emplace("pops.amr.level-history.v1/" + std::to_string(level) + "/" +
+                                 std::to_string(name.size()) + ":" + name,
+                             std::vector<int>(2));
+      EXPECT_FALSE(system.history_initialized(name, level));
+      EXPECT_EQ(system.history_fill_count(name, level), 0);
+      for (int slot = 0; slot < 2; ++slot) {
+        EXPECT_DOUBLE_EQ(system.history_slot_dt(name, level, slot), 0.0);
+        for (const auto value : system.history_global(name, level, slot))
+          EXPECT_DOUBLE_EQ(value, 0.0);
+      }
+    }
+  ASSERT_EQ(expected_rings.size(), 4u);
+  // A cold ring still has an authenticated registry of zero-term samples.
+  // Empty bytes mean absent provenance, not the explicit four-ring image.
+  checkpoint_detail::Reader flux(cold_flux);
+  ASSERT_EQ(flux.u64(), UINT64_C(0x504f5053464c5835));
+  ASSERT_EQ(flux.size(), expected_rings.size());
+  for (const auto& [key, slots] : expected_rings) {
+    ASSERT_EQ(flux.string(), key);
+    ASSERT_EQ(flux.size(), slots.size());
+    for (std::size_t slot = 0; slot < slots.size(); ++slot)
+      EXPECT_EQ(flux.size(), 0u);
+  }
+  EXPECT_NO_THROW(flux.finish());
+  const HistoryFieldMetadataBudget budget{UINT64_C(1) << 20, UINT64_C(1) << 20};
+  const auto fields = decode_history_field_metadata(metadata_wire, expected_rings, budget);
+  ASSERT_EQ(fields.size(), expected_rings.size());
+  for (const auto& [key, slots] : fields) {
+    EXPECT_TRUE(expected_rings.contains(key));
+    ASSERT_EQ(slots.size(), 2u);
+    for (const auto& metadata : slots)
+      EXPECT_TRUE(metadata.empty());  // Cold storage never inherits old Field authority.
+  }
+  // Omitting or adding a ring is still rejected, even though all metadata leaves are empty.
+  auto missing = expected_rings;
+  missing.erase(missing.begin());
+  EXPECT_THROW(decode_history_field_metadata(metadata_wire, missing, budget),
+               std::invalid_argument);
+  auto extra = expected_rings;
+  extra.emplace("unregistered", std::vector<int>(2));
+  EXPECT_THROW(decode_history_field_metadata(metadata_wire, extra, budget), std::invalid_argument);
+  EXPECT_THROW(system.commit_restart_transaction(), std::exception);
+  ASSERT_NO_THROW(system.rollback_restart_transaction());
+  EXPECT_EQ(system.program_accepted_state(), accepted);
 }
 
 TEST(test_amr_synthetic_program_loader_transaction,
@@ -1390,8 +1471,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
   const std::string shared_object = stem + ".so";
   auto artifact_lane =
       pops::ExecutionLane::duplicate_world_collectively("test.three-level-history.artifact");
-  ASSERT_NO_THROW((void)prepare_exact_loader_artifact(stem + ".cpp", shared_object,
-                                                     artifact_lane, false, true));
+  ASSERT_NO_THROW((void)prepare_exact_loader_artifact(stem + ".cpp", shared_object, artifact_lane,
+                                                      false, true));
   const auto handle = pops::dynlib::open(shared_object);
   ASSERT_NE(handle, nullptr);
   using RejectNthRefresh = void (*)(int);
@@ -1443,8 +1524,12 @@ TEST(test_amr_synthetic_program_loader_transaction,
   std::vector<HistoryImage> histories;
   for (const auto& name : names)
     for (int level = 0; level < 3; ++level) {
-      HistoryImage row{name, level, system.history_fill_count(name, level),
-                       system.history_initialized(name, level), {}, {},
+      HistoryImage row{name,
+                       level,
+                       system.history_fill_count(name, level),
+                       system.history_initialized(name, level),
+                       {},
+                       {},
                        system.history_sample_identity(name, level)};
       ASSERT_TRUE(row.initialized);
       ASSERT_EQ(row.fill, 1);
@@ -1503,10 +1588,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
   } catch (const std::exception& error) {
     second_publication_failure = error.what();
   }
-  ASSERT_EQ(pops::all_reduce_max(second_publication_failure.empty() ? 1L : 0L, artifact_lane),
-            0L);
-  EXPECT_NE(second_publication_failure.find("injected history resource refresh"),
-            std::string::npos)
+  ASSERT_EQ(pops::all_reduce_max(second_publication_failure.empty() ? 1L : 0L, artifact_lane), 0L);
+  EXPECT_NE(second_publication_failure.find("injected history resource refresh"), std::string::npos)
       << "rank " << pops::my_rank() << ": " << second_publication_failure;
   ASSERT_NO_THROW(system.rollback_restart_transaction());
   EXPECT_EQ(system.patch_boxes(), old_boxes);
@@ -1529,8 +1612,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
     EXPECT_EQ(system.history_fill_count(row.name, row.level), row.fill);
     EXPECT_EQ(system.history_sample_identity(row.name, row.level), row.sample);
     for (int slot = 0; slot < static_cast<int>(row.values.size()); ++slot) {
-      EXPECT_TRUE(byte_exact_equal(system.history_global(row.name, row.level, slot),
-                                   row.values.at(slot)));
+      EXPECT_TRUE(
+          byte_exact_equal(system.history_global(row.name, row.level, slot), row.values.at(slot)));
       EXPECT_DOUBLE_EQ(system.history_slot_dt(row.name, row.level, slot), row.dt.at(slot));
     }
   }
@@ -1709,10 +1792,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
       } else {
         EXPECT_NE(refusal.find("AMR Program hierarchy-state publication failed collectively"),
                   std::string::npos);
-        EXPECT_NE(refusal.find("rank 0: fixture resource publication failed"),
-                  std::string::npos);
-        EXPECT_NE(refusal.find("rank 0: injected history resource refresh"),
-                  std::string::npos);
+        EXPECT_NE(refusal.find("rank 0: fixture resource publication failed"), std::string::npos);
+        EXPECT_NE(refusal.find("rank 0: injected history resource refresh"), std::string::npos);
       }
       std::fprintf(stderr, "scheduled-history-remap rank=%d refused=%s\n", pops::my_rank(),
                    refusal.c_str());
@@ -1850,7 +1931,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
                            std::to_string(static_cast<long>(std::clock()));
   const std::string shared_object = stem + ".so";
   auto observer = pops::ExecutionLane::duplicate_world_collectively("test.completion.observer");
-  auto artifact = prepare_exact_loader_artifact(stem + ".cpp", shared_object, observer, false, true);
+  auto artifact =
+      prepare_exact_loader_artifact(stem + ".cpp", shared_object, observer, false, true);
   for (const bool use_region : {false, true}) {
     SCOPED_TRACE(use_region ? "advance_program_region" : "step");
     auto settings = config();
@@ -1872,12 +1954,14 @@ TEST(test_amr_synthetic_program_loader_transaction,
 #endif
     auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
         prepared_execution()->for_lane(*package));
-    assembling.install_prepared_boundary_execution_context(std::move(package), std::move(execution));
+    assembling.install_prepared_boundary_execution_context(std::move(package),
+                                                           std::move(execution));
     // Move the installed RuntimeInstance authority, before Program captures bind the facade.
     pops::AmrSystem<Dim> moved(std::move(assembling));
     pops::AmrSystem<Dim> system(settings);
     system = std::move(moved);
-    ASSERT_NO_THROW(build_refined_system(system, shared_object, initial_state(settings.shape), true));
+    ASSERT_NO_THROW(
+        build_refined_system(system, shared_object, initial_state(settings.shape), true));
     const auto accepted = system.program_accepted_state();
     const auto boxes = system.patch_boxes();
     const auto initial_state0 = system.block_level_state_global(kBlock, 0);
@@ -1902,12 +1986,14 @@ TEST(test_amr_synthetic_program_loader_transaction,
     // Reject only after a real replacement, on one rank, then restore the public transaction
     // on every participant. A second step must use the restored graph and the same durable lane.
     EXPECT_THROW(pops::runtime::program::collective_step_rejection_phase(
-        observer.communicator(),
-        {"test.post-regrid-rejection.v1", "test.post-regrid-rejection", false, false},
-        "post-regrid rejection failed collectively", [&] {
-          if (observer.rank() == 0)
-            throw std::runtime_error("injected rejection after scheduled regrid");
-        }), std::runtime_error);
+                     observer.communicator(),
+                     {"test.post-regrid-rejection.v1", "test.post-regrid-rejection", false, false},
+                     "post-regrid rejection failed collectively",
+                     [&] {
+                       if (observer.rank() == 0)
+                         throw std::runtime_error("injected rejection after scheduled regrid");
+                     }),
+                 std::runtime_error);
     ASSERT_NO_THROW(system.rollback_step_transaction());
     EXPECT_EQ(system.program_accepted_state(), accepted);
     EXPECT_EQ(system.patch_boxes(), boxes);

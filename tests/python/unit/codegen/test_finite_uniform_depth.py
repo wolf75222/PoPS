@@ -52,7 +52,9 @@ def test_record_layout_slots_preserve_variant_arms_and_array_boundaries():
     source = _source(signature)
     assert "switch (*tag)" in source
     assert source.index("replicated Variant tag differs") < source.index("switch (*tag)")
-    assert source.index("replicated finite domain differs") < source.index("frame.cursor < frame.array->values->size()")
+    domain_guard = ("finite_collective::require_domain(frame.array->domain, 2, 1, "
+                    "ctx.prepared_execution_lane())")
+    assert source.index(domain_guard) < source.index("frame.cursor < frame.array->values->size()")
     assert "const std::any* child" in source and "std::any(*" not in source
     assert _nesting(source) < 12
 

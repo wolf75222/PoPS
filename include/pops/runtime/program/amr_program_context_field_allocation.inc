@@ -11,6 +11,7 @@ std::shared_ptr<field_type> allocate_field_storage(const field_type& prototype,
           throw std::invalid_argument("Field allocation requires an exact target topology");
         const auto authority = regrid_field_qualification_(prototype);
         if (!authority || authority->block != topology.program_block() ||
+            authority->provider != topology.field_provider() ||
             prototype.ncomp() != topology.components() || prototype.ghosts() != topology.ghosts())
           throw std::invalid_argument("Field allocation changed its qualified scientific template");
         if (authority->side == FieldTopology::Side::Target && authority->level != topology.level())
@@ -23,7 +24,7 @@ std::shared_ptr<field_type> allocate_field_storage(const field_type& prototype,
         // Retain the exact object until this topology frame is revoked, so its
         // registered pointer cannot be recycled into another storage authority.
         require_continuation_regrid_().allocated_fields.push_back(field);
-        continuation_bind_regrid_import_(*field, topology);
+        continuation_bind_regrid_import_(*field, topology, prototype);
         return field;
       },
       "explicit target Field storage allocation");

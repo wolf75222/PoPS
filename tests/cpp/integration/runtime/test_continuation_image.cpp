@@ -1596,3 +1596,36 @@ TEST(FiniteCollectiveExecution, AllocationFailuresConvergeWithoutChangingTheirCl
   EXPECT_NO_THROW(finite_protocol_v16::allocation_phase([] {}, lane));
 }
 }  // namespace
+
+TEST(ContinuationImage, LegacyDomainFreeRestartKeepsAbsentAllocatorAndExactNextImage) {
+  auto original = initial_store();
+  const auto bytes = original.checkpoint(none());
+  continuation_detail::Reader header(bytes);
+  ASSERT_EQ(header.text(), "POPSCONT1");
+  Codec codec(configuration().type, configuration().identity, 4096, none());
+  const auto decoded = codec.decode(bytes);
+  EXPECT_FALSE(decoded.realm);
+  EXPECT_TRUE(decoded.realms.empty());
+  EXPECT_EQ(decoded.max_domain_version, 0);
+  Store replay;
+  replay.configure(configuration());
+  replay.publish(replay.prepare_restart(bytes, none()));
+  EXPECT_FALSE(replay.domain_realm());
+  EXPECT_EQ(replay.domain_high_water(), 0);
+  EXPECT_EQ(replay.checkpoint(none()), bytes);
+
+  auto lane = ExecutionLane::duplicate_world_collectively("test.continuation.absent-realm");
+  FiniteDomainRegistry live;
+  for (auto* store : {&original, &replay}) {
+    // A real read synchronizes an accepted allocator when one exists. The
+    // legacy image has none; a fresh invocation's unused realm stays local.
+    if (const auto realm = store->domain_realm())
+      live.synchronize_identity(realm, {711, 719});
+    const auto next = root(.25, 1, 4);
+    const auto realm = store->domain_realm() ? store->domain_realm() : live.realm();
+    auto closure = continuation_collective_closure<D>(next, nullptr, lane, 4096, realm);
+    store->publish(store->prepare(next, none(), false, {}, std::move(closure)));
+    EXPECT_FALSE(store->domain_realm());
+  }
+  EXPECT_EQ(replay.checkpoint(none()), original.checkpoint(none()));
+}

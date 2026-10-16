@@ -137,3 +137,5 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
         % (json.dumps(stem + ".finite_difference_jvps"), workspace),
     ]
     variables[value.id] = result
+    from .program_emit_spatial_representation import emit_spatial_representation
+    emit_spatial_representation(program, value, variables, model, lines, block_indices, target)

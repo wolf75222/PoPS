@@ -20,7 +20,10 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         history_flux_regrid_source_epoch_(owner.history_flux_regrid_source_epoch_),
         history_flux_regrid_source_generation_(owner.history_flux_regrid_source_generation_),
         pending_history_remaps_(owner.pending_history_remaps_),
-        deferred_history_lag_scratches_(owner.deferred_history_lag_scratches_),
+        deferred_history_lag_scratches_(owner.copy_deferred_history_scratches_(
+            owner.deferred_history_lag_scratches_, owner.deferred_history_lag_authorities_)),
+        deferred_history_lag_authorities_(owner.prepare_deferred_history_authorities_(
+            deferred_history_lag_scratches_, owner.deferred_history_lag_authorities_)),
         accepted_temporal_partition_(owner.accepted_temporal_partition_),
         cell_temporal_configuration_(owner.cell_temporal_configuration_),
         accepted_flux_budget_contract_(owner.accepted_flux_budget_contract_),
@@ -49,7 +52,10 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
         history_flux_regrid_source_epoch_(accepted.history_flux_regrid_source_epoch_),
         history_flux_regrid_source_generation_(accepted.history_flux_regrid_source_generation_),
         pending_history_remaps_(accepted.pending_history_remaps_),
-        deferred_history_lag_scratches_(accepted.deferred_history_lag_scratches_),
+        deferred_history_lag_scratches_(accepted.owner_->copy_deferred_history_scratches_(
+            accepted.deferred_history_lag_scratches_, accepted.deferred_history_lag_authorities_)),
+        deferred_history_lag_authorities_(accepted.owner_->prepare_deferred_history_authorities_(
+            deferred_history_lag_scratches_, accepted.deferred_history_lag_authorities_)),
         accepted_temporal_partition_(accepted.accepted_temporal_partition_),
         cell_temporal_configuration_(accepted.cell_temporal_configuration_),
         accepted_flux_budget_contract_(accepted.accepted_flux_budget_contract_),
@@ -79,6 +85,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     static_assert(std::is_nothrow_swappable_v<decltype(history_flux_regrid_sources_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(pending_history_remaps_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(deferred_history_lag_scratches_)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(deferred_history_lag_authorities_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(accepted_temporal_partition_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(cell_temporal_configuration_)>);
     static_assert(std::is_nothrow_swappable_v<decltype(accepted_flux_budget_contract_)>);
@@ -105,6 +112,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
     owner_->history_flux_regrid_source_generation_ = history_flux_regrid_source_generation_;
     owner_->pending_history_remaps_.swap(pending_history_remaps_);
     owner_->deferred_history_lag_scratches_.swap(deferred_history_lag_scratches_);
+    owner_->deferred_history_lag_authorities_.swap(deferred_history_lag_authorities_);
     owner_->scratches_.swap(discarded_scratches_);
     owner_->hierarchy_tensor_solver_.reset();
     for (auto& [key, resource] : owner_->hierarchy_field_resources_) {
@@ -152,6 +160,7 @@ class AcceptedContextSnapshot final : public AcceptedProgramContextSnapshot {
   std::uint64_t history_flux_regrid_source_generation_ = std::numeric_limits<std::uint64_t>::max();
   std::map<std::string, AmrProgramPendingHistoryRemap> pending_history_remaps_;
   DeferredHistoryLagScratches deferred_history_lag_scratches_;
+  DeferredHistoryLagAuthorities deferred_history_lag_authorities_;
   CellTemporalPartitionAcceptedState accepted_temporal_partition_;
   std::optional<CellTemporalConfiguration> cell_temporal_configuration_;
   std::string accepted_flux_budget_contract_;

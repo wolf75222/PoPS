@@ -36,3 +36,20 @@ def validate_terminal_failure_capacities(per_rank, aggregate):
                         ("terminal_failure_aggregate_byte_capacity", aggregate)):
         if type(value) is not int or not 1 <= value <= (1 << 63) - 1:
             raise ValueError(f"{name} must be an integer in [1, INT64_MAX]")
+
+
+def validate_history_field_metadata_budget(value):
+    """Retained descriptions and transient codec workspace are separate ceilings."""
+    if value is None:
+        return
+    if (type(value) is not tuple or len(value) != 2
+            or any(type(item) is not int or not 1 <= item <= (1 << 63) - 1 for item in value)):
+        raise ValueError(
+            "history_field_metadata_budget requires (retained_bytes, workspace_bytes) positive int64 capacities"
+        )
+
+
+def validate_representation_workspace_capacity(value):
+    """Workspace for exact closed-read certificates, independent of failure/flux storage."""
+    if type(value) is not int or not 1 <= value <= (1 << 63) - 1:
+        raise ValueError("representation_workspace_byte_capacity must be an integer in [1, INT64_MAX]")

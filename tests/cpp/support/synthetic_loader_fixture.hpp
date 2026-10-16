@@ -5,12 +5,12 @@
 
 namespace pops::test::synthetic_loader {
 
-// The six compiled programs exercised by the nine independent transaction cases.
+// Source-built variants consumed by the independent transaction cases.
 inline unsigned variant(bool interface_blocks, bool histories, bool attempt_cursor, bool with_flux,
-                        bool mapping) {
+                        bool mapping, bool history_metadata = false) {
   const unsigned result = unsigned(interface_blocks) | (unsigned(histories) << 1) |
                           (unsigned(attempt_cursor) << 2) | (unsigned(with_flux) << 3) |
-                          (unsigned(mapping) << 4);
+                          (unsigned(mapping) << 4) | (unsigned(history_metadata) << 5);
   switch (result) {
     case 4:
     case 8:
@@ -18,6 +18,7 @@ inline unsigned variant(bool interface_blocks, bool histories, bool attempt_curs
     case 10:
     case 12:
     case 28:
+    case 42:
       return result;
     default:
       throw std::invalid_argument("unprepared synthetic loader fixture variant");
@@ -25,15 +26,16 @@ inline unsigned variant(bool interface_blocks, bool histories, bool attempt_curs
 }
 
 inline std::string source(bool interface_blocks = false, bool histories = false,
-                          bool attempt_cursor = false, bool with_flux = true,
-                          bool mapping = false) {
+                          bool attempt_cursor = false, bool with_flux = true, bool mapping = false,
+                          bool history_metadata = false) {
   // clang-format off
   return std::string("#define POPS_TEST_INTERFACE_BLOCKS ") +
       (interface_blocks ? "1\n" : "0\n") + "#define POPS_TEST_HISTORIES " +
       (histories ? "1\n" : "0\n") + "#define POPS_TEST_ATTEMPT_CURSOR " +
       (attempt_cursor ? "1\n" : "0\n") + "#define POPS_TEST_ATTEMPT_FLUX " +
       (with_flux ? "1\n" : "0\n") + "#define POPS_TEST_ATTEMPT_MAPPING " +
-      (mapping ? "1\n" : "0\n") + R"CPP(
+      (mapping ? "1\n" : "0\n") + "#define POPS_TEST_HISTORY_METADATA " +
+      (history_metadata ? "1\n" : "0\n") + R"CPP(
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -163,7 +165,9 @@ extern "C" const char* pops_program_hash() {
       : (POPS_TEST_ATTEMPT_FLUX ? "tests.attempt-cursor/hierarchy-flux@1"
                                 : "tests.attempt-cursor/hierarchy-empty@1");
 #elif POPS_TEST_HISTORIES
-  return "tests.synthetic-loader/program/history-restart-v1";
+  return POPS_TEST_HISTORY_METADATA
+      ? "tests.synthetic-loader/program/history-metadata-restart-v1"
+      : "tests.synthetic-loader/program/history-restart-v1";
 #else
   return POPS_TEST_INTERFACE_BLOCKS
       ? "tests.synthetic-loader/program/interface-publication-v1"
@@ -193,6 +197,12 @@ extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
 extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int block) {
   return block == 0 && (!POPS_TEST_ATTEMPT_CURSOR || POPS_TEST_ATTEMPT_FLUX)
       ? UINT64_C(1) : UINT64_C(0);
+}
+extern "C" std::uint64_t pops_program_history_field_metadata_storage_bytes() {
+  return POPS_TEST_HISTORY_METADATA ? (UINT64_C(1) << 20) : UINT64_C(0);
+}
+extern "C" std::uint64_t pops_program_history_field_metadata_workspace_bytes() {
+  return POPS_TEST_HISTORY_METADATA ? (UINT64_C(1) << 20) : UINT64_C(0);
 }
 extern "C" int pops_program_checkpoint_history_count() { return POPS_TEST_HISTORIES ? 2 : 0; }
 extern "C" const char* pops_program_checkpoint_history_name(int history) {
@@ -401,6 +411,9 @@ extern "C" void pops_install_program_amr(
   auto epoch = std::make_shared<std::uint64_t>(std::numeric_limits<std::uint64_t>::max());
   auto generation = std::make_shared<std::uint64_t>(std::numeric_limits<std::uint64_t>::max());
   const auto refresh_resources = [context, level_bodies, epoch, generation](bool force = false) {
+#if POPS_TEST_HISTORY_METADATA
+    context->configure_history_field_metadata(UINT64_C(1) << 20, UINT64_C(1) << 20);
+#endif
     if (force)
       *epoch = *generation = std::numeric_limits<std::uint64_t>::max();
     const auto topology = context->program_resource_topology();

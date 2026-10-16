@@ -64,9 +64,9 @@ def resolve_runtime_parameter_storage(
 ) -> dict[str, Any]:
     counts = _cardinalities(artifact)
     if counts and storage_bytes is None:
-        from pops import _pops
+        from pops._native_selector import selected_native_module
 
-        storage_bytes = _pops.runtime_parameter_storage_bytes
+        storage_bytes = selected_native_module(required=True).runtime_parameter_storage_bytes
     sizes = {
         key: validate_parameter_byte_capacity(storage_bytes(count))
         for key, count in counts.items()

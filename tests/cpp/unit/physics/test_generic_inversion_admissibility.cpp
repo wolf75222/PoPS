@@ -3,6 +3,7 @@
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/physics/admissibility/admissibility.hpp>
 #include <pops/physics/inversion/inversion.hpp>
+#include <pops/runtime/config/runtime_params.hpp>
 
 #include <gtest/gtest.h>
 
@@ -13,6 +14,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -22,6 +24,36 @@ void ensure_kokkos() {
   (void)guard;
 #endif
 }
+
+struct OwnedParameterPredicate {
+  pops::RuntimeParams parameters;
+  using pops_device_capture_members = pops::DeviceCaptureMembers<decltype(parameters)>;
+
+  static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
+    return {"test.owned-parameter-predicate", 1};
+  }
+  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
+    parameters.require_bound();
+    contract.scalar(parameters.get(64));
+  }
+  POPS_HD bool operator()(const pops::StateVec<1>& candidate) const {
+    return candidate[0] <= parameters.get(64);
+  }
+};
+
+struct HostContainerPredicate {
+  std::vector<double> values;
+  using pops_device_capture_members = pops::DeviceCaptureMembers<decltype(values)>;
+};
+
+using UnmanagedPredicateView = Kokkos::View<double*, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+struct BorrowedPredicate {
+  UnmanagedPredicateView values;
+  using pops_device_capture_members = pops::DeviceCaptureMembers<decltype(values)>;
+};
+
+static_assert(!pops::device_capture_v<pops::CustomInequality<HostContainerPredicate>>);
+static_assert(!pops::device_capture_v<pops::CustomInequality<BorrowedPredicate>>);
 
 enum class RecoveryFailure : std::uint8_t {
   kNone = 0,
@@ -224,6 +256,35 @@ TEST(GenericInversionAdmissibility, ExactRankedClosedFormAndIterativeProviders) 
   pops::PreparedVariableInversion same(dim1, ClosedFormSource{});
   EXPECT_EQ(first.collective_contract(), same.collective_contract());
   EXPECT_NE(dim1.exact_contract(), dim2.exact_contract());
+}
+
+TEST(GenericInversionAdmissibility, OwnedParameterConstraintExecutesAndRetainsItsIncarnation) {
+  ensure_kokkos();
+  std::array<double, 65> values{};
+  values[64] = 2;
+  const auto capacity = pops::RuntimeParams::checked_storage_bytes(values.size());
+  OwnedParameterPredicate predicate{pops::RuntimeParams::from_host(values, capacity)};
+  const pops::AdmissibleSet accepted(pops::FiniteComponents<0, 1>(1),
+                                     pops::CustomInequality<OwnedParameterPredicate>(predicate, 2));
+  static_assert(pops::device_capture_v<decltype(accepted)>);
+  const auto contract = accepted.exact_contract();
+  values[64] = 0;
+  predicate.parameters = pops::RuntimeParams::from_host(values, capacity);
+  const pops::AdmissibleSet replaced(pops::FiniteComponents<0, 1>(1),
+                                     pops::CustomInequality<OwnedParameterPredicate>(predicate, 2));
+  EXPECT_NE(contract, replaced.exact_contract());
+  EXPECT_EQ(contract, accepted.exact_contract());
+  Kokkos::View<int*> result("owned-admissibility", 3);
+  Kokkos::parallel_for(
+      "owned-admissibility", 3, KOKKOS_LAMBDA(const int index) {
+        const pops::StateVec<1> candidate{{pops::Real(index + 1)}};
+        const auto decision = accepted.evaluate(candidate);
+        result(index) = decision.accepted ? 0 : int(decision.diagnostic_code);
+      });
+  const auto host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, result);
+  EXPECT_EQ(host(0), 0);
+  EXPECT_EQ(host(1), 0);
+  EXPECT_EQ(host(2), 2);
 }
 
 TEST(GenericInversionAdmissibility, IdentityModelUsesTypedStateCandidateInEveryDimension) {

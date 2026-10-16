@@ -77,8 +77,10 @@ def rebuild_program(
     validate_issuances(self)
     out = type(self)(self.name, max_exact_coefficient_bytes=self.max_exact_coefficient_bytes,
                      flux_expression_budget=self.flux_expression_budget,
+                     history_field_metadata_budget=self.history_field_metadata_budget,
                      terminal_failure_byte_capacity=self.terminal_failure_byte_capacity,
-                     terminal_failure_aggregate_byte_capacity=self.terminal_failure_aggregate_byte_capacity)
+                     terminal_failure_aggregate_byte_capacity=self.terminal_failure_aggregate_byte_capacity,
+                     representation_workspace_byte_capacity=self.representation_workspace_byte_capacity)
     if canonical_owner:
         object.__setattr__(out, "_owner_path", out.owner_path.canonical())
         case_owner = getattr(self, "_case_owner_path", None)

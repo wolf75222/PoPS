@@ -268,7 +268,7 @@ def test_empty_change_selects_none(tmp_path):
 # --------------------------------------------------------------------------- #
 # Duration-balanced C++ matrix partition                                      #
 # --------------------------------------------------------------------------- #
-def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=14):
+def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=15):
     changed = tmp_path / f"changed-{shard_index}.txt"
     changed.write_text("".join(f"{c}\n" for c in changed_lines), encoding="utf-8")
     out = tmp_path / f"gh-out-{shard_index}.txt"
@@ -328,12 +328,12 @@ def test_cpp_shard_refinement_can_cross_a_tied_critical_path():
 
 def test_cpp_duration_catalog_verifier_authenticates_full_inventory(capsys):
     class Args:
-        shard_total = 14
+        shard_total = 15
 
     assert sel.verify_cpp_duration_catalogs(Args()) == 0
     output = capsys.readouterr().out
     assert "C++ targets in both duration catalogs" in output
-    assert "14 shards form an exact cover" in output
+    assert "15 shards form an exact cover" in output
 
 
 @pytest.mark.parametrize(
@@ -438,19 +438,18 @@ def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
     very_heavy = sorted(target for target, seconds in build.items() if seconds >= 240.0)
     assert len(very_heavy) >= 7, "cold-CI catalog lost the known five-minute AMR TUs"
 
-    shards = sel.cpp_target_shards(very_heavy, 14)
+    shards = sel.cpp_target_shards(very_heavy, 15)
     sel.ci_shard_binpack.verify_partition(very_heavy, shards, excluded=())
-    # The two fixture-owning targets each occupy one shard. With the two new heavy suites,
-    # thirteen shards would leave only three pairs for eight >=310-second targets: each
-    # exceeds 906 seconds even with the two smallest companions. Fourteen retains the bound
-    # without lowering catalog costs or lengthening either watchdog.
+    # Fixture-owning targets remain on independent shards. The three new Field suites
+    # make fourteen workers exceed the unchanged 906-second scheduling budget; fifteen
+    # preserve all catalog costs and both watchdogs.
     heavy_weights = sel.cpp_target_weights(very_heavy)
     assert max(sum(heavy_weights[target] for target in shard) for shard in shards) <= 15.1 * 60.0
 
-    # The complete inventory uses the same fourteen CI workers.
+    # The complete inventory uses the same fifteen CI workers.
     # LPT plus deterministic exchanges stays below 15.1 modeled minutes, leaving at least 2.9
     # minutes inside the workflow's 18 min build watchdog. CTest alone remains below its 7 min watchdog.
-    full_shards = sel.cpp_target_shards(sorted(build), 14)
+    full_shards = sel.cpp_target_shards(sorted(build), 15)
     weights = sel.cpp_target_weights(sorted(build))
     modeled_loads = [
         sum(weights[target] for target in shard) for shard in full_shards
@@ -538,6 +537,10 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     ], "parameterized GoogleTests require an explicit RUNTIME_DISCOVERY suite"
     assert conditional_sources == [
         ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
+         "AmrPathRhsBarrier.RepeatedSsaUsesDistinctNativeBarrierInvocations"),
+        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
+         "AmrPathRhsBarrier.DuplicateAndPreviousInvocationTracesRejectAndRollback"),
+        ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
          "AmrPathRhsBarrier.CanonicalSubfacesAndIndependentSidesPrecedeUpdatesAtPeriodicSeam"),
         ("tests/cpp/integration/amr/test_amr_path_rhs_barrier.cpp",
          "AmrPathRhsBarrier.NonconstantParentMeansAndUnequalSubfacesUseExactInjection"),
@@ -612,10 +615,10 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
     ).group("body")
 
 
-def test_full_cpp_plan_fourteen_shards_preserves_every_cpp_target(tmp_path):
+def test_full_cpp_plan_fifteen_shards_preserves_every_cpp_target(tmp_path):
     outputs = [
         _run_plan_cpp_shard(tmp_path, ["CMakeLists.txt"], shard_index)
-        for shard_index in range(14)
+        for shard_index in range(15)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     sharded = [output["cpp_shard_targets"].split() for output in outputs]
@@ -636,11 +639,11 @@ def test_full_cpp_plan_fourteen_shards_preserves_every_cpp_target(tmp_path):
     ), "the generated catalog is a pure-Python architecture test, not a C++ shard"
 
 
-def test_subset_cpp_plan_fourteen_shards_preserves_selected_union(tmp_path):
+def test_subset_cpp_plan_fifteen_shards_preserves_selected_union(tmp_path):
     changed = ["include/pops/numerics/time/schemes/splitting.hpp"]
     outputs = [
         _run_plan_cpp_shard(tmp_path, changed, shard_index)
-        for shard_index in range(14)
+        for shard_index in range(15)
     ]
     selected = set(outputs[0]["cpp_targets"].split())
     flat = [

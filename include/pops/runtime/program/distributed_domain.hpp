@@ -445,6 +445,33 @@ class Registry {
     used_bytes_ += charge;
     return Identity{issuer_, next_value_};
   }
+  // Prepare a final immutable object with its exact issued identity before
+  // publishing any registry entry. The local factory must not enter collectives.
+  template <class Factory>
+  Identity publish_value_with_identity(Factory&& factory, std::string type, std::uint64_t charge) {
+    configure(storage_bytes_, storage_versions_);
+    phase(*lane_, [&] {
+      local_require(configured_ && !type.empty() && values_.size() < storage_versions_ &&
+                        used_bytes_ <= storage_bytes_ && charge <= storage_bytes_ - used_bytes_ &&
+                        next_value_ < std::uint64_t(std::numeric_limits<std::int64_t>::max()),
+                    Code::capacity);
+    });
+    agree_i64(std::int64_t(next_value_), *lane_);
+    ++next_value_;
+    const Identity identity{issuer_, next_value_};
+    try {
+      phase(*lane_, [&] {
+        std::shared_ptr<const void> value = factory(identity);
+        local_require(bool(value), Code::domain);
+        values_.emplace(next_value_, StoredValue{std::move(value), std::move(type), charge});
+      });
+    } catch (...) {
+      values_.erase(next_value_);
+      throw;
+    }
+    used_bytes_ += charge;
+    return identity;
+  }
   std::shared_ptr<const void> resolve_value(Identity id, const std::string& type) const {
     local_require(authority_ && authority_->visible() && id.issuer == issuer_, Code::domain);
     auto found = values_.find(id.ordinal);

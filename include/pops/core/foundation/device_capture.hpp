@@ -2,6 +2,7 @@
 
 #include <Kokkos_Core.hpp>
 #include <type_traits>
+#include <array>
 
 namespace pops {
 
@@ -20,6 +21,13 @@ struct DeviceCapture : std::bool_constant<std::is_trivially_copyable_v<T>> {};
 template <class T>
 struct DeviceCapture<T, std::enable_if_t<Kokkos::is_view<T>::value>>
     : std::bool_constant<!T::memory_traits::is_unmanaged> {};
+
+// A fixed-size aggregate owns exactly its elements. Managed members retain
+// their allocations; an array never turns an unmanaged/host element into a
+// device capture. A zero-length array stores no element at all.
+template <class T, std::size_t N>
+struct DeviceCapture<std::array<T, N>, void>
+    : std::bool_constant<N == 0 || DeviceCapture<T>::value> {};
 
 template <class... Members>
 struct DeviceCaptureMembers : std::bool_constant<(DeviceCapture<Members>::value && ...)> {};

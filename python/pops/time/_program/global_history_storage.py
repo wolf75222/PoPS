@@ -69,7 +69,8 @@ def storage_contract(program: Any, source: Any, owner: Any) -> dict[str, Any]:
     result = {"contract":CONTRACT, "owner_block":owner, "clock":clock,
         "point":source.point, "region":source.region, "layout_witness":allocation,
         "storage_state_witness":matching[0].state, "field_problem_identity":source.attrs["field_problem_identity"],
-        "field_unknown":source.attrs["field_unknown"], "ncomp":1,
+        "field_unknown":source.attrs["field_unknown"],
+        "field_authority":source.attrs["field_authority"], "ncomp":1,
         "sampling":"cell", "representation":"valid_cell_copy"}
     if source.space is not None:
         # Observation validation above binds this exact FieldSpace to the solved
@@ -151,8 +152,11 @@ def validate_issuances(program: Any) -> None:
     if not getattr(program, "_global_field_history_issuance", None):
         return
     from pops.time._graph.value_traversal import walk_program_nodes
+    from .global_history_reads import validate_read
     found = set()
     for node in walk_program_nodes(program._values):
+        if node.op == "history" and node.attrs.get("global_field_history_read"):
+            validate_read(program, node)
         if node.op == "store_history" and node.attrs.get("history") in program._global_field_history_issuance:
             validate_storage_node(program, node)
             found.add(node.attrs["history"])

@@ -1,5 +1,8 @@
-// Included in ProgramContext<Dim>. All accepted data lives in RuntimeState::continuation_;
-// the context owns only non-restorable live capabilities and burned instance ordinals.
+// Included in ProgramContext<Dim>. The structural image lives in RuntimeState::continuation_.
+// Histories, held values, provider state, integral ledgers and moving geometry remain in their
+// native owners. The enclosing System accepted-state transaction captures and restores these
+// owners together with the structural image; publication does not erase their authored effects.
+// The context owns only non-restorable live capabilities and burned instance ordinals.
 public:
 using continuation_authority_type = ContinuationAuthority<Dim>;
 using continuation_ref = ContinuationValueRef<Dim>;
@@ -129,7 +132,6 @@ void continuation_configure(ContinuationConfiguration configuration) const {
             throw std::invalid_argument(
                 "Continuation binding changes the carrier component schema");
         }
-        continuation_require_profile_();
         runtime_state().continuation_.configure(std::move(configuration));
       },
       "continuation schema installation");
@@ -154,7 +156,6 @@ void continuation_initialize(continuation_ref initial) const {
   auto prepared = continuation_local_phase(
       [&] {
         auto& store = runtime_state().continuation_;
-        continuation_require_profile_();
         auto out = store.prepare(std::move(initial), continuation_prototypes_(), true,
                                  algebra_lifetime_->distributed, std::move(closure));
         continuation_require_frontier_(out.value, system_->time(), macro_step());
@@ -177,7 +178,6 @@ typename continuation_authority_type::Base continuation_read() const {
   auto base = continuation_local_phase(
       [&] {
         auto& store = runtime_state().continuation_;
-        continuation_require_profile_();
         store.require_frontier(system_->time(), macro_step());
         continuation_require_projection_(store.read());
         algebra_lifetime_->finite.import_high_water(store.domain_high_water());
@@ -224,7 +224,6 @@ void continuation_publish(const typename continuation_authority_type::Accepted& 
   auto value = continuation_local_phase(
       [&] {
         auto& runtime = runtime_state();
-        continuation_require_profile_();
         if (!runtime.cadence_continuation_ || !runtime.cadence_continuation_->executing ||
             runtime.stride_ != 1 || runtime.substeps_ != 1)
           throw std::logic_error(
@@ -365,16 +364,6 @@ typename ContinuationCodec<Dim>::Prototypes continuation_prototypes_() const {
                 const ContinuationFieldSupport::Ref& support) -> const field_type& {
     return continuation_field_prototype_(type, support);
   };
-}
-void continuation_require_profile_() const {
-  const auto& runtime = runtime_state();
-  if (!runtime.hist_.histories.empty() || runtime.cache_.size() != 0 ||
-      !runtime.moving_interval_geometry_.empty() ||
-      !system_->configured_field_provider_slots().empty() ||
-      !runtime.accepted_exchanges_.same_integral_declarations(AcceptedExchangeLedger{}))
-    throw std::logic_error(
-        "Continuation profile does not permit retained legacy history/cache/field/integral/moving "
-        "storage");
 }
 void continuation_require_frontier_(const continuation_ref& value, double time,
                                     std::int64_t step) const {

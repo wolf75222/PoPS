@@ -782,7 +782,7 @@ def _emit_auxiliary_route_registration(
                 "                output(index, output_component) = %s;" % expression,
                 "              });",
                 "            }",
-                "          })",
+                "          }), AuxiliaryPointReads{0}",
             )
         )
         return "\n".join(lines)

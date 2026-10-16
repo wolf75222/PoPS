@@ -94,7 +94,9 @@ def build_t01(cells=(8, 8), *, dt=.001, end=None):
     if not 0 < dt <= .02:raise ValueError("T01 reception requires 0 < dt <= .02")
     end=2*dt if end is None else end
     if end < dt:raise ValueError("T01 reception must include at least one complete step")
-    p = pops.Program("T01_explicit_stages"); q = p.state(block[U])
+    p = pops.Program("T01_explicit_stages",
+        history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
+    q = p.state(block[U])
     evaluate = _live_field_evaluator(field, phi, model, block, U, rate)
     point0 = p.stage("begin", c=0)
     k0 = evaluate(p, q.n, point0, "stage0")

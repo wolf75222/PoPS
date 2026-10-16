@@ -79,20 +79,22 @@ def test_full_manifest_pack_stays_within_python_shard_test_budget():
     timing = _load("ci_pytest_timings")
     universe = sorted({path for suite in selector.manifest_python_suites(selector.load_manifest())
                        for path in suite["files"]})
-    durations = binpack.load_durations()
+    units = _load("ci_python_test_units")
+    durations = units.weights(binpack.load_durations())
     excluded = set(binpack.EXCLUDED_FROM_SHARDS)
     files = [path for path in universe if path not in excluded]
     # Full selection and deterministic partial selections must all fit the job reservations.
     selections = [files] + [files[offset::stride] for stride in range(2, 8)
                            for offset in range(stride)]
-    for selected in selections:
+    for selected_files in selections:
+        selected = units.expand(selected_files)
         shards = binpack.assign_shards(selected, timing.SHARD_TOTAL, durations)
         binpack.verify_partition(selected, shards)
         for index, shard in enumerate(shards):
             minutes = timing.selected_budget(shard, durations)
             assert minutes + 5 <= timing.job_budget(index), (index, minutes, shard)
             if sum(durations[path] for path in shard) > timing.ORDINARY_BUDGET_SECONDS:
-                assert index < 5 and len(shard) == 1
+                assert index < 6 and len(shard) == 1
             else:
                 assert minutes == 45
 
@@ -318,3 +320,75 @@ def test_select_shard_rejects_bad_index():
     sel = _load("ci_select_tests")
     with pytest.raises(SystemExit):
         sel.shard(["a"], 5, 3)
+
+
+def test_explicit_case_inventory_is_expanded_and_covered_exactly_once():
+    units = _load("ci_python_test_units")
+    contract = units.load_contract()
+    expected_counts = {
+        "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py": 38,
+        "tests/python/integration/runtime/test_public_evolved_original_stage.py": 8,
+        "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py": 8,
+        "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py": 7,
+        "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 2,
+    }
+    assert {file: len(nodes) for file, nodes in contract.items()} == expected_counts
+    expanded = units.expand(list(expected_counts), contract)
+    assert len(expanded) == len(set(expanded)) == 63
+    costs = units.weights({}, contract)
+    shards = binpack.assign_shards(expanded, 9, costs)
+    binpack.verify_partition(expanded, shards, excluded=())
+    assert sum(len(group) for group in shards) == 63
+    for group in shards:
+        owners = {units.owner(node) for node in group}
+        collected = [node for file in owners for node in contract[file]]
+        assert units.collected_selection(collected, group, contract) == set(group)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "added", "duplicate", "foreign", "file", "repeat"])
+def test_case_inventory_refuses_drift_before_filtering(mutation):
+    units = _load("ci_python_test_units")
+    file = "tests/python/a.py"
+    contract = {file: {file + "::test_x[a]": 30., file + "::test_x[b]": 40.}}
+    collected = list(contract[file])
+    selected = collected[:1]
+    if mutation == "missing":
+        collected.pop()
+    elif mutation == "added":
+        collected.append(file + "::test_added")
+    elif mutation == "duplicate":
+        collected.append(collected[0])
+    elif mutation == "foreign":
+        selected = [file + "::test_foreign"]
+    elif mutation == "file":
+        selected = [file]
+    else:
+        selected += selected
+    with pytest.raises(ValueError):
+        units.collected_selection(collected, selected, contract)
+
+
+def test_case_units_keep_declared_native_dimension_and_whole_file_coverage():
+    units = _load("ci_python_test_units")
+    dimensions = _load("ci_python_dimensions")
+    paths = ["tests/python/a.py::test_one[x]", "tests/python/b.py"]
+    assert dimensions.partition(paths, {"default": 2, "files": {"tests/python/a.py": 3}}) == {
+        2: paths[1:], 3: paths[:1]}
+    assert units.collected_selection(["tests/python/b.py::test_two"], paths[1:], {}) == {
+        "tests/python/b.py::test_two"}
+
+
+@pytest.mark.parametrize("module", ["ci_python_dimensions", "ci_shard_binpack", "ci_pytest_timings"])
+@pytest.mark.parametrize("mode", ["package", "file"])
+def test_partition_helpers_import_in_a_fresh_process_without_sibling_imports(module, mode):
+    import subprocess
+    code = "import importlib,importlib.util,sys; "
+    code += f"sys.path.insert(0, {str(REPO_ROOT)!r}); "
+    if mode == "package":
+        code += f"importlib.import_module('scripts.'+{module!r})"
+    else:
+        code += (f"s=importlib.util.spec_from_file_location({module!r}, {str(SCRIPTS)!r}+'/'+{module!r}+'.py'); "
+                 "m=importlib.util.module_from_spec(s); s.loader.exec_module(m)")
+    result = subprocess.run([sys.executable, "-I", "-c", code], cwd=REPO_ROOT,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

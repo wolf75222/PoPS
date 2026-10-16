@@ -37,7 +37,7 @@ def captured_group(*, widths=(1, 1), reverse=False, face=False, foreign=False,
         components={frame.x: tuple(total + q for q in state), frame.y: (0.,) * len(state.components)})
         for i, state in enumerate(states))
     rates = tuple(model.rate("R%d" % i, equation=ddt(state) == -div(flux))
-                  for i, (state, flux) in enumerate(zip(states, fluxes)))
+                  for i, (state, flux) in enumerate(zip(states, fluxes, strict=True)))
     case = pops.Case("captured_principal")
     order = tuple(reversed(range(len(states)))) if reverse else tuple(range(len(states)))
     blocks = {i: case.block("block%d" % i, model, states=(states[i],)) for i in order}
@@ -102,10 +102,13 @@ def test_principal_face_keeps_vector_rows_and_each_rows_own_bound(reverse):
 
 
 def test_generated_reconstruction_selects_row_table_and_slot_in_compiled_scalar_code(tmp_path):
-    """C++ emission proof only; the integrated SDK/kernel execution is a separate test."""
+    """Real owned RuntimeParams/emission proof; integrated FV kernels are tested separately."""
     import ctypes
     import shutil
     import subprocess
+    from pathlib import Path
+    from pops.codegen.toolchain import pops_loader_build_flags
+    from pops.codegen.program_emit_principal import emit_principal_model
     from pops.codegen._native_toolchain import (
         capture_native_toolchain, native_toolchain_flags, verify_native_toolchain,
     )
@@ -118,34 +121,40 @@ def test_generated_reconstruction_selects_row_table_and_slot_in_compiled_scalar_
     entry = model._m._principal_groups[0]
     definition, _ = emit_principal_reconstruction(entry)
     wrapper = entry["cpp_name"] + "Reconstruction"
-    # Minimal scalar ABI for this emitter test; no native loader/kernel proof is claimed.
+    # Use the real managed carrier and capture concept, so a missing aggregate
+    # contract cannot be hidden by a trivially-copyable stand-in.
     source = """#include <array>
-#include <cmath>
-#include <limits>
-#define POPS_HD
-namespace pops {
-using Real=double;
-struct RuntimeParams { double values[2]{}; double get(int i) const { return values[i]; } };
-template<class T> concept ReconstructionPolicy=true;
-template<class T> constexpr bool stencil_envelope_fits_storage=true;
-}
+#include <vector>
+#include <pops/runtime/config/runtime_params.hpp>
+#include <pops/numerics/fv/reconstruction.hpp>
+#include <pops/numerics/spatial/nd/finite_volume.hpp>
+static_assert(pops::device_capture_v<std::array<pops::RuntimeParams, 2>>);
+static_assert(!pops::device_capture_v<std::array<std::vector<double>, 2>>);
+static_assert(!pops::device_capture_v<std::array<Kokkos::View<double*,
+    Kokkos::MemoryTraits<Kokkos::Unmanaged>>, 2>>);
+static_assert(pops::device_capture_v<std::array<std::vector<double>, 0>>);
+""" + emit_principal_model(entry) + (
+    "static_assert(pops::nd::ConservationLaw<2, %s>);\n" % entry["cpp_name"]) + """
 struct Sample { int component; double operator()(int i) const { return i==0 ? 4. : i>0 ? 7. : 1.; } };
 """ + definition + """
 extern "C" double evaluate(int component,double alpha0,double alpha1) {
   %s policy{};
-  policy.parameter_sets[0].values[0]=alpha0;
-  policy.parameter_sets[0].values[1]=99.;
-  policy.parameter_sets[1].values[0]=-99.;
-  policy.parameter_sets[1].values[1]=alpha1;
+  static_assert(pops::device_capture_v<decltype(policy)>);
+  const std::array<double,2> first{alpha0,99.}, second{-99.,alpha1};
+  const auto bytes = pops::RuntimeParams::checked_storage_bytes(2);
+  policy.parameter_sets[0] = pops::RuntimeParams::from_host(first,bytes);
+  policy.parameter_sets[1] = pops::RuntimeParams::from_host(second,bytes);
   return policy.stencil_face_value(Sample{component});
 }
 """ % wrapper
     cpp, library = tmp_path / "capture.cpp", tmp_path / "capture.so"
     cpp.write_text(source)
     toolchain = capture_native_toolchain()
+    compiler, native_flags, link_flags = pops_loader_build_flags(compiler)
     flags = native_toolchain_flags(toolchain, ["-std=c++20", "-shared", "-fPIC", "-O2",
-                                              "-fno-fast-math", "-ffp-contract=off"])
-    result = subprocess.run([compiler, *flags, str(cpp), "-o", str(library)],
+        "-fno-fast-math", "-ffp-contract=off", *native_flags,
+        "-I", str(Path(__file__).resolve().parents[4] / "include")])
+    result = subprocess.run([compiler, *flags, str(cpp), "-o", str(library), *link_flags],
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     verify_native_toolchain(toolchain)

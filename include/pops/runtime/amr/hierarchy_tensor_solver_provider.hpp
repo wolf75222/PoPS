@@ -265,6 +265,17 @@ class PreparedHierarchyTensorSolver {
   virtual const field_type& active_cell_mask(int) const {
     throw std::logic_error("hierarchy solver has no authenticated observation coverage");
   }
+  // Borrow the provider's exact spatial representation, not a State block with
+  // a coincident layout. Null masks explicitly mean a full physical cell.
+  struct RepresentationTopology {
+    const Geometry<Dim>& geometry;
+    const field_type& coverage;
+    const field_type* active = nullptr;
+    const field_type* volume_fraction = nullptr;
+  };
+  virtual RepresentationTopology representation_topology(int) const {
+    throw std::logic_error("hierarchy solver has no authenticated representation topology");
+  }
   virtual void stage_initial_guess(int level, const field_type* guess) = 0;
 
   FieldView<Real, Dim> assembly_target_view(std::string_view field_slot_identity, int level,

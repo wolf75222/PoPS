@@ -1117,7 +1117,7 @@ _METHODS = (
             "test_api_v02_relaxed_cutcell_native.py",
             "test_api_v02_authored_stability_native.py",
         ),
-        parameters={"temporal_ratio": 2},
+        parameters={"temporal_ratio": 2, "clip_to_frontier": True},
         component_choices={"factor": {"relaxed": True}},
         companions=(
             _named(

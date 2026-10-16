@@ -767,7 +767,7 @@ class ComputedDtController(StepController[ComputedDt]):
         if local_error is not None:
             raise local_error
         receipt = {}
-        requested_dt = self.strategy.dt
+        requested_dt = self.strategy.initial_request(now, float(t_end))
         rejected = 0
 
         def advance() -> None:

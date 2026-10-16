@@ -107,6 +107,10 @@ class _ProgramHistory(_ProgramBase):
             from pops.problem.handles import BlockHandle
             if not isinstance(block, BlockHandle):
                 raise TypeError("history: block must be a BlockHandle or None")
+        if name in getattr(self, "_global_field_history_issuance", {}):
+            from .global_history_reads import read
+            return read(self, name, lag, ncomp=ncomp, space=space, block=block,
+                        state_ref=state_ref, contract=contract)
         if ncomp is None:
             if space is None and name in self._history_spaces:
                 space = self._history_spaces[name]

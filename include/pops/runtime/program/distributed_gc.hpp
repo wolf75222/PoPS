@@ -73,6 +73,16 @@ class Census {
         domain_edge_(frame.array->domain);
         if (frame.array->index_domain)
           domain_edge_(frame.array->index_domain);
+        if (frame.array->has_immutable_scalar_values()) {
+          // Preserve the edge resource charge, without touching the scalar
+          // payloads. Domain liveness and strong root counts are fresh above.
+          const auto size = frame.array->values.size();
+          local_require(size <= remaining_, Code::capacity);
+          remaining_ -= size;
+          scalar_values_ += size;
+          count.color = 2;
+          continue;
+        }
         push({nullptr, frame.array, true});
         for (auto i = frame.array->values.size(); i != 0; --i) {
           const auto& value = frame.array->values[i - 1];

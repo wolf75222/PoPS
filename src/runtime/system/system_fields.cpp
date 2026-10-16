@@ -495,7 +495,8 @@ const MultiFab<Dim>* System<Dim>::validate_program_state_publication_candidate_(
 template <int Dim>
 void System<Dim>::set_density(const std::string& name, const std::vector<double>& density_values) {
   if (p_->program_.continuation_.initialized() && !p_->external_restart_transaction_)
-    throw std::logic_error("state is an authoritative Continuation projection; publish a Candidate instead");
+    throw std::logic_error(
+        "state is an authoritative Continuation projection; publish a Candidate instead");
 
   typename Impl::Species& block = p_->find(name);
   const std::size_t cells = checked_cell_count(p_->dom);
@@ -518,7 +519,8 @@ template <int Dim>
 void System<Dim>::set_primitive_state(const std::string& name,
                                       const std::vector<double>& primitive) {
   if (p_->program_.continuation_.initialized() && !p_->external_restart_transaction_)
-    throw std::logic_error("state is an authoritative Continuation projection; publish a Candidate instead");
+    throw std::logic_error(
+        "state is an authoritative Continuation projection; publish a Candidate instead");
 
   typename Impl::Species& block = p_->find(name);
   const std::size_t cells = checked_cell_count(p_->dom);
@@ -642,11 +644,14 @@ SolveReport System<Dim>::solve_fields_from_state_at_in_place_(
   p_->active_field_rhs_point_ = &point;
   try {
     auto report = provider_slot == "pops.system.default-field"
-        ? solve_fields_from_state_in_place_(block_index, stage)
-        : solve_fields_from_state_in_place_(provider_slot, block_index, stage);
+                      ? solve_fields_from_state_in_place_(block_index, stage)
+                      : solve_fields_from_state_in_place_(provider_slot, block_index, stage);
     p_->active_field_rhs_point_ = previous;
     return report;
-  } catch (...) { p_->active_field_rhs_point_ = previous; throw; }
+  } catch (...) {
+    p_->active_field_rhs_point_ = previous;
+    throw;
+  }
 }
 
 template <int Dim>
@@ -704,13 +709,15 @@ SolveReport System<Dim>::solve_fields_from_request_in_place_(
       exact.scalar(static_cast<std::uint64_t>(block));
     }
     contract = std::move(exact).release();
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       error, &lane, "System FieldSolveRequest source preparation failed collectively");
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"field-solve-source", contract}}, lane))
     throw std::invalid_argument("System FieldSolveRequest sources differ across ranks");
   require_exact_field_evaluation_request<Dim>(request.point(), request.field(),
-                                             "opaque-program-values@1", lane);
+                                              "opaque-program-values@1", lane);
   p_->active_field_rhs_request_ = &request;
   try {
     auto report = solve_fields_from_blocks_in_place_(request.field(), states);
@@ -724,9 +731,10 @@ SolveReport System<Dim>::solve_fields_from_request_in_place_(
 
 template <int Dim>
 void System<Dim>::invoke_field_rhs_v2_(const std::string& field, int block,
-    const MultiFab<Dim>& state, MultiFab<Dim>& rhs, const std::string& binding,
-    const std::string& consumer, std::size_t count,
-    const runtime::system::FieldRhsCallbackV2<Dim>& callback) {
+                                       const MultiFab<Dim>& state, MultiFab<Dim>& rhs,
+                                       const std::string& binding, const std::string& consumer,
+                                       std::size_t count,
+                                       const runtime::system::FieldRhsCallbackV2<Dim>& callback) {
   using Inputs = runtime::system::PreparedFieldRhsInputs<Dim>;
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   std::optional<Inputs> inputs;
@@ -745,13 +753,17 @@ void System<Dim>::invoke_field_rhs_v2_(const std::string& field, int block,
         throw std::invalid_argument("System Field RHS V2 received a foreign source image");
       point = request->point();
     } else {
-      if (block < 0 || static_cast<std::size_t>(block) >= p_->sp.size() || &p_->sp[block].U != &state)
-        throw std::invalid_argument("System raw Field state cannot mint accepted native membership");
+      if (block < 0 || static_cast<std::size_t>(block) >= p_->sp.size() ||
+          &p_->sp[block].U != &state)
+        throw std::invalid_argument(
+            "System raw Field state cannot mint accepted native membership");
       (void)p_->field_plans_.at(field);
-      if (p_->active_field_rhs_point_) point = *p_->active_field_rhs_point_;
+      if (p_->active_field_rhs_point_)
+        point = *p_->active_field_rhs_point_;
       else {
         point.clock = p_->program_.checkpoint_metadata_.primary_clock_identity;
-        if (point.clock.empty()) point.clock = "pops.system.native-accepted";
+        if (point.clock.empty())
+          point.clock = "pops.system.native-accepted";
         point.tick = p_->macro_step_;
         point.level = 0;
         point.stage = 0;
@@ -780,16 +792,19 @@ void System<Dim>::invoke_field_rhs_v2_(const std::string& field, int block,
         allocations->push_back(state.fab(local).storage());
       auto validate = [this, implementation, session, actual, allocations, block, field, binding,
                        epoch, accepted_step, accepted_time, depth] {
-        if (session.expired()) throw std::logic_error("System accepted Field source session expired");
+        if (session.expired())
+          throw std::logic_error("System accepted Field source session expired");
         const auto& plan = implementation->field_plans_.at(field);
         const auto& block_name = implementation->sp.at(block).name;
-        if (&implementation->sp.at(block).U != actual || implementation->embedded_boundary_generation_ != epoch ||
+        if (&implementation->sp.at(block).U != actual ||
+            implementation->embedded_boundary_generation_ != epoch ||
             implementation->macro_step_ != accepted_step || implementation->t != accepted_time ||
             step_transaction_depth() != depth || actual->local_size() != allocations->size() ||
             std::none_of(plan.providers.begin(), plan.providers.end(), [&](const auto& row) {
               return row.block == block_name && row.identity == binding;
             }))
-          throw std::logic_error("System accepted Field source lost actual owner/point/binding authority");
+          throw std::logic_error(
+              "System accepted Field source lost actual owner/point/binding authority");
         for (std::size_t local = 0; local < actual->local_size(); ++local)
           if (actual->fab(local).storage().data() != (*allocations)[local].data())
             throw std::logic_error("System accepted Field carrier incarnation changed");
@@ -803,31 +818,39 @@ void System<Dim>::invoke_field_rhs_v2_(const std::string& field, int block,
     source_storage->validate();
     if (count != 0 && p_->auxiliary_registry_.consumer_plan(consumer).value_count() != count)
       throw std::invalid_argument("System Field RHS V2 consumer arity differs from its binding");
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       error, &lane, "System Field RHS V2 issuer preflight failed collectively");
   const auto source = *source_storage;
   if (count != 0) {
     if (point.dt > 0) {
       const auto auxiliary = runtime::system::detail::prepare_auxiliary_consumer_point(
-          point, p_->embedded_boundary_generation_, p_->embedded_boundary_generation_,
-          point.stage, runtime::system::AuxiliaryEvaluationEvent::before_field_solve,
-          lane, consumer, block, "system-field-rhs-v2", [&] {
+          point, p_->embedded_boundary_generation_, p_->embedded_boundary_generation_, point.stage,
+          runtime::system::AuxiliaryEvaluationEvent::before_field_solve, lane, consumer, block,
+          "system-field-rhs-v2", [&] {
             source.validate();
             if (point.tick != p_->macro_step_ || point.level != 0)
               throw std::invalid_argument("Field auxiliary requires its complete current point");
             const auto& accepted = block_state(block);
-            if (state.layout() != accepted.layout() || state.distribution() != accepted.distribution() ||
+            if (state.layout() != accepted.layout() ||
+                state.distribution() != accepted.distribution() ||
                 state.local_rank() != accepted.local_rank() || state.ncomp() != accepted.ncomp())
-              throw std::invalid_argument("Field auxiliary SSA state differs from its block layout");
+              throw std::invalid_argument(
+                  "Field auxiliary SSA state differs from its block layout");
           });
-      if (refresh_auxiliary_(auxiliary, {consumer}) != runtime::system::AuxiliaryPublicationStatus::ready)
+      if (refresh_auxiliary_(auxiliary, {consumer}) !=
+          runtime::system::AuxiliaryPublicationStatus::ready)
         throw std::runtime_error("System Field auxiliary candidate is non-finite");
     } else {
       runtime::system::AuxiliaryEvaluationPoint auxiliary;
       try {
-        const auto* proof = std::get_if<runtime::system::NativeAcceptedFieldSource<Dim>>(&source.proof);
-        if (!proof) throw std::invalid_argument("zero-interval auxiliary read lacks native accepted authority");
+        const auto* proof =
+            std::get_if<runtime::system::NativeAcceptedFieldSource<Dim>>(&source.proof);
+        if (!proof)
+          throw std::invalid_argument(
+              "zero-interval auxiliary read lacks native accepted authority");
         proof->validate();
         const auto& initial = proof->birth_point();
         if (initial.physical_time != point.physical_time || initial.dt != point.dt)
@@ -839,52 +862,69 @@ void System<Dim>::invoke_field_rhs_v2_(const std::string& field, int block,
         auxiliary.stage = initial.stage;
         auxiliary.substep = initial.substep;
         auxiliary.event = runtime::system::AuxiliaryEvaluationEvent::before_field_solve;
-        runtime::system::AuxiliaryPhysicalEvaluation physical(
-            initial.stage_fraction, initial.dt, initial.physical_time);
+        runtime::system::AuxiliaryPhysicalEvaluation physical(initial.stage_fraction, initial.dt,
+                                                              initial.physical_time);
         physical.qualify_native_accepted_initial(initial);
         auxiliary.physical_evaluation = std::move(physical);
-      } catch (...) { error = std::current_exception(); }
+      } catch (...) {
+        error = std::current_exception();
+      }
       runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
           error, &lane, "System native initial auxiliary point failed collectively");
-      if (refresh_auxiliary_(auxiliary, {consumer}) != runtime::system::AuxiliaryPublicationStatus::ready)
+      if (refresh_auxiliary_(auxiliary, {consumer}) !=
+          runtime::system::AuxiliaryPublicationStatus::ready)
         throw std::runtime_error("System native initial auxiliary candidate is non-finite");
     }
   }
   try {
     const auto topology = p_->embedded_boundary_generation_;
     const auto generation = p_->auxiliary_registry_.accepted_generation();
-    auto groups = count == 0 ? nullptr :
-        std::make_shared<const runtime::system::AuxiliaryStorageGroups<Dim>>(*p_->provider_carrier_);
-    auto plan = count == 0 ? nullptr :
-        std::make_shared<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>>(
-            p_->auxiliary_registry_.consumer_plan(consumer));
+    auto groups = count == 0 ? nullptr
+                             : std::make_shared<const runtime::system::AuxiliaryStorageGroups<Dim>>(
+                                   *p_->provider_carrier_);
+    auto plan = count == 0
+                    ? nullptr
+                    : std::make_shared<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>>(
+                          p_->auxiliary_registry_.consumer_plan(consumer));
     auto owner = std::make_shared<const MultiFab<Dim>>(source.state());
     auto output_owner = std::make_shared<std::vector<typename Fab<Dim>::storage_type>>();
     output_owner->reserve(rhs.local_size());
     for (std::size_t local = 0; local < rhs.local_size(); ++local)
       output_owner->push_back(rhs.fab(local).storage());
     lease = std::make_shared<typename Inputs::InvocationLease>();
-    inputs.emplace(Inputs(owner, groups, plan, p_->geom,
-        runtime::system::field_rhs_logical_point(point), point, binding,
-        source.source_identity(), consumer, count, topology, generation,
+    inputs.emplace(Inputs(
+        owner, groups, plan, p_->geom, runtime::system::field_rhs_logical_point(point), point,
+        binding, source.source_identity(), consumer, count, topology, generation,
         Kokkos::DefaultExecutionSpace{}, prepared_boundary_execution_lane_, lease,
         [this, source, topology, generation] {
           source.validate();
           if (p_->embedded_boundary_generation_ != topology ||
               p_->auxiliary_registry_.accepted_generation() != generation)
-            throw std::logic_error("System Field RHS V2 storage generation changed during invocation");
-        }, p_->field_rhs_recovery_));
-    p_->field_rhs_recovery_->retain(std::make_shared<decltype(std::tuple(owner, output_owner, groups, plan, lease, source))>(
-        owner, output_owner, groups, plan, lease, source),
+            throw std::logic_error(
+                "System Field RHS V2 storage generation changed during invocation");
+        },
+        p_->field_rhs_recovery_));
+    p_->field_rhs_recovery_->retain(
+        std::make_shared<decltype(std::tuple(owner, output_owner, groups, plan, lease, source))>(
+            owner, output_owner, groups, plan, lease, source),
         [lease] { lease->active.store(false, std::memory_order_release); });
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       error, &lane, "System Field RHS V2 retained-input preparation failed collectively");
-  try { callback(*inputs, rhs); }
-  catch (...) { error = std::current_exception(); }
-  try { p_->field_rhs_recovery_->drain(); }
-  catch (...) { error = std::current_exception(); }
-  if (error) lease->revoked.store(true, std::memory_order_release);
+  try {
+    callback(*inputs, rhs);
+  } catch (...) {
+    error = std::current_exception();
+  }
+  try {
+    p_->field_rhs_recovery_->drain();
+  } catch (...) {
+    error = std::current_exception();
+  }
+  if (error)
+    lease->revoked.store(true, std::memory_order_release);
   runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
       error, &lane, "System Field RHS V2 execution failed collectively");
 }
@@ -901,7 +941,10 @@ SolveReport System<Dim>::solve_fields_from_blocks_at_in_place_(
     auto report = solve_fields_from_blocks_in_place_(field, stages);
     p_->active_field_rhs_point_ = previous;
     return report;
-  } catch (...) { p_->active_field_rhs_point_ = previous; throw; }
+  } catch (...) {
+    p_->active_field_rhs_point_ = previous;
+    throw;
+  }
 }
 
 template <int Dim>
@@ -1273,12 +1316,16 @@ std::vector<std::string> System<Dim>::configured_field_provider_slots() const {
 template <int Dim>
 std::optional<SolveReport> System<Dim>::field_solve_report(const std::string& provider_slot) const {
   if (provider_slot == "pops.system.default-field") {
-    if (p_->default_field_) return p_->default_field_->last_accepted_solve_report();
-    if (default_field_has_prepared_rhs(*p_)) return {};
+    if (p_->default_field_)
+      return p_->default_field_->last_accepted_solve_report();
+    if (default_field_has_prepared_rhs(*p_))
+      return {};
   } else {
     const auto found = p_->named_fields_.find(provider_slot);
-    if (found != p_->named_fields_.end()) return found->second->last_accepted_solve_report();
-    if (p_->field_plans_.contains(provider_slot)) return {};
+    if (found != p_->named_fields_.end())
+      return found->second->last_accepted_solve_report();
+    if (p_->field_plans_.contains(provider_slot))
+      return {};
   }
   throw std::out_of_range("System solve report names an unknown field provider slot");
 }
@@ -1300,18 +1347,18 @@ void System<Dim>::set_field_potential(const std::string& provider_slot,
 
 template <int Dim>
 void System<Dim>::publish_program_field_warm_start(
-    const runtime::multiblock::BoundaryEvaluationPoint& point,
-    const std::string& provider_slot, int runtime_block, const MultiFab<Dim>& potential,
-    const std::string& publication_identity) {
+    const runtime::multiblock::BoundaryEvaluationPoint& point, const std::string& provider_slot,
+    int runtime_block, const MultiFab<Dim>& potential, const std::string& publication_identity) {
   const auto& lane = prepared_boundary_execution_lane();
   std::shared_ptr<runtime::system::ExactNamedField<Dim>> field;
   std::string contract;
   std::exception_ptr error;
   try {
-    if (publication_identity.empty() || point.tick != p_->macro_step_ ||
-        runtime_block < 0 || static_cast<std::size_t>(runtime_block) >= p_->sp.size() ||
+    if (publication_identity.empty() || point.tick != p_->macro_step_ || runtime_block < 0 ||
+        static_cast<std::size_t>(runtime_block) >= p_->sp.size() ||
         field_publication_transaction_active_())
-      throw std::invalid_argument("Program field warm start requires an idle exact current field point");
+      throw std::invalid_argument(
+          "Program field warm start requires an idle exact current field point");
     const auto& clocks = p_->program_.checkpoint_metadata_.uniform_auxiliary_clocks;
     if (!clocks.owner_identity.empty())
       clocks.require_owned(point.clock);
@@ -1324,13 +1371,20 @@ void System<Dim>::publish_program_field_warm_start(
       throw std::invalid_argument("Program field warm start lost its exact installed field owner");
     field = installed->second;
     ExactContractBuilder exact;
-    exact.text("pops.program.field-warm-start").scalar(std::uint32_t{1})
-        .text(publication_identity).text(provider_slot).text(plan->second.plan_identity)
-        .text(plan->second.output_owner_identity).scalar(runtime_block)
+    exact.text("pops.program.field-warm-start")
+        .scalar(std::uint32_t{1})
+        .text(publication_identity)
+        .text(provider_slot)
+        .text(plan->second.plan_identity)
+        .text(plan->second.output_owner_identity)
+        .scalar(runtime_block)
         .scalar(p_->embedded_boundary_generation_);
     contract = std::move(exact).release();
-  } catch (...) { error = std::current_exception(); }
-  collectively_rethrow_exception(error, lane, "Program field warm-start preparation failed collectively");
+  } catch (...) {
+    error = std::current_exception();
+  }
+  collectively_rethrow_exception(error, lane,
+                                 "Program field warm-start preparation failed collectively");
   p_->require_field_plan_consensus();
   require_exact_field_evaluation_request<Dim>(point, provider_slot, "warm-start", lane);
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"field-warm-start", contract}}, lane))
@@ -1347,17 +1401,23 @@ SolveOutcome System<Dim>::solve_initial_field(const std::string& provider_slot) 
     require_assembling(p_->lifecycle_, "solve_initial_field");
     if (p_->t != 0.0 || p_->macro_step_ != 0 || provider_slot.empty() ||
         field_publication_transaction_active_())
-      throw std::invalid_argument("initial field solve requires its accepted zero-time installation state");
+      throw std::invalid_argument(
+          "initial field solve requires its accepted zero-time installation state");
     const auto plan = p_->field_plans_.find(provider_slot);
     if (plan == p_->field_plans_.end() || !p_->named_fields_.contains(provider_slot) ||
         plan->second.plan_identity.empty() || plan->second.output_owner_identity.empty())
-      throw std::invalid_argument("initial field solve requires one exact installed named field slot");
+      throw std::invalid_argument(
+          "initial field solve requires one exact installed named field slot");
     ExactContractBuilder exact;
-    exact.text("pops.system.initial-named-field").scalar(std::uint32_t{1})
-        .text(provider_slot).text(plan->second.plan_identity)
+    exact.text("pops.system.initial-named-field")
+        .scalar(std::uint32_t{1})
+        .text(provider_slot)
+        .text(plan->second.plan_identity)
         .text(plan->second.output_owner_identity);
     contract = std::move(exact).release();
-  } catch (...) { error = std::current_exception(); }
+  } catch (...) {
+    error = std::current_exception();
+  }
   collectively_rethrow_exception(error, lane, "initial named field admission failed collectively");
   p_->require_field_plan_consensus();
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"initial-named-field", contract}}, lane))
@@ -1460,6 +1520,7 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
     histories.slot_dt[name].resize(found->second.size(), Real(0));
     samples.resize(found->second.size(), tail_sample);
     histories.slot_exchanges.at(name).resize(found->second.size());
+    histories.slot_fields.at(name).resize(found->second.size());
     return found->second.front();
   }
   const int components =
@@ -1484,6 +1545,7 @@ MultiFab<Dim>& System<Dim>::register_history(const std::string& name, int lag, i
   histories.ghost_depth[name] = 1;
   histories.slot_dt[name] = std::vector<Real>(static_cast<std::size_t>(depth), Real(0));
   histories.slot_exchanges[name].resize(static_cast<std::size_t>(depth));
+  histories.slot_fields[name].resize(static_cast<std::size_t>(depth));
   histories.slot_sample[name] = std::vector<runtime::program::HistorySampleIdentity>(
       static_cast<std::size_t>(depth), runtime::program::HistorySampleIdentity::zero_start());
   if (qualified) {
@@ -1515,7 +1577,8 @@ std::vector<double> System<Dim>::get_state(const std::string& name) {
 template <int Dim>
 void System<Dim>::set_state(const std::string& name, const std::vector<double>& state) {
   if (p_->program_.continuation_.initialized() && !p_->external_restart_transaction_)
-    throw std::logic_error("state is an authoritative Continuation projection; publish a Candidate instead");
+    throw std::logic_error(
+        "state is an authoritative Continuation projection; publish a Candidate instead");
 
   typename Impl::Species& block = p_->find(name);
   write_global(block.U, p_->dom, state, block.ncomp);
@@ -1830,7 +1893,8 @@ template <int Dim>
 std::vector<double> System<Dim>::field_potential_global(const std::string& provider_slot) {
   if (all_reduce_max(p_->has_pending_field_warm_start() ? 1L : 0L,
                      prepared_boundary_execution_lane()) != 0)
-    throw std::logic_error("field potential checkpoint/read requires resolved accepted field iterates");
+    throw std::logic_error(
+        "field potential checkpoint/read requires resolved accepted field iterates");
   if (provider_slot == "pops.system.default-field")
     return potential_global();
   const auto found = p_->named_fields_.find(provider_slot);
@@ -1986,7 +2050,8 @@ template void System<kNativeDimension>::set_potential(const std::vector<double>&
 template std::vector<std::string> System<kNativeDimension>::field_provider_slots() const;
 template bool System<kNativeDimension>::field_provider_materialized(const std::string&) const;
 template std::vector<std::string> System<kNativeDimension>::configured_field_provider_slots() const;
-template std::optional<SolveReport> System<kNativeDimension>::field_solve_report(const std::string&) const;
+template std::optional<SolveReport> System<kNativeDimension>::field_solve_report(
+    const std::string&) const;
 template void System<kNativeDimension>::set_field_potential(const std::string&,
                                                             const std::vector<double>&);
 template void System<kNativeDimension>::publish_program_field_warm_start(

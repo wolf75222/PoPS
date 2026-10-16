@@ -60,6 +60,9 @@ def _install(*args, **kwargs):
     }
     for row in plan.artifact.layout_programs:
         row.program.program = declared
+        # This authored rk2 Program has no parameters. Seal the empty immutable
+        # route rather than making absence masquerade as a zero-cardinality route.
+        row.program.program_param_routes = ()
     artifact = CompiledSimulationArtifact(
         plan.artifact.plan, plan.artifact.program, plan.artifact.blocks,
         plan.artifact.layout_programs, plan.artifact.component_artifacts,

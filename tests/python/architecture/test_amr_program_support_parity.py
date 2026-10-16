@@ -28,6 +28,8 @@ PRODUCTION_CODEGEN = (
 CONTEXT_ROOT = "pops/runtime/program/amr_program_context.hpp"
 CONTEXT_FRAGMENT_PATHS = frozenset(
     {
+        "pops/runtime/program/amr_program_context_field_representation_obligation.inc",
+        "pops/runtime/program/amr_program_context_history_deferred_authority.inc",
         "pops/runtime/program/amr_program_context_field_observation.inc",
         "pops/runtime/program/amr_program_context_finite_values.inc",
         "pops/runtime/program/amr_program_context_continuation_level.inc",
@@ -36,9 +38,12 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_continuation_regrid.inc",
         "pops/runtime/program/amr_program_context_continuation_regrid_child.inc",
         "pops/runtime/program/amr_program_context_continuation_field_storage.inc",
+        "pops/runtime/program/amr_program_context_continuation_field_provider.inc",
+        "pops/runtime/program/amr_program_context_continuation_regrid_topology.inc",
         "pops/runtime/program/amr_program_context_field_allocation.inc",
         "pops/runtime/program/amr_program_context_field_bundle.inc",
         "pops/runtime/program/amr_program_context_affine_finalization.inc",
+        "pops/runtime/program/amr_program_context_composite_integral.inc",
         "pops/runtime/program/amr_program_context_affine_history.inc",
         "pops/runtime/program/amr_program_context_affine_measure.inc",
         "pops/runtime/program/amr_program_context_temporal_field.inc",

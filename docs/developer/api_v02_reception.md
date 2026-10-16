@@ -111,6 +111,126 @@ mirror; that metadata correction passes the unchanged failing assertion in a
 separate replay. The 125 Python groups cover all 1166 selected files exactly
 once, with unchanged watchdogs. These source checks are not GitHub results.
 
+## Source017 and source018 integration
+
+Source017a passes the official Dim2/MPI build. Native Python receivers pass the
+33-, 65- and 129-parameter cases, both independent Uniform Field checkpoint and
+rollback cases, and the straight-branch Path composition. The two independent
+regrid fixtures still accidentally declare their unknown as an input auxiliary;
+the fold Path receiver exposes a trace keyed by SSA identity without its dynamic
+invocation. Those three failed cases remain recorded as failed. Their corrections
+are included in source018b. Their subsequent reception is recorded below.
+
+The independent Uniform Field C++ checkpoint fixture separately passes MPI1/2/3
+after installing its actual block map before provider configuration, against the
+unchanged source017a native core. Source016d also completes six integral-feedback
+receivers and thirteen of fourteen implicit/frontier receivers. The latter include
+all eight constant, variable, diagonal and nonlinear-accumulation diffusion cases
+with backward Euler and IMEX, and all four typed-recovery cases. Its remaining
+failure is the fold Path composition; these successful subsets do not qualify it.
+
+Source018b builds the actual PoPS Dim2/MPI module in 199.36 seconds, with unchanged
+source inputs and an authenticated Kokkos/MPI/parallel-HDF5 identity. The earlier
+018 and 018a build failures are preserved. The integrated source adds exact Field
+support and representation metadata to History rotation, rollback and checkpoint;
+Python-authored nonlinear coordinate transforms retain their actual read bindings;
+and immutable distributed arrays avoid repeated scalar-payload garbage-collection
+walks while preserving resource accounting and conservative handling of mutable
+entries. Numerical, MPI and ROMEO performance reception is still in progress.
+
+Source018b subsequently receives both nested Path examples in actual C++,
+including their accepted face-integral comparisons. Nonlinear representation,
+workspace rejection, continuation-history rollback and mapped condensation also
+pass. The history/regrid campaign exposes three distinct defects: a numeric
+preflight incorrectly applied to structural history retention, frozen history
+descriptors omitted by the Uniform installer, and representation lookup requiring
+a State owner for authenticated independent provider storage. Restart also
+creates an unnecessary allocator for a domain-free legacy continuation image.
+The failures remain indexed; source018c includes their corrections.
+
+Thirty-five selected C++ cases pass on MPI1/2/3. Five additional cases pass after
+correcting their fixtures against the unchanged source018b core: the Path
+quadrature splits one duration into two halves, deferred histories obtain their
+actual provider-issued storage and DSO identity, and mapped solver routes are
+installed before their package. Four admissibility cases pass on MPI1/2/3 with
+the new owned-capture header, including an actual Kokkos kernel with 65 parameters;
+borrowed views and host containers remain rejected.
+
+The official source018c Dim2/MPI build passes in 282.22 seconds with unchanged
+sources and authenticated Kokkos/MPI/parallel-HDF5 identity. Five new C++ authority
+and continuation contracts pass on MPI1/2/3. Native Uniform independent-history,
+domain-free continuation restart, and nonlinear-coordinate-history rollback pass.
+The nonlinear-coordinate restart receiver also passes after correcting its slot
+order to the existing rotation contract; it still compares every slot, metadata,
+checkpoint and subsequent accepted state.
+
+The AMR independent-history receivers expose a separate restart defect: numerical
+samples were restored, but the manager omitted frozen slot descriptors and their
+declared capacity. Source018d materializes both from the installed contract before
+collective publication. Its official Dim2/MPI build passes in 278.48 seconds,
+but the two receivers still fail: provisional hierarchy construction precedes
+that materialization and also needs the complete cold metadata table. Source018e
+initializes this table from the installed contract before publishing the forest.
+Its official build passes in 324.32 seconds. Both complete independent-history
+regrid/restart receivers now pass in 153.03 seconds on that SDK, including the
+subsequent step, without a source overlay.
+
+The independent solved-field regrid witness also exposed two numerical choices
+in its Python definition. Its local affine equation has no spatial Jacobian, so
+it now declares identity preconditioning. Its central-difference step is one:
+the affine derivative has no truncation error, while the previous step of 1e-6
+caused cancellation above the unchanged 1e-13 stopping criterion. The failed
+receipts are retained. Both complete native regrid receivers pass against the
+unchanged source018d SDK with the recorded Python witness correction: checkpoint
+and next step, then late rejection and complete forest rollback (298.72 seconds).
+
+T10's explicit computed-frontier clipping policy passes its principal native
+case. Two parameter variants expose cancellation in the Python relaxation
+formula near the final time, including after an exact first-step restart. They
+remain recorded as failures; the runtime's final-time guard and numerical
+tolerances remain unchanged. The stable authored increment formula now passes
+six native cases on source018e: principal macro-step, two exact restart variants,
+one/two-level affine finalization and late rejection. The (0.75, 1.3) variant
+retains its final step of 1.7763568394002505e-15; no near-frontier tolerance hides
+that step. Original and restarted trajectories have identical states and receipts.
+
+The direct C++ cold-history receiver also passes on MPI1/2/3 with the source018e
+runtime unchanged. Its initial test-only assertion incorrectly expected empty
+flux bytes; the corrected reader authenticates all four registered rings, two
+empty-term slots per ring and exact end-of-input. Metadata omissions, extra rings,
+incomplete restart publication and rollback checks are retained.
+
+Six new signed-remainder ledger contracts pass on MPI1/2/3 against source018c
+with a recorded header overlay. They authenticate source families, face coverage,
+clock windows, affine publication and exact destination bases. These results do
+not qualify the still-incomplete persistent deferred-flux protocol.
+
+Nested implicit solves, composed commit delivery and persistent deferred AMR
+flux expressions remain separate open work. Build success and source-only tests
+do not establish their completion, nor final-source coverage of all 40 contracts.
+
+The isolated CONT7 protocol passes four C++ contracts on MPI1/2/3 with a
+source018e overlay. The first reception retains a signed-zero fixture failure;
+the corrected fixture initializes exact IEEE bits before exercising the codec.
+This protocol is not yet integrated with the physical AMR archive. The underlying
+`Fab::set_val(-0)` defect is corrected separately: two native Kokkos tests pass
+on MPI1/2/3, including Host/default storage, dimensions1/2/3, ghosts and copies.
+Those CPU results do not establish CUDA or Float32 reception.
+
+The depth160 diagnostic still times out during preparation after 450 seconds,
+before native compilation. Iterative traversal and bounded-size encoding chunks
+remove recursion limits but do not yet make this case practical. A proposed hash
+reuse shortcut was removed after six counterexamples showed that it suppressed
+observable second-pass metadata validation. The 32 targeted source tests now
+pass with both protocol calls retained. The compiler must preserve extension
+semantics while reducing repeated structural work; depth160 remains open.
+
+CI scheduling now selects 135 groups, partitioning long parameterized receivers
+into exact test units without dropping cases. The integration checks pass 231
+source tests. The longer existing job classes are assigned using recorded case
+costs; numerical tolerances and case trajectories are unchanged. The current
+GitHub result still belongs to the previous commit and is not green.
+
 ## Contract of the language
 
 The fixed engine understands values, regions, supports, ownership, effects,

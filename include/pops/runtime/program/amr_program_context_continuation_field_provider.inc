@@ -86,15 +86,13 @@ void configure_hierarchy_continuation_field_provider(std::string_view contract, 
                                                      int component, int components = 1,
                                                      int ghosts = 1) const {
   auto& provider = configured_hierarchy_field_solver_(solve);
-  std::optional<ContinuationFieldProvider> pending;
   decltype(continuation_field_providers_) staged;
   std::string identity;
   continuation_local_phase(
       [&] {
         if (contract.empty() || component < 0 || components < 1 || ghosts < 0 ||
             provider.level_count() != nlev())
-          throw std::invalid_argument(
-              "Continuation FieldProblem requires an exact selected unknown");
+          throw std::invalid_argument("Continuation FieldProblem requires an exact unknown");
         ExactContractBuilder proof;
         proof.text("pops.continuation.field-provider@1")
             .text(contract)
@@ -103,33 +101,31 @@ void configure_hierarchy_continuation_field_provider(std::string_view contract, 
             .scalar(components)
             .scalar(ghosts);
         identity = std::move(proof).release();
-        pending.emplace();
-        pending->components = components;
-        pending->ghosts = ghosts;
-        pending->epoch = runtime_->topology_epoch();
-        pending->generation = runtime_->materialization_generation();
+        ContinuationFieldProvider pending{
+            {},         {},    runtime_->topology_epoch(), runtime_->materialization_generation(),
+            components, ghosts};
         const auto previous = continuation_field_providers_.find(contract);
         if (previous != continuation_field_providers_.end()) {
           if (previous->second.components != components || previous->second.ghosts != ghosts)
             throw std::invalid_argument(
                 "Continuation FieldProblem catalogue changed its storage schema");
-          pending->routes = previous->second.routes;
+          pending.routes = previous->second.routes;
         }
-        pending->routes.emplace(solve, component);
-        pending->prototypes.reserve(static_cast<std::size_t>(nlev()));
+        pending.routes.emplace(solve, component);
+        pending.prototypes.reserve(static_cast<std::size_t>(nlev()));
         for (int level = 0; level < nlev(); ++level) {
           const auto& source = provider.solution(level);
           if (component >= source.ncomp())
             throw std::invalid_argument("Continuation FieldProblem selects an absent component");
-          pending->prototypes.push_back(make_scratch_(source, components, uniform_ghosts_(ghosts)));
+          pending.prototypes.push_back(make_scratch_(source, components, uniform_ghosts_(ghosts)));
           if (previous != continuation_field_providers_.end() &&
-              previous->second.epoch == pending->epoch &&
-              previous->second.generation == pending->generation)
-            require_same_field_contract_(pending->prototypes.back(),
+              previous->second.epoch == pending.epoch &&
+              previous->second.generation == pending.generation)
+            require_same_field_contract_(pending.prototypes.back(),
                                          previous->second.prototypes.at(level),
                                          "Continuation FieldProblem routes disagree on storage");
         }
-        staged.emplace(std::string(contract), std::move(*pending));
+        staged.emplace(std::string(contract), std::move(pending));
       },
       "Continuation FieldProblem catalogue preparation");
   const std::array<std::pair<std::string_view, std::string_view>, 1> proof{

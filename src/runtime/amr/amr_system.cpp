@@ -1,3 +1,4 @@
+#include <pops/runtime/program/field_provider_read_authority.hpp>
 /// @file
 /// @brief Exact compile-time-ranked AMR facade over runtime::amr::AmrRuntime<Dim>.
 
@@ -8,6 +9,7 @@
 #include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
 #include <pops/runtime/checkpoint/state_carriers.hpp>
 #include <pops/parallel/collective_exception.hpp>
+#include <pops/runtime/program/amr_history_field_metadata_codec.hpp>
 #include <pops/runtime/program/amr_history_flux_snapshot_codec.hpp>
 
 #include <pops/amr/hierarchy/amr_hierarchy.hpp>
@@ -803,6 +805,7 @@ struct PreparedHistoryHierarchyImages {
     std::string interpolation_identity;
     std::vector<Real> slot_dt;
     std::vector<runtime::program::HistorySampleIdentity> slot_sample;
+    std::vector<runtime::program::HistoryFieldMetadata> slot_fields;
     std::vector<PreparedSparseFieldGather<Dim>> slots;
   };
 
@@ -9628,6 +9631,13 @@ struct AmrSystem<Dim>::Impl {
         image.interpolation_identity = program.hist_.interpolation_identity.at(key);
         image.slot_dt = slot_dt;
         image.slot_sample = program.hist_.slot_sample.at(key);
+        image.slot_fields.resize(ring.size());
+        if (const auto fields = program.hist_.slot_fields.find(key);
+            fields != program.hist_.slot_fields.end()) {
+          if (fields->second.size() != ring.size())
+            throw std::invalid_argument("AMR retained Field metadata differs from ring depth");
+          image.slot_fields = fields->second;
+        }
         if (image.slot_sample.size() != ring.size())
           throw std::invalid_argument("AMR history sample identities differ from the ring depth");
         image.slots.reserve(ring.size());
@@ -9653,6 +9663,8 @@ struct AmrSystem<Dim>::Impl {
               .scalar(sample.interval_bits)
               .scalar(sample.ordinal);
         }
+        for (const auto& metadata : image.slot_fields)
+          metadata.append_contract(exact);
         for (const field_type& slot : ring) {
           image.slots.push_back(prepare_sparse_field_gather(slot, domain, communicator));
           exact.bytes(image.slots.back().exact_contract);
@@ -9769,6 +9781,7 @@ struct AmrSystem<Dim>::Impl {
         candidate->ghost_depth.erase(key);
         candidate->slot_dt.erase(key);
         candidate->slot_sample.erase(key);
+        candidate->slot_fields.erase(key);
       }
       if (fine_layout != nullptr) {
         const int child_level = parent_level + 1;
@@ -10056,6 +10069,67 @@ struct AmrSystem<Dim>::Impl {
                   engine->materialization_generation());
             }
           }
+          if (candidate->field_metadata_budget.enabled()) {
+            std::uint64_t workspace = 0;
+            runtime::program::history_field_detail::charge(
+                workspace, parent->second.size(),
+                4 * sizeof(runtime::program::HistoryFieldMetadata),
+                candidate->field_metadata_budget.workspace_bytes);
+          }
+          std::vector<runtime::program::HistoryFieldMetadata> source_fields(parent->second.size());
+          if (parent_source) {
+            if (const auto fields = program.hist_.slot_fields.find(parent_key);
+                fields != program.hist_.slot_fields.end())
+              source_fields = fields->second;
+          } else {
+            source_fields = previous->slot_fields;
+          }
+          if (source_fields.size() != parent->second.size())
+            throw std::invalid_argument("AMR remap Field metadata differs from exact source depth");
+          // A pure redistribution copies every retained value and its old producer
+          // description. Changed coverage or any interpolation is a new numerical
+          // operation and cannot silently discharge raw-coordinate obligations.
+          const bool has_field_metadata =
+              std::any_of(source_fields.begin(), source_fields.end(),
+                          [](const auto& field) { return !field.empty(); }) ||
+              (previous != nullptr &&
+               std::any_of(previous->slot_fields.begin(), previous->slot_fields.end(),
+                           [](const auto& field) { return !field.empty(); }));
+          if ((child_physical_layout_changed || parent_source || temporal) && has_field_metadata) {
+            std::uint64_t operation_bytes = 0;
+            runtime::program::history_field_detail::charge(
+                operation_bytes, source_images.exact_contract.size(), 4,
+                candidate->field_metadata_budget.workspace_bytes);
+            runtime::program::history_field_detail::charge(
+                operation_bytes, parent->second.size(),
+                4 * sizeof(runtime::program::HistoryFieldMetadata),
+                candidate->field_metadata_budget.workspace_bytes);
+            auto all_sources = source_fields;
+            if (previous != nullptr && parent_source)
+              all_sources.insert(all_sources.end(), previous->slot_fields.begin(),
+                                 previous->slot_fields.end());
+            ExactContractBuilder operation;
+            operation.bytes(source_images.exact_contract)
+                .text(parent_key)
+                .text(child_key)
+                .scalar(source)
+                .scalar(child_physical_layout_changed)
+                .scalar(
+                    regrid_transfer_kind(parent_level, static_cast<std::size_t>(runtime_owner)));
+            if (temporal)
+              for (const auto& row : temporal->rows) {
+                operation.scalar(row.time).scalar(row.interval);
+                runtime::program::append_history_transfer_weight_contract(operation, row);
+              }
+            for (std::size_t slot = 0; slot < source_fields.size(); ++slot) {
+              ExactContractBuilder selected;
+              selected.bytes(operation.view()).scalar(slot);
+              source_fields[slot] = runtime::program::history_field_detail::reconstructed_metadata(
+                  all_sources, selected.view(), child_level, engine->topology_epoch(),
+                  engine->materialization_generation(), candidate->field_metadata_budget);
+            }
+          }
+          candidate->slot_fields.insert_or_assign(child_key, std::move(source_fields));
           remap_plan.push_back(
               {child_key, parent_source ? parent_key : std::string{}, source, temporal});
           const amr::transfer::TransferKind transfer_kind =
@@ -10087,6 +10161,16 @@ struct AmrSystem<Dim>::Impl {
               exact.scalar(weight);
             runtime::program::append_history_transfer_weight_contract(exact, row);
           }
+      }
+      if (candidate->field_metadata_budget.enabled()) {
+        runtime::program::history_field_detail::Tables metadata(
+            candidate->field_metadata_budget.workspace_bytes);
+        metadata.collect(candidate->slot_fields, candidate->field_metadata_budget);
+      }
+      for (const auto& [key, fields] : candidate->slot_fields) {
+        exact.text(key);
+        for (const auto& field : fields)
+          field.append_contract(exact);
       }
       transfer_contract = std::move(exact).release();
     } catch (...) {
@@ -12332,6 +12416,19 @@ AmrSystem<Dim>::prepared_amr_auxiliary_consumer_plan(const std::string& consumer
         throw std::logic_error("AMR auxiliary consumer cannot read an unresolved field warm start");
   }
   return consumer;
+}
+
+template <int Dim>
+std::string AmrSystem<Dim>::prepared_amr_auxiliary_read_authority(
+    std::string_view consumer, int level, std::size_t slot, std::uint64_t byte_capacity) const {
+  const auto copy_bytes = sizeof(std::string) + consumer.size();
+  if (copy_bytes > byte_capacity)
+    throw std::length_error("AMR provider read lookup exceeds its workspace");
+  // Retain the existing collectively prepared hierarchy and warm-start guard.
+  (void)prepared_amr_auxiliary_consumer_plan(std::string(consumer), level);
+  return runtime::program::field_provider_read_authority(
+      p_->prepared_hierarchy->auxiliary_registries[static_cast<std::size_t>(level)], consumer, slot,
+      byte_capacity - copy_bytes);
 }
 
 #include "amr_program_field_publication.inc"
@@ -22799,6 +22896,12 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
     install(this);
     p_->program.require_exact_artifact_step_install(*previous_install,
                                                     "AmrSystem::install_program:");
+    const runtime::program::HistoryFieldMetadataBudget issued_history_fields{
+        checkpoint_metadata.history_field_metadata_storage_bytes,
+        checkpoint_metadata.history_field_metadata_workspace_bytes};
+    if (p_->program.hist_.field_metadata_budget != issued_history_fields)
+      throw std::invalid_argument(
+          "AmrSystem::install_program: History Field metadata budget differs from its artifact");
     if (!p_->program.hierarchy_refresh_)
       throw std::runtime_error(
           "AmrSystem::install_program: artifact lacks its hierarchy refresh hook");
@@ -23900,6 +24003,13 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
           (void)descriptor;
         }
         provisional_histories.emplace();
+        // This cold candidate is observed by the generated resource refresh before the
+        // authenticated checkpoint slots are materialized. Carry the installed capacity and
+        // complete empty metadata table now; register_history must not repair a partial manager.
+        provisional_histories->field_metadata_budget = {
+            p_->program.checkpoint_metadata_.history_field_metadata_storage_bytes,
+            p_->program.checkpoint_metadata_.history_field_metadata_workspace_bytes};
+        provisional_histories->field_metadata_budget.validate();
         for (const auto& [name, descriptor] : descriptors) {
           for (std::size_t level = 0; level < candidate_engine->hierarchy().num_levels(); ++level) {
             const std::string key = exact_amr_history_key(name, static_cast<int>(level));
@@ -23939,12 +24049,17 @@ void AmrSystem<Dim>::rebuild_hierarchy(const std::vector<AmrPatch<Dim>>& boxes,
             provisional_histories->ghost_depth.emplace(key, descriptor.ghost_depth);
             provisional_histories->slot_dt.emplace(
                 key, std::vector<Real>(static_cast<std::size_t>(descriptor.depth), Real(0)));
+            provisional_histories->slot_fields.emplace(
+                key, std::vector<runtime::program::HistoryFieldMetadata>(
+                         static_cast<std::size_t>(descriptor.depth)));
             provisional_histories->slot_sample.emplace(
                 key, std::vector<runtime::program::HistorySampleIdentity>(
                          static_cast<std::size_t>(descriptor.depth),
                          runtime::program::HistorySampleIdentity::zero_start()));
           }
         }
+        runtime::program::amr_history_field_detail::require_manager_metadata(
+            *provisional_histories, p_->program.installed_hash_);
       }
     } catch (...) {
       provisional_history_error = std::current_exception();
@@ -25487,6 +25602,12 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
         }
       }
     }
+    // The metadata envelope has its own frozen workspace bound, independent of
+    // whether any History value carries an FV face expression. Its complete
+    // output is bounded before serialization, including the nested FLX image.
+    shape.history_flux_payload_bytes = checked_size_sum(
+        shape.history_flux_payload_bytes, metadata.history_field_metadata_workspace_bytes,
+        "AMR history Field metadata checkpoint capacity exceeds size_t");
     // One direct-child deferred AB2 remap can exist per logical ring and configured transition.
     // Its key is the canonical level-qualified history key; derive its bounded characters from
     // the same frozen descriptor rather than reserving opaque slack.
@@ -25588,6 +25709,10 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
         .scalar(static_cast<std::uint64_t>(metadata.continuation_root_byte_capacity))
         .text(metadata.continuation_level_schema_identity)
         .scalar(static_cast<std::uint64_t>(metadata.continuation_level_byte_capacity));
+    if (metadata.history_field_metadata_workspace_bytes != 0)
+      exact.text("pops.history-field-metadata-budget@1")
+          .scalar(static_cast<std::uint64_t>(metadata.history_field_metadata_storage_bytes))
+          .scalar(static_cast<std::uint64_t>(metadata.history_field_metadata_workspace_bytes));
     candidate.emplace(accepted, source_authority_bytes);
     candidate_contract = std::move(exact).release();
   } catch (...) {
@@ -25951,6 +26076,10 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
   std::exception_ptr preparation_error;
   try {
     const auto& accepted = *decoded_preflight;
+    candidate.field_metadata_budget = {
+        p_->program.checkpoint_metadata_.history_field_metadata_storage_bytes,
+        p_->program.checkpoint_metadata_.history_field_metadata_workspace_bytes};
+    candidate.field_metadata_budget.validate();
     p_->requalify_restart_program_authority(accepted);
     runtime::program::require_live_amr_program_checkpoint(accepted, *p_->engine);
     p_->require_accepted_state_authority_contracts(accepted);
@@ -25962,6 +26091,8 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
     exact.text("pops.amr-system.restart-history-materialization")
         .scalar(std::uint32_t{1})
         .scalar(std::int32_t{Dim})
+        .scalar(candidate.field_metadata_budget.retained_bytes)
+        .scalar(candidate.field_metadata_budget.workspace_bytes)
         .bytes(p_->engine->spatial_contract())
         .scalar(static_cast<std::uint64_t>(accepted.histories.size()));
     for (std::size_t index = 0; index < names.size(); ++index) {
@@ -26019,12 +26150,16 @@ void AmrSystem<Dim>::materialize_program_restart_histories(const std::vector<std
         candidate.ghost_depth.emplace(key, descriptor.ghost_depth);
         candidate.slot_dt.emplace(
             key, std::vector<Real>(static_cast<std::size_t>(descriptor.depth), Real(0)));
+        candidate.slot_fields.emplace(key, std::vector<runtime::program::HistoryFieldMetadata>(
+                                               static_cast<std::size_t>(descriptor.depth)));
         candidate.slot_sample.emplace(key,
                                       std::vector<runtime::program::HistorySampleIdentity>(
                                           static_cast<std::size_t>(descriptor.depth),
                                           runtime::program::HistorySampleIdentity::zero_start()));
       }
     }
+    runtime::program::amr_history_field_detail::require_manager_metadata(
+        candidate, p_->program.installed_hash_);
     contract = std::move(exact).release();
     candidate_authority = state;
   } catch (...) {
@@ -26604,6 +26739,8 @@ template const runtime::system::AuxiliaryStorageGroups<kNativeDimension>*
 AmrSystem<kNativeDimension>::prepared_amr_provider_storage_groups(int) const;
 template const runtime::system::ResolvedAuxiliaryConsumerPlan<kNativeDimension>&
 AmrSystem<kNativeDimension>::prepared_amr_auxiliary_consumer_plan(const std::string&, int) const;
+template std::string AmrSystem<kNativeDimension>::prepared_amr_auxiliary_read_authority(
+    std::string_view, int, std::size_t, std::uint64_t) const;
 template void AmrSystem<kNativeDimension>::publish_program_field_components(
     const std::string&, const std::vector<AmrSystem<kNativeDimension>::ProgramFieldLevel>&);
 template void AmrSystem<kNativeDimension>::publish_program_field_warm_start(

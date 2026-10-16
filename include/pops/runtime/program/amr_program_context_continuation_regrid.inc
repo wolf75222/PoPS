@@ -1,10 +1,15 @@
 // Included in AmrProgramContext. Topology is representation, not a transfer law.
 private:
 using FieldTopology = FieldTopologyView<Dim>;
-using TopologyViews = std::map<std::pair<int, int>, FieldTopology>;
+using TopologyKey = std::tuple<int, std::string, int>;
+using TopologyViews = std::map<TopologyKey, FieldTopology>;
 struct RegridFieldQualification {
   int block, level;
   typename FieldTopology::Side side;
+  std::string provider;
+  ContinuationFieldSupport::Ref support;
+  ContinuationFieldAllocations allocations;
+  FieldRepresentationObligation::Ref representation;
 };
 struct ContinuationRegridFrame {
   PreparedResourceAttempt attempt;
@@ -23,27 +28,7 @@ struct ContinuationRegridFrame {
 mutable PreparedResourceCache continuation_regrid_lifetime_;
 mutable std::optional<ContinuationRegridFrame> continuation_regrid_;
 
-TopologyViews capture_continuation_topologies_(typename FieldTopology::Side side,
-                                               PreparedResourceAttempt attempt) const {
-  TopologyViews views;
-  for (int block = 0; block < n_blocks(); ++block)
-    for (int level = 0; level < nlev(); ++level) {
-      const int owner = sys_block(block);
-      const auto& field = facade_->prepared_amr_block_state(owner, level);
-      const auto* active = facade_->prepared_amr_block_level_active_mask(owner, level);
-      const auto* fraction = facade_->prepared_amr_block_level_volume_fraction(owner, level);
-      auto data = std::make_shared<typename FieldTopology::Data>(typename FieldTopology::Data{
-          attempt, level, block, runtime_->topology_epoch(), runtime_->materialization_generation(),
-          side, facade_->prepared_amr_level_geometry(level), field.layout(), field.distribution(),
-          field.local_rank(), field.ghosts(), field.ncomp(),
-          active ? std::make_shared<const field_type>(*active) : nullptr,
-          fraction ? std::make_shared<const field_type>(*fraction) : nullptr,
-          std::make_shared<const field_type>(
-              facade_->prepared_amr_block_level_coverage_mask(owner, level))});
-      views.emplace(std::pair{block, level}, FieldTopology(std::move(data)));
-    }
-  return views;
-}
+#include "pops/runtime/program/amr_program_context_continuation_regrid_topology.inc"
 
 ContinuationRegridFrame& require_continuation_regrid_() const {
   if (!continuation_regrid_ || !continuation_regrid_->attempt.visible())
@@ -69,7 +54,8 @@ void require_field_topology(const FieldTopology& view) const {
   if (!source && !frame.target_ready)
     throw std::logic_error("target topology is not materialized for the regrid graph");
   const auto& table = source ? frame.source_views : frame.target_views;
-  const auto found = table.find({view.program_block(), view.level()});
+  const auto found =
+      table.find({view.program_block(), std::string(view.field_provider()), view.level()});
   const bool registered =
       found != table.end() && (found->second.same_view(view) ||
                                std::any_of(frame.derived_views.begin(), frame.derived_views.end(),
@@ -87,7 +73,7 @@ FieldTopology continuation_source_topology(int block, std::int64_t level) const 
   const auto& frame = require_continuation_regrid_();
   if (level < 0 || level >= static_cast<std::int64_t>(frame.sources.size()) - 1)
     throw std::out_of_range("source Field topology level is outside the immutable forest");
-  const auto view = frame.source_views.at({block, static_cast<int>(level)});
+  const auto view = frame.source_views.at({block, {}, static_cast<int>(level)});
   require_field_topology(view);
   return view;
 }
@@ -95,7 +81,7 @@ FieldTopology continuation_target_topology(int block, std::int64_t level) const 
   const auto& frame = require_continuation_regrid_();
   if (level < 0 || level >= nlev())
     throw std::out_of_range("target Field topology level is outside the candidate forest");
-  const auto view = frame.target_views.at({block, static_cast<int>(level)});
+  const auto view = frame.target_views.at({block, {}, static_cast<int>(level)});
   require_field_topology(view);
   return view;
 }
@@ -105,8 +91,11 @@ std::optional<RegridFieldQualification> regrid_field_qualification_(const field_
   const auto& frame = require_continuation_regrid_();
   for (const auto* values : {&frame.source_fields, &frame.target_fields, &frame.copied_fields}) {
     const auto found = values->find(&field);
-    if (found != values->end())
+    if (found != values->end()) {
+      if (!found->second.allocations.matches(field))
+        throw std::invalid_argument("regrid Field storage was reincarnated");
       return found->second;
+    }
   }
   return std::nullopt;
 }
@@ -114,7 +103,8 @@ FieldTopology derive_field_topology_(const FieldTopology& storage, const field_t
   require_field_topology(storage);
   auto& frame = require_continuation_regrid_();
   const auto qualification = regrid_field_qualification_(field);
-  if (!qualification || qualification->block != storage.program_block())
+  if (!qualification || qualification->block != storage.program_block() ||
+      qualification->provider != storage.field_provider())
     throw std::invalid_argument("Field topology template has no exact Continuation owner");
   if (storage.side() == FieldTopology::Side::Source &&
       (qualification->side != FieldTopology::Side::Source ||
@@ -145,6 +135,25 @@ FieldTopology continuation_target_topology(int block, std::int64_t level,
                                            const field_type& field) const {
   return derive_field_topology_(continuation_target_topology(block, level), field);
 }
+FieldTopology continuation_source_topology(std::string_view provider, std::int64_t level,
+                                           const field_type& field) const {
+  return derive_field_topology_(
+      continuation_provider_topology_(provider, level, FieldTopology::Side::Source), field);
+}
+FieldTopology continuation_target_topology(std::string_view provider, std::int64_t level,
+                                           const field_type& field) const {
+  return derive_field_topology_(
+      continuation_provider_topology_(provider, level, FieldTopology::Side::Target), field);
+}
+void require_regrid_field_topology(const field_type& field, const FieldTopology& view) const {
+  require_field_topology(view);
+  view.require_field(field);
+  const auto qualification = regrid_field_qualification_(field);
+  if (!qualification || qualification->block != view.program_block() ||
+      qualification->provider != view.field_provider() || qualification->level != view.level() ||
+      qualification->side != view.side())
+    throw std::invalid_argument("Field representation requires its exact regrid source instance");
+}
 void continuation_bind_regrid_field_(const field_type& source,
                                      const field_type& destination) const {
   if (!continuation_regrid_phase())
@@ -156,23 +165,39 @@ void continuation_bind_regrid_field_(const field_type& source,
     return;
   }
   require_same_field_contract_(source, destination, "qualified regrid Field copy");
-  frame.copied_fields.insert_or_assign(&destination, *qualification);
+  auto copied = *qualification;
+  copied.allocations = continuation_field_allocations_(destination);
+  frame.copied_fields.insert_or_assign(&destination, std::move(copied));
 }
-void continuation_bind_regrid_import_(const field_type& field,
-                                      const FieldTopology& topology) const {
+void continuation_bind_regrid_import_(const field_type& field, const FieldTopology& topology,
+                                      const field_type& prototype) const {
   require_field_topology(topology);
   topology.require_field(field);
   if (topology.side() != FieldTopology::Side::Target)
     throw std::invalid_argument("Field import requires an exact target topology");
+  const auto source = regrid_field_qualification_(prototype);
+  if (!source || source->block != topology.program_block() ||
+      source->provider != topology.field_provider())
+    throw std::invalid_argument("Field import changed its scientific producer");
+  auto support = source->support;
+  if (support)
+    support = std::make_shared<const ContinuationFieldSupport>(ContinuationFieldSupport{
+        support->program_identity, support->origin_point, support->program_owner, topology.level(),
+        topology.topology_epoch(), topology.materialization_generation(), support->field_provider});
+  if (!topology.field_provider().empty() && !support)
+    throw std::invalid_argument("independent Field import has no authenticated temporal source");
   require_continuation_regrid_().copied_fields.insert_or_assign(
-      &field, RegridFieldQualification{topology.program_block(), topology.level(),
-                                       FieldTopology::Side::Target});
+      &field, RegridFieldQualification{
+                  topology.program_block(), topology.level(), FieldTopology::Side::Target,
+                  std::string(topology.field_provider()), std::move(support),
+                  continuation_field_allocations_(field), source->representation});
 }
 
 // Called before the engine replaces any topology, masks or Field storage.
 bool begin_continuation_regrid() const {
   require_facade_execution_();
   refresh_resources_();
+  prepare_continuation_topology_providers_();
   return continuation_local_phase(
       [&] {
         const auto root = amr_continuation_accepted_.find(-1);
@@ -192,18 +217,21 @@ bool begin_continuation_regrid() const {
         frame.source_views =
             capture_continuation_topologies_(FieldTopology::Side::Source, frame.attempt);
         for (const auto& [level, store] : frame.sources) {
-          if (level < 0)
-            continue;
           continuation_detail::walk_value<Dim>(
               store.read(), store.configuration().byte_capacity,
               [&](const ContinuationValue<Dim>& value) {
                 if (value.kind() == ContinuationKind::Field) {
                   const auto& support = value.field_support();
+                  if (level < 0 && !support)
+                    throw std::invalid_argument(
+                        "parent retained Field lacks an explicit producer support");
                   frame.source_fields.emplace(
                       &value.field(),
-                      RegridFieldQualification{value.field_owner(),
-                                               support ? support->producer_level : level,
-                                               FieldTopology::Side::Source});
+                      RegridFieldQualification{
+                          value.field_owner(), support ? support->producer_level : level,
+                          FieldTopology::Side::Source, value.field_provider(), support,
+                          continuation_field_allocations_(value.field()),
+                          value.field_representation()});
                 }
                 return true;
               },
@@ -218,6 +246,7 @@ bool begin_continuation_regrid() const {
 // Called only after target hierarchy and its declared geometry providers exist.
 void prepare_continuation_regrid() const {
   refresh_resources_();
+  prepare_continuation_topology_providers_();
   continuation_local_phase(
       [&] {
         auto& frame = require_continuation_regrid_();
@@ -231,7 +260,15 @@ void prepare_continuation_regrid() const {
           for (int level = 0; level < nlev(); ++level)
             frame.target_fields.emplace(
                 &facade_->prepared_amr_block_state(sys_block(block), level),
-                RegridFieldQualification{block, level, FieldTopology::Side::Target});
+                RegridFieldQualification{
+                    block,
+                    level,
+                    FieldTopology::Side::Target,
+                    {},
+                    {},
+                    continuation_field_allocations_(
+                        facade_->prepared_amr_block_state(sys_block(block), level)),
+                    {}});
         continuation_parent_working_ = frame.sources.at(-1);
         continuation_parent_phase_ = false;
         continuation_children_.clear();
