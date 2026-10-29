@@ -4,7 +4,8 @@ A source scan of the conformance cases, litmus cases, probes and the final witne
 ``cases.toml``) refuses:
 
 * the sizes that the plan derives (B2, section 12.1): halo widths, stencil radii, component counts
-  and history depths written by the author;
+  (``components=``, ``field_components=``), dimensions given as an integer to a call, history
+  depths and the slots of a history ring, written by the author;
 * the runtime resources (B3, B5): memory and metadata budgets, byte capacities, buffer sizes,
   storage sizes and every ``capacity=``;
 * C++ files, C++ source strings and the names of C++ files;
@@ -13,7 +14,9 @@ A source scan of the conformance cases, litmus cases, probes and the final witne
   ``User`` (``riemann.User("id")``), and imports from the native component tree.
 
 A method budget (a Newton or Krylov iteration limit, a retry count, ``budget=`` of a solve) is part
-of the method and stays in the case (B1, section 12.1). A size is reported where the author writes
+of the method and stays in the case (B1, section 12.1), and so do a physical quantity
+(``dimension=pops.Dimension(...)``, a heat capacity) and the parameter of a builder that declares
+its support (``def build(dimension=2)``). A size is reported where the author writes
 it: a keyword argument, a parameter default, an attribute assignment or a key of a ``**{...}``
 argument. Library objects reach no C++ entry route either (CF0b), so a case cannot reach one through
 ``pops.lib``. The exception list of b6 (``cf8_exceptions.txt``) only shrinks (MG6).
@@ -43,6 +46,11 @@ _COUNT_NAMES = frozenset({"n_components", "num_components", "component_count", "
 _HISTORY_DEPTH_NAMES = frozenset({"history_depth", "history_size", "history_length"})
 _RESOURCE_BUDGET_WORDS = frozenset({"memory", "metadata", "byte", "bytes", "storage", "buffer",
                                     "workspace", "expression"})
+# A capacity with one of these words is a physical quantity (a heat capacity), not the capacity of
+# a set or of a storage (B5).
+_PHYSICAL_CAPACITY_WORDS = frozenset({"heat", "thermal", "specific", "molar", "isobaric",
+                                      "isochoric", "volumetric"})
+_HISTORY_SLOT_NAMES = frozenset({"slots", "source_slots", "target_slots"})
 
 
 def load_case_paths(path: pathlib.Path = CASES) -> tuple[str, ...]:
@@ -66,6 +74,8 @@ def infrastructure_kind(name: str, value: ast.AST | None, callee: str) -> str | 
     words = set(scan.split_words(name))
     callee_words = set(scan.split_words(callee))
     if words & {"capacity", "capacities"}:
+        if words & _PHYSICAL_CAPACITY_WORDS:
+            return None
         return "byte capacity" if words & {"byte", "bytes"} else "capacity"
     if words & {"byte", "bytes"}:
         return "byte capacity"
@@ -82,10 +92,14 @@ def infrastructure_kind(name: str, value: ast.AST | None, callee: str) -> str | 
                                                  or callee_words & _STENCIL_CALLEES
                                                  or "stencil" in words):
         return "stencil radius"
-    if name in _COUNT_NAMES or (name == "components" and _is_int_literal(value)):
+    if name in _COUNT_NAMES or (name == "components" and _is_int_literal(value)) \
+            or (name == "field_components" and callee):
         return "component count"  # components=("u", "v") or {axis: ...} declares, never counts
-    if name in _HISTORY_DEPTH_NAMES or (name == "depth" and "history" in callee_words):
-        return "history depth"
+    if name in _HISTORY_DEPTH_NAMES or (name == "depth" and "history" in callee_words) \
+            or (name in _HISTORY_SLOT_NAMES and "history" in callee_words):
+        return "history depth"  # HistoryTransfer(slots=3): the slots of the ring are its depth
+    if name == "dimension" and callee and _is_int_literal(value):
+        return "dimension"  # the rank of the support that a call reads; Dimension(...) is physical
     return None
 
 
@@ -173,8 +187,8 @@ def kind_of(term: str) -> str:
     """The CF8 bullet that a term of the exception list falls under."""
     if term in NATIVE_TERMS or term == "cpp-file":
         return "native code (A7, C37)"
-    if term == "depth":
-        return "history depth"  # depth= is a site only in a history call
+    if term == "depth" or term in _HISTORY_SLOT_NAMES:
+        return "history depth"  # depth= and slots= are sites only in a history call
     return infrastructure_kind(term, ast.Constant(value=2), "stencil") or "infrastructure"
 
 
@@ -188,6 +202,10 @@ OWNER_RULES = (
      "history persistence is a runtime resource with a default (B3, CN5), Phase 2"),
     ("N7", ("halo width", "stencil radius", "component count"), None,
      "footprints and halo widths derived from the reads (IR14, IR17; N7a pilot), Phase 1"),
+    ("N7", ("dimension",), None,
+     "the rank of the support that a call reads (B2): N7's typed index maps derive it for "
+     "StencilFlux and TraceFlux; the gradient calls go with the field operators of G10 and the "
+     "regrid_topology and continuation_forest calls with G11, Phase 1 and 2"),
     ("N8", ("history depth",), None,
      "lag(..., startup=f) replaces keep_history and its depth (section 5.12, T27), Phase 1"),
     ("G13", ("byte capacity", "buffer size"), None,

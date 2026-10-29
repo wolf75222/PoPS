@@ -5,15 +5,18 @@ starts with ``_``, nothing from ``pops.codegen``, ``pops.runtime`` or the native
 ``pops._pops``. It reaches none of the C++ entry routes of A7 (``pops.external``,
 ``NativeFunction``, ``NativeDerivative``, ``PreparedNativeComponent``, ``load_cpp_library``, a
 brick id passed to ``User``), holds no C++ file and no C++ source string, imports nothing from
-the native component tree and holds no private module of its own. The scanner is
-``frozen_engine/cf0b.py``.
+the native component tree and holds no private module of its own. It neither reads nor writes a
+private attribute of an object that it receives from the core (``model._m``,
+``getattr(model, "_frame")``; A4). The scanner is ``frozen_engine/cf0b.py``.
 
-The test starts from the b6 exception list (``frozen_engine/cf0b_exceptions.txt``, which is the list
-that CF0b names, site for site) and fails both on a new site and on an exception that has become
-useless, so the list can only shrink (MG6). It is empty at the exit of Phase 1 (section 18).
+The test starts from the b6 exception list (``frozen_engine/cf0b_exceptions.txt``: the list that
+CF0b names, site for site, and the private attributes that the audit of lot 2 found) and fails both
+on a new site and on an exception that has become useless, so the list can only shrink (MG6). It is
+empty at the exit of Phase 1 (section 18).
 
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
+import ast
 import collections
 
 import pytest
@@ -22,7 +25,7 @@ from tests.python.architecture.frozen_engine import cf0b, ratchet, scan
 
 # The number of sites of each term in cf0b_exceptions.txt at b6e64c1d. A total may only go down
 # (MG6); never raise one: remove the occurrence instead.
-B6_TERM_TOTALS = {"private-import": 11, "private-module": 3}
+B6_TERM_TOTALS = {"private-import": 11, "private-module": 3, "private-attribute": 6}
 
 # CF0b at b6e64c1d, verbatim from section 16.1 (all under python/pops/): lib/time/dirk.py:9,
 # euler.py:7, imex.py:7-8, rk.py:9, ssprk.py:8, strang.py:25, lib/amr/__init__.py:374,435,
@@ -36,6 +39,16 @@ SPEC_B6_SITES = {
     ("python/pops/lib/amr/__init__.py", 435), ("python/pops/lib/initial/__init__.py", 306),
     ("python/pops/lib/initial/__init__.py", 440), ("python/pops/lib/time/_factory.py", 0),
     ("python/pops/lib/time/_helpers.py", 0), ("python/pops/lib/initial/_bootstrap_program.py", 0),
+}
+# The b6 sites that the audit of lot 2 added (Linear N2, ROM-81): the library reads private
+# attributes of a core model to find its frame and state, and writes the provenance of a core
+# Program. Section 16.1 names imports; its intention covers these reads and writes (A4).
+AUDIT_B6_SITES = {
+    ("python/pops/lib/models/electrostatic_lorentz.py", 32),
+    ("python/pops/lib/models/electrostatic_lorentz.py", 50),
+    ("python/pops/lib/models/electrostatic_lorentz.py", 52),
+    ("python/pops/lib/models/electrostatic_lorentz.py", 55),
+    ("python/pops/lib/time/_factory.py", 26), ("python/pops/lib/time/_factory.py", 34),
 }
 
 
@@ -67,12 +80,14 @@ def test_exception_list_never_exceeds_its_b6_totals(listed):
         "exceptions): unknown %s, grown %s" % (unknown, grown))
 
 
-def test_b6_list_is_the_list_of_the_spec():
-    # At b6 the scan finds exactly the sites that CF0b names. A slice removes sites; it never adds.
+def test_b6_list_is_the_list_of_the_spec_and_the_audit():
+    # At b6 the scan finds exactly the sites that CF0b names and those of the audit. A slice
+    # removes sites; it never adds.
     listed_sites = {(entry.path, entry.line) for entry in ratchet.read_list(cf0b.EXCEPTIONS)[1]}
-    assert listed_sites <= SPEC_B6_SITES, (
-        "CF0b: sites that the b6 list of section 16.1 does not name: %s"
-        % sorted(listed_sites - SPEC_B6_SITES))
+    allowed = SPEC_B6_SITES | AUDIT_B6_SITES
+    assert listed_sites <= allowed, (
+        "CF0b: sites that neither the b6 list of section 16.1 nor the audit names: %s"
+        % sorted(listed_sites - allowed))
 
 
 def test_every_exception_names_the_issue_that_removes_it(listed):
@@ -97,8 +112,10 @@ def test_library_is_the_path_that_cf0_excludes():
 # Controls: the scanner refuses what CF0b refuses, and only that.
 # ---------------------------------------------------------------------------------------------
 def _terms(source, rel="python/pops/lib/time/probe.py"):
+    defined = cf0b.library_attributes([ast.parse(source)])
     return sorted({term for _, term in cf0b.python_sites(
-        rel, source, library_module="pops.lib", native_tree="native/")})
+        rel, source, library_module="pops.lib", native_tree="native/",
+        library_attributes=defined)})
 
 
 @pytest.mark.parametrize("source, expected", [
@@ -130,6 +147,14 @@ def _terms(source, rel="python/pops/lib/time/probe.py"):
     ("SRC = '#include <cmath>\\ndouble f(double x) { return x; }'\n", ["cpp-source"]),
     ("SRC = 'KOKKOS_INLINE_FUNCTION double f(double x);'\n", ["cpp-source"]),
     ("HEADER = 'flux_kernel.hpp'\n", ["cpp-file-reference"]),
+    ("def f(model):\n    return model._m\n", ["private-attribute"]),
+    ("def f(model):\n    return getattr(model, '_frame', None)\n", ["private-attribute"]),
+    ("def f(program):\n    program._provenance_context = None\n", ["private-attribute"]),
+    ("def f(state):\n    setattr(state, '_cache', {})\n", ["private-attribute"]),
+    ("def f(model):\n    return getattr(getattr(model, '_dsl', None), '_m', model)\n",
+     ["private-attribute"]),
+    ("import pops.time\npops.time._registry = {}\n", ["private-access"]),
+    ("import pops.time\nhandle = getattr(pops.time, '_program')\n", ["private-access"]),
 ])
 def test_scanner_refuses_what_cf0b_refuses(source, expected):
     assert _terms(source) == expected
@@ -147,6 +172,14 @@ def test_scanner_refuses_what_cf0b_refuses(source, expected):
     "def f():\n    raise ValueError('pops.external(...) and NativeFunction are refused here')\n",
     '"""Docstring naming #include <cmath> and std::vector."""\n',
     "TARGET = 'pops::RusanovFlux'\n",  # a qualified name, not C++ source
+    # private attributes that the library defines itself, on self or on another of its objects
+    "class Box:\n    def __init__(self):\n        self._lo = 0\n"
+    "    def __eq__(self, other):\n        return self._lo == other._lo\n",
+    "class Ring:\n    __slots__ = ('_items',)\n\ndef size(ring):\n    return len(ring._items)\n",
+    "class _Cell:\n    pass\n\ndef cells():\n    return _Cell._instances\n",  # a module class
+    "def f(row):\n    return row._replace(a=1)._asdict()\n",  # the public API of a namedtuple
+    "import sys\nframe = sys._getframe(0)\n",  # not the pops surface
+    "def f(model):\n    return model.__class__, getattr(model, '__name__', None)\n",  # dunders
 ])
 def test_scanner_accepts_the_public_surface(source):
     assert _terms(source) == []

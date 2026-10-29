@@ -8,6 +8,12 @@ entry routes of A7 (``pops.external``, ``NativeFunction`` and ``NativeDerivative
 and no C++ source string, imports nothing from the native component tree, and holds no private
 module of its own.
 
+The same intention covers the objects that the library receives from the core (A4: a library
+object can be written in a case, with the same identity, and a case reads no ``model._m``): the
+library neither reads nor writes a private attribute of a core object, as ``obj._x`` or as
+``getattr(obj, "_x")``. The private attributes that the library defines itself (``self._x``, a
+class attribute or a method of a library class) stay the library's own business.
+
 The scan reads source only. Imports inside ``pops.lib`` itself are the library's own business (a
 private module of the library is one site, at its path), so ``from ._factory import x`` adds no site
 beyond ``lib/time/_factory.py``.
@@ -28,10 +34,17 @@ ROUTE_NAMES = frozenset({"NativeFunction", "NativeDerivative", "PreparedNativeCo
 ROUTE_MODULES = frozenset({"pops.native_calls", "pops.native_components"})
 EXTERNAL = "external"  # refused only where it resolves into pops: the word itself is generic
 BINDINGS = "pops._pops"
+# Names that start with one underscore but are the documented public API of a Python type: the
+# methods and fields of a namedtuple and the members of an Enum.
+PUBLIC_UNDERSCORE_NAMES = frozenset({
+    "_asdict", "_field_defaults", "_fields", "_make", "_replace",
+    "_generate_next_value_", "_ignore_", "_missing_", "_name_", "_order_", "_value_"})
+_ATTRIBUTE_CALLS = frozenset({"getattr", "setattr", "hasattr", "delattr"})
 
 TERMS = {
     "private-import": "imports a module or a name of the core whose name starts with _",
     "private-access": "reaches a private attribute of a core module",
+    "private-attribute": "reads or writes a private attribute of an object of the core (A4)",
     "codegen-import": "imports pops.codegen",
     "runtime-import": "imports pops.runtime",
     "bindings-import": "imports the native bindings pops._pops",
@@ -125,6 +138,75 @@ def route_terms(node: ast.AST, names: pysource.Names, library_module: str):
         yield "private-access"
 
 
+def library_attributes(trees) -> frozenset[str]:
+    """The private attribute names that the library defines itself: stored on ``self`` or ``cls``,
+    bound in a class body (methods, class attributes, ``__slots__``)."""
+    defined = set()
+    for tree in trees:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store) \
+                    and isinstance(node.value, ast.Name) and node.value.id in ("self", "cls"):
+                defined.add(node.attr)
+            elif isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        defined.add(item.name)
+                    targets = item.targets if isinstance(item, ast.Assign) else \
+                        [item.target] if isinstance(item, ast.AnnAssign) else []
+                    for target in targets:
+                        if isinstance(target, ast.Name):
+                            defined.add(target.id)
+                            if target.id == "__slots__" and isinstance(item.value, (
+                                    ast.Tuple, ast.List)):
+                                defined.update(element.value for element in item.value.elts
+                                               if isinstance(element, ast.Constant)
+                                               and isinstance(element.value, str))
+    return frozenset(name for name in defined if pysource.is_private_part(name))
+
+
+def _private_name(name: str) -> bool:
+    return pysource.is_private_part(name) and name not in PUBLIC_UNDERSCORE_NAMES
+
+
+def _object_term(base: ast.AST, attribute: str, names: pysource.Names, local: set[str],
+                 defined: frozenset[str], library_module: str, *, module_access: bool):
+    """The term of a private @p attribute reached on @p base, or None. A base that resolves into
+    ``pops`` is a core module or a name imported from one: it is reported as private-access when
+    @p module_access (a store, or ``getattr(module, "_x")``), since route_terms reports the
+    dotted loads."""
+    if isinstance(base, ast.Name) and base.id in ("self", "cls"):
+        return None
+    dotted = names.dotted(base)
+    if dotted is not None and dotted.split(".")[0] == "pops":
+        if module_access and not _in_library(dotted, library_module):
+            return "private-access"
+        return None
+    if isinstance(base, ast.Name) and (base.id in names.bound or base.id in local):
+        return None  # a module or name of another package, or a class of this module
+    return None if attribute in defined else "private-attribute"
+
+
+def private_attribute_terms(tree: ast.AST, names: pysource.Names, defined: frozenset[str],
+                            library_module: str):
+    """(line, term) of every read or write of a private attribute of a core object."""
+    local = {node.name for node in ast.walk(tree)
+             if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and _private_name(node.attr):
+            term = _object_term(node.value, node.attr, names, local, defined, library_module,
+                                module_access=not isinstance(node.ctx, ast.Load))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id in _ATTRIBUTE_CALLS and len(node.args) >= 2 \
+                and isinstance(node.args[1], ast.Constant) \
+                and isinstance(node.args[1].value, str) and _private_name(node.args[1].value):
+            term = _object_term(node.args[0], node.args[1].value, names, local, defined,
+                                library_module, module_access=True)
+        else:
+            continue
+        if term:
+            yield node.lineno, term
+
+
 def brick_id_call(node: ast.Call, names: pysource.Names) -> bool:
     """``User("id")``: a pops ``User`` selector called with a brick id instead of a body."""
     dotted = names.dotted(node.func)
@@ -134,11 +216,18 @@ def brick_id_call(node: ast.Call, names: pysource.Names) -> bool:
         and isinstance(node.args[0].value, str)
 
 
-def python_sites(rel: str, text: str, *, library_module: str, native_tree: str):
-    """(line, term) of every CF0b-kind site of one Python file (CF8 reuses it for case files)."""
+def python_sites(rel: str, text: str, *, library_module: str, native_tree: str,
+                 library_attributes: frozenset[str] | None = None):
+    """(line, term) of every CF0b-kind site of one Python file (CF8 reuses it for case files).
+
+    With @p library_attributes (the private attribute names that the library defines), the reads
+    and writes of private attributes of core objects are sites too.
+    """
     tree = ast.parse(text)
     native_top = native_tree.strip("/").split("/")[0]
     names = pysource.Names(tree, rel)
+    if library_attributes is not None:
+        yield from private_attribute_terms(tree, names, library_attributes, library_module)
     for record in pysource.imports(tree, rel):
         for term in _import_terms(record, library_module, native_top):
             yield record.line, term
@@ -168,22 +257,23 @@ def scan_library(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine 
     engine = engine or scan.load_cf0()
     library = library_root(engine)
     library_module = pysource.module_name(library.rstrip("/"))
+    files = [rel for rel in scan.tracked_files(root) if rel.startswith(library)]
+    texts = {rel: (root / rel).read_text(encoding="utf-8") for rel in files if rel.endswith(".py")}
+    defined = library_attributes(ast.parse(text) for text in texts.values())
     sites: set[Site] = set()
-    for rel in scan.tracked_files(root):
-        if not rel.startswith(library):
-            continue
+    for rel in files:
         inner = pathlib.PurePosixPath(rel[len(library):])
         if pysource.is_cpp_file(rel):
             sites.add(Site(rel, 0, "cpp-file", "(path)"))
         if any(pysource.is_private_part(part) for part in inner.with_suffix("").parts) \
                 and rel.endswith(".py"):
             sites.add(Site(rel, 0, "private-module", "(path)"))
-        if not rel.endswith(".py"):
+        if rel not in texts:
             continue
-        text = (root / rel).read_text(encoding="utf-8")
-        lines = text.splitlines()
-        for line, term in python_sites(rel, text, library_module=library_module,
-                                       native_tree=engine.native_tree):
+        lines = texts[rel].splitlines()
+        for line, term in python_sites(rel, texts[rel], library_module=library_module,
+                                       native_tree=engine.native_tree,
+                                       library_attributes=defined):
             sites.add(Site(rel, line, term, _excerpt(lines, line)))
     return sorted(sites)
 

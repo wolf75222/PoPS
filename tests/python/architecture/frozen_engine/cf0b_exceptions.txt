@@ -4,15 +4,22 @@
 # Each line: <path>:<line> <term> <issue> | <excerpt>. Line 0 is a site in the path itself (a
 # private module of the library). The terms are cf0b.TERMS. The list only shrinks: a slice that
 # removes a site removes its line in the same PR (refresh_exceptions.py cf0b), and a new site fails
-# test_cf0b_library_boundary.py. It is the list that CF0b names at b6, line for line, and it is
-# empty at the exit of Phase 1 (section 18).
+# test_cf0b_library_boundary.py. It is the list that CF0b names at b6, line for line, plus the six
+# lines where the library reads or writes a private attribute of a core object (private-attribute,
+# found by the lot 2 audit), and it is empty at the exit of Phase 1 (section 18).
 
 python/pops/lib/amr/__init__.py:374 private-import N12 | from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 python/pops/lib/amr/__init__.py:435 private-import N12 | from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 python/pops/lib/initial/__init__.py:306 private-import N8 | from pops.analytic._cell_bounds import validate_cell_integrals
 python/pops/lib/initial/__init__.py:440 private-import N8 | from pops.analytic._cell_bounds import validate_cell_integral_contract
 python/pops/lib/initial/_bootstrap_program.py:0 private-module N8 | (path)
+python/pops/lib/models/electrostatic_lorentz.py:32 private-attribute N3 | frame = getattr(model, "_frame", None)
+python/pops/lib/models/electrostatic_lorentz.py:50 private-attribute N3 | authored = getattr(model, "_m", None)
+python/pops/lib/models/electrostatic_lorentz.py:52 private-attribute N3 | authored = getattr(getattr(model, "_dsl", None), "_m", model)
+python/pops/lib/models/electrostatic_lorentz.py:55 private-attribute N3 | names = getattr(authored, "_cons_names", None)
 python/pops/lib/time/_factory.py:0 private-module N8 | (path)
+python/pops/lib/time/_factory.py:26 private-attribute N8 | program._provenance_context = {
+python/pops/lib/time/_factory.py:34 private-attribute N8 | program._provenance_context = None
 python/pops/lib/time/_helpers.py:0 private-module N8 | (path)
 python/pops/lib/time/dirk.py:9 private-import N8 | from pops.time._methods.tableau import DiagonallyImplicitRungeKuttaTableau
 python/pops/lib/time/euler.py:7 private-import N8 | from pops.time._methods.tableau import RungeKuttaTableau

@@ -2,7 +2,8 @@
 # native code in the case files of cases.toml. Written by cf8.py and refresh_exceptions.py.
 #
 # Each line: <path>:<line> <term> <issue> | <excerpt>. The term is the keyword that writes a derived
-# size or a runtime resource (capacity, byte_capacity, ghost_depth, radius, components, depth, ...),
+# size or a runtime resource (capacity, byte_capacity, ghost_depth, radius, components, dimension,
+# field_components, depth, slots, ...),
 # or a kind of native code (cf8.NATIVE_TERMS, cpp-file). The issue is the one whose mechanism makes
 # the written value unnecessary (cf8.OWNER_RULES, a proposal). The list only shrinks: a slice that
 # removes a site removes its line in the same PR (refresh_exceptions.py cf8), and a new site fails
@@ -32,6 +33,8 @@ examples/api_v02/continuation_forest_amr.py:66 capacity G02 | domain = p.range_s
 examples/api_v02/continuation_forest_amr.py:120 level_capacity G02 | parent=parent, observe=observe, level_capacity=8)
 examples/api_v02/continuation_history_uniform.py:21 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 8*1024*1024))
 examples/api_v02/continuation_history_uniform.py:25 depth N8 | p.store_history("prior", q.n, depth=1)
+examples/api_v02/continuation_independent_uniform.py:27 dimension N7 | retained=seed[field[phi]], gradient=seed.gradient(field[phi],dimension=2), previous=p.float64(0))
+examples/api_v02/continuation_independent_uniform.py:36 dimension N7 | return b.product(retained=solved[field[phi]], gradient=solved.gradient(field[phi],dimension=2))
 examples/api_v02/continuation_migration_amr.py:46 capacity G02 | domain = algebra.balanced_domain(p.int64(7), capacity=7)
 examples/api_v02/continuation_migration_amr.py:49 byte_capacity G13 | byte_capacity=1 << 20))
 examples/api_v02/continuation_migration_amr.py:71 byte_capacity G13 | distributed.at_local(old["history"], i)+z.int64(1)), byte_capacity=1 << 20))
@@ -42,19 +45,26 @@ examples/api_v02/continuation_regrid_amr.py:117 byte_capacity G13 | order="globa
 examples/api_v02/continuation_regrid_amr.py:170 capacity G02 | domain = p.range_set(3, capacity=3, ownership="replicated")
 examples/api_v02/continuation_regrid_amr.py:221 storage_bytes G13 | algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
 examples/api_v02/continuation_regrid_amr.py:221 storage_versions G02 | algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
+examples/api_v02/continuation_regrid_amr.py:229 dimension N7 | old_view = b.regrid_topology(field, level=source_level, side="source", dimension=2)
 examples/api_v02/continuation_regrid_amr.py:230 cell_capacity G02 | exported = b.field_bundle(field, topology=old_view, cell_capacity=16384,
 examples/api_v02/continuation_regrid_amr.py:231 patch_capacity G02 | patch_capacity=256, family=family)
+examples/api_v02/continuation_regrid_amr.py:233 dimension N7 | side="target", dimension=2)
 examples/api_v02/continuation_regrid_amr.py:236 cell_capacity G02 | target = (b.field_bundle(output_template, topology=new_view, cell_capacity=16384,
 examples/api_v02/continuation_regrid_amr.py:237 patch_capacity G02 | patch_capacity=256, family=exported)
+examples/api_v02/continuation_regrid_amr.py:246 dimension N7 | side="target", dimension=2)
 examples/api_v02/continuation_regrid_amr.py:267 level_capacity G02 | parent=parent, observe=observe, level_capacity=8, regrid=remap,
+examples/api_v02/continuation_regrid_amr.py:268 dimension N7 | regrid_parent=remap_parent, dimension=2)
 examples/api_v02/continuation_regrid_auxiliary.py:71 ghost_depth N7 | numerics.states.add(state, StateStorage(ghost_depth=2))
 examples/api_v02/continuation_regrid_auxiliary.py:97 capacity G02 | domain = p.range_set(3, capacity=3, ownership="replicated")
 examples/api_v02/continuation_regrid_auxiliary.py:137 storage_bytes G13 | algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
 examples/api_v02/continuation_regrid_auxiliary.py:137 storage_versions G02 | algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
+examples/api_v02/continuation_regrid_auxiliary.py:145 dimension N7 | source_view = b.regrid_topology(field, level=source_level, side="source", dimension=2)
 examples/api_v02/continuation_regrid_auxiliary.py:146 cell_capacity G02 | exported = b.field_bundle(field, topology=source_view, cell_capacity=32768,
 examples/api_v02/continuation_regrid_auxiliary.py:147 patch_capacity G02 | patch_capacity=256, family=family)
+examples/api_v02/continuation_regrid_auxiliary.py:148 dimension N7 | target_view = b.regrid_topology(target_template, level=proposal["level"], side="target", dimension=2)
 examples/api_v02/continuation_regrid_auxiliary.py:153 cell_capacity G02 | target = b.field_bundle(storage, topology=target_view, cell_capacity=32768,
 examples/api_v02/continuation_regrid_auxiliary.py:154 patch_capacity G02 | patch_capacity=256, family=exported)
+examples/api_v02/continuation_regrid_auxiliary.py:174 dimension N7 | observe=observe, level_capacity=8, regrid=remap, regrid_parent=remap_parent, dimension=2)
 examples/api_v02/continuation_regrid_auxiliary.py:174 level_capacity G02 | observe=observe, level_capacity=8, regrid=remap, regrid_parent=remap_parent, dimension=2)
 examples/api_v02/decision_assess_v14.py:23 capacity G02 | domain=p.range_set(2,capacity=2,ownership='replicated')
 examples/api_v02/distributed_algebra_v14.py:25 storage_bytes G13 | d = Distributed(p, storage_bytes=8*1024*1024,
@@ -139,12 +149,17 @@ examples/api_v02/implicit_array_v14.py:127 transport_byte_capacity G13 | guess=g
 examples/api_v02/independent_field_history.py:22 history_field_metadata_budget G07 | "independent_history", history_field_metadata_budget=(8 * 1024 * 1024, 16 * 1024 * 1024)
 examples/api_v02/independent_field_history.py:45 depth N8 | p.store_history("potential", observed, depth=2, owner_block=block)
 examples/api_v02/method_authored_stability.py:22 components N7 | flux = StencilFlux(dimension=2, components=1, radius=1,
+examples/api_v02/method_authored_stability.py:22 dimension N7 | flux = StencilFlux(dimension=2, components=1, radius=1,
 examples/api_v02/method_authored_stability.py:22 radius N7 | flux = StencilFlux(dimension=2, components=1, radius=1,
 examples/api_v02/method_euler_correction.py:146 components N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body,
+examples/api_v02/method_euler_correction.py:146 dimension N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body,
 examples/api_v02/method_euler_correction.py:146 radius N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body,
+examples/api_v02/method_euler_correction.py:147 field_components N7 | field_components=(4,) if corrected else (), parameters=("duration",))
 examples/api_v02/method_euler_correction.py:204 ghost_depth N7 | plan.rates.add(balance, ProgramRealization(uses=(use,), ghost_depth=ghost_depth))
 examples/api_v02/method_flux_correction.py:54 components N7 | return StencilFlux(dimension=2,components=1,radius=1,body=body,
+examples/api_v02/method_flux_correction.py:54 dimension N7 | return StencilFlux(dimension=2,components=1,radius=1,body=body,
 examples/api_v02/method_flux_correction.py:54 radius N7 | return StencilFlux(dimension=2,components=1,radius=1,body=body,
+examples/api_v02/method_flux_correction.py:55 field_components N7 | field_components=(1,) if corrected else (),parameters=("duration",))
 examples/api_v02/method_flux_correction.py:100 ghost_depth N7 | plan.rates.add(rate,ProgramRealization(uses=(use,),ghost_depth=1))
 examples/api_v02/method_flux_correction.py:126 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
 examples/api_v02/method_flux_correction.py:135 depth N8 | p.store_history("provisional_potential", provisional_observation[field[potential]], depth=1)
@@ -152,34 +167,48 @@ examples/api_v02/method_flux_correction.py:151 depth N8 | p.store_history("accep
 examples/api_v02/method_flux_correction.py:152 depth N8 | p.store_history("accepted_field_input", field_state, depth=1)
 examples/api_v02/method_flux_correction.py:153 depth N8 | p.store_history("corrected_amount", accepted, depth=1)
 examples/api_v02/method_flux_correction_amr.py:46 components N7 | return StencilFlux(dimension=2, components=1, radius=2, body=body,
+examples/api_v02/method_flux_correction_amr.py:46 dimension N7 | return StencilFlux(dimension=2, components=1, radius=2, body=body,
 examples/api_v02/method_flux_correction_amr.py:46 radius N7 | return StencilFlux(dimension=2, components=1, radius=2, body=body,
 examples/api_v02/method_flux_correction_amr.py:66 ghost_depth N7 | discretization.rates.add(rate, ProgramRealization(uses=(use,), ghost_depth=2))
+examples/api_v02/method_history_transfer.py:35 slots N8 | return HistoryTransfer(slots=3, body=equations)
 examples/api_v02/method_history_transfer.py:74 depth N8 | p.keep_history(q, depth=2, interpolation=quadratic_transfer(
+examples/api_v02/method_history_transfer.py:153 slots N8 | return HistoryTransfer(slots=3,body=equations)
 examples/api_v02/method_history_transfer.py:183 depth N8 | p.store_history("retained_rhs",current,depth=2,interpolation=regular_quadratic_flux_transfer())
 examples/api_v02/method_interval_regions.py:26 ghost_depth N7 | plan.states.add(state, StateStorage(ghost_depth=1))
 examples/api_v02/method_interval_transport.py:82 components N7 | flux=StencilFlux(dimension=2,components=2,radius=2,parameters=("duration",),body=face)
+examples/api_v02/method_interval_transport.py:82 dimension N7 | flux=StencilFlux(dimension=2,components=2,radius=2,parameters=("duration",),body=face)
 examples/api_v02/method_interval_transport.py:82 radius N7 | flux=StencilFlux(dimension=2,components=2,radius=2,parameters=("duration",),body=face)
 examples/api_v02/method_interval_transport.py:88 ghost_depth N7 | uses=(face_use,volume_use),ghost_depth=max(flux.ghost_extent)))
 examples/api_v02/method_nonlinear_interval_transport.py:86 components N7 | flux = StencilFlux(dimension=2, components=3, radius=2, parameters=("duration",), body=face)
+examples/api_v02/method_nonlinear_interval_transport.py:86 dimension N7 | flux = StencilFlux(dimension=2, components=3, radius=2, parameters=("duration",), body=face)
 examples/api_v02/method_nonlinear_interval_transport.py:86 radius N7 | flux = StencilFlux(dimension=2, components=3, radius=2, parameters=("duration",), body=face)
 examples/api_v02/method_nonlinear_interval_transport.py:91 ghost_depth N7 | plan.rates.add(equation, ProgramRealization(uses=(face_use, volume_use), ghost_depth=max(flux.ghost_extent)))
 examples/api_v02/method_relaxed_composite.py:59 ghost_depth N7 | discretization.rates.add(equation, ProgramRealization(uses=(face_use, source_use), ghost_depth=1))
 examples/api_v02/method_relaxed_composite.py:63 components N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
+examples/api_v02/method_relaxed_composite.py:63 dimension N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
 examples/api_v02/method_relaxed_composite.py:63 radius N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
 examples/api_v02/method_relaxed_history.py:58 ghost_depth N7 | discretization.rates.add(equation, ProgramRealization(uses=(face_use, source_use), ghost_depth=1))
 examples/api_v02/method_relaxed_history.py:62 components N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
+examples/api_v02/method_relaxed_history.py:62 dimension N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
 examples/api_v02/method_relaxed_history.py:62 radius N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
 examples/api_v02/method_relaxed_history.py:65 depth N8 | program.keep_history(q, depth=2)
 examples/api_v02/method_relaxed_history.py:69 depth N8 | program.store_history("retained_transport", f0, depth=2)
+examples/api_v02/method_relaxed_history.py:114 source_slots N8 | retained = HistoryTransfer(source_slots=8, target_slots=3,
+examples/api_v02/method_relaxed_history.py:114 target_slots N8 | retained = HistoryTransfer(source_slots=8, target_slots=3,
+examples/api_v02/method_relaxed_history.py:127 source_slots N8 | retained_rhs = HistoryTransfer(source_slots=6, target_slots=3,
+examples/api_v02/method_relaxed_history.py:127 target_slots N8 | retained_rhs = HistoryTransfer(source_slots=6, target_slots=3,
 examples/api_v02/method_relaxed_multiblock.py:37 components N7 | dimension=2, components=1,
+examples/api_v02/method_relaxed_multiblock.py:37 dimension N7 | dimension=2, components=1,
 examples/api_v02/method_relaxed_quartic.py:54 ghost_depth N7 | discretization.rates.add(equation, ProgramRealization(uses=(face_use, source_use), ghost_depth=1))
 examples/api_v02/method_relaxed_quartic.py:58 components N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
+examples/api_v02/method_relaxed_quartic.py:58 dimension N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
 examples/api_v02/method_relaxed_quartic.py:58 radius N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
 examples/api_v02/method_retained_stencil.py:47 basis_capacity G02 | basis_capacity=None, cells=(16, 4), dt=.01):
 examples/api_v02/method_retained_stencil.py:53 ghost_depth N7 | plan.states.add(state, StateStorage(ghost_depth=1))
 examples/api_v02/method_retained_stencil.py:57 flux_expression_budget N7 | p.flux_expression_budget = (basis_capacity, 1)
 examples/api_v02/method_retained_stencil.py:61 depth N8 | p.store_history("retained_rhs", rate, depth=1)
 examples/api_v02/method_scoped_stencil.py:23 components N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body)
+examples/api_v02/method_scoped_stencil.py:23 dimension N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body)
 examples/api_v02/method_scoped_stencil.py:23 radius N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body)
 examples/api_v02/method_scoped_stencil.py:45 ghost_depth N7 | plan.states.add(state, StateStorage(ghost_depth=1))
 examples/api_v02/method_spatial_bdf2.py:40 depth N8 | p.keep_history(q, depth=1)
@@ -187,11 +216,14 @@ examples/api_v02/method_splitting_boundary.py:39 capacity G02 | def lifted_stran
 examples/api_v02/method_splitting_boundary.py:50 capacity G02 | capacity=capacity)
 examples/api_v02/method_splitting_boundary.py:74 capacity G02 | capacity=count)
 examples/api_v02/method_stencil_extensions.py:42 components N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body,
+examples/api_v02/method_stencil_extensions.py:42 dimension N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body,
 examples/api_v02/method_stencil_extensions.py:42 radius N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body,
+examples/api_v02/method_stencil_extensions.py:43 field_components N7 | field_components=(1,) if sampled else ())
 examples/api_v02/method_stencil_extensions.py:81 ghost_depth N7 | plan.rates.add(rate, ProgramRealization(uses=tuple(uses.values()), ghost_depth=1))
 examples/api_v02/method_stencil_extensions.py:105 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
 examples/api_v02/method_stencil_extensions.py:117 depth N8 | builder.store_history(label+"_potential", sampled, depth=1, owner_block=block)
 examples/api_v02/method_stencil_extensions.py:149 ghost_depth N7 | marker_plan.states.add(marker, StateStorage(ghost_depth=1))
+examples/api_v02/method_temporal_field.py:96 slots N8 | return HistoryTransfer(slots=3, body=equations)
 examples/api_v02/method_temporal_field.py:108 observation_byte_capacity G13 | observation_byte_capacity=64 * 1024 * 1024,
 examples/api_v02/method_temporal_field.py:123 ghost_depth N7 | plan.states.add(U, StateStorage(ghost_depth=1))
 examples/api_v02/method_temporal_field.py:158 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
@@ -249,21 +281,29 @@ examples/api_v02/model_hall_mhd_ct.py:261 byte_capacity G13 | initial, fields=()
 examples/api_v02/model_hall_mhd_ct.py:329 byte_capacity G13 | byte_capacity=64 << 20,
 examples/api_v02/models_M01_M14.py:64 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
 examples/api_v02/models_M01_M14.py:324 components N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body)
+examples/api_v02/models_M01_M14.py:324 dimension N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body)
 examples/api_v02/models_M01_M14.py:324 radius N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body)
 examples/api_v02/models_M01_M14.py:337 ghost_depth N7 | plan = DiscretizationPlan(); plan.states.add(U, StateStorage(ghost_depth=max(flux.ghost_extent)))
+examples/api_v02/models_M01_M14.py:506 dimension N7 | gradient=observation.gradient(field[phi],dimension=2)
 examples/api_v02/models_M01_M14.py:511 depth N8 | program.store_history(label+"_state",state,depth=1)
 examples/api_v02/models_M01_M14.py:512 depth N8 | program.store_history(label+"_potential",potential,depth=1)
 examples/api_v02/models_M01_M14.py:617 components N7 | return StencilFlux(dimension=2,components=1,radius=1,field_components=(1,),body=face)
+examples/api_v02/models_M01_M14.py:617 dimension N7 | return StencilFlux(dimension=2,components=1,radius=1,field_components=(1,),body=face)
+examples/api_v02/models_M01_M14.py:617 field_components N7 | return StencilFlux(dimension=2,components=1,radius=1,field_components=(1,),body=face)
 examples/api_v02/models_M01_M14.py:617 radius N7 | return StencilFlux(dimension=2,components=1,radius=1,field_components=(1,),body=face)
 examples/api_v02/models_M01_M14.py:631 ghost_depth N7 | plan=DiscretizationPlan();plan.states.add(U,StateStorage(ghost_depth=max(face.ghost_extent)))
 examples/api_v02/models_M01_M14.py:645 depth N8 | program.store_history(label+"_state",state,depth=1)
 examples/api_v02/models_M01_M14.py:646 depth N8 | program.store_history(label+"_potential",potential,depth=1)
 examples/api_v02/models_M01_M14.py:688 components N7 | return StencilFlux(dimension=2, components=3, radius=1,
+examples/api_v02/models_M01_M14.py:688 dimension N7 | return StencilFlux(dimension=2, components=3, radius=1,
 examples/api_v02/models_M01_M14.py:688 radius N7 | return StencilFlux(dimension=2, components=3, radius=1,
+examples/api_v02/models_M01_M14.py:689 field_components N7 | field_components=(1,), body=body)
 examples/api_v02/models_M01_M14.py:721 ghost_depth N7 | plan=DiscretizationPlan();plan.states.add(U,StateStorage(ghost_depth=max(flux.ghost_extent)))
 examples/api_v02/models_M01_M14.py:729 depth N8 | program.store_history(label+"_state",state,depth=1)
 examples/api_v02/models_M01_M14.py:730 depth N8 | program.store_history(label+"_potential",potential,depth=1)
 examples/api_v02/models_M13.py:64 components N7 | flux=StencilFlux(dimension=2,components=3,radius=1,field_components=(1,),body=body)
+examples/api_v02/models_M13.py:64 dimension N7 | flux=StencilFlux(dimension=2,components=3,radius=1,field_components=(1,),body=body)
+examples/api_v02/models_M13.py:64 field_components N7 | flux=StencilFlux(dimension=2,components=3,radius=1,field_components=(1,),body=body)
 examples/api_v02/models_M13.py:64 radius N7 | flux=StencilFlux(dimension=2,components=3,radius=1,field_components=(1,),body=body)
 examples/api_v02/models_M13.py:65 ghost_depth N7 | plan=DiscretizationPlan();plan.states.add(U,StateStorage(ghost_depth=max(flux.ghost_extent)))
 examples/api_v02/models_M13.py:92 depth N8 | p.store_history(label+"_state",state,depth=1)
@@ -278,6 +318,7 @@ examples/api_v02/models_M20_M21.py:223 depth N8 | p.store_history("Ampere_rate_r
 examples/api_v02/models_M20_M21.py:224 depth N8 | p.store_history("A_dot",adot,depth=1)
 examples/api_v02/models_M20_M21.py:226 depth N8 | p.store_history("A_parallel",p.value("Ampere_accepted_field",fibre.pullback(accepted_A),at=state.next.point),d
 examples/api_v02/models_M22_M25_M28.py:195 components N7 | return StencilFlux(dimension=2,components=8,radius=1,body=body)
+examples/api_v02/models_M22_M25_M28.py:195 dimension N7 | return StencilFlux(dimension=2,components=8,radius=1,body=body)
 examples/api_v02/models_M22_M25_M28.py:195 radius N7 | return StencilFlux(dimension=2,components=8,radius=1,body=body)
 examples/api_v02/models_M22_M25_M28.py:210 ghost_depth N7 | plan=DiscretizationPlan();plan.states.add(u,StateStorage(ghost_depth=max(flux.ghost_extent)));case.numerics(pl
 examples/api_v02/models_kinetic_nd.py:202 capacity G02 | species_domain = p.range_set(species_count, capacity=species_count, ownership="replicated")

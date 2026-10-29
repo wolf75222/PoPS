@@ -3,7 +3,8 @@ in case files.
 
 A source scan of the conformance cases, litmus cases, probes and the final witness (the paths of
 ``frozen_engine/cases.toml``) refuses the sizes that the plan derives (halo widths, stencil radii,
-component counts, history depths; B2), the runtime resources (memory and metadata budgets, byte
+component counts, dimensions given to a call, history depths and the slots of a history ring; B2),
+the runtime resources (memory and metadata budgets, byte
 capacities, buffer sizes, storage sizes, ``capacity=``; B3, B5), C++ files and C++ source strings,
 the C++ entry routes of A7 (gap C37: ``pops.external``, ``NativeFunction``, ``NativeDerivative``,
 ``PreparedNativeComponent``, ``load_cpp_library``, a brick id passed to ``riemann.User``) and
@@ -12,8 +13,9 @@ scanner is ``frozen_engine/cf8.py``; the library side of A7 is CF0b
 (``test_cf0b_library_boundary.py``), so a case cannot reach a C++ entry route through ``pops.lib``
 either.
 
-The test starts from the exception list of b6e64c1d (``frozen_engine/cf8_exceptions.txt``) and fails
-both on a new site and on an exception that has become useless (MG6).
+The test starts from the exception list of b6e64c1d (``frozen_engine/cf8_exceptions.txt``, with the
+dimensions, field component counts and history slots that the audit of lot 2 added) and fails both
+on a new site and on an exception that has become useless (MG6).
 
 The test reads the source tree only; it does not import ``pops``, ``_pops`` or a case.
 """
@@ -31,6 +33,8 @@ B6_TERM_TOTALS = {
     "depth": 46, "flux_expression_budget": 1, "ghost_depth": 22, "history_field_metadata_budget": 7,
     "level_capacity": 5, "nnz_capacity": 2, "observation_byte_capacity": 1, "patch_capacity": 4,
     "radius": 16, "storage_bytes": 10, "storage_versions": 10, "transport_byte_capacity": 6,
+    # added by the audit of lot 2 (B2; gap C32 names the dimension of StencilFlux)
+    "dimension": 27, "field_components": 6, "slots": 3, "source_slots": 2, "target_slots": 2,
 }
 # The case paths of b6 (cases.toml). Entries are added for the litmus cases, probes and the witness;
 # a b6 entry is never removed while it holds cases.
@@ -126,8 +130,15 @@ def _sites(source):
     ("Distributed(p, storage_bytes=64 << 20, storage_versions=4096)\n",
      ["storage_bytes", "storage_versions"]),
     ("plan.states.add(U, StateStorage(ghost_depth=max(flux.ghost_extent)))\n", ["ghost_depth"]),
-    ("StencilFlux(dimension=2, components=3, radius=1, body=face)\n", ["components", "radius"]),
-    ("StencilFlux(dimension=2, components=c, radius=r, body=face)\n", ["radius"]),
+    ("StencilFlux(dimension=2, components=3, radius=1, body=face)\n",
+     ["components", "dimension", "radius"]),
+    ("StencilFlux(dimension=2, components=c, radius=r, body=face)\n", ["dimension", "radius"]),
+    ("StencilFlux(dimension=d, components=c, radius=r, body=f, field_components=(1, 2))\n",
+     ["field_components", "radius"]),
+    ("regrid_topology(layout, dimension=2)\n", ["dimension"]),
+    ("HistoryTransfer(slots=3, body=equations)\n", ["slots"]),
+    ("HistoryTransfer(source_slots=8, target_slots=3, body=f, parameters=('w',))\n",
+     ["source_slots", "target_slots"]),
     ("p.keep_history(q, depth=2)\np.store_history('rhs', rate, depth=1)\n", ["depth", "depth"]),
     ("def build(count=3, *, capacity=8):\n    pass\n", ["capacity"]),
     ("program.history_field_metadata_budget = (1, 2)\n", ["history_field_metadata_budget"]),
@@ -149,6 +160,10 @@ def test_scanner_refuses_infrastructure(source, expected):
     "Rectangle('d', (0., 0.), (1., 1.))\nCartesianGrid(frame=f, cells=(16, 8))\n",  # configuration
     "result = dict(passed=True, prescribed_trace_vs_mirrored_ghost_defect=e)\n",
     "history = p.product(q=p.float64(0))\nmetrics(levels=runtime.n_levels())\n",
+    "rho = Scalar(omega, dimension=Dimension(length=-3))\n",  # a physical dimension
+    "def build_m26(dimension=2):\n    pass\n",  # a builder that declares its support
+    "AMR(cells=(32, 32), max_levels=3, ratios=(2, 2))\n",  # configuration (kappa)
+    "material(heat_capacity=c, specific_heat_capacity=4.18)\n",  # physical, not of a set (B5)
 ])
 def test_scanner_accepts_what_the_case_writes(source):
     assert _sites(source) == []

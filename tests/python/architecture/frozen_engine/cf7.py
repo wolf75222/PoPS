@@ -12,10 +12,12 @@ member initializer or a ``#define`` whose name holds a limit word (``max``, ``ma
 entries visited, nodes, depth, stack, registers, terms, program length, instructions), bound to an
 integer literal of at least 2 that is not the range of an integer type. ``METHOD_BUDGETS`` names the
 limits whose words match but which are method budgets of section 12.1 (the iteration limit of a
-Newton, Krylov, multigrid or eigenvalue solver), with their reason; ``ANCHORED_SITES`` names the b6
-caps that are not a named constant. The exception list of b6 (``cf7_exceptions.txt``) only shrinks
-(MG6); at the exit of Phase 1 it holds only the caps of the two interpreters of C44 (section 18.3),
-and at the exit of Phase 2 it is empty.
+Newton, Krylov, multigrid or eigenvalue solver), with their reason; ``RUNTIME_BACKSTOPS`` names the
+limits of a loop of the run that are not analysis caps but that no author writes either (a B1 and
+B7 gap, with the issue that closes it); ``ANCHORED_SITES`` names the b6 caps that the vocabulary
+does not catch. The exception list of b6 (``cf7_exceptions.txt``) only shrinks (MG6); at the exit
+of Phase 1 it holds only the caps of the two interpreters of C44 (section 18.3), and at the exit of
+Phase 2 it is empty.
 """
 from __future__ import annotations
 
@@ -210,9 +212,6 @@ METHOD_BUDGETS = (
      ("kNewtonDefaultMaxIters", "kPolarTensorKrylovDefaultMaxIters", "kSchurKrylovPolarMaxIters",
       "kCartesianCGDefaultMaxIterations", "kFACDefaultMaxIters"),
      "the default iteration limits of the native Newton, Krylov, CG and FAC solvers"),
-    ("python/pops/codegen/solvers/dsl.py", ("_SOLVER_MAX_ITERS",),
-     "the run-time backstop of a generated custom-solver loop whose authored stop predicate never "
-     "turns false: it bounds a loop of the run, not an analysis"),
     ("python/pops/fields/providers.py", ("max_iterations",),
      "the iteration limit of an external field-solver provider"),
     ("python/pops/moments/model_builder.py", ("eig_max_iter",),
@@ -230,14 +229,33 @@ METHOD_BUDGETS = (
      "the default iteration limit of a hierarchy solver provider"),
 )
 
-# (path, term, regular expression of the line, reason). A b6 cap that no named constant carries;
-# the scan reports it while its line is there. Pinned at b6: entries are removed, never added.
+# (path, names, reason). A limit of a loop of the run that no author writes: not a cap on analysis
+# work, so CF7 leaves it out, but not a method budget either, since B1 and B7 want a budget written
+# in the Program and reported in the manifest. Each entry names the gap and the issue that closes
+# it. The test fails on an entry that no longer names a limit of its file.
+RUNTIME_BACKSTOPS = (
+    ("python/pops/codegen/solvers/dsl.py", ("_SOLVER_MAX_ITERS",),
+     "the hard cap that solver_cpp.py emits into the loop of a generated custom solver whose IR "
+     "omits one (_emit_while): it bounds a loop of the run, not an analysis, but the Program does "
+     "not write it and the manifest does not report it, a B1 and B7 gap that G10 closes when "
+     "pops.lib.solve references with iterate(..., max_steps) replace the custom solvers"),
+)
+
+# (path, term, regular expression of the line, reason). A b6 cap that the vocabulary does not catch,
+# because no named constant carries it or because its name holds no noun of analysis work; the scan
+# reports it while its line is there. Pinned at b6: entries are removed, never added.
 ANCHORED_SITES = (
     ("python/pops/codegen/program_stencil_budget.py", "runtime-bound-repetition",
      r'\s*if bound\.op == "int64_constant":',
      "the retained-expression analysis multiplies by the count of a fold or iterate whose bound "
      "is a constant and counts a runtime-valued bound as one repetition, \"the default finite "
      "ceiling\" of lines 26-28, which an author lifts with flux_expression_budget (CF7, IR19)"),
+    ("include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp",
+     "kMaxAnalyticBoundaryComponents",
+     r"\s*inline constexpr int kMaxAnalyticBoundaryComponents = \d+;",
+     "the number of analytic-VM programs that a boundary state holds, one per component "
+     "(programs[kMaxAnalyticBoundaryComponents]), refused beyond it: a program-size cap of the "
+     "analytic-expression VM of C44 on its boundary route (found by the lot 2 audit)"),
 )
 
 
@@ -254,7 +272,8 @@ class Site:
 
 
 def _method_budget(rel: str, name: str):
-    for entry in METHOD_BUDGETS:
+    """The METHOD_BUDGETS or RUNTIME_BACKSTOPS entry that exempts @p name in @p rel, or None."""
+    for entry in METHOD_BUDGETS + RUNTIME_BACKSTOPS:
         path, names, _ = entry
         if path == rel and name in names:
             return entry
@@ -262,8 +281,8 @@ def _method_budget(rel: str, name: str):
 
 
 def scan_engine(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine | None = None):
-    """(CF7 sites of the frozen engine, METHOD_BUDGETS entries used, ANCHORED_SITES entries
-    used)."""
+    """(CF7 sites of the frozen engine, METHOD_BUDGETS and RUNTIME_BACKSTOPS entries used,
+    ANCHORED_SITES entries used)."""
     sites: set[Site] = set()
     budgets_used, anchors_used = set(), set()
     anchored = {}
@@ -311,6 +330,10 @@ OWNER_RULES = (
      "routes are replaced, Phase 2"),
     ("G06", ("python/pops/physics/_coupled_abi.py", "include/pops/coupling/source/"), None,
      "C44: the coupled-source bytecode, Phase 2"),
+    ("G04", ("include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp",),
+     frozenset({"kMaxAnalyticBoundaryComponents"}),
+     "C44: the analytic-expression VM on the boundary-state route, removed when G04 replaces that "
+     "route, Phase 2"),
     ("N7", None, None, "B4: the analyses of the IR scale with it (IR8-IR21), Phase 1"),
 )
 

@@ -4,13 +4,16 @@ A source scan of the core paths and of the native component tree (FC6b, ``cf0_pa
 a named integer limit on analysis work: iterations unrolled, alternatives enumerated, entries
 visited, and the program sizes that the interpreters of b6 accept (the analytic-expression VM and
 the coupled-source bytecode of C44, the tag-graph VM of C36). The iteration limits of numerical
-solvers are method budgets of section 12.1, listed with their reason in ``cf7.METHOD_BUDGETS``. The
-scanner is ``frozen_engine/cf7.py``.
+solvers are method budgets of section 12.1, listed with their reason in ``cf7.METHOD_BUDGETS``; the
+hard cap of a generated custom-solver loop is a run-time backstop that no author writes
+(``cf7.RUNTIME_BACKSTOPS``, a B1 and B7 gap of G10), not an analysis cap either. The scanner is
+``frozen_engine/cf7.py``.
 
 The test starts from the exception list of b6e64c1d (``frozen_engine/cf7_exceptions.txt``) and fails
 both on a new cap and on an exception that has become useless (MG6). At the exit of Phase 1 the list
-holds only the caps of the two interpreters of C44, with G04 and G07 or with G06 (section 18.3); at
-the exit of Phase 2 it is empty.
+holds only the caps of the two interpreters of C44: with G04 and G07, with G04 alone on the
+boundary-state route of the analytic VM, or with G06 (section 18.3); at the exit of Phase 2 it is
+empty.
 
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
@@ -29,6 +32,7 @@ B6_TERM_TOTALS = {
     "kAnalyticMaxDepth": 1, "kAnalyticMaxNodes": 1, "kAnalyticMaxStack": 1, "kCsMaxProg": 1,
     "kCsMaxReg": 1, "kCsMaxStack": 1, "kCsMaxTerms": 1, "max_alternatives": 1, "max_iterations": 1,
     "maximum_instruction_count": 2, "maximum_stencil_terms": 2, "runtime-bound-repetition": 1,
+    "kMaxAnalyticBoundaryComponents": 1,
 }
 
 # The sites that CF7 names at b6 (section 16.2), all @b6: realization_delivery.py:45,
@@ -48,10 +52,14 @@ SPEC_B6_SITES = {
     ("python/pops/physics/_coupled_abi.py", "CS_MAX_TERMS"),
     ("python/pops/physics/_coupled_abi.py", "CS_MAX_PROG"),
 }
-# Section 18.3: the issues of the caps that may remain at the exit of Phase 1.
-PHASE_2_ISSUES = {"G04+G07", "G06"}
-# The ids of ANCHORED_SITES at b6. Anchors only go; never add one.
-B6_ANCHORS = {("python/pops/codegen/program_stencil_budget.py", "runtime-bound-repetition")}
+# Section 18.3: the issues of the caps that may remain at the exit of Phase 1, those of the two
+# interpreters of C44 (G04 alone for the boundary-state route of the analytic VM).
+PHASE_2_ISSUES = {"G04+G07", "G04", "G06"}
+# The ids of ANCHORED_SITES at b6 (the second one found by the audit of lot 2). Anchors only go;
+# never add one.
+B6_ANCHORS = {("python/pops/codegen/program_stencil_budget.py", "runtime-bound-repetition"),
+              ("include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp",
+               "kMaxAnalyticBoundaryComponents")}
 
 
 @pytest.fixture(scope="module")
@@ -107,22 +115,34 @@ def test_phase_1_exit_leaves_only_the_interpreters_of_c44(listed):
 
 def test_every_method_budget_still_names_a_limit(scanned):
     _, budgets_used, anchors_used = scanned
-    stale = [entry for entry in cf7.METHOD_BUDGETS if entry not in budgets_used]
+    stale = [entry for entry in cf7.METHOD_BUDGETS + cf7.RUNTIME_BACKSTOPS
+             if entry not in budgets_used]
     assert not stale, (
-        "CF7: METHOD_BUDGETS (cf7.py) entries that no longer name a limit of their file; remove "
-        "them so the table cannot hide a future cap:\n  " + "\n  ".join(map(repr, stale)))
+        "CF7: METHOD_BUDGETS or RUNTIME_BACKSTOPS (cf7.py) entries that no longer name a limit of "
+        "their file; remove them so the tables cannot hide a future cap:\n  "
+        + "\n  ".join(map(repr, stale)))
     assert set(anchors_used) == set(cf7.ANCHORED_SITES), (
         "CF7: an anchored site no longer matches its line; when its cap is gone, remove the anchor "
         "and its exception in the same PR")
 
 
 def test_method_budgets_are_solver_iteration_limits():
-    for path, names, reason in cf7.METHOD_BUDGETS:
+    for path, names, reason in cf7.METHOD_BUDGETS + cf7.RUNTIME_BACKSTOPS:
         assert names and reason and not path.endswith("/"), (path, names)
         for name in names:
             words = set(scan.split_words(name))
             assert words & {"iter", "iters", "iteration", "iterations"}, (
                 "a method budget of section 12.1 is an iteration limit: %s in %s" % (name, path))
+
+
+def test_runtime_backstops_name_their_gap_and_its_issue():
+    # A run-time backstop is not a method budget (B1, B7): each entry says so, names the issue that
+    # replaces it with a budget written in the Program, and is not a method budget as well.
+    budgets = {(path, name) for path, names, _ in cf7.METHOD_BUDGETS for name in names}
+    for path, names, reason in cf7.RUNTIME_BACKSTOPS:
+        issues = {word.strip(",.;()") for word in reason.split()} & ratchet.KNOWN_ISSUES
+        assert "B1" in reason and "B7" in reason and issues, (path, reason)
+        assert not {(path, name) for name in names} & budgets, (path, names)
 
 
 def test_anchors_only_go():

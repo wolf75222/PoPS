@@ -8,8 +8,8 @@ The default refuses any (path, term) whose site count would rise: it only drops 
 disappeared and updates the line numbers and excerpts of the others (MG6). ``--allow-moves`` accepts
 a site that moved to another file (a file renamed or split by a slice) as long as no term's total
 rises. ``--bootstrap`` writes the list from scratch; it was used once, at b6e64c1d, and a PR that
-uses it again must say why (the CF0b, CF7 and CF8 lists were written with it at b6e64c1d, in
-lot 2 of Linear N2).
+uses it again must say why (the CF0b, CF7 and CF8 lists were written with it at b6e64c1d in lot 2
+of Linear N2, and once more, before they merged, with the sites that the audit of lot 2 found).
 """
 from __future__ import annotations
 

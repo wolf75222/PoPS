@@ -12,6 +12,7 @@ include/pops/coupling/source/coupled_source_program.hpp:42 kCsMaxReg G06 | inlin
 include/pops/coupling/source/coupled_source_program.hpp:43 kCsMaxStack G06 | inline constexpr int kCsMaxStack = 32; // postfix stack depth
 include/pops/coupling/source/coupled_source_program.hpp:44 kCsMaxProg G06 | inline constexpr int kCsMaxProg = 256; // length of a program (opcodes)
 include/pops/coupling/source/coupled_source_program.hpp:45 kCsMaxTerms G06 | inline constexpr int kCsMaxTerms = 16; // source terms (one per .add)
+include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp:268 kMaxAnalyticBoundaryComponents G04 | inline constexpr int kMaxAnalyticBoundaryComponents = 32;
 include/pops/runtime/analytic/expression.hpp:74 kAnalyticMaxNodes G04+G07 | inline constexpr std::size_t kAnalyticMaxNodes = 4096;
 include/pops/runtime/analytic/expression.hpp:75 kAnalyticMaxDepth G04+G07 | inline constexpr std::size_t kAnalyticMaxDepth = 64;
 include/pops/runtime/analytic/expression.hpp:76 kAnalyticMaxStack G04+G07 | inline constexpr std::size_t kAnalyticMaxStack = 64;
