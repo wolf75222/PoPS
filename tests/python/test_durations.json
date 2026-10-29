@@ -9036,7 +9036,7 @@
   "tests/python/unit/time/test_ledger_compositions_v15.py": 120,
   "tests/python/unit/time/test_ledger_provenance_v15.py": 60,
   "tests/python/unit/time/test_lib_time_exact_coefficients.py": 1.0,
-  "tests/python/unit/time/test_local_transform.py": 30,
+  "tests/python/unit/time/test_local_transform.py": 40,
   "tests/python/unit/time/test_localized_event_v14.py": 120,
   "tests/python/unit/time/test_method_tableaux.py": 1.0,
   "tests/python/unit/time/test_mpi_restart_fixture_contracts.py": 5,

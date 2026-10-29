@@ -9,6 +9,7 @@ strictly owner-affine replay class. Pure Python IR construction (no numerics / n
 
 from typed_program_support import state_refs, typed_state
 
+import re
 import sys
 
 import pytest
@@ -147,6 +148,12 @@ def test_primary_clock_affine_transition_with_dt_and_zero_weight_lag_passes():
     check_program(detach_compiled_program(P))
 
 
+def _exported_table(source, prefix):
+    """Every exported definition whose symbol starts with ``prefix``, in source order."""
+    pattern = r'^extern "C" [^(\n]*\b%s\w*\((?:[^\n]*\}$|.*?^\}$)' % re.escape(prefix)
+    return "\n".join(re.findall(pattern, source, flags=re.MULTILINE | re.DOTALL))
+
+
 def test_codegen_exports_only_validated_selective_replay_ring_authorities():
     from pops.codegen.program_codegen import emit_cpp_program
 
@@ -158,10 +165,11 @@ def test_codegen_exports_only_validated_selective_replay_ring_authorities():
         selective.value("U_next", 1.0 * tracked.n, at=tracked.next.point),
     )
     source = emit_cpp_program(selective)
-    assert "pops_program_history_replay_authority_count() { return 1; }" in source
-    assert 'case 0: return "plasma.U";' in source
-    assert "pops_program_history_replay_authority_depth" in source
-    assert "case 0: return 4;" in source
+    replay = _exported_table(source, "pops_program_history_replay_authority")
+    assert "pops_program_history_replay_authority_count() { return 1; }" in replay
+    assert 'case 0: return "plasma.U";' in replay
+    assert "pops_program_history_replay_authority_depth" in replay
+    assert "case 0: return 4;" in replay
 
     dense = adctime.Program("dense_authority")
     dense_state = typed_state(dense, "plasma", state_name="U")
@@ -171,8 +179,13 @@ def test_codegen_exports_only_validated_selective_replay_ring_authorities():
         dense.value("U_next", 1.0 * dense_state.n, at=dense_state.next.point),
     )
     dense_source = emit_cpp_program(dense)
-    assert "pops_program_history_replay_authority_count() { return 0; }" in dense_source
-    assert 'case 0: return "plasma.U";' not in dense_source
+    dense_replay = _exported_table(dense_source, "pops_program_history_replay_authority")
+    assert "pops_program_history_replay_authority_count() { return 0; }" in dense_replay
+    assert 'case 0: return "plasma.U";' not in dense_replay
+    # The checkpoint of retained History lists every ring, whatever its replay policy.
+    rings = _exported_table(dense_source, "pops_program_checkpoint_history")
+    assert "pops_program_checkpoint_history_count() { return 1; }" in rings
+    assert 'case 0: return "plasma.U";' in rings
 
 
 def test_load_bearing_lag_refuses_single_anchor_replay():

@@ -163,9 +163,14 @@ def test_actual_subcycled_diffusion_rhs_keeps_spatial_sum_at_dt_power_zero(n):
     copies = re.findall(
         r"ctx\.axpy\((\w+), static_cast<pops::Real>\(pops::Real\(1\)\), "
         r"diffusive_rhs_\d+, dt, \{\{0, 1, 1\}\}\);", source)
-    assert len(copies) == 1
+    assert copies == ["u%d" % frozen_rhs[0].id]
+    # The State update reads the frozen RHS through its identity alias, which selects
+    # that same scratch unless a pending Field representation is retained.
+    observed = "identity_observed_%d" % frozen_rhs[0].id
+    assert ("auto& %s = identity_owner_%d ? *identity_owner_%d : %s;"
+            % (observed, frozen_rhs[0].id, frozen_rhs[0].id, copies[0])) in source
     assert re.search(
-        r"ctx\.axpy\([^;]*static_cast<pops::Real>\(dt\), " + re.escape(copies[0])
+        r"ctx\.axpy\([^;]*static_cast<pops::Real>\(dt\), " + re.escape(observed)
         + r", dt, \{\{1, 1, 1\}\}\);", source)
     assert "ctx.advance_hierarchy(dt" in source
 
