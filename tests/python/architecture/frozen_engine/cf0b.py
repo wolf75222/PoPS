@@ -11,8 +11,10 @@ module of its own.
 The same intention covers the objects that the library receives from the core (A4: a library
 object can be written in a case, with the same identity, and a case reads no ``model._m``): the
 library neither reads nor writes a private attribute of a core object, as ``obj._x`` or as
-``getattr(obj, "_x")``. The private attributes that the library defines itself (``self._x``, a
-class attribute or a method of a library class) stay the library's own business.
+``getattr(obj, "_x")``. The private attributes that a library module defines itself (``self._x``, a
+class attribute or a method of one of its classes) stay that module's business. The set is taken
+per module, so a name that one module defines never hides the same name on a core object in
+another.
 
 The scan reads source only. Imports inside ``pops.lib`` itself are the library's own business (a
 private module of the library is one site, at its path), so ``from ._factory import x`` adds no site
@@ -138,29 +140,28 @@ def route_terms(node: ast.AST, names: pysource.Names, library_module: str):
         yield "private-access"
 
 
-def library_attributes(trees) -> frozenset[str]:
-    """The private attribute names that the library defines itself: stored on ``self`` or ``cls``,
-    bound in a class body (methods, class attributes, ``__slots__``)."""
+def module_attributes(tree: ast.AST) -> frozenset[str]:
+    """The private attribute names that one library module defines itself: stored on ``self`` or
+    ``cls``, bound in a class body (methods, class attributes, ``__slots__``)."""
     defined = set()
-    for tree in trees:
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store) \
-                    and isinstance(node.value, ast.Name) and node.value.id in ("self", "cls"):
-                defined.add(node.attr)
-            elif isinstance(node, ast.ClassDef):
-                for item in node.body:
-                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                        defined.add(item.name)
-                    targets = item.targets if isinstance(item, ast.Assign) else \
-                        [item.target] if isinstance(item, ast.AnnAssign) else []
-                    for target in targets:
-                        if isinstance(target, ast.Name):
-                            defined.add(target.id)
-                            if target.id == "__slots__" and isinstance(item.value, (
-                                    ast.Tuple, ast.List)):
-                                defined.update(element.value for element in item.value.elts
-                                               if isinstance(element, ast.Constant)
-                                               and isinstance(element.value, str))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store) \
+                and isinstance(node.value, ast.Name) and node.value.id in ("self", "cls"):
+            defined.add(node.attr)
+        elif isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    defined.add(item.name)
+                targets = item.targets if isinstance(item, ast.Assign) else \
+                    [item.target] if isinstance(item, ast.AnnAssign) else []
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        defined.add(target.id)
+                        if target.id == "__slots__" and isinstance(item.value, (
+                                ast.Tuple, ast.List)):
+                            defined.update(element.value for element in item.value.elts
+                                           if isinstance(element, ast.Constant)
+                                           and isinstance(element.value, str))
     return frozenset(name for name in defined if pysource.is_private_part(name))
 
 
@@ -217,17 +218,17 @@ def brick_id_call(node: ast.Call, names: pysource.Names) -> bool:
 
 
 def python_sites(rel: str, text: str, *, library_module: str, native_tree: str,
-                 library_attributes: frozenset[str] | None = None):
+                 private_attributes: bool = False):
     """(line, term) of every CF0b-kind site of one Python file (CF8 reuses it for case files).
 
-    With @p library_attributes (the private attribute names that the library defines), the reads
-    and writes of private attributes of core objects are sites too.
+    With @p private_attributes, the reads and writes of private attributes of core objects are
+    sites too, except for the names that this module defines itself.
     """
     tree = ast.parse(text)
     native_top = native_tree.strip("/").split("/")[0]
     names = pysource.Names(tree, rel)
-    if library_attributes is not None:
-        yield from private_attribute_terms(tree, names, library_attributes, library_module)
+    if private_attributes:
+        yield from private_attribute_terms(tree, names, module_attributes(tree), library_module)
     for record in pysource.imports(tree, rel):
         for term in _import_terms(record, library_module, native_top):
             yield record.line, term
@@ -259,7 +260,6 @@ def scan_library(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine 
     library_module = pysource.module_name(library.rstrip("/"))
     files = [rel for rel in scan.tracked_files(root) if rel.startswith(library)]
     texts = {rel: (root / rel).read_text(encoding="utf-8") for rel in files if rel.endswith(".py")}
-    defined = library_attributes(ast.parse(text) for text in texts.values())
     sites: set[Site] = set()
     for rel in files:
         inner = pathlib.PurePosixPath(rel[len(library):])
@@ -272,8 +272,7 @@ def scan_library(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine 
             continue
         lines = texts[rel].splitlines()
         for line, term in python_sites(rel, texts[rel], library_module=library_module,
-                                       native_tree=engine.native_tree,
-                                       library_attributes=defined):
+                                       native_tree=engine.native_tree, private_attributes=True):
             sites.add(Site(rel, line, term, _excerpt(lines, line)))
     return sorted(sites)
 

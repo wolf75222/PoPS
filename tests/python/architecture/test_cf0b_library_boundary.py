@@ -16,8 +16,8 @@ empty at the exit of Phase 1 (section 18).
 
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
-import ast
 import collections
+import dataclasses
 
 import pytest
 
@@ -30,26 +30,30 @@ B6_TERM_TOTALS = {"private-import": 11, "private-module": 3, "private-attribute"
 # CF0b at b6e64c1d, verbatim from section 16.1 (all under python/pops/): lib/time/dirk.py:9,
 # euler.py:7, imex.py:7-8, rk.py:9, ssprk.py:8, strang.py:25, lib/amr/__init__.py:374,435,
 # lib/initial/__init__.py:306,440 and the private modules lib/time/_factory.py,
-# lib/time/_helpers.py, lib/initial/_bootstrap_program.py.
-SPEC_B6_SITES = {
-    ("python/pops/lib/time/dirk.py", 9), ("python/pops/lib/time/euler.py", 7),
-    ("python/pops/lib/time/imex.py", 7), ("python/pops/lib/time/imex.py", 8),
-    ("python/pops/lib/time/rk.py", 9), ("python/pops/lib/time/ssprk.py", 8),
-    ("python/pops/lib/time/strang.py", 25), ("python/pops/lib/amr/__init__.py", 374),
-    ("python/pops/lib/amr/__init__.py", 435), ("python/pops/lib/initial/__init__.py", 306),
-    ("python/pops/lib/initial/__init__.py", 440), ("python/pops/lib/time/_factory.py", 0),
-    ("python/pops/lib/time/_helpers.py", 0), ("python/pops/lib/initial/_bootstrap_program.py", 0),
-}
+# lib/time/_helpers.py, lib/initial/_bootstrap_program.py. The sites are pinned per (path, term),
+# the key of the ratchet: refresh_exceptions.py rewrites line numbers and excerpts, so a pin on
+# either would fail on the first slice that shifts or edits a listed line.
+SPEC_B6_SITES = collections.Counter({
+    ("python/pops/lib/time/dirk.py", "private-import"): 1,
+    ("python/pops/lib/time/euler.py", "private-import"): 1,
+    ("python/pops/lib/time/imex.py", "private-import"): 2,
+    ("python/pops/lib/time/rk.py", "private-import"): 1,
+    ("python/pops/lib/time/ssprk.py", "private-import"): 1,
+    ("python/pops/lib/time/strang.py", "private-import"): 1,
+    ("python/pops/lib/amr/__init__.py", "private-import"): 2,
+    ("python/pops/lib/initial/__init__.py", "private-import"): 2,
+    ("python/pops/lib/time/_factory.py", "private-module"): 1,
+    ("python/pops/lib/time/_helpers.py", "private-module"): 1,
+    ("python/pops/lib/initial/_bootstrap_program.py", "private-module"): 1,
+})
 # The b6 sites that the audit of lot 2 added (Linear N2, ROM-81): the library reads private
-# attributes of a core model to find its frame and state, and writes the provenance of a core
-# Program. Section 16.1 names imports; its intention covers these reads and writes (A4).
-AUDIT_B6_SITES = {
-    ("python/pops/lib/models/electrostatic_lorentz.py", 32),
-    ("python/pops/lib/models/electrostatic_lorentz.py", 50),
-    ("python/pops/lib/models/electrostatic_lorentz.py", 52),
-    ("python/pops/lib/models/electrostatic_lorentz.py", 55),
-    ("python/pops/lib/time/_factory.py", 26), ("python/pops/lib/time/_factory.py", 34),
-}
+# attributes of a core model to find its frame and state (electrostatic_lorentz.py:32,50,52,55),
+# and writes the provenance of a core Program (_factory.py:26,34). Section 16.1 names imports; its
+# intention covers these reads and writes (A4).
+AUDIT_B6_SITES = collections.Counter({
+    ("python/pops/lib/models/electrostatic_lorentz.py", "private-attribute"): 4,
+    ("python/pops/lib/time/_factory.py", "private-attribute"): 2,
+})
 
 
 @pytest.fixture(scope="module")
@@ -80,14 +84,35 @@ def test_exception_list_never_exceeds_its_b6_totals(listed):
         "exceptions): unknown %s, grown %s" % (unknown, grown))
 
 
-def test_b6_list_is_the_list_of_the_spec_and_the_audit():
+def _beyond_the_b6_pins(entries):
+    """(path, term) -> (listed, pinned) for each count above the b6 sites of the spec and audit."""
+    pinned = SPEC_B6_SITES + AUDIT_B6_SITES
+    return {key: (count, pinned[key]) for key, count in sorted(ratchet.counts(entries).items())
+            if count > pinned[key]}
+
+
+def test_b6_list_is_the_list_of_the_spec_and_the_audit(listed):
     # At b6 the scan finds exactly the sites that CF0b names and those of the audit. A slice
     # removes sites; it never adds.
-    listed_sites = {(entry.path, entry.line) for entry in ratchet.read_list(cf0b.EXCEPTIONS)[1]}
-    allowed = SPEC_B6_SITES | AUDIT_B6_SITES
-    assert listed_sites <= allowed, (
-        "CF0b: sites that neither the b6 list of section 16.1 nor the audit names: %s"
-        % sorted(listed_sites - allowed))
+    beyond = _beyond_the_b6_pins(listed)
+    assert not beyond, (
+        "CF0b: sites that neither the b6 list of section 16.1 nor the audit names, as (path, "
+        "term): (listed, pinned): %s" % beyond)
+    per_term = collections.Counter()
+    for (_, term), count in (SPEC_B6_SITES + AUDIT_B6_SITES).items():
+        per_term[term] += count
+    assert per_term == collections.Counter(B6_TERM_TOTALS)
+
+
+def test_b6_pins_do_not_depend_on_lines_or_excerpts(listed):
+    # refresh_exceptions.py moves a site's line when an edit above it shifts the file, and
+    # rewrites its excerpt when the line itself is edited: the pins hold through both.
+    edited = [dataclasses.replace(entry, line=entry.line + 1, excerpt=entry.excerpt + " # edited")
+              for entry in listed]
+    assert not _beyond_the_b6_pins(edited)
+    elsewhere = dataclasses.replace(listed[0], path="python/pops/lib/numerics/probe.py")
+    assert _beyond_the_b6_pins(listed + [elsewhere])
+    assert _beyond_the_b6_pins(listed + [listed[0]])
 
 
 def test_every_exception_names_the_issue_that_removes_it(listed):
@@ -112,10 +137,8 @@ def test_library_is_the_path_that_cf0_excludes():
 # Controls: the scanner refuses what CF0b refuses, and only that.
 # ---------------------------------------------------------------------------------------------
 def _terms(source, rel="python/pops/lib/time/probe.py"):
-    defined = cf0b.library_attributes([ast.parse(source)])
     return sorted({term for _, term in cf0b.python_sites(
-        rel, source, library_module="pops.lib", native_tree="native/",
-        library_attributes=defined)})
+        rel, source, library_module="pops.lib", native_tree="native/", private_attributes=True)})
 
 
 @pytest.mark.parametrize("source, expected", [
@@ -195,3 +218,20 @@ def test_scanner_reports_private_modules_and_cpp_files(tmp_path, monkeypatch):
     monkeypatch.setattr(scan, "tracked_files", lambda root=None: [rel_private, rel_init, rel_cpp])
     sites = {(site.path, site.term) for site in cf0b.scan_library(tmp_path)}
     assert sites == {(rel_private, "private-module"), (rel_cpp, "cpp-file")}
+
+
+def test_private_attributes_that_a_module_defines_stay_its_own(tmp_path, monkeypatch):
+    # A library class that stores _provenance_context on itself hides no write of the same name
+    # on a core Program in another library module.
+    files = {
+        "python/pops/lib/time/trace.py":
+            "class Trace:\n    def __init__(self):\n        self._provenance_context = None\n",
+        "python/pops/lib/time/factory.py":
+            "def build(program):\n    program._provenance_context = {}\n    return program\n",
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    monkeypatch.setattr(scan, "tracked_files", lambda root=None: sorted(files))
+    sites = {(site.path, site.line, site.term) for site in cf0b.scan_library(tmp_path)}
+    assert sites == {("python/pops/lib/time/factory.py", 2, "private-attribute")}
