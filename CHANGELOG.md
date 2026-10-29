@@ -284,6 +284,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   eigensolve. Checked extrema return NaN on non-convergence/non-finite diagnostics, and the tri-state
   real-spectrum witness propagates the same failure into native pointwise transforms before commit.
 
+### Fixed
+
+- Divide and reduce exact weights without copying the remainder for each quotient bit:
+  `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
+  and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step
+  validates its face-flux fragments with these weights; the scalar advection final example
+  now runs about three times as many steps per minute.
+
 ## [1.0.0] - 2026-07-16
 
 ### Added
