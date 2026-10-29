@@ -123,6 +123,20 @@ def _required_block_index(block_idx: Any, block: Any, where: str) -> int:
     return index
 
 
+def _closed_interaction_reduction_source(value: Any) -> Any:
+    """Return the IR19 closed interaction that an unowned ``reduce`` realizes by its result id.
+
+    ``reduce_closed_original_interaction`` reads the registered tower of every level and
+    authenticates its Accept receipt collectively; it never reads the per-level C++ alias.
+    """
+    from pops.codegen.program_emit_hierarchy_operations import is_closed_interaction
+
+    if value.op != "reduce" or value.block is not None:
+        return None
+    source = value.inputs[0]
+    return source if is_closed_interaction(source) else None
+
+
 def _value_owner_block(value: Any) -> Any:
     """Return one declared block identity carried by ``value``, or None."""
     block = getattr(value, "block", None)
@@ -434,10 +448,14 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         # Structural carriers may retain a producer-level Field opaquely. A
         # mathematical consumer must authenticate its instance before allocating
         # outputs or launching any numerical kernel; matching shape is not a port.
+        # A closed interaction reduction is such a port: it authenticates its
+        # tower itself, and any other consumer of that tower keeps this guard.
+        closed_tower = _closed_interaction_reduction_source(v)
         reads = [item for item in v.inputs
                  if item.vtype in {"state", "rhs", "scalar_field"}
                  and item.id in var
-                 and ("field_observation_snapshot", item.id) not in var]
+                 and ("field_observation_snapshot", item.id) not in var
+                 and item is not closed_tower]
         if reads:
             lines.append("ctx.prepare_spatial_collectively([&]() {")
             lines.extend("  ctx.require_program_field_access(%s);" % var[item.id] for item in reads)
@@ -1665,7 +1683,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         kind = v.attrs["kind"]
         if v.block is None:
             source = v.inputs[0]
-            if source.op == "spatial_interaction" and source.attrs.get("contract") == "pops.spatial-interaction@3":
+            if _closed_interaction_reduction_source(v) is not None:
                 from pops.time._program.spatial_interaction import interaction_contract
                 interaction_contract(source)
                 component = v.attrs.get("comp", 0)
