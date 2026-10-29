@@ -28,7 +28,7 @@ import re
 
 # The issues that take over a site of the b6 exception lists (spec 0.3, sections 18.3 and 18.4).
 KNOWN_ISSUES = frozenset({"N3", "N4", "N7", "N8", "N9", "N12", "G02", "G04", "G05", "G06", "G07",
-                          "G10", "G11", "G13"})
+                          "G10", "G11", "G12", "G13"})
 
 _ENTRY = re.compile(r"^(?P<path>\S+):(?P<line>\d+) (?P<term>\S+)"
                     r" (?P<issue>[A-Z0-9]+(?:\+[A-Z0-9]+)*) \| ?(?P<excerpt>.*)$")
@@ -112,6 +112,59 @@ def compare(found, listed) -> Comparison:
         elif len(found_sites) < len(listed_entries):
             useless[key] = (listed_entries, len(found_sites))
     return Comparison(new, useless)
+
+
+def moves(found, listed):
+    """(moves, unexplained): whether a scan that grew some (path, term) counts is only a move.
+
+    A site counts as moved when a listed site of the same term disappears from one file and a site
+    with the same excerpt appears in another: a file renamed or split by a slice. ``moves`` pairs
+    each such listed entry with the site that replaces it, never more sites from a (path, term)
+    than it lost. ``unexplained`` holds, for each (path, term) count that grew beyond what the moves
+    cover, its sites whose excerpt is not listed there; the new occurrences are among them.
+    """
+    found_by_key = collections.defaultdict(list)
+    for site in found:
+        found_by_key[site.key].append(site)
+    listed_by_key = collections.defaultdict(list)
+    for entry in listed:
+        listed_by_key[entry.key].append(entry)
+
+    def unmatched(sites, others):
+        left = collections.Counter(other.excerpt for other in others)
+        out = []
+        for site in sites:
+            if left[site.excerpt]:
+                left[site.excerpt] -= 1
+            else:
+                out.append(site)
+        return out
+
+    lost = {key: len(entries) - len(found_by_key.get(key, ()))
+            for key, entries in listed_by_key.items()}
+    gone = collections.defaultdict(list)  # (term, excerpt) -> listed entries that may have moved
+    for key, entries in listed_by_key.items():
+        if lost[key] > 0:
+            for entry in unmatched(entries, found_by_key.get(key, ())):
+                gone[(entry.term, entry.excerpt)].append(entry)
+    pairs, unexplained = [], []
+    for key, sites in sorted(found_by_key.items()):
+        surplus = len(sites) - len(listed_by_key.get(key, ()))
+        if surplus <= 0:
+            continue
+        candidates = unmatched(sites, listed_by_key.get(key, ()))
+        for site in candidates:
+            pool = gone.get((site.term, site.excerpt), [])
+            source = next((entry for entry in pool if lost[entry.key] > 0), None)
+            if surplus and source is not None:
+                pool.remove(source)
+                lost[source.key] -= 1
+                pairs.append((source, site))
+                surplus -= 1
+        if surplus:
+            paired = {id(new) for _, new in pairs}
+            unexplained.extend(site for site in candidates if id(site) not in paired)
+    return pairs, unexplained
 
 
 def describe(comparison: Comparison, list_name: str, rule: str) -> str:

@@ -5,16 +5,17 @@
     python -m tests.python.architecture.frozen_engine.refresh_exceptions cf0b   # also cf7, cf8
 
 The default refuses any (path, term) whose site count would rise: it only drops sites that have
-disappeared and updates the line numbers and excerpts of the others (MG6). ``--allow-moves`` accepts
-a site that moved to another file (a file renamed or split by a slice) as long as no term's total
-rises. ``--bootstrap`` writes the list from scratch; it was used once, at b6e64c1d, and a PR that
-uses it again must say why (the CF0b, CF7 and CF8 lists were written with it at b6e64c1d in lot 2
-of Linear N2, and once more, before they merged, with the sites that the audit of lot 2 found).
+disappeared and updates the line numbers and excerpts of the others (MG6). ``--allow-moves`` also
+accepts a site that moved to another file (a file renamed or split by a slice): the same excerpt
+must disappear from one file and appear in the other, and each move is printed with the issues of
+both files. ``--bootstrap`` writes the list from scratch; it was used at b6e64c1d and again for the
+terms of the early audit of N2 (29/10), and a PR that uses it again must say why (the CF0b, CF7 and
+CF8 lists were written with it at b6e64c1d in lot 2 of Linear N2, and once more, before they
+merged, with the sites that the audit of lot 2 found).
 """
 from __future__ import annotations
 
 import argparse
-import collections
 import sys
 
 from . import cf0b, cf2, cf7, cf8, ratchet
@@ -25,10 +26,6 @@ LISTS = {
     "cf7": (cf7.EXCEPTIONS, lambda: cf7.current_entries()[0]),
     "cf8": (cf8.EXCEPTIONS, cf8.current_entries),
 }
-
-
-def _term_totals(entries) -> collections.Counter:
-    return collections.Counter(entry.term for entry in entries)
 
 
 def main(argv=None) -> int:
@@ -42,15 +39,22 @@ def main(argv=None) -> int:
     path, current = LISTS[args.list]
     header, listed = ratchet.read_list(path)
     found = current()
-    if not args.bootstrap:
-        if args.allow_moves:
-            grown = {term: (count, _term_totals(listed)[term])
-                     for term, count in _term_totals(found).items()
-                     if count > _term_totals(listed)[term]}
-        else:
-            listed_counts = ratchet.counts(listed)
-            grown = {key: (count, listed_counts[key])
-                     for key, count in ratchet.counts(found).items() if count > listed_counts[key]}
+    if args.allow_moves:
+        pairs, unexplained = ratchet.moves(found, listed)
+        if unexplained:
+            print("refused: no move explains these sites (MG6); remove the new occurrences among "
+                  "them instead:", file=sys.stderr)
+            for site in unexplained:
+                print("  %s" % site.render(), file=sys.stderr)
+            return 1
+        for before, after in pairs:
+            print("moved: %s %s:%d (%s) -> %s:%d (%s)" % (before.term, before.path, before.line,
+                                                      before.issue, after.path, after.line,
+                                                      after.issue))
+    elif not args.bootstrap:
+        listed_counts = ratchet.counts(listed)
+        grown = {key: (count, listed_counts[key])
+                 for key, count in ratchet.counts(found).items() if count > listed_counts[key]}
         if grown:
             print("refused: the list would grow (MG6); remove these occurrences instead:",
                   file=sys.stderr)
