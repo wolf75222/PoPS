@@ -374,10 +374,15 @@ class Receipt:
                     self.fail("close:" + key, exc)
             if self.data["process"] is not None:
                 try:
-                    self.data["process"]["harness"] = committed_files(self.data["source"],
-                                                                      HARNESS)
+                    self.data["process"]["harness"] = committed_files(
+                        self.data["source"], HARNESS, contents=_HARNESS_BYTES)
+                    now = sdk_cohort.source_identity(self._source_root)
+                    self.data["process"]["source_at_close"] = {
+                        "commit": now["commit"], "tree": now["tree"], "clean": now["clean"],
+                        "modified": now["modified"][:20],
+                        "untracked_sdk_inputs": now["untracked_sdk_inputs"][:20]}
                 except (CohortError, OSError) as exc:
-                    self.fail("close:harness", exc)
+                    self.fail("close:source", exc)
             self.data["overlay"] = overlay_findings(self.data, self._sdk_files)
         finally:
             if self._lease is not None:
@@ -630,8 +635,13 @@ def _source_path(item: Any) -> Path:
     return Path(origin).resolve()
 
 
-def committed_files(source: Mapping[str, Any], paths: Sequence[Path]) -> list[dict[str, Any]]:
-    """Hash each file and say whether it is committed unchanged at the source's HEAD."""
+def committed_files(source: Mapping[str, Any], paths: Sequence[Path], *,
+                    contents: Mapping[Path, bytes] | None = None) -> list[dict[str, Any]]:
+    """Hash each file and say whether it is committed unchanged at the source's HEAD.
+
+    ``contents`` gives the bytes to judge instead of the file's current bytes (the harness is
+    judged on the bytes it was imported from).
+    """
     root = Path(source["root"])
     inside = [path.relative_to(root).as_posix() for path in paths if _inside(path, root)]
     tracked = {} if not inside else {
@@ -639,7 +649,7 @@ def committed_files(source: Mapping[str, Any], paths: Sequence[Path]) -> list[di
         if kind == "blob"}
     files = []
     for path in paths:
-        data = path.read_bytes()
+        data = contents[path] if contents is not None and path in contents else path.read_bytes()
         relative = path.relative_to(root).as_posix() if _inside(path, root) else None
         files.append({
             "path": relative or str(path),
@@ -651,8 +661,10 @@ def committed_files(source: Mapping[str, Any], paths: Sequence[Path]) -> list[di
 
 
 #: The code that observes and judges a qualification; it must itself be the committed source.
+#: It is judged on the bytes read when this module is imported, the code that actually runs.
 HARNESS = (Path(__file__).resolve(), SCRIPTS / "sdk_cohort.py",
            SCRIPTS / "write_native_variant_manifest.py")
+_HARNESS_BYTES = {path: path.read_bytes() for path in HARNESS}
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -683,6 +695,12 @@ def overlay_findings(data: Mapping[str, Any], sdk_files: Mapping[str, str]) -> d
     lease = data.get("lease") or {}
     if not lease.get("held"):
         findings.append("the installation lease was not held")
+    at_close = (data.get("process") or {}).get("source_at_close")
+    if at_close is not None and (at_close["commit"], at_close["tree"], at_close["clean"]) \
+            != (source["commit"], source["tree"], source["clean"]):
+        findings.append("the source changed during the qualification (now %s, clean=%s, "
+                        "modified %s)" % (at_close["commit"], at_close["clean"],
+                                          at_close["modified"][:5]))
     for item in (data.get("process") or {}).get("harness", ()):
         if not item["committed"]:
             findings.append("qualification harness %s is not committed unchanged in the source"

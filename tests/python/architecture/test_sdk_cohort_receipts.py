@@ -611,6 +611,32 @@ def test_overlay_findings_name_environment_overrides(repo, site, monkeypatch, tm
     receipt.close()
 
 
+def test_a_source_changed_during_the_qualification_is_an_overlay(repo, site, tmp_path):
+    receipt = receipts.Receipt("changing source", source_root=repo, package=site / "pops",
+                               directory=tmp_path)
+    with receipt:
+        receipt.equations(repo / "examples/case.py")
+        (repo / "tests/data.txt").write_text("edited while qualifying\n")
+    data = receipts.read_receipt(receipt.path)
+    assert data["source"]["clean"] and not data["process"]["source_at_close"]["clean"]
+    assert any(item.startswith("the source changed during the qualification")
+               for item in data["overlay"]["findings"])
+
+
+def test_the_harness_is_judged_on_the_bytes_it_was_imported_from():
+    source = cohort.source_identity(ROOT)
+    head = receipts.committed_files(source, receipts.HARNESS, contents=receipts._HARNESS_BYTES)
+    for path, row in zip(receipts.HARNESS, head, strict=True):
+        unchanged = subprocess.run(
+            ["git", "-C", str(ROOT), "diff", "--quiet", "HEAD", "--", str(path)],
+            check=False).returncode == 0
+        assert row["committed"] is unchanged, row
+    tampered = dict(receipts._HARNESS_BYTES)
+    tampered[receipts.HARNESS[0]] = b"# not the code that runs\n"
+    rows = receipts.committed_files(source, receipts.HARNESS, contents=tampered)
+    assert rows[0]["committed"] is False
+
+
 def test_harness_must_be_committed_in_the_source_it_qualifies(repo):
     source = cohort.source_identity(repo)
     rows = receipts.committed_files(source, receipts.HARNESS)
