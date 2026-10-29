@@ -69,20 +69,20 @@ name = "tagger"
 issue = "N12"
 reason = "physics-level native interface (C38): the refinement criterion is a generated region (DM13b)"
 
-# The next three are not physics-level and C38 does not name them, but FC6b admits natives only
-# through the closed list. The issue is a proposal until Romain or the early audit of N2 settles it.
+# The next three are not physics-level. Spec 0.3 settled them on 29/10 (FC6b and C38, adjudication
+# section 17): they leave the protocol too, with these owners in C38.
 
 [[exception]]
 name = "clustering"
 issue = "N12"
-reason = "clustering is core machinery (section 15.2 item 5, DM13), not a substitution; proposed owner"
+reason = "clustering is core machinery with no reference region to bind a native to (section 2.3, DM13); FC6b, C38, Phase 1"
 
 [[exception]]
 name = "field_topology"
 issue = "G10"
-reason = "topology of field solves (constraints, gauges); not in the closed list; proposed owner"
+reason = "coverage, cut-cell fractions and connected components are geometry of the support that the plan binds (section 4.3); the kernels that depend on them are derived (SV2, R13); FC6b, C38, Phase 2"
 
 [[exception]]
 name = "writer"
 issue = "N8"
-reason = "output writer, I/O plumbing (section 15.2 item 7) behind pops.Output (CC14); not a substitution; proposed owner"
+reason = "I/O is core machinery with no reference region to bind a native to (section 2.3); FC6b, C38"

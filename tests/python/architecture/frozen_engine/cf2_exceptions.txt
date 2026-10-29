@@ -15,7 +15,7 @@
 #     python -m tests.python.architecture.frozen_engine.refresh_exceptions cf2
 #
 # which never raises a count. G3 requires this list to be empty (spec 0.3, section 1.5); the exit of
-# Phase 1 keeps only sites of G04, G05, G06, G10 and G11 (section 18.3).
+# Phase 1 keeps only sites of G04, G05, G06, G10, G11 and N9 (section 18.3, as amended on 29/10).
 
 CMakeLists.txt:584 poisson G10 | "FFTW3 found (${_pops_fftw_root}) : PoissonFFT local-axis production radix backend")
 CMakeLists.txt:588 poisson G10 | "PoissonFFT keeps the in-tree radix-2 + diagnosed direct-DFT backend")
@@ -200,390 +200,390 @@ include/pops/numerics/diffusion/prepared_diffusion.hpp:258 gummel G05 | left_los
 include/pops/numerics/diffusion/prepared_diffusion.hpp:258 scharfetter G05 | left_loss = coefficient * scharfetter_gummel_bernoulli(jump) / distance;
 include/pops/numerics/diffusion/prepared_diffusion.hpp:259 gummel G05 | right_loss = coefficient * scharfetter_gummel_bernoulli(-jump) / distance;
 include/pops/numerics/diffusion/prepared_diffusion.hpp:259 scharfetter G05 | right_loss = coefficient * scharfetter_gummel_bernoulli(-jump) / distance;
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:25 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:170 dirichlet N9 | if (law.kind == PhysicalBoundaryKind::dirichlet ||
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:171 robin N9 | (law.kind == PhysicalBoundaryKind::robin && law.alpha != Real(0)))
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:554 poisson N9 | class CompositeFacPoisson {
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:566 poisson N9 | CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:606 dirichlet N9 | level.boundary.at(face).kind != PhysicalBoundaryKind::dirichlet ||
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:680 poisson N9 | CompositeFacPoisson(const CompositeFacPoisson&) = delete;
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:681 poisson N9 | CompositeFacPoisson& operator=(const CompositeFacPoisson&) = delete;
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:682 poisson N9 | CompositeFacPoisson(CompositeFacPoisson&&) = delete;
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:683 poisson N9 | CompositeFacPoisson& operator=(CompositeFacPoisson&&) = delete;
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:694 poisson N9 | ::pops::elliptic::PoissonFftBottomKind fft_coarse_kind() const noexcept {
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:695 poisson N9 | return fft_coarse_ ? fft_coarse_->kind() : ::pops::elliptic::PoissonFftBottomKind::none;
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:807 poisson N9 | ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> probe;
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:809 poisson N9 | ::pops::elliptic::mg::validate_weighted_poisson_fields(target.phi, probe,
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:923 poisson N9 | ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> probe;
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:928 poisson N9 | ::pops::elliptic::mg::validate_weighted_poisson_fields(target.phi, probe,
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:1810 poisson N9 | ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> weighted_fields_(
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:1812 poisson N9 | ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> fields;
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:1914 poisson N9 | ::pops::elliptic::mg::weighted_poisson_residual_valid(
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:1918 poisson N9 | ::pops::elliptic::mg::poisson_residual_valid(iterate, level.rhs, level.geometry, level.residual,
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2021 poisson N9 | fft_coarse_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2346 poisson N9 | ::pops::elliptic::mg::weighted_poisson_residual_valid(
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2350 poisson N9 | ::pops::elliptic::mg::poisson_residual_valid(level.residual_operator_view, level.rhs,
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2384 poisson N9 | ::pops::elliptic::mg::apply_weighted_poisson_operator_valid(
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2388 poisson N9 | ::pops::elliptic::mg::apply_poisson_operator_valid(
-include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2493 poisson N9 | std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_coarse_{};
-include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp:21 neumann N9 | case PhysicalBoundaryKind::neumann:
-include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp:23 robin N9 | case PhysicalBoundaryKind::robin:
-include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp:26 dirichlet N9 | case PhysicalBoundaryKind::dirichlet:
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:22 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:148 poisson N9 | class CompositeFacPoisson {
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:158 poisson N9 | CompositeFacPoisson(request_type request, const ExecutionLane& lane,
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:208 poisson N9 | CompositeFacPoisson(const CompositeFacPoisson&) = delete;
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:209 poisson N9 | CompositeFacPoisson& operator=(const CompositeFacPoisson&) = delete;
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:210 poisson N9 | CompositeFacPoisson(CompositeFacPoisson&&) noexcept = default;
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:211 poisson N9 | CompositeFacPoisson& operator=(CompositeFacPoisson&&) noexcept = default;
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:231 poisson N9 | ::pops::elliptic::PoissonFftBottomKind fft_coarse_kind() const noexcept {
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:232 poisson N9 | return fft_coarse_ ? fft_coarse_->kind() : ::pops::elliptic::PoissonFftBottomKind::none;
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:339 poisson N9 | WeightedPoissonFields<Dim, MemorySpace> probe;
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:341 poisson N9 | validate_weighted_poisson_fields(target.phi, probe, "composite FAC coefficient");
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:360 poisson N9 | WeightedPoissonFields<Dim, MemorySpace> probe;
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:365 poisson N9 | validate_weighted_poisson_fields(target.phi, probe, "composite FAC embedded boundary");
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1447 poisson N9 | fft_coarse_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1492 poisson N9 | WeightedPoissonFields<Dim, MemorySpace> weighted_fields_(Level& level) const {
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1493 poisson N9 | WeightedPoissonFields<Dim, MemorySpace> fields;
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1591 poisson N9 | weighted_poisson_residual_valid(iterate, level.rhs, level.geometry, level.residual, reaction_,
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1594 poisson N9 | poisson_residual_valid(iterate, level.rhs, level.geometry, level.residual, reaction_);
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1831 poisson N9 | weighted_poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1834 poisson N9 | poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1873 poisson N9 | apply_weighted_poisson_operator_valid(level.direction_operator_view, level.geometry,
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1876 poisson N9 | apply_poisson_operator_valid(level.direction_operator_view, level.geometry, level.scratch,
-include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:2005 poisson N9 | std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_coarse_{};
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:20 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp>
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:21 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:160 laplacian N9 | Real laplacian = Real(0);
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:165 laplacian N9 | laplacian += (phi(upper, 0) - Real(2) * phi(cell, 0) + phi(lower, 0)) * inverse_spacing_squared[axis];
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:171 laplacian N9 | laplacian += high * phi(upper, 0) + low * phi(lower, 0) - (low + high) * phi(cell, 0);
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:174 laplacian N9 | residual(cell, 0) = rhs(cell, 0) + laplacian;
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:459 dirichlet N9 | if (law.kind == PhysicalBoundaryKind::dirichlet ||
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:460 robin N9 | (law.kind == PhysicalBoundaryKind::robin && law.alpha != Real(0)))
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:566 poisson N9 | ::pops::elliptic::PoissonFftBottomKind fft_coarse_kind() const noexcept {
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:567 poisson N9 | return fft_bottom_ ? fft_bottom_->kind() : ::pops::elliptic::PoissonFftBottomKind::none;
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:682 poisson N9 | WeightedPoissonFields<Dim, MemorySpace> probe;
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:684 poisson N9 | validate_weighted_poisson_fields(levels_.front()->phi, probe, "geometric MG coefficient");
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:717 poisson N9 | WeightedPoissonFields<Dim, MemorySpace> probe;
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:722 poisson N9 | validate_weighted_poisson_fields(fine.phi, probe, "geometric MG embedded boundary");
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:1019 poisson N9 | fft_bottom_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:1194 poisson N9 | WeightedPoissonFields<Dim, MemorySpace> weighted_fields_(Level& level) const {
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:1195 poisson N9 | WeightedPoissonFields<Dim, MemorySpace> fields;
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:1215 poisson N9 | apply_poisson_operator_valid(input, level.geometry, output, options_.reaction);
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:1218 poisson N9 | apply_weighted_poisson_operator_valid(input, level.geometry, output, options_.reaction,
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:1306 poisson N9 | weighted_poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual,
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:1309 poisson N9 | poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual,
-include/pops/numerics/elliptic/mg/geometric_mg.hpp:1457 poisson N9 | std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_bottom_{};
-include/pops/numerics/elliptic/mg/residual_roundoff.hpp:83 laplacian N9 | Real laplacian = Real(0);
-include/pops/numerics/elliptic/mg/residual_roundoff.hpp:97 laplacian N9 | laplacian += term;
-include/pops/numerics/elliptic/mg/residual_roundoff.hpp:98 laplacian N9 | if (!normal_or_zero(laplacian)) return std::numeric_limits<Real>::infinity();
-include/pops/numerics/elliptic/mg/residual_roundoff.hpp:106 laplacian N9 | if (!normal_or_zero(rhs(cell, 0) + laplacian))
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:29 dirichlet N9 | enum class CartesianBoundaryKind : unsigned char { periodic, dirichlet, neumann, mixed };
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:29 neumann N9 | enum class CartesianBoundaryKind : unsigned char { periodic, dirichlet, neumann, mixed };
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:32 poisson N9 | struct CartesianPoissonOptions {
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:44 poisson N9 | static CartesianPoissonOptions from_topology(
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:46 dirichlet N9 | CartesianBoundaryKind physical_kind = CartesianBoundaryKind::dirichlet) {
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:50 poisson N9 | CartesianPoissonOptions result;
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:59 dirichlet N9 | physical_kind == CartesianBoundaryKind::dirichlet ? Real(1) : Real(0);
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:61 neumann N9 | physical_kind == CartesianBoundaryKind::neumann ? Real(1) : Real(0);
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:84 poisson N9 | checked_multiply(boxes, boxes, "Cartesian Poisson halo pair budget overflow");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:87 poisson N9 | images = checked_multiply(images, 3, "Cartesian Poisson image budget overflow");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:89 poisson N9 | checked_multiply(pairs, images, "Cartesian Poisson halo work budget overflow");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:91 poisson N9 | "Cartesian Poisson halo job budget overflow");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:97 poisson N9 | checked_multiply(jobs, cells, "Cartesian Poisson halo element budget overflow"),
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:98 poisson N9 | static_cast<std::size_t>(components), "Cartesian Poisson halo component budget overflow");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:104 poisson N9 | checked_multiply(boxes, std::size_t{2}, "Cartesian Poisson peer budget overflow"),
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:178 laplacian N9 | struct NegativeLaplacianKernel {
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:222 poisson N9 | class CartesianPoissonSolver {
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:231 poisson N9 | CartesianPoissonSolver(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:233 poisson N9 | BoundaryTopology<Dim> topology, CartesianPoissonOptions<Dim> options,
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:235 poisson N9 | : CartesianPoissonSolver(geometry, layout, distribution, local_rank, std::move(topology),
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:243 poisson N9 | static CartesianPoissonSolver prepare_local(const Geometry<Dim>& geometry,
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:247 poisson N9 | CartesianPoissonOptions<Dim> options,
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:249 poisson N9 | return CartesianPoissonSolver(geometry, layout, distribution, local_rank, std::move(topology),
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:294 poisson N9 | CartesianPoissonSolver(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:296 poisson N9 | BoundaryTopology<Dim> topology, CartesianPoissonOptions<Dim> options,
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:315 poisson N9 | CartesianPoissonSolver(const CartesianPoissonSolver&) = delete;
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:316 poisson N9 | CartesianPoissonSolver& operator=(const CartesianPoissonSolver&) = delete;
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:317 poisson N9 | CartesianPoissonSolver(CartesianPoissonSolver&&) = default;
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:318 poisson N9 | CartesianPoissonSolver& operator=(CartesianPoissonSolver&&) = default;
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:456 poisson N9 | "cartesian_poisson_non_finite_initial_residual");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:462 poisson N9 | report.mark_solved("cartesian_poisson_initial_residual");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:474 poisson N9 | "cartesian_poisson_non_positive_curvature");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:491 poisson N9 | "cartesian_poisson_non_finite_iteration");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:497 poisson N9 | report.mark_solved("cartesian_poisson_converged");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:502 poisson N9 | "cartesian_poisson_zero_recurrence_norm");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:511 poisson N9 | "cartesian_poisson_iteration_limit");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:553 dirichlet N9 | if (kind == CartesianBoundaryKind::dirichlet && (alpha != Real(1) || beta != Real(0)))
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:556 neumann N9 | if (kind == CartesianBoundaryKind::neumann && (alpha != Real(0) || beta != Real(1)))
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:647 poisson N9 | context, "Cartesian Poisson dynamic boundary evaluation failed collectively");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:660 poisson N9 | "Cartesian Poisson dynamic boundary JVP failed collectively");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:664 laplacian N9 | void apply_negative_laplacian_(field_type& output) {
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:673 laplacian N9 | detail::NegativeLaplacianKernel<Dim> kernel{output.fab(local).view(), source.view(), {}};
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:685 laplacian N9 | apply_negative_laplacian_(image_);
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:693 poisson N9 | context, "Cartesian Poisson dynamic residual closure failed collectively");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:704 laplacian N9 | apply_negative_laplacian_(output);
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:711 poisson N9 | "Cartesian Poisson dynamic JVP closure failed collectively");
-include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:727 poisson N9 | CartesianPoissonOptions<Dim> options_;
-include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:31 dirichlet N9 | unsigned dirichlet_faces = 0;
-include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:110 dirichlet N9 | if (options.arithmetic_diagonal && on_face(cell, axis, side, options.dirichlet_faces)) {
-include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:175 dirichlet N9 | const unsigned physical = options.zero_flux_faces | options.dirichlet_faces;
-include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:208 dirichlet N9 | const unsigned physical = options.zero_flux_faces | options.dirichlet_faces;
-include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:266 dirichlet N9 | if ((options.dirichlet_faces & face) != 0) {
-include/pops/numerics/elliptic/nd/general_field_operator.hpp:18 neumann N9 | enum class PhysicalFieldBoundary : unsigned char { periodic, homogeneous_neumann };
-include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:3 poisson N9 | #include <pops/numerics/elliptic/amr/composite_fac_poisson.hpp>
-include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:112 neumann N9 | if (!value || (*value != "periodic" && *value != "neumann"))
-include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:293 poisson N9 | entries_.push_back(std::make_unique<amr::CompositeFacPoisson<Dim>>(
-include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:296 poisson N9 | using scalar_type = amr::CompositeFacPoisson<Dim>;
-include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:904 poisson N9 | std::vector<std::unique_ptr<amr::CompositeFacPoisson<Dim>>> entries_;
-include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:953 neumann N9 | if (!periodic && (law.kind != PhysicalBoundaryKind::neumann || law.value != Real(0)))
-include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:959 neumann N9 | if (std::get<std::string>(found->second) != (periodic ? "periodic" : "neumann"))
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:22 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp>
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:54 poisson N9 | inline void reset_poisson_fft_direct_dft_fallback_count() {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:57 poisson N9 | inline std::size_t poisson_fft_direct_dft_fallback_count() {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:60 poisson N9 | inline void record_poisson_fft_direct_dft_fallback() {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:64 poisson N9 | inline constexpr bool poisson_fft_fftw_configured() noexcept {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:72 poisson N9 | inline const char* poisson_fft_fftw_absence_reason() noexcept {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:77 poisson N9 | "PoissonFFT uses the in-tree radix-2 / diagnosed direct-DFT backend";
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:84 poisson N9 | enum class PoissonFFTDiagnosticStage : std::uint8_t {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:92 poisson N9 | struct PoissonFFTDiagnosticContext {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:93 poisson N9 | PoissonFFTDiagnosticStage stage = PoissonFFTDiagnosticStage::none;
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:98 poisson N9 | class PoissonFFT {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:108 poisson N9 | PoissonFFT(int_array cells, real_array lengths, const ExecutionLane& lane,
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:109 poisson N9 | std::string_view lane_identity, PoissonFFTDiagnosticContext diagnostic = {})
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:125 poisson N9 | if ((diagnostic_.stage == PoissonFFTDiagnosticStage::none && diagnostic_.fail_rank != -1) ||
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:126 poisson N9 | (diagnostic_.stage != PoissonFFTDiagnosticStage::none &&
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:148 poisson N9 | contract.text("pops.poisson-fft.exact-request@3")
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:169 poisson N9 | {{"pops.poisson-fft.exact-request@3", request_contract}}, lane))
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:174 poisson N9 | if (diagnostic_.stage == PoissonFFTDiagnosticStage::workspace_allocation &&
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:177 poisson N9 | values_ = device_view("poisson_fft_values", local_count_);
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:178 poisson N9 | scratch_ = device_view("poisson_fft_scratch", local_count_);
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:179 poisson N9 | peer_send_ = device_view("poisson_fft_peer_send", local_count_);
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:180 poisson N9 | peer_receive_ = device_view("poisson_fft_peer_receive", local_count_);
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:181 poisson N9 | host_send_ = pinned_view("poisson_fft_host_send", local_count_);
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:182 poisson N9 | host_receive_ = pinned_view("poisson_fft_host_receive", local_count_);
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:193 poisson N9 | PoissonFFT(const PoissonFFT&) = delete;
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:194 poisson N9 | PoissonFFT& operator=(const PoissonFFT&) = delete;
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:195 poisson N9 | PoissonFFT(PoissonFFT&&) noexcept = default;
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:196 poisson N9 | PoissonFFT& operator=(PoissonFFT&&) noexcept = default;
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:204 poisson N9 | if (poisson_fft_fftw_configured()) {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:215 poisson N9 | if (!poisson_fft_fftw_configured())
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:249 poisson N9 | using device_kernels = detail::PoissonFFTDeviceKernels<Dim, MemorySpace>;
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:260 poisson N9 | PoissonFFTDiagnosticStage diagnostic_stage = PoissonFFTDiagnosticStage::none) {
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:333 poisson N9 | record_poisson_fft_direct_dft_fallback();
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:382 poisson N9 | record_poisson_fft_direct_dft_fallback();
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:408 poisson N9 | "peer-DFT launch", PoissonFFTDiagnosticStage::peer_dft_launch);
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:414 poisson N9 | "peer accumulation", PoissonFFTDiagnosticStage::peer_accumulation);
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:492 poisson N9 | "distributed radix stage", PoissonFFTDiagnosticStage::distributed_radix);
-include/pops/numerics/elliptic/poisson/poisson_fft.hpp:571 poisson N9 | PoissonFFTDiagnosticContext diagnostic_{};
-include/pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp:22 poisson N9 | namespace pops::elliptic::poisson::internal {
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:17 poisson N9 | struct PoissonFFTDeviceKernels {
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:35 poisson N9 | "pops_poisson_fft_local_dft", Kokkos::RangePolicy<>(0, lines),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:57 poisson N9 | "pops_poisson_fft_bit_reverse", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:75 poisson N9 | "pops_poisson_fft_radix2_stage", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:96 poisson N9 | "pops_poisson_fft_radix2_normalize", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:104 poisson N9 | "pops_poisson_fft_peer_dft", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:124 poisson N9 | "pops_poisson_fft_peer_accumulate", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:131 poisson N9 | "pops_poisson_fft_inverse_normalize", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:140 poisson N9 | "pops_poisson_fft_last_inverse_normalize", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:150 poisson N9 | "pops_poisson_fft_last_local_radix", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:178 poisson N9 | "pops_poisson_fft_last_distributed_radix", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:213 poisson N9 | "pops_poisson_fft_symbol", Kokkos::RangePolicy<>(0, local_count),
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:13 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:14 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:30 poisson N9 | enum class PoissonFftBottomKind : unsigned char {
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:36 poisson N9 | struct PoissonFftBottomClassification {
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:37 poisson N9 | PoissonFftBottomKind kind = PoissonFftBottomKind::none;
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:39 poisson N9 | constexpr bool eligible() const noexcept { return kind != PoissonFftBottomKind::none; }
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:48 poisson N9 | typename PoissonFFT<Dim>::device_view destination{};
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:54 poisson N9 | using complex_type = typename PoissonFFT<Dim>::complex_type;
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:62 poisson N9 | typename PoissonFFT<Dim>::device_view source{};
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:205 poisson N9 | class PoissonFftMultiFabAdapter {
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:211 poisson N9 | using complex_type = typename PoissonFFT<Dim>::complex_type;
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:212 poisson N9 | using device_view = typename PoissonFFT<Dim>::device_view;
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:214 poisson N9 | static PoissonFftBottomClassification classify(const request_type& request,
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:218 poisson N9 | PoissonFftBottomClassification result;
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:224 poisson N9 | if (PoissonFFTSolver<Dim>::supports(normalized, lane)) {
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:225 poisson N9 | result.kind = PoissonFftBottomKind::native_solver;
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:231 poisson N9 | PoissonFFTSolver<Dim>::supports(
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:233 poisson N9 | result.kind = PoissonFftBottomKind::replicated_slab_rewrite;
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:242 poisson N9 | static std::unique_ptr<PoissonFftMultiFabAdapter<Dim>> try_make(const request_type& request,
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:255 poisson N9 | return std::make_unique<PoissonFftMultiFabAdapter<Dim>>(request, lane, reaction,
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:259 poisson N9 | PoissonFftMultiFabAdapter(const request_type& request, const ExecutionLane& lane, Real reaction,
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:268 poisson N9 | lane, "pops.poisson-fft/multifab-bottom");
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:272 poisson N9 | fft_rhs_ = device_view("pops.poisson-fft.multifab-rhs", fft_->local_cell_count());
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:273 poisson N9 | fft_phi_ = device_view("pops.poisson-fft.multifab-phi", fft_->local_cell_count());
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:277 poisson N9 | PoissonFftBottomKind kind() const noexcept { return classification_.kind; }
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:292 poisson N9 | "poisson_fft_multifab_incompatible_rhs");
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:299 poisson N9 | if (classification_.kind == PoissonFftBottomKind::replicated_slab_rewrite)
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:302 poisson N9 | if (classification_.kind == PoissonFftBottomKind::replicated_slab_rewrite)
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:306 poisson N9 | report.mark_solved("poisson_fft_multifab_discrete_direct");
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:351 poisson N9 | PoissonFftBottomClassification classification_{};
-include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:352 poisson N9 | std::optional<PoissonFFT<Dim>> fft_{};
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:14 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_fft.hpp>
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:15 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:34 poisson N9 | enum class PoissonFFTSymbol : unsigned char {
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:41 poisson N9 | struct PoissonFFTCapabilities {
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:55 poisson N9 | static constexpr bool supports(PoissonFFTSymbol symbol) noexcept {
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:56 poisson N9 | return symbol == PoissonFFTSymbol::discrete_cartesian && discrete_symbol;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:59 poisson N9 | static constexpr std::string_view rejection_reason(PoissonFFTSymbol symbol) noexcept {
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:68 poisson N9 | static_assert(PoissonFFTCapabilities<1>::available);
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:69 poisson N9 | static_assert(PoissonFFTCapabilities<2>::available);
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:70 poisson N9 | static_assert(PoissonFFTCapabilities<3>::available);
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:78 poisson N9 | contract.text("pops.elliptic.poisson-fft.options")
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:147 poisson N9 | typename PoissonFFT<Dim>::device_view destination{};
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:153 poisson N9 | destination[ordinal] = typename PoissonFFT<Dim>::complex_type(-source(cell, 0), Real(0));
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:159 poisson N9 | typename PoissonFFT<Dim>::device_view source{};
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:190 poisson N9 | class PoissonFFTSolver {
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:207 poisson N9 | typename PoissonFFT<Dim>::device_view fft_rhs;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:208 poisson N9 | typename PoissonFFT<Dim>::device_view fft_phi;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:214 poisson N9 | PoissonFFTSolver(request_type request, const ExecutionLane& lane)
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:215 poisson N9 | : PoissonFFTSolver(
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:219 poisson N9 | PoissonFFTSolver(const PoissonFFTSolver&) = delete;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:220 poisson N9 | PoissonFFTSolver& operator=(const PoissonFFTSolver&) = delete;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:221 poisson N9 | PoissonFFTSolver(PoissonFFTSolver&&) noexcept = default;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:222 poisson N9 | PoissonFFTSolver& operator=(PoissonFFTSolver&&) noexcept = default;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:223 poisson N9 | ~PoissonFFTSolver() noexcept = default;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:225 poisson N9 | static constexpr PoissonFFTCapabilities<Dim> capabilities() noexcept { return {}; }
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:227 poisson N9 | return {"pops.elliptic.poisson-fft.discrete-cartesian", 3};
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:248 poisson N9 | static constexpr PoissonFFTSymbol symbol() noexcept {
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:249 poisson N9 | return PoissonFFTSymbol::discrete_cartesian;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:309 poisson N9 | "poisson_fft_local_slab_layout_mismatch");
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:325 poisson N9 | report, "poisson_fft_rhs_pack_failed_collectively"))
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:328 poisson N9 | "poisson_fft_transform_failed_collectively"))
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:335 poisson N9 | report, "poisson_fft_solution_unpack_failed_collectively"))
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:356 poisson N9 | report, "poisson_fft_residual_evaluation_failed_collectively"))
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:368 poisson N9 | "poisson_fft_non_finite_residual");
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:378 poisson N9 | "poisson_fft_discrete_residual_exceeds_roundoff_envelope");
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:387 poisson N9 | report.mark_solved("poisson_fft_discrete_direct");
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:410 poisson N9 | PoissonFFTSolver(PreparedStorage prepared, const ExecutionLane& lane, PreparedTag)
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:424 poisson N9 | lane, "pops.poisson-fft/cartesian");
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:455 poisson N9 | typename PoissonFFT<Dim>::device_view fft_rhs("poisson_fft_rhs",
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:457 poisson N9 | typename PoissonFFT<Dim>::device_view fft_phi("poisson_fft_phi",
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:484 poisson N9 | local_cells, local_extent, "Poisson FFT local slab element count overflow");
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:532 poisson N9 | local_elements, local_extent, "Poisson FFT local slab element count overflow");
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:535 poisson N9 | sizeof(typename PoissonFFT<Dim>::complex_type))
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:570 poisson N9 | {{"pops.poisson-fft-solver.exact-request@3", exact_request}}, lane))
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:583 poisson N9 | elliptic::mg::poisson_residual_valid(trial_, rhs_, geometry_, residual_field_);
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:592 poisson N9 | typename PoissonFFT<Dim>::device_view fft_rhs_{};
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:593 poisson N9 | typename PoissonFFT<Dim>::device_view fft_phi_{};
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:598 poisson N9 | std::optional<PoissonFFT<Dim>> fft_{};
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:606 poisson N9 | class PoissonFFTFactory {
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:608 poisson N9 | using solver_type = PoissonFFTSolver<Dim>;
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:611 poisson N9 | explicit PoissonFFTFactory(const ExecutionLane& lane,
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:612 poisson N9 | PoissonFFTSymbol symbol = PoissonFFTSymbol::discrete_cartesian)
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:614 poisson N9 | if (!PoissonFFTCapabilities<Dim>::supports(symbol))
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:616 poisson N9 | std::string(PoissonFFTCapabilities<Dim>::rejection_reason(symbol)));
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:620 poisson N9 | return "pops.poisson-fft-factory.discrete-cartesian@3";
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:639 poisson N9 | static_assert(EllipticSolver<PoissonFFTSolver<1>>);
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:640 poisson N9 | static_assert(EllipticSolver<PoissonFFTSolver<2>>);
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:641 poisson N9 | static_assert(EllipticSolver<PoissonFFTSolver<3>>);
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:642 poisson N9 | static_assert(EllipticFactory<PoissonFFTFactory<1>, PoissonFFTSolver<1>>);
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:643 poisson N9 | static_assert(EllipticFactory<PoissonFFTFactory<2>, PoissonFFTSolver<2>>);
-include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:644 poisson N9 | static_assert(EllipticFactory<PoissonFFTFactory<3>, PoissonFFTSolver<3>>);
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:42 laplacian N9 | struct NegativeLaplacianKernel {
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:154 poisson N9 | struct WeightedPoissonKernel {
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:224 poisson N9 | struct WeightedPoissonFields {
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:234 poisson N9 | void validate_weighted_poisson_fields(const MultiFab<Dim, MemorySpace>& iterate,
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:235 poisson N9 | const WeightedPoissonFields<Dim, MemorySpace>& fields,
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:293 poisson N9 | void apply_poisson_operator_valid(const MultiFab<Dim, InputSpace>& input,
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:304 laplacian N9 | detail::NegativeLaplacianKernel<Dim> kernel{output.fab(local).view(),
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:315 poisson N9 | void poisson_residual_valid(const MultiFab<Dim, IterateSpace>& iterate,
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:371 poisson N9 | void apply_weighted_poisson_operator_valid(
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:374 poisson N9 | const WeightedPoissonFields<Dim, MemorySpace>& fields) {
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:377 poisson N9 | validate_weighted_poisson_fields(input, fields, "apply_weighted_poisson_operator_valid");
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:383 poisson N9 | detail::WeightedPoissonKernel<Dim> kernel{};
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:407 poisson N9 | void weighted_poisson_residual_valid(const MultiFab<Dim, MemorySpace>& iterate,
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:411 poisson N9 | const WeightedPoissonFields<Dim, MemorySpace>& fields) {
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:415 poisson N9 | validate_weighted_poisson_fields(iterate, fields, "weighted_poisson_residual_valid");
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:421 poisson N9 | detail::WeightedPoissonKernel<Dim> kernel{};
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:452 poisson N9 | const WeightedPoissonFields<Dim, MemorySpace>& fields) {
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:456 poisson N9 | validate_weighted_poisson_fields(iterate, fields, "damped_jacobi_weighted_update_valid");
-include/pops/numerics/elliptic/poisson/poisson_operator.hpp:464 poisson N9 | detail::WeightedPoissonKernel<Dim> kernel{};
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:9 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp>
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:30 poisson N9 | struct PolarPoissonCapabilities {
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:40 poisson N9 | : std::string_view{"polar FFT/Thomas Poisson has exactly the axes (r, theta)"};
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:43 poisson N9 | static_assert(!PolarPoissonCapabilities<1>::available);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:44 poisson N9 | static_assert(PolarPoissonCapabilities<2>::available);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:45 poisson N9 | static_assert(!PolarPoissonCapabilities<3>::available);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:60 poisson N9 | namespace polar_poisson_detail {
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:69 dirichlet N9 | if (face.kind == PhysicalBoundaryKind::dirichlet)
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:73 neumann N9 | return face.kind == PhysicalBoundaryKind::neumann && face.value == Real(0);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:76 dirichlet N9 | inline bool is_dirichlet(const PhysicalBoundaryFace& face) noexcept {
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:77 dirichlet N9 | return face.kind == PhysicalBoundaryKind::dirichlet;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:84 poisson N9 | requires(PolarPoissonCapabilities<Dim>::available)
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:85 poisson N9 | class PolarPoissonSolver {
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:91 poisson N9 | explicit PolarPoissonSolver(request_type request)
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:100 poisson N9 | PolarPoissonSolver(const PolarPoissonSolver&) = delete;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:101 poisson N9 | PolarPoissonSolver& operator=(const PolarPoissonSolver&) = delete;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:102 poisson N9 | PolarPoissonSolver(PolarPoissonSolver&&) noexcept = default;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:103 poisson N9 | PolarPoissonSolver& operator=(PolarPoissonSolver&&) noexcept = default;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:104 poisson N9 | ~PolarPoissonSolver() noexcept = default;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:106 poisson N9 | static constexpr PolarPoissonCapabilities<Dim> capabilities() noexcept { return {}; }
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:129 poisson N9 | "polar_poisson_non_finite_residual");
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:138 poisson N9 | "polar_poisson_residual_exceeds_roundoff_envelope");
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:143 poisson N9 | report.mark_solved("polar_poisson_fft_thomas_direct");
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:146 poisson N9 | std::string("polar_poisson_solve_failed: ") + error.what());
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:180 poisson N9 | !polar_poisson_detail::radial_boundary_supported(bc.at(radial)))
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:210 poisson N9 | complex_type(host(polar_poisson_detail::host_offset(storage, i, j)), Real(0));
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:212 poisson N9 | elliptic::poisson::internal::host_fft1d(row, false);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:242 dirichlet N9 | const bool low_dirichlet = polar_poisson_detail::is_dirichlet(low);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:242 poisson N9 | const bool low_dirichlet = polar_poisson_detail::is_dirichlet(low);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:243 dirichlet N9 | const bool high_dirichlet = polar_poisson_detail::is_dirichlet(high);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:243 poisson N9 | const bool high_dirichlet = polar_poisson_detail::is_dirichlet(high);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:244 dirichlet N9 | const bool pin_constant = !low_dirichlet && !high_dirichlet;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:262 dirichlet N9 | if (low_dirichlet) {
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:270 dirichlet N9 | if (high_dirichlet) {
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:292 poisson N9 | elliptic::poisson::internal::host_fft1d(row, true);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:296 poisson N9 | host(polar_poisson_detail::host_offset(storage, i, j)) =
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:343 dirichlet N9 | const bool low_dirichlet = polar_poisson_detail::is_dirichlet(low);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:343 poisson N9 | const bool low_dirichlet = polar_poisson_detail::is_dirichlet(low);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:344 dirichlet N9 | const bool high_dirichlet = polar_poisson_detail::is_dirichlet(high);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:344 poisson N9 | const bool high_dirichlet = polar_poisson_detail::is_dirichlet(high);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:345 dirichlet N9 | const bool pin_constant = !low_dirichlet && !high_dirichlet;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:364 dirichlet N9 | diagonal += low_dirichlet ? -lower : lower;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:365 dirichlet N9 | if (low_dirichlet && mode == 0)
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:373 dirichlet N9 | diagonal += high_dirichlet ? -upper : upper;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:374 dirichlet N9 | if (high_dirichlet && mode == 0)
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:401 poisson N9 | std::abs(host(polar_poisson_detail::host_offset(storage, i, j))));
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:416 poisson N9 | static_assert(PolarEllipticSolver<PolarPoissonSolver<2>>);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:420 poisson N9 | struct PolarPoissonProvider {
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:424 poisson N9 | static constexpr bool available = PolarPoissonCapabilities<Dim>::available;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:426 poisson N9 | return PolarPoissonCapabilities<Dim>::unavailable_reason;
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:430 poisson N9 | requires(PolarPoissonCapabilities<ExactDim>::available)
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:431 poisson N9 | static PolarPoissonSolver<ExactDim> build(PolarEllipticBuildRequest<ExactDim> request) {
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:432 poisson N9 | return PolarPoissonSolver<ExactDim>{std::move(request)};
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:436 poisson N9 | static_assert(!PolarPoissonProvider<1>::available);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:437 poisson N9 | static_assert(PolarPoissonProvider<2>::available);
-include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:438 poisson N9 | static_assert(!PolarPoissonProvider<3>::available);
-include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:242 dirichlet N9 | if (face.kind == PhysicalBoundaryKind::dirichlet)
-include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:245 neumann N9 | face.kind == PhysicalBoundaryKind::neumann)
-include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:247 robin N9 | if (face.kind == PhysicalBoundaryKind::robin) {
-include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:257 dirichlet N9 | return face.kind == PhysicalBoundaryKind::dirichlet ||
-include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:258 robin N9 | (face.kind == PhysicalBoundaryKind::robin && face.alpha != Real(0));
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:0 poisson N9 | (path)
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:40 poisson N9 | class PreparedPolarPoissonInverse {
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:52 poisson N9 | PreparedPolarPoissonInverse(const field_type& prototype, const Geometry<Dim>& geometry,
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:58 poisson N9 | PreparedPolarPoissonInverse(const PreparedPolarPoissonInverse&) = delete;
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:59 poisson N9 | PreparedPolarPoissonInverse& operator=(const PreparedPolarPoissonInverse&) = delete;
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:60 poisson N9 | PreparedPolarPoissonInverse(PreparedPolarPoissonInverse&&) noexcept = default;
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:61 poisson N9 | PreparedPolarPoissonInverse& operator=(PreparedPolarPoissonInverse&&) noexcept = default;
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:82 poisson N9 | builder.text("pops.prepared-fv-polar-poisson-inverse@1")
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:85 dirichlet N9 | .scalar(options_.zero_flux_faces).scalar(options_.dirichlet_faces)
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:118 poisson N9 | {{"pops.prepared-fv-polar-poisson-inverse@1", contract}}, *lane_))
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:381 dirichlet N9 | options_.zero_flux_faces != 1u || options_.dirichlet_faces != 2u ||
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:400 neumann N9 | if (pole.kind != PhysicalBoundaryKind::neumann || pole.value != 0 ||
-include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:401 dirichlet N9 | wall.kind != PhysicalBoundaryKind::dirichlet || wall.value != 0)
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:25 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:170 dirichlet G04 | if (law.kind == PhysicalBoundaryKind::dirichlet ||
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:171 robin G04 | (law.kind == PhysicalBoundaryKind::robin && law.alpha != Real(0)))
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:554 poisson G10 | class CompositeFacPoisson {
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:566 poisson G10 | CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:606 dirichlet G04 | level.boundary.at(face).kind != PhysicalBoundaryKind::dirichlet ||
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:680 poisson G10 | CompositeFacPoisson(const CompositeFacPoisson&) = delete;
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:681 poisson G10 | CompositeFacPoisson& operator=(const CompositeFacPoisson&) = delete;
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:682 poisson G10 | CompositeFacPoisson(CompositeFacPoisson&&) = delete;
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:683 poisson G10 | CompositeFacPoisson& operator=(CompositeFacPoisson&&) = delete;
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:694 poisson G10 | ::pops::elliptic::PoissonFftBottomKind fft_coarse_kind() const noexcept {
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:695 poisson G10 | return fft_coarse_ ? fft_coarse_->kind() : ::pops::elliptic::PoissonFftBottomKind::none;
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:807 poisson G10 | ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> probe;
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:809 poisson G10 | ::pops::elliptic::mg::validate_weighted_poisson_fields(target.phi, probe,
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:923 poisson G10 | ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> probe;
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:928 poisson G10 | ::pops::elliptic::mg::validate_weighted_poisson_fields(target.phi, probe,
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:1810 poisson G10 | ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> weighted_fields_(
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:1812 poisson G10 | ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> fields;
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:1914 poisson G10 | ::pops::elliptic::mg::weighted_poisson_residual_valid(
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:1918 poisson G10 | ::pops::elliptic::mg::poisson_residual_valid(iterate, level.rhs, level.geometry, level.residual,
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2021 poisson G10 | fft_coarse_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2346 poisson G10 | ::pops::elliptic::mg::weighted_poisson_residual_valid(
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2350 poisson G10 | ::pops::elliptic::mg::poisson_residual_valid(level.residual_operator_view, level.rhs,
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2384 poisson G10 | ::pops::elliptic::mg::apply_weighted_poisson_operator_valid(
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2388 poisson G10 | ::pops::elliptic::mg::apply_poisson_operator_valid(
+include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp:2493 poisson G10 | std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_coarse_{};
+include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp:21 neumann G04 | case PhysicalBoundaryKind::neumann:
+include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp:23 robin G04 | case PhysicalBoundaryKind::robin:
+include/pops/numerics/elliptic/interface/field_nullspace_bc_rec_adapter.hpp:26 dirichlet G04 | case PhysicalBoundaryKind::dirichlet:
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:22 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:148 poisson G10 | class CompositeFacPoisson {
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:158 poisson G10 | CompositeFacPoisson(request_type request, const ExecutionLane& lane,
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:208 poisson G10 | CompositeFacPoisson(const CompositeFacPoisson&) = delete;
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:209 poisson G10 | CompositeFacPoisson& operator=(const CompositeFacPoisson&) = delete;
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:210 poisson G10 | CompositeFacPoisson(CompositeFacPoisson&&) noexcept = default;
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:211 poisson G10 | CompositeFacPoisson& operator=(CompositeFacPoisson&&) noexcept = default;
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:231 poisson G10 | ::pops::elliptic::PoissonFftBottomKind fft_coarse_kind() const noexcept {
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:232 poisson G10 | return fft_coarse_ ? fft_coarse_->kind() : ::pops::elliptic::PoissonFftBottomKind::none;
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:339 poisson G10 | WeightedPoissonFields<Dim, MemorySpace> probe;
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:341 poisson G10 | validate_weighted_poisson_fields(target.phi, probe, "composite FAC coefficient");
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:360 poisson G10 | WeightedPoissonFields<Dim, MemorySpace> probe;
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:365 poisson G10 | validate_weighted_poisson_fields(target.phi, probe, "composite FAC embedded boundary");
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1447 poisson G10 | fft_coarse_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1492 poisson G10 | WeightedPoissonFields<Dim, MemorySpace> weighted_fields_(Level& level) const {
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1493 poisson G10 | WeightedPoissonFields<Dim, MemorySpace> fields;
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1591 poisson G10 | weighted_poisson_residual_valid(iterate, level.rhs, level.geometry, level.residual, reaction_,
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1594 poisson G10 | poisson_residual_valid(iterate, level.rhs, level.geometry, level.residual, reaction_);
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1831 poisson G10 | weighted_poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1834 poisson G10 | poisson_residual_valid(level.residual_operator_view, level.rhs, level.geometry,
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1873 poisson G10 | apply_weighted_poisson_operator_valid(level.direction_operator_view, level.geometry,
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:1876 poisson G10 | apply_poisson_operator_valid(level.direction_operator_view, level.geometry, level.scratch,
+include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp:2005 poisson G10 | std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_coarse_{};
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:20 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp>
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:21 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:160 laplacian G10 | Real laplacian = Real(0);
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:165 laplacian G10 | laplacian += (phi(upper, 0) - Real(2) * phi(cell, 0) + phi(lower, 0)) * inverse_spacing_squared[axis];
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:171 laplacian G10 | laplacian += high * phi(upper, 0) + low * phi(lower, 0) - (low + high) * phi(cell, 0);
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:174 laplacian G10 | residual(cell, 0) = rhs(cell, 0) + laplacian;
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:459 dirichlet G04 | if (law.kind == PhysicalBoundaryKind::dirichlet ||
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:460 robin G04 | (law.kind == PhysicalBoundaryKind::robin && law.alpha != Real(0)))
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:566 poisson G10 | ::pops::elliptic::PoissonFftBottomKind fft_coarse_kind() const noexcept {
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:567 poisson G10 | return fft_bottom_ ? fft_bottom_->kind() : ::pops::elliptic::PoissonFftBottomKind::none;
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:682 poisson G10 | WeightedPoissonFields<Dim, MemorySpace> probe;
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:684 poisson G10 | validate_weighted_poisson_fields(levels_.front()->phi, probe, "geometric MG coefficient");
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:717 poisson G10 | WeightedPoissonFields<Dim, MemorySpace> probe;
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:722 poisson G10 | validate_weighted_poisson_fields(fine.phi, probe, "geometric MG embedded boundary");
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:1019 poisson G10 | fft_bottom_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:1194 poisson G10 | WeightedPoissonFields<Dim, MemorySpace> weighted_fields_(Level& level) const {
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:1195 poisson G10 | WeightedPoissonFields<Dim, MemorySpace> fields;
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:1215 poisson G10 | apply_poisson_operator_valid(input, level.geometry, output, options_.reaction);
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:1218 poisson G10 | apply_weighted_poisson_operator_valid(input, level.geometry, output, options_.reaction,
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:1306 poisson G10 | weighted_poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual,
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:1309 poisson G10 | poisson_residual_valid(level.phi, level.rhs, level.geometry, level.residual,
+include/pops/numerics/elliptic/mg/geometric_mg.hpp:1457 poisson G10 | std::unique_ptr<::pops::elliptic::PoissonFftMultiFabAdapter<Dim>> fft_bottom_{};
+include/pops/numerics/elliptic/mg/residual_roundoff.hpp:83 laplacian G10 | Real laplacian = Real(0);
+include/pops/numerics/elliptic/mg/residual_roundoff.hpp:97 laplacian G10 | laplacian += term;
+include/pops/numerics/elliptic/mg/residual_roundoff.hpp:98 laplacian G10 | if (!normal_or_zero(laplacian)) return std::numeric_limits<Real>::infinity();
+include/pops/numerics/elliptic/mg/residual_roundoff.hpp:106 laplacian G10 | if (!normal_or_zero(rhs(cell, 0) + laplacian))
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:29 dirichlet G04 | enum class CartesianBoundaryKind : unsigned char { periodic, dirichlet, neumann, mixed };
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:29 neumann G04 | enum class CartesianBoundaryKind : unsigned char { periodic, dirichlet, neumann, mixed };
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:32 poisson G10 | struct CartesianPoissonOptions {
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:44 poisson G10 | static CartesianPoissonOptions from_topology(
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:46 dirichlet G04 | CartesianBoundaryKind physical_kind = CartesianBoundaryKind::dirichlet) {
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:50 poisson G10 | CartesianPoissonOptions result;
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:59 dirichlet G04 | physical_kind == CartesianBoundaryKind::dirichlet ? Real(1) : Real(0);
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:61 neumann G04 | physical_kind == CartesianBoundaryKind::neumann ? Real(1) : Real(0);
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:84 poisson G10 | checked_multiply(boxes, boxes, "Cartesian Poisson halo pair budget overflow");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:87 poisson G10 | images = checked_multiply(images, 3, "Cartesian Poisson image budget overflow");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:89 poisson G10 | checked_multiply(pairs, images, "Cartesian Poisson halo work budget overflow");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:91 poisson G10 | "Cartesian Poisson halo job budget overflow");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:97 poisson G10 | checked_multiply(jobs, cells, "Cartesian Poisson halo element budget overflow"),
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:98 poisson G10 | static_cast<std::size_t>(components), "Cartesian Poisson halo component budget overflow");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:104 poisson G10 | checked_multiply(boxes, std::size_t{2}, "Cartesian Poisson peer budget overflow"),
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:178 laplacian G10 | struct NegativeLaplacianKernel {
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:222 poisson G10 | class CartesianPoissonSolver {
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:231 poisson G10 | CartesianPoissonSolver(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:233 poisson G10 | BoundaryTopology<Dim> topology, CartesianPoissonOptions<Dim> options,
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:235 poisson G10 | : CartesianPoissonSolver(geometry, layout, distribution, local_rank, std::move(topology),
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:243 poisson G10 | static CartesianPoissonSolver prepare_local(const Geometry<Dim>& geometry,
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:247 poisson G10 | CartesianPoissonOptions<Dim> options,
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:249 poisson G10 | return CartesianPoissonSolver(geometry, layout, distribution, local_rank, std::move(topology),
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:294 poisson G10 | CartesianPoissonSolver(const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:296 poisson G10 | BoundaryTopology<Dim> topology, CartesianPoissonOptions<Dim> options,
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:315 poisson G10 | CartesianPoissonSolver(const CartesianPoissonSolver&) = delete;
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:316 poisson G10 | CartesianPoissonSolver& operator=(const CartesianPoissonSolver&) = delete;
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:317 poisson G10 | CartesianPoissonSolver(CartesianPoissonSolver&&) = default;
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:318 poisson G10 | CartesianPoissonSolver& operator=(CartesianPoissonSolver&&) = default;
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:456 poisson G10 | "cartesian_poisson_non_finite_initial_residual");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:462 poisson G10 | report.mark_solved("cartesian_poisson_initial_residual");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:474 poisson G10 | "cartesian_poisson_non_positive_curvature");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:491 poisson G10 | "cartesian_poisson_non_finite_iteration");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:497 poisson G10 | report.mark_solved("cartesian_poisson_converged");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:502 poisson G10 | "cartesian_poisson_zero_recurrence_norm");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:511 poisson G10 | "cartesian_poisson_iteration_limit");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:553 dirichlet G04 | if (kind == CartesianBoundaryKind::dirichlet && (alpha != Real(1) || beta != Real(0)))
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:556 neumann G04 | if (kind == CartesianBoundaryKind::neumann && (alpha != Real(0) || beta != Real(1)))
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:647 poisson G10 | context, "Cartesian Poisson dynamic boundary evaluation failed collectively");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:660 poisson G10 | "Cartesian Poisson dynamic boundary JVP failed collectively");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:664 laplacian G10 | void apply_negative_laplacian_(field_type& output) {
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:673 laplacian G10 | detail::NegativeLaplacianKernel<Dim> kernel{output.fab(local).view(), source.view(), {}};
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:685 laplacian G10 | apply_negative_laplacian_(image_);
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:693 poisson G10 | context, "Cartesian Poisson dynamic residual closure failed collectively");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:704 laplacian G10 | apply_negative_laplacian_(output);
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:711 poisson G10 | "Cartesian Poisson dynamic JVP closure failed collectively");
+include/pops/numerics/elliptic/nd/cartesian_poisson.hpp:727 poisson G10 | CartesianPoissonOptions<Dim> options_;
+include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:31 dirichlet G04 | unsigned dirichlet_faces = 0;
+include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:110 dirichlet G04 | if (options.arithmetic_diagonal && on_face(cell, axis, side, options.dirichlet_faces)) {
+include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:175 dirichlet G04 | const unsigned physical = options.zero_flux_faces | options.dirichlet_faces;
+include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:208 dirichlet G04 | const unsigned physical = options.zero_flux_faces | options.dirichlet_faces;
+include/pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp:266 dirichlet G04 | if ((options.dirichlet_faces & face) != 0) {
+include/pops/numerics/elliptic/nd/general_field_operator.hpp:18 neumann G04 | enum class PhysicalFieldBoundary : unsigned char { periodic, homogeneous_neumann };
+include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:3 poisson G10 | #include <pops/numerics/elliptic/amr/composite_fac_poisson.hpp>
+include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:112 neumann G04 | if (!value || (*value != "periodic" && *value != "neumann"))
+include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:293 poisson G10 | entries_.push_back(std::make_unique<amr::CompositeFacPoisson<Dim>>(
+include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:296 poisson G10 | using scalar_type = amr::CompositeFacPoisson<Dim>;
+include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:904 poisson G10 | std::vector<std::unique_ptr<amr::CompositeFacPoisson<Dim>>> entries_;
+include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:953 neumann G04 | if (!periodic && (law.kind != PhysicalBoundaryKind::neumann || law.value != Real(0)))
+include/pops/numerics/elliptic/nd/prepared_composite_general_field.hpp:959 neumann G04 | if (std::get<std::string>(found->second) != (periodic ? "periodic" : "neumann"))
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:22 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp>
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:54 poisson G10 | inline void reset_poisson_fft_direct_dft_fallback_count() {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:57 poisson G10 | inline std::size_t poisson_fft_direct_dft_fallback_count() {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:60 poisson G10 | inline void record_poisson_fft_direct_dft_fallback() {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:64 poisson G10 | inline constexpr bool poisson_fft_fftw_configured() noexcept {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:72 poisson G10 | inline const char* poisson_fft_fftw_absence_reason() noexcept {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:77 poisson G10 | "PoissonFFT uses the in-tree radix-2 / diagnosed direct-DFT backend";
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:84 poisson G10 | enum class PoissonFFTDiagnosticStage : std::uint8_t {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:92 poisson G10 | struct PoissonFFTDiagnosticContext {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:93 poisson G10 | PoissonFFTDiagnosticStage stage = PoissonFFTDiagnosticStage::none;
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:98 poisson G10 | class PoissonFFT {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:108 poisson G10 | PoissonFFT(int_array cells, real_array lengths, const ExecutionLane& lane,
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:109 poisson G10 | std::string_view lane_identity, PoissonFFTDiagnosticContext diagnostic = {})
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:125 poisson G10 | if ((diagnostic_.stage == PoissonFFTDiagnosticStage::none && diagnostic_.fail_rank != -1) ||
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:126 poisson G10 | (diagnostic_.stage != PoissonFFTDiagnosticStage::none &&
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:148 poisson G10 | contract.text("pops.poisson-fft.exact-request@3")
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:169 poisson G10 | {{"pops.poisson-fft.exact-request@3", request_contract}}, lane))
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:174 poisson G10 | if (diagnostic_.stage == PoissonFFTDiagnosticStage::workspace_allocation &&
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:177 poisson G10 | values_ = device_view("poisson_fft_values", local_count_);
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:178 poisson G10 | scratch_ = device_view("poisson_fft_scratch", local_count_);
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:179 poisson G10 | peer_send_ = device_view("poisson_fft_peer_send", local_count_);
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:180 poisson G10 | peer_receive_ = device_view("poisson_fft_peer_receive", local_count_);
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:181 poisson G10 | host_send_ = pinned_view("poisson_fft_host_send", local_count_);
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:182 poisson G10 | host_receive_ = pinned_view("poisson_fft_host_receive", local_count_);
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:193 poisson G10 | PoissonFFT(const PoissonFFT&) = delete;
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:194 poisson G10 | PoissonFFT& operator=(const PoissonFFT&) = delete;
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:195 poisson G10 | PoissonFFT(PoissonFFT&&) noexcept = default;
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:196 poisson G10 | PoissonFFT& operator=(PoissonFFT&&) noexcept = default;
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:204 poisson G10 | if (poisson_fft_fftw_configured()) {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:215 poisson G10 | if (!poisson_fft_fftw_configured())
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:249 poisson G10 | using device_kernels = detail::PoissonFFTDeviceKernels<Dim, MemorySpace>;
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:260 poisson G10 | PoissonFFTDiagnosticStage diagnostic_stage = PoissonFFTDiagnosticStage::none) {
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:333 poisson G10 | record_poisson_fft_direct_dft_fallback();
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:382 poisson G10 | record_poisson_fft_direct_dft_fallback();
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:408 poisson G10 | "peer-DFT launch", PoissonFFTDiagnosticStage::peer_dft_launch);
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:414 poisson G10 | "peer accumulation", PoissonFFTDiagnosticStage::peer_accumulation);
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:492 poisson G10 | "distributed radix stage", PoissonFFTDiagnosticStage::distributed_radix);
+include/pops/numerics/elliptic/poisson/poisson_fft.hpp:571 poisson G10 | PoissonFFTDiagnosticContext diagnostic_{};
+include/pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp:22 poisson G10 | namespace pops::elliptic::poisson::internal {
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:17 poisson G10 | struct PoissonFFTDeviceKernels {
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:35 poisson G10 | "pops_poisson_fft_local_dft", Kokkos::RangePolicy<>(0, lines),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:57 poisson G10 | "pops_poisson_fft_bit_reverse", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:75 poisson G10 | "pops_poisson_fft_radix2_stage", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:96 poisson G10 | "pops_poisson_fft_radix2_normalize", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:104 poisson G10 | "pops_poisson_fft_peer_dft", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:124 poisson G10 | "pops_poisson_fft_peer_accumulate", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:131 poisson G10 | "pops_poisson_fft_inverse_normalize", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:140 poisson G10 | "pops_poisson_fft_last_inverse_normalize", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:150 poisson G10 | "pops_poisson_fft_last_local_radix", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:178 poisson G10 | "pops_poisson_fft_last_distributed_radix", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp:213 poisson G10 | "pops_poisson_fft_symbol", Kokkos::RangePolicy<>(0, local_count),
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:13 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:14 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:30 poisson G10 | enum class PoissonFftBottomKind : unsigned char {
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:36 poisson G10 | struct PoissonFftBottomClassification {
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:37 poisson G10 | PoissonFftBottomKind kind = PoissonFftBottomKind::none;
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:39 poisson G10 | constexpr bool eligible() const noexcept { return kind != PoissonFftBottomKind::none; }
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:48 poisson G10 | typename PoissonFFT<Dim>::device_view destination{};
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:54 poisson G10 | using complex_type = typename PoissonFFT<Dim>::complex_type;
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:62 poisson G10 | typename PoissonFFT<Dim>::device_view source{};
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:205 poisson G10 | class PoissonFftMultiFabAdapter {
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:211 poisson G10 | using complex_type = typename PoissonFFT<Dim>::complex_type;
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:212 poisson G10 | using device_view = typename PoissonFFT<Dim>::device_view;
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:214 poisson G10 | static PoissonFftBottomClassification classify(const request_type& request,
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:218 poisson G10 | PoissonFftBottomClassification result;
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:224 poisson G10 | if (PoissonFFTSolver<Dim>::supports(normalized, lane)) {
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:225 poisson G10 | result.kind = PoissonFftBottomKind::native_solver;
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:231 poisson G10 | PoissonFFTSolver<Dim>::supports(
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:233 poisson G10 | result.kind = PoissonFftBottomKind::replicated_slab_rewrite;
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:242 poisson G10 | static std::unique_ptr<PoissonFftMultiFabAdapter<Dim>> try_make(const request_type& request,
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:255 poisson G10 | return std::make_unique<PoissonFftMultiFabAdapter<Dim>>(request, lane, reaction,
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:259 poisson G10 | PoissonFftMultiFabAdapter(const request_type& request, const ExecutionLane& lane, Real reaction,
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:268 poisson G10 | lane, "pops.poisson-fft/multifab-bottom");
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:272 poisson G10 | fft_rhs_ = device_view("pops.poisson-fft.multifab-rhs", fft_->local_cell_count());
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:273 poisson G10 | fft_phi_ = device_view("pops.poisson-fft.multifab-phi", fft_->local_cell_count());
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:277 poisson G10 | PoissonFftBottomKind kind() const noexcept { return classification_.kind; }
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:292 poisson G10 | "poisson_fft_multifab_incompatible_rhs");
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:299 poisson G10 | if (classification_.kind == PoissonFftBottomKind::replicated_slab_rewrite)
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:302 poisson G10 | if (classification_.kind == PoissonFftBottomKind::replicated_slab_rewrite)
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:306 poisson G10 | report.mark_solved("poisson_fft_multifab_discrete_direct");
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:351 poisson G10 | PoissonFftBottomClassification classification_{};
+include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp:352 poisson G10 | std::optional<PoissonFFT<Dim>> fft_{};
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:14 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_fft.hpp>
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:15 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:34 poisson G10 | enum class PoissonFFTSymbol : unsigned char {
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:41 poisson G10 | struct PoissonFFTCapabilities {
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:55 poisson G10 | static constexpr bool supports(PoissonFFTSymbol symbol) noexcept {
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:56 poisson G10 | return symbol == PoissonFFTSymbol::discrete_cartesian && discrete_symbol;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:59 poisson G10 | static constexpr std::string_view rejection_reason(PoissonFFTSymbol symbol) noexcept {
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:68 poisson G10 | static_assert(PoissonFFTCapabilities<1>::available);
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:69 poisson G10 | static_assert(PoissonFFTCapabilities<2>::available);
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:70 poisson G10 | static_assert(PoissonFFTCapabilities<3>::available);
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:78 poisson G10 | contract.text("pops.elliptic.poisson-fft.options")
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:147 poisson G10 | typename PoissonFFT<Dim>::device_view destination{};
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:153 poisson G10 | destination[ordinal] = typename PoissonFFT<Dim>::complex_type(-source(cell, 0), Real(0));
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:159 poisson G10 | typename PoissonFFT<Dim>::device_view source{};
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:190 poisson G10 | class PoissonFFTSolver {
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:207 poisson G10 | typename PoissonFFT<Dim>::device_view fft_rhs;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:208 poisson G10 | typename PoissonFFT<Dim>::device_view fft_phi;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:214 poisson G10 | PoissonFFTSolver(request_type request, const ExecutionLane& lane)
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:215 poisson G10 | : PoissonFFTSolver(
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:219 poisson G10 | PoissonFFTSolver(const PoissonFFTSolver&) = delete;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:220 poisson G10 | PoissonFFTSolver& operator=(const PoissonFFTSolver&) = delete;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:221 poisson G10 | PoissonFFTSolver(PoissonFFTSolver&&) noexcept = default;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:222 poisson G10 | PoissonFFTSolver& operator=(PoissonFFTSolver&&) noexcept = default;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:223 poisson G10 | ~PoissonFFTSolver() noexcept = default;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:225 poisson G10 | static constexpr PoissonFFTCapabilities<Dim> capabilities() noexcept { return {}; }
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:227 poisson G10 | return {"pops.elliptic.poisson-fft.discrete-cartesian", 3};
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:248 poisson G10 | static constexpr PoissonFFTSymbol symbol() noexcept {
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:249 poisson G10 | return PoissonFFTSymbol::discrete_cartesian;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:309 poisson G10 | "poisson_fft_local_slab_layout_mismatch");
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:325 poisson G10 | report, "poisson_fft_rhs_pack_failed_collectively"))
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:328 poisson G10 | "poisson_fft_transform_failed_collectively"))
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:335 poisson G10 | report, "poisson_fft_solution_unpack_failed_collectively"))
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:356 poisson G10 | report, "poisson_fft_residual_evaluation_failed_collectively"))
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:368 poisson G10 | "poisson_fft_non_finite_residual");
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:378 poisson G10 | "poisson_fft_discrete_residual_exceeds_roundoff_envelope");
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:387 poisson G10 | report.mark_solved("poisson_fft_discrete_direct");
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:410 poisson G10 | PoissonFFTSolver(PreparedStorage prepared, const ExecutionLane& lane, PreparedTag)
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:424 poisson G10 | lane, "pops.poisson-fft/cartesian");
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:455 poisson G10 | typename PoissonFFT<Dim>::device_view fft_rhs("poisson_fft_rhs",
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:457 poisson G10 | typename PoissonFFT<Dim>::device_view fft_phi("poisson_fft_phi",
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:484 poisson G10 | local_cells, local_extent, "Poisson FFT local slab element count overflow");
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:532 poisson G10 | local_elements, local_extent, "Poisson FFT local slab element count overflow");
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:535 poisson G10 | sizeof(typename PoissonFFT<Dim>::complex_type))
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:570 poisson G10 | {{"pops.poisson-fft-solver.exact-request@3", exact_request}}, lane))
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:583 poisson G10 | elliptic::mg::poisson_residual_valid(trial_, rhs_, geometry_, residual_field_);
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:592 poisson G10 | typename PoissonFFT<Dim>::device_view fft_rhs_{};
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:593 poisson G10 | typename PoissonFFT<Dim>::device_view fft_phi_{};
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:598 poisson G10 | std::optional<PoissonFFT<Dim>> fft_{};
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:606 poisson G10 | class PoissonFFTFactory {
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:608 poisson G10 | using solver_type = PoissonFFTSolver<Dim>;
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:611 poisson G10 | explicit PoissonFFTFactory(const ExecutionLane& lane,
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:612 poisson G10 | PoissonFFTSymbol symbol = PoissonFFTSymbol::discrete_cartesian)
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:614 poisson G10 | if (!PoissonFFTCapabilities<Dim>::supports(symbol))
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:616 poisson G10 | std::string(PoissonFFTCapabilities<Dim>::rejection_reason(symbol)));
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:620 poisson G10 | return "pops.poisson-fft-factory.discrete-cartesian@3";
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:639 poisson G10 | static_assert(EllipticSolver<PoissonFFTSolver<1>>);
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:640 poisson G10 | static_assert(EllipticSolver<PoissonFFTSolver<2>>);
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:641 poisson G10 | static_assert(EllipticSolver<PoissonFFTSolver<3>>);
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:642 poisson G10 | static_assert(EllipticFactory<PoissonFFTFactory<1>, PoissonFFTSolver<1>>);
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:643 poisson G10 | static_assert(EllipticFactory<PoissonFFTFactory<2>, PoissonFFTSolver<2>>);
+include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp:644 poisson G10 | static_assert(EllipticFactory<PoissonFFTFactory<3>, PoissonFFTSolver<3>>);
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:42 laplacian G10 | struct NegativeLaplacianKernel {
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:154 poisson G10 | struct WeightedPoissonKernel {
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:224 poisson G10 | struct WeightedPoissonFields {
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:234 poisson G10 | void validate_weighted_poisson_fields(const MultiFab<Dim, MemorySpace>& iterate,
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:235 poisson G10 | const WeightedPoissonFields<Dim, MemorySpace>& fields,
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:293 poisson G10 | void apply_poisson_operator_valid(const MultiFab<Dim, InputSpace>& input,
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:304 laplacian G10 | detail::NegativeLaplacianKernel<Dim> kernel{output.fab(local).view(),
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:315 poisson G10 | void poisson_residual_valid(const MultiFab<Dim, IterateSpace>& iterate,
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:371 poisson G10 | void apply_weighted_poisson_operator_valid(
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:374 poisson G10 | const WeightedPoissonFields<Dim, MemorySpace>& fields) {
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:377 poisson G10 | validate_weighted_poisson_fields(input, fields, "apply_weighted_poisson_operator_valid");
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:383 poisson G10 | detail::WeightedPoissonKernel<Dim> kernel{};
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:407 poisson G10 | void weighted_poisson_residual_valid(const MultiFab<Dim, MemorySpace>& iterate,
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:411 poisson G10 | const WeightedPoissonFields<Dim, MemorySpace>& fields) {
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:415 poisson G10 | validate_weighted_poisson_fields(iterate, fields, "weighted_poisson_residual_valid");
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:421 poisson G10 | detail::WeightedPoissonKernel<Dim> kernel{};
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:452 poisson G10 | const WeightedPoissonFields<Dim, MemorySpace>& fields) {
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:456 poisson G10 | validate_weighted_poisson_fields(iterate, fields, "damped_jacobi_weighted_update_valid");
+include/pops/numerics/elliptic/poisson/poisson_operator.hpp:464 poisson G10 | detail::WeightedPoissonKernel<Dim> kernel{};
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:9 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp>
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:30 poisson G10 | struct PolarPoissonCapabilities {
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:40 poisson G10 | : std::string_view{"polar FFT/Thomas Poisson has exactly the axes (r, theta)"};
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:43 poisson G10 | static_assert(!PolarPoissonCapabilities<1>::available);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:44 poisson G10 | static_assert(PolarPoissonCapabilities<2>::available);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:45 poisson G10 | static_assert(!PolarPoissonCapabilities<3>::available);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:60 poisson G10 | namespace polar_poisson_detail {
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:69 dirichlet G04 | if (face.kind == PhysicalBoundaryKind::dirichlet)
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:73 neumann G04 | return face.kind == PhysicalBoundaryKind::neumann && face.value == Real(0);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:76 dirichlet G04 | inline bool is_dirichlet(const PhysicalBoundaryFace& face) noexcept {
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:77 dirichlet G04 | return face.kind == PhysicalBoundaryKind::dirichlet;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:84 poisson G10 | requires(PolarPoissonCapabilities<Dim>::available)
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:85 poisson G10 | class PolarPoissonSolver {
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:91 poisson G10 | explicit PolarPoissonSolver(request_type request)
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:100 poisson G10 | PolarPoissonSolver(const PolarPoissonSolver&) = delete;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:101 poisson G10 | PolarPoissonSolver& operator=(const PolarPoissonSolver&) = delete;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:102 poisson G10 | PolarPoissonSolver(PolarPoissonSolver&&) noexcept = default;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:103 poisson G10 | PolarPoissonSolver& operator=(PolarPoissonSolver&&) noexcept = default;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:104 poisson G10 | ~PolarPoissonSolver() noexcept = default;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:106 poisson G10 | static constexpr PolarPoissonCapabilities<Dim> capabilities() noexcept { return {}; }
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:129 poisson G10 | "polar_poisson_non_finite_residual");
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:138 poisson G10 | "polar_poisson_residual_exceeds_roundoff_envelope");
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:143 poisson G10 | report.mark_solved("polar_poisson_fft_thomas_direct");
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:146 poisson G10 | std::string("polar_poisson_solve_failed: ") + error.what());
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:180 poisson G10 | !polar_poisson_detail::radial_boundary_supported(bc.at(radial)))
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:210 poisson G10 | complex_type(host(polar_poisson_detail::host_offset(storage, i, j)), Real(0));
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:212 poisson G10 | elliptic::poisson::internal::host_fft1d(row, false);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:242 dirichlet G04 | const bool low_dirichlet = polar_poisson_detail::is_dirichlet(low);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:242 poisson G10 | const bool low_dirichlet = polar_poisson_detail::is_dirichlet(low);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:243 dirichlet G04 | const bool high_dirichlet = polar_poisson_detail::is_dirichlet(high);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:243 poisson G10 | const bool high_dirichlet = polar_poisson_detail::is_dirichlet(high);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:244 dirichlet G04 | const bool pin_constant = !low_dirichlet && !high_dirichlet;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:262 dirichlet G04 | if (low_dirichlet) {
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:270 dirichlet G04 | if (high_dirichlet) {
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:292 poisson G10 | elliptic::poisson::internal::host_fft1d(row, true);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:296 poisson G10 | host(polar_poisson_detail::host_offset(storage, i, j)) =
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:343 dirichlet G04 | const bool low_dirichlet = polar_poisson_detail::is_dirichlet(low);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:343 poisson G10 | const bool low_dirichlet = polar_poisson_detail::is_dirichlet(low);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:344 dirichlet G04 | const bool high_dirichlet = polar_poisson_detail::is_dirichlet(high);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:344 poisson G10 | const bool high_dirichlet = polar_poisson_detail::is_dirichlet(high);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:345 dirichlet G04 | const bool pin_constant = !low_dirichlet && !high_dirichlet;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:364 dirichlet G04 | diagonal += low_dirichlet ? -lower : lower;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:365 dirichlet G04 | if (low_dirichlet && mode == 0)
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:373 dirichlet G04 | diagonal += high_dirichlet ? -upper : upper;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:374 dirichlet G04 | if (high_dirichlet && mode == 0)
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:401 poisson G10 | std::abs(host(polar_poisson_detail::host_offset(storage, i, j))));
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:416 poisson G10 | static_assert(PolarEllipticSolver<PolarPoissonSolver<2>>);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:420 poisson G10 | struct PolarPoissonProvider {
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:424 poisson G10 | static constexpr bool available = PolarPoissonCapabilities<Dim>::available;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:426 poisson G10 | return PolarPoissonCapabilities<Dim>::unavailable_reason;
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:430 poisson G10 | requires(PolarPoissonCapabilities<ExactDim>::available)
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:431 poisson G10 | static PolarPoissonSolver<ExactDim> build(PolarEllipticBuildRequest<ExactDim> request) {
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:432 poisson G10 | return PolarPoissonSolver<ExactDim>{std::move(request)};
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:436 poisson G10 | static_assert(!PolarPoissonProvider<1>::available);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:437 poisson G10 | static_assert(PolarPoissonProvider<2>::available);
+include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp:438 poisson G10 | static_assert(!PolarPoissonProvider<3>::available);
+include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:242 dirichlet G04 | if (face.kind == PhysicalBoundaryKind::dirichlet)
+include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:245 neumann G04 | face.kind == PhysicalBoundaryKind::neumann)
+include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:247 robin G04 | if (face.kind == PhysicalBoundaryKind::robin) {
+include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:257 dirichlet G04 | return face.kind == PhysicalBoundaryKind::dirichlet ||
+include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp:258 robin G04 | (face.kind == PhysicalBoundaryKind::robin && face.alpha != Real(0));
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:0 poisson G10 | (path)
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:40 poisson G10 | class PreparedPolarPoissonInverse {
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:52 poisson G10 | PreparedPolarPoissonInverse(const field_type& prototype, const Geometry<Dim>& geometry,
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:58 poisson G10 | PreparedPolarPoissonInverse(const PreparedPolarPoissonInverse&) = delete;
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:59 poisson G10 | PreparedPolarPoissonInverse& operator=(const PreparedPolarPoissonInverse&) = delete;
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:60 poisson G10 | PreparedPolarPoissonInverse(PreparedPolarPoissonInverse&&) noexcept = default;
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:61 poisson G10 | PreparedPolarPoissonInverse& operator=(PreparedPolarPoissonInverse&&) noexcept = default;
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:82 poisson G10 | builder.text("pops.prepared-fv-polar-poisson-inverse@1")
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:85 dirichlet G04 | .scalar(options_.zero_flux_faces).scalar(options_.dirichlet_faces)
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:118 poisson G10 | {{"pops.prepared-fv-polar-poisson-inverse@1", contract}}, *lane_))
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:381 dirichlet G04 | options_.zero_flux_faces != 1u || options_.dirichlet_faces != 2u ||
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:400 neumann G04 | if (pole.kind != PhysicalBoundaryKind::neumann || pole.value != 0 ||
+include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp:401 dirichlet G04 | wall.kind != PhysicalBoundaryKind::dirichlet || wall.value != 0)
 include/pops/numerics/fv/flux_interfaces.hpp:118 rusanov N3 | kRusanov = 1,
 include/pops/numerics/fv/flux_interfaces.hpp:119 hll N3 | kHll = 2,
 include/pops/numerics/fv/flux_interfaces.hpp:120 hllc N3 | kHllc = 3,
@@ -1374,13 +1374,13 @@ include/pops/physics/fluids/euler.hpp:16 euler N3 | using EulerND = nd::IdealGas
 include/pops/physics/fluids/euler.hpp:16 ideal-gas N3 | using EulerND = nd::IdealGasEuler<Dim>;
 include/pops/physics/fluids/euler.hpp:18 euler N3 | using Euler = EulerND<kNativeDimension>;
 include/pops/runtime/amr/amr_runtime.hpp:426 node-multilinear G11 | case ::pops::amr::transfer::TransferKind::NodeMultilinearProlongation:
-include/pops/runtime/amr/amr_tensor_elliptic.hpp:79 poisson N9 | preconditioner != tensor_fac::CoarsePreconditionerKind::polar_poisson &&
-include/pops/runtime/amr/amr_tensor_elliptic.hpp:82 poisson N9 | if (preconditioner == tensor_fac::CoarsePreconditionerKind::polar_poisson &&
-include/pops/runtime/amr/amr_tensor_elliptic.hpp:133 poisson N9 | else if (name == "polar_poisson")
-include/pops/runtime/amr/amr_tensor_elliptic.hpp:134 poisson N9 | controls.coarse_preconditioner = tensor_fac::CoarsePreconditionerKind::polar_poisson;
-include/pops/runtime/amr/amr_tensor_elliptic.hpp:196 dirichlet N9 | controls.stencil_options.dirichlet_faces |= 1u << face;
-include/pops/runtime/amr/amr_tensor_elliptic.hpp:331 dirichlet N9 | (law.kind != PhysicalBoundaryKind::dirichlet || law.value != Real(0))) ||
-include/pops/runtime/amr/amr_tensor_elliptic.hpp:333 neumann N9 | (law.kind != PhysicalBoundaryKind::neumann || law.value != Real(0))))
+include/pops/runtime/amr/amr_tensor_elliptic.hpp:79 poisson G10 | preconditioner != tensor_fac::CoarsePreconditionerKind::polar_poisson &&
+include/pops/runtime/amr/amr_tensor_elliptic.hpp:82 poisson G10 | if (preconditioner == tensor_fac::CoarsePreconditionerKind::polar_poisson &&
+include/pops/runtime/amr/amr_tensor_elliptic.hpp:133 poisson G10 | else if (name == "polar_poisson")
+include/pops/runtime/amr/amr_tensor_elliptic.hpp:134 poisson G10 | controls.coarse_preconditioner = tensor_fac::CoarsePreconditionerKind::polar_poisson;
+include/pops/runtime/amr/amr_tensor_elliptic.hpp:196 dirichlet G04 | controls.stencil_options.dirichlet_faces |= 1u << face;
+include/pops/runtime/amr/amr_tensor_elliptic.hpp:331 dirichlet G04 | (law.kind != PhysicalBoundaryKind::dirichlet || law.value != Real(0))) ||
+include/pops/runtime/amr/amr_tensor_elliptic.hpp:333 neumann G04 | (law.kind != PhysicalBoundaryKind::neumann || law.value != Real(0))))
 include/pops/runtime/amr/bootstrap_transfer_builtins.hpp:16 divergence-preserving G11 | ::pops::amr::transfer::PreparedDivergencePreservingFaceTransfer<Dim>
 include/pops/runtime/amr/bootstrap_transfer_builtins.hpp:17 divergence-preserving G11 | prepare_divergence_preserving_face(
 include/pops/runtime/amr/bootstrap_transfer_builtins.hpp:23 divergence-preserving G11 | return ::pops::numerics::time::amr::prepare_divergence_preserving_faces(
@@ -1394,27 +1394,27 @@ include/pops/runtime/amr/bootstrap_transfer_builtins.hpp:118 conservative-coarse
 include/pops/runtime/amr/bootstrap_transfer_builtins.hpp:129 conservative-polynomial G11 | ::pops::amr::transfer::PreparedTransfer<Dim> prepare_conservative_polynomial5_coarse_fine(
 include/pops/runtime/amr/exact_field_solver_provider.hpp:15 poisson G10 | #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 include/pops/runtime/amr/field_solver_options.hpp:5 poisson G10 | #include <pops/runtime/system/system_poisson_options.hpp>
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:12 poisson N9 | #include <pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp>
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:32 poisson N9 | enum class CoarsePreconditionerKind : std::uint8_t { diagonal, polar_poisson, tensor_diagonal_mg };
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:80 dirichlet N9 | .scalar(options.dirichlet_faces)
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:289 poisson N9 | std::unique_ptr<elliptic::polar::PreparedPolarPoissonInverse<Dim>> inverse;
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:293 poisson N9 | inverse(std::make_unique<elliptic::polar::PreparedPolarPoissonInverse<Dim>>(
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:310 poisson N9 | return {"pops.tensor-fac.coarse-fixed-polar-poisson", 1};
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:369 poisson N9 | preconditioner != CoarsePreconditionerKind::polar_poisson &&
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:371 poisson N9 | (preconditioner == CoarsePreconditionerKind::polar_poisson && Dim != 2))
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:408 poisson N9 | if (data_->preconditioner == CoarsePreconditionerKind::polar_poisson)
-include/pops/runtime/amr/tensor_coarse_gmres.hpp:596 dirichlet N9 | output << data_->options.zero_flux_faces << ' ' << data_->options.dirichlet_faces << ' '
-include/pops/runtime/amr/tensor_composite_fac.hpp:21 poisson N9 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
-include/pops/runtime/amr/tensor_composite_fac.hpp:520 poisson N9 | controls.coarse_preconditioner != CoarsePreconditionerKind::polar_poisson &&
-include/pops/runtime/amr/tensor_composite_fac.hpp:1543 dirichlet N9 | if (((stencil_options_.zero_flux_faces | stencil_options_.dirichlet_faces) & ~face_mask) != 0 ||
-include/pops/runtime/amr/tensor_composite_fac.hpp:1544 dirichlet N9 | (stencil_options_.zero_flux_faces & stencil_options_.dirichlet_faces) != 0)
-include/pops/runtime/amr/tensor_composite_fac.hpp:1605 dirichlet N9 | if (((stencil_options_.zero_flux_faces | stencil_options_.dirichlet_faces) & bit) != 0) {
-include/pops/runtime/amr/tensor_composite_fac.hpp:1608 neumann N9 | law.kind != PhysicalBoundaryKind::neumann) ||
-include/pops/runtime/amr/tensor_composite_fac.hpp:1609 dirichlet N9 | ((stencil_options_.dirichlet_faces & bit) != 0 &&
-include/pops/runtime/amr/tensor_composite_fac.hpp:1610 dirichlet N9 | law.kind != PhysicalBoundaryKind::dirichlet))
-include/pops/runtime/amr/tensor_composite_fac.hpp:1653 dirichlet N9 | .scalar(stencil_options_.dirichlet_faces)
-include/pops/runtime/amr/tensor_composite_fac.hpp:2005 dirichlet N9 | if (law.kind == PhysicalBoundaryKind::dirichlet ||
-include/pops/runtime/amr/tensor_composite_fac.hpp:2006 robin N9 | (law.kind == PhysicalBoundaryKind::robin && law.alpha != Real(0)))
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:12 poisson G10 | #include <pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp>
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:32 poisson G10 | enum class CoarsePreconditionerKind : std::uint8_t { diagonal, polar_poisson, tensor_diagonal_mg };
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:80 dirichlet G04 | .scalar(options.dirichlet_faces)
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:289 poisson G10 | std::unique_ptr<elliptic::polar::PreparedPolarPoissonInverse<Dim>> inverse;
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:293 poisson G10 | inverse(std::make_unique<elliptic::polar::PreparedPolarPoissonInverse<Dim>>(
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:310 poisson G10 | return {"pops.tensor-fac.coarse-fixed-polar-poisson", 1};
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:369 poisson G10 | preconditioner != CoarsePreconditionerKind::polar_poisson &&
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:371 poisson G10 | (preconditioner == CoarsePreconditionerKind::polar_poisson && Dim != 2))
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:408 poisson G10 | if (data_->preconditioner == CoarsePreconditionerKind::polar_poisson)
+include/pops/runtime/amr/tensor_coarse_gmres.hpp:596 dirichlet G04 | output << data_->options.zero_flux_faces << ' ' << data_->options.dirichlet_faces << ' '
+include/pops/runtime/amr/tensor_composite_fac.hpp:21 poisson G10 | #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+include/pops/runtime/amr/tensor_composite_fac.hpp:520 poisson G10 | controls.coarse_preconditioner != CoarsePreconditionerKind::polar_poisson &&
+include/pops/runtime/amr/tensor_composite_fac.hpp:1543 dirichlet G04 | if (((stencil_options_.zero_flux_faces | stencil_options_.dirichlet_faces) & ~face_mask) != 0 ||
+include/pops/runtime/amr/tensor_composite_fac.hpp:1544 dirichlet G04 | (stencil_options_.zero_flux_faces & stencil_options_.dirichlet_faces) != 0)
+include/pops/runtime/amr/tensor_composite_fac.hpp:1605 dirichlet G04 | if (((stencil_options_.zero_flux_faces | stencil_options_.dirichlet_faces) & bit) != 0) {
+include/pops/runtime/amr/tensor_composite_fac.hpp:1608 neumann G04 | law.kind != PhysicalBoundaryKind::neumann) ||
+include/pops/runtime/amr/tensor_composite_fac.hpp:1609 dirichlet G04 | ((stencil_options_.dirichlet_faces & bit) != 0 &&
+include/pops/runtime/amr/tensor_composite_fac.hpp:1610 dirichlet G04 | law.kind != PhysicalBoundaryKind::dirichlet))
+include/pops/runtime/amr/tensor_composite_fac.hpp:1653 dirichlet G04 | .scalar(stencil_options_.dirichlet_faces)
+include/pops/runtime/amr/tensor_composite_fac.hpp:2005 dirichlet G04 | if (law.kind == PhysicalBoundaryKind::dirichlet ||
+include/pops/runtime/amr/tensor_composite_fac.hpp:2006 robin G04 | (law.kind == PhysicalBoundaryKind::robin && law.alpha != Real(0)))
 include/pops/runtime/amr_system.hpp:34 poisson G10 | #include <pops/runtime/system/system_poisson_options.hpp>
 include/pops/runtime/amr_system.hpp:272 gamma N3 | bool has_state, double gamma, int substeps, bool recon_prim, int stride,
 include/pops/runtime/amr_system.hpp:276 weno N3 | double pos_floor, double weno_epsilon, bool wave_speed_cache)>;
@@ -4202,32 +4202,32 @@ python/pops/runtime/routes.py:355 hll N3 | from pops.numerics.riemann.waves impo
 python/pops/runtime/routes.py:357 hll N3 | check_hll_waves(contract.wave_speed_provider, compiled, ctx)
 python/pops/runtime/routes.py:411 pressure N3 | if actual_provider not in ("explicit_pair", "jacobian", "pressure_derived"):
 python/pops/runtime/routes.py:424 pressure N3 | "pressure_derived": "FromPressure()", "einfeldt": "Einfeldt()",
-python/pops/solvers/_composite_field.py:122 neumann N9 | physical = "periodic" if apply.attrs["physical_boundary"] == "periodic" else "neumann"
-python/pops/solvers/elliptic/_descriptor.py:69 poisson N9 | native_id = "pops::elliptic::nd::CartesianPoissonSolver<Dim>"
-python/pops/solvers/elliptic/_descriptor.py:527 poisson N9 | native_id = "pops::PoissonFFTSolver<Dim>"
-python/pops/solvers/elliptic/_descriptor.py:572 poisson N9 | "the exact-ranked FFT Poisson solver requires a periodic boundary, a "
-python/pops/solvers/elliptic/_prepared_field_providers.py:218 laplacian N9 | if facts.operator.get("principal") != "scalar-laplacian" or facts.operator.get("screened"):
-python/pops/solvers/elliptic/_prepared_field_providers.py:362 poisson N9 | "targets": ("system", "amr_system"), "operators": ("poisson",),
-python/pops/solvers/elliptic/_prepared_field_providers.py:438 poisson N9 | "operators": ("poisson",),
-python/pops/solvers/elliptic/_prepared_field_providers.py:458 poisson N9 | "operators": ("poisson", "screened-poisson"),
-python/pops/solvers/elliptic/_prepared_field_providers.py:488 poisson N9 | "operator": "discrete-cartesian-poisson",
-python/pops/solvers/options.py:114 poisson N9 | native_id = "pops::CompositeFacPoisson"
-python/pops/solvers/providers.py:737 dirichlet N9 | from pops.fields.bcs import Dirichlet, Neumann, Periodic
-python/pops/solvers/providers.py:737 neumann N9 | from pops.fields.bcs import Dirichlet, Neumann, Periodic
-python/pops/solvers/providers.py:742 dirichlet N9 | elif type(condition) is Dirichlet:
-python/pops/solvers/providers.py:746 dirichlet N9 | result.append("dirichlet")
-python/pops/solvers/providers.py:747 neumann N9 | elif type(condition) is Neumann:
-python/pops/solvers/providers.py:751 neumann N9 | result.append("neumann")
-python/pops/solvers/providers.py:752 dirichlet N9 | elif not authored and type(condition) is str and condition in ("periodic", "dirichlet", "neumann"):
-python/pops/solvers/providers.py:752 neumann N9 | elif not authored and type(condition) is str and condition in ("periodic", "dirichlet", "neumann"):
-python/pops/solvers/providers.py:794 poisson N9 | "diagonal", "polar_poisson", "tensor_diagonal_mg"):
-python/pops/solvers/providers.py:798 poisson N9 | if coarse_preconditioner == "polar_poisson" and (
-python/pops/solvers/providers.py:873 laplacian N9 | expected = sorted(("apply_out", "apply_in", "scalar_field", "apply_laplacian_coeff"))
-python/pops/solvers/providers.py:878 laplacian N9 | tensor = next(node for node in block if node.op == "apply_laplacian_coeff")
-python/pops/solvers/providers.py:1093 dirichlet N9 | (ordinal, ("periodic", "dirichlet", "neumann").index(law)))
-python/pops/solvers/providers.py:1093 neumann N9 | (ordinal, ("periodic", "dirichlet", "neumann").index(law)))
-python/pops/solvers/providers.py:1321 poisson N9 | "diagonal", "polar_poisson", "tensor_diagonal_mg"):
-python/pops/solvers/providers.py:1325 poisson N9 | if self.coarse_preconditioner == "polar_poisson" and (
+python/pops/solvers/_composite_field.py:122 neumann G04 | physical = "periodic" if apply.attrs["physical_boundary"] == "periodic" else "neumann"
+python/pops/solvers/elliptic/_descriptor.py:69 poisson G10 | native_id = "pops::elliptic::nd::CartesianPoissonSolver<Dim>"
+python/pops/solvers/elliptic/_descriptor.py:527 poisson G10 | native_id = "pops::PoissonFFTSolver<Dim>"
+python/pops/solvers/elliptic/_descriptor.py:572 poisson G10 | "the exact-ranked FFT Poisson solver requires a periodic boundary, a "
+python/pops/solvers/elliptic/_prepared_field_providers.py:218 laplacian G10 | if facts.operator.get("principal") != "scalar-laplacian" or facts.operator.get("screened"):
+python/pops/solvers/elliptic/_prepared_field_providers.py:362 poisson G10 | "targets": ("system", "amr_system"), "operators": ("poisson",),
+python/pops/solvers/elliptic/_prepared_field_providers.py:438 poisson G10 | "operators": ("poisson",),
+python/pops/solvers/elliptic/_prepared_field_providers.py:458 poisson G10 | "operators": ("poisson", "screened-poisson"),
+python/pops/solvers/elliptic/_prepared_field_providers.py:488 poisson G10 | "operator": "discrete-cartesian-poisson",
+python/pops/solvers/options.py:114 poisson G10 | native_id = "pops::CompositeFacPoisson"
+python/pops/solvers/providers.py:737 dirichlet G04 | from pops.fields.bcs import Dirichlet, Neumann, Periodic
+python/pops/solvers/providers.py:737 neumann G04 | from pops.fields.bcs import Dirichlet, Neumann, Periodic
+python/pops/solvers/providers.py:742 dirichlet G04 | elif type(condition) is Dirichlet:
+python/pops/solvers/providers.py:746 dirichlet G04 | result.append("dirichlet")
+python/pops/solvers/providers.py:747 neumann G04 | elif type(condition) is Neumann:
+python/pops/solvers/providers.py:751 neumann G04 | result.append("neumann")
+python/pops/solvers/providers.py:752 dirichlet G04 | elif not authored and type(condition) is str and condition in ("periodic", "dirichlet", "neumann"):
+python/pops/solvers/providers.py:752 neumann G04 | elif not authored and type(condition) is str and condition in ("periodic", "dirichlet", "neumann"):
+python/pops/solvers/providers.py:794 poisson G10 | "diagonal", "polar_poisson", "tensor_diagonal_mg"):
+python/pops/solvers/providers.py:798 poisson G10 | if coarse_preconditioner == "polar_poisson" and (
+python/pops/solvers/providers.py:873 laplacian G10 | expected = sorted(("apply_out", "apply_in", "scalar_field", "apply_laplacian_coeff"))
+python/pops/solvers/providers.py:878 laplacian G10 | tensor = next(node for node in block if node.op == "apply_laplacian_coeff")
+python/pops/solvers/providers.py:1093 dirichlet G04 | (ordinal, ("periodic", "dirichlet", "neumann").index(law)))
+python/pops/solvers/providers.py:1093 neumann G04 | (ordinal, ("periodic", "dirichlet", "neumann").index(law)))
+python/pops/solvers/providers.py:1321 poisson G10 | "diagonal", "polar_poisson", "tensor_diagonal_mg"):
+python/pops/solvers/providers.py:1325 poisson G10 | if self.coarse_preconditioner == "polar_poisson" and (
 python/pops/time/__init__.py:41 runge-kutta N3 | AdditiveRungeKuttaTableau, RungeKuttaTableau,
 python/pops/time/__init__.py:62 euler N3 | CoupledImplicitEuler, LocalLinear, LocalResidual,
 python/pops/time/__init__.py:93 euler N3 | "CoupledImplicitEuler", "LocalLinear", "LocalResidual",

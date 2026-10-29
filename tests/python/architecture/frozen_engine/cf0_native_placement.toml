@@ -154,8 +154,9 @@ files = ["include/pops/numerics/fv/path_flux.hpp"]
 lines = ["82-95"]
 issue = "G06"
 phase = 2
-# A named flux is never a substitution (FC6, last sentence): no interface of the closed list binds
-# it, and it leaves with G06 instead of moving to the native tree.
+# A named flux is never a substitution (FC6, which holds over IR24: adjudication section 17, 29/10):
+# no interface of the closed list binds it, it never enters the native tree, and G06 removes it once
+# the flux generated from the per-side bodies of IR25 meets the PF10 bound on its profiles (PF14).
 interface = "none"
 
 [[native]]
