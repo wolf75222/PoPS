@@ -48,7 +48,11 @@ def test_retained_ab2_faces_restart_without_replaying_accepted_origin(retention,
     if retention == "history":
         image = collective_call(world, runtime._executor._checkpoint_program_exchanges)
         with collective_check(world):
-            assert image.startswith(b"POPSEX05")
+            # A History ring retains Field metadata under the plan default budget, so the
+            # POPSEX06 envelope carries the retained-face image POPSEX05 as its first blob.
+            assert image.startswith(b"POPSEX06")
+            nested = int.from_bytes(image[8:16], "little")
+            assert image[16:16 + nested].startswith(b"POPSEX05")
     directory = collective_directory(world, tmp_path)
     path = collective_call(world, lambda: runtime.checkpoint(str(directory / ("AB2-"+retention))))
     replay = _bind(spec, artifact, world)
