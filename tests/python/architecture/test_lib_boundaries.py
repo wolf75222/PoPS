@@ -31,7 +31,9 @@ LIB = REPO_ROOT / "python" / "pops" / "lib"
 # The strict directory allow: pops.lib has exactly these immediate child packages. A new
 # python/pops/lib/riemann/ or .../solvers/ would grow this set and fail (an ALLOW of 3 named dirs,
 # not a broad pattern).
-_ALLOWED_LIB_CHILD_DIRS = {"amr", "initial", "models", "time"}
+# Spec 0.3 IR25 adds numerics: the builders of the discrete algebra are pops.lib functions over the
+# public surface, with no core status.
+_ALLOWED_LIB_CHILD_DIRS = {"amr", "initial", "models", "numerics", "time"}
 
 # The HARD refusal list: lib is a leaf, so it must import none of these at ANY scope (module-scope OR
 # lazily inside a function). This is the delta over test_no_runtime_imports.py (module-scope only).
