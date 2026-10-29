@@ -870,8 +870,7 @@ def record_standalone(requirement: str, *, source_root: Path, binary: Path,
     }
     data["stages"].append({"stage": "compiled", "at_utc": utc_now(),
                            "evidence": {"binary": str(binary), "sha256": sha256_file(binary)}})
-    result = subprocess.run(list(command), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            check=False)
+    result = subprocess.run(list(command), capture_output=True, check=False)
     data["stages"].append({"stage": "executed", "at_utc": utc_now(), "evidence": {
         "argv": list(command), "returncode": result.returncode,
         "stdout_sha256": hashlib.sha256(result.stdout).hexdigest(),

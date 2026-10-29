@@ -61,7 +61,7 @@ SOURCES = {
 
 def _git(repo, *arguments):
     return subprocess.run([*GIT, "-C", str(repo), *arguments], check=True,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode()
+                          capture_output=True).stdout.decode()
 
 
 def _commit(repo, message):
@@ -325,8 +325,7 @@ def test_mutation_lease_excludes_every_qualification(site):
 
 def _cli(*arguments, env=None):
     return subprocess.run([sys.executable, "-I", str(SCRIPTS / "sdk_cohort.py"), *arguments],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                          env=env, check=False)
+                          capture_output=True, text=True, env=env, check=False)
 
 
 def test_two_processes_cannot_qualify_two_sources_in_one_installation(repo, site, tmp_path):

@@ -46,10 +46,9 @@ import contextlib
 import csv
 import datetime
 import hashlib
-import io
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import socket
 import stat
@@ -164,9 +163,8 @@ def write_json_atomic(path: Path, value: Any, *, mode: int = 0o644) -> None:
 
 def _git(root: Path, *arguments: str) -> bytes:
     try:
-        result = subprocess.run(
-            ["git", "-C", str(root), *arguments],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        result = subprocess.run(["git", "-C", str(root), *arguments], capture_output=True,
+                                check=False)
     except OSError as exc:
         raise CohortError("git is unavailable: %s" % exc) from exc
     if result.returncode:
@@ -508,7 +506,7 @@ def expected_payload(source_root: Path) -> dict[str, str]:
     """
     root = Path(_git(Path(source_root), "rev-parse", "--show-toplevel").decode().strip())
     payload: dict[str, str] = {}
-    for mode, kind, object_id, path in _tree_rows(root, ("python/pops",)):
+    for _mode, kind, object_id, path in _tree_rows(root, ("python/pops",)):
         if kind != "blob" or not path.endswith(PYTHON_SOURCE_SUFFIXES):
             continue
         payload[path[len("python/pops/"):]] = object_id
@@ -777,7 +775,7 @@ def _seal(package_dir: Path, distribution: str | None) -> None:
     if distribution:
         roots.append(package_dir.parent / distribution)
     for root in roots:
-        for directory, subdirectories, names in os.walk(root, topdown=False):
+        for directory, _subdirectories, names in os.walk(root, topdown=False):
             for name in names:
                 path = Path(directory) / name
                 if not path.is_symlink():
@@ -917,7 +915,7 @@ def acquire_qualification_lease(installation_root: Path, source_commit: str, *,
                         "installation %s is leased to qualify source %s (%s, pid %s); "
                         "source %s needs its own installation"
                         % (installation_root, owner.get("source"), owner.get("purpose"),
-                           owner.get("pid"), source_commit))
+                           owner.get("pid"), source_commit)) from None
                 record = dict(owner)
             else:
                 record = {"schema": LEASE_SCHEMA, "mode": "qualify", "source": source_commit,
