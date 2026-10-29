@@ -586,10 +586,12 @@ def test_overlay_findings_name_environment_overrides(repo, site, monkeypatch, tm
     receipt.open()
     monkeypatch.setenv("POPS_NATIVE_VARIANTS_ROOT", str(tmp_path))
     monkeypatch.setenv("POPS_INCLUDE", str(tmp_path / "missing"))
+    monkeypatch.setenv("LD_PRELOAD", str(tmp_path / "libshim.so"))
     findings = receipts.overlay_findings(receipt.data, receipt._sdk_files)["findings"]
     assert "the installation lease was not held" in findings
     assert any(item.startswith("POPS_NATIVE_VARIANTS_ROOT selects") for item in findings)
     assert any(item.startswith("POPS_INCLUDE=") for item in findings)
+    assert any(item.startswith("LD_PRELOAD injects code") for item in findings)
     receipt.close()
 
 

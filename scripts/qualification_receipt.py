@@ -684,6 +684,9 @@ def overlay_findings(data: Mapping[str, Any], sdk_files: Mapping[str, str]) -> d
         origin = str(Path(getattr(native, "__file__", "")).resolve())
         if origin not in leaves:
             findings.append("native leaf %s is not a leaf of the SDK" % origin)
+    for name in ("LD_PRELOAD", "DYLD_INSERT_LIBRARIES"):
+        if os.environ.get(name):
+            findings.append("%s injects code into the process: %s" % (name, os.environ[name]))
     include = os.environ.get("POPS_INCLUDE")
     if include:
         try:
