@@ -9,6 +9,7 @@
 /// provider.  Warm starts and accepted state remain caller-owned and are changed only through the
 /// explicit publication transaction below.
 
+#include <pops/core/foundation/device_capture.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/model/physical_model.hpp>
 #include <pops/core/state/state.hpp>
@@ -626,6 +627,10 @@ struct ModelVariableInversionSource {
 /// as a second validation authority.
 template <HasRecoveryAdmissibility Model>
 struct ModelRecoveryAdmissibilityProvider {
+  // The model is the only member; a model with bound runtime parameters is captured by its own
+  // exhaustive contract, not by trivial copyability.
+  using pops_device_capture_members = DeviceCaptureMembers<Model>;
+
   Model model;
 
   static constexpr PreparedProviderIdentity provider_identity() noexcept {

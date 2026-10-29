@@ -29,6 +29,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   and every later consumer name variables in scope. A held (`Hold`, `AccumulateDt`) local
   transform refuses a source with a pending Field representation before evaluating, because
   the schedule cache restores numbers without their Field description.
+- Capture the recovery admissibility provider of a model with bound runtime parameters:
+  `ModelRecoveryAdmissibilityProvider` declares its model as its only device-capture member.
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
   complete continuations and child advances, spatial composition, distributed
   operators, and graph/implicit derivatives lower from Python into native Program C++.
