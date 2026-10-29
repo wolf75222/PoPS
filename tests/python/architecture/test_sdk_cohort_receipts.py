@@ -566,6 +566,22 @@ def test_receipt_fails_fast_while_another_source_qualifies(repo, site):
             receipts.Receipt("blocked", source_root=repo, package=site / "pops").open()
 
 
+def test_receipt_on_a_checkout_package_takes_no_lease_and_writes_nothing_there(repo, tmp_path):
+    receipt = receipts.Receipt("editable probe", source_root=repo,
+                               package=repo / "python" / "pops", directory=tmp_path)
+    with receipt:
+        receipt.equations(repo / "examples/case.py")
+    data = receipts.read_receipt(receipt.path)
+    assert data["lease"] == {"held": False, "installation_root": str(repo / "python"),
+                             "skipped": "the SDK is not a retained wheel installation"}
+    assert not (repo / "python" / ".pops-sdk").exists()
+    assert _git(repo, "status", "--porcelain", "--untracked-files=all") == ""
+    findings = data["overlay"]["findings"]
+    assert "installation is unmanaged, not a wheel authenticated by RECORD" in findings
+    assert "the installation lease was not held" in findings
+    assert not receipts.admit(data, None, require="E")["admitted"]
+
+
 def test_receipt_records_a_failed_stage_and_reaches_no_level_past_it(repo, site, tmp_path):
     receipt = receipts.Receipt("failing case", source_root=repo, package=site / "pops",
                                directory=tmp_path)

@@ -455,7 +455,10 @@ def _abi_header_token(abi_key: str) -> str | None:
 
 
 def native_rows(package_dir: Path) -> tuple[dict[str, Any], ...]:
+    """Verified native leaves; none for a package without ``_native``, such as a checkout."""
     manifest = package_dir / "_native" / "variants.json"
+    if not manifest.exists() and not manifest.is_symlink():
+        return ()
     try:
         return load_manifest(manifest, verify_files=True, verify_hashes=True)
     except NativeVariantManifestError as exc:

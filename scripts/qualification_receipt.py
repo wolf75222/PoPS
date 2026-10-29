@@ -277,10 +277,11 @@ def _dso_file(path: Any, role: str) -> dict[str, Any]:
 class Receipt:
     """Record one qualification of one requirement, stage by stage, in one process.
 
-    Use it as a context manager.  Opening identifies the source and the installed SDK and takes the
-    shared qualification lease of that installation for this source; closing observes the process,
-    derives the levels, writes the receipt and releases the lease.  An exception inside the block
-    is recorded as the failure of the stage in progress and the receipt is still written.
+    Use it as a context manager.  Opening identifies the source and the installed SDK and, when the
+    SDK is a retained wheel installation, takes the shared qualification lease of that installation
+    for this source; closing observes the process, derives the levels, writes the receipt and
+    releases the lease.  An exception inside the block is recorded as the failure of the stage in
+    progress and the receipt is still written.
     """
 
     def __init__(self, requirement: str, *, source_root: Path, directory: Path | None = None,
@@ -344,7 +345,11 @@ class Receipt:
             "cohort_id": record["cohort_id"], "source_commit": record["source"]["commit"],
             "sdk_id": record["sdk"]["sdk_id"]}
         self.data["lease"] = {"held": False, "installation_root": str(installation)}
-        if self._want_lease:
+        if self._want_lease and sdk["installation"]["kind"] != "wheel":
+            # A checkout or unmanaged tree is never admitted; leasing it would write lock files
+            # into the source under qualification.
+            self.data["lease"]["skipped"] = "the SDK is not a retained wheel installation"
+        elif self._want_lease:
             try:
                 self._lease = sdk_cohort.acquire_qualification_lease(
                     installation, source["commit"],

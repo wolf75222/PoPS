@@ -38,7 +38,8 @@ waiting). While one source qualifies, a second source and any build are refused 
 `build_python.sh` re-executes itself under `sdk_cohort.py mutate`, so the whole build, from the
 first `pip` call to the attestation, holds the installation. A whole test session can hold it
 with `sdk_cohort.py hold --installation SITE --source . -- python -m pytest ...`; each `Receipt`
-also takes the lease itself. The lease is advisory: it binds the PoPS tools, not an arbitrary
+on a retained wheel installation also takes the lease itself (on a checkout or another unmanaged
+tree it takes none, writes nothing there and is never admitted). The lease is advisory: it binds the PoPS tools, not an arbitrary
 `pip install` typed by hand. It needs POSIX `flock`; elsewhere a build runs unleased with a
 warning and a receipt records that no lease was held, which refuses its admission.
 
