@@ -28,6 +28,8 @@ OMP_NUM_THREADS=1 python benchmarks/n3a/face_routes.py M01 4096x4096 --steps 3 -
 OMP_NUM_THREADS=1 python benchmarks/n3a/face_routes.py M03 2048x2048 --steps 2 --out m03.json
 OMP_NUM_THREADS=1 python benchmarks/n3a/face_routes.py M01 4096x4096 --signed \
     --routes native_hll,python_hll_m01 --steps 3 --out m01_hll.json
+OMP_NUM_THREADS=1 python benchmarks/n3a/face_routes.py M03 2048x2048 --signed \
+    --routes native_hll,python_hll_m03 --steps 2 --out m03_hll.json
 OMP_NUM_THREADS=1 build/n3a/stream 200000000 10 >> stream.jsonl
 python benchmarks/n3a/roofline.py stream.jsonl m01.json m03.json
 ```

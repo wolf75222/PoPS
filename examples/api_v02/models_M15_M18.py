@@ -6,8 +6,7 @@ from examples.api_v02.common import CaseSpec, state_array, non_owner_metrics
 
 
 def _periodic_case(name, model, state, flux, *, cells, initial, rhs, domain, steps, dt,
-                   pointwise_source=None, scheme=None):
-    """``scheme(flux, state)`` realizes the transport; None is the native ``riemann.HLL()``."""
+                   pointwise_source=None):
     import numpy as np
     import pops
     from pops import math
@@ -22,9 +21,8 @@ def _periodic_case(name, model, state, flux, *, cells, initial, rhs, domain, ste
     rate = model.rate("spatial_balance",equation=math.ddt(state)==-math.div(flux))
     case = pops.Case(name); block = case.block("moments",model); subject = block[state]
     case.initials.add(InitialCondition(state=subject,value=BindArray(),projection=ConservativeCellAverage()))
-    transport = scheme(flux,state) if scheme is not None else FiniteVolume(flux=flux,
-        variables=variables.Conservative(state),reconstruction=reconstruction.FirstOrder(),riemann=riemann.HLL())
-    plan = DiscretizationPlan();plan.rates.add(rate,transport)
+    plan = DiscretizationPlan();plan.rates.add(rate,FiniteVolume(flux=flux,
+        variables=variables.Conservative(state),reconstruction=reconstruction.FirstOrder(),riemann=riemann.HLL()))
     case.numerics(plan,block=block)
     p = pops.Program(name+"_Euler");u = p.state(subject)
     def guard(value,label):
@@ -228,7 +226,23 @@ def _b1_reference_flux(values,normal=(1.,0.)):
     return np.stack([normal[0]*closed[p+1,q]+normal[1]*closed[p,q+1] for p,q in indices])
 
 
-def build_m16(*,cells=16,steps=4,dt=1e-5,omega=.2,oblique_refusal=False,scheme=None):
+def _m16_model(*,oblique_refusal=False):
+    """The B.1 fifteen-moment model of M16; its signed wave speeds are the eigenvalues of the
+    flux Jacobian along each axis, which have no closed form."""
+    import pops
+    from pops.moments import moment_flux_expressions,HyQMOM15Closure
+    indices=tuple((p,q) for q in range(5) for p in range(5-q))
+    frame=_frame("M16_periodic");model=pops.Model("HyQMOM15_original_B1",frame=frame)
+    U=model.state("moments",components=tuple("M%d%d"%pq for pq in indices),sampling="cell_average")
+    physical=moment_flux_expressions(model,tuple(U),4,HyQMOM15Closure(),robust=False)
+    directions=((1.,-1.),(1.,1.)) if oblique_refusal else ((1.,0.),(0.,1.))
+    flux=model.flux("B1_transport",state=U,frame=frame,components={axis:tuple(
+        normal[0]*fx+normal[1]*fy for fx,fy in zip(physical.x,physical.y)) for axis,normal in zip(frame.axes,directions)})
+    model.wave_speeds_from_jacobian()
+    return model,U,flux,indices
+
+
+def build_m16(*,cells=16,steps=4,dt=1e-5,omega=.2,oblique_refusal=False):
     """Complete B.1 fifteen-moment flux plus constant magnetic Lorentz source.
 
     The ordinary profile evaluates Cartesian x,y faces and checks the *actual*
@@ -237,18 +251,9 @@ def build_m16(*,cells=16,steps=4,dt=1e-5,omega=.2,oblique_refusal=False,scheme=N
     nonreal eigenvalues: a successful native evolution must fail reception.
     """
     import numpy as np
-    import pops
-    from pops.moments import moment_flux_expressions,HyQMOM15Closure
     from examples.migration.scientific.api040_m17_oracle import gaussian_mixture
     if cells<8 or steps<2 or not 0<dt<=1e-5*(16/cells):raise ValueError("M16 reception envelope exceeded")
-    indices=tuple((p,q) for q in range(5) for p in range(5-q));slot={pq:j for j,pq in enumerate(indices)}
-    frame=_frame("M16_periodic");model=pops.Model("HyQMOM15_original_B1",frame=frame)
-    U=model.state("moments",components=tuple("M%d%d"%pq for pq in indices),sampling="cell_average")
-    physical=moment_flux_expressions(model,tuple(U),4,HyQMOM15Closure(),robust=False)
-    directions=((1.,-1.),(1.,1.)) if oblique_refusal else ((1.,0.),(0.,1.))
-    flux=model.flux("B1_transport",state=U,frame=frame,components={axis:tuple(
-        normal[0]*fx+normal[1]*fy for fx,fy in zip(physical.x,physical.y)) for axis,normal in zip(frame.axes,directions)})
-    model.wave_speeds_from_jacobian()
+    model,U,flux,indices=_m16_model(oblique_refusal=oblique_refusal);slot={pq:j for j,pq in enumerate(indices)}
     def lorentz(values):
         raw=dict(zip(indices,values))
         return tuple(omega*(p*raw.get((p-1,q+1),0)-q*raw.get((p+1,q-1),0)) for p,q in indices)
@@ -281,8 +286,7 @@ def build_m16(*,cells=16,steps=4,dt=1e-5,omega=.2,oblique_refusal=False,scheme=N
         yy=r*values[slot[0,2]]-values[slot[0,1]]**2;xy=r*values[slot[1,1]]-values[slot[1,0]]*values[slot[0,1]]
         return r,xx,yy,xx*yy-xy*xy
     spec=_periodic_case("M16 original B1 fifteen-moment transport + Lorentz; conditional Cartesian spectral admission",
-        model,U,flux,cells=cells,initial=initial,rhs=rhs,domain=domain,steps=steps,dt=dt,pointwise_source=lorentz,
-        scheme=scheme)
+        model,U,flux,cells=cells,initial=initial,rhs=rhs,domain=domain,steps=steps,dt=dt,pointwise_source=lorentz)
     if oblique_refusal:
         from dataclasses import replace
         return replace(spec,profile="M16 negative: original B1 correlated Gaussian, nonreal DFx-DFy spectrum; native refusal required",

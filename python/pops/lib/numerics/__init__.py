@@ -5,6 +5,6 @@ a library method is the same object a case would write by hand (CF4), and its fo
 generated C++ (G2). :mod:`.fluxes` holds the Rusanov, upwind and HLL face fluxes of the N3a pilot;
 the native ``pops.numerics.riemann`` routes stay in place until N3 moves the catalog.
 """
-from .fluxes import hll, rusanov, spectral_radius, upwind
+from .fluxes import hll, rusanov, upwind
 
-__all__ = ["hll", "rusanov", "spectral_radius", "upwind"]
+__all__ = ["hll", "rusanov", "upwind"]

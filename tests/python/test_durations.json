@@ -6732,6 +6732,7 @@
       "tests/python/integration/runtime/test_api_v02_original_field_typed_recovery_native.py",
       "tests/python/integration/runtime/test_api_v02_output_history_remap_native.py",
       "tests/python/integration/runtime/test_api_v02_path_hierarchy_native.py",
+      "tests/python/integration/runtime/test_api_v02_python_faces_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_choices_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_loops_native.py",
       "tests/python/integration/runtime/test_api_v02_regions_native.py",
@@ -7332,6 +7333,7 @@
       "tests/python/unit/numerics/test_flux_correction_v02.py",
       "tests/python/unit/numerics/test_hall_independent_oracle.py",
       "tests/python/unit/numerics/test_indicator_stencils.py",
+      "tests/python/unit/numerics/test_lib_numerics_faces.py",
       "tests/python/unit/numerics/test_m05_shear_independent_review.py",
       "tests/python/unit/numerics/test_m07_hydrostatic_public_gap.py",
       "tests/python/unit/numerics/test_m08_independent_receipt.py",
@@ -7709,9 +7711,7 @@
       "tests/python/unit/time/test_typed_schedule.py",
       "tests/python/unit/time/test_uniform_affine_expressions_v02.py",
       "tests/python/unit/time/test_variant_temporal_envelope.py",
-      "tests/python/unit/time/test_variant_types_v09.py",
-      "tests/python/unit/numerics/test_lib_numerics_faces.py",
-      "tests/python/integration/runtime/test_api_v02_python_faces_native.py"
+      "tests/python/unit/time/test_variant_types_v09.py"
     ],
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates. Local source/native qualification timings are not substituted for CI per-file measurements.",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
@@ -7960,10 +7960,10 @@
       }
     },
     "n3a_20261029": {
-      "basis": "Unmeasured scheduling estimates for the N3a pilot (ROM-82). The source unit file builds a few model graphs without compiling (unit tier). The native file compiles three case pairs, six artifacts, each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts), plus margin. Refresh from complete CI timing artifacts.",
+      "basis": "Scheduling estimates for the N3a pilot (ROM-82), not CI receipts. The source unit file builds the M03 and M16 models without compiling (24 s locally on 4 cores, so 30 s). The native file compiles four case pairs, eight artifacts (769 s locally on 4 cores with Kokkos OpenMP), each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts), plus margin. Refresh from complete CI timing artifacts.",
       "files": {
         "tests/python/unit/numerics/test_lib_numerics_faces.py": {
-          "estimated_seconds": 10,
+          "estimated_seconds": 30,
           "kind": "source_unit"
         },
         "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
@@ -9166,6 +9166,6 @@
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
   "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
-  "tests/python/unit/numerics/test_lib_numerics_faces.py": 10,
+  "tests/python/unit/numerics/test_lib_numerics_faces.py": 30,
   "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 900
 }

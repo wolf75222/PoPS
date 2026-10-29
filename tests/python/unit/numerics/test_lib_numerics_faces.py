@@ -5,18 +5,19 @@ tests/python/integration/runtime/test_api_v02_python_faces_native.py.
 """
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 import pops
 from pops.codegen.user_riemann_lowering import emit_user_face_policy
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.lib.numerics import hll, rusanov, spectral_radius, upwind
+from pops.lib.numerics import hll, rusanov, upwind
 from pops.numerics import reconstruction, riemann
 from pops.numerics.riemann.user import authenticated_user_face
 
 
-def _transport(width=1):
+def _transport_model(width=1, *, signed_wave_speeds=False):
     frame = Rectangle("n3a_box", (0., 0.), (1., 1.)).frame(Cartesian2D())
     model = pops.Model("n3a_transport", frame=frame)
     U = model.state("U", components=tuple("q%d" % k for k in range(width)))
@@ -25,7 +26,14 @@ def _transport(width=1):
         components={axis: tuple(a*q for q in U)
                     for axis, a in zip(frame.axes, speeds, strict=True)},
         waves={axis: (a,)*width for axis, a in zip(frame.axes, speeds, strict=True)})
-    return U, flux
+    if signed_wave_speeds:
+        model.wave_speeds(flux, frame=frame,
+                          values={axis: (a, a) for axis, a in zip(frame.axes, speeds, strict=True)})
+    return model, U, flux
+
+
+def _transport(width=1):
+    return _transport_model(width)[1:]
 
 
 def _policy(face):
@@ -55,9 +63,13 @@ def test_rusanov_is_the_face_a_case_would_write_by_hand():
 def test_rusanov_speed_option_changes_the_body_and_the_recorded_speed():
     U, flux = _transport()
     default = rusanov(flux, U).riemann
-    _same_face(default, rusanov(flux, U, smax=spectral_radius).riemann)
-    doubled = rusanov(flux, U, smax=lambda uL, uR, fL, fR, s: 2*s).riemann
-    assert doubled.options["source_identity"] != default.options["source_identity"]
+    _same_face(default, rusanov(flux, U, smax=lambda uL, uR, fL, fR, s: s).riemann)
+    doubled = authenticated_user_face(rusanov(flux, U, smax=lambda uL, uR, fL, fR, s: 2*s).riemann)
+    _same_face(doubled, riemann.User(
+        body=lambda left, right, fl, fr, s: tuple(
+            .5*(a + b) - .5*(2*s)*(r - l) for l, r, a, b in zip(left, right, fl, fr, strict=True)),
+        state=U, stability=lambda left, right, fl, fr, s: 2*s))
+    assert doubled.options["stability"] != default.options["stability"]
     with pytest.raises(TypeError, match="speed function"):
         rusanov(flux, U, smax=1.)
 
@@ -69,7 +81,7 @@ def test_rusanov_keeps_a_given_reconstruction():
 
 
 def test_upwind_without_speed_is_rusanov_with_the_spectral_radius():
-    """For a flux linear in u, Rusanov with the R9 speed is the upwind flux (section 4.4)."""
+    """For a scalar flux linear in u, Rusanov with the R9 speed is the upwind flux (section 4.4)."""
     U, flux = _transport(width=2)
     _same_face(upwind(flux, U).riemann, rusanov(flux, U).riemann)
 
@@ -105,16 +117,13 @@ def test_hll_with_stated_speeds_is_the_face_a_case_would_write_by_hand():
                                   stability=lambda left, right, fl, fr, s: s))
 
 
-def test_hll_needs_signed_wave_speeds_that_the_user_face_does_not_receive():
-    """CF15 failing graph: the derived HLL speeds need a face input the frozen engine lacks.
+def test_hll_without_stated_speeds_is_refused_by_the_library():
+    """The library's own refusal (fluxes.py): ``hll(F, Uh)`` has no derived default yet.
 
-    ``riemann.User`` gives the body the spectral radius only. HLL needs the slowest and fastest
-    signed speeds of each trace along the face normal (R9), which depend on the axis of the
-    face. M03 (Euler) and M16 (HyQMOM 15 moments, native HLL from the Jacobian) both need them.
-    When the face input lands, this test becomes the parity test of the derived default.
+    It fires before any model is read, for every flux. The CF15 evidence is in the next two tests.
     """
     U, flux = _transport()
-    with pytest.raises(NotImplementedError, match="signed wave speeds"):
+    with pytest.raises(NotImplementedError, match="no derived default"):
         hll(flux, U)
     with pytest.raises(TypeError, match="speeds"):
         hll(flux, U, speeds=(0., 1.))
@@ -122,16 +131,69 @@ def test_hll_needs_signed_wave_speeds_that_the_user_face_does_not_receive():
         hll(flux, U, speeds=lambda uL, uR, fL, fR, s: s)
 
 
-def test_m03_and_m16_have_no_python_hll_without_the_face_input():
-    """The two structures of CF15 for the signed-speed face input (N3a report).
+def test_a_user_face_body_cannot_read_the_face_normal():
+    """CF15 failing graph (ROM-99): ``riemann.User`` gives its body no face normal.
 
-    M03 is the stiffened-gas Euler system (waves u.n - c, u.n + c); M16 is the HyQMOM 15-moment
-    B.1 transport, whose native HLL takes its signed speeds from the flux Jacobian. Both
-    builders accept the Python HLL and both refuse it for the same missing face input.
+    Section 4.4 writes the face speed ``smax(uL, uR, n)``, a stated upwind speed as the velocity
+    dotted with the face normal, and the derived HLL from the declared speeds along n. The body
+    and the stability bound of ``riemann.User`` receive the five face inputs only, so a face that
+    reads n is refused, here on the scalar transport. When the face input lands, this graph
+    builds, and the test becomes the parity test of the derived ``hll(F, Uh)`` against
+    ``riemann.HLL()`` on M03 and M16.
     """
-    from examples.api_v02.models_M01_M14 import build_m03
-    from examples.api_v02.models_M15_M18 import build_m16
+    U, flux = _transport()
 
-    for build in (build_m03, build_m16):
-        with pytest.raises(NotImplementedError, match="signed wave speeds"):
-            build(scheme=hll)
+    def upwind_along_the_normal(uL, uR, fL, fR, s, n):
+        speed = .7*n[0] + .3*n[1]
+        return tuple(pops.math.where(speed > 0, lambda a=a: a, lambda b=b: b)
+                     for a, b in zip(fL, fR, strict=True))
+
+    with pytest.raises(TypeError, match="missing 1 required positional argument: 'n'"):
+        riemann.User(body=upwind_along_the_normal, state=U,
+                     stability=lambda uL, uR, fL, fR, s: s)
+    with pytest.raises(TypeError, match="missing 1 required positional argument: 'n'"):
+        riemann.User(body=lambda uL, uR, fL, fR, s: tuple(fL), state=U,
+                     stability=lambda uL, uR, fL, fR, s, n: s)
+
+
+def _declared_pairs(model, state):
+    """The declared signed pair (sL, sR) along each canonical normal at every cell (R9)."""
+    emitted = model.__pops_compiler_lowering__().emit_model
+    samples = np.asarray(state, dtype=float).reshape(len(state), -1)
+    return {axis: tuple(np.asarray(value, dtype=float)
+                        for value in emitted.eval_wave_speeds(samples, {}, axis))
+            for axis in ("x", "y")}
+
+
+def test_m03_and_m16_declare_signed_speeds_that_the_face_inputs_do_not_give():
+    """The two structures of CF15 (ROM-99), against the scalar transport of M01.
+
+    The face of ``riemann.User`` receives one speed, the spectral radius s = max(|sL|, |sR|) of
+    R9, and evaluates one body on both axes. On the transport, the declared pair along each normal
+    is (s, s), so a body states it from s (``m01_hll``). On M03 (v.n - c, v.n + c) and on M16 (the
+    eigenvalues of the flux Jacobian along n, which have no closed form), at each case's own
+    initial state, sL < 0 < sR on every cell, sL + sR is not zero, and the pair differs between
+    the two normals: neither (s, s) nor (-s, s) gives it, and the derived ``hll(F, Uh)`` needs the
+    face input. M03 still has a Python HLL whose interval the case states from its own physics
+    (``m03_hll``, bitwise equal to ``riemann.HLL()`` in test_api_v02_python_faces_native.py).
+    """
+    from examples.api_v02.models_M01_M14 import _domain, _euler, build_m03
+    from examples.api_v02.models_M15_M18 import _m16_model, build_m16
+
+    transport = _transport_model(signed_wave_speeds=True)[0]
+    for lower, upper in _declared_pairs(transport, np.ones((1, 4))).values():
+        speed = np.maximum(np.abs(lower), np.abs(upper))
+        assert np.array_equal(lower, speed) and np.array_equal(upper, speed)
+
+    frame, _ = _domain("M03_periodic", (16, 8))
+    m03 = pops.Model("M03_authored_stiffened_Euler", frame=frame)
+    _euler(m03, frame, gamma=1.4, pressure_offset=.2, signed_wave_speeds=True)
+    m16 = _m16_model()[0]
+    m03_state = next(iter(build_m03(signed_wave_speeds=True).initial_values.values()))
+    m16_state = next(iter(build_m16().initial_values.values()))
+    for name, model, state in (("M03", m03, m03_state), ("M16", m16, m16_state)):
+        pairs = _declared_pairs(model, state)
+        for lower, upper in pairs.values():
+            assert lower.max() < 0 < upper.min(), name
+            assert np.max(np.abs(lower + upper)) > 1e-3, name
+        assert np.max(np.abs(pairs["x"][0] - pairs["y"][0])) > 1e-3, name

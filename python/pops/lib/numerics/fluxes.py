@@ -17,7 +17,9 @@ A face body reads, for one face and its canonical positive normal ``n``:
 A speed function given as an option is called with the same five arguments,
 ``f(uL, uR, fL, fR, s)``, and returns expressions of them. Section 4.4 writes ``smax(uL, uR, n)``;
 the body of ``riemann.User`` receives neither ``n`` nor the signed wave speeds along it, so these
-functions take the five face inputs above until that face input exists (CF15, N3a report).
+functions take the five face inputs above until that face input exists (CF15, ROM-99). The
+``spectral_radius(F, u, n)`` of section 4.3 belongs to this module and needs ``n``; the face reads
+its own majorant as the input ``s``.
 """
 from __future__ import annotations
 
@@ -43,19 +45,19 @@ def _face(body: Callable[..., tuple], Uh: Any, stability: Callable[..., Any]) ->
     return riemann.User(body=body, state=Uh, stability=stability)
 
 
-def spectral_radius(uL: Any, uR: Any, fL: Any, fR: Any, s: Any) -> Any:
-    """The larger spectral radius of the flux at the two traces along the face normal (R9)."""
+def _face_spectral_radius(uL: Any, uR: Any, fL: Any, fR: Any, s: Any) -> Any:
+    # The face input s: the larger spectral radius of the flux at the two traces along n (R9).
     del uL, uR, fL, fR
     return s
 
 
-def rusanov(F: Any, Uh: Any, smax: Callable[..., Any] = spectral_radius, *,
+def rusanov(F: Any, Uh: Any, smax: Callable[..., Any] = _face_spectral_radius, *,
             reconstruction: Any = None) -> Any:
     """Rusanov (local Lax-Friedrichs) flux of ``F`` on ``Uh``.
 
     F* = (F(uL).n + F(uR).n) / 2 - smax (uR - uL) / 2, with ``smax`` recorded as the speed of the
-    flux. The default ``smax`` is :func:`spectral_radius`, which gives master's Rusanov.
-    ``reconstruction=None`` is first order.
+    flux. The default ``smax`` is the face input ``s``, the larger spectral radius of the two
+    traces (R9), which gives master's Rusanov. ``reconstruction=None`` is first order.
     """
     if not callable(smax):
         raise TypeError("rusanov(smax=) requires a speed function f(uL, uR, fL, fR, s)")
@@ -73,9 +75,10 @@ def upwind(F: Any, Uh: Any, speed: Callable[..., Any] | None = None, *,
     """Upwind flux of ``F`` on ``Uh``: F(uL).n where the normal speed is positive, else F(uR).n.
 
     ``speed=None`` is :func:`rusanov` with the spectral radius of R9, which is the upwind flux of a
-    flux linear in u. A given ``speed`` returns the signed normal speed; since the body receives no
-    face normal, its sign must hold on every canonical normal of the case (for M01 the velocity
-    (.7, .3) gives a positive speed on both axes). The recorded speed is the spectral radius ``s``.
+    scalar flux linear in u (section 4.4). A given ``speed`` returns the signed normal speed; since
+    the body receives no face normal, its sign must hold on every canonical normal of the case (for
+    M01 the velocity (.7, .3) gives a positive speed on both axes). The recorded speed is the
+    spectral radius ``s``.
     """
     if speed is None:
         return rusanov(F, Uh, reconstruction=reconstruction)
@@ -87,7 +90,7 @@ def upwind(F: Any, Uh: Any, speed: Callable[..., Any] | None = None, *,
         return tuple(pm.where(sign > 0, lambda fl=fl: fl, lambda fr=fr: fr)
                      for fl, fr in zip(fL, fR, strict=True))
 
-    return _realization(F, Uh, _face(body, Uh, spectral_radius), reconstruction)
+    return _realization(F, Uh, _face(body, Uh, _face_spectral_radius), reconstruction)
 
 
 def hll(F: Any, Uh: Any, speeds: Callable[..., tuple] | None = None, *,
@@ -100,15 +103,16 @@ def hll(F: Any, Uh: Any, speeds: Callable[..., tuple] | None = None, *,
     along the face normal. The recorded speed of the flux is the spectral radius ``s``.
 
     The face of ``riemann.User`` receives no signed wave speed, so ``speeds`` has no derived
-    default yet: a case states the pair from its own wave-speed bounds. The derived default, the
-    slowest and fastest speeds of R9 along the face normal, needs a face input that the frozen
-    engine does not provide (CF15; see the N3a report).
+    default yet: a case states the pair from its own physics (M01: ``(s, s)``; M03: the union of
+    v.n - c and v.n + c over the two traces, with v.n = fL[0]/uL[0]). The derived default, the
+    slowest and fastest declared speeds of R9 along the face normal, needs the face input of ROM-99
+    that the frozen engine does not provide (CF15).
     """
     if speeds is None:
         raise NotImplementedError(
-            "hll(F, Uh) needs the signed wave speeds of F along the face normal; the "
-            "riemann.User face receives only the spectral radius. State them with "
-            "hll(F, Uh, speeds=f), f(uL, uR, fL, fR, s) -> (sL, sR).")
+            "hll(F, Uh) has no derived default: it needs the signed wave speeds of F along the "
+            "face normal, and the riemann.User face receives only the spectral radius (ROM-99). "
+            "State them with hll(F, Uh, speeds=f), f(uL, uR, fL, fR, s) -> (sL, sR).")
     if not callable(speeds):
         raise TypeError("hll(speeds=) requires a function f(uL, uR, fL, fR, s) -> (sL, sR)")
 
@@ -127,7 +131,7 @@ def hll(F: Any, Uh: Any, speeds: Callable[..., tuple] | None = None, *,
 
         return tuple(component(*row) for row in zip(uL, uR, fL, fR, strict=True))
 
-    return _realization(F, Uh, _face(body, Uh, spectral_radius), reconstruction)
+    return _realization(F, Uh, _face(body, Uh, _face_spectral_radius), reconstruction)
 
 
-__all__ = ["rusanov", "upwind", "hll", "spectral_radius"]
+__all__ = ["rusanov", "upwind", "hll"]

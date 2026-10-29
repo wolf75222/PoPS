@@ -143,7 +143,7 @@ def build_m01(cells=(16, 8), *, scheme=rusanov, signed_wave_speeds=False):
         waves={axis: (a,) for axis, a in zip(frame.axes, speeds)})
     if signed_wave_speeds:
         model.wave_speeds(flux, frame=frame,
-                          values={axis: (a, a) for axis, a in zip(frame.axes, speeds)})
+                          values={axis: (a, a) for axis, a in zip(frame.axes, speeds, strict=True)})
     rate = model.rate("conservation", equation=pm.ddt(U) == -pm.div(flux))
     case = pops.Case("M01_periodic_transport")
     block = case.block("fluid", model)
@@ -200,13 +200,19 @@ def build_m02(cells=(16, 8)):
         "M02: u_t+(u²/2)_x+(u²/2)_y=0, periodic y-invariant discontinuous data with shock and rarefaction; exact authored Godunov face, two SSPRK2 steps versus independent FV oracle")
 
 
+def _stiffened_gas(state, *, gamma, pressure_offset):
+    """Pressure and sound speed of the stiffened gas at a conserved state (rho, mx, my, energy)."""
+    rho,mx,my,energy = state
+    pressure = (gamma-1)*(energy-(mx*mx+my*my)/(2*rho))-gamma*pressure_offset
+    return pressure, pm.sqrt(gamma*(pressure+pressure_offset)/rho)
+
+
 def _euler(model, frame, *, gamma, pressure_offset=0., electromagnetic=False,
            signed_wave_speeds=False):
     U = model.state("conserved", components=("rho","mx","my","energy"))
     rho,mx,my,energy = U
     vx,vy = mx/rho,my/rho
-    pressure = (gamma-1)*(energy-(mx*mx+my*my)/(2*rho))-gamma*pressure_offset
-    sound = pm.sqrt(gamma*(pressure+pressure_offset)/rho)
+    pressure,sound = _stiffened_gas(U, gamma=gamma, pressure_offset=pressure_offset)
     x,y = frame.axes
     flux = model.flux("Euler_flux", state=U, frame=frame,
         components={x:(mx,mx*vx+pressure,my*vx,(energy+pressure)*vx),
@@ -227,6 +233,26 @@ def _euler(model, frame, *, gamma, pressure_offset=0., electromagnetic=False,
         phi=None
         rate=model.rate("Euler_balance",equation=pm.ddt(U)==-pm.div(flux))
     return U,flux,rate,phi
+
+
+def m03_hll(flux, state, *, gamma=1.4, pressure_offset=.2):
+    """HLL on M03 with the signed wave-speed interval that the case states (R9).
+
+    Along a face normal n the slowest and fastest waves of a trace are v.n - c and v.n + c. The
+    body reads v.n as the normal mass flux over the density, fL[0]/uL[0], and c from the formula
+    of the model's waves; (sL, sR) is their union over the two traces, as the native
+    ``riemann.HLL()`` takes it from the declared signed pair. ``gamma`` and ``pressure_offset``
+    must be those of the case; the defaults are those of :func:`build_m03`.
+    """
+    def speeds(uL, uR, fL, fR, s):
+        vL, vR = fL[0]/uL[0], fR[0]/uR[0]
+        cL = _stiffened_gas(uL, gamma=gamma, pressure_offset=pressure_offset)[1]
+        cR = _stiffened_gas(uR, gamma=gamma, pressure_offset=pressure_offset)[1]
+        lowL, lowR, highL, highR = vL-cL, vR-cR, vL+cL, vR+cR
+        return (pm.where(lowL < lowR, lambda: lowL, lambda: lowR),
+                pm.where(highL > highR, lambda: highL, lambda: highR))
+
+    return hll(flux, state, speeds=speeds)
 
 
 def build_m03(cells=(16,8), *, gamma=1.4, pressure_offset=.2, scheme=rusanov,

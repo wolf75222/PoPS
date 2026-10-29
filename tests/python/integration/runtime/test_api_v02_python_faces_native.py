@@ -3,8 +3,10 @@
 Each pair compiles the same case twice, once with the native face and once with the Python face,
 binds the same initial data and takes the same fixed steps. The two final states must agree to
 rounding; their L1 and L-infinity differences are recorded. The Python face is also received by
-the case's own invariants. M03 has no Python HLL yet: the riemann.User face does not receive the
-signed wave speeds (CF15, see tests/python/unit/numerics/test_lib_numerics_faces.py).
+the case's own invariants. Both HLL rows take an interval that the case states: on M01 both waves
+of each axis are positive, so only the sL >= 0 branch runs; on M03 sL < 0 < sR on every face, so
+the two-wave state runs. The derived hll(F, Uh) needs a face input that riemann.User lacks (CF15,
+ROM-99; tests/python/unit/numerics/test_lib_numerics_faces.py).
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import numpy as np
 import pops
 import pytest
 
-from examples.api_v02.models_M01_M14 import (build_m01, build_m03, m01_hll, native_hll,
+from examples.api_v02.models_M01_M14 import (build_m01, build_m03, m01_hll, m03_hll, native_hll,
                                              native_rusanov, rusanov)
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -26,6 +28,7 @@ PAIRS = {
     "M01-rusanov": (build_m01, native_rusanov, rusanov, False),
     "M03-rusanov": (build_m03, native_rusanov, rusanov, False),
     "M01-hll": (build_m01, native_hll, m01_hll, True),
+    "M03-hll": (build_m03, native_hll, m03_hll, True),
 }
 
 

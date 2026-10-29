@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ROUTES = ("native_rusanov", "python_rusanov", "native_hll", "python_hll_m01")
+ROUTES = ("native_rusanov", "python_rusanov", "native_hll", "python_hll_m01", "python_hll_m03")
 
 
 def _arguments():
@@ -76,7 +76,8 @@ def main():
     if os.environ.get("KOKKOS_TOOLS_LIBS"):
         timer = ctypes.CDLL(os.environ["KOKKOS_TOOLS_LIBS"])
     schemes = {"native_rusanov": cases.native_rusanov, "python_rusanov": cases.rusanov,
-               "native_hll": cases.native_hll, "python_hll_m01": cases.m01_hll}
+               "native_hll": cases.native_hll, "python_hll_m01": cases.m01_hll,
+               "python_hll_m03": cases.m03_hll}
     builder = {"M01": cases.build_m01, "M03": cases.build_m03}[args.case]
     cells = tuple(int(count) for count in args.cells.split("x"))
 
