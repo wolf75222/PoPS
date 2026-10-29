@@ -1685,7 +1685,9 @@ TEST(FiniteCollectiveExecution, DomainChecksRetainCapacityFamilyRevocationAndRep
 }
 
 TEST(FiniteCollectiveExecution, TypedAllocationsAndMirrorCopiesPreserveActualValues) {
-  static Kokkos::ScopeGuard kokkos;
+  // Earlier cases of the same process may already own the lazy Kokkos lifecycle (one MPI
+  // launch runs the whole binary); a second ScopeGuard would abort every rank.
+  pops::detail::ensure_kokkos_initialized();
   using namespace pops::runtime::program;
   auto lane = pops::ExecutionLane::world();
   finite_kokkos::View<pops::Real> device;
