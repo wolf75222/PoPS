@@ -20,7 +20,7 @@ imports `pops`, so the code under qualification never vouches for itself:
 | SDK | digest of the exact installed bytes of the `pops` package | pip `RECORD` does not authenticate a file (native leaves may instead be authenticated by `variants.json`), or the installation is not from a retained wheel |
 | Coherence | installed Python sources and headers equal the blobs of the commit; each leaf's `abi_key` names the installed header signature | any file missing, different or unexpected |
 | Native provenance | `.pops-sdk/native-builds/<leaf sha256>/<SDK inputs sha256>.json`, written by the official build | no clean build of the same SDK inputs attests the leaf |
-| Cohort | digest of commit, tree and SDK identity; record `<site-packages>/.pops-sdk/cohort.json`, mode 0444 | publishing another cohort into an installation that already holds one |
+| Cohort | digest of commit, tree and SDK identity; record `<site-packages>/.pops-sdk/cohort.json`, mode 0444 | publishing another cohort, or building or installing anything (`mutate`), into an installation that already holds one |
 
 Native bytes cannot be compared with C++ sources, so the official build states which SDK inputs it
 built: `build_python.sh --wheel-dir` runs `sdk_cohort.py attest-build` after the retained wheel is

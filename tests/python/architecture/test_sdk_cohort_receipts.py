@@ -368,6 +368,17 @@ def test_a_build_holds_the_installation_for_its_whole_duration(site):
     assert alone.returncode == 1
 
 
+def test_no_build_or_install_mutates_an_installation_that_holds_a_cohort(repo, site, tmp_path):
+    _attest(repo, site)
+    cohort.publish_cohort(repo, site / "pops")
+    marker = tmp_path / "ran"
+    build = _cli("mutate", "--installation", str(site), "--purpose", "pip install", "--",
+                 sys.executable, "-c", "open(%r, 'w').close()" % str(marker))
+    assert build.returncode == 2 and "a cohort never changes" in build.stderr
+    assert not marker.exists()
+    cohort.acquire_mutation_lease(site).release()  # the refusal released the lease
+
+
 def test_build_python_runs_under_the_lease_and_attests_retained_wheels():
     build = (ROOT / "scripts" / "build_python.sh").read_text(encoding="utf-8")
     activate = build.index('conda activate "$ENV_NAME"')

@@ -808,6 +808,21 @@ def read_cohort(installation_root: Path) -> dict[str, Any]:
     return validate_cohort(record, where="cohort record %s" % path)
 
 
+def refuse_published_installation(installation_root: Path, purpose: str) -> None:
+    """A cohort never changes: no build or install mutates an installation that holds one."""
+    path = cohort_path(installation_root)
+    if not path.exists() and not path.is_symlink():
+        return
+    try:
+        record = read_cohort(installation_root)
+        held = "cohort %s of source %s" % (record["cohort_id"], record["source"]["commit"])
+    except CohortError as exc:
+        held = "an unreadable cohort record (%s)" % exc
+    raise CohortError(
+        "installation %s holds %s; a cohort never changes, so %s needs a new installation "
+        "(to retire this cohort deliberately, remove %s)" % (installation_root, held, purpose, path))
+
+
 def verify_cohort(package: Path | None = None, *, source_root: Path | None = None
                   ) -> dict[str, Any]:
     """Re-hash an installation against its cohort record; optionally check a checkout too."""
@@ -1118,6 +1133,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             environment = dict(os.environ, POPS_SDK_LEASE=json.dumps(lease.record))
             return _run_held(lease, command, environment)
         lease = acquire_mutation_lease(arguments.installation, purpose=arguments.purpose)
+        try:
+            refuse_published_installation(Path(lease.record["installation_root"]),
+                                          arguments.purpose)
+        except CohortError:
+            lease.release()
+            raise
         environment = dict(os.environ, POPS_SDK_LEASE=json.dumps(lease.record))
         return _run_held(lease, command, environment)
     except CohortError as exc:
