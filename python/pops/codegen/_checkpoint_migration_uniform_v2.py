@@ -481,7 +481,11 @@ def _history_rings(payload: Mapping[str, Any]) -> tuple[tuple[str, int], ...]:
 def _split_history_field_envelope(
     image: bytes, rings: tuple[tuple[str, int], ...]
 ) -> tuple[bytes, tuple[bytes, ...], bytes]:
-    """Split one POPSEX06 image into its exchange image, ring sample ledgers and metadata table."""
+    """Split one POPSEX06 image into its exchange image, ring sample ledgers and metadata table.
+
+    The framing is that of native ``encode_uniform_history_fields``
+    (``include/pops/runtime/program/uniform_history_exchange_checkpoint.hpp``).
+    """
     at = len(_HISTORY_FIELD_ENVELOPE)
 
     def word() -> int:
@@ -516,7 +520,11 @@ def _split_history_field_envelope(
 
 
 def _empty_history_field_metadata(rings: tuple[tuple[str, int], ...]) -> bytes:
-    """The canonical table of rings whose slots retain no Field support or representation."""
+    """The canonical table of rings whose slots retain no Field support or representation.
+
+    Native ``encode_prepared_history_field_metadata``
+    (``include/pops/runtime/program/history_field_metadata.hpp``) writes the same bytes.
+    """
     return b"".join(
         (_word(0), _word(0), _word(len(rings)))
         + tuple(
