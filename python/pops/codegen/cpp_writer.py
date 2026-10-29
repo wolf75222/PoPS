@@ -133,13 +133,15 @@ def _cse_emit(
     return_names: bool = False,
     return_native_statuses: bool = False,
     scalar_bindings: Any = None,
+    observe: Any = None,
 ) -> Any:
     """Return (local_declaration_lines, [C++ per root]). Compound subexpressions seen >= 2 times
     become ``cseK_`` locals. roots: list of Expr.
 
     ``materialize_all`` gives fail-closed kernels an observation point for every non-leaf operation,
     including a non-finite intermediate that a later comparison or IEEE min/max could otherwise
-    conceal. ``return_names`` additionally returns the local names in declaration order.
+    conceal. ``return_names`` additionally returns the local names in declaration order;
+    ``observe``, a predicate on a materialized expression, keeps only the names it accepts.
 
     Memo by id(): a shared Expr OBJECT (DAG, e.g. intermediates reused from a large model)
     is traversed only once; its later occurrences re-credit the counter of its
@@ -277,7 +279,7 @@ def _cse_emit(
                 else:
                     lines.append("%sconst %s %s = %s;" % (
                         indent, "auto" if joint_kind(expression) else real, name, value))
-                if not joint_kind(expression):
+                if not joint_kind(expression) and (observe is None or observe(expression)):
                     observed_names.append(name)
             cse_map[k] = name
         rendered = [_cpp_cse(r, cse_map, key_memo, guarded) for r in scope_roots]

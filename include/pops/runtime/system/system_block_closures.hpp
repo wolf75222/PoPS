@@ -346,9 +346,11 @@ struct SystemInterfaceProvider {
       std::function<void(const point_type&, const std::vector<field_type*>&,
                          const std::vector<field_type*>&, const std::vector<int>&)>;
   using RetainedFaces = std::vector<std::vector<nd::FaceField<Dim>>*>;
-  using CoreFaceEvaluator = std::function<void(const point_type&, const std::vector<field_type*>&,
-                                               const std::vector<field_type*>&,
-                                               const std::vector<int>&, const RetainedFaces&)>;
+  /// Per block, the local maximum incident-face frequency of the exact evaluated face speeds.
+  using RetainedFrequencies = std::vector<Real*>;
+  using CoreFaceEvaluator = std::function<void(
+      const point_type&, const std::vector<field_type*>&, const std::vector<field_type*>&,
+      const std::vector<int>&, const RetainedFaces&, const RetainedFrequencies&)>;
   using CoreAdmission = std::function<void(void (*)(void*), void*)>;
   using CoreSession = typename SystemInterfaceCoreSession<Dim>::pointer;
   using Evaluate = std::function<void(const point_type&, const std::vector<field_type*>&,

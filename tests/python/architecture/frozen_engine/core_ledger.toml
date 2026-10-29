@@ -1,0 +1,49 @@
+# Core ledger (spec 0.3: FC7, A6, CF15, IR26, CF16).
+#
+# Every generic mechanism added to the core for the corpus is listed here with the two
+# scientifically distinct structures that justify it (CF15): never one case, never the knowledge
+# of one paper (A6). CF16 counts the entries against its target. An entry made before the first
+# freeze has pre_freeze = true; the freeze (FC8) reruns the conformance suite over it.
+#
+# An entry names its issue, the rule that admits it, what it adds, the structures with the
+# measurement that shows each one needs it, and the core paths it changes (CF0).
+
+[[mechanism]]
+id = "observed-face-residual-on-prepared-transport"
+issue = "ROM-100"
+rule = "IR26"
+pre_freeze = true
+what = """
+A flux-only residual whose faces a Program observes, through the face carrier or through the
+incident-face frequency of its stability guard, takes the route of the residual it observes: a
+block that the transport prepared at bind can evaluate goes through it, so no field is allocated
+per evaluation. The face carrier is produced only when the Program reads it; otherwise the face
+gives only its frequency, reduced in one pass over the face speeds the evaluation recorded. The
+generated face policy tests the finiteness of its outputs and of the operands whose non-finite
+value an operation could conceal (comparison, fmin, fmax, sign, exp, expm1, pow, divisor); every
+other operation carries a non-finite operand to an output, so the faces it refuses, and the cause
+of each refusal, are those of a test of every evaluated value."""
+structures = [
+  { case = "M01", builder = "build_m01", structure = "2-D linear scalar transport, one component" },
+  { case = "M03", builder = "build_m03", structure = "2-D stiffened-gas Euler, four components, nonlinear waves" },
+]
+measurement = """
+benchmarks/n3a/face_routes.py at b6e64c1d (N3a, ROM-82): the riemann.User route reached 0.16 to
+0.53 of native throughput on both structures, at 1 and 4 threads, with face kernels within 0.97 to
+1.18 of native; the cost was a boundary session allocated and zero-filled per evaluation, an
+unread copy of the faces and a two-pass frequency. After this mechanism: see ROM-100."""
+refusal_set = "unchanged: kUserNonFiniteFlux refuses the same faces with the same cause"
+paths = [
+  "include/pops/numerics/spatial/nd/face_frequency.hpp",
+  "include/pops/runtime/builders/compiled/generated_amr_system_block.hpp",
+  "include/pops/runtime/program/amr_program_context_diffusion.inc",
+  "include/pops/runtime/program/prepared_scalar_boundary_session.hpp",
+  "include/pops/runtime/program/program_context.hpp",
+  "include/pops/runtime/system.hpp",
+  "include/pops/runtime/system/system_block_closures.hpp",
+  "python/pops/codegen/cpp_writer.py",
+  "python/pops/codegen/program_emit_ops.py",
+  "python/pops/codegen/user_riemann_lowering.py",
+  "src/runtime/amr/amr_system.cpp",
+  "src/runtime/system/system_program.cpp",
+]
