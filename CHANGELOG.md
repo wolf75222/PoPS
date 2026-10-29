@@ -16,6 +16,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 
+### Added
+
+- ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
+  qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
+  SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
+  publishes the immutable cohort of one clean source and one retained-wheel installation and
+  leases the installation, so a build never replaces an SDK under a running qualification.
+
 ### Changed
 
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
