@@ -74,12 +74,14 @@ _CANONICAL_NAMES = {
 # lib/__init__.py must stay thin; a fat __init__ that concentrates logic fails.
 _LIB_INIT_LINE_CAP = 40
 
-# Categories of the CF2 vocabulary (frozen_engine/scan.py) that name a numerical method.
-_METHOD_CATEGORIES = ("method", "interpolation")
+# Categories of the CF2 vocabulary (frozen_engine/scan.py) that name a numerical method: methods and
+# field operators, interpolations, approximations of histories, controllers, refinement predicates.
+_METHOD_CATEGORIES = ("method", "interpolation", "approximation", "controller", "tagging")
 
-# The number of core definitions named after a numerical method at b6e64c1d (gate 2e). It may only go
-# down (MG6); never raise it.
-_B6_METHOD_HOMES_IN_CORE = 103
+# The number of core definitions named after a numerical method at b6e64c1d (gate 2e), counted with
+# the vocabulary that the early audit of N2 completed on 29/10. It may only go down (MG6); never
+# raise it.
+_B6_METHOD_HOMES_IN_CORE = 178
 
 
 def _rel(path):
@@ -267,8 +269,8 @@ def test_lib_models_lower_to_physics_without_runtime():
 # ---------------------------------------------------------------------------------------------
 # Gate 2e -- the inverse rule: no numerical method has a home in the core.
 # ---------------------------------------------------------------------------------------------
-_METHOD_TERMS = frozenset(term.label for term in scan.VOCABULARY
-                          if term.category in _METHOD_CATEGORIES)
+_METHOD_TERMS = frozenset(label for label, (category, _) in scan.TERM_INFO.items()
+                          if category in _METHOD_CATEGORIES)
 _CPP_DEFINITION = re.compile(r"\b(?:struct|class|using|enum\s+class|enum)\s+([A-Za-z_]\w*)")
 _CPP_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 

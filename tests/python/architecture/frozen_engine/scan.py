@@ -12,12 +12,15 @@ non-alphanumeric characters and at camel-case boundaries (``HLLCFlux`` -> ``hllc
 order or version number (``weno5``, ``ssprk2``). A term never matches a fragment of a longer word,
 so no pattern is wider than the name it refuses.
 
-The vocabulary refuses proper names (Rusanov, Poisson, Dirichlet) and physical quantities, not
-category nouns (flux, limiter, reconstruction, Riemann problem, closure, moment): a route table keyed
-on names is caught by the names it holds. Words that also carry a generic mathematical sense are
-refused only in their unambiguous spellings: ``density`` alone is a flux density or a stored density
-(spec D6, R8), so only the role token ``"density"`` and ``VariableRole`` are refused; ``gamma`` is
-refused, and the few sites where it is Higham's rounding bound are listed, with their reason, in
+The vocabulary refuses proper names (Rusanov, Poisson, Dirichlet), physical quantities and the
+machinery that selects them (the role enumeration, route tables and their switches: FC3, FC4), not
+category nouns (flux, limiter, reconstruction, Riemann problem, closure, moment). Words that also
+carry a generic mathematical sense are refused only in their unambiguous spellings: ``density``
+alone is a flux density or a stored density (spec D6, R8), so only the role token ``"density"``,
+``VariableRole`` and the member ``Density`` are refused; short names such as ``mc`` or ``n0`` are
+refused only as a whole identifier or string; a term inside a longer term is the longer term
+(``divergence_preserving``). The few sites where a refused word carries a generic sense (Higham's
+rounding bound gamma_n, the slope of a level-set fit) are listed, with their reason, in
 ``GENERIC_SENSES`` below.
 
 The module imports neither ``pops`` nor ``_pops``. ``python -m
@@ -228,7 +231,7 @@ _CPP_TOKEN = re.compile(
     r"|(?P<char>(?:u8|u|U|L)?'(?:\\.|[^'\\\n])+')"
     r'|(?P<number>\b[0-9][0-9A-Za-z_.\']*)'
     r'|(?P<ident>[A-Za-z_][A-Za-z0-9_]*)'
-    r'|(?P<punct>[;{}])',
+    r'|(?P<punct>[;{}()])',
     re.DOTALL)
 # An identifier that makes the rest of its statement error text: throw, static_assert, an error
 # type (std::runtime_error, ...) or a failure helper (POPS_REQUIRE, fail_..., require_...).
@@ -242,26 +245,38 @@ def cpp_tokens(text: str):
     """Identifiers and string literals of C++ source, outside comments and error text.
 
     A string literal is error text when an identifier of the same statement before it is
-    ``throw``, ``static_assert``, an error type or a failure helper (``_CPP_ERROR_IDENT``).
+    ``throw``, ``static_assert``, an error type or a failure helper (``_CPP_ERROR_IDENT``). The
+    statement ends at a ``;``, ``{`` or ``}`` at the parenthesis depth of that identifier, or at
+    the ``)`` that closes the parentheses it appeared in; braces and semicolons nested inside its
+    parentheses (a requires-expression, a lambda) do not end it.
     """
     line_of = _Lines(text)
-    statement_is_error = False
+    depth = 0  # parenthesis depth
+    error_depth = None  # the depth of the error identifier of the current statement, if any
     for match in _CPP_TOKEN.finditer(text):
         kind = match.lastgroup
         if kind in ("comment", "char", "number"):
             continue
         line = line_of(match.start())
         if kind == "punct":
-            statement_is_error = False
+            punct = match.group("punct")
+            if punct == "(":
+                depth += 1
+            elif punct == ")":
+                depth -= 1
+                if error_depth is not None and depth < error_depth:
+                    error_depth = None
+            elif error_depth is not None and depth <= error_depth:
+                error_depth = None
         elif kind == "ident":
             ident = match.group("ident")
-            if _CPP_ERROR_IDENT.search(ident):
-                statement_is_error = True
+            if error_depth is None and _CPP_ERROR_IDENT.search(ident):
+                error_depth = depth
             yield line, ident, "ident"
-        elif kind == "string" and not statement_is_error:
+        elif kind == "string" and error_depth is None:
             literal = match.group("string")
             yield line, literal[literal.index('"') + 1:-1], "string"
-        elif kind == "raw" and not statement_is_error:
+        elif kind == "raw" and error_depth is None:
             for offset, piece in enumerate(match.group("rawbody").split("\n")):
                 if piece.strip():
                     yield line + offset, piece, "string"
@@ -334,33 +349,57 @@ def split_words(text: str) -> list[str]:
 CF2_VOCABULARY = (
     ("role", "CF2 role vocabulary used as a selector; FC3",
      "ident:variable-role ident:canonical-roles ident:role-of ident:roles-for"),
+    ("role", "CF2 role machinery behind the selector (VariableRole aliases VariableSemantic); "
+     "FC3, C3",
+     "ident:variable-semantic ident:variable-roles ident:component-role ident:role-key "
+     "ident:parse-role ident:role-token ident:role-canonical ident:role-from-name ident:role-name "
+     "ident:roles-csv ident:energy-role ident:role-index ident:require-density ident:from-semantic "
+     "ident:c-rho"),
     ("role", "15.3 physical roles; FC3",
      "momentum velocity pressure temperature enthalpy kinetic-energy internal-energy total-energy"),
     ("model", "15.3 named models; CF2 model and family names",
      "euler navier stokes poisson vlasov maxwell hall baer nunziato mhd boltzmann fokker planck "
      "cahn hilliard burgers schrodinger pitaevskii"),
+    ("model", "15.3 named models: the transport, force and species routes of b6",
+     "isothermal compressible exb ex-b electrostatic drift-diffusion maxwellian potential-force "
+     "background-density multispecies ionization thermal species"),
     ("model", "15.3 physical quantities and forces of named models",
      "magnetic electric lorentz gravity gravitational charge-density electron ion sound-speed "
      "speed-of-sound acoustic mach"),
     ("closure", "15.3 equations of state and closures",
      "equation-of-state eos ideal-gas adiabatic hyqmom qmom fan-li levermore maxent gaussian "
      "hermite bgk"),
-    ("method", "15.3 named numerical fluxes; CF2 named methods",
-     "rusanov hll hllc hlle hlld roe osher godunov lax-friedrichs lax-wendroff upwind"),
+    ("method", "15.3 named numerical fluxes and wave-speed estimates; CF2 named methods",
+     "rusanov hll hllc hlle hlld roe osher godunov lax-friedrichs lax-wendroff upwind harten "
+     "einfeldt davis"),
     ("method", "15.3 named reconstructions or limiters; CF2 named limiters",
-     "muscl weno eno minmod superbee van-leer vanleer van-albada vanalbada koren monotonized"),
+     "muscl weno eno minmod superbee van-leer vanleer van-albada vanalbada koren monotonized "
+     "zhang"),
     ("method", "15.3 named time schemes; CF2 named schemes",
      "ssprk heun strang patankar bdf crank-nicolson imex dirk runge-kutta adams-bashforth "
-     "adams-moulton rosenbrock"),
+     "adams-moulton rosenbrock ars imexrk lie"),
     ("method", "15.3 named discretizations; CF2 named methods",
      "scharfetter gummel"),
-    ("method", "15.3 named field operators; FC2", "laplacian curl"),
+    ("method", "15.3 named field operators; FC2", "laplacian curl gradient divergence"),
+    ("tagging", "15.3 named field operators in the refinement predicates of the tag-graph VM (C36)",
+     "gradient-above gradient-below discrete-gradient-stencil"),
     ("boundary", "15.3 named boundary families",
-     "dirichlet neumann robin inflow outflow reflective slip"),
+     "dirichlet neumann robin inflow outflow reflective slip foextrap no-flux zero-flux "
+     "constant-extrapolation"),
     ("interpolation", "CF2 named coarse-fine, temporal or regrid interpolation (C43)",
      "conservative-linear conservative-injection conservative-coarse-fine conservative-polynomial "
-     "linear-time-interpolation divergence-preserving node-multilinear"),
-    ("constant", "15.3 physical constants; CF2 a physical constant in an ABI", "gamma"),
+     "linear-time-interpolation divergence-preserving node-multilinear linear-prolongation "
+     "coarse-fine-ghost-interpolation constant-injection linear-temporal-interpolation"),
+    ("approximation", "CF2 a named approximation of a history between two instants (T7)",
+     "linear-interpolation dense-output"),
+    ("controller", "15.3 named controllers; controllers are library functions (section 15, 5.11)",
+     "cfl courant"),
+    ("route", "FC4 a route table or switch keyed on named methods or models (C21)",
+     "ident:select-riemann ident:riemann-route ident:limiter-route ident:recon-route "
+     "ident:time-route ident:transport-route ident:source-route-id ident:parse-source-route "
+     "ident:source-route-tokens ident:elliptic-route ident:field-solver-route"),
+    ("constant", "15.3 physical constants; CF2 a physical constant in an ABI",
+     "gamma physical-default q-over-m four-pi-g vacuum-floor"),
 )
 
 # Exact string literals, compared whole and case-sensitively.
@@ -371,6 +410,17 @@ EXACT_LITERALS = (
      ("p", "rho", "rho_u", "rho_v", "rho_w", "rho_E", "rhou", "rhov", "rhow", "E", "vx", "vy",
       "vz")),
     ("role", "CF2 role vocabulary used as a selector; FC3", ("density", "energy")),
+    ("boundary", "15.3 named boundary families by their token", ("wall", "outlet", "inlet")),
+    ("method", "15.3 the monotonized-central limiter by its route token", ("mc",)),
+)
+# Exact names, compared whole and case-sensitively with an identifier or a string literal: names
+# too short or too generic as words (MC, n0) that are knowledge only spelled exactly so. Each is
+# reported as `name`.
+EXACT_NAMES = (
+    ("role", "CF2 the members of the role enumeration; FC3",
+     ("Density", "Energy", "kDensity", "kEnergy")),
+    ("constant", "15.3 physical constants in an ABI (C20)", ("qom", "cs2", "n0", "rho0", "B0")),
+    ("method", "15.3 the monotonized-central limiter by its short name", ("MC", "kMc")),
 )
 # A component name built from a variable name and an axis name, the <name>_<axis> links of b6 (C19).
 AXIS_LINK = "name-axis-link"
@@ -378,8 +428,9 @@ AXIS_LINK = "name-axis-link"
 # norms in the core (pops.linalg) and M00, M10, ... raw moments, so neither is refused.
 CASE_IDENTIFIER = re.compile(r"^(M(0[1-9]|1[0-9]|2[0-8])|T(0[1-9]|1[0-2]))$")
 # A term preceded by one of these words is another word: round_robin is a load-balancing order,
-# not the Robin boundary family.
-NOT_AFTER = {"robin": frozenset({"round"})}
+# not the Robin boundary family, and the conjugate gradient is a Krylov driver (FC6b), not the
+# gradient operator.
+NOT_AFTER = {"robin": frozenset({"round"}), "gradient": frozenset({"conjugate"})}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -407,8 +458,11 @@ for _term in VOCABULARY:
     _BY_FIRST_WORD.setdefault(_term.words[0], []).append(_term)
 _EXACT = {literal: (category, source)
           for category, source, literals in EXACT_LITERALS for literal in literals}
+_EXACT_NAME = {name: (category, source)
+               for category, source, names in EXACT_NAMES for name in names}
 TERM_INFO = {term.label: (term.category, term.source) for term in VOCABULARY}
 TERM_INFO.update({'"%s"' % literal: info for literal, info in _EXACT.items()})
+TERM_INFO.update({"`%s`" % name: info for name, info in _EXACT_NAME.items()})
 TERM_INFO["case-identifier"] = ("case", "15.3 case or profile identifiers")
 TERM_INFO[AXIS_LINK] = ("name", "FC4 names are presentation: a <name>_<axis> link (C19)")
 
@@ -424,9 +478,12 @@ def terms_in(text: str, kind: str) -> set[str]:
         return {AXIS_LINK}
     if kind == "string" and text in _EXACT:
         found.add('"%s"' % text)
+    if kind in ("ident", "string") and text in _EXACT_NAME:
+        found.add("`%s`" % text)
     if kind != "path" and CASE_IDENTIFIER.match(text):
         found.add("case-identifier")
     words = [_strip_order(word) for word in split_words(text)]
+    matches = []  # (first word, past-the-end word, label)
     for index, word in enumerate(words):
         for term in _BY_FIRST_WORD.get(word, ()):
             if term.ident_only and kind == "string":
@@ -434,7 +491,14 @@ def terms_in(text: str, kind: str) -> set[str]:
             if index and words[index - 1] in NOT_AFTER.get(term.label, ()):
                 continue
             if tuple(words[index:index + len(term.words)]) == term.words:
-                found.add(term.label)
+                matches.append((index, index + len(term.words), term.label))
+    # A term inside a longer term is that longer term: divergence_preserving is the C43
+    # interpolation, not the divergence operator.
+    for start, end, label in matches:
+        if not any(other_start <= start and end <= other_end
+                   and other_end - other_start > end - start
+                   for other_start, other_end, _ in matches):
+            found.add(label)
     return found
 
 
@@ -467,6 +531,16 @@ GENERIC_SENSES = (
     ("pyproject.toml", '"E"', r'\s*select = \["E", .*', "the pycodestyle error class of ruff"),
     ("python/pops/codegen/program_emit_principal.py", '"p"', r'\s*letter = "p" if primitive else "u"',
      "the local name of the emitted array argument, not a selected primitive"),
+    ("include/pops/numerics/spatial/embedded_boundary/cut_geometry.hpp", "gradient", r".*",
+     "the slope vector of the linear level-set fit that measures cut-cell fractions (geometry of "
+     "the support, section 4.3), not a field operator; the whole file is that geometry"),
+    ("src/runtime/amr/amr_system.cpp", "divergence",
+     r'\s*rollback(_active_field_candidate_collectively)?\((lane, )?'
+     r'"[a-z ]*divergence rollback"\);',
+     "a disagreement between MPI ranks before a collective rollback, not the divergence operator"),
+    ("python/pops/time/_program/inspection.py", "pressure",
+     r'\s*"many live scratch buffers: GPU memory pressure / allocator churn; consider reuse"\),',
+     "memory pressure on a GPU, not the physical pressure"),
 )
 
 
