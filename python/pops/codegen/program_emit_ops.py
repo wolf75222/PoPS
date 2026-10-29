@@ -944,11 +944,15 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 % (status_resource, int(v.id), bidx))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (var[v.id], state_resource))
         closed_owner = "transform_closed_owner_%d" % v.id
-        held = False
+        held = discharge = False
         if v.op == "local_transform":
             from .program_emit_schedule import restores_held_value
+            from .program_emit_spatial_representation import program_issues_field_representations
             held = restores_held_value(v)
-            if not held:
+            # Only a Program that issues a Field representation can hand one to a
+            # transform; elsewhere the discharge kernel would be a second, dead copy.
+            discharge = not held and program_issues_field_representations(program)
+            if discharge:
                 # Storage setup precedes any cadence guard: every branch and every later
                 # consumer sees the owner, which only an evaluated discharge sets.
                 lines.append("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;"
@@ -958,12 +962,32 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         lines.append(
             "const pops::MultiFab<pops::kNativeDimension>* %s = ctx.pointwise_active_mask(%d, %s);"
             % (active_mask, bidx, var[v.id]))
+        reduced = "transform_failed_%d" % v.id
+        # AMR transforms (including after-synchronization and composite Q maps) are
+        # produced and checked collectively one level at a time. Sibling statuses
+        # do not exist yet, or belong to a previous invocation of this same node.
+        status_reduction = (
+            "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
+        )
+        status_check = [
+            "const pops::Real %s = ctx.%s("
+            "%d, %s, %s, ctx.prepared_execution_lane());"
+            % (reduced, status_reduction, bidx, status, active_mask),
+            "if (%s != pops::Real(0)) {" % reduced,
+            "  throw pops::runtime::program::StepAttemptRejected("
+            "pops::SolveStatus::kInvalidEvaluation, %s, %s);"
+            % (json.dumps(v.op), json.dumps(
+                "transform '%s' rejected a non-finite or out-of-domain state"
+                % v.attrs.get("transform", v.op))),
+            "}",
+        ]
         if v.op == "affine_moment_update":
             from pops.codegen.program_emit_affine_moments import emit_affine_moment_kernel
             lines += emit_affine_moment_kernel(
                 node_model, v.attrs, var[state_in.id], var[v.inputs[1].id], var[v.id],
                 status, active_mask, bidx, provider_plans=provider_plans,
                 consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block))
+            lines += status_check
         else:
             from .program_emit_transform_obligation import emit_closed_transform, emit_pending_presence
             from pops.time.value_signatures import value_signature
@@ -975,18 +999,24 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 provider_plans=provider_plans,
                 consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
             )
-            if held:
+            if not discharge:
                 # The schedule cache restores numbers into this scratch, never the Field
                 # description a discharge binds. Holding one would serve an off-cadence
                 # value without its producer, so the due evaluation refuses it first.
-                lines.append("if (%s)" % pending)
-                lines.append("  throw std::invalid_argument(%s);" % json.dumps(
+                # Without an issuer, a pending representation cannot be this Program's.
+                refusal = (
                     "held local transform '%s' cannot discharge a Field representation: its "
                     "schedule cache restores numerical values without their Field description"
-                    % v.attrs["transform"]))
-                lines += kernel
+                    if held else
+                    "local transform '%s' cannot discharge a Field representation: its "
+                    "Program issues none")
+                lines.append("if (%s)" % pending)
+                lines.append("  throw std::invalid_argument(%s);"
+                             % json.dumps(refusal % v.attrs["transform"]))
+                lines += kernel + status_check
             else:
                 lines.append("if (%s) {" % pending)
+                # The discharge reduces its own status before it publishes the owner.
                 closed, owned = emit_closed_transform(
                     model=node_model, name=v.attrs["transform"], source=var[state_in.id],
                     output=var[v.id], status=status, mask=active_mask, owner=bidx,
@@ -999,32 +1029,12 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 lines += ["  " + line for line in closed]
                 lines.append("  %s = std::move(%s);" % (closed_owner, owned))
                 lines.append("} else {")
-                lines += ["  " + line for line in kernel]
+                lines += ["  " + line for line in kernel + status_check]
                 lines.append("}")
                 alias = "transform_observed_%d" % v.id
                 # Bound after the cadence branches: an off-cadence step keeps the scratch.
                 consumer_binding = (alias, "auto& %s = %s ? *%s : %s;"
                                     % (alias, closed_owner, closed_owner, var[v.id]))
-        reduced = "transform_failed_%d" % v.id
-        # AMR transforms (including after-synchronization and composite Q maps) are
-        # produced and checked collectively one level at a time. Sibling statuses
-        # do not exist yet, or belong to a previous invocation of this same node.
-        status_reduction = (
-            "pointwise_level_status_max" if target == "amr_system" else "pointwise_status_max"
-        )
-        lines.append(
-            "const pops::Real %s = ctx.%s("
-            "%d, %s, %s, ctx.prepared_execution_lane());"
-            % (reduced, status_reduction, bidx, status, active_mask)
-        )
-        lines.append("if (%s != pops::Real(0)) {" % reduced)
-        lines.append(
-            "  throw pops::runtime::program::StepAttemptRejected("
-            "pops::SolveStatus::kInvalidEvaluation, %s, %s);"
-            % (json.dumps(v.op), json.dumps(
-                "transform '%s' rejected a non-finite or out-of-domain state"
-                % v.attrs.get("transform", v.op))))
-        lines.append("}")
     elif v.op == "cell_compare":
         # A PER-CELL threshold (spec op 17, ADC-418): mask(i,j,0) = field(i,j,0) <cmp> value ? 1 : 0,
         # a fresh 1-component scalar_field. Lowered to a for_each_cell select kernel (the mask the
