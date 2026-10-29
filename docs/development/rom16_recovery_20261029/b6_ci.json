@@ -1,0 +1,383 @@
+{
+  "databaseId": 38840872542,
+  "headSha": "b6e64c1d23f5c0565c41674d262ca26b401e8339",
+  "headBranch": "codex/pops-api-v02-local",
+  "status": "completed",
+  "conclusion": "failure",
+  "event": "pull_request",
+  "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542",
+  "job_counts": {
+    "success": 154,
+    "failure": 43,
+    "cancelled": 1,
+    "skipped": 1
+  },
+  "non_success_jobs": [
+    {
+      "databaseId": 116781066149,
+      "name": "ubuntu-latest / Python architecture",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116781066149"
+    },
+    {
+      "databaseId": 116782213677,
+      "name": "ubuntu-24.04 / MPI + Kokkos Serial + collective HDF5",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116782213677"
+    },
+    {
+      "databaseId": 116783021916,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 0",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783021916"
+    },
+    {
+      "databaseId": 116783021932,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 7",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783021932"
+    },
+    {
+      "databaseId": 116783022128,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 54",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022128"
+    },
+    {
+      "databaseId": 116783022165,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 36",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022165"
+    },
+    {
+      "databaseId": 116783022170,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 46",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022170"
+    },
+    {
+      "databaseId": 116783022173,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 35",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022173"
+    },
+    {
+      "databaseId": 116783022174,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 50",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022174"
+    },
+    {
+      "databaseId": 116783022196,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 44",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022196"
+    },
+    {
+      "databaseId": 116783022198,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 30",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022198"
+    },
+    {
+      "databaseId": 116783022232,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 12",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022232"
+    },
+    {
+      "databaseId": 116783022244,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 51",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022244"
+    },
+    {
+      "databaseId": 116783022253,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 45",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022253"
+    },
+    {
+      "databaseId": 116783022258,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 62",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022258"
+    },
+    {
+      "databaseId": 116783022283,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 57",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022283"
+    },
+    {
+      "databaseId": 116783022310,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 61",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022310"
+    },
+    {
+      "databaseId": 116783022317,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 43",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022317"
+    },
+    {
+      "databaseId": 116783022319,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 55",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022319"
+    },
+    {
+      "databaseId": 116783022321,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 56",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022321"
+    },
+    {
+      "databaseId": 116783022346,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 37",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022346"
+    },
+    {
+      "databaseId": 116783022372,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 58",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022372"
+    },
+    {
+      "databaseId": 116783022622,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 63",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783022622"
+    },
+    {
+      "databaseId": 116783025108,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 67",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025108"
+    },
+    {
+      "databaseId": 116783025109,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 84",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025109"
+    },
+    {
+      "databaseId": 116783025122,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 94",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025122"
+    },
+    {
+      "databaseId": 116783025124,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 82",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025124"
+    },
+    {
+      "databaseId": 116783025136,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 74",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025136"
+    },
+    {
+      "databaseId": 116783025159,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 92",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025159"
+    },
+    {
+      "databaseId": 116783025163,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 89",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025163"
+    },
+    {
+      "databaseId": 116783025165,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 71",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025165"
+    },
+    {
+      "databaseId": 116783025175,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 108",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025175"
+    },
+    {
+      "databaseId": 116783025183,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 76",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025183"
+    },
+    {
+      "databaseId": 116783025200,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 72",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025200"
+    },
+    {
+      "databaseId": 116783025208,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 73",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025208"
+    },
+    {
+      "databaseId": 116783025229,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 109",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025229"
+    },
+    {
+      "databaseId": 116783025260,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 106",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025260"
+    },
+    {
+      "databaseId": 116783025282,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 120",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025282"
+    },
+    {
+      "databaseId": 116783025284,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 118",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025284"
+    },
+    {
+      "databaseId": 116783025322,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 87",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025322"
+    },
+    {
+      "databaseId": 116783025331,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 117",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025331"
+    },
+    {
+      "databaseId": 116783025534,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 127",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783025534"
+    },
+    {
+      "databaseId": 116783028569,
+      "name": "ubuntu-latest / Kokkos Serial (Python) shard 133",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116783028569"
+    },
+    {
+      "databaseId": 116797932702,
+      "name": "ubuntu-24.04 / MPI Python ${{ matrix.group }}",
+      "status": "completed",
+      "conclusion": "skipped",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116797932702"
+    },
+    {
+      "databaseId": 116811467599,
+      "name": "gate (agregation requise)",
+      "status": "completed",
+      "conclusion": "failure",
+      "url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542/job/116811467599"
+    }
+  ],
+  "inspected_failure_observations": [
+    {
+      "job": 116781066149,
+      "observation": "Pyright reportArgumentType at python/pops/time/_program/traversal.py:42:32; one error, three warnings.",
+      "log_lines": [
+        308,
+        315
+      ]
+    },
+    {
+      "job": 116782213677,
+      "observation": "test_mpi_cell_temporal_program_refusal_np2 throws: AMR Program scratch prototype has no authenticated runtime block owner; test_continuation_image_np2 fails with already initialized Kokkos ScopeGuard. Other MPI failures not claimed.",
+      "log_lines": [
+        2161,
+        2162,
+        2480,
+        2778,
+        2780
+      ]
+    },
+    {
+      "job": 116783021916,
+      "observation": "Python shard0 test step timed out after existing 100-minute limit; first of two items passed.",
+      "log_lines": [
+        968,
+        971
+      ]
+    }
+  ],
+  "evidence_files": [
+    {
+      "name": "b6_ci_run_38840872542.json",
+      "sha256": "491fbe60866979c4b5a3b1dbb8398f7db8605fa7c40110c2031039df3fc3ca61",
+      "bytes": 1121014
+    },
+    {
+      "name": "failed_job_116781066149.log",
+      "sha256": "91c4c6957e71f4d51061971706c900cbb8a8085fe839f49c6acf792763ab3320",
+      "bytes": 47942
+    },
+    {
+      "name": "failed_job_116782213677.log",
+      "sha256": "48414dc603a1ec395b67dddefacc1b5c02e1275c4f1dd21278697da159d8f47e",
+      "bytes": 502722
+    },
+    {
+      "name": "failed_job_116783021916.log",
+      "sha256": "4847eed5669a6a32cfea6839b0fab4d2eb544a3265042f961ca7f42955115563",
+      "bytes": 165473
+    }
+  ]
+}
