@@ -331,6 +331,58 @@ TEST(test_interface_flux_fragment_ledger, exact_weight_rounding_and_canonical_wi
             "10000000000000000000000000000000000000000/3");
 }
 
+TEST(test_interface_flux_fragment_ledger, exact_weight_multiword_division_and_gcd_are_exact) {
+  using pops::ExactWeight;
+  // The multiword common factor 2^127 - 1 cancels through the general long division.
+  const auto product =
+      ExactWeight::from_decimal(
+          "170141183460469231731687303725582153184246746208706176311805394026439", "1", 512) *
+      ExactWeight::from_decimal(
+          "1", "425889840005138625341827496619373129859156554350279099253808298414557223", 512);
+  EXPECT_EQ(product.text(), "1000000000000000000000000000057/2503155504993241601315571986085849");
+  EXPECT_EQ(product.value(), 0.0003994957556592953);
+  // Multiword power-of-two divisors, then a one-limb divisor of a multiword numerator.
+  EXPECT_EQ((ExactWeight::from_decimal("1267650600228229401496703205376", "1", 512) *
+             ExactWeight::from_decimal("1", "1393796574908163946345982392040522594123776", 512))
+                .text(),
+            "1/1099511627776");
+  const auto odd = ExactWeight::from_decimal("3802951800684688204490109616129",
+                                             "696898287454081973172991196020261297061888", 512);
+  EXPECT_EQ(odd.value(), 5.4569682106375694e-12);
+  EXPECT_EQ((odd * ExactWeight(2)).text(),
+            "3802951800684688204490109616129/348449143727040986586495598010130648530944");
+  const auto third =
+      ExactWeight::from_decimal("4820814132776970826625886277023487807566608981348378505941163",
+                                "1", 512) *
+      ExactWeight(1, 9);
+  EXPECT_EQ(third.text(), "1606938044258990275541962092341162602522202993782792835313721/3");
+  EXPECT_EQ(third.value(), 5.356460147529967e+59);
+  // Canonical limbs do not depend on the division path that normalized them.
+  std::uint64_t state = 0x9e3779b97f4a7c15ULL;
+  const auto next_hex = [&state](int words) {
+    std::string text = "0x";
+    for (int word = 0; word < words; ++word) {
+      state ^= state << 13;
+      state ^= state >> 7;
+      state ^= state << 17;
+      const std::uint64_t value = word == 0 ? state | (std::uint64_t{1} << 63) : state;
+      for (int nibble = 15; nibble >= 0; --nibble)
+        text.push_back("0123456789abcdef"[(value >> (4 * nibble)) & 15]);
+    }
+    return text;
+  };
+  for (int words = 1; words <= 6; ++words)
+    for (int trial = 0; trial < 8; ++trial) {
+      const auto x = ExactWeight::from_hex(next_hex(words), "0x1", 512) /
+                     ExactWeight::from_hex(next_hex(7 - words), "0x1", 512);
+      const auto y = ExactWeight::from_hex(next_hex(words), "0x1", 512) * ExactWeight(1, 6);
+      EXPECT_EQ((x * y) / y, x);
+      EXPECT_EQ((x + y) - y, x);
+      EXPECT_EQ(x / x, ExactWeight(1));
+      EXPECT_EQ(ExactWeight::decode((x * y).encode(), 512), x * y);
+    }
+}
+
 TEST(test_interface_flux_fragment_ledger, exact_weight_budget_failure_keeps_source_and_ledger) {
   using pops::ExactWeight;
   const auto small = ExactWeight::from_double(1e-6, 512);
