@@ -8,9 +8,11 @@ component name. The author writes no stencil radius, no halo depth and no
 dimension (CF8, B2, B3): every read is recorded as a typed map
 ``Compose(Shift(o), Incidence(face(a), cell, side))``, and the builder derives
 
-* the halo of each input with the b6 face formulas (IR14),
-* the face identities: orientation, signs and cell-face incidence (IR17),
-* the lowering class that the builder expects (IR20, IR21).
+* the halo of each input with the b6 face formulas of IR14,
+* the face identities of IR17: orientation and cell-face incidence come from
+  the incidence maps, the signs from the D6 delivery that the builder fixes,
+* the lowering class, face incidence, which the face vocabulary reaches by
+  construction (IR20, IR21).
 
 The realization is the b6 native face loop, a qualified substitution (IR24):
 the builder lowers to one ``StencilFlux`` whose radius is derived from the reads.
@@ -107,8 +109,6 @@ class _Cell:
         _require_axis(axis, self._face._dimension)
         return self._face._spacing[axis]
 
-    width = h
-
     # Two paths to one cell are one entity: compare the normal forms (IR9).
     def _key(self):
         return self._face.axis, self._map.offset(self._face._dimension)
@@ -162,7 +162,9 @@ class _Targets:
         self.fields = []
 
     def resolve(self, quantity):
-        if getattr(quantity, "kind", None) == "field":
+        # A solved field of another model falls through to the refusal below.
+        if (getattr(quantity, "kind", None) == "field"
+                and getattr(quantity, "owner_path", None) == self.state.owner_path):
             for slot, field in enumerate(self.fields):
                 if field.qualified_id == quantity.qualified_id:
                     return ("field", slot)
@@ -193,7 +195,10 @@ def _halo(offsets, dimension):
     # IR14 for reads relative to a face, offsets counted from the right cell:
     # the low side of axis a needs max(-o_a) cells and the high side
     # max(o_a + 1), never below 0 (python/pops/numerics/stencil_flux.py:96-98@b6).
-    # b6 stores one width per axis, the larger side.
+    # The +1 is exact on the face's normal axis only: the native loop adds one
+    # face along that axis (nd::face_box), so a tangent axis b needs max(o_b)
+    # on its high side. b6 applies the +1 to every axis, and IR-T1 compares that
+    # bound. b6 stores one width per axis, the larger side.
     low = tuple(max(0, max((-o[d] for o in offsets), default=0)) for d in range(dimension))
     high = tuple(max(0, max((o[d]+1 for o in offsets), default=0)) for d in range(dimension))
     return low, high, tuple(max(a, b) for a, b in zip(low, high))
@@ -206,6 +211,7 @@ class RealizedFaceFlux:
         self.state = state
         self.dimension = dimension
         self.components = names
+        # In first-read order: the program binds the solved fields by position.
         self.fields = tuple(fields)
         self.reads = reads                      # axis -> tuple of _Read, in read order
         self.stencil_flux = stencil_flux
@@ -222,7 +228,12 @@ class RealizedFaceFlux:
         raise KeyError("the scheme does not read the field %r" % (field.name,))
 
     def halo(self, field=None):
-        """``(low, high)`` widths per axis, of the state or of one solved field (IR14)."""
+        """``(low, high)`` widths per axis, of the state or of one solved field (IR14).
+
+        These are the b6 bounds. On a tangent axis the high side carries the +1
+        of the normal axis, so it can exceed what the reads need: M05 reads one
+        cell on each side, and the bound is ``((1, 1), (2, 2))``.
+        """
         offsets = self._offsets("state") if field is None else self._offsets("field", self._slot(field))
         low, high, _ = _halo(offsets, self.dimension)
         return low, high
@@ -244,12 +255,15 @@ class RealizedFaceFlux:
     def identities(self):
         """The face identities of IR17, for each axis of the frame.
 
-        They follow from the incidence maps of a face (IR9) and from the
-        delivery of D6: the face value J goes to ``Incidence(face(a), cell,
+        The normal and the cell offsets follow from the incidence maps of a
+        face (IR9). The deliveries are the builder's own (D6, IR25), whatever
+        the scheme writes: the face value J goes to ``Incidence(face(a), cell,
         left)`` with weight -1 and to ``Incidence(face(a), cell, right)`` with
-        weight +1; conservation is sum_k w_k = 0. The normal points from the
-        left cell to the right cell. ``reads`` lists the distinct cells, as
-        ``(side, shift)`` normal forms, that the scheme reads on that axis.
+        weight +1, so ``conservation`` (sum_k w_k = 0) holds by construction.
+        The executed evidence of conservation is the b6 ``mass_defect``
+        invariant of each case. ``reads`` lists the distinct cells that the
+        scheme reads on that axis, as offsets from the right cell (the normal
+        forms of IR9).
         """
         out = []
         for axis in range(self.dimension):
@@ -264,27 +278,24 @@ class RealizedFaceFlux:
                 "targets": targets,
                 "conservation": sum(w for _, w in targets) == 0,
                 "components": self.components,
-                "reads": tuple(sorted({(read.map.incidence.side, read.map.shift.offset)
+                "reads": tuple(sorted({read.map.offset(self.dimension)
                                        for read in self.reads[axis]})),
             })
         return tuple(out)
 
     def lowering_class(self):
-        """The class the builder expects and the one its regions reach (IR20, IR21).
+        """The class the builder expects, face incidence, reached by construction (IR20, IR21).
 
-        Every read is a cell of the face, ``Incidence(face(a), cell, side)``,
-        composed with a constant shift (IR25): the regions reach face incidence.
+        The face vocabulary can only read a cell of the face,
+        ``Incidence(face(a), cell, side)``, composed with an integer shift
+        (``cell.shift`` refuses any other), so no classification can fail here.
+        The report lists the composed shifts that the scheme reads.
         """
-        for axis, axis_reads in self.reads.items():
-            for read in axis_reads:
-                if (type(read.map) is not Compose or read.map.incidence.axis != axis
-                        or any(type(x) is not int for x in read.map.shift.offset)):
-                    raise ValueError("ClassNotReached: the read %r of axis %d is not a cell of "
-                                     "its face" % (read.map, axis))
         shifts = sorted({read.map.shift.offset for axis_reads in self.reads.values()
                          for read in axis_reads if any(read.map.shift.offset)})
         return {"expected": "face_incidence",
                 "reached": "face_incidence",
+                "reached_by": "construction of the face vocabulary",
                 "composed_shifts": tuple(shifts),
                 "substitution": "StencilFlux (include/pops/numerics/fv/stencil_flux.hpp@b6, IR24)"}
 
@@ -301,7 +312,8 @@ def realize_face_flux(scheme, state, *, frame):
     handle names its frame only by identity, so the frame stands for the
     configuration kappa and gives the axes. The scheme runs twice per axis, as the
     b6 body does: once to record the typed maps, then once inside the native
-    ``StencilFlux``, whose radius is the largest recorded offset.
+    ``StencilFlux``, whose radius is the largest recorded offset. Both passes
+    must read the same cells; the rows come from the second pass.
     """
     from pops.numerics.stencil_flux import StencilFlux
     if getattr(state, "kind", None) != "state":
@@ -345,7 +357,8 @@ def realize_face_flux(scheme, state, *, frame):
     lowered = ({(offset, "state", c) for offset, c, _ in native.samples}
                | {(offset, "field", f) for f, offset, _, _ in native.field_samples})
     if len(targets.fields) != len(fields) or lowered != _read_set(reads, dimension):
-        raise ValueError("the scheme read other cells when it was realized; a scheme must be pure")
+        raise ValueError("the scheme read other cells when it was realized: both passes of a "
+                         "face scheme must read the same cells")
     return RealizedFaceFlux(state=state, dimension=dimension, names=names, fields=fields,
                             reads=reads, stencil_flux=native)
 

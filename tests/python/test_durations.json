@@ -6581,14 +6581,14 @@
           "session_seconds": 104.42
         },
         "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": {
-          "cases": 18,
-          "phase_seconds": 24.44,
-          "session_seconds": 25.13
+          "cases": 19,
+          "phase_seconds": 24.99,
+          "session_seconds": 25.67
         }
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": "fdf1566dcfb724e13377796c5340ad688cc54331d799503334d3b41804c005ae",
-        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "e9ad88d9cf6171b8ff141a9246aff38e69fcc2c3834f01a27cc6a18a6a5063ad"
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "c1260647ccd3fcfa02a32f913bfda80573fc6168edb1603fda6d367f7a353a73"
       }
     },
     "declared_hardware_profiles": {

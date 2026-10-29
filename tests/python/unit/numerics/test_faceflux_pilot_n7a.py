@@ -50,8 +50,9 @@ def test_m05_halo_is_derived_and_equals_b6():
     assert realized.ghost_extent == b6.ghost_extent == (2, 2)
     # One depth per state, as build_m05 stores it with StateStorage(ghost_depth=...).
     assert realized.ghost_depth == max(b6.ghost_extent) == 2
-    # The per-side widths that b6 folds into one number: the transverse reads
-    # of the viscous terms reach one cell low and two cells high on each axis.
+    # The per-side widths that b6 folds into one number. Its formula puts the
+    # +1 of the face's normal axis on every axis, so the high side reads 2
+    # where the transverse reads of the viscous terms reach one cell.
     assert realized.halo() == ((1, 1), (2, 2))
     assert realized.stencil_flux.radius == b6.radius == 1
 
@@ -90,6 +91,14 @@ def test_halo_follows_the_reads_and_is_never_declared():
     assert realized.halo() == ((1, 1), (3, 3))
     assert realized.ghost_extent == realized.stencil_flux.ghost_extent == (3, 3)
     assert realized.stencil_flux.radius == 2
+    # Two paths to one cell are one read: the right cell, reached from the left one.
+    def twice(face):
+        again = face.left_cell.shift(face.axis, 1).value(q)
+        return FaceFlux({"q": (face.right(q)+again-2*face.left(q))/face.distance},
+                        frequency=1/face.distance**2)
+    assert [identity["reads"] for identity in
+            realize_face_flux(twice, U, frame=model.frame).identities()] == [
+        ((-1, 0), (0, 0)), ((0, -1), (0, 0))]
 
     def two_point(face):
         return FaceFlux({"q": face.normal_gradient(q)}, frequency=1/face.distance**2)
@@ -132,7 +141,11 @@ def _derived_assembly(identity, J):
 
 
 @pytest.mark.parametrize("realized", (_m05(), _m10()[0]))
-def test_face_identities_are_derived_and_match_the_native_assembly(realized):
+def test_face_identities_match_a_transcription_of_the_native_assembly(realized):
+    # The normal and the offsets come from the incidence maps; the deliveries
+    # are the builder's own (D6), so this is an arithmetic check. The executed
+    # evidence of conservation is the b6 mass_defect invariant that the native
+    # test asserts on both routes.
     identities = realized.identities()
     assert [i["axis"] for i in identities] == [0, 1]
     for identity in identities:
@@ -181,6 +194,7 @@ def test_identities_and_lowering_survive_a_permutation_of_the_components():
 def test_reached_class_is_face_incidence(realized):
     report = realized.lowering_class()
     assert report["expected"] == report["reached"] == "face_incidence"
+    assert report["reached_by"] == "construction of the face vocabulary"
     assert "StencilFlux" in report["substitution"]
 
 
@@ -244,14 +258,36 @@ def test_scheme_must_cover_every_component_once():
                           U, frame=model.frame)
 
 
-def test_reads_of_a_foreign_state_or_a_foreign_frame_are_refused():
+def test_a_scheme_that_reads_other_cells_when_realized_is_refused():
+    frame, _ = cases._domain("drifting", (8, 8))
+    model = pops.Model("drifting", frame=frame)
+    U = model.state("q", components=("q",))
+    q, calls = U["q"], []
+
+    def drifting(face):
+        calls.append(face.axis)
+        value = face.right(q)-face.left(q)
+        if len(calls) > 2:  # after one recording call per axis: the realization pass
+            value = value+face.right_cell.shift(face.axis, 1).value(q)
+        return FaceFlux({"q": value}, frequency=1.)
+    with pytest.raises(ValueError, match="must read the same cells"):
+        realize_face_flux(drifting, U, frame=model.frame)
+    assert len(calls) > 2
+
+
+def test_reads_of_a_foreign_state_field_or_frame_are_refused():
     frame, _ = cases._domain("own", (8, 8))
     model = pops.Model("own", frame=frame)
     U = model.state("q", components=("q",))
-    other = pops.Model("other", frame=frame).state("q", components=("q",))
+    other_model = pops.Model("other", frame=frame)
+    other = other_model.state("q", components=("q",))
     with pytest.raises(TypeError, match="own state"):
         realize_face_flux(lambda face: FaceFlux({"q": face.left(other["q"])}, frequency=1.),
                           U, frame=model.frame)
+    chi = other_model.field("chi")
+    with pytest.raises(TypeError, match="own state or solved fields"):
+        realize_face_flux(lambda face: FaceFlux({"q": face.left(U["q"])*face.right(chi)},
+                                                frequency=1.), U, frame=model.frame)
     elsewhere, _ = cases._domain("elsewhere", (8, 8), lengths=(2., 1.))
     with pytest.raises(ValueError, match="frame"):
         realize_face_flux(lambda face: FaceFlux({"q": face.left(U["q"])}, frequency=1.),
