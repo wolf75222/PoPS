@@ -457,20 +457,158 @@ def _validate_legacy_v2(payload: Mapping[str, Any]) -> _LegacyUniformV2:
     )
 
 
+_EMPTY_NATIVE_EXCHANGE_IMAGE = b"POPSEX01" + bytes(8)
+_HISTORY_FIELD_ENVELOPE = b"POPSEX06"
+
+
+def _word(value: int) -> bytes:
+    return value.to_bytes(8, "little")
+
+
+def _blob(data: bytes) -> bytes:
+    return _word(len(data)) + data
+
+
+def _history_rings(payload: Mapping[str, Any]) -> tuple[tuple[str, int], ...]:
+    """History names with their depths, in the byte order of the native ring map."""
+    names = _text_vector(payload, "history_names", nonempty=False)
+    return tuple(
+        (name, _int_scalar(payload, "history_depth_" + name, minimum=1))
+        for name in sorted(names, key=lambda name: name.encode("utf-8"))
+    )
+
+
+def _split_history_field_envelope(
+    image: bytes, rings: tuple[tuple[str, int], ...]
+) -> tuple[bytes, tuple[bytes, ...], bytes]:
+    """Split one POPSEX06 image into its exchange image, ring sample ledgers and metadata table."""
+    at = len(_HISTORY_FIELD_ENVELOPE)
+
+    def word() -> int:
+        nonlocal at
+        if len(image) - at < 8:
+            raise ValueError("Uniform v2 migration History Field envelope is truncated")
+        at += 8
+        return int.from_bytes(image[at - 8 : at], "little")
+
+    def blob() -> bytes:
+        nonlocal at
+        size = word()
+        if size > len(image) - at:
+            raise ValueError("Uniform v2 migration History Field envelope is truncated")
+        at += size
+        return image[at - size : at]
+
+    exchanges = blob()
+    if word() != len(rings):
+        raise ValueError("Uniform v2 migration History Field envelope changes its ring set")
+    ledgers = []
+    for name, _depth in rings:
+        if blob() != name.encode("utf-8"):
+            raise ValueError(
+                "Uniform v2 migration History Field envelope changes ring identity or order"
+            )
+        ledgers.append(blob())
+    metadata = blob()
+    if at != len(image):
+        raise ValueError("Uniform v2 migration History Field envelope has trailing bytes")
+    return exchanges, tuple(ledgers), metadata
+
+
+def _empty_history_field_metadata(rings: tuple[tuple[str, int], ...]) -> bytes:
+    """The canonical table of rings whose slots retain no Field support or representation."""
+    return b"".join(
+        (_word(0), _word(0), _word(len(rings)))
+        + tuple(
+            _blob(name.encode("utf-8")) + _word(depth) + bytes(16 * depth) for name, depth in rings
+        )
+    )
+
+
 def _attest_empty_accepted_exchange_authority(payload: Mapping[str, Any]) -> None:
-    """Require the target authority's native mailbox to carry no trajectory absent from v2."""
+    """Require the target authority's native mailbox to carry no trajectory absent from v2.
+
+    A Program with History Field metadata (the plan default of every Program with a History
+    ring) wraps the mailbox of every rank in the static POPSEX06 envelope. Frozen v2 has no Field
+    metadata, so the envelope table must be empty, and each ring ledger must equal the payload's
+    sample identity, or be explicit unknown provenance where that identity is absent.
+    """
+    import numpy as np
+
     from pops.runtime._checkpoint_exchanges import validate_checkpoint_continuation_arrays
+    from pops.runtime._history_sample_identity import identity_key, unknown_identity_bytes
 
     _contract, raw, offsets = validate_checkpoint_continuation_arrays(payload)
-    empty_native_image = b"POPSEX01" + bytes(8)
     images = tuple(
         raw[int(first) : int(last)].tobytes()
         for first, last in zip(offsets[:-1], offsets[1:], strict=True)
     )
-    if not images or any(image != empty_native_image for image in images):
+    enveloped = {image.startswith(_HISTORY_FIELD_ENVELOPE) for image in images}
+    if len(enveloped) > 1:
+        raise ValueError("Uniform v2 migration authority ranks disagree on History Field metadata")
+    if enveloped == {True}:
+        rings = _history_rings(payload)
+        if not rings:
+            raise ValueError("Uniform v2 migration History Field envelope has no History ring")
+        unwrapped = []
+        for image in images:
+            exchanges, ledgers, metadata = _split_history_field_envelope(image, rings)
+            if metadata != _empty_history_field_metadata(rings):
+                raise ValueError(
+                    "Uniform v2 migration authority History retains Field metadata absent from v2"
+                )
+            for (name, depth), ledger in zip(rings, ledgers, strict=True):
+                key = identity_key(name, None)
+                expected = (
+                    np.asarray(payload[key]).tobytes()
+                    if key in payload
+                    else unknown_identity_bytes(name, None, depth)
+                )
+                if ledger != expected:
+                    raise ValueError(
+                        "Uniform v2 migration History Field envelope sample ledger differs "
+                        "from history %r" % name
+                    )
+            unwrapped.append(exchanges)
+        images = tuple(unwrapped)
+    if not images or any(image != _EMPTY_NATIVE_EXCHANGE_IMAGE for image in images):
         raise ValueError(
             "Uniform v2 migration authority has a non-empty accepted exchange mailbox"
         )
+
+
+def _unknown_provenance_exchange_arrays(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The authority's accepted exchange arrays with every envelope ring ledger made unknown.
+
+    Frozen v2 did not encode publication windows or ordinals, so the authority ledgers would
+    forge provenance for the migrated values, like its history sample identities. The empty
+    mailbox and the empty metadata table transfer byte-identically; a bare mailbox has no ledger.
+    """
+    import numpy as np
+
+    from pops.runtime._checkpoint_exchanges import validate_checkpoint_continuation_arrays
+    from pops.runtime._history_sample_identity import unknown_identity_bytes
+
+    _contract, raw, offsets = validate_checkpoint_continuation_arrays(payload)
+    rings = _history_rings(payload)
+    images = []
+    for first, last in zip(offsets[:-1], offsets[1:], strict=True):
+        image = raw[int(first) : int(last)].tobytes()
+        if image.startswith(_HISTORY_FIELD_ENVELOPE):
+            exchanges, _ledgers, metadata = _split_history_field_envelope(image, rings)
+            image = b"".join(
+                (_HISTORY_FIELD_ENVELOPE, _blob(exchanges), _word(len(rings)))
+                + tuple(
+                    _blob(name.encode("utf-8")) + _blob(unknown_identity_bytes(name, None, depth))
+                    for name, depth in rings
+                )
+                + (_blob(metadata),)
+            )
+        images.append(image)
+    return {
+        "program_exchange_state": np.frombuffer(b"".join(images), dtype=np.uint8).copy(),
+        "program_exchange_offsets": np.cumsum([0, *map(len, images)], dtype=np.int64),
+    }
 
 
 def _attest_current_storage_authority(payload, spatial, blocks, components, version):
@@ -1043,6 +1181,8 @@ def _migrate_payload(
             for source_index, target_index in row.components:
                 target_values[target_index] = source_values[source_index]
             output["history_%s_%d" % (row.target, slot)] = target_values
+    # The exchange envelope repeats each ring's sample ledger, which is reset the same way.
+    output.update(_unknown_provenance_exchange_arrays(authority.payload))
 
     if _uint8_vector(output, "auxiliary_checkpoint", minimum=8) != authority.auxiliary_checkpoint:
         raise RuntimeError("migrated auxiliary checkpoint differs from its authenticated authority")
@@ -1127,8 +1267,12 @@ def _validate_migrated_bytes(
             )
     _attest_empty_accepted_exchange_authority(payload)
     from pops.runtime._checkpoint_exchanges import CONTINUATION_CHECKPOINT_KEYS
+    expected = {
+        **{key: authority.payload[key] for key in CONTINUATION_CHECKPOINT_KEYS},
+        **_unknown_provenance_exchange_arrays(authority.payload),
+    }
     for key in CONTINUATION_CHECKPOINT_KEYS:
-        if not np.array_equal(np.asarray(payload[key]), np.asarray(authority.payload[key])):
+        if not np.array_equal(np.asarray(payload[key]), np.asarray(expected[key])):
             raise RuntimeError(
                 "migrated checkpoint continuation authority differs for %s" % key
             )

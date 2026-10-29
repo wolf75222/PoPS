@@ -8331,7 +8331,7 @@
   "tests/python/unit/codegen/test_cache_key_completeness.py": 2.0,
   "tests/python/unit/codegen/test_cache_key_routes.py": 0.5,
   "tests/python/unit/codegen/test_cell_local_time_codegen.py": 5,
-  "tests/python/unit/codegen/test_checkpoint_migration.py": 210,
+  "tests/python/unit/codegen/test_checkpoint_migration.py": 240,
   "tests/python/unit/codegen/test_codegen_dead_prims.py": 10,
   "tests/python/unit/codegen/test_collective_diffusion_constraint.py": 300.0,
   "tests/python/unit/codegen/test_compile_cache_lock.py": 1.2,
