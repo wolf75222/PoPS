@@ -5128,7 +5128,7 @@
           "kind": "native_profile",
           "registration": "completion_20261015",
           "native_dimension": 2,
-          "declared_cases": 5,
+          "declared_cases": 6,
           "estimated_seconds": 1200,
           "ci_ranks": [
             1,
