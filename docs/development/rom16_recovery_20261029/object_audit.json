@@ -1,0 +1,10 @@
+{
+  "fsck_exit": 0,
+  "unreachable_commits": 69,
+  "stdout_lines": 1236,
+  "stderr": "",
+  "post_b6_unreachable_descendants": [],
+  "rev_list_exit": 0,
+  "artifact_dir": "/tmp/rom16-inventory-20261029",
+  "timestamp": "2026-10-29T20:41:36.469225+00:00"
+}

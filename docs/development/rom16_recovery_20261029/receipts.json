@@ -1,0 +1,399 @@
+{
+  "schema": "pops.rom16.receipt-inventory@1",
+  "created_utc": "2026-10-29T20:43:32.328308+00:00",
+  "scope": "Read-only bounded preservation audit; no test/build/SDK mutation; no claim of current native or scientific qualification",
+  "cache": {
+    "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02",
+    "exists": false
+  },
+  "verified_local_files": [
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/README.md",
+      "size": 2982,
+      "flags": "0x40",
+      "state": "present_bytes_authenticated",
+      "sha256": "0de8b65bc11ad2938cc3aa224143b28309fb6c225008b4cf00db1b365f61e16a",
+      "historical_declared_sha256": "0de8b65bc11ad2938cc3aa224143b28309fb6c225008b4cf00db1b365f61e16a",
+      "matches_historical_manifest": true
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/handoff.json",
+      "size": 3230,
+      "flags": "0x40",
+      "state": "present_bytes_authenticated",
+      "sha256": "e8b73fba9c356b93d1dd0c83a4f02e58f676f7a33051b14ee2a63609e424f4b2",
+      "historical_declared_sha256": "e8b73fba9c356b93d1dd0c83a4f02e58f676f7a33051b14ee2a63609e424f4b2",
+      "matches_historical_manifest": true
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/delivery-receipt.json",
+      "size": 3341,
+      "flags": "0x40",
+      "state": "present_bytes_authenticated",
+      "sha256": "22e3d825345129d83dc2537d2e4016b1b4959f6e7ae0c254a469e04f215ec009"
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/delivery-manifest.json",
+      "size": 25287,
+      "flags": "0x40",
+      "state": "present_bytes_authenticated",
+      "sha256": "99c6aef405ba113ae2ad93254a018d0bb782aa94d25d8c7693b0137d76829745"
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/registre_receptions.md",
+      "size": 16310,
+      "flags": "0x40",
+      "state": "present_bytes_authenticated",
+      "sha256": "d414cf3a92d1892eda51e7a462a97480395a1a64eb4559e362e593843713b843",
+      "historical_declared_sha256": "d414cf3a92d1892eda51e7a462a97480395a1a64eb4559e362e593843713b843",
+      "matches_historical_manifest": true
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/preuves/index-receipts/source_new.json",
+      "size": 271,
+      "flags": "0x40000060",
+      "state": "dataless_content_not_authenticated",
+      "historical_declared_sha256": "31fbd8d00ce161c0532af1f906cc398c0352520e22984bd5fe628f1f9c59d5ac"
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/preuves/index-receipts/ci_local.json",
+      "size": 54270,
+      "flags": "0x40000060",
+      "state": "dataless_content_not_authenticated",
+      "historical_declared_sha256": "41808abf3d3b44b47fb8bcecf268f09826fa39d124470380d03932021cb59503"
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/preuves/index-receipts/official_build.json",
+      "size": 694,
+      "flags": "0x40000060",
+      "state": "dataless_content_not_authenticated",
+      "historical_declared_sha256": "ea072e0f74271f2a0ff55a400997059a86c7c67241a64f9a9445d8359526e08e"
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/preuves/n10_transition/transition-v15d-v15d2.json",
+      "size": 1644,
+      "flags": "0x40000060",
+      "state": "dataless_content_not_authenticated",
+      "historical_declared_sha256": "48c3c6d3036f868236f9c0c9a2a8fa8178670edd43ce6673d7d7933d029bc7aa"
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/preuves/smoke4_verified/verified_receipt.json",
+      "size": 302,
+      "flags": "0x40000060",
+      "state": "dataless_content_not_authenticated",
+      "historical_declared_sha256": "b2333fbf0c30746a6258f418a5e79350e1637af1b899d97f4ae23998f9e5654f"
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/evidence.json",
+      "size": 127903,
+      "flags": "0x40000060",
+      "state": "dataless_content_not_authenticated",
+      "historical_declared_sha256": "be163927696eb6429eb239bf4dc5e2c43a60233ad39e59a0573e6e476896af7d"
+    }
+  ],
+  "documentary_archive_assertions": {
+    "schema": "pops.final-document-handoff@1",
+    "status": "finalized_with_explicit_scoped_integrator_decisions",
+    "delivery": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2",
+    "root_final_inputs": {
+      "final_index": {
+        "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/phase15/index-v15d2-final-0001/index.json",
+        "sha256": "58fdbbdf91718ee05c6042baa10241a0e5c8555dcbe657ff208a6a6fe46ff4da"
+      },
+      "final_index_inputs": {
+        "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/phase15/assembly-v15d2-final-0001/inputs.candidate.json",
+        "sha256": "94c512df75b5d442b5976066a5b3a69765d00770d382ccd636b3abebb93ae3ef"
+      },
+      "owner_decisions": {
+        "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/phase15/owner-decisions-v15d2-final-0001/owner-decisions.json",
+        "sha256": "1bec8623c1009700a5fa489d5574ef09cdef75dc44003004175cc504a702cba1"
+      }
+    },
+    "before_finalization_archive": {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/phase15/delivery-finalization-v15d2-application-0001/before-manifest.json",
+      "sha256": "b79d5667e3df1807e0e5538e15c9b951bdb920f121881bd6722984db8ed37343"
+    },
+    "finalized_fields": [
+      "README",
+      "rapport",
+      "guide Python path",
+      "evidence final receipts",
+      "thirty C/N explicit decisions",
+      "five scoped gap closures",
+      "forty received profiles with unqualified-family flags",
+      "37 new groups and14 legacy",
+      "N10 extension provenance",
+      "C17 erratum",
+      "document checks",
+      "proof and file manifests"
+    ],
+    "remaining_reception_or_decision_fields": [],
+    "root_final_editorial_review": "root reads the delivery and closes the task; not a missing scientific receipt",
+    "new_scientific_or_native_execution": false,
+    "global_index_executed_by_this_finalizer": false,
+    "owner_verdicts_set_from_exact_root_record": true,
+    "cryptographic_signature": false,
+    "human_approval": false,
+    "counts": {
+      "new_groups": {
+        "groups": 37,
+        "case_executions": 116,
+        "rank_observations": 252
+      },
+      "legacy_groups": {
+        "groups": 14,
+        "case_executions": 232,
+        "rank_observations": 312
+      }
+    },
+    "source_cases": 884,
+    "ci_local_cases": 60,
+    "document_checks": {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/document-checks.json",
+      "sha256": "acb40633af3679c57d848315e0bcc5f04166fb214c1bfac1a17ca4a12d98742c"
+    },
+    "link_checks": {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/link-checks.json",
+      "sha256": "5463b01e5ddd108b2af3d7c3beabcae27a6466f67116eda99e9aa76e60136750"
+    },
+    "receipt_manifest": {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_v15d2/preuves/manifest.json",
+      "sha256": "4a4f2c34b53af8ed860a4d1ab4031348c66f7bcabe966848b065e755880406f8"
+    },
+    "api_02_universal_certification": false,
+    "all_scientific_families_qualified": false,
+    "gpu_qualified": false
+  },
+  "documentary_limitations": [
+    "v15d2 is an October14 documentary delivery and not the b6 October16 source state",
+    "new_scientific_or_native_execution=false in its handoff",
+    "api_02_universal_certification=false; all_scientific_families_qualified=false; gpu_qualified=false",
+    "884 source cases and60 local CI cases are historical recorded counts, not current GitHub CI",
+    "Individual dataless receipts have not been read or independently hashed in this audit",
+    "No current E/G/C/R/S claim is inherited solely from archive presence"
+  ],
+  "older_source_archives": [
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2/source.patch",
+      "size": 1037577,
+      "state": "dataless_content_not_authenticated"
+    },
+    {
+      "path": "/Users/romaindespoulain/Documents/Codex/2026-10-13/read-the-entire-mathematical-abstraction-document/implementation_v0_2_final/source.patch",
+      "size": 1756729,
+      "state": "dataless_content_not_authenticated"
+    }
+  ],
+  "post_b6_original_files_unrecovered": [
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/models/child-field-increment022/freeze-uniform0001/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 78237,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/backend/gc-census022/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 78417,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/methods/boundary-context-fixture021b/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 78417,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/models/child-field-increment022/test-hygiene0001/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 78417,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/backend/ci-child022/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 78546,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/backend/ci-child022/delivery.json",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 78546,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/root/compiled-eb022/freeze0001/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 79298,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/root/compiled-eb022/freeze0001/delivery.json",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 79298,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/models/child-field-increment022/amr-cps/native-path/freeze0002/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 79672,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/magnetic/path-producer-window022/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 79672,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/magnetic/path-producer-window022/changes-r2.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 79773,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/models/child-field-increment022/amr-cps/freeze-coherent0001/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 79927,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/magnetic/deferred-spatial-flux019/freeze-amr-cont7-0001/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 80572,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    },
+    {
+      "path": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/root/mapping-reconciliation023/changes.patch",
+      "exists": false,
+      "source_journal": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+      "source_line": 80614,
+      "status": "original_file_unrecovered",
+      "next_action": "recover exact bytes from a durable backup or fully recorded journal patch; verify declared hash before creating a lot branch",
+      "base_commit": "unknown",
+      "base_proof": "The inspected journal lines name a mutable cached worktree or overlay, without a pinned comparable base SHA. Do not infer b6."
+    }
+  ],
+  "historical_journal": {
+    "path": "/Users/romaindespoulain/.codex/sessions/2026/10/13/rollout-2026-10-13T10-04-19-01a1344a-7c7b-7e50-8c24-91f1bf830a98.jsonl",
+    "rollout_id": "01a1344a-7c7b-7e50-8c24-91f1bf830a98",
+    "sha256": "5a93f793d4bca8455b3043c0618f53b0719d591622e623fefd29ac0a0080609c",
+    "interpretation": "Historical tool output supports prior existence and recorded results; it is not proof original patch bytes or current source/SDK are recovered"
+  },
+  "historical_receipt_extracts": [
+    {
+      "line": 79300,
+      "timestamp": "2026-10-16T07:10:57.354Z",
+      "command": [
+        "/bin/zsh",
+        "-c",
+        "rtk proxy python3 -c 'from pathlib import Path; import difflib,json,hashlib,shutil; c=Path(\"/Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02\"); b=c/\"root/compiled-eb022\"; o=b/\"overlay\"; f=b/\"freeze0001\"; f.mkdir(); files=[\"include/pops/runtime/system/prepared_embedded_boundary.hpp\",\"src/runtime/prepared_embedded_boundary.cpp\",\"tests/cpp/unit/runtime/test_prepared_embedded_boundary_nd.cpp\"]; patch=\"\"; manifest={}\nfor rel in files:\n source=o/rel; target=f/\"overlay\"/rel; target.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(source,target); before=c.parent/\"worktree\"/rel; patch+=\"\".join(difflib.unified_diff(before.read_text().splitlines(True),source.read_text().splitlines(True),fromfile=\"a/\"+rel,tofile=\"b/\"+rel)); manifest[rel]=hashlib.sha256(source.read_bytes()).hexdigest()\n(f/\"changes.patch\").write_text(patch); d={\"patch_sha256\":hashlib.sha256(patch.encode()).hexdigest(),\"files\":manifest,\"depends_on\":\"Methods stable compiled_expression_provider.hpp and catalogue owning alias shared_ptr; not yet installed in W\",\"native_new\":\"native0003/receipt.json:3cases MPI1/2/3,18 passing rank observations\",\"native_legacy\":\"legacy-reception0001/receipt.json:19serial +2MPI2 +1MPI3,26 passing rank observations\",\"claim\":\"Actual native EB implementation+test TU on unchanged official SDK022a. Python-generated full installation remains Methods integration/reception.\",\"earlier_failures\":[\"syntax0002 fixture Geometry lacked default constructor\",\"native0001 test fixture used borrowed lane where distributed halo requires owning duplicate\",\"native0002/incomplete-reception.json disk exhausted; not a numerical failure\"]}; (f/\"delivery.json\").write_text(json.dumps(d,indent=2)+\"\\n\"); print(json.dumps(d))'"
+      ],
+      "exit_code": 0,
+      "historical_output": "{\"patch_sha256\": \"497577144b7b4230052c23dbd8dd1eddd0ef941aedd5225e2ed9fee3ceb7b4a9\", \"files\": {\"include/pops/runtime/system/prepared_embedded_boundary.hpp\": \"f54fafb12d8acafe202f930cff2cbf1a59920e624c929036e1f0f5b75d068364\", \"src/runtime/prepared_embedded_boundary.cpp\": \"e70f3c381267df48ec0b4f1657258288bca934f3cba6e78b130fc813cf510312\", \"tests/cpp/unit/runtime/test_prepared_embedded_boundary_nd.cpp\": \"88656c2ba2398c724ef51f6a2edd15fc990ac4cff89680783a90b121e0e41839\"}, \"depends_on\": \"Methods stable compiled_expression_provider.hpp and catalogue owning alias shared_ptr; not yet installed in W\", \"native_new\": \"native0003/receipt.json:3cases MPI1/2/3,18 passing rank observations\", \"native_legacy\": \"legacy-reception0001/receipt.json:19serial +2MPI2 +1MPI3,26 passing rank observations\", \"claim\": \"Actual native EB implementation+test TU on unchanged official SDK022a. Python-generated full installation remains Methods integration/reception.\", \"earlier_failures\": [\"syntax0002 fixture Geometry lacked default constructor\", \"native0001 test fixture used borrowed lane where distributed halo requires owning duplicate\", \"native0002/incomplete-reception.json disk exhausted; not a numerical failure\"]}\n"
+    },
+    {
+      "line": 80573,
+      "timestamp": "2026-10-16T09:22:20.948Z",
+      "command": [
+        "/bin/zsh",
+        "-c",
+        "rtk proxy sed -n '1,205p' magnetic/deferred-spatial-flux019/freeze-amr-cont7-0001/handoff.md"
+      ],
+      "exit_code": 0,
+      "historical_output": "# Lot AMR Increment et CONT7\n\nÉtat : code gelé pour intégration et réception contre un SDK PoPS reconstruit. Aucun succès syntaxe ne vaut réception native de ce lot.\n\n`changes.patch` est calculé contre W b6e64c1d23f5c0565c41674d262ca26b401e8339 avec ses modifications actuelles. Les 77 fichiers disposent de leur version base (si elle existait), version overlay et SHA avant/après dans manifest.json. `git apply --check` a passé. Ne pas recopier toute la racine de travail magnetic. Ce gel conserve les corrections W du sous-cycle et le clock actif de l'application uniforme.\n\n## Invariants\n\n- L'application dense part d'un Contribution/Delivery/Increment explicite, conserve le producteur, son ancien dt et les intégrales total/déjà-réconcilié. Le nouveau destinataire, intervalle et point de consommation définissent une nouvelle incidence. Aucune face n'est reconstruite depuis la divergence ou l'état.\n- Avant le premier replay MPI, tous les rangs comparent le contrat complet du calendrier de livraison. Les payloads locaux restent distincts. Le replay authentifie l'archive fermée complète et son propriétaire exact, puis vérifie les faces contre les valeurs authentifiées. Les projections AMR existantes utilisent leur récurrence linéaire réelle.\n- L'application AMR dense matérialise total sur le ledger physique et total moins déjà-réconcilié sur le ledger de correction. Les deux ont la même matrice IEEE réellement évaluée. Une fenêtre enfant doit appartenir exactement à la fenêtre parent.\n- Candidate est préparé avant Assess/Freeze; la projection acceptée est une copie distincte dont l'obligation de livraison est consommée. Les alias du paquet conservent leur provenance immutable. Un checkpoint ne restaure jamais une ancienne permission de publication.\n- CONT7 transporte ensemble support, obligation de représentation, expression de flux et archive de faces fermée. Capture, copie, migration, checkpoint et publication conservent l'identité du producteur. Les scalaires de preuve et les deux polynômes restent exacts.\n- PreparedFieldRetention est un jeton non copiable lié au contexte, à l'allocation, à la tentative et à l'expression exacte. Préparer avant la copie numérique; déduire workspace_bytes() du budget simultané; identity et bind réauthentifient le jeton. L'identité ne doit pas être recalculée au moyen d'une préparation non bornée.\n- Les payloads capturés hors History utilisent le même budget explicite de Field Increment que les plans; une durée de vie partagée restitue la réservation. Les anciens budgets d'image/History ne sont pas empruntés silencieusement.\n- Le guard CurrentField est présent en Uniform et AMR. Il refuse une publication pendante et des preuves de faces sans transformation explicite. Ce guard n'est pas encore un pont générique sur domaines de faces.\n\n## Preuves obtenues\n\n- Ruff des cinq fichiers Python de production : PASS.\n- 70 tests source sur CONT7, versions antérieures du codec et inspection des deux polynômes : PASS (source-receipt.json).\n- BDF enfant authoring/codegen : trois tests source PASS, reçu source-1792137165550949000.json. Réception AMR BDF encore requise.\n- Syntax finale : wrapper réel AmrProgramContext/ProgramContext avec pack, Candidate, rétention, CurrentField (7,41 s), test_amr_history_flux_snapshot.cpp (4,86 s), test_amr_hierarchy_field_scratch.cpp avec définitions CMake natives (11,70 s), tous PASS. Inventaire des headers/W/SDK inchangé. Les commandes exactes sont syntax-freeze-0001/commands.json. Pas de lien nouveau contre l'ancien core.\n\n## Réception nécessaire après intégration et SDK reconstruit\n\n- C++ : tests/cpp/unit/runtime/test_amr_history_flux_snapshot.cpp, tests/cpp/integration/runtime/test_continuation_image.cpp, tests/cpp/integration/amr/test_program_reflux_ledger.cpp, tests/cpp/integration/amr/test_amr_hierarchy_field_scratch.cpp; MPI 1/2/3, mêmes tolérances.\n- Python natif : child_field_increment_amr, field_increment/BDF, History checkpoint/restart/regrid, et contrôles de reprise bit à bit et rollback tardif. Toutes les preuves doivent référencer le nouveau SDK et la source intégrée.\n- Les deux contrôles MPI de désaccord du graphe de livraison existent dans field-increment-consensus-tests.inc, hors gel car le fichier W test_program_context_contract.cpp était déjà l'objet d'autres intégrations. Root peut ajouter ces cas au TU et les recevoir; ils ont été vérifiés en syntaxe antérieure mais pas exécutés dans ce lot.\n- Le bridge sur domaines de faces M23/M28, le budget de l'inventaire des livraisons du compilateur, et la réception native des ports CurrentField restent à terminer. Ce gel ne revendique pas la clôture de ces chantiers.\n\n## Chevauchement backend\n\nLe cache AMR du backend ajoute un chemin cache_authority dans continuation_field_storage_authority_ du fichier amr_program_context_continuation_field_storage.inc. Fusionner son petit delta avec ce gel, en préservant le payload amr_flux complet, support et obligation. Backend a l'autorisation de composer une vue syntaxe sans modifier ce gel.\n"
+    },
+    {
+      "line": 80574,
+      "timestamp": "2026-10-16T09:22:20.956Z",
+      "command": [
+        "/bin/zsh",
+        "-c",
+        "rtk proxy git apply --stat /Users/romaindespoulain/Library/Caches/PoPS-api-v02/completion-v02/magnetic/deferred-spatial-flux019/freeze-amr-cont7-0001/changes.patch"
+      ],
+      "exit_code": 0,
+      "historical_output": " include/pops/amr/reflux/face_flux_ledger.hpp       |    2 \n .../pops/amr/reflux/metric_reflux_linear_form.hpp  |  162 ++++++\n include/pops/math/exact_weight.hpp                 |   10 \n .../program/amr_continuation_flux_archive.hpp      |  314 ++++++++++++\n .../program/amr_continuation_flux_payload.hpp      |   42 ++\n .../program/amr_continuation_flux_preflight.hpp    |  141 +++++\n .../program/amr_continuation_flux_redistribute.hpp |  109 ++++\n .../runtime/program/amr_continuation_flux_scan.hpp |  187 +++++++\n .../pops/runtime/program/amr_flux_basis_import.hpp |   98 ++++\n .../runtime/program/amr_flux_capture_budget.hpp    |   66 ++\n .../runtime/program/amr_flux_digest_writer.hpp     |   71 +++\n .../pops/runtime/program/amr_flux_face_replay.hpp  |  178 +++++++\n .../pops/runtime/program/amr_flux_wire_writer.hpp  |   53 ++\n .../runtime/program/amr_history_flux_snapshot.hpp  |   77 ++-\n .../program/amr_history_flux_snapshot_codec.hpp    |  481 +++++++++++++++---\n .../amr_history_flux_snapshot_execution.hpp        |   50 +-\n .../pops/runtime/program/amr_program_context.hpp   |   21 +\n ...amr_program_context_continuation_checkpoint.inc |   36 +\n ..._program_context_continuation_field_storage.inc |   21 +\n .../amr_program_context_continuation_flux.inc      |  330 ++++++++++++\n .../amr_program_context_continuation_forest.inc    |   33 +\n .../amr_program_context_continuation_level.inc     |   40 +-\n .../amr_program_context_field_increment.inc        |  120 +++++\n .../amr_program_context_field_increment_flux.inc   |  328 ++++++++++++\n .../amr_program_context_field_retention.inc        |  245 +++++++++\n .../amr_program_context_field_runtime_services.inc |    4 \n .../program/amr_program_context_finite_values.inc  |    3 \n .../program/amr_program_context_flux_basis.inc     |   43 +-\n .../program/amr_program_context_flux_decode.inc    |  176 +++++++\n ...program_context_flux_expression_definitions.inc |   16 -\n ..._program_context_flux_expression_polynomial.inc |    2 \n .../amr_program_context_flux_expression_public.inc |   23 +\n ...amr_program_context_flux_expression_runtime.inc |   44 +-\n ...mr_program_context_flux_expression_services.inc |  277 +++-------\n ..._program_context_history_checkpoint_runtime.inc |   47 +-\n ...program_context_history_checkpoint_services.inc |    2 \n .../program/amr_program_context_shared_flux.inc    |    4 \n .../amr_program_context_spatial_flux_capture.inc   |  264 ++++++++++\n .../amr_program_context_spatial_flux_deferred.inc  |  103 ++++\n .../program/amr_program_context_spatial_imex.inc   |  247 +++++----\n .../amr_program_context_subcycling_runtime.inc     |    6 \n .../pops/runtime/program/continuation_amr_flux.hpp |   44 ++\n .../runtime/program/continuation_archive_codec.inc |   27 +\n .../program/continuation_codec_extended.inc        |   77 +++\n .../program/continuation_field_migration.hpp       |   27 +\n .../continuation_forest_distributed_migration.hpp  |    7 \n .../program/continuation_forest_migration.hpp      |    3 \n .../pops/runtime/program/continuation_image.hpp    |  108 ++++\n .../pops/runtime/program/field_flux_delivery.hpp   |  104 ++++\n .../program/field_increment_application.hpp        |   99 +++-\n .../runtime/program/field_increment_authority.hpp  |   51 ++\n .../runtime/program/field_increment_budget.hpp     |   63 ++\n .../runtime/program/field_increment_projection.hpp |  141 +++++\n .../runtime/program/finite_structural_storage.hpp  |   38 +\n include/pops/runtime/program/module_metadata.hpp   |   21 +\n include/pops/runtime/program/program_context.hpp   |    2 \n .../program_context_continuation_fields.inc        |   14 +\n .../program/program_context_field_increment.inc    |   36 +\n .../program_context_field_increment_uniform.inc    |   18 +\n .../runtime/program/reconciled_flux_expression.hpp |  238 +++++++++\n include/pops_headers.manifest                      |   22 +\n python/pops/codegen/program_emit_amr.py            |    2 \n python/pops/codegen/program_emit_inventory.py      |   15 -\n .../pops/codegen/program_emit_spatial_hierarchy.py |   24 +\n python/pops/codegen/program_emit_versioned.py      |   10 \n .../codegen/program_spatial_boundary_capacity.py   |   33 +\n src/runtime/amr/amr_system.cpp                     |   57 ++\n .../amr/test_amr_hierarchy_field_scratch.cpp       |   59 ++\n .../integration/amr/test_program_reflux_ledger.cpp |  266 ++++++++++\n .../runtime/test_continuation_image.cpp            |  225 +++++++++\n .../runtime/test_amr_history_flux_snapshot.cpp     |  529 ++++++++++++++++++++\n tests/python/support/amr_flux_archive_receipts.py  |  107 ++++\n tests/python/support/api_v02_receipts.py           |   43 +-\n tests/python/support/history_flux_receipts.py      |  129 ++++-\n .../unit/runtime/test_continuation_receipt_v7.py   |   57 ++\n .../test_history_flux_dual_weight_inspector.py     |  194 +++++++\n tests/python/unit/time/test_field_inventory.py     |    8 \n 77 files changed, 6731 insertions(+), 643 deletions(-)\n"
+    }
+  ],
+  "known_superseded_or_failed_historical_runs": [
+    {
+      "lot": "compiled-eb022",
+      "recorded_in_journal_line": 79300,
+      "failures": [
+        "syntax0002 fixture Geometry lacked default constructor",
+        "native0001 borrowed lane where distributed halo requires owning duplicate",
+        "native0002/incomplete-reception.json disk exhausted"
+      ],
+      "recorded_replacement": "native0003 receipt:3 cases MPI1/2/3,18 passing rank observations; legacy19serial+2MPI2+1MPI3,26passing rank observations",
+      "qualification_limit": "actual native EB implementation+test TU linked to unchanged SDK022a; complete Python-generated catalogue installation still required a separate reception"
+    }
+  ],
+  "search_evidence": [
+    {
+      "command": "filename walk under exact taskdir excluding source/env/evidence trees",
+      "finding": "no filename patches022 found"
+    },
+    {
+      "command": "rg patches022|SDK022a|PoPS-api-v02 under .codex/sessions/2026/10/16",
+      "finding": "no matches; relevant October16 turns live in exact October13 rollout above"
+    },
+    {
+      "command": "targeted exact rollout string extraction",
+      "finding": "cache patch paths and historical delivery data above; no original files at cache paths"
+    }
+  ],
+  "next_bounded_action": "Do not reconstruct runtime behavior in ROM16. Recover original post-b6 bytes with comparable bases and hashes, then publish each clean-identity lot separately; keep missing lots open.",
+  "historical_receipt_extracts_note": "Historical output only; no patch base commit inferred from path or timestamp."
+}

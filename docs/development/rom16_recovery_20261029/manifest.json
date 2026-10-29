@@ -1,0 +1,92 @@
+{
+  "issue": "ROM-16",
+  "recorded_utc": "2026-10-29T20:44:03.887053+00:00",
+  "scope": "Recover and publish available source identities and an evidence manifest; no implementation or scientific acceptance.",
+  "normative_source": {
+    "url": "https://linear.app/romain7522/document/spec-03-api-python-de-pops-cible-normative-2a2f962f9c42",
+    "attachment_sha256": "d555c5622eb05ad9b748274158b3c1a46c8d56c01ed138b9bc6831b106c2cdfa",
+    "attachment_lines": 4346,
+    "rules_read": {
+      "K6": "2696-2710",
+      "FC6b": "2883",
+      "CF1": "2900",
+      "CF15": "3018-3020",
+      "CF14": "3022-3024",
+      "MG5_MG7": "3543-3545",
+      "phase0_B01": "3552-3558"
+    }
+  },
+  "initial_checkout": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-audit-20260907",
+    "branch": "master",
+    "head": "51bcdc2e2399dbc922c58c3008ae30a11332f1d8",
+    "dirty": false
+  },
+  "manifest_worktree": {
+    "path": "/Users/romaindespoulain/dev/tmp/pops-rom16-recovery-20261029",
+    "branch": "rom16/recovery-manifest-20261029",
+    "base": "bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7"
+  },
+  "repository": "https://github.com/wolf75222/PoPS",
+  "shallow_repository": true,
+  "source_lots": [
+    {
+      "name": "b6",
+      "status": "recovered_pushed_not_integrated",
+      "sha": "b6e64c1d23f5c0565c41674d262ca26b401e8339",
+      "branch": "rom16/recovered-b6-20261029",
+      "original_branch": "codex/pops-api-v02-local",
+      "first_parent_base": "d17c0535d0d0baf0b5c7f6f06d7e842b9760276b",
+      "integration_base": "77acb67747c18666e31c24f6b51ffbe290496bb8",
+      "merge_base_with_current_master": "bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7",
+      "original_pr": "https://github.com/wolf75222/PoPS/pull/687",
+      "original_pr_base_branch": "codex/adc-euler-comparison-20261011",
+      "files_vs_parent": "b6_files_vs_parent.txt",
+      "files_vs_integration_base": "b6_files_vs_integration_base.txt",
+      "ci": {
+        "native_original": "failure",
+        "run_url": "https://github.com/wolf75222/PoPS/actions/runs/38840872542",
+        "docs_original": "success",
+        "docs_url": "https://github.com/wolf75222/PoPS/actions/runs/38840872541",
+        "identity_original": "success",
+        "identity_url": "https://github.com/wolf75222/PoPS/actions/runs/38840872390",
+        "new_preservation_push_identity_run": "https://github.com/wolf75222/PoPS/actions/runs/40951386929"
+      },
+      "K6": "No new E/G/C/R/S claim. Original receipts retain only their original source and target scope."
+    }
+  ],
+  "post_b6_git_search": {
+    "refs_reflogs_descendants": 0,
+    "unreachable_commits": 69,
+    "unreachable_descendants": 0,
+    "commands": [
+      "git rev-list --all --reflog --ancestry-path b6e64c1d.. --count",
+      "git fsck --no-reflogs --unreachable --no-progress",
+      "git rev-list --stdin --ancestry-path b6e64c1d.."
+    ],
+    "boundary": "Local Git objects and targeted archives only. Absence is not proof that historical dirty patches never existed."
+  },
+  "preservation": {
+    "no_reset_clean_prune_force_push_or_rewrite": true,
+    "existing_worktrees_untouched": true,
+    "no_engine_test_tolerance_skip_timeout_or_assertion_change": true,
+    "CF15": "Not triggered: no case or engine mechanism is changed in this lot.",
+    "missing_old_cache": "/Users/romaindespoulain/Library/Caches/PoPS-api-v02",
+    "old_taskdir_checkout": {
+      "head": "77acb67747c18666e31c24f6b51ffbe290496bb8",
+      "dirty": "unknown: read-only status commands blocked; only audit processes terminated"
+    },
+    "git_identity": {
+      "name": "desp0042",
+      "email": "romain.despoullains@etudiant.univ-reims.fr"
+    },
+    "gh_account": "wolf75222",
+    "git_transport": "Existing gh auth git-credential used per push; broken configured GCM executable left unchanged."
+  },
+  "validation": {
+    "local": "env -u PYTHONPATH PATH=/Users/romaindespoulain/miniforge3/envs/pops/bin:$PATH bash scripts/build_docs.sh",
+    "ci_scope": "Documentation manifest PR on current master. Its green checks do not repair or qualify b6.",
+    "native_build_or_execution": "not launched: no source change; preserve historical receipts and failures",
+    "next_bounded_action": "Recover missing original patches from an independent backup; authenticate exact base and content before a separate source branch. B03 owns existing PR687 CI failures."
+  }
+}
