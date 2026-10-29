@@ -49,6 +49,25 @@ def validate_history_field_metadata_budget(value):
         )
 
 
+# Plan default of the History Field metadata resource: no case has to author a memory budget
+# for its History to retain Field support and representation (spec 0.3, B3). It is the
+# capacity that the API 0.2 examples and fixtures declare explicitly.
+DEFAULT_HISTORY_FIELD_METADATA_BUDGET = (8 * 1024 * 1024, 16 * 1024 * 1024)
+
+
+def resolved_history_field_metadata_budget(program):
+    """Installed (retained_bytes, workspace_bytes), or None for a Program without History rings.
+
+    An authored budget takes precedence over the plan default. Every native consumer (the
+    prelude, the AMR checkpoint exports and the exchange checkpoint bound) reads this one value.
+    """
+    budget = getattr(program, "history_field_metadata_budget", None)
+    validate_history_field_metadata_budget(budget)
+    if budget is not None:
+        return budget
+    return DEFAULT_HISTORY_FIELD_METADATA_BUDGET if program._histories else None
+
+
 def validate_representation_workspace_capacity(value):
     """Workspace for exact closed-read certificates, independent of failure/flux storage."""
     if type(value) is not int or not 1 <= value <= (1 << 63) - 1:

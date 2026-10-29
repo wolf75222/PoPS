@@ -193,7 +193,8 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
         # The native POPSEX05 writer admits this exact per-rank metadata bound in addition
         # to its inner mailbox. HID2/ring-table overhead is inside retained_bytes.
         capacity += rank_capacity * retained_bytes
-    metadata_budget = getattr(program, "history_field_metadata_budget", None)
+    from pops.time._program.resource_budgets import resolved_history_field_metadata_budget
+    metadata_budget = resolved_history_field_metadata_budget(program)
     if metadata_budget is not None and program._histories:
         # POPSEX06 is bounded by its independently declared workspace, including
         # the exact nested exchange image, metadata and sample identity tables.

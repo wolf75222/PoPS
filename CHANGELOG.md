@@ -18,6 +18,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Install a plan default History Field metadata capacity (8 MiB retained, 16 MiB workspace)
+  for every Program with a History ring that does not author `history_field_metadata_budget`,
+  so a case no longer has to write that infrastructure budget to retain Field support and
+  representation. An authored budget still takes precedence; Programs without History are
+  unchanged.
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
   complete continuations and child advances, spatial composition, distributed
   operators, and graph/implicit derivatives lower from Python into native Program C++.

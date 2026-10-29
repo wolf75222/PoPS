@@ -5624,7 +5624,7 @@
         },
         "tests/python/unit/time/test_history_field_metadata_budget.py": {
           "basis": "Ten-second unmeasured source-only scheduling seed for the bounded history/representation contract suite. Case count is checked against collected source cases; no native qualification.",
-          "declared_cases": 12,
+          "declared_cases": 15,
           "estimated_seconds": 10,
           "kind": "source_contract",
           "registration": "history_representation_20261016"
