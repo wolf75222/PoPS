@@ -580,6 +580,22 @@ def test_receipt_records_a_failed_stage_and_reaches_no_level_past_it(repo, site,
     assert data["limits"][-1].startswith("failed in stage C: compile failed")
 
 
+def test_an_observation_failing_at_close_is_recorded_and_the_receipt_written(
+        repo, site, monkeypatch, tmp_path):
+    def unavailable():
+        raise RuntimeError("runtime report unavailable")
+    monkeypatch.setattr(receipts, "backend_observation", unavailable)
+    receipt = receipts.Receipt("close probe", source_root=repo, package=site / "pops",
+                               directory=tmp_path)
+    with receipt:
+        receipt.equations(repo / "examples/case.py")
+    data = receipts.read_receipt(receipt.path)
+    assert data["status"] == "failed" and data["backend"] is None
+    assert [row["stage"] for row in data["failures"]] == ["close:backend"]
+    assert not receipts.admit(data, None)["admitted"]
+    cohort.acquire_mutation_lease(site).release()
+
+
 def test_overlay_findings_name_environment_overrides(repo, site, monkeypatch, tmp_path):
     receipt = receipts.Receipt("overlay probe", source_root=repo, package=site / "pops",
                                lease=False)

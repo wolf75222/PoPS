@@ -73,6 +73,14 @@ class ReceiptError(RuntimeError):
 # --- canonical parameter values ----------------------------------------------------------------
 
 
+def _jsonable(value: Any) -> Any:
+    """The JSON image a receipt stores: tuples become lists, foreign objects their type and repr."""
+    def fallback(item: Any) -> Any:
+        return {"object": type(item).__module__ + "." + type(item).__qualname__,
+                "repr": repr(item)[:200]}
+    return json.loads(json.dumps(value, default=fallback))
+
+
 def _key(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -196,9 +204,16 @@ def backend_observation() -> dict[str, Any]:
     def contract_digest(name: str) -> Any:
         contract = getattr(native, name, None)
         return contract.get("abi_sha256") if isinstance(contract, dict) else None
-    report = native.runtime_environment_report() \
-        if callable(getattr(native, "runtime_environment_report", None)) else None
-    abi = native.abi_key() if callable(getattr(native, "abi_key", None)) else None
+    def call(name: str) -> Any:
+        function = getattr(native, name, None)
+        if not callable(function):
+            return None
+        try:
+            return function()
+        except Exception as exc:  # the backend says it cannot report: record why
+            return {"error": "%s: %s" % (type(exc).__name__, exc)}
+    report = call("runtime_environment_report")
+    abi = call("abi_key")
     return {
         "native_loaded": True,
         "native_file": attribute("__file__"),
@@ -343,14 +358,26 @@ class Receipt:
         self._current = "E"
 
     def close(self) -> dict[str, Any]:
-        if self.data["status"] != "open" and self.data["closed_utc"] is not None:
+        if self.data["closed_utc"] is not None:
             return self.data
+        observations = (
+            ("process", process_observation),
+            ("backend", backend_observation),
+            ("dsos", lambda: self._observe_dsos(final=True)),
+            ("ranks", self._ranks),
+        )
         try:
-            self.data["process"] = process_observation()
-            self.data["process"]["harness"] = committed_files(self.data["source"], HARNESS)
-            self.data["backend"] = backend_observation()
-            self.data["dsos"] = self._observe_dsos(final=True)
-            self.data["ranks"] = self._ranks()
+            for key, observe in observations:
+                try:
+                    self.data[key] = _jsonable(observe())
+                except Exception as exc:  # an observation that fails is recorded, never hidden
+                    self.fail("close:" + key, exc)
+            if self.data["process"] is not None:
+                try:
+                    self.data["process"]["harness"] = committed_files(self.data["source"],
+                                                                      HARNESS)
+                except (CohortError, OSError) as exc:
+                    self.fail("close:harness", exc)
             self.data["overlay"] = overlay_findings(self.data, self._sdk_files)
         finally:
             if self._lease is not None:
@@ -371,7 +398,7 @@ class Receipt:
     # -- stages ---------------------------------------------------------------------------------
 
     def _stage(self, name: str, evidence: Mapping[str, Any]) -> dict[str, Any]:
-        row = {"stage": name, "at_utc": utc_now(), "evidence": dict(evidence)}
+        row = {"stage": name, "at_utc": utc_now(), "evidence": _jsonable(dict(evidence))}
         self.data["stages"].append(row)
         return row
 
@@ -558,7 +585,10 @@ class Receipt:
                             _inside(path, root) for root in roots))
             entry = dict(row)
             if relevant and not row["deleted"]:
-                entry["sha256"] = sha256_file(path) if path.is_file() else None
+                try:
+                    entry["sha256"] = sha256_file(path)
+                except OSError:
+                    entry["sha256"] = None  # unmapped or replaced since /proc/self/maps was read
                 entry["same_inode"] = _same_file(row, path)
             role = "other"
             if _inside(path, package):
@@ -574,8 +604,10 @@ class Receipt:
     def _ranks(self) -> dict[str, Any]:
         backend = self.data["backend"] or {}
         report = backend.get("runtime_environment") or {}
-        size = report.get("mpi_ranks", 1)
-        rank = report.get("mpi_rank", 0)
+        if backend.get("native_loaded"):
+            size, rank = report.get("mpi_ranks"), report.get("mpi_rank")
+        else:
+            size, rank = 1, 0  # no native leaf, hence no communicator: one process
         local = digest("pops.receipt-rank", {
             "sdk": self.data["sdk"]["sdk_id"], "source": self.data["source"]["commit"],
             "artifact": self._artifact_identity,
