@@ -24,6 +24,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   representation. Their History checkpoints therefore carry the Field metadata envelope
   (`POPSEX06` uniform, `POPSHFM1` AMR). An authored budget still takes precedence; Programs
   without History are unchanged.
+- Compile scheduled local transforms again: the discharge owner is declared with the storage
+  setup and consumers bind it after the cadence branches, so the off-cadence restore or zero
+  and every later consumer name variables in scope. A held (`Hold`, `AccumulateDt`) local
+  transform refuses a source with a pending Field representation before evaluating, because
+  the schedule cache restores numbers without their Field description.
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
   complete continuations and child advances, spatial composition, distributed
   operators, and graph/implicit derivatives lower from Python into native Program C++.

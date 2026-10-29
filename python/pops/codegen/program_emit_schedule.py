@@ -151,6 +151,18 @@ def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: b
     )
 
 
+def restores_held_value(v: Any) -> bool:
+    """Whether an off-cadence step serves node @p v's value restored from the schedule cache."""
+    sched = v.attrs.get("schedule")
+    if sched is None:
+        return False
+    lowering = _lower_schedule_ir(v, sched)
+    if (lowering.due.kind is ScheduleDueKind.ALWAYS
+            and lowering.domain.timeline is ScheduleTimeline.ACCEPTED_STEP):
+        return False
+    return ScheduleAction.RESTORE in lowering.off.off_cadence
+
+
 def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any,
                         *, output_setup_end: int | None = None) -> None:
     """Wrap the C++ statements node @p v emitted (``lines[start:]``) in its schedule's due-test guard
