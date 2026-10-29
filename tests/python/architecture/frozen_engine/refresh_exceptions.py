@@ -2,12 +2,14 @@
 
     python -m tests.python.architecture.frozen_engine.refresh_exceptions cf2
     python -m tests.python.architecture.frozen_engine.refresh_exceptions cf2 --allow-moves
+    python -m tests.python.architecture.frozen_engine.refresh_exceptions cf0b   # also cf7, cf8
 
 The default refuses any (path, term) whose site count would rise: it only drops sites that have
 disappeared and updates the line numbers and excerpts of the others (MG6). ``--allow-moves`` accepts
 a site that moved to another file (a file renamed or split by a slice) as long as no term's total
 rises. ``--bootstrap`` writes the list from scratch; it was used once, at b6e64c1d, and a PR that
-uses it again must say why.
+uses it again must say why (the CF0b, CF7 and CF8 lists were written with it at b6e64c1d, in
+lot 2 of Linear N2).
 """
 from __future__ import annotations
 
@@ -15,10 +17,13 @@ import argparse
 import collections
 import sys
 
-from . import cf2, ratchet
+from . import cf0b, cf2, cf7, cf8, ratchet
 
 LISTS = {
+    "cf0b": (cf0b.EXCEPTIONS, cf0b.current_entries),
     "cf2": (cf2.EXCEPTIONS, lambda: cf2.current_entries()[0]),
+    "cf7": (cf7.EXCEPTIONS, lambda: cf7.current_entries()[0]),
+    "cf8": (cf8.EXCEPTIONS, cf8.current_entries),
 }
 
 

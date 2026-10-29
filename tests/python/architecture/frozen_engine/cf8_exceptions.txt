@@ -1,0 +1,316 @@
+# CF8 exception list of b6e64c1d (spec 0.3, section 16.2; B2, B3, B5, A7; MG6): infrastructure and
+# native code in the case files of cases.toml. Written by cf8.py and refresh_exceptions.py.
+#
+# Each line: <path>:<line> <term> <issue> | <excerpt>. The term is the keyword that writes a derived
+# size or a runtime resource (capacity, byte_capacity, ghost_depth, radius, components, depth, ...),
+# or a kind of native code (cf8.NATIVE_TERMS, cpp-file). The issue is the one whose mechanism makes
+# the written value unnecessary (cf8.OWNER_RULES, a proposal). The list only shrinks: a slice that
+# removes a site removes its line in the same PR (refresh_exceptions.py cf8), and a new site fails
+# test_cf8_case_files.py. At b6 the case files hold no C++ file, no C++ string and no C++ entry
+# route of A7.
+
+examples/api_v02/array_derivative_v14.py:37 capacity G02 | def build_array_derivative_v14(count=3, *, capacity=8, wrong_domain=False):
+examples/api_v02/array_derivative_v14.py:43 capacity G02 | domain = p.range_set(native_count, capacity=capacity, ownership='replicated')
+examples/api_v02/array_derivative_v14.py:44 capacity G02 | targets = p.range_set(2*native_count, capacity=2*capacity, ownership='replicated')
+examples/api_v02/array_derivative_v14.py:52 capacity G02 | covector_domain = (p.range_set(2*native_count, capacity=2*capacity, ownership='replicated',
+examples/api_v02/bundle_inventory_v15.py:22 capacity G02 | domain=p.range_set(3,capacity=3,ownership='replicated')
+examples/api_v02/bundle_remap_v14.py:30 capacity G02 | def build_bundle_remap_v14(*, mode='success', steps=3, capacity=64):
+examples/api_v02/bundle_remap_v14.py:44 capacity G02 | domain = p.range_set(2, capacity=capacity, ownership='replicated')
+examples/api_v02/bundle_repartition_v14.py:19 storage_bytes G13 | STORAGE=dict(storage_bytes=16*1024*1024,storage_versions=2048)
+examples/api_v02/bundle_repartition_v14.py:19 storage_versions G02 | STORAGE=dict(storage_bytes=16*1024*1024,storage_versions=2048)
+examples/api_v02/bundle_repartition_v14.py:25 byte_capacity G13 | result=d.local_map(domain,lambda q,i:q.variant(Result(Float64,Int64),'ok',body(q,i)),byte_capacity=CAP)
+examples/api_v02/bundle_repartition_v14.py:35 byte_capacity G13 | order='global_gid_ascending',byte_capacity=CAP)
+examples/api_v02/bundle_repartition_v14.py:45 capacity G02 | domain=d.domain(initial_offsets,capacity=4)
+examples/api_v02/bundle_repartition_v14.py:57 byte_capacity G13 | schema=ContinuationSchema(initial,fields=(),time=('time',),step=('step',),byte_capacity=4*1024*1024)
+examples/api_v02/bundle_repartition_v14.py:68 byte_capacity G13 | transferred={key:dd.import_values(old['geometry'][key],requests,byte_capacity=CAP)
+examples/api_v02/bundle_repartition_v14.py:70 byte_capacity G13 | values=dd.import_values(old['fields']['q'],requests,byte_capacity=CAP)
+examples/api_v02/bundle_repartition_v14.py:71 byte_capacity G13 | history=dd.import_values(old['histories']['previous'],requests,byte_capacity=CAP)
+examples/api_v02/coarsening_moments_v14.py:72 capacity G02 | domain = p.range_set(2, capacity=2, ownership='replicated')
+examples/api_v02/continuation_capture_amr.py:157 level_capacity G02 | parent=parent, level_capacity=8)
+examples/api_v02/continuation_checks.py:26 capacity G02 | domain=p.range_set(p.int64(2),capacity=2,ownership='replicated')
+examples/api_v02/continuation_forest_amr.py:66 capacity G02 | domain = p.range_set(3, capacity=3, ownership="replicated")
+examples/api_v02/continuation_forest_amr.py:120 level_capacity G02 | parent=parent, observe=observe, level_capacity=8)
+examples/api_v02/continuation_history_uniform.py:21 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 8*1024*1024))
+examples/api_v02/continuation_history_uniform.py:25 depth N8 | p.store_history("prior", q.n, depth=1)
+examples/api_v02/continuation_migration_amr.py:46 capacity G02 | domain = algebra.balanced_domain(p.int64(7), capacity=7)
+examples/api_v02/continuation_migration_amr.py:49 byte_capacity G13 | byte_capacity=1 << 20))
+examples/api_v02/continuation_migration_amr.py:71 byte_capacity G13 | distributed.at_local(old["history"], i)+z.int64(1)), byte_capacity=1 << 20))
+examples/api_v02/continuation_migration_amr.py:105 level_capacity G02 | parent=parent, observe=observe, level_capacity=8)
+examples/api_v02/continuation_regrid_amr.py:105 byte_capacity G13 | values = algebra.import_values(source["fields"]["values"], requests, byte_capacity=8*1024*1024)
+examples/api_v02/continuation_regrid_amr.py:115 byte_capacity G13 | byte_capacity=8*1024*1024))
+examples/api_v02/continuation_regrid_amr.py:117 byte_capacity G13 | order="global_gid_ascending", byte_capacity=8*1024*1024)
+examples/api_v02/continuation_regrid_amr.py:170 capacity G02 | domain = p.range_set(3, capacity=3, ownership="replicated")
+examples/api_v02/continuation_regrid_amr.py:221 storage_bytes G13 | algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
+examples/api_v02/continuation_regrid_amr.py:221 storage_versions G02 | algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
+examples/api_v02/continuation_regrid_amr.py:230 cell_capacity G02 | exported = b.field_bundle(field, topology=old_view, cell_capacity=16384,
+examples/api_v02/continuation_regrid_amr.py:231 patch_capacity G02 | patch_capacity=256, family=family)
+examples/api_v02/continuation_regrid_amr.py:236 cell_capacity G02 | target = (b.field_bundle(output_template, topology=new_view, cell_capacity=16384,
+examples/api_v02/continuation_regrid_amr.py:237 patch_capacity G02 | patch_capacity=256, family=exported)
+examples/api_v02/continuation_regrid_amr.py:267 level_capacity G02 | parent=parent, observe=observe, level_capacity=8, regrid=remap,
+examples/api_v02/continuation_regrid_auxiliary.py:71 ghost_depth N7 | numerics.states.add(state, StateStorage(ghost_depth=2))
+examples/api_v02/continuation_regrid_auxiliary.py:97 capacity G02 | domain = p.range_set(3, capacity=3, ownership="replicated")
+examples/api_v02/continuation_regrid_auxiliary.py:137 storage_bytes G13 | algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
+examples/api_v02/continuation_regrid_auxiliary.py:137 storage_versions G02 | algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
+examples/api_v02/continuation_regrid_auxiliary.py:146 cell_capacity G02 | exported = b.field_bundle(field, topology=source_view, cell_capacity=32768,
+examples/api_v02/continuation_regrid_auxiliary.py:147 patch_capacity G02 | patch_capacity=256, family=family)
+examples/api_v02/continuation_regrid_auxiliary.py:153 cell_capacity G02 | target = b.field_bundle(storage, topology=target_view, cell_capacity=32768,
+examples/api_v02/continuation_regrid_auxiliary.py:154 patch_capacity G02 | patch_capacity=256, family=exported)
+examples/api_v02/continuation_regrid_auxiliary.py:174 level_capacity G02 | observe=observe, level_capacity=8, regrid=remap, regrid_parent=remap_parent, dimension=2)
+examples/api_v02/decision_assess_v14.py:23 capacity G02 | domain=p.range_set(2,capacity=2,ownership='replicated')
+examples/api_v02/distributed_algebra_v14.py:25 storage_bytes G13 | d = Distributed(p, storage_bytes=8*1024*1024,
+examples/api_v02/distributed_algebra_v14.py:26 storage_versions G02 | storage_versions=1 if kind == "budget" else 128)
+examples/api_v02/distributed_algebra_v14.py:28 capacity G02 | domain = d.domain(offsets, capacity=4)
+examples/api_v02/distributed_algebra_v14.py:32 byte_capacity G13 | byte_capacity=cap))
+examples/api_v02/distributed_algebra_v14.py:36 byte_capacity G13 | order=order, byte_capacity=cap)
+examples/api_v02/distributed_algebra_v14.py:51 byte_capacity G13 | lambda b,i:b.capture(lambda z:sparse(z,i)),byte_capacity=cap))
+examples/api_v02/distributed_algebra_v14.py:56 capacity G02 | target = d.domain((0, 1, 2) if ranks == 2 else (0, 1, 1, 2), capacity=2)
+examples/api_v02/distributed_algebra_v14.py:60 byte_capacity G13 | byte_capacity=cap))
+examples/api_v02/distributed_algebra_v14.py:62 byte_capacity G13 | lambda b, s, x: s*10+x, order=order, byte_capacity=cap)
+examples/api_v02/distributed_algebra_v14.py:65 byte_capacity G13 | order=order, byte_capacity=cap)
+examples/api_v02/distributed_algebra_v14.py:67 byte_capacity G13 | order=order, byte_capacity=cap)
+examples/api_v02/distributed_algebra_v14.py:68 capacity G02 | empty = d.domain(tuple(0 for _ in range(ranks+1)), capacity=1)
+examples/api_v02/distributed_algebra_v14.py:70 byte_capacity G13 | lambda b, i: b.variant(Result(Int64, Int64), "ok", b.int64(99)), byte_capacity=cap))
+examples/api_v02/distributed_algebra_v14.py:72 byte_capacity G13 | lambda b, i: b.capture(lambda z: d.index(domain, z.int64(0))), byte_capacity=cap))
+examples/api_v02/distributed_algebra_v14.py:74 byte_capacity G13 | lambda b, s, x: s+x, order=order, byte_capacity=cap)
+examples/api_v02/distributed_algebra_v14.py:76 nnz_capacity G02 | nnz_capacity=1, target=domain)
+examples/api_v02/distributed_algebra_v14.py:77 byte_capacity G13 | empty_import = d.import_csr(source, empty_csr, byte_capacity=cap)
+examples/api_v02/distributed_algebra_v14.py:86 capacity G02 | local = b.range_set(3, capacity=3, ownership="replicated")
+examples/api_v02/distributed_algebra_v14.py:93 byte_capacity G13 | lambda b, i: b.capture(lambda z: payload(z, i)), byte_capacity=cap))
+examples/api_v02/distributed_algebra_v14.py:96 byte_capacity G13 | imported = d.import_values(nested, requests, byte_capacity=cap)
+examples/api_v02/distributed_algebra_v14.py:111 byte_capacity G13 | checked = p.require_success(d.local_map(domain, check, byte_capacity=cap))
+examples/api_v02/distributed_algebra_v14.py:117 byte_capacity G13 | byte_capacity=cap)
+examples/api_v02/distributed_algebra_v14.py:136 byte_capacity G13 | order=order, byte_capacity=cap))
+examples/api_v02/distributed_derivative_v14.py:27 storage_bytes G13 | d=Distributed(p,storage_bytes=256*1024*1024,storage_versions=8192)
+examples/api_v02/distributed_derivative_v14.py:27 storage_versions G02 | d=Distributed(p,storage_bytes=256*1024*1024,storage_versions=8192)
+examples/api_v02/distributed_derivative_v14.py:28 capacity G02 | domain=d.domain(offsets,capacity=3)
+examples/api_v02/distributed_derivative_v14.py:29 byte_capacity G13 | def map_(q,D,body):return q.map(D,body,byte_capacity=TRANSPORT_BYTES)
+examples/api_v02/distributed_derivative_v14.py:42 byte_capacity G13 | values=q.gather(x,requests,byte_capacity=TRANSPORT_BYTES)
+examples/api_v02/distributed_derivative_v14.py:46 byte_capacity G13 | order='global_gid_ascending',byte_capacity=TRANSPORT_BYTES)
+examples/api_v02/distributed_derivative_v14.py:49 byte_capacity G13 | order='global_gid_ascending',byte_capacity=TRANSPORT_BYTES)['values']
+examples/api_v02/distributed_derivative_v14.py:62 transport_byte_capacity G13 | forward=jvp(equations,transport_byte_capacity=TRANSPORT_BYTES)(p,
+examples/api_v02/distributed_derivative_v14.py:65 transport_byte_capacity G13 | transport_byte_capacity=TRANSPORT_BYTES)(p,primal=p.product(x=source),
+examples/api_v02/distributed_derivative_v14.py:92 storage_bytes G13 | d=Distributed(p,storage_bytes=256*1024*1024,storage_versions=8192)
+examples/api_v02/distributed_derivative_v14.py:92 storage_versions G02 | d=Distributed(p,storage_bytes=256*1024*1024,storage_versions=8192)
+examples/api_v02/distributed_derivative_v14.py:93 capacity G02 | domain=d.domain(offsets,capacity=3)
+examples/api_v02/distributed_derivative_v14.py:94 byte_capacity G13 | source=p.map(domain,lambda q,i:q.float64(q.index_value(i)+1),byte_capacity=TRANSPORT_BYTES)
+examples/api_v02/distributed_derivative_v14.py:105 byte_capacity G13 | imported=q.gather(a['values'],requests,byte_capacity=TRANSPORT_BYTES)
+examples/api_v02/distributed_derivative_v14.py:107 byte_capacity G13 | order='global_gid_ascending',byte_capacity=TRANSPORT_BYTES)
+examples/api_v02/distributed_derivative_v14.py:112 transport_byte_capacity G13 | result=jvp(function,differentiate_iterations=True,transport_byte_capacity=TRANSPORT_BYTES)(p,
+examples/api_v02/distributed_derivative_v14.py:115 byte_capacity G13 | byte_capacity=TRANSPORT_BYTES)))
+examples/api_v02/distributed_gc_v14.py:25 storage_bytes G13 | d=Distributed(p,storage_bytes=65536,storage_versions=2)
+examples/api_v02/distributed_gc_v14.py:25 storage_versions G02 | d=Distributed(p,storage_bytes=65536,storage_versions=2)
+examples/api_v02/distributed_gc_v14.py:26 capacity G02 | domain=d.domain((0,1,4) if ranks==2 else (0,1,1,4),capacity=4)
+examples/api_v02/distributed_gc_v14.py:28 byte_capacity G13 | lambda b,i:b.variant(Result(Int64,Int64),"ok",d.gid(i)+1),byte_capacity=4096))
+examples/api_v02/distributed_gc_v14.py:30 byte_capacity G13 | lambda b,i:b.variant(Result(Int64,Int64),"ok",2*d.at_local(source,i)),byte_capacity=4096))
+examples/api_v02/distributed_gc_v14.py:32 byte_capacity G13 | order="global_gid_ascending",byte_capacity=4096)
+examples/api_v02/distributed_program_checks.py:61 capacity G02 | source_domain = d.domain(source_offsets, capacity=4)
+examples/api_v02/distributed_program_checks.py:62 capacity G02 | request_domain = d.domain(request_offsets, capacity=6)
+examples/api_v02/distributed_program_checks.py:63 capacity G02 | row_domain = d.domain(row_offsets, capacity=3)
+examples/api_v02/distributed_program_checks.py:83 byte_capacity G13 | source_result = d.local_map(source_domain, source_body, byte_capacity=65536)
+examples/api_v02/distributed_program_checks.py:100 byte_capacity G13 | imported = d.import_values(source, requests, byte_capacity=65536)
+examples/api_v02/distributed_program_checks.py:101 nnz_capacity G02 | incidence = d.csr(row_domain, requests, lambda b, offset: offset*2, nnz_capacity=6)
+examples/api_v02/distributed_program_checks.py:102 byte_capacity G13 | csr_imported = d.import_csr(source, incidence, byte_capacity=65536)
+examples/api_v02/distributed_program_checks.py:124 byte_capacity G13 | checked = d.local_map(request_domain, verify, byte_capacity=65536)
+examples/api_v02/extension_closure_v14.py:75 capacity G02 | domain=p.range_set(p.int64(4),capacity=8,ownership='replicated')
+examples/api_v02/finite_amr.py:32 capacity G02 | domain = algebra.domain(tuple(4*rank//ranks for rank in range(ranks+1)), capacity=4)
+examples/api_v02/finite_amr.py:35 byte_capacity G13 | byte_capacity=65536))
+examples/api_v02/finite_amr.py:38 byte_capacity G13 | order="global_gid_ascending", byte_capacity=65536)
+examples/api_v02/finite_amr.py:40 byte_capacity G13 | order="global_gid_ascending", byte_capacity=65536)
+examples/api_v02/finite_amr.py:41 capacity G02 | domain = program.range_set(4, capacity=4, ownership="replicated")
+examples/api_v02/finite_bdf2_v14.py:29 capacity G02 | domain = p.range_set(2, capacity=8, ownership='replicated')
+examples/api_v02/finite_structural_depth.py:16 capacity G02 | domain = p.range_set(1, capacity=1, ownership="replicated")
+examples/api_v02/graph_function_checks.py:51 capacity G02 | domain = g.range_set(args['n'], capacity=8, ownership='replicated')
+examples/api_v02/graph_function_checks.py:102 capacity G02 | domain = g.range_set(4, capacity=4, ownership='replicated')
+examples/api_v02/hierarchy_flux_v14.py:85 capacity G02 | active=p.range_set(3,capacity=3,ownership='replicated')
+examples/api_v02/hierarchy_flux_v14.py:86 capacity G02 | coarse=p.range_set(2,capacity=2,ownership='replicated')
+examples/api_v02/hierarchy_flux_v14.py:87 capacity G02 | fine=p.range_set(2,capacity=2,ownership='replicated')
+examples/api_v02/hierarchy_flux_v14.py:88 capacity G02 | faces=p.range_set(3,capacity=3,ownership='replicated')
+examples/api_v02/implicit_array_v14.py:22 capacity G02 | def build_implicit_array_v14(count=3, *, transpose=False, dishonest=False, capacity=4, native_state=True, dist
+examples/api_v02/implicit_array_v14.py:29 byte_capacity G13 | return q.map(D,body,**({'byte_capacity':transport} if transport else {}))
+examples/api_v02/implicit_array_v14.py:31 byte_capacity G13 | return q.reduce(values,initial,body,order=order,**({'byte_capacity':transport} if transport else {}))
+examples/api_v02/implicit_array_v14.py:38 capacity G02 | domain = p.range_set(count, capacity=capacity, ownership='replicated')
+examples/api_v02/implicit_array_v14.py:43 capacity G02 | domain = Distributed(p,storage_bytes=512*1024*1024,storage_versions=16384).domain(offsets,capacity=capacity)
+examples/api_v02/implicit_array_v14.py:43 storage_bytes G13 | domain = Distributed(p,storage_bytes=512*1024*1024,storage_versions=16384).domain(offsets,capacity=capacity)
+examples/api_v02/implicit_array_v14.py:43 storage_versions G02 | domain = Distributed(p,storage_bytes=512*1024*1024,storage_versions=16384).domain(offsets,capacity=capacity)
+examples/api_v02/implicit_array_v14.py:60 capacity G02 | domain = p.range_set(n, capacity=capacity, ownership='replicated')
+examples/api_v02/implicit_array_v14.py:93 transport_byte_capacity G13 | lin = linearize(relation, request_test=tangent_request, transport_byte_capacity=transport)
+examples/api_v02/implicit_array_v14.py:123 transport_byte_capacity G13 | guess=guess, base_accuracy=accuracy, accuracy=accuracy, budget=p.product(), transport_byte_capacity=transport)
+examples/api_v02/implicit_array_v14.py:127 transport_byte_capacity G13 | guess=guess, base_accuracy=accuracy, accuracy=accuracy, budget=p.product(), transport_byte_capacity=transport)
+examples/api_v02/independent_field_history.py:22 history_field_metadata_budget G07 | "independent_history", history_field_metadata_budget=(8 * 1024 * 1024, 16 * 1024 * 1024)
+examples/api_v02/independent_field_history.py:45 depth N8 | p.store_history("potential", observed, depth=2, owner_block=block)
+examples/api_v02/method_authored_stability.py:22 components N7 | flux = StencilFlux(dimension=2, components=1, radius=1,
+examples/api_v02/method_authored_stability.py:22 radius N7 | flux = StencilFlux(dimension=2, components=1, radius=1,
+examples/api_v02/method_euler_correction.py:146 components N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body,
+examples/api_v02/method_euler_correction.py:146 radius N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body,
+examples/api_v02/method_euler_correction.py:204 ghost_depth N7 | plan.rates.add(balance, ProgramRealization(uses=(use,), ghost_depth=ghost_depth))
+examples/api_v02/method_flux_correction.py:54 components N7 | return StencilFlux(dimension=2,components=1,radius=1,body=body,
+examples/api_v02/method_flux_correction.py:54 radius N7 | return StencilFlux(dimension=2,components=1,radius=1,body=body,
+examples/api_v02/method_flux_correction.py:100 ghost_depth N7 | plan.rates.add(rate,ProgramRealization(uses=(use,),ghost_depth=1))
+examples/api_v02/method_flux_correction.py:126 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
+examples/api_v02/method_flux_correction.py:135 depth N8 | p.store_history("provisional_potential", provisional_observation[field[potential]], depth=1)
+examples/api_v02/method_flux_correction.py:151 depth N8 | p.store_history("accepted_potential", final_potential, depth=1)
+examples/api_v02/method_flux_correction.py:152 depth N8 | p.store_history("accepted_field_input", field_state, depth=1)
+examples/api_v02/method_flux_correction.py:153 depth N8 | p.store_history("corrected_amount", accepted, depth=1)
+examples/api_v02/method_flux_correction_amr.py:46 components N7 | return StencilFlux(dimension=2, components=1, radius=2, body=body,
+examples/api_v02/method_flux_correction_amr.py:46 radius N7 | return StencilFlux(dimension=2, components=1, radius=2, body=body,
+examples/api_v02/method_flux_correction_amr.py:66 ghost_depth N7 | discretization.rates.add(rate, ProgramRealization(uses=(use,), ghost_depth=2))
+examples/api_v02/method_history_transfer.py:74 depth N8 | p.keep_history(q, depth=2, interpolation=quadratic_transfer(
+examples/api_v02/method_history_transfer.py:183 depth N8 | p.store_history("retained_rhs",current,depth=2,interpolation=regular_quadratic_flux_transfer())
+examples/api_v02/method_interval_regions.py:26 ghost_depth N7 | plan.states.add(state, StateStorage(ghost_depth=1))
+examples/api_v02/method_interval_transport.py:82 components N7 | flux=StencilFlux(dimension=2,components=2,radius=2,parameters=("duration",),body=face)
+examples/api_v02/method_interval_transport.py:82 radius N7 | flux=StencilFlux(dimension=2,components=2,radius=2,parameters=("duration",),body=face)
+examples/api_v02/method_interval_transport.py:88 ghost_depth N7 | uses=(face_use,volume_use),ghost_depth=max(flux.ghost_extent)))
+examples/api_v02/method_nonlinear_interval_transport.py:86 components N7 | flux = StencilFlux(dimension=2, components=3, radius=2, parameters=("duration",), body=face)
+examples/api_v02/method_nonlinear_interval_transport.py:86 radius N7 | flux = StencilFlux(dimension=2, components=3, radius=2, parameters=("duration",), body=face)
+examples/api_v02/method_nonlinear_interval_transport.py:91 ghost_depth N7 | plan.rates.add(equation, ProgramRealization(uses=(face_use, volume_use), ghost_depth=max(flux.ghost_extent)))
+examples/api_v02/method_relaxed_composite.py:59 ghost_depth N7 | discretization.rates.add(equation, ProgramRealization(uses=(face_use, source_use), ghost_depth=1))
+examples/api_v02/method_relaxed_composite.py:63 components N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
+examples/api_v02/method_relaxed_composite.py:63 radius N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
+examples/api_v02/method_relaxed_history.py:58 ghost_depth N7 | discretization.rates.add(equation, ProgramRealization(uses=(face_use, source_use), ghost_depth=1))
+examples/api_v02/method_relaxed_history.py:62 components N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
+examples/api_v02/method_relaxed_history.py:62 radius N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
+examples/api_v02/method_relaxed_history.py:65 depth N8 | program.keep_history(q, depth=2)
+examples/api_v02/method_relaxed_history.py:69 depth N8 | program.store_history("retained_transport", f0, depth=2)
+examples/api_v02/method_relaxed_multiblock.py:37 components N7 | dimension=2, components=1,
+examples/api_v02/method_relaxed_quartic.py:54 ghost_depth N7 | discretization.rates.add(equation, ProgramRealization(uses=(face_use, source_use), ghost_depth=1))
+examples/api_v02/method_relaxed_quartic.py:58 components N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
+examples/api_v02/method_relaxed_quartic.py:58 radius N7 | stencil = StencilFlux(dimension=2, components=3, radius=1, body=face)
+examples/api_v02/method_retained_stencil.py:47 basis_capacity G02 | basis_capacity=None, cells=(16, 4), dt=.01):
+examples/api_v02/method_retained_stencil.py:53 ghost_depth N7 | plan.states.add(state, StateStorage(ghost_depth=1))
+examples/api_v02/method_retained_stencil.py:57 flux_expression_budget N7 | p.flux_expression_budget = (basis_capacity, 1)
+examples/api_v02/method_retained_stencil.py:61 depth N8 | p.store_history("retained_rhs", rate, depth=1)
+examples/api_v02/method_scoped_stencil.py:23 components N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body)
+examples/api_v02/method_scoped_stencil.py:23 radius N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body)
+examples/api_v02/method_scoped_stencil.py:45 ghost_depth N7 | plan.states.add(state, StateStorage(ghost_depth=1))
+examples/api_v02/method_spatial_bdf2.py:40 depth N8 | p.keep_history(q, depth=1)
+examples/api_v02/method_splitting_boundary.py:39 capacity G02 | def lifted_strang(p, old, time, h, *, capacity, diffusion=.08, reaction=1.3):
+examples/api_v02/method_splitting_boundary.py:50 capacity G02 | capacity=capacity)
+examples/api_v02/method_splitting_boundary.py:74 capacity G02 | capacity=count)
+examples/api_v02/method_stencil_extensions.py:42 components N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body,
+examples/api_v02/method_stencil_extensions.py:42 radius N7 | return StencilFlux(dimension=2, components=1, radius=1, body=body,
+examples/api_v02/method_stencil_extensions.py:81 ghost_depth N7 | plan.rates.add(rate, ProgramRealization(uses=tuple(uses.values()), ghost_depth=1))
+examples/api_v02/method_stencil_extensions.py:105 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
+examples/api_v02/method_stencil_extensions.py:117 depth N8 | builder.store_history(label+"_potential", sampled, depth=1, owner_block=block)
+examples/api_v02/method_stencil_extensions.py:149 ghost_depth N7 | marker_plan.states.add(marker, StateStorage(ghost_depth=1))
+examples/api_v02/method_temporal_field.py:108 observation_byte_capacity G13 | observation_byte_capacity=64 * 1024 * 1024,
+examples/api_v02/method_temporal_field.py:123 ghost_depth N7 | plan.states.add(U, StateStorage(ghost_depth=1))
+examples/api_v02/method_temporal_field.py:158 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
+examples/api_v02/method_temporal_field.py:163 depth N8 | p.keep_history(q, depth=2, interpolation=regular_quadratic_flux_transfer())
+examples/api_v02/method_temporal_field.py:165 depth N8 | p.keep_history(q, depth=2)
+examples/api_v02/method_temporal_field.py:173 byte_capacity G13 | byte_capacity=observation_byte_capacity,
+examples/api_v02/method_temporal_field.py:178 depth N8 | depth=2 if regrid_observation else 1,
+examples/api_v02/method_temporal_field.py:186 depth N8 | p.store_history("observed_before_barrier", observed, depth=1, owner_block=block)
+examples/api_v02/method_temporal_field.py:194 byte_capacity G13 | byte_capacity=observation_byte_capacity,
+examples/api_v02/method_temporal_field.py:196 depth N8 | p.store_history("synchronized", synchronized, depth=1, owner_block=block)
+examples/api_v02/method_temporal_field.py:197 depth N8 | p.store_history("observed_after_barrier", observed, depth=1, owner_block=block)
+examples/api_v02/method_temporal_field.py:214 ghost_depth N7 | marker_plan.states.add(marker, StateStorage(ghost_depth=1))
+examples/api_v02/methods_T01_T12.py:98 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
+examples/api_v02/methods_T01_T12.py:111 depth N8 | p.store_history("final_state", candidate, depth=1)
+examples/api_v02/methods_T01_T12.py:112 depth N8 | p.store_history("final_potential", final[field[phi]], depth=1)
+examples/api_v02/methods_T01_T12.py:223 depth N8 | p.store_history("monolithic", monolithic, depth=1)
+examples/api_v02/methods_T01_T12.py:255 depth N8 | p.store_history("monolithic",monolithic,depth=1)
+examples/api_v02/methods_T01_T12.py:318 depth N8 | p.store_history("entropy_alpha", alpha, depth=1)
+examples/api_v02/methods_T01_T12.py:323 depth N8 | p.store_history("entropy_tangent", derivative, depth=1)
+examples/api_v02/methods_T01_T12.py:375 depth N8 | p.store_history("bdf_state", q.n, depth=1)
+examples/api_v02/methods_T01_T12.py:412 depth N8 | p.store_history("bdf_increment", accepted_increment, depth=1)
+examples/api_v02/methods_T01_T12.py:454 depth N8 | p.keep_history(q,depth=2);p.commit(q.next,candidate)
+examples/api_v02/methods_T01_T12.py:618 depth N8 | p.store_history("discarded_candidate",provisional,depth=1)
+examples/api_v02/methods_coupled_nonsymmetric.py:52 capacity G02 | def solve_linear(p, rhs, action, *, capacity, tolerance=2.e-12):
+examples/api_v02/methods_coupled_nonsymmetric.py:55 capacity G02 | atol=p.float64(tolerance*tolerance), capacity=capacity)
+examples/api_v02/methods_coupled_nonsymmetric.py:63 capacity G02 | def solve_blocks(p, f, g, *, A, B, C, D, method, capacity, tolerance=2.e-12):
+examples/api_v02/methods_coupled_nonsymmetric.py:68 capacity G02 | return solve_linear(b, args["rhs"], D, capacity=capacity,
+examples/api_v02/methods_coupled_nonsymmetric.py:75 capacity G02 | x = solve_linear(p, rhs, reduced, capacity=capacity, tolerance=tolerance)[0]
+examples/api_v02/methods_coupled_nonsymmetric.py:79 capacity G02 | pair = p.range_set(2*n, capacity=2*capacity, ownership="replicated")
+examples/api_v02/methods_coupled_nonsymmetric.py:90 capacity G02 | values = solve_linear(p, pack(p, f, g), action, capacity=2*capacity,
+examples/api_v02/methods_coupled_nonsymmetric.py:110 capacity G02 | domain = p.range_set(count, capacity=count, ownership="replicated")
+examples/api_v02/methods_coupled_nonsymmetric.py:152 capacity G02 | method="schur", capacity=count)
+examples/api_v02/methods_coupled_nonsymmetric.py:154 capacity G02 | method="monolithic", capacity=count)
+examples/api_v02/methods_coupled_nonsymmetric.py:159 capacity G02 | def solve_selected_relation(p, old, forcing, *, capacity, mode, branch, tolerance=2.e-12):
+examples/api_v02/methods_coupled_nonsymmetric.py:185 capacity G02 | correction = solve_linear(b, r, jacobian, capacity=capacity, tolerance=tolerance/20)[0]
+examples/api_v02/methods_coupled_nonsymmetric.py:214 capacity G02 | capacity=count, mode=mode, branch=branch)
+examples/api_v02/methods_coupled_nonsymmetric.py:220 capacity G02 | def imex_ars222(p, old, h, explicit, implicit, *, capacity):
+examples/api_v02/methods_coupled_nonsymmetric.py:234 capacity G02 | first, r0, _ = solve_linear(p, axpy(p, old, h*gamma, e0), action, capacity=capacity)
+examples/api_v02/methods_coupled_nonsymmetric.py:238 capacity G02 | answer, r1, _ = solve_linear(p, rhs, action, capacity=capacity)
+examples/api_v02/methods_coupled_nonsymmetric.py:248 capacity G02 | return imex_ars222(p, old, h, explicit, implicit, capacity=count)
+examples/api_v02/methods_patankar_network.py:23 capacity G02 | def directed_processes(p, inventory, *, capacity, quotient):
+examples/api_v02/methods_patankar_network.py:31 capacity G02 | edges = p.range_set(n*n, capacity=capacity*capacity, ownership="replicated")
+examples/api_v02/methods_patankar_network.py:55 capacity G02 | def modified_patankar22(p, inventory, h, *, capacity, quotient):
+examples/api_v02/methods_patankar_network.py:64 capacity G02 | first = directed_processes(p, inventory, capacity=capacity, quotient=quotient)
+examples/api_v02/methods_patankar_network.py:66 capacity G02 | lambda b, value: axpy(b, value, -h, _net(b, inventory, first, value)), capacity=capacity)
+examples/api_v02/methods_patankar_network.py:67 capacity G02 | second = directed_processes(p, stage, capacity=capacity, quotient=quotient)
+examples/api_v02/methods_patankar_network.py:83 capacity G02 | lambda b, value: axpy(b, value, -h, _net(b, inventory, averaged, value)), capacity=capacity)
+examples/api_v02/methods_patankar_network.py:122 capacity G02 | domain = p.range_set(count, capacity=count, ownership="replicated")
+examples/api_v02/methods_patankar_network.py:139 capacity G02 | capacity=count, quotient=quotient)
+examples/api_v02/model_ale_nd.py:83 byte_capacity G13 | byte_capacity=32 << 20)
+examples/api_v02/model_ale_nd.py:120 byte_capacity G13 | lambda b, a, v: pm.minimum(a, v), order="global_gid_ascending", byte_capacity=32 << 20)
+examples/api_v02/model_gyrokinetic_nd.py:504 byte_capacity G13 | initial, fields=(), time=("time",), step=("step",), byte_capacity=64 << 20
+examples/api_v02/model_gyrokinetic_nd.py:583 byte_capacity G13 | byte_capacity=64 << 20,
+examples/api_v02/model_hall_mhd_ct.py:261 byte_capacity G13 | initial, fields=(), time=("time",), step=("step",), byte_capacity=64 << 20
+examples/api_v02/model_hall_mhd_ct.py:329 byte_capacity G13 | byte_capacity=64 << 20,
+examples/api_v02/models_M01_M14.py:64 history_field_metadata_budget G07 | history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
+examples/api_v02/models_M01_M14.py:324 components N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body)
+examples/api_v02/models_M01_M14.py:324 radius N7 | return StencilFlux(dimension=2, components=4, radius=1, body=body)
+examples/api_v02/models_M01_M14.py:337 ghost_depth N7 | plan = DiscretizationPlan(); plan.states.add(U, StateStorage(ghost_depth=max(flux.ghost_extent)))
+examples/api_v02/models_M01_M14.py:511 depth N8 | program.store_history(label+"_state",state,depth=1)
+examples/api_v02/models_M01_M14.py:512 depth N8 | program.store_history(label+"_potential",potential,depth=1)
+examples/api_v02/models_M01_M14.py:617 components N7 | return StencilFlux(dimension=2,components=1,radius=1,field_components=(1,),body=face)
+examples/api_v02/models_M01_M14.py:617 radius N7 | return StencilFlux(dimension=2,components=1,radius=1,field_components=(1,),body=face)
+examples/api_v02/models_M01_M14.py:631 ghost_depth N7 | plan=DiscretizationPlan();plan.states.add(U,StateStorage(ghost_depth=max(face.ghost_extent)))
+examples/api_v02/models_M01_M14.py:645 depth N8 | program.store_history(label+"_state",state,depth=1)
+examples/api_v02/models_M01_M14.py:646 depth N8 | program.store_history(label+"_potential",potential,depth=1)
+examples/api_v02/models_M01_M14.py:688 components N7 | return StencilFlux(dimension=2, components=3, radius=1,
+examples/api_v02/models_M01_M14.py:688 radius N7 | return StencilFlux(dimension=2, components=3, radius=1,
+examples/api_v02/models_M01_M14.py:721 ghost_depth N7 | plan=DiscretizationPlan();plan.states.add(U,StateStorage(ghost_depth=max(flux.ghost_extent)))
+examples/api_v02/models_M01_M14.py:729 depth N8 | program.store_history(label+"_state",state,depth=1)
+examples/api_v02/models_M01_M14.py:730 depth N8 | program.store_history(label+"_potential",potential,depth=1)
+examples/api_v02/models_M13.py:64 components N7 | flux=StencilFlux(dimension=2,components=3,radius=1,field_components=(1,),body=body)
+examples/api_v02/models_M13.py:64 radius N7 | flux=StencilFlux(dimension=2,components=3,radius=1,field_components=(1,),body=body)
+examples/api_v02/models_M13.py:65 ghost_depth N7 | plan=DiscretizationPlan();plan.states.add(U,StateStorage(ghost_depth=max(flux.ghost_extent)))
+examples/api_v02/models_M13.py:92 depth N8 | p.store_history(label+"_state",state,depth=1)
+examples/api_v02/models_M13.py:93 depth N8 | p.store_history(label+"_potential",potential,depth=1)
+examples/api_v02/models_M13.py:94 depth N8 | p.store_history(label+"_photo",photo_field,depth=1)
+examples/api_v02/models_M14.py:159 depth N8 | p.store_history("source_state",old,depth=1)
+examples/api_v02/models_M18_entropy.py:129 depth N8 | p.store_history(label+"_residual",defect,depth=1)
+examples/api_v02/models_M18_entropy.py:146 depth N8 | p.store_history("accepted_alpha",alpha,depth=1)
+examples/api_v02/models_M18_entropy.py:147 depth N8 | p.store_history("accepted_flux",flux,depth=1)
+examples/api_v02/models_M18_entropy.py:148 depth N8 | p.store_history("accepted_residual",defect,depth=1)
+examples/api_v02/models_M20_M21.py:223 depth N8 | p.store_history("Ampere_rate_residual",p.value("original_derivative_residual",fibre.pullback(residual)),depth=
+examples/api_v02/models_M20_M21.py:224 depth N8 | p.store_history("A_dot",adot,depth=1)
+examples/api_v02/models_M20_M21.py:226 depth N8 | p.store_history("A_parallel",p.value("Ampere_accepted_field",fibre.pullback(accepted_A),at=state.next.point),d
+examples/api_v02/models_M22_M25_M28.py:195 components N7 | return StencilFlux(dimension=2,components=8,radius=1,body=body)
+examples/api_v02/models_M22_M25_M28.py:195 radius N7 | return StencilFlux(dimension=2,components=8,radius=1,body=body)
+examples/api_v02/models_M22_M25_M28.py:210 ghost_depth N7 | plan=DiscretizationPlan();plan.states.add(u,StateStorage(ghost_depth=max(flux.ghost_extent)));case.numerics(pl
+examples/api_v02/models_kinetic_nd.py:202 capacity G02 | species_domain = p.range_set(species_count, capacity=species_count, ownership="replicated")
+examples/api_v02/models_kinetic_nd.py:328 byte_capacity G13 | byte_capacity=64 << 20,
+examples/api_v02/models_kinetic_nd.py:329 storage_bytes G13 | storage_bytes=64 << 20,
+examples/api_v02/models_kinetic_nd.py:330 storage_versions G02 | storage_versions=65536,
+examples/api_v02/models_kinetic_nd.py:345 storage_bytes G13 | Distributed(p, storage_bytes=storage_bytes, storage_versions=storage_versions)
+examples/api_v02/models_kinetic_nd.py:345 storage_versions G02 | Distributed(p, storage_bytes=storage_bytes, storage_versions=storage_versions)
+examples/api_v02/models_kinetic_nd.py:346 byte_capacity G13 | xspace = DistributedTensor.create(p, xgrid, ranks, byte_capacity=byte_capacity)
+examples/api_v02/models_kinetic_nd.py:347 byte_capacity G13 | phase = DistributedTensor.create(p, grid, ranks, byte_capacity=byte_capacity)
+examples/api_v02/models_kinetic_nd.py:357 byte_capacity G13 | initial, fields=(), time=("time",), step=("step",), byte_capacity=byte_capacity
+examples/api_v02/models_kinetic_nd.py:442 byte_capacity G13 | byte_capacity=byte_capacity,
+examples/api_v02/models_magnetic_midpoint.py:140 capacity G02 | atol=p.float64(tolerance*tolerance), capacity=count)
+examples/api_v02/models_magnetic_midpoint.py:145 capacity G02 | domain = p.range_set(3*count, capacity=3*count, ownership="replicated")
+examples/api_v02/models_magnetic_midpoint.py:176 capacity G02 | atol=p.float64(tolerance*tolerance), capacity=3*count)
+examples/api_v02/models_magnetic_midpoint.py:297 capacity G02 | domain = p.range_set(count, capacity=count, ownership="replicated")
+examples/api_v02/multisupport_children_v14.py:41 capacity G02 | domains={key:p.range_set(n,capacity=n,ownership='replicated')
+examples/api_v02/phase_space_transport.py:78 byte_capacity G13 | def __init__(self, program, grid, domain, *, byte_capacity=64 << 20):
+examples/api_v02/phase_space_transport.py:80 byte_capacity G13 | self.byte_capacity = byte_capacity
+examples/api_v02/phase_space_transport.py:83 byte_capacity G13 | def create(cls, program, grid, ranks, *, byte_capacity=64 << 20):
+examples/api_v02/phase_space_transport.py:84 capacity G02 | domain = Distributed(program).domain(partition(grid.size, ranks), capacity=grid.size)
+examples/api_v02/phase_space_transport.py:85 byte_capacity G13 | return cls(program, grid, domain, byte_capacity=byte_capacity)
+examples/api_v02/phase_space_transport.py:92 byte_capacity G13 | byte_capacity=self.byte_capacity,
+examples/api_v02/phase_space_transport.py:101 byte_capacity G13 | byte_capacity=self.byte_capacity,
+examples/api_v02/phase_space_transport.py:122 byte_capacity G13 | byte_capacity=self.byte_capacity,
+examples/api_v02/phase_space_transport.py:146 byte_capacity G13 | return Distributed(p).import_values(values, requests, byte_capacity=self.byte_capacity)
+examples/api_v02/phase_space_transport.py:209 byte_capacity G13 | byte_capacity=phase.byte_capacity,
+examples/api_v02/phase_space_transport.py:223 byte_capacity G13 | return Distributed(p).import_values(values, requests, byte_capacity=phase.byte_capacity)
+examples/api_v02/runtime_parameter_family.py:30 ghost_depth N7 | plan.rates.add(rate, StateStorage(ghost_depth=1))
+examples/api_v02/scientific_krylov_v14.py:10 capacity G02 | def gmres(p, rhs, guess, action, *, atol, capacity):
+examples/api_v02/scientific_krylov_v14.py:21 capacity G02 | columns = p.range_set(n, capacity=capacity, ownership='replicated')
+examples/api_v02/scientific_krylov_v14.py:22 capacity G02 | rows = p.range_set(n+1, capacity=capacity+1, ownership='replicated')
+examples/api_v02/scientific_krylov_v14.py:23 capacity G02 | entries = p.range_set(n*(n+1), capacity=capacity*(capacity+1), ownership='replicated')
+examples/api_v02/scientific_spatial_v14.py:114 capacity G02 | atol=a['accuracy']['atol'], capacity=array.signature['capacity'])
+examples/api_v02/scientific_spatial_v14.py:184 capacity G02 | domain = p.range_set(count, capacity=8, ownership='replicated')
+examples/api_v02/variant_checks.py:20 capacity G02 | domain = p.range_set(3, capacity=3, ownership="replicated")

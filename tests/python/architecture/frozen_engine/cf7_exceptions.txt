@@ -1,0 +1,34 @@
+# CF7 exception list of b6e64c1d (spec 0.3, section 16.2; B4; MG6): constant limits on analysis
+# work in the core paths and the native component tree. Written by cf7.py and
+# refresh_exceptions.py.
+#
+# Each line: <path>:<line> <term> <issue> | <excerpt>. The term is the name of the limit, or the
+# label of an anchored site (cf7.ANCHORED_SITES). The list only shrinks: a slice that removes a cap
+# removes its line in the same PR (refresh_exceptions.py cf7), and a new cap fails
+# test_cf7_no_capped_analysis.py. At the exit of Phase 1 it holds only the caps of the two
+# interpreters of C44 (G04+G07, G06; section 18.3); at the exit of Phase 2 it is empty.
+
+include/pops/coupling/source/coupled_source_program.hpp:42 kCsMaxReg G06 | inline constexpr int kCsMaxReg = 32; // inputs + constants
+include/pops/coupling/source/coupled_source_program.hpp:43 kCsMaxStack G06 | inline constexpr int kCsMaxStack = 32; // postfix stack depth
+include/pops/coupling/source/coupled_source_program.hpp:44 kCsMaxProg G06 | inline constexpr int kCsMaxProg = 256; // length of a program (opcodes)
+include/pops/coupling/source/coupled_source_program.hpp:45 kCsMaxTerms G06 | inline constexpr int kCsMaxTerms = 16; // source terms (one per .add)
+include/pops/runtime/analytic/expression.hpp:74 kAnalyticMaxNodes G04+G07 | inline constexpr std::size_t kAnalyticMaxNodes = 4096;
+include/pops/runtime/analytic/expression.hpp:75 kAnalyticMaxDepth G04+G07 | inline constexpr std::size_t kAnalyticMaxDepth = 64;
+include/pops/runtime/analytic/expression.hpp:76 kAnalyticMaxStack G04+G07 | inline constexpr std::size_t kAnalyticMaxStack = 64;
+include/pops/runtime/config/generated_component_abi.hpp:49 POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1 N12 | #define POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1 128u
+include/pops/runtime/config/generated_component_abi.hpp:50 POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1 N12 | #define POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1 16u
+python/pops/_generated_component_interfaces.py:23 maximum_stencil_terms N12 | 'maximum_stencil_terms': 16,
+python/pops/_generated_component_interfaces.py:24 maximum_instruction_count N12 | 'maximum_instruction_count': 128,
+python/pops/analytic/_model.py:21 DEFAULT_MAX_DEPTH G04+G07 | DEFAULT_MAX_DEPTH = 64
+python/pops/analytic/_model.py:22 DEFAULT_MAX_NODES G04+G07 | DEFAULT_MAX_NODES = 4096
+python/pops/analytic/_model.py:23 DEFAULT_MAX_STACK G04+G07 | DEFAULT_MAX_STACK = 64
+python/pops/codegen/_analytic_expression_lowering.py:22 _MAX_DEPTH G04+G07 | _MAX_DEPTH = 64
+python/pops/codegen/_analytic_expression_lowering.py:23 _MAX_NODES G04+G07 | _MAX_NODES = 4096
+python/pops/codegen/program_stencil_budget.py:24 runtime-bound-repetition N7 | if bound.op == "int64_constant":
+python/pops/codegen/realization_delivery.py:45 max_alternatives N7 | def delivered_frontiers(root, matches, *, path=(), max_alternatives=4096, max_iterations=256, with_choices=Fal
+python/pops/codegen/realization_delivery.py:45 max_iterations N7 | def delivered_frontiers(root, matches, *, path=(), max_alternatives=4096, max_iterations=256, with_choices=Fal
+python/pops/physics/_coupled_abi.py:27 CS_MAX_REG G06 | CS_MAX_REG = 32
+python/pops/physics/_coupled_abi.py:28 CS_MAX_TERMS G06 | CS_MAX_TERMS = 16
+python/pops/physics/_coupled_abi.py:29 CS_MAX_PROG G06 | CS_MAX_PROG = 256
+schemas/component_catalog.v2.json:95 maximum_stencil_terms N12 | "maximum_stencil_terms": 16,
+schemas/component_catalog.v2.json:96 maximum_instruction_count N12 | "maximum_instruction_count": 128,
