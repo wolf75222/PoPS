@@ -3,8 +3,8 @@
 The b6 case builders stay unchanged; only their face is replaced by the
 ``StencilFlux`` that ``pops.lib.numerics.realize_face_flux`` derives from the
 face schemes of ``examples/api_v02/faceflux_pilot.py`` (IR24 substitution).
-Each route is compiled, bound and run, and the final states must be equal
-bitwise; the case invariants of b6 must still pass.
+Both routes must reach one artifact identity; each is bound and run, the
+final states must be equal bitwise, and the case invariants of b6 must pass.
 """
 import numpy as np
 import pytest
@@ -55,10 +55,18 @@ def test_builder_realization_runs_bitwise_like_b6(case, monkeypatch, isolated_na
     build, face, realized_face = ROUTES[case]
     _, world = native_profile(dimension=2, scope="N7a FaceFlux pilot %s" % case)
     b6_state, b6_artifact, b6_rows = _final_state(build, world, "N7a %s b6 StencilFlux" % case)
-    monkeypatch.setattr(cases, face, realized_face)
+    calls = []
+
+    def builder_face(**parameters):
+        calls.append(parameters)
+        return realized_face(**parameters)
+    monkeypatch.setattr(cases, face, builder_face)
     state, artifact, rows = _final_state(build, world, "N7a %s FaceFlux builder" % case)
     with collective_check(world):
+        assert calls, "the builder route must build its face with the FaceFlux builder"
         assert all(row["passed"] for row in b6_rows) and all(row["passed"] for row in rows)
+        # The substitution receives the b6 declaration itself: one artifact identity.
+        assert artifact.artifact_identity.hexdigest == b6_artifact.artifact_identity.hexdigest
         if b6_state is not None or state is not None:
             assert b6_state is not None and state is not None
             assert b6_state.dtype == state.dtype == np.float64
