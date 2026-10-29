@@ -57,7 +57,8 @@ def test_moved_catalogs_are_gone_from_lib():
 
 def test_lib_keeps_only_preimplemented_public_contracts():
     # Implementations are grouped by public contract family; there is no second bundle DSL.
-    allowed = {"amr", "initial", "models", "time", "__init__.py", "__pycache__"}
+    # Spec 0.3 IR25 places the builders of the discrete algebra in pops.lib.numerics.
+    allowed = {"amr", "initial", "models", "numerics", "time", "__init__.py", "__pycache__"}
     unexpected = []
     for child in (POPS / "lib").iterdir():
         if child.is_dir() and not (child / "__init__.py").exists():

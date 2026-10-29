@@ -20,6 +20,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
+from pops.lib.numerics import hll, rusanov
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import (CoordinatedFace, CoordinatedFiniteVolume, Diffusion,
                            DiscretizationPlan, FaceBalance,
@@ -56,6 +57,16 @@ def _fv(flux, state, face=None):
     return FiniteVolume(flux=flux, variables=variables.Conservative(state),
         reconstruction=reconstruction.FirstOrder(),
         riemann=riemann.Rusanov() if face is None else face)
+
+
+def native_rusanov(flux, state):
+    """b6's route, the native ``riemann.Rusanov()``; kept for the N3a comparison until N3."""
+    return _fv(flux, state)
+
+
+def native_hll(flux, state):
+    """b6's native ``riemann.HLL()`` route, for the N3a comparison."""
+    return _fv(flux, state, riemann.HLL())
 
 
 def _ssprk2(case, block, state, evaluate, dt, *, name, trace_quantity=False):
@@ -108,7 +119,21 @@ def _periodic_metrics(initial, *, block="fluid", components=(0,), tolerance=2.e-
     return check
 
 
-def build_m01(cells=(16, 8)):
+def m01_hll(flux, state):
+    """HLL on M01 with the wave-speed bounds that the case states (R9).
+
+    Each axis has one constant positive wave (.7 and .3), so along a face normal the slowest and
+    fastest speeds of both traces equal the spectral radius s: (sL, sR) = (s, s).
+    """
+    return hll(flux, state, speeds=lambda uL, uR, fL, fR, s: (s, s))
+
+
+def build_m01(cells=(16, 8), *, scheme=rusanov, signed_wave_speeds=False):
+    """``scheme(flux, state)`` realizes the transport; the default is pops.lib.numerics.rusanov.
+
+    ``signed_wave_speeds=True`` also declares the signed pair of each axis (R9), which the native
+    ``riemann.HLL()`` route requires.
+    """
     frame, layout = _domain("M01_periodic", cells)
     model = pops.Model("M01_authored_transport", frame=frame)
     U = model.state("amount", components=("u",))
@@ -116,10 +141,13 @@ def build_m01(cells=(16, 8)):
     flux = model.flux("transport", state=U, frame=frame,
         components={axis: (a*U[0],) for axis, a in zip(frame.axes, speeds)},
         waves={axis: (a,) for axis, a in zip(frame.axes, speeds)})
+    if signed_wave_speeds:
+        model.wave_speeds(flux, frame=frame,
+                          values={axis: (a, a) for axis, a in zip(frame.axes, speeds)})
     rate = model.rate("conservation", equation=pm.ddt(U) == -pm.div(flux))
     case = pops.Case("M01_periodic_transport")
     block = case.block("fluid", model)
-    plan = DiscretizationPlan(); plan.rates.add(rate, _fv(flux, U)); case.numerics(plan, block=block)
+    plan = DiscretizationPlan(); plan.rates.add(rate, scheme(flux, U)); case.numerics(plan, block=block)
     dt, end = .05/max(cells), .1/max(cells)
     _ssprk2(case, block, U, lambda p, u, point, label: rate(u), dt, name="M01_SSPRK2")
     x, y = np.meshgrid((np.arange(cells[0])+.5)/cells[0], (np.arange(cells[1])+.5)/cells[1])
@@ -172,7 +200,8 @@ def build_m02(cells=(16, 8)):
         "M02: u_t+(u²/2)_x+(u²/2)_y=0, periodic y-invariant discontinuous data with shock and rarefaction; exact authored Godunov face, two SSPRK2 steps versus independent FV oracle")
 
 
-def _euler(model, frame, *, gamma, pressure_offset=0., electromagnetic=False):
+def _euler(model, frame, *, gamma, pressure_offset=0., electromagnetic=False,
+           signed_wave_speeds=False):
     U = model.state("conserved", components=("rho","mx","my","energy"))
     rho,mx,my,energy = U
     vx,vy = mx/rho,my/rho
@@ -183,6 +212,8 @@ def _euler(model, frame, *, gamma, pressure_offset=0., electromagnetic=False):
         components={x:(mx,mx*vx+pressure,my*vx,(energy+pressure)*vx),
                     y:(my,mx*vy,my*vy+pressure,(energy+pressure)*vy)},
         waves={x:(vx-sound,vx,vx,vx+sound),y:(vy-sound,vy,vy,vy+sound)})
+    if signed_wave_speeds:
+        model.wave_speeds(flux,frame=frame,values={x:(vx-sound,vx+sound),y:(vy-sound,vy+sound)})
     if electromagnetic:
         phi=model.field("potential")
         gradient=model.vector("electric_potential_gradient",frame=frame,
@@ -198,14 +229,21 @@ def _euler(model, frame, *, gamma, pressure_offset=0., electromagnetic=False):
     return U,flux,rate,phi
 
 
-def build_m03(cells=(16,8), *, gamma=1.4, pressure_offset=.2):
+def build_m03(cells=(16,8), *, gamma=1.4, pressure_offset=.2, scheme=rusanov,
+              signed_wave_speeds=False):
+    """``scheme(flux, state)`` realizes the transport; the default is pops.lib.numerics.rusanov.
+
+    ``signed_wave_speeds=True`` also declares the signed pair of each axis (R9), which the native
+    ``riemann.HLL()`` route requires.
+    """
     if gamma <= 1 or pressure_offset < 0:
         raise ValueError("the selected gas domain requires gamma>1,p_inf>=0")
     frame,layout=_domain("M03_periodic",cells)
     model=pops.Model("M03_authored_stiffened_Euler",frame=frame)
-    U,flux,rate,_=_euler(model,frame,gamma=gamma,pressure_offset=pressure_offset)
+    U,flux,rate,_=_euler(model,frame,gamma=gamma,pressure_offset=pressure_offset,
+                         signed_wave_speeds=signed_wave_speeds)
     case=pops.Case("M03_full_Euler_entropy_wave");block=case.block("fluid",model)
-    plan=DiscretizationPlan();plan.rates.add(rate,_fv(flux,U));case.numerics(plan,block=block)
+    plan=DiscretizationPlan();plan.rates.add(rate,scheme(flux,U));case.numerics(plan,block=block)
     dt,end=.02/max(cells),.04/max(cells)
     _ssprk2(case,block,U,lambda p,u,point,label:rate(u),dt,name="M03_SSPRK2")
     x=(np.arange(cells[0])+.5)/cells[0]

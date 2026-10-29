@@ -5703,6 +5703,11 @@
           "estimated_seconds": 10,
           "kind": "source_contract",
           "registration": "snapshot_protocols_20261016"
+        },
+        "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
+          "estimated_seconds": 900,
+          "kind": "native_profile",
+          "native_dimension": 2
         }
       },
       "mpi_routing_20261014": {
@@ -6576,7 +6581,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1127,
+    "estimated_count": 1129,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7704,7 +7709,9 @@
       "tests/python/unit/time/test_typed_schedule.py",
       "tests/python/unit/time/test_uniform_affine_expressions_v02.py",
       "tests/python/unit/time/test_variant_temporal_envelope.py",
-      "tests/python/unit/time/test_variant_types_v09.py"
+      "tests/python/unit/time/test_variant_types_v09.py",
+      "tests/python/unit/numerics/test_lib_numerics_faces.py",
+      "tests/python/integration/runtime/test_api_v02_python_faces_native.py"
     ],
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates. Local source/native qualification timings are not substituted for CI per-file measurements.",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
@@ -7906,7 +7913,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1192,
+    "total_files": 1194,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -7950,6 +7957,20 @@
         "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
         "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 960,
         "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 1320
+      }
+    },
+    "n3a_20261029": {
+      "basis": "Unmeasured scheduling estimates for the N3a pilot (ROM-82). The source unit file builds a few model graphs without compiling (unit tier). The native file compiles three case pairs, six artifacts, each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts), plus margin. Refresh from complete CI timing artifacts.",
+      "files": {
+        "tests/python/unit/numerics/test_lib_numerics_faces.py": {
+          "estimated_seconds": 10,
+          "kind": "source_unit"
+        },
+        "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
+          "estimated_seconds": 900,
+          "kind": "native_profile",
+          "analogue": "tests/python/integration/runtime/test_api_v02_models_M01_M14.py"
+        }
       }
     }
   },
@@ -9144,5 +9165,7 @@
   "tests/python/integration/runtime/test_api_v02_computed_frontier_clipping_native.py": 1200,
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
-  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10
+  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
+  "tests/python/unit/numerics/test_lib_numerics_faces.py": 10,
+  "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 900
 }

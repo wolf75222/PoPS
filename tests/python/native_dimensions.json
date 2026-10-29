@@ -134,6 +134,7 @@
     "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py": 3,
     "tests/python/unit/runtime/test_computed_frontier_clipping.py": 2,
     "tests/python/unit/runtime/test_computed_program_frontier.py": 2,
-    "tests/python/unit/runtime/test_step_strategy.py": 2
+    "tests/python/unit/runtime/test_step_strategy.py": 2,
+    "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 2
   }
 }
