@@ -1,8 +1,0 @@
-.                                                                        [100%]
-=============================== warnings summary ===============================
-tests/python/integration/amr/test_public_initial_field_ghost_failure.py::test_public_initial_ghost_rank_fault_keeps_prepublication_owner
-  tests/python/integration/amr/test_public_initial_field_ghost_failure.py:17: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
-    @pytest.mark.compiler
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-1 passed, 1 warning in 50.27s
