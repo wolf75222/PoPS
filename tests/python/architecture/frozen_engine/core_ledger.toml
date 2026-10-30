@@ -18,8 +18,9 @@ A flux-only residual whose faces a Program observes, through the face carrier or
 incident-face frequency of its stability guard, takes the route of the residual it observes: a
 block that the transport prepared at bind can evaluate goes through it, so no field is allocated
 per evaluation. The face carrier is produced only when the Program reads it; otherwise the face
-gives only its frequency, reduced in one pass over the face speeds the evaluation recorded. The
-generated face policy tests the finiteness of its outputs and of the operands whose non-finite
+gives only its frequency, read from the face speeds that the evaluation recorded: on the prepared
+transport in the traversal that already validates the evaluated residual, elsewhere in one pass.
+The generated face policy tests the finiteness of its outputs and of the operands whose non-finite
 value an operation could conceal (comparison, fmin, fmax, sign, exp, expm1, pow, divisor); every
 other operation carries a non-finite operand to an output, so the faces it refuses, and the cause
 of each refusal, are those of a test of every evaluated value."""

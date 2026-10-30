@@ -31,9 +31,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   and `native_hll`, with bitwise equal final states; `benchmarks/n3a/` times both routes.
 - Evaluate a `riemann.User` face residual on the transport prepared at bind, like the native face:
   no field is allocated per evaluation, the face carrier is copied only when a Program reads it,
-  and the stability frequency is reduced in one pass over the recorded face speeds. The generated
-  face policy tests its outputs and the operands that could conceal a non-finite value, and refuses
-  the same faces with the same cause (ROM-100, core ledger entry).
+  and the stability frequency is read from the recorded face speeds, on the prepared transport in
+  the pass that validates the residual, elsewhere in one pass. The generated face policy tests its
+  outputs and the operands that could conceal a non-finite value, and refuses the same faces with
+  the same cause (ROM-100, core ledger entry).
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.

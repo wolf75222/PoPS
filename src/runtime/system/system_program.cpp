@@ -11,8 +11,11 @@
 #include <pops/parallel/collective_exception.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -20,6 +23,45 @@
 #include <vector>
 
 namespace pops {
+namespace system_program_detail {
+
+// One traversal of an observed block's candidate: the finite-result maximum of its first
+// component (norm_inf's kernel) and the incident-face frequency of the speeds that the same
+// evaluation recorded.
+template <int Dim>
+struct ObservedFirstComponentMaximum {
+  struct value_type {
+    Real norm;
+    Real frequency;
+  };
+
+  Index<Dim> lower;
+  Extent<Dim> extent;
+  FieldView<const Real, Dim> values{};
+  nd::FaceFieldView<const Real, Dim> speeds{};
+  std::array<Real, static_cast<std::size_t>(Dim)> inverse_spacing{};
+
+  POPS_HD void init(value_type& value) const {
+    value.norm = std::numeric_limits<Real>::lowest();
+    value.frequency = std::numeric_limits<Real>::lowest();
+  }
+
+  POPS_HD void join(value_type& destination, const value_type& source) const {
+    if (source.norm > destination.norm)
+      destination.norm = source.norm;
+    if (source.frequency > destination.frequency)
+      destination.frequency = source.frequency;
+  }
+
+  POPS_HD void operator()(std::int64_t ordinal, value_type& accumulator) const {
+    const Index<Dim> cell = detail::cell_index_from_ordinal(lower, extent, ordinal);
+    join(accumulator, value_type{mf_arith_detail::NormInfKernel<Dim>{values, 0}(cell),
+                                 nd::incident_face_frequency_at(speeds, cell, inverse_spacing)});
+  }
+};
+
+}  // namespace system_program_detail
+
 namespace {
 
 template <int Dim>
@@ -83,6 +125,57 @@ Real prepared_boundary_local_norm_inf(const MultiFab<Dim>& field) {
   Real local_norm = Real(0);
   for (int component = 0; component < field.ncomp(); ++component)
     local_norm = std::max(local_norm, norm_inf(field, component));
+  return local_norm;
+}
+
+/// prepared_boundary_local_norm_inf of an observed block. The traversal of its first component
+/// also reduces the incident-face frequency of the speeds that the same evaluation recorded:
+/// both maxima equal norm_inf and nd::maximum_incident_face_frequency, with one traversal fewer.
+template <int Dim>
+Real prepared_boundary_local_norm_inf_observing(const MultiFab<Dim>& field,
+                                                const std::vector<nd::FaceField<Dim>>& speeds,
+                                                const Geometry<Dim>& geometry, Real& frequency) {
+  if (field.ncomp() < 1) {
+    frequency = nd::maximum_incident_face_frequency(field, speeds, geometry);
+    return prepared_boundary_local_norm_inf(field);
+  }
+  if (speeds.size() != field.local_size())
+    throw std::invalid_argument("face frequency speeds differ from the prepared state layout");
+  std::array<Real, static_cast<std::size_t>(Dim)> inverse_spacing{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    const Real spacing = geometry.spacing(axis);
+    if (!std::isfinite(spacing) || !(spacing > Real(0)))
+      throw std::invalid_argument("face frequency requires positive finite axis spacing");
+    inverse_spacing[static_cast<std::size_t>(axis)] = Real(1) / spacing;
+  }
+  Real local_norm = Real(0);
+  Real observed = -std::numeric_limits<Real>::infinity();
+  for (std::size_t local = 0; local < field.local_size(); ++local) {
+    const Box<Dim> box = field.box(local);
+    if (speeds[local].cell_box() != box || speeds[local].ncomp() != 1)
+      throw std::invalid_argument("face frequency patch or component authority differs");
+    if (box.empty()) {
+      // An empty patch reduces to zero, as in for_each_cell_reduce_max.
+      observed = std::max(observed, Real(0));
+      continue;
+    }
+    detail::require_iterable_box(box);
+    detail::ensure_kokkos_initialized();
+    using Reduction = system_program_detail::ObservedFirstComponentMaximum<Dim>;
+    typename Reduction::value_type patch{};
+    Kokkos::parallel_reduce(
+        "pops_reduce_observed_max_index",
+        Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+            Kokkos::DefaultExecutionSpace{}, 0, box.numPts()),
+        Reduction{box.lo, box.extent(), field.fab(local).view(), speeds[local].view(),
+                  inverse_spacing},
+        patch);
+    local_norm = std::max(local_norm, patch.norm);
+    observed = std::max(observed, patch.frequency);
+  }
+  for (int component = 1; component < field.ncomp(); ++component)
+    local_norm = std::max(local_norm, norm_inf(field, component));
+  frequency = observed;
   return local_norm;
 }
 
@@ -151,7 +244,8 @@ void collective_boundary_preflight(
 template <int Dim, class Invoke>
 void invoke_prepared_boundary_transaction(
     MultiFab<Dim>& state, MultiFab<Dim>& result, const ExecutionLane& lane, const char* operation,
-    const runtime::program::PreparedScalarBoundarySession<Dim>& transport, Invoke&& invoke) {
+    const runtime::program::PreparedScalarBoundarySession<Dim>& transport, Invoke&& invoke,
+    Real* observed_frequency = nullptr, const Geometry<Dim>* observed_geometry = nullptr) {
   transport.with_boundary_scratch(state, [&](auto& scratch) {
     MultiFab<Dim>& state_snapshot = scratch.transaction_state_snapshot;
     MultiFab<Dim>& result_snapshot = scratch.transaction_result_snapshot;
@@ -200,7 +294,12 @@ void invoke_prepared_boundary_transaction(
     Real local_norm = Real(0);
     local_error = nullptr;
     try {
-      local_norm = prepared_boundary_local_norm_inf(candidate);
+      // An observed frequency rides on the validation pass, while the recorded speeds are locked.
+      local_norm = observed_frequency == nullptr
+                       ? prepared_boundary_local_norm_inf(candidate)
+                       : prepared_boundary_local_norm_inf_observing(
+                             candidate, scratch.cartesian_operator.face_speeds(),
+                             *observed_geometry, *observed_frequency);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -567,11 +666,9 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
             }
             if (!retained_faces.empty() && retained_faces[block] != nullptr)
               *retained_faces[block] = scratch.generated_faces;
-            // One reduction over the speeds this evaluation recorded, while they are locked.
-            if (!retained_frequencies.empty() && retained_frequencies[block] != nullptr)
-              *retained_frequencies[block] = nd::maximum_incident_face_frequency(
-                  state, scratch.cartesian_operator.face_speeds(), owner->geom);
-          });
+          },
+          // The frequency of the speeds this evaluation recorded is read by its validation pass.
+          retained_frequencies.empty() ? nullptr : retained_frequencies[block], &owner->geom);
     }
   };
   typename SystemInterfaceProvider<Dim>::CoreEvaluator evaluator;
