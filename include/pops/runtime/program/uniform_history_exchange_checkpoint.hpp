@@ -38,15 +38,23 @@ inline std::vector<std::uint8_t> encode_uniform_history_exchanges(
   return std::move(out.bytes);
 }
 
+// The exchange image nested in a POPSEX06 envelope, or the image itself. Only the
+// envelope around it is charged to the metadata workspace: the nested image keeps
+// the bound it has without metadata.
+inline std::span<const std::uint8_t> nested_history_exchange_image(
+    std::span<const std::uint8_t> bytes) {
+  field_exchange_detail::Reader in{bytes};
+  return bytes.size() >= 8 && in.word() == UINT64_C(0x3630584553504f50) ? in.blob() : bytes;
+}
+
 inline std::vector<std::uint8_t> encode_uniform_history_fields(
     std::span<const std::uint8_t> exchanges, const HistoryFieldMetadataTable& fields,
     const std::map<std::string, std::vector<HistorySampleIdentity>>& samples,
     const HistoryFieldMetadataBudget& budget) {
   history_field_detail::Tables tables(budget.workspace_bytes);
   tables.collect(fields, budget);
-  std::uint64_t total = 32, largest_sample = 0;
-  history_field_detail::charge(total, exchanges.size(), 1, budget.workspace_bytes);
-  history_field_detail::charge(total, tables.wire, 1, budget.workspace_bytes);
+  std::uint64_t envelope = 32, largest_sample = 0;
+  history_field_detail::charge(envelope, tables.wire, 1, budget.workspace_bytes);
   for (const auto& [name, slots] : fields) {
     if (slots.size() != samples.at(name).size())
       throw std::invalid_argument("history Field metadata differs from exact sample depth");
@@ -54,18 +62,21 @@ inline std::vector<std::uint8_t> encode_uniform_history_fields(
     history_field_detail::charge(sample_size, name.size(), 1, budget.workspace_bytes);
     history_field_detail::charge(sample_size, slots.size(), 64, budget.workspace_bytes);
     largest_sample = std::max(largest_sample, sample_size);
-    history_field_detail::charge(total, name.size(), 1, budget.workspace_bytes);
-    history_field_detail::charge(total, 16 + sample_size, 1, budget.workspace_bytes);
+    history_field_detail::charge(envelope, name.size(), 1, budget.workspace_bytes);
+    history_field_detail::charge(envelope, 16 + sample_size, 1, budget.workspace_bytes);
   }
-  // The output, metadata table and one exact sample blob coexist. Retained
-  // descriptors/payloads are accounted independently by tables.collect().
-  auto peak = total;
+  // The envelope around the nested image, metadata table and one exact sample blob
+  // coexist. Retained descriptors/payloads are accounted independently by tables.collect().
+  auto peak = envelope;
   history_field_detail::charge(peak, tables.wire + tables.workspace.used(), 1,
                                budget.workspace_bytes);
   history_field_detail::charge(peak, largest_sample, 1, budget.workspace_bytes);
+  std::size_t total = exchanges.size();
+  field_exchange_detail::charge(total, static_cast<std::size_t>(envelope),
+                                std::numeric_limits<std::size_t>::max());
   const auto metadata = encode_prepared_history_field_metadata(fields, tables);
-  field_exchange_detail::Writer out{{}, static_cast<std::size_t>(total)};
-  out.bytes.reserve(static_cast<std::size_t>(total));
+  field_exchange_detail::Writer out{{}, total};
+  out.bytes.reserve(total);
   out.word(UINT64_C(0x3630584553504f50));  // POPSEX06
   out.blob(exchanges);
   out.word(fields.size());
@@ -113,8 +124,10 @@ UniformHistoryExchangeImage<Dim> read_uniform_history_exchanges(
   if (has_fields != fields_required)
     throw std::invalid_argument("history checkpoint retained Field metadata declaration differs");
   if (has_fields) {
+    result.exchanges = envelope.blob();
+    // The borrowed envelope is charged without its nested image, as in the encoder.
     std::uint64_t field_workspace = reserved_workspace;
-    history_field_detail::charge(field_workspace, bytes.size(), 1,
+    history_field_detail::charge(field_workspace, bytes.size() - result.exchanges.size(), 1,
                                  manager.field_metadata_budget.workspace_bytes);
     for (const auto& [name, ring] : manager.histories) {
       history_field_detail::charge(field_workspace, ring.size(), sizeof(HistorySampleIdentity),
@@ -125,7 +138,6 @@ UniformHistoryExchangeImage<Dim> read_uniform_history_exchanges(
       history_field_detail::charge(field_workspace, name.size(), 1,
                                    manager.field_metadata_budget.workspace_bytes);
     }
-    result.exchanges = envelope.blob();
     if (envelope.count(manager.histories.size(), 16) != manager.histories.size())
       throw std::invalid_argument("history Field checkpoint omits a ring");
     for (const auto& [name, ring] : manager.histories) {
@@ -206,20 +218,17 @@ std::vector<std::uint8_t> rematerialize_uniform_history_exchanges(
     throw std::invalid_argument("history exchange migration has invalid source/target ranks");
   const bool histories = manager.exchange_limits.max_bases && !manager.histories.empty();
   const bool fields = manager.field_metadata_budget.enabled() && !manager.histories.empty();
-  std::size_t total = 0;
+  std::size_t total = 0, envelopes = 0;
   // This preflight only views the wire. In particular no rank-local ledger is decoded until
   // all sources have the supported owner-free mailbox shape and fit the installed contract.
+  // Each bound counts its own part: face provenance the nested images, metadata the envelopes.
   for (const auto bytes : images) {
-    field_exchange_detail::charge(total, bytes.size(), std::numeric_limits<std::size_t>::max());
-    field_exchange_detail::Reader outer{bytes};
-    auto inner = bytes;
-    auto magic_outer = bytes.size() >= 8 ? outer.word() : 0;
-    if (magic_outer == UINT64_C(0x3630584553504f50)) {
-      inner = outer.blob();
-      outer = field_exchange_detail::Reader{inner};
-      magic_outer = inner.size() >= 8 ? outer.word() : 0;
-    }
-    if (magic_outer == UINT64_C(0x3530584553504f50))
+    auto inner = nested_history_exchange_image(bytes);
+    field_exchange_detail::charge(total, inner.size(), std::numeric_limits<std::size_t>::max());
+    field_exchange_detail::charge(envelopes, bytes.size() - inner.size(),
+                                  std::numeric_limits<std::size_t>::max());
+    field_exchange_detail::Reader outer{inner};
+    if (inner.size() >= 8 && outer.word() == UINT64_C(0x3530584553504f50))
       inner = outer.blob();
     field_exchange_detail::Reader ledger{inner};
     const auto magic = ledger.word();
@@ -231,10 +240,10 @@ std::vector<std::uint8_t> rematerialize_uniform_history_exchanges(
   if (histories && total > manager.exchange_limits.max_bytes)
     throw std::length_error(
         "history exchange migration source images exceed installed byte capacity");
-  if (fields && total > manager.field_metadata_budget.workspace_bytes)
+  if (fields && envelopes > manager.field_metadata_budget.workspace_bytes)
     throw std::length_error(
-        "history Field migration source images exceed explicit workspace capacity");
-  std::uint64_t field_workspace = total;
+        "history Field migration source envelopes exceed installed workspace capacity");
+  std::uint64_t field_workspace = envelopes;
   if (fields) {
     history_field_detail::charge(field_workspace, images.size(),
                                  sizeof(UniformHistoryExchangeImage<Dim>),
@@ -272,9 +281,10 @@ std::vector<std::uint8_t> rematerialize_uniform_history_exchanges(
   std::vector<AcceptedExchangeLedger> mailboxes;
   mailboxes.reserve(images.size());
   for (const auto bytes : images) {
+    const auto envelope = bytes.size() - nested_history_exchange_image(bytes).size();
     sources.push_back(read_uniform_history_exchanges(
         bytes, manager, false, sources.empty() ? std::span<const std::uint8_t>{} : field_wire,
-        fields ? field_workspace - bytes.size() : 0));
+        fields ? field_workspace - envelope : 0));
     mailboxes.push_back(AcceptedExchangeLedger::from_checkpoint(sources.back().exchanges));
   }
   const auto mailbox =

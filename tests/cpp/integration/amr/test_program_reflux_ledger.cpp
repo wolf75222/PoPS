@@ -1281,3 +1281,23 @@ TEST(AmrHistoryFieldMetadata, EmptyTableAndVerbatimLegacyFluxHaveDistinctContrac
   manager.field_metadata_budget = {};
   EXPECT_THROW(program::prepare_amr_history_field_metadata(empty, manager, ""), std::length_error);
 }
+
+TEST(AmrHistoryFieldMetadata, WorkspaceBoundsTheEnvelopeNotTheNestedFluxImage) {
+  auto manager = history_metadata_image();
+  const auto bare = program::encode_amr_history_field_metadata({}, manager, "metadata.program");
+  manager.field_metadata_budget.workspace_bytes = 4 * bare.size();
+  const std::vector<std::uint8_t> flux(4 * manager.field_metadata_budget.workspace_bytes, 7);
+  const auto wire = program::encode_amr_history_field_metadata(flux, manager, "metadata.program");
+  EXPECT_EQ(wire.size(), bare.size() + flux.size());
+  auto restored = program::prepare_amr_history_field_metadata(wire, manager, "metadata.program");
+  EXPECT_EQ(std::vector(restored.flux.begin(), restored.flux.end()), flux);
+  EXPECT_EQ(*restored.fields.begin()->second[0].support,
+            *manager.slot_fields.begin()->second[0].support);
+  // The envelope itself stays bounded, whatever the size of the FLX image.
+  auto small = manager;
+  small.field_metadata_budget.workspace_bytes = bare.size() - 1;
+  EXPECT_THROW(program::encode_amr_history_field_metadata(flux, small, "metadata.program"),
+               std::length_error);
+  EXPECT_THROW(program::prepare_amr_history_field_metadata(wire, small, "metadata.program"),
+               std::length_error);
+}

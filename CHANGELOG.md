@@ -25,6 +25,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   of the seven benchmark scripts that stay, move to
   `tests/python/support/`, `tests/cpp/integration/runtime/`, `benchmarks/joint_reconstruction/`
   and `docs/development/`.
+- Install a plan default History Field metadata capacity (8 MiB retained, 16 MiB workspace) for
+  every Program with a History ring that does not author `history_field_metadata_budget`, so a
+  case whose History metadata fits it writes no infrastructure budget to retain Field support
+  and representation. Their History checkpoints therefore carry the Field metadata envelope
+  (`POPSEX06` uniform, `POPSHFM1` AMR). Its workspace bounds the envelope's own bytes, not the
+  exchange or FLX image nested in it, so the default limits no mesh size. Larger metadata still
+  needs an authored budget until ROM-20 makes the capacity a bind-time resource reported in the
+  manifest (spec 0.3, B5, B7). An authored budget still takes precedence; Programs without
+  History are unchanged. The offline Uniform v2 migration accepts such an authority: it requires
+  an empty wrapped mailbox and metadata table and writes each ring's sample ledger in the
+  envelope as unknown provenance, like the migrated history sample identities.
+- Compile scheduled local transforms again: the discharge owner is declared with the storage
+  setup and consumers bind it after the cadence branches, so the off-cadence restore or zero
+  and every later consumer name variables in scope. A held (`Hold`, `AccumulateDt`) local
+  transform refuses a source with a pending Field representation before evaluating, because
+  the schedule cache restores numbers without their Field description.
+- Capture the recovery admissibility provider of a model with bound runtime parameters:
+  `ModelRecoveryAdmissibilityProvider` declares its model as its only device-capture member.
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
   complete continuations and child advances, spatial composition, distributed
   operators, and graph/implicit derivatives lower from Python into native Program C++.

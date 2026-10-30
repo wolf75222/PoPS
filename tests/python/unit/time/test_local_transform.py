@@ -15,7 +15,7 @@ from pops.codegen.program_codegen import emit_cpp_program
 from pops.frames import Cartesian2D
 from pops.physics import Model
 from pops.runtime.amr_program_support import AMRProgramSupportContext
-from pops.time import Program
+from pops.time import AccumulateDt, Hold, Program, Zero
 
 from typed_program_support import state_refs
 
@@ -263,15 +263,22 @@ def test_compiled_local_transform_body_keeps_guarded_finite_checks_in_scope(tmp_
     from pops.codegen.toolchain import _default_cxx, _probe_cxx_std, loader_cxx_std
     model, _, _, program = _transform_program(boolean_domain=True)
     generated = emit_cpp_program(program, model=_canonical_emit_model(model))
-    start = generated.index("pops::Real transform_failed_")
-    end = generated.index("statusA(index, 0) = transform_failed_;", start)
-    body = generated[start:end] + "statusA(index, 0) = transform_failed_;"
-    sources = set(re.findall(r"([A-Za-z0-9_]+A)\(index, 0\)", body)) - {"outA", "statusA"}
+    first, last = "pops::Real transform_failed_ = pops::Real(0);", "statusA(index, 0) = transform_failed_;"
+    starts = [match.start() for match in re.finditer(re.escape(first), generated)]
+    # The kernel discharging a Field representation and the plain kernel each own a scalar body.
+    assert len(starts) == 2
     source = '#include <cmath>\nnamespace pops { using Real = double; }\nnamespace Kokkos { using std::isfinite; }\n'
-    source += 'extern "C" int evaluate(double q, double* output) { int index=0; double status=0;\n'
-    source += "\n".join("auto %s=[&](int,int){return q;};" % name for name in sources)
-    source += "\nauto outA=[&](int,int)->double&{return *output;}; auto statusA=[&](int,int)->double&{return status;};\n"
-    source += body + "\nreturn static_cast<int>(status);\n}\n"
+    for kernel, start in enumerate(starts):
+        body = generated[start:generated.index(last, start)] + last
+        sources = set(re.findall(r"([A-Za-z0-9_]+A)\(index, 0\)", body)) - {"outA", "statusA"}
+        # Read journals are runtime capture state; the scalar body only consults their verdict.
+        captures = set(re.findall(r"\b(\w+)\.valid\(\)", body))
+        source += 'extern "C" int evaluate_%d(double q, double* output) { int index=0; double status=0;\n' % kernel
+        source += "".join("struct { bool valid() const { return true; } } %s;\n" % name
+                          for name in sorted(captures))
+        source += "\n".join("auto %s=[&](int,int){return q;};" % name for name in sorted(sources))
+        source += "\nauto outA=[&](int,int)->double&{return *output;}; auto statusA=[&](int,int)->double&{return status;};\n"
+        source += body + "\nreturn static_cast<int>(status);\n}\n"
     path, binary = tmp_path / "transform.cpp", tmp_path / "transform.so"
     path.write_text(source)
     # This compiles the emitted scalar body only; it links no PoPS/Kokkos runtime ABI.
@@ -281,9 +288,61 @@ def test_compiled_local_transform_body_keeps_guarded_finite_checks_in_scope(tmp_
         str(path), "-o", str(binary)], capture_output=True, text=True)
     assert compiled.returncode == 0, compiled.stderr
     native = ctypes.CDLL(str(binary))
-    native.evaluate.argtypes = (ctypes.c_double, ctypes.POINTER(ctypes.c_double))
-    native.evaluate.restype = ctypes.c_int
-    for value, expected_status in ((1., 0), (-1., 1), (5., 1)):
-        output = ctypes.c_double(99)
-        assert native.evaluate(value, ctypes.byref(output)) == expected_status
-        assert output.value == value + 1
+    for kernel in range(len(starts)):
+        evaluate = getattr(native, "evaluate_%d" % kernel)
+        evaluate.argtypes = (ctypes.c_double, ctypes.POINTER(ctypes.c_double))
+        evaluate.restype = ctypes.c_int
+        for value, expected_status in ((1., 0), (-1., 1), (5., 1)):
+            output = ctypes.c_double(99)
+            assert evaluate(value, ctypes.byref(output)) == expected_status
+            assert output.value == value + 1
+
+
+def _scheduled_transform_program(off):
+    from pops.time import AcceptedStep, Every, Schedule
+
+    model = Model("scheduled_transform_model", frame=Cartesian2D())
+    state = model.state("U", components=("q",))
+    transform = model.local_transform("held_shift", (state[0] + 1.0,), valid_if=state[0] > 0.0)
+    model.module.operator_capabilities("held_shift", cacheable=True)
+    program = Program("scheduled_transform_program")
+    block, _ = state_refs(program, "fluid", model=model, state=state)
+    temporal = program.state(block[state])
+    held = transform(temporal.n, name="held_value",
+                     schedule=Schedule(Every(AcceptedStep(program.clock), 2), off=off))
+    program.commit(temporal.next, program.value(
+        "candidate", temporal.n + program.dt * held, at=temporal.next.point))
+    return model, program, held
+
+
+@pytest.mark.compiler
+@pytest.mark.parametrize("policy", (Hold, AccumulateDt, Zero))
+def test_scheduled_local_transform_program_compiles_with_its_off_cadence_value(policy, tmp_path):
+    import subprocess
+    from pathlib import Path
+    from tests.python.support.native_syntax_toolchain import configured_kokkos_toolchain
+
+    model, program, held = _scheduled_transform_program(policy())
+    generated = emit_cpp_program(program, model=_canonical_emit_model(model))
+    guard = generated.index("if (ctx.schedule_decision(%d," % held.id)
+    owner = "transform_closed_owner_%d" % held.id
+    if policy is Zero:
+        # Consumers bind after both cadence branches, so an off-cadence step reads the zeroed scratch.
+        assert generated.index("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % owner) < guard
+        assert (generated.index("u%d.set_val(" % held.id, guard)
+                < generated.index("auto& transform_observed_%d = " % held.id))
+    else:
+        # The schedule cache restores numbers only: a held value refuses the discharge path.
+        assert owner not in generated
+        assert (guard < generated.index("cannot discharge a Field representation")
+                < generated.index("pops::Real transform_failed_ = pops::Real(0);", guard))
+    root = Path(__file__).resolve().parents[4]
+    cpp = tmp_path / "program.cpp"
+    cpp.write_text(generated)
+    compiler, _, flags, _ = configured_kokkos_toolchain()
+    compiled = subprocess.run(
+        [compiler, "-std=c++20", "-DPOPS_NATIVE_DIM=2", "-DPOPS_HAS_KOKKOS=1",
+         "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI=1", "-I" + str(root / "include"), *flags,
+         "-fsyntax-only", str(cpp)],
+        capture_output=True, text=True, timeout=300)
+    assert compiled.returncode == 0, compiled.stderr

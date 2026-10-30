@@ -31,17 +31,28 @@ def native_real_bytes():
     return width
 
 
+def _header(magic, name, level, depth):
+    encoded_name = name.encode("utf-8")
+    header = magic + struct.pack("<Q", len(encoded_name)) + encoded_name
+    return header + struct.pack("<qQ", -1 if level is None else level, depth)
+
+
+def unknown_identity_bytes(name, level, depth):
+    """Exact ledger of ``depth`` samples with unknown provenance, as native History encodes it."""
+    if type(depth) is not int or depth < 1:
+        raise ValueError("history sample identity requires a positive ring depth")
+    return _header(MAGIC, name, level, depth) + bytes(64 * depth)
+
+
 def validate_identity_bytes(raw, name, level, depth, *, initialized=None, slot_dt=None):
     """Validate exact canonical bytes without native mutation or float conversion of identity bits."""
     if not isinstance(raw, (bytes, bytearray, memoryview)):
         raise TypeError("history sample identity must be bytes")
     raw = bytes(raw)
-    encoded_name = name.encode("utf-8")
     legacy = raw[:8] == b"POPSHID1"
     magic = b"POPSHID1" if legacy else MAGIC
     width = 32 if legacy else 64
-    header = magic + struct.pack("<Q", len(encoded_name)) + encoded_name
-    header += struct.pack("<qQ", -1 if level is None else level, depth)
+    header = _header(magic, name, level, depth)
     if depth < 1 or len(raw) != len(header) + width * depth or raw[:len(header)] != header:
         raise ValueError("history sample identity has an invalid version, ring, level or depth")
     if slot_dt is not None and len(slot_dt) != depth:
