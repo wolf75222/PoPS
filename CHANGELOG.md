@@ -290,6 +290,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Generated dense spectral witnesses now distinguish a converged complex spectrum from an invalid
   eigensolve. Checked extrema return NaN on non-convergence/non-finite diagnostics, and the tri-state
   real-spectrum witness propagates the same failure into native pointwise transforms before commit.
+- `ci.yml` checks, with the pinned clang-format 19.1.7, the C++ lines that each pull request
+  changes, in a `format` job that the required gate aggregates (`git clang-format --diff` against
+  the first parent of the merge commit, about a minute, no build), so a branch never has to
+  reformat lines it does not touch. `quality.yml` keeps its whole-tree check through the same
+  script, `scripts/check_clang_format.sh`. The historical SDK header snapshots that tests pin by
+  SHA-256 are listed in the new `.clang-format-ignore`, which both checks honor.
 
 ## [1.0.0] - 2026-07-16
 

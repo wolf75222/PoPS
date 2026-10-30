@@ -162,6 +162,31 @@ jobs:
           path: ci-plan/
           if-no-files-found: error
 
+  # Style C++ (N5, ROM-84) : les lignes C++ qu'apporte la PR (ou le push) suivent .clang-format,
+  # avec la version epinglee et le script du job format de quality.yml. HEAD est le commit de fusion
+  # que CI extrait, HEAD^1 la base : seules les lignes changees comptent, si bien qu'une branche
+  # n'a jamais a reformater ce qu'elle ne touche pas. Environ une minute, sans build.
+  format:
+    name: clang-format (style)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - name: Install clang-format (version epinglee)
+        run: pipx install clang-format==19.1.7
+      - name: git clang-format --diff HEAD^1
+        run: bash scripts/check_clang_format.sh --changed-since HEAD^1
+      - name: Upload diff de format
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: clang-format-diff
+          path: format-diff.patch
+          if-no-files-found: ignore
+          retention-days: 7
+
   # PREWARM C++ NATIF. Trois runners compilent une partition exacte et disjointe des objets runtime
   # communs a tous les shards. Ils publient uniquement des entrees ccache et leur contrat exact
   # compilateur/flags/revision/sources. Les shards reconfigurent ensuite eux-memes le graphe officiel,
@@ -1505,7 +1530,7 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, mpi-dim1, mpi-python, kokkos-openmp]
+    needs: [changes, set-mode, format, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, mpi-dim1, mpi-python, kokkos-openmp]
     if: always()
     steps:
       - uses: actions/checkout@v7
@@ -1513,10 +1538,11 @@ jobs:
           fetch-depth: 1
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} mpi-python=${{ needs.mpi-python.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }}"
+          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} format=${{ needs.format.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} mpi-python=${{ needs.mpi-python.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }}"
           python3 scripts/ci_route_mode.py check \
             --gate changes "${{ needs.changes.result }}" true \
             --gate set-mode "${{ needs.set-mode.result }}" true \
+            --gate format "${{ needs.format.result }}" true \
             --gate gate-cpp "${{ needs.gate-cpp.result }}" true \
             --gate gate-python-architecture \
               "${{ needs.gate-python-architecture.result }}" \

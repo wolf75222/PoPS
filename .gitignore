@@ -30,6 +30,9 @@ docs/tutorials/**/results/
 # Runtime receipts are generated; curated evidence already tracked remains versioned.
 docs/development/migration_evidence/representative_20260913/receipts/
 
+# Diff left by scripts/check_clang_format.sh when the C++ style check fails.
+/format-diff.patch
+
 # Local agent guidance.
 CLAUDE.md
 CLAUDE.local.md
