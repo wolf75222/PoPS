@@ -100,10 +100,106 @@ def amr_program_context_unit_identity(
     return semantic, spec
 
 
+def amr_program_context_object(
+    unit: tuple[Any, Any], *, compiler: str, standard: str, header_signature: str, include: str,
+    optflags: Any, cflags: Any, toolchain_capture: Any,
+) -> str:
+    """Return the cached object of ``unit``, compiled with the flags of the Program that links it.
+
+    The object is published like an artifact: compiled to a staging file under its identity lock,
+    verified against its observed dependencies, then promoted with its sidecar.
+    """
+    import os
+    import tempfile
+
+    from pops.codegen._native_toolchain import verify_native_toolchain
+    from pops.codegen.cache import (
+        _artifact_cache_lock,
+        _artifact_cache_staging_path,
+        pops_cache_dir,
+    )
+    from pops.codegen.compile_provenance import (
+        artifact_sidecar_path,
+        publish_staged_artifact,
+        verify_cached_artifact,
+    )
+    from pops.codegen.toolchain import (
+        _run_compile,
+        normalize_native_compiler_command,
+        pops_header_signature,
+    )
+    from pops.native_components import (
+        compiler_include_roots,
+        verify_prepared_native_dependencies,
+    )
+
+    unit_semantic, unit_spec = unit
+    unit_path = os.path.join(pops_cache_dir(), unit_spec.hexdigest + ".o")
+    with _artifact_cache_lock(unit_path):
+        if os.path.isfile(unit_path):
+            verify_cached_artifact(
+                unit_path, semantic_identity=unit_semantic, spec_identity=unit_spec)
+            return unit_path
+        unit_staging = _artifact_cache_staging_path(unit_path)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                unit_cpp = os.path.join(tmp, "amr_program_context.cpp")
+                unit_dependencies = os.path.join(tmp, "amr_program_context.d")
+                with open(unit_cpp, "w") as f:
+                    f.write(amr_program_context_unit_source())
+                unit_cmd = normalize_native_compiler_command([
+                    compiler,
+                    "-c",
+                    "-fPIC",
+                    "-std=" + standard,
+                    *optflags,
+                    '-DPOPS_HEADER_SIG="%s"' % header_signature,
+                    *cflags,
+                    "-MMD",
+                    "-MF",
+                    unit_dependencies,
+                    "-MT",
+                    unit_staging,
+                    "-I",
+                    include,
+                    unit_cpp,
+                    "-o",
+                    unit_staging,
+                ])
+                verify_native_toolchain(toolchain_capture)
+                _run_compile(unit_cmd, "AMR Program context unit")
+                verify_prepared_native_dependencies(
+                    unit_dependencies,
+                    generated_source=unit_cpp,
+                    pops_include_root=include,
+                    staged_components=(),
+                    toolchain_include_roots=compiler_include_roots(cflags),
+                    toolchain_metadata=toolchain_capture,
+                )
+                if pops_header_signature(include) != header_signature:
+                    raise RuntimeError(
+                        "PoPS SDK headers changed while the AMR Program context unit was compiled")
+            verify_native_toolchain(toolchain_capture)
+            publish_staged_artifact(
+                unit_staging,
+                unit_path,
+                semantic_identity=unit_semantic,
+                spec_identity=unit_spec,
+            )
+        finally:
+            for leftover in (unit_staging, artifact_sidecar_path(unit_staging)):
+                try:
+                    os.remove(leftover)
+                except FileNotFoundError:
+                    pass
+    return unit_path
+
+
 __all__ = [
     "AMR_PROGRAM_CONTEXT_EXTERN",
     "AMR_PROGRAM_CONTEXT_INCLUDE",
     "amr_program_context_include",
+    "amr_program_context_object",
     "amr_program_context_unit_identity",
     "amr_program_context_unit_source",
 ]

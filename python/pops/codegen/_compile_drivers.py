@@ -28,7 +28,6 @@ from pops.codegen.cache import (
     _record_artifact_identity,
     _registry_cache_key,
     _dsl_optflags,
-    pops_cache_dir,
 )
 from pops.codegen.compile_provenance import (
     artifact_sidecar_path,
@@ -53,8 +52,8 @@ from pops.codegen.compile_link_flags import (
 )
 from pops.codegen.amr_program_context_unit import (
     AMR_PROGRAM_CONTEXT_EXTERN,
+    amr_program_context_object,
     amr_program_context_unit_identity,
-    amr_program_context_unit_source,
 )
 
 # _module_to_model moved to module_lowering.py (500-line budget); re-exported here so
@@ -719,77 +718,6 @@ def _compile_problem_impl(
         cenv.run_dumps(compiled)
         return compiled
 
-    def _context_unit_object():
-        # The unit is published like an artifact: compiled to a staging file under its identity
-        # lock, verified against its observed dependencies, then promoted with its sidecar.
-        unit_semantic, unit_spec = context_unit
-        unit_path = os.path.join(pops_cache_dir(), unit_spec.hexdigest + ".o")
-        with _artifact_cache_lock(unit_path):
-            if os.path.isfile(unit_path):
-                verify_cached_artifact(
-                    unit_path, semantic_identity=unit_semantic, spec_identity=unit_spec)
-                return unit_path
-            unit_staging = _artifact_cache_staging_path(unit_path)
-            try:
-                with tempfile.TemporaryDirectory() as tmp:
-                    unit_cpp = os.path.join(tmp, "amr_program_context.cpp")
-                    unit_dependencies = os.path.join(tmp, "amr_program_context.d")
-                    with open(unit_cpp, "w") as f:
-                        f.write(amr_program_context_unit_source())
-                    unit_cmd = normalize_native_compiler_command([
-                        cc,
-                        "-c",
-                        "-fPIC",
-                        "-std=" + eff_std,
-                        *optflags,
-                        '-DPOPS_HEADER_SIG="%s"' % sig,
-                        *cflags,
-                        "-MMD",
-                        "-MF",
-                        unit_dependencies,
-                        "-MT",
-                        unit_staging,
-                        "-I",
-                        include,
-                        unit_cpp,
-                        "-o",
-                        unit_staging,
-                    ])
-                    verify_native_toolchain(toolchain_capture)
-                    _run_compile(unit_cmd, "compile_problem (AMR Program context unit)")
-                    from pops.native_components import (
-                        compiler_include_roots,
-                        verify_prepared_native_dependencies,
-                    )
-
-                    verify_prepared_native_dependencies(
-                        unit_dependencies,
-                        generated_source=unit_cpp,
-                        pops_include_root=include,
-                        staged_components=(),
-                        toolchain_include_roots=compiler_include_roots(cflags),
-                        toolchain_metadata=toolchain_capture,
-                    )
-                    if pops_header_signature(include) != sig:
-                        raise RuntimeError(
-                            "PoPS SDK headers changed while the AMR Program context unit was "
-                            "compiled"
-                        )
-                verify_native_toolchain(toolchain_capture)
-                publish_staged_artifact(
-                    unit_staging,
-                    unit_path,
-                    semantic_identity=unit_semantic,
-                    spec_identity=unit_spec,
-                )
-            finally:
-                for leftover in (unit_staging, artifact_sidecar_path(unit_staging)):
-                    try:
-                        os.remove(leftover)
-                    except FileNotFoundError:
-                        pass
-        return unit_path
-
     def _compile_fresh(*, staged: bool):
         # Compiler writes never target a shared content-addressed path.  Only a fully compiled and
         # authenticated staging pair is atomically promoted while the identity lock is held.
@@ -797,7 +725,20 @@ def _compile_problem_impl(
         published = False
         gen_src_path = os.path.splitext(so_path)[0] + ".cpp" if cenv.keep_generated else None
         try:
-            context_object = None if context_unit is None else _context_unit_object()
+            context_object = (
+                None
+                if context_unit is None
+                else amr_program_context_object(
+                    context_unit,
+                    compiler=cc,
+                    standard=eff_std,
+                    header_signature=sig,
+                    include=include,
+                    optflags=optflags,
+                    cflags=cflags,
+                    toolchain_capture=toolchain_capture,
+                )
+            )
             with tempfile.TemporaryDirectory() as tmp:
                 cpp = os.path.join(tmp, "problem.cpp")
                 dependency_file = os.path.join(tmp, "problem.d")
