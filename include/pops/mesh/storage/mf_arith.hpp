@@ -13,7 +13,6 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -776,21 +775,28 @@ inline const CompensatedSummaryReduction& compensated_summary_reduction() {
 
 }  // namespace mf_arith_detail
 
+/// The result of collective_finite_compensated_sum_or_failure on every rank: the reduced sum, or
+/// `failed` when some rank reported a local failure, which the caller then reports collectively.
+struct CollectiveCompensatedSum {
+  Real value = Real{0};
+  bool failed = false;
+};
+
 /// dot-all@1 transports the two-word summaries, never fields or finalized rank scalars.
-/// One collective, whose payload is the two-word summary (spec 0.3 SV20, duties 2 and 3): the
-/// local failure of the caller (@p local_error) and a nonfinite local summary ride on it as an
-/// invalid summary instead of separate votes. Rounding policy: compensated (Neumaier) joins in
-/// rank order over the MPI reduction tree; rank 0 enters as the running sum started at zero, so
-/// a left-to-right tree reproduces the sequential merge of every summary. A failure of the caller
-/// is rethrown on a single rank and reported as "<operation> failed collectively" otherwise.
-inline Real collective_finite_compensated_sum(const FiniteCompensatedSum& local,
-                                              std::exception_ptr local_error,
-                                              const CommunicatorView& communicator,
-                                              const char* operation) {
+/// One collective, whose payload is the two-word summary (spec 0.3 SV20, duties 2 and 3): a local
+/// failure of the caller (@p local_failed) and a nonfinite local summary ride on it as an invalid
+/// summary instead of separate votes, with the precedence of those votes (local failure, then
+/// nonfinite local summary, then nonfinite sum). Rounding policy: compensated (Neumaier) joins in
+/// rank order over the MPI reduction tree; rank 0 enters as the running sum started at zero, so a
+/// left-to-right tree reproduces the sequential merge of every summary. A local failure makes
+/// every rank return `failed`, on a single rank too, so the caller's own failure report (the
+/// vote that preceded this reduction before SV20) runs only on the failure path.
+inline CollectiveCompensatedSum collective_finite_compensated_sum_or_failure(
+    const FiniteCompensatedSum& local, bool local_failed, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (communicator.active() && communicator.size() > 1) {
     std::array<Real, 2> words{local.high, local.low};
-    if (local_error) {
+    if (local_failed) {
       words = {std::numeric_limits<Real>::quiet_NaN(), mf_arith_detail::kCompensatedLocalFailure};
     } else if (!local.finite()) {
       words = {std::numeric_limits<Real>::quiet_NaN(), mf_arith_detail::kCompensatedLocalNonfinite};
@@ -806,25 +812,24 @@ inline Real collective_finite_compensated_sum(const FiniteCompensatedSum& local,
                                 "MPI_Allreduce(Program dot_all compensated summaries)");
     if (std::isnan(words[0])) {
       if (words[1] == mf_arith_detail::kCompensatedLocalFailure)
-        throw std::runtime_error(std::string(operation) + " failed collectively");
+        return {Real{0}, true};
       if (words[1] == mf_arith_detail::kCompensatedLocalNonfinite)
         throw std::overflow_error("Program dot_all local summary is nonfinite");
       throw std::overflow_error("Program dot_all collective sum is nonfinite");
     }
-    return words[0] + words[1];
+    return {words[0] + words[1], false};
   }
 #endif
-  (void)operation;
-  if (local_error)
-    std::rethrow_exception(local_error);
+  if (local_failed)
+    return {Real{0}, true};
   if (!local.finite())
     throw std::overflow_error("Program dot_all local summary is nonfinite");
-  return local.value();
+  return {local.value(), false};
 }
 
 inline Real collective_finite_compensated_sum(const FiniteCompensatedSum& local,
                                               const CommunicatorView& communicator) {
-  return collective_finite_compensated_sum(local, nullptr, communicator, "Program dot_all");
+  return collective_finite_compensated_sum_or_failure(local, false, communicator).value;
 }
 
 template <int Dim, class MemorySpace>

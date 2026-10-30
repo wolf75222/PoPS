@@ -1618,8 +1618,11 @@ class ProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    return pops::collective_finite_compensated_sum(local, local_error, lane.communicator(),
-                                                   "Program dot-all reduction");
+    const CollectiveCompensatedSum reduced = pops::collective_finite_compensated_sum_or_failure(
+        local, static_cast<bool>(local_error), lane.communicator());
+    if (reduced.failed)
+      report_owner_failure_(local_error, lane, "Program dot-all reduction");
+    return reduced.value;
   }
 
   Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }
@@ -2840,11 +2843,29 @@ class ProgramContext {
     return runtime_block;
   }
 
+  void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLane& lane,
+                                 const char* operation) const {
+    if (all_reduce_max(local_error ? 1L : 0L, lane) == 0)
+      return;
+    if (lane.size() == 1 && local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error(std::string(operation) + " failed collectively");
+  }
+
+  /// The failure path of a reduction that carried a local failure: every rank knows that some
+  /// rank failed and reports it through the vote that preceded the reduction before SV20.
+  [[noreturn]] void report_owner_failure_(std::exception_ptr local_error, const ExecutionLane& lane,
+                                          const char* operation) const {
+    converge_owner_reduction_(local_error, lane, operation);
+    throw std::logic_error(std::string(operation) + " lost its local failure");
+  }
+
   enum class OwnerReduction { sum, max, min };
 
   /// One collective per generated reduction (spec 0.3 SV20, duties 2 and 3). The local failure
   /// travels as a second word of the same reduction, combined by the same operator (a negated
-  /// flag for min), instead of a separate vote before it. A single rank rethrows its own failure.
+  /// flag for min), instead of a separate vote before it; only a failure is then reported by that
+  /// vote. A single rank rethrows its own failure.
   Real reduce_owner_(Real local, std::exception_ptr local_error, const ExecutionLane& lane,
                      OwnerReduction reduction, const char* operation) const {
     if (lane.size() == 1) {
@@ -2866,7 +2887,7 @@ class ProgramContext {
         break;
     }
     if (words[1] != Real(0))
-      throw std::runtime_error(std::string(operation) + " failed collectively");
+      report_owner_failure_(local_error, lane, operation);
     return words[0];
   }
 
