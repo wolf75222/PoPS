@@ -139,9 +139,11 @@ print("== (C) set_conservative_state multi-blocs : etat complet seede (avec deri
 amr3 = AmrSystem(n=16, L=1.0, periodicity=(True, True), regrid_every=0)
 amr3.set_temporal_relations([2], [1], ["integral_only"])
 amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
+# Each package instantiates only the conservative/minmod/Rusanov route its block installs.
 packages = {
     name: compile_modelspec_package(
         iso_model(charge, n0=rho16_mean), name=name, target="amr_system",
+        native_route=("conservative", "minmod", "rusanov"),
     )
     for name, charge in (("e1", +1.0), ("e2", -1.0))
 }
