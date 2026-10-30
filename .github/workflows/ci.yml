@@ -1685,10 +1685,14 @@ jobs:
             # Non-OpenMPI launchers never receive an implementation-specific option.
             mpi_cmake_args+=("-DMPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1")
           fi
+          # Two heavy -O0 test units at a time (the presets keep one): one at a time, the two
+          # remaining native test phases of a cold build passed the 60-minute step. Their measured
+          # peak memory is in docs/development/change_aware_ci.md; the isolated phase keeps one.
           cmake --preset ci-mpi \
             -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -DPOPS_BUILD_PYTHON=ON \
             -DPOPS_USE_HDF5=ON \
+            -DPOPS_HEAVY_TEST_TU_POOL=2 \
             -DPython_EXECUTABLE=/usr/bin/python3 \
             "${mpi_cmake_args[@]}"
           mapfile -t compile_contracts < <(
