@@ -487,6 +487,57 @@ def _consumer_owner_qid(model: Any, consumer_owner_qid: Any = None) -> str:
     return consumer_owner_qid
 
 
+def normalize_native_route(route: Any) -> tuple[str, str, str] | None:
+    """Return one exact catalogue ``(variables, limiter, Riemann)`` route, or ``None``."""
+    if route is None:
+        return None
+    from pops.runtime._generated_component_routes import ROUTE_TABLES
+
+    route = tuple(route)
+    if len(route) != 3 or any(type(token) is not str for token in route):
+        raise TypeError("native route must be a (variables, limiter, Riemann) token triple")
+    for token, family in zip(route, ("recon", "limiter", "riemann"), strict=True):
+        if token not in {row[0] for row in ROUTE_TABLES[family]}:
+            raise ValueError("native route %r is not a catalogue %s route" % (token, family))
+    return route
+
+
+def selects_catalogue_routes(model: Any) -> bool:
+    """Whether the lowered package of *model* selects its face numerics among catalogue routes.
+
+    A Program state-storage carrier instantiates no face operator, and a source-authored
+    reconstruction or face keeps the routes it was authored with: no resolved route specializes
+    either package.
+    """
+    impl = getattr(model, "_m", model)
+    return not (getattr(impl, "_program_only_storage_axes", ())
+                or getattr(impl, "_user_reconstruction", None) is not None
+                or getattr(impl, "_user_face", None) is not None)
+
+
+def _native_route_cpp(route: Any) -> str:
+    """C++ route set of one package: every catalogue route, or the single resolved one.
+
+    The resolved route is named by the native types that the route catalogue records for its
+    limiter and Riemann tokens, and by the reconstructed-variable set of its variables token; the
+    engine instantiates the route that the package names and holds no table of routes.
+    """
+    route = normalize_native_route(route)
+    if route is None:
+        return ""
+    from pops.runtime.routes import RECON_CONSERVATIVE, RECON_PRIMITIVE, resolve
+
+    variables, limiter, riemann = route
+    reconstructed = {RECON_CONSERVATIVE: "Conservative", RECON_PRIMITIVE: "Primitive"}
+    if variables not in reconstructed:
+        raise ValueError("native route %r has no reconstructed-variable set" % variables)
+    return "pops::GeneratedResolvedRoute<pops::nd::ReconstructionVariables::%s, %s, %s>" % (
+        reconstructed[variables],
+        resolve("limiter", limiter).native_entry,
+        resolve("riemann", riemann).native_entry,
+    )
+
+
 def _default_auxiliary_evaluation_policy_cpp(kind):
     """Default pure-expression providers follow the event of their actual consumer.
 
@@ -920,6 +971,7 @@ def emit_cpp_native_loader(
     native_field_roles: Any = None,
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
+    native_route: Any = None,
 ) -> str:
     """Source of the sole production package.
 
@@ -929,6 +981,9 @@ def emit_cpp_native_loader(
 
     @p target: "system" (default) | "amr_system". Selects the targeted facade and
     thus the add_compiled_model OVERLOAD called.
+    @p native_route: ``None`` instantiates every catalogue route; one exact
+    ``(variables, limiter, Riemann)`` triple instantiates only that route, and the
+    package refuses any other while preparing its block.
     """
     from pops.codegen.cpp_writer import _cpp_identifier
     from pops.codegen.module_codegen import (
@@ -979,6 +1034,11 @@ def emit_cpp_native_loader(
         getattr(getattr(m, "_m", m), "_user_face", None))
     user_face_captures = bool(user_face_descriptor is not None and
                               user_face_descriptor.options["runtime_captures"])
+    route_cpp = _native_route_cpp(native_route)
+    if route_cpp and not selects_catalogue_routes(m):
+        raise ValueError(
+            "emit_cpp_native_loader: a catalogue native route cannot specialize a state-storage "
+            "or source-authored numerical package")
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
     if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
         raise ValueError("emit_cpp_native_loader requires one lowercase 64-hex model identity")
@@ -1344,11 +1404,12 @@ def emit_cpp_native_loader(
             + "  pops::PreparedNativeAmrPackage<pops::kNativeDimension> package;\n"
             "  const pops::NewtonOptions newton = pops::newton_options_from_abi(\n"
             "      newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);\n"
-            "  package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension>(\n"
+            "  package.block = pops::prepare_compiled_amr_system_block<pops::kNativeDimension%s>(\n"
             "      name, std::move(model), limiter, riemann, recon, time, gamma, substeps,\n"
             "      stride, pos_floor, weno_epsilon, wave_speed_cache, %s, newton,\n"
             "      newton_diagnostics != 0%s);\n"
-            % (cpp_string_expression(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model"),
+            % ((", " + route_cpp) if route_cpp else "",
+               cpp_string_expression(_consumer_owner_qid(m, consumer_owner_qid) + "/native_model"),
                (", user_reconstruction" if user_reconstruction_identity is not None else "") +
                (", user_face" if user_face_identity is not None else ""))
             + amr_elliptic_package_lines
@@ -1380,8 +1441,9 @@ def emit_cpp_native_loader(
                if user_face_captures else
                "  auto user_face = UserFacePolicy{};\n"
                if user_face_identity is not None else "")
-            + "  return pops::prepare_generated_system_block(std::move(request)%s);\n"
-            % ((", user_reconstruction" if user_reconstruction_identity is not None else "") +
+            + "  return pops::prepare_generated_system_block%s(std::move(request)%s);\n"
+            % (("<%s>" % route_cpp) if route_cpp else "",
+               (", user_reconstruction" if user_reconstruction_identity is not None else "") +
                (", user_face" if user_face_identity is not None else ""))
             + "}\n"
             "}  // namespace pops_generated\n"

@@ -40,6 +40,29 @@
 #include <vector>
 
 namespace pops {
+
+/// The catalogue routes that one generated package instantiates. A package that any catalogue
+/// route may install instantiates them all. The generated loader of a package compiled for one
+/// resolved block names that block's reconstructed variables, reconstruction and face flux with
+/// the native types of the route catalogue (GeneratedResolvedRoute); the package then instantiates
+/// that route alone and refuses every other while preparing (a guarded static specialization).
+struct GeneratedCatalogueRoutes {
+  template <nd::ReconstructionVariables, class, class>
+  static constexpr bool instantiates() noexcept {
+    return true;
+  }
+};
+
+template <nd::ReconstructionVariables Variables, class Reconstruction, class Numerical>
+struct GeneratedResolvedRoute {
+  template <nd::ReconstructionVariables RouteVariables, class RouteReconstruction,
+            class RouteNumerical>
+  static constexpr bool instantiates() noexcept {
+    return RouteVariables == Variables && std::is_same_v<RouteReconstruction, Reconstruction> &&
+           std::is_same_v<RouteNumerical, Numerical>;
+  }
+};
+
 namespace generated_system_detail {
 
 /// Convert one primitive cell without exposing a rejected or partially materialized candidate.
@@ -1433,53 +1456,74 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   return result;
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request, class Reconstruction>
+/// Materialize one catalogue route of a generated package, or refuse a route that the package
+/// does not instantiate. The first argument names the route set of the package
+/// (GeneratedCatalogueRoutes).
+template <int Dim, class Model, class Reconstruction, class Numerical,
+          nd::ReconstructionVariables Variables, class Routes, class Request>
+PreparedSystemBlock<Dim> materialize_block(Routes, Request request,
+                                           [[maybe_unused]] Reconstruction reconstruction,
+                                           [[maybe_unused]] Numerical numerical) {
+  if constexpr (Routes::template instantiates<Variables, Reconstruction, Numerical>())
+    return materialize_block<Dim, Model, Reconstruction, Numerical, Variables>(
+        std::move(request), reconstruction, numerical);
+  else
+    throw std::invalid_argument(
+        "generated System package was compiled for another catalogue numerical route than " +
+        request.routes.reconstruction + "/" + request.routes.limiter + "/" +
+        request.routes.riemann);
+}
+
+template <int Dim, nd::ReconstructionVariables Variables, class Routes = GeneratedCatalogueRoutes,
+          class Request, class Reconstruction>
 PreparedSystemBlock<Dim> select_riemann(Request request, Reconstruction reconstruction) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   switch (parse_riemann_route(request.routes.riemann, "generated System block")) {
     case RiemannRouteId::kRusanov:
       return materialize_block<Dim, Model, Reconstruction, RusanovFlux, Variables>(
-          std::move(request), reconstruction, RusanovFlux{});
+          Routes{}, std::move(request), reconstruction, RusanovFlux{});
     case RiemannRouteId::kHll:
       if constexpr (detail::wave_speeds_all_axes<Model>())
         return materialize_block<Dim, Model, Reconstruction, HLLFlux, Variables>(
-            std::move(request), reconstruction, HLLFlux{});
+            Routes{}, std::move(request), reconstruction, HLLFlux{});
       break;
     case RiemannRouteId::kHllc:
       if constexpr (HasHLLCStructure<Model>)
         return materialize_block<Dim, Model, Reconstruction, HLLCFlux, Variables>(
-            std::move(request), reconstruction, HLLCFlux{});
+            Routes{}, std::move(request), reconstruction, HLLCFlux{});
       break;
     case RiemannRouteId::kRoe:
       if constexpr (HasRoeDissipation<Model>)
         return materialize_block<Dim, Model, Reconstruction, RoeFlux, Variables>(
-            std::move(request), reconstruction, RoeFlux{});
+            Routes{}, std::move(request), reconstruction, RoeFlux{});
       break;
     case RiemannRouteId::kRoeHllRusanovRecovery:
       if constexpr (HasRoeDissipation<Model> && detail::wave_speeds_all_axes<Model>())
         return materialize_block<Dim, Model, Reconstruction, RoeHllRusanovRecoveryPolicy,
-                                 Variables>(std::move(request), reconstruction,
+                                 Variables>(Routes{}, std::move(request), reconstruction,
                                             RoeHllRusanovRecoveryPolicy{});
       break;
   }
   throw std::invalid_argument("generated model does not satisfy the requested Riemann capability");
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request>
+template <int Dim, nd::ReconstructionVariables Variables, class Routes = GeneratedCatalogueRoutes,
+          class Request>
 PreparedSystemBlock<Dim> select_reconstruction(Request request) {
   switch (parse_limiter_route(request.routes.limiter, "generated System block")) {
     case LimiterRouteId::kNone:
-      return select_riemann<Dim, Variables>(std::move(request), NoSlope{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), NoSlope{});
     case LimiterRouteId::kMinmod:
-      return select_riemann<Dim, Variables>(std::move(request), Minmod{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), Minmod{});
     case LimiterRouteId::kVanLeer:
-      return select_riemann<Dim, Variables>(std::move(request), VanLeer{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), VanLeer{});
     case LimiterRouteId::kWeno5:
-      return select_riemann<Dim, Variables>(std::move(request), configured_reconstruction<Weno5>());
+      return select_riemann<Dim, Variables, Routes>(std::move(request),
+                                                    configured_reconstruction<Weno5>());
     case LimiterRouteId::kMc:
-      return select_riemann<Dim, Variables>(std::move(request), MC{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), MC{});
     case LimiterRouteId::kSuperbee:
-      return select_riemann<Dim, Variables>(std::move(request), Superbee{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), Superbee{});
   }
   throw std::logic_error("generated limiter route escaped its exhaustive selector");
 }
@@ -1642,8 +1686,9 @@ PoissonRhsV2Callable<Model> make_poisson_rhs_v2(Model model) {
   return PoissonRhsV2Callable<Model>(std::move(model));
 }
 
-/// Build the single exact numerical specialization requested by a generated package.
-template <class Request>
+/// Build the single exact numerical specialization requested by a generated package. `Routes`
+/// names the catalogue routes that the package instantiates (GeneratedCatalogueRoutes).
+template <class Routes = GeneratedCatalogueRoutes, class Request>
 auto prepare_generated_system_block(Request request) -> PreparedSystemBlock<Request::dimension> {
   constexpr int Dim = Request::dimension;
   using Model = std::remove_cvref_t<decltype(request.model)>;
@@ -1660,10 +1705,10 @@ auto prepare_generated_system_block(Request request) -> PreparedSystemBlock<Requ
     switch (parse_recon_route(request.routes.reconstruction, "generated System block")) {
       case ReconRouteId::kConservative:
         return generated_system_detail::select_reconstruction<
-            Dim, nd::ReconstructionVariables::Conservative>(std::move(request));
+            Dim, nd::ReconstructionVariables::Conservative, Routes>(std::move(request));
       case ReconRouteId::kPrimitive:
         return generated_system_detail::select_reconstruction<
-            Dim, nd::ReconstructionVariables::Primitive>(std::move(request));
+            Dim, nd::ReconstructionVariables::Primitive, Routes>(std::move(request));
     }
     throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
   }

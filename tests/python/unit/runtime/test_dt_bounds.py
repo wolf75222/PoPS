@@ -130,7 +130,8 @@ def _build_uniform_artifact(artifact, n, *, block_name="s"):
     sim.add_equation(
         block_name,
         artifact.blocks[0].model,
-        spatial=engine.Spatial(limiter=Minmod()),
+        # The package instantiates only the route its Case resolves.
+        spatial=artifact.blocks[0].spatial.runtime_spatial(),
         time=engine.Explicit(),
     )
     if sim._pending_native_packages:
@@ -155,12 +156,14 @@ def build_amr(n=24, *, second_block=False):
     from pops.runtime._modelspec_compile import compile_modelspec_package
     packages = {}
     for name in (("ions", "e2") if second_block else ("ions",)):
+        # The package instantiates only the conservative/minmod/Rusanov route its block installs.
         packages[name] = compile_modelspec_package(
             engine.Model(
                 state=engine.FluidState("isothermal", cs2=0.5),
                 transport=engine.IsothermalFlux(), source=engine.NoSource(),
                 elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
             ), name=name, target="amr_system",
+            native_route=("conservative", "minmod", "rusanov"),
         )
     from pops.runtime._amr_package_lane import ensure_native_block_state_route
     for name, package in packages.items():

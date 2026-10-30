@@ -477,6 +477,14 @@ class CompiledBlockArtifact:
         _binary_evidence(self.model, where="CompiledBlockArtifact.model")
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="CompiledBlockArtifact.spatial")
+        compiled_route = getattr(self.model, "_native_route", None)
+        if compiled_route is not None:
+            from pops.runtime._bricks_scheme import native_catalogue_route
+
+            if tuple(compiled_route) != native_catalogue_route(self.spatial):
+                raise ValueError(
+                    "CompiledBlockArtifact package was compiled for another numerical route "
+                    "than its resolved spatial descriptor")
 
 
 @dataclass(frozen=True, slots=True)

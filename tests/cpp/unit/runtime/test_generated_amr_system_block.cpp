@@ -933,6 +933,84 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
     EXPECT_EQ(weno.ghosts[axis], 3);
 }
 
+TEST(GeneratedAmrSystemBlock, ResolvedRoutePackageInstantiatesOnlyItsRoute) {
+  constexpr int Dim = pops::kNativeDimension;
+  using Model = AdvectionModel<Dim>;
+  constexpr auto conservative = pops::nd::ReconstructionVariables::Conservative;
+  constexpr auto primitive = pops::nd::ReconstructionVariables::Primitive;
+  // The conservative/minmod/rusanov route, named by its catalogue native types.
+  using Routes = pops::GeneratedResolvedRoute<conservative, pops::Minmod, pops::RusanovFlux>;
+  static_assert(Routes::instantiates<conservative, pops::Minmod, pops::RusanovFlux>());
+  static_assert(!Routes::instantiates<primitive, pops::Minmod, pops::RusanovFlux>());
+  static_assert(!Routes::instantiates<conservative, pops::Weno5, pops::RusanovFlux>());
+  static_assert(!Routes::instantiates<conservative, pops::Minmod, pops::HLLFlux>());
+  static_assert(
+      pops::GeneratedCatalogueRoutes::instantiates<primitive, pops::Weno5, pops::HLLFlux>());
+
+  pops::Extent<Dim> shape{};
+  pops::RealVector<Dim> lower{}, upper{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    shape[axis] = 4;
+    upper[axis] = 1;
+  }
+  const auto geometry =
+      pops::Geometry<Dim>::from_bounds(pops::Box<Dim>::from_extents(shape), lower, upper);
+  const auto uniform = [&](const char* limiter, const char* riemann, const char* variables) {
+    return pops::prepare_generated_system_block<Routes>(
+        pops::CompiledSystemBlockPreparation<Dim, Model>{"tracer",
+                                                         advection_model<Dim>(),
+                                                         {limiter, riemann, variables, "explicit"},
+                                                         geometry,
+                                                         {},
+                                                         {},
+                                                         {}});
+  };
+  const auto adaptive = [](const char* limiter, const char* riemann, const char* variables) {
+    return pops::prepare_generated_amr_system_block<Routes>(
+        pops::CompiledAmrSystemBlockPreparation<Dim, Model>{
+            "tracer",
+            "tests.tracer/physical_flux",
+            advection_model<Dim>(),
+            {limiter, riemann, variables, "explicit"},
+            1.4,
+            1,
+            1});
+  };
+  const auto refusal = [](auto&& prepare) {
+    try {
+      (void)prepare();
+    } catch (const std::invalid_argument& error) {
+      return std::string(error.what());
+    }
+    return std::string();
+  };
+
+  const auto prepared = uniform("minmod", "rusanov", "conservative");
+  const auto prepared_amr = adaptive("minmod", "rusanov", "conservative");
+  EXPECT_EQ(prepared_amr.reconstruction_order, 2);
+  for (int axis = 0; axis < Dim; ++axis) {
+    EXPECT_EQ(prepared.ghosts[axis], 2);
+    EXPECT_EQ(prepared_amr.ghosts[axis], 2);
+  }
+  for (const auto& [limiter, riemann, variables] :
+       {std::tuple{"weno5", "rusanov", "conservative"}, std::tuple{"minmod", "hll", "conservative"},
+        std::tuple{"minmod", "rusanov", "primitive"}}) {
+    // The refusal names the requested variables/limiter/Riemann route.
+    const std::string requested =
+        std::string("route than ") + variables + "/" + limiter + "/" + riemann;
+    EXPECT_NE(refusal([&] {
+                return uniform(limiter, riemann, variables);
+              }).find("System package was compiled for another catalogue numerical " + requested),
+              std::string::npos)
+        << requested;
+    EXPECT_NE(refusal([&] {
+                return adaptive(limiter, riemann, variables);
+              }).find("AMR package was compiled for another catalogue numerical " + requested),
+              std::string::npos)
+        << requested;
+  }
+}
+
 TEST(GeneratedAmrSystemBlock, ProgramStateHaloRequirementReachesUniformAndAmrFactories) {
   constexpr int Dim = pops::kNativeDimension;
   using Model = ProgramStateModel<Dim, 2>;

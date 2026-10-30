@@ -315,6 +315,34 @@ def test_amr_loader_builds_elliptic_closures_before_moving_bound_model() -> None
     _assert_exact_native_loader(loader, target="amr_system", dimension=2)
 
 
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_resolved_route_loader_instantiates_only_that_catalogue_route(target: str) -> None:
+    model = _ranked_scalar_model(2)
+    model._model_hash()
+    catalogue = model._m.emit_cpp_native_loader(name="RoutedLoader", target=target)
+    resolved = model._m.emit_cpp_native_loader(
+        name="RoutedLoader", target=target, native_route=("primitive", "vanleer", "hll"))
+    # The route catalogue names the native types of the vanleer limiter and the hll flux.
+    routes = (
+        "pops::GeneratedResolvedRoute<pops::nd::ReconstructionVariables::Primitive, "
+        "pops::VanLeer, pops::HLLFlux>"
+    )
+    if target == "system":
+        assert "return pops::prepare_generated_system_block(std::move(request));" in catalogue
+        assert "return pops::prepare_generated_system_block<%s>(std::move(request));" % routes \
+            in resolved
+    else:
+        assert "prepare_compiled_amr_system_block<pops::kNativeDimension>(\n" in catalogue
+        assert "prepare_compiled_amr_system_block<pops::kNativeDimension, %s>(\n" % routes \
+            in resolved
+    assert "GeneratedResolvedRoute" not in catalogue
+    _assert_exact_native_loader(resolved, target=target, dimension=2)
+    for route in (("conservative", "source_stencil:%s" % ("0" * 64), "rusanov"),
+                  ("conservative", "minmod", "coordinated_face:v1:x")):
+        with pytest.raises(ValueError, match="is not a catalogue"):
+            model._m.emit_cpp_native_loader(name="RoutedLoader", target=target, native_route=route)
+
+
 def test_unbound_private_carrier_native_loader_is_fail_closed() -> None:
     model = _ranked_scalar_model(2)
     with pytest.raises(ValueError, match="complete exact ProviderPack carrier"):

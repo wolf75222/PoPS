@@ -1889,7 +1889,26 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   return result;
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request, class Reconstruction>
+/// Materialize one catalogue route of a generated AMR package, or refuse a route that the package
+/// does not instantiate. The first argument names the route set of the package
+/// (GeneratedCatalogueRoutes).
+template <int Dim, class Model, class Reconstruction, class Numerical,
+          nd::ReconstructionVariables Variables, class Routes, class Request>
+PreparedAmrSystemBlock<Dim> materialize_system(Routes, Request request,
+                                               [[maybe_unused]] Reconstruction reconstruction,
+                                               [[maybe_unused]] Numerical numerical) {
+  if constexpr (Routes::template instantiates<Variables, Reconstruction, Numerical>())
+    return materialize_system<Dim, Model, Reconstruction, Numerical, Variables>(
+        std::move(request), reconstruction, numerical);
+  else
+    throw std::invalid_argument(
+        "generated AMR package was compiled for another catalogue numerical route than " +
+        request.routes.reconstruction + "/" + request.routes.limiter + "/" +
+        request.routes.riemann);
+}
+
+template <int Dim, nd::ReconstructionVariables Variables, class Routes = GeneratedCatalogueRoutes,
+          class Request, class Reconstruction>
 PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction reconstruction) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   if constexpr (path_conservative_model<Model>) {
@@ -1915,26 +1934,26 @@ PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction recon
     switch (parse_riemann_route(request.routes.riemann, "generated AMR block")) {
       case RiemannRouteId::kRusanov:
         return materialize_system<Dim, Model, Reconstruction, RusanovFlux, Variables>(
-            std::move(request), reconstruction, RusanovFlux{});
+            Routes{}, std::move(request), reconstruction, RusanovFlux{});
       case RiemannRouteId::kHll:
         if constexpr (detail::wave_speeds_all_axes<Model>())
           return materialize_system<Dim, Model, Reconstruction, HLLFlux, Variables>(
-              std::move(request), reconstruction, HLLFlux{});
+              Routes{}, std::move(request), reconstruction, HLLFlux{});
         break;
       case RiemannRouteId::kHllc:
         if constexpr (HasHLLCStructure<Model>)
           return materialize_system<Dim, Model, Reconstruction, HLLCFlux, Variables>(
-              std::move(request), reconstruction, HLLCFlux{});
+              Routes{}, std::move(request), reconstruction, HLLCFlux{});
         break;
       case RiemannRouteId::kRoe:
         if constexpr (HasRoeDissipation<Model>)
           return materialize_system<Dim, Model, Reconstruction, RoeFlux, Variables>(
-              std::move(request), reconstruction, RoeFlux{});
+              Routes{}, std::move(request), reconstruction, RoeFlux{});
         break;
       case RiemannRouteId::kRoeHllRusanovRecovery:
         if constexpr (HasRoeDissipation<Model> && detail::wave_speeds_all_axes<Model>())
           return materialize_system<Dim, Model, Reconstruction, RoeHllRusanovRecoveryPolicy,
-                                    Variables>(std::move(request), reconstruction,
+                                    Variables>(Routes{}, std::move(request), reconstruction,
                                                RoeHllRusanovRecoveryPolicy{});
         break;
     }
@@ -1943,24 +1962,25 @@ PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction recon
   }
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request>
+template <int Dim, nd::ReconstructionVariables Variables, class Routes = GeneratedCatalogueRoutes,
+          class Request>
 PreparedAmrSystemBlock<Dim> select_reconstruction(Request request) {
   switch (parse_limiter_route(request.routes.limiter, "generated AMR block")) {
     case LimiterRouteId::kNone:
-      return select_riemann<Dim, Variables>(std::move(request), NoSlope{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), NoSlope{});
     case LimiterRouteId::kMinmod:
-      return select_riemann<Dim, Variables>(std::move(request), Minmod{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), Minmod{});
     case LimiterRouteId::kVanLeer:
-      return select_riemann<Dim, Variables>(std::move(request), VanLeer{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), VanLeer{});
     case LimiterRouteId::kWeno5: {
       const Real epsilon = request.routes.weno_epsilon;
-      return select_riemann<Dim, Variables>(std::move(request),
-                                            configured_reconstruction<Weno5>(epsilon));
+      return select_riemann<Dim, Variables, Routes>(std::move(request),
+                                                    configured_reconstruction<Weno5>(epsilon));
     }
     case LimiterRouteId::kMc:
-      return select_riemann<Dim, Variables>(std::move(request), MC{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), MC{});
     case LimiterRouteId::kSuperbee:
-      return select_riemann<Dim, Variables>(std::move(request), Superbee{});
+      return select_riemann<Dim, Variables, Routes>(std::move(request), Superbee{});
   }
   throw std::logic_error("generated AMR limiter route escaped its exhaustive selector");
 }
@@ -2204,8 +2224,9 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
 
 }  // namespace generated_amr_detail
 
-/// Prepare one package-owned exact AMR block image without touching a runtime facade.
-template <class Request>
+/// Prepare one package-owned exact AMR block image without touching a runtime facade. `Routes`
+/// names the catalogue routes that the package instantiates (GeneratedCatalogueRoutes).
+template <class Routes = GeneratedCatalogueRoutes, class Request>
 auto prepare_generated_amr_system_block(Request request)
     -> PreparedAmrSystemBlock<Request::dimension> {
   constexpr int Dim = Request::dimension;
@@ -2223,11 +2244,10 @@ auto prepare_generated_amr_system_block(Request request)
     switch (parse_recon_route(request.routes.reconstruction, "generated AMR block")) {
       case ReconRouteId::kConservative:
         return generated_amr_detail::select_reconstruction<
-            Dim, nd::ReconstructionVariables::Conservative>(std::move(request));
+            Dim, nd::ReconstructionVariables::Conservative, Routes>(std::move(request));
       case ReconRouteId::kPrimitive:
-        return generated_amr_detail::select_reconstruction<Dim,
-                                                           nd::ReconstructionVariables::Primitive>(
-            std::move(request));
+        return generated_amr_detail::select_reconstruction<
+            Dim, nd::ReconstructionVariables::Primitive, Routes>(std::move(request));
     }
     throw std::logic_error("generated AMR reconstruction route escaped its exhaustive selector");
   }
@@ -2427,8 +2447,9 @@ inline void validate_compiled_amr_system_block_route_syntax(
                                             source_identity(routes.riemann, "source_face:"));
 }
 
-/// Prepare a complete generated AMR block image without mutating the facade.
-template <int Dim, class Model>
+/// Prepare a complete generated AMR block image without mutating the facade. `Routes` names the
+/// catalogue routes that the generated package instantiates (GeneratedCatalogueRoutes).
+template <int Dim, class Routes = GeneratedCatalogueRoutes, class Model>
 PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
     const std::string& reconstruction, const std::string& time, double gamma, int substeps,
@@ -2471,7 +2492,7 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     validate_compiled_amr_system_block_routes(routes, {}, {}, Model::path_operator_identity());
   else
     validate_compiled_amr_system_block_routes(routes);
-  return prepare_generated_amr_system_block(CompiledAmrSystemBlockPreparation<Dim, Model>{
+  return prepare_generated_amr_system_block<Routes>(CompiledAmrSystemBlockPreparation<Dim, Model>{
       name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride,
       newton, newton_diagnostics});
 }

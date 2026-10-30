@@ -85,8 +85,11 @@ def _install_state_routes(sim, names):
         sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
 
 
-def _scalar_charge(name, q, *, background=0.0):
-    """Explicit nonzero advection plus an independent scalar contribution to shared Poisson."""
+def _scalar_charge(name, q, *, limiter="none", background=0.0):
+    """Explicit nonzero advection plus an independent scalar contribution to shared Poisson.
+
+    The package instantiates only the conservative/<limiter>/Rusanov route its block installs.
+    """
     model = Model("%s-scalar-advection" % name)
     (rho,) = model.conservative_vars("n", roles=(Density(),))
     model.flux(x=[0.3 * rho], y=[0.2 * rho])
@@ -97,6 +100,7 @@ def _scalar_charge(name, q, *, background=0.0):
     return model.compile(
         backend="production", target="amr_system", name=name,
         consumer_owner_qid="tests.amr-multiblock.%s" % name,
+        _native_route=("conservative", limiter, "rusanov"),
     )
 
 
@@ -117,6 +121,25 @@ def _reject_legacy_exb():
     assert (sim.n_blocks(), tuple(sim.field_provider_slots())) == before
 
 
+def _reject_other_route():
+    """A package compiled for one route must not install a block or field slot with another."""
+    sim = _amr_system(32, regrid_every=0)
+    install_compiled_model_amr_test_lane(sim, _amr_lane_model())
+    _install_state_routes(sim, ("ions",))
+    sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.set_poisson(bc=Periodic())
+    before = (sim.n_blocks(), tuple(sim.field_provider_slots()))
+    try:
+        sim.add_equation("ions", _scalar_charge("ions", +1.0),
+                         spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()))
+    except ValueError as error:
+        assert ("instantiates only the conservative/none/rusanov" in str(error)
+                and "not conservative/minmod/rusanov" in str(error)), error
+    else:
+        raise AssertionError("a package compiled for another route was installed")
+    assert (sim.n_blocks(), tuple(sim.field_provider_slots())) == before
+
+
 def _build(n=32, regrid_every=0, *, tagging=()):
     sim = _amr_system(n, regrid_every=regrid_every)
     install_compiled_model_amr_test_lane(sim, _amr_lane_model())
@@ -125,7 +148,7 @@ def _build(n=32, regrid_every=0, *, tagging=()):
     sim.set_poisson(bc=Periodic())
     sim.add_equation("ions", _scalar_charge("ions", +1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-    sim.add_equation("electrons", _scalar_charge("electrons", -1.0),
+    sim.add_equation("electrons", _scalar_charge("electrons", -1.0, limiter="minmod"),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()))  # SCHEMA DIFFERENT
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", np.roll(_bump(n, 0.20), (3, 5), axis=(0, 1)))
@@ -139,6 +162,7 @@ def _build(n=32, regrid_every=0, *, tagging=()):
 def main():
     n = 32
     _reject_legacy_exb()
+    _reject_other_route()
 
     # (a)(b)(c) deux blocs, schemas differents, hierarchie partagee, Poisson somme co-localise.
     sim = _build(n=n, regrid_every=0)
