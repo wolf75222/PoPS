@@ -128,15 +128,18 @@ def exchange_checkpoint_byte_capacity(program, *, cells, dimension, rank_capacit
     strings = []
 
     def visit(value):
-        if isinstance(value, Mapping):
-            for key, item in value.items():
-                strings.append(str(key))
-                visit(item)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                visit(item)
-        elif isinstance(value, str):
-            strings.append(value)
+        # An explicit stack: a Program of any finite structural depth has a capacity (B4, B6).
+        pending = [value]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, Mapping):
+                for key, item in value.items():
+                    strings.append(str(key))
+                    pending.append(item)
+            elif isinstance(value, (list, tuple)):
+                pending.extend(value)
+            elif isinstance(value, str):
+                strings.append(value)
 
     visit(serial)
     occurrence_count = 0
