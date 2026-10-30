@@ -894,7 +894,7 @@ set(_program_runtime_review
   "cpp/integration/runtime/program_dot_all_contract.inc"
   "cpp/integration/runtime/program_dot_all_precision_independent.inc"
   "cpp/integration/runtime/integral_candidate_capture_tests.inc"
-  "review/sol61_t5_public_native_capture.inc")
+  "cpp/integration/runtime/sol61_t5_public_native_capture.inc")
 set_source_files_properties(${_program_runtime_review} PROPERTIES HEADER_FILE_ONLY TRUE)
 pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" ${_program_runtime_review}
   EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)

@@ -18,6 +18,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- Move the review material of the API 0.4.0 and API 0.2 work (`docs/development/api_040/`,
+  `docs/review/`, `tests/review/`, `outputs/`, `docs/dev/`; 3,281 files) out of the code tree
+  into an archive with a SHA-256 manifest, described in `docs/development/review_archive.md`.
+  What tests and docs still read (17 files and two receipt bundles of 327 files), and the notes
+  of the seven benchmark scripts that stay, move to
+  `tests/python/support/`, `tests/cpp/integration/runtime/`, `benchmarks/joint_reconstruction/`
+  and `docs/development/`.
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
   complete continuations and child advances, spatial composition, distributed
   operators, and graph/implicit derivatives lower from Python into native Program C++.

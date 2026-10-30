@@ -6,7 +6,7 @@ import numpy as np
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.public_native_profile import rank_and_size
 from tests.python.support.amr_snapshots import composite_active_mask
-from tests.review.sol61_amr_full_carrier_offline import decode
+from tests.python.support.sol61_amr_full_carrier_offline import decode
 
 
 def pin(path):

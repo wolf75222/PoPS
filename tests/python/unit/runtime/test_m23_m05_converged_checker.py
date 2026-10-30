@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[4] / "docs/development/api_040"
+ROOT = Path(__file__).resolve().parents[2] / "support/fixtures/receipt_bundles"
 SPEC = importlib.util.spec_from_file_location("m23_m05_checker", ROOT / "check_m23_m05_converged.py")
 CHECKER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECKER)

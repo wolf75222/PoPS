@@ -21,7 +21,7 @@ Contracts:
 
 This commit prepares Source only. SDK12 was being rebuilt at authoring time; no Native execution of this script, Field solve, initial freshness, grown Ghost science, restart Field bit preservation, MPI, GPU or universal boundary support is claimed. The dedicated Native integration fixture `tests/python/integration/amr/test_public_initial_field_ghost.py` records full scientific captures and independently checks the Field/Ghost oracle; its actual receipts, including prior SDK11 bind failure, remain distinct from this example.
 
-Source check (no execution tail, no JIT/SDK mutation):
+Source check (no execution tail, no JIT/SDK mutation). Its test left the code tree with the other review artifacts; it is kept under the same path in the [review archive](../../development/review_archive.md) and is not run by CI. It was run as:
 
 ```sh
 env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 /absolute/Source/env/bin/python -m pytest --noconftest -p no:cacheprovider -o pythonpath=python tests/review/test_sol61_public_initial_field_ghost_example.py -q --tb=short

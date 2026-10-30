@@ -55,7 +55,7 @@ def persist_phase(directory,label,rank,ranks,observation,clock,values,*,expected
 
 
 def validate_phase(observation,clock,values,*,rank,ranks):
-    from tests.review.sol61_amr_full_carrier_offline import decode
+    from tests.python.support.sol61_amr_full_carrier_offline import decode
     if type(rank) is not int or type(ranks) is not int or ranks<1 or not 0<=rank<ranks:raise ValueError('external world authority differs')
     image=decode(np.frombuffer(observation.complete,dtype=np.uint8).copy())
     if image['shard']!=-1 or image['levels']!=1 or image['real']!=64 or image['dim']!=observation.dimension or len(set(image['blocks']))!=len(image['blocks']) or set(image['blocks'])!=set(values):raise ValueError('complete phase authority differs')
