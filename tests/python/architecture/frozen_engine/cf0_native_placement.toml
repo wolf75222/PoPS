@@ -6,8 +6,9 @@
 # (cf2_interfaces.toml) through which it will be bound. "lines" are the sites that IR24 cites (a line or
 # a "first-last" range, in the first file); an entry without lines covers whole files.
 #
-# The list only shrinks (MG6): test_cf0_placement.py fails on an entry that b6 did not have, and on
-# an entry whose files are no longer in core paths (moved or deleted), which must then be removed.
+# The list only shrinks (MG6): test_cf0_frozen_engine_paths.py fails on an entry that b6 did not
+# have, and on an entry whose files are no longer in core paths (moved or deleted), which must then
+# be removed.
 # It holds only Phase 2 entries at the exit of Phase 1 and is empty at the freeze (G01, FC8).
 
 [[native]]

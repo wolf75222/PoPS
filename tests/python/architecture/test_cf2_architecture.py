@@ -10,58 +10,69 @@ vocabulary are in ``frozen_engine/scan.py``; the early audit of N2 (29/10) compl
 so that the counter-examples of FC2, FC3, FC4 and C43 are refused whatever their spelling.
 
 The test starts from the exception list of b6e64c1d (``frozen_engine/cf2_exceptions.txt``, each
-entry ``file:line`` with the issue that removes it) and fails both on a new occurrence and on an
-exception that has become useless, so the list can only shrink (MG6). G3 requires it to be empty
-(section 1.5). The closed list of interfaces of FC6b is asserted by
+entry ``file:line`` with the issue that removes it and the spelling of the site) and fails both on
+a new occurrence and on an exception that has become useless, so the list can only shrink (MG6).
+Sites pair with entries by path, term and spelling, so a site that replaces another of the same term
+in the same file is new; CI also compares the scan with the scan of the base of each PR
+(``refresh_exceptions.py --check-base``), so an entry added by hand lets nothing in. G3 requires the
+list to be empty (section 1.5). The closed list of interfaces of FC6b is asserted by
 ``test_native_interfaces_closed.py``.
 
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
 import collections
+import subprocess
 
 import pytest
 
-from tests.python.architecture.frozen_engine import cf2, ratchet, scan
+from tests.python.architecture.frozen_engine import cf2, ratchet, refresh_exceptions, scan
 
 
 # The number of sites of each term in cf2_exceptions.txt at b6e64c1d. A total here may only go down
 # (MG6). Listing a new site in cf2_exceptions.txt would need a higher number here; do not raise one:
 # remove the occurrence instead. The terms that the early audit of N2 added on 29/10 entered here
 # with their counts at that commit, in the PR that added them; a term added later does the same.
+# The independent review of N2 (30/10) corrected three counts of b6 that the error-text rule had hid
+# (rusanov 110 -> 113, minmod 56 -> 60, exb 19 -> 20) and added the solve algorithms. These totals
+# are upper bounds; the slack that a removed site leaves is closed by the CI check against the base
+# of each PR (refresh_exceptions.py --check-base), not by lowering them.
 B6_TERM_TOTALS = {
     '"E"': 4, '"density"': 39, '"energy"': 19, '"mc"': 9, '"outlet"': 1, '"p"': 17, '"rho"': 10,
     '"rho_E"': 2, '"rho_u"': 2, '"rho_v"': 2, '"rho_w"': 2, '"rhou"': 2, '"rhov"': 2, '"rhow"': 2,
     '"vx"': 3, '"vy"': 3, '"vz"': 2, '"wall"': 4, '`B0`': 10, '`Density`': 35, '`Energy`': 19,
     '`MC`': 9, '`cs2`': 35, '`kMc`': 8, '`n0`': 23, '`qom`': 41, '`rho0`': 20, 'acoustic': 17,
-    'adiabatic': 8, 'ars': 18, 'background-density': 13, 'bdf': 7, 'bgk': 5, 'c-rho': 28,
-    'canonical-roles': 5, 'cfl': 117, 'charge-density': 63, 'coarse-fine-ghost-interpolation': 27,
-    'component-role': 38, 'compressible': 32, 'conservative-coarse-fine': 3,
-    'conservative-injection': 9, 'conservative-linear': 5, 'conservative-polynomial': 3,
-    'constant-extrapolation': 11, 'constant-injection': 35, 'courant': 66, 'davis': 13,
-    'dense-output': 11, 'dirichlet': 140, 'dirk': 4, 'discrete-gradient-stencil': 17,
-    'divergence': 154, 'divergence-preserving': 29, 'drift-diffusion': 7, 'einfeldt': 13,
-    'electric': 25, 'electron': 11, 'electrostatic': 10, 'elliptic-route': 7, 'energy-role': 4,
-    'enthalpy': 9, 'eos': 2, 'equation-of-state': 8, 'euler': 152, 'ex-b': 14, 'exb': 19,
-    'fan-li': 75, 'field-solver-route': 3, 'foextrap': 10, 'four-pi-g': 29, 'from-semantic': 2,
-    'gamma': 231, 'gaussian': 142, 'gradient': 454, 'gradient-above': 23, 'gradient-below': 20,
-    'gravitational': 5, 'gravity': 72, 'gummel': 11, 'harten': 24, 'hermite': 18, 'heun': 1,
-    'hll': 91, 'hllc': 166, 'hyqmom': 44, 'ideal-gas': 13, 'imex': 72, 'imexrk': 18, 'inflow': 177,
-    'ion': 10, 'ionization': 9, 'isothermal': 51, 'laplacian': 166, 'lie': 3, 'limiter-route': 37,
-    'linear-interpolation': 16, 'linear-prolongation': 18, 'linear-temporal-interpolation': 14,
-    'linear-time-interpolation': 9, 'lorentz': 48, 'mach': 12, 'magnetic': 118, 'maxwellian': 6,
-    'minmod': 56, 'momentum': 126, 'monotonized': 8, 'multispecies': 10, 'muscl': 35,
-    'name-axis-link': 4, 'neumann': 85, 'no-flux': 47, 'node-multilinear': 18, 'osher': 2,
-    'outflow': 25, 'parse-role': 17, 'parse-source-route': 1, 'physical-default': 140,
-    'poisson': 646, 'potential-force': 20, 'pressure': 203, 'q-over-m': 25, 'qmom': 12,
-    'recon-route': 29, 'reflective': 7, 'require-density': 4, 'riemann-route': 18, 'robin': 12,
+    'adiabatic': 8, 'armijo': 51, 'arnoldi': 26, 'ars': 18, 'background-density': 13, 'bdf': 7,
+    'bgk': 5, 'bi-cg-stab': 15, 'bicgstab': 26, 'c-rho': 28, 'canonical-roles': 5, 'cfl': 117,
+    'cg': 150, 'charge-density': 63, 'chebyshev': 7, 'coarse-fine-ghost-interpolation': 27,
+    'component-role': 38, 'compressible': 32, 'conjugate-gradient': 1,
+    'conservative-coarse-fine': 3, 'conservative-injection': 9, 'conservative-linear': 5,
+    'conservative-polynomial': 3, 'constant-extrapolation': 11, 'constant-injection': 35,
+    'courant': 66, 'davis': 13, 'dense-output': 11, 'dirichlet': 140, 'dirk': 4,
+    'discrete-gradient-stencil': 17, 'divergence': 154, 'divergence-preserving': 29,
+    'drift-diffusion': 7, 'einfeldt': 13, 'electric': 25, 'electron': 11, 'electrostatic': 10,
+    'elliptic-route': 7, 'energy-role': 4, 'enthalpy': 9, 'eos': 2, 'equation-of-state': 8,
+    'euler': 152, 'ex-b': 14, 'exb': 20, 'fac': 563, 'fan-li': 75, 'fft': 409, 'fftw': 49,
+    'field-solver-route': 3, 'foextrap': 10, 'four-pi-g': 29, 'from-semantic': 2, 'gamma': 231,
+    'gauss-seidel': 52, 'gaussian': 142, 'geometric-mg': 173, 'gmres': 127, 'gradient': 454,
+    'gradient-above': 23, 'gradient-below': 20, 'gravitational': 5, 'gravity': 72, 'gummel': 11,
+    'harten': 24, 'hermite': 18, 'heun': 1, 'hll': 91, 'hllc': 166, 'hyqmom': 44, 'ideal-gas': 13,
+    'imex': 72, 'imexrk': 18, 'inflow': 177, 'ion': 10, 'ionization': 9, 'isothermal': 51,
+    'jacobi': 63, 'laplacian': 166, 'lie': 3, 'limiter-route': 37, 'linear-interpolation': 16,
+    'linear-prolongation': 18, 'linear-temporal-interpolation': 14, 'linear-time-interpolation': 9,
+    'lorentz': 48, 'lu': 90, 'mach': 12, 'magnetic': 118, 'maxwellian': 6, 'minmod': 60,
+    'momentum': 126, 'monotonized': 8, 'multispecies': 10, 'muscl': 35, 'name-axis-link': 4,
+    'neumann': 85, 'newton': 800, 'no-flux': 47, 'node-multilinear': 18, 'osher': 2, 'outflow': 25,
+    'parse-role': 17, 'parse-source-route': 1, 'physical-default': 140, 'poisson': 646,
+    'potential-force': 20, 'pressure': 203, 'q-over-m': 25, 'qmom': 12, 'recon-route': 29,
+    'reflective': 7, 'require-density': 4, 'richardson': 38, 'riemann-route': 18, 'robin': 12,
     'roe': 420, 'role-canonical': 7, 'role-from-name': 5, 'role-index': 8, 'role-key': 12,
     'role-name': 13, 'role-of': 4, 'role-token': 28, 'roles-csv': 6, 'roles-for': 32,
-    'runge-kutta': 31, 'rusanov': 110, 'scharfetter': 11, 'select-riemann': 18, 'slip': 27,
+    'runge-kutta': 31, 'rusanov': 113, 'scharfetter': 11, 'select-riemann': 18, 'slip': 27,
     'sound-speed': 11, 'source-route-id': 9, 'source-route-tokens': 1, 'species': 133, 'ssprk': 39,
     'strang': 3, 'superbee': 39, 'temperature': 33, 'thermal': 13, 'time-route': 9,
-    'transport-route': 7, 'upwind': 5, 'vacuum-floor': 35, 'van-leer': 26, 'vanleer': 18,
-    'variable-role': 55, 'variable-roles': 13, 'variable-semantic': 51, 'velocity': 235,
-    'vlasov': 4, 'weno': 171, 'zero-flux': 29, 'zhang': 4,
+    'transport-route': 7, 'upwind': 5, 'v-cycle': 7, 'vacuum-floor': 35, 'van-leer': 26,
+    'vanleer': 18, 'variable-role': 55, 'variable-roles': 13, 'variable-semantic': 51, 'vcycle': 8,
+    'velocity': 235, 'vlasov': 4, 'weno': 171, 'zero-flux': 29, 'zhang': 4,
 }
 
 
@@ -186,6 +197,23 @@ def _terms(text, kind, path="include/pops/x.hpp"):
     ("opcode == POPS_TAGGING_GRADIENT_ABOVE_V1", ["gradient-above"]),
     # The error text of a statement ends where its parentheses close.
     ('if (failure(x)) { route = "rusanov"; }', ["rusanov"]),
+    # A name opens error text only where it is used as error text (independent review, B1): these
+    # names are code, and so is the condition of an assertion.
+    ('const bool chosen = (name == "rusanov");', ["rusanov"]),
+    ('const bool expected = (name == "rusanov");', ["rusanov"]),
+    ('const bool required = route == "hll";', ["hll"]),
+    ('auto failed_routes = table.at("weno5");', ["weno"]),
+    ('template <class T> requires Flux<T> constexpr auto k = lookup("hllc");', ["hllc"]),
+    ('void f(const std::string& expected_identity = {}, const std::string& riemann = "rusanov");',
+     ["rusanov"]),
+    ('static_assert(transport_n_vars_ct("exb") == 3, "the drift has three variables");', ["exb"]),
+    # Solve algorithms (independent review, R2).
+    ('if (method == "gmres") { return TensorCoarseGMRES{}; }', ["gmres"]),
+    ("using S = BiCGStabSolver; class GeometricMG;", ["bi-cg-stab", "geometric-mg"]),
+    ('if (family_route == "fft") { solver = PoissonFFTSolver{}; }', ["fft", "poisson"]),
+    ("struct DenseLU {}; NewtonOptions newton;", ["lu", "newton"]),
+    ('const char* d = "exact-ranked constant-coefficient conjugate gradient";',
+     ["conjugate-gradient"]),
 ])
 def test_scanner_refuses_named_knowledge_in_cpp(source, expected):
     assert _terms(source, "cpp") == expected
@@ -206,6 +234,18 @@ def test_scanner_refuses_named_knowledge_in_cpp(source, expected):
     ("class AdaptiveCFL(StepStrategy):\n    cfl: float\n", ["cfl"]),
     ("history = LinearInterpolation()\n", ["linear-interpolation"]),
     ("GHOSTS = {'mc': 2}\n", ['"mc"']),
+    # A failure helper whose result is used is code (independent review, B1).
+    ('route = fail_safe_route("rusanov")\n', ["rusanov"]),
+    # The <name>_<axis> link in its other spellings (independent review, O2).
+    ('name = f"{output.name}_{axis_name}"\n', ["name-axis-link"]),
+    ('name = "%s_%s" % (output.name, axis)\n', ["name-axis-link"]),
+    ('name = "{}_{}".format(output.name, axis_name)\n', ["name-axis-link"]),
+    ('name = "_".join((output.name, axis_name))\n', ["name-axis-link"]),
+    # Solve algorithms (independent review, R2); the conjugate gradient is not the gradient.
+    ("class GeometricMG(Descriptor):\n    pass\n", ["geometric-mg"]),
+    ("def BiCGStab(**options):\n    return CG(**options)\n", ["bi-cg-stab", "cg"]),
+    ("solver = FFT() if periodic else Newton()\n", ["fft", "newton"]),
+    ("solver = 'conjugate_gradient'\n", ["conjugate-gradient"]),
 ])
 def test_scanner_refuses_named_knowledge_in_python(source, expected):
     assert _terms(source, "python", path="python/pops/x.py") == expected
@@ -223,13 +263,18 @@ def test_scanner_reads_the_file_path():
     "struct FluxDensity { Real density; };",  # a flux density (spec D6), not a role
     "LoadBalanceStrategy::round_robin;",  # not the Robin boundary family
     "Real g = std::tgamma(x);",  # the Gamma function: tgamma is one word, not the word gamma
-    'const char* d = "exact-ranked constant-coefficient conjugate gradient";',  # a Krylov driver
     "std::string source_route_contract;",  # the sampled side of a projection, not a source route
+    "auto w = std::make_unique<KrylovWorkspace>(); MultigridCycle c;",  # FC6b interfaces
     # error text whose parentheses hold braces and semicolons (a requires-expression, a lambda)
     'static_assert(requires { Brick::dimension; }, "a source with momentum components must declare '
     'its spatial dimension");',
     'POPS_REQUIRE(std::all_of(v.begin(), v.end(), [](Real s) { return s > 0; }), "Rusanov needs '
     'positive speeds");',
+    # the call of a failure helper, an error object that is built or assigned
+    'reject(request, "the Rusanov route needs wave speeds");',
+    'fail_<ContractError>(lane, "HLLC needs a contact speed");',
+    'const auto& lane = p_->require_prepared_engine_lane("prepared AMR block Poisson RHS");',
+    'message_error = "Rusanov failed";',
 ])
 def test_scanner_ignores_comments_error_text_and_generic_senses_in_cpp(source):
     assert _terms(source, "cpp") == []
@@ -249,8 +294,18 @@ def test_scanner_ignores_docstrings_comments_and_error_text_in_python():
     assert _terms(source, "python", path="python/pops/x.py") == []
 
 
-def test_scanner_ignores_the_conjugate_gradient_in_python():
-    assert _terms("solver = 'conjugate_gradient'\n", "python", path="python/pops/x.py") == []
+def test_scanner_refuses_generic_solve_algorithms_in_the_core_paths_only(tmp_path):
+    """FC6: a qualified substitution in the native tree may name its generic algorithm (GMRES);
+    Newton, which FC6 does not admit as a substitution, is refused in both trees."""
+    engine = scan.FrozenEngine(core_include=("include/",), core_exclude=(), native_tree="native/")
+    for rel in ("include/pops/krylov.hpp", "native/krylov/driver.hpp"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("struct GMRESDriver {}; NewtonOptions options;\n")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    found = {(o.path, o.term) for o in scan.scan_cf2(tmp_path, engine)[0]}
+    assert found == {("include/pops/krylov.hpp", "gmres"), ("include/pops/krylov.hpp", "newton"),
+                     ("native/krylov/driver.hpp", "newton")}
 
 
 def test_scanner_keeps_the_exception_class_of_a_raise():
@@ -300,3 +355,93 @@ def test_refresh_accepts_only_a_site_that_left_one_file_for_another():
     copied = listed + [entry("b.hpp", 1, "rusanov", "return RusanovFlux{};")]
     pairs, unexplained = ratchet.moves(copied, listed)
     assert not pairs and [site.path for site in unexplained] == ["b.hpp"]
+
+
+def test_ratchet_pairs_sites_by_spelling_so_a_swap_in_one_file_fails():
+    """The first probe of the independent review: a new "rusanov" added to a file while a listed
+    site of the same term is renamed away keeps the count of (file, term), and still fails."""
+    def entry(path, line, term, excerpt):
+        return ratchet.Entry(path, line, term, "N3", excerpt)
+
+    listed = [entry("a.hpp", 137, "rusanov", "kRusanovInvalidStability"),
+              entry("a.hpp", 200, "rusanov", "RusanovFlux")]
+    swapped = [entry("a.hpp", 62, "rusanov", '"rusanov"'),
+               entry("a.hpp", 201, "rusanov", "RusanovFlux")]
+    comparison = ratchet.compare(swapped, listed)
+    new, _ = comparison.new[("a.hpp", "rusanov")]
+    useless, _ = comparison.useless[("a.hpp", "rusanov")]
+    assert [site.excerpt for site in new] == ['"rusanov"']
+    assert [entry.excerpt for entry in useless] == ["kRusanovInvalidStability"]
+
+
+def test_scanner_spelling_ignores_the_rest_of_the_line():
+    def spelling(source):
+        return [(occurrence.term, occurrence.excerpt)
+                for occurrence, _ in scan.cf2_sites_in_text("include/pops/x.hpp", source, "cpp")]
+
+    expected = [("rusanov", '"rusanov" RusanovFlux')]
+    assert spelling('auto f = RusanovFlux{}; route = "rusanov";') == expected
+    assert spelling('const auto g = RusanovFlux{}; next = "rusanov";') == expected
+
+
+def test_base_check_refuses_a_site_moved_by_hand_and_accepts_a_moved_line(tmp_path):
+    """The second and third probes of the independent review: the list is not read at all. A site
+    of the head that the base does not hold fails, whatever the list says, unless it moved from
+    another file with its source line (a file renamed or split)."""
+    def tree(name, files):
+        root = tmp_path / name
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text)
+        return root
+
+    def check(head):
+        def sites(root):
+            return [occurrence for rel in ("a.hpp", "b.hpp")
+                    for occurrence, sense in scan.cf2_sites(rel, root) if sense is None]
+        return ratchet.new_sites(sites(base), sites(head), base, head)
+
+    base = tree("base", {"a.hpp": "int x;\nreturn kRusanovInvalidStability;\n",
+                         "b.hpp": "int y;\n"})
+    moved, added = check(tree("by_hand", {"a.hpp": "int x;\n",
+                                          "b.hpp": 'int y;\nauto f = "rusanov";\n'}))
+    assert not moved and [(site.path, site.excerpt) for site in added] == [("b.hpp", '"rusanov"')]
+    moved, added = check(tree("split", {"a.hpp": "int x;\n",
+                                        "b.hpp": "int y;\n\nreturn kRusanovInvalidStability;\n"}))
+    assert [(old.path, new.path) for old, new in moved] == [("a.hpp", "b.hpp")] and not added
+    # the same spelling on another line of another file is not a move
+    moved, added = check(tree("rewritten", {"a.hpp": "int x;\n",
+                                            "b.hpp": "int y;\nf(kRusanovInvalidStability);\n"}))
+    assert not moved and [site.path for site in added] == ["b.hpp"]
+
+
+def test_check_base_scans_the_base_revision_in_a_worktree(tmp_path, monkeypatch):
+    """End to end, as CI runs it: a site added to the working tree fails against HEAD, and the
+    temporary worktree is removed."""
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                        *args], check=True, stdout=subprocess.DEVNULL)
+
+    engine = scan.FrozenEngine(core_include=("include/",), core_exclude=(), native_tree="native/")
+    (tmp_path / "include").mkdir()
+    (tmp_path / "include" / "x.hpp").write_text("return RusanovFlux{};\n")
+    git("init", "-q")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    monkeypatch.setattr(scan, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(refresh_exceptions, "LISTS", {
+        "t": (tmp_path / "t_exceptions.txt", lambda root: cf2.current_entries(root, engine)[0])})
+    assert refresh_exceptions.check_base("HEAD", ["t"]) == 0
+    (tmp_path / "include" / "x.hpp").write_text('return RusanovFlux{};\nauto f = "rusanov";\n')
+    assert refresh_exceptions.check_base("HEAD", ["t"]) == 1
+    worktrees = subprocess.run(["git", "-C", str(tmp_path), "worktree", "list"], check=True,
+                               stdout=subprocess.PIPE, text=True).stdout.splitlines()
+    assert len(worktrees) == 1
+
+
+def test_every_exception_list_is_checked_against_the_base():
+    lists = {path.name for path, _ in refresh_exceptions.LISTS.values()}
+    files = {path.name for path in scan.HERE.glob("*_exceptions.txt")}
+    assert files <= lists, (
+        "MG6: every exception list is registered in refresh_exceptions.LISTS, which CI checks "
+        "against the base of each PR: %s" % sorted(files - lists))

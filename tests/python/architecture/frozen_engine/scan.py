@@ -14,7 +14,9 @@ so no pattern is wider than the name it refuses.
 
 The vocabulary refuses proper names (Rusanov, Poisson, Dirichlet), physical quantities and the
 machinery that selects them (the role enumeration, route tables and their switches: FC3, FC4), not
-category nouns (flux, limiter, reconstruction, Riemann problem, closure, moment). Words that also
+category nouns (flux, limiter, reconstruction, Riemann problem, closure, moment). It also refuses
+the solve algorithms of ``pops.lib.solve`` (Newton, GMRES, GeometricMG, FFT, ...); those that FC6
+admits as qualified substitutions are refused in the core paths only. Words that also
 carry a generic mathematical sense are refused only in their unambiguous spellings: ``density``
 alone is a flux density or a stored density (spec D6, R8), so only the role token ``"density"``,
 ``VariableRole`` and the member ``Density`` are refused; short names such as ``mc`` or ``n0`` are
@@ -135,10 +137,13 @@ class _Lines:
         return bisect.bisect_right(self._starts, offset)
 
 
-# A call whose name ends like an error type, or starts like a failure helper, carries error text.
-_PY_ERROR_CALL = re.compile(
-    r"(Error|Exception|Warning|Failure|Refusal|Violation)$"
-    r"|^_?(warn|fail|error|raise|reject|refuse|abort)(_|$)", re.IGNORECASE)
+# Python error text: the message of a raise or an assert, the arguments of a call that builds an
+# error (a name ending in Error, Warning, Failure, ...), and the arguments of a failure helper
+# (warnings.warn, self._fail, _refuse, ...) called as a statement of its own. A helper whose result
+# is used is code: ``route = fail_safe_route("rusanov")`` is scanned.
+_PY_ERROR_TYPE = re.compile(r"(Error|Exception|Warning|Failure|Refusal|Violation)$", re.IGNORECASE)
+_PY_FAILURE_HELPER = re.compile(r"^_?(warn|fail|error|raise|reject|refuse|abort)(_|$)",
+                                re.IGNORECASE)
 
 
 def _call_name(func: ast.AST) -> str:
@@ -158,10 +163,17 @@ def _python_excluded_strings(tree: ast.AST) -> set[int]:
             if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
                 excluded.add(id(sub))
 
+    def exclude_arguments(call: ast.Call) -> None:
+        for arg in list(call.args) + [keyword.value for keyword in call.keywords]:
+            exclude_all(arg)
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) \
                 and isinstance(node.value.value, str):
             excluded.add(id(node.value))  # a docstring or a bare string statement is a comment
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) \
+                and _PY_FAILURE_HELPER.search(_call_name(node.value.func) or "-"):
+            exclude_arguments(node.value)
         elif isinstance(node, ast.Raise):
             # the message of a raise is error text; the exception class is code and stays scanned
             for part in (node.exc, node.cause):
@@ -169,9 +181,8 @@ def _python_excluded_strings(tree: ast.AST) -> set[int]:
                     exclude_all(part)
         elif isinstance(node, ast.Assert) and node.msg is not None:
             exclude_all(node.msg)
-        elif isinstance(node, ast.Call) and _PY_ERROR_CALL.search(_call_name(node.func) or "-"):
-            for arg in list(node.args) + [keyword.value for keyword in node.keywords]:
-                exclude_all(arg)
+        elif isinstance(node, ast.Call) and _PY_ERROR_TYPE.search(_call_name(node.func) or "-"):
+            exclude_arguments(node)
     return excluded
 
 
@@ -183,14 +194,39 @@ def _identifier_of(node: ast.AST) -> str:
     return ""
 
 
+def _is_axis(node: ast.AST) -> bool:
+    return "axis" in split_words(_identifier_of(node))
+
+
+def _is_text(node: ast.AST, pattern: str) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str) \
+        and re.search(pattern, node.value) is not None
+
+
 def _is_axis_link(node: ast.AST) -> bool:
-    """``<name> + "_" + <axis>``: a component name spelled from an axis name (gap C19)."""
-    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)):
-        return False
-    left = node.left
-    return ("axis" in split_words(_identifier_of(node.right))
-            and isinstance(left, ast.BinOp) and isinstance(left.op, ast.Add)
-            and isinstance(left.right, ast.Constant) and left.right.value == "_")
+    """A component name spelled from a name and an axis name, the <name>_<axis> link of gap C19:
+    ``<name> + "_" + <axis>``, ``f"{<name>}_{<axis>}"``, ``"%s_%s" % (<name>, <axis>)``,
+    ``"{}_{}".format(<name>, <axis>)`` or ``"_".join((<name>, <axis>))``."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = node.left
+        return (_is_axis(node.right) and isinstance(left, ast.BinOp)
+                and isinstance(left.op, ast.Add) and isinstance(left.right, ast.Constant)
+                and left.right.value == "_")
+    if isinstance(node, ast.JoinedStr):
+        parts = node.values
+        return any(isinstance(parts[i], ast.FormattedValue) and _is_text(parts[i + 1], r"_$")
+                   and isinstance(parts[i + 2], ast.FormattedValue) and _is_axis(parts[i + 2].value)
+                   for i in range(len(parts) - 2))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        operands = node.right.elts if isinstance(node.right, ast.Tuple) else [node.right]
+        return _is_text(node.left, r"%[a-z]_%[a-z]") and any(map(_is_axis, operands))
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        if node.func.attr == "format" and _is_text(node.func.value, r"\}_\{"):
+            return any(map(_is_axis, node.args))
+        if node.func.attr == "join" and _is_text(node.func.value, r"^_$") and node.args:
+            items = node.args[0]
+            return isinstance(items, (ast.Tuple, ast.List)) and any(map(_is_axis, items.elts))
+    return False
 
 
 def python_tokens(text: str):
@@ -199,7 +235,7 @@ def python_tokens(text: str):
     for node in ast.walk(tree):
         line = getattr(node, "lineno", None)
         if _is_axis_link(node):
-            yield line, AXIS_LINK, "link"
+            yield line, ast.get_source_segment(text, node) or AXIS_LINK, "link"
         if isinstance(node, ast.Name):
             yield line, node.id, "ident"
         elif isinstance(node, ast.Attribute):
@@ -231,28 +267,41 @@ _CPP_TOKEN = re.compile(
     r"|(?P<char>(?:u8|u|U|L)?'(?:\\.|[^'\\\n])+')"
     r'|(?P<number>\b[0-9][0-9A-Za-z_.\']*)'
     r'|(?P<ident>[A-Za-z_][A-Za-z0-9_]*)'
-    r'|(?P<punct>[;{}()])',
+    r'|(?P<punct>[;{}(),])',
     re.DOTALL)
-# An identifier that makes the rest of its statement error text: throw, static_assert, an error
-# type (std::runtime_error, ...) or a failure helper (POPS_REQUIRE, fail_..., require_...).
-_CPP_ERROR_IDENT = re.compile(
-    r"^(throw|static_assert)$|(error|exception|failure|refusal)$"
-    r"|^(POPS_)?(REQUIRE|ASSERT|EXPECT|FAIL|ABORT)|^(fail|reject|refuse|raise)(_|$)",
-    re.IGNORECASE)
+# C++ error text, recognised by the use of a name, never by a name alone (``expected_face``,
+# ``required``, ``failed_routes`` and the C++20 ``requires`` are code):
+# - ``throw`` makes the rest of its statement error text;
+# - an error object that is constructed, assigned or streamed into: a name ending in error,
+#   exception, failure or refusal followed by ``(``, ``{``, ``=``, ``+=`` or ``<<``
+#   (``std::runtime_error("...")``, ``message_error = "..."``);
+# - the call of a failure helper (``reject(...)``, ``require_text(...)``, ``fail_<T>(...)``,
+#   ``POPS_FAIL(...)``), up to the ``)`` that closes it;
+# - an assertion (``static_assert``, ``assert``, ``POPS_REQUIRE``, ...): its first argument is
+#   the condition, which is code; the arguments after it are the message.
+_CPP_ERROR_OBJECT = re.compile(r"(error|exception|failure|refusal)$", re.IGNORECASE)
+_CPP_FAILURE_HELPER = re.compile(
+    r"^(fail|reject|refuse|raise|require|rethrow|abort)(_\w*)?$"
+    r"|^(POPS_)?(FAIL|ABORT)(_[A-Z0-9_]*)?$")
+_CPP_ASSERTION = re.compile(
+    r"^(static_assert|assert|KOKKOS_ASSERT)$|^POPS_(REQUIRE|ASSERT|EXPECT|CHECK)(_[A-Z0-9_]*)?$")
+_CPP_CALLED = re.compile(r"\s*(?:<[^;{}()\"]*>)?\s*\(")  # ``(`` or ``<...>(`` after the name
+_CPP_BUILT = re.compile(r"\s*(?:\(|\{|=(?!=)|\+=|<<)")
 
 
 def cpp_tokens(text: str):
     """Identifiers and string literals of C++ source, outside comments and error text.
 
-    A string literal is error text when an identifier of the same statement before it is
-    ``throw``, ``static_assert``, an error type or a failure helper (``_CPP_ERROR_IDENT``). The
-    statement ends at a ``;``, ``{`` or ``}`` at the parenthesis depth of that identifier, or at
-    the ``)`` that closes the parentheses it appeared in; braces and semicolons nested inside its
-    parentheses (a requires-expression, a lambda) do not end it.
+    Error text (see ``_CPP_ERROR_OBJECT`` and the rules above it) starts at the name that opens
+    it and ends at a ``;``, ``{`` or ``}`` at the parenthesis depth of that name, or at the ``)``
+    that closes the parentheses it appeared in; braces and semicolons nested inside its parentheses
+    (a requires-expression, a lambda) do not end it. The message of an assertion starts at the
+    first ``,`` of its argument list and ends with that list.
     """
     line_of = _Lines(text)
     depth = 0  # parenthesis depth
-    error_depth = None  # the depth of the error identifier of the current statement, if any
+    error_depth = None  # the depth of the name that opened the current error text, if any
+    condition_depth = None  # the depth inside the parentheses of an assertion, before its message
     for match in _CPP_TOKEN.finditer(text):
         kind = match.lastgroup
         if kind in ("comment", "char", "number"):
@@ -266,12 +315,24 @@ def cpp_tokens(text: str):
                 depth -= 1
                 if error_depth is not None and depth < error_depth:
                     error_depth = None
+                if condition_depth is not None and depth < condition_depth:
+                    condition_depth = None
+            elif punct == ",":
+                if condition_depth is not None and depth == condition_depth:
+                    error_depth, condition_depth = depth, None  # the message of the assertion
             elif error_depth is not None and depth <= error_depth:
                 error_depth = None
         elif kind == "ident":
             ident = match.group("ident")
-            if error_depth is None and _CPP_ERROR_IDENT.search(ident):
-                error_depth = depth
+            if error_depth is None and condition_depth is None:
+                if _CPP_ASSERTION.search(ident) and _CPP_CALLED.match(text, match.end()):
+                    condition_depth = depth + 1
+                elif ident == "throw" \
+                        or (_CPP_ERROR_OBJECT.search(ident)
+                            and _CPP_BUILT.match(text, match.end())) \
+                        or (_CPP_FAILURE_HELPER.search(ident)
+                            and _CPP_CALLED.match(text, match.end())):
+                    error_depth = depth
             yield line, ident, "ident"
         elif kind == "string" and error_depth is None:
             literal = match.group("string")
@@ -400,6 +461,20 @@ CF2_VOCABULARY = (
      "ident:source-route-tokens ident:elliptic-route ident:field-solver-route"),
     ("constant", "15.3 physical constants; CF2 a physical constant in an ABI",
      "gamma physical-default q-over-m four-pi-g vacuum-floor"),
+    # Solve algorithms are pops.lib.solve words (1.2, the table of 1.4, SV4). The generic ones
+    # that FC6 admits as qualified substitutions (Krylov methods, multigrid with its cycles and
+    # smoothers, FFT, dense factorization) may live in the native component tree, so they are
+    # refused in the core paths only (marked "core:"; IR24, CF0 placement list). The FC6b
+    # interfaces themselves (krylov_driver, multigrid_cycle, dense_banded_factorization) are not
+    # terms; the fft interface, once a core file declares it, is a GENERIC_SENSES entry.
+    ("solver", "1.2, 15.1, FC6: a generic solve algorithm in the core paths, which belongs in "
+     "pops.lib.solve or, as a qualified substitution, in the native component tree (IR24, SV12)",
+     "core:cg core:conjugate-gradient core:bicgstab core:bi-cg-stab core:gmres core:arnoldi "
+     "core:richardson core:chebyshev core:jacobi core:gauss-seidel core:geometric-mg core:fac "
+     "core:v-cycle core:vcycle core:fft core:fftw core:lu"),
+    ("solver", "1.2, SV4: a named solve algorithm that FC6 does not admit as a substitution "
+     "(Newton and its Armijo line search, fixed-point accelerations, Leja actions)",
+     "newton armijo picard anderson leja"),
 )
 
 # Exact string literals, compared whole and case-sensitively.
@@ -428,9 +503,9 @@ AXIS_LINK = "name-axis-link"
 # norms in the core (pops.linalg) and M00, M10, ... raw moments, so neither is refused.
 CASE_IDENTIFIER = re.compile(r"^(M(0[1-9]|1[0-9]|2[0-8])|T(0[1-9]|1[0-2]))$")
 # A term preceded by one of these words is another word: round_robin is a load-balancing order,
-# not the Robin boundary family, and the conjugate gradient is a Krylov driver (FC6b), not the
-# gradient operator.
-NOT_AFTER = {"robin": frozenset({"round"}), "gradient": frozenset({"conjugate"})}
+# not the Robin boundary family. (The conjugate gradient is its own term, conjugate-gradient, which
+# shadows the gradient operator.)
+NOT_AFTER = {"robin": frozenset({"round"})}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -440,19 +515,25 @@ class Term:
     category: str
     source: str
     ident_only: bool
+    core_only: bool = False
 
 
 def _vocabulary() -> tuple[Term, ...]:
     terms = []
     for category, source, spelled in CF2_VOCABULARY:
         for raw in spelled.split():
-            ident_only = raw.startswith("ident:")
-            label = raw.removeprefix("ident:")
-            terms.append(Term(label, tuple(label.split("-")), category, source, ident_only))
+            core_only = raw.startswith("core:")
+            label = raw.removeprefix("core:")
+            ident_only = label.startswith("ident:")
+            label = label.removeprefix("ident:")
+            terms.append(Term(label, tuple(label.split("-")), category, source, ident_only,
+                              core_only))
     return tuple(terms)
 
 
 VOCABULARY = _vocabulary()
+# Terms refused in the core paths only: a qualified substitution may name them in the native tree.
+CORE_ONLY = frozenset(term.label for term in VOCABULARY if term.core_only)
 _BY_FIRST_WORD: dict[str, list[Term]] = {}
 for _term in VOCABULARY:
     _BY_FIRST_WORD.setdefault(_term.words[0], []).append(_term)
@@ -506,13 +587,15 @@ def terms_in(text: str, kind: str) -> set[str]:
 # Generic senses: sites where a refused spelling carries a generic mathematical meaning, so the
 # site is not knowledge of section 15.3 and is not an exception either. Each entry names the file,
 # the term, a regular expression that the whole source line must match, and the reason. The CF2 test
-# fails on an entry that no longer matches any site, so no entry outlives its site. The pattern ".*"
-# covers a whole file and is kept to files whose subject is that generic sense.
+# fails on an entry that no longer matches any site, so no entry outlives its site. A pattern names
+# the identifiers or the statements of today, never a whole file, so a new use of the term fails.
 # ---------------------------------------------------------------------------------------------
 GENERIC_SENSES = (
-    ("include/pops/numerics/elliptic/mg/residual_roundoff.hpp", "gamma", r".*",
+    ("include/pops/numerics/elliptic/mg/residual_roundoff.hpp", "gamma",
+     r".*\b(gamma_for_operations|evaluation_gamma|construction_gamma|stencil_gamma)\b.*"
+     r"|\s*Real gamma = Real\(0\);|.*Scaled::from\(gamma\).*",
      "Higham's rounding bound gamma_n of floating-point error analysis (section 11 plumbing), "
-     "not the ratio of specific heats; the whole file is that bound"),
+     "not the ratio of specific heats"),
     ("include/pops/numerics/elliptic/mg/geometric_mg.hpp", "gamma",
      r".*(gamma-bound@1|roundoff::stencil_gamma).*", "the same rounding bound gamma_n"),
     ("include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp", "gamma",
@@ -525,15 +608,17 @@ GENERIC_SENSES = (
      "the name of the rounding-bound policy"),
     ("python/pops/solvers/elliptic/_prepared_field_providers.py", "gamma",
      r".*binary64-five-point-gamma-bound.*", "the name of the rounding-bound policy"),
-    ("include/pops/amr/tagging/berger_rigoutsos.hpp", "laplacian", r".*",
+    ("include/pops/amr/tagging/berger_rigoutsos.hpp", "laplacian",
+     r".*\blaplacian[\[(]static_cast<std::size_t>\(.*",
      "the second difference of the 1-D signature in Berger-Rigoutsos clustering (core machinery, "
      "section 15.2 item 5, DM13), not a field operator"),
     ("pyproject.toml", '"E"', r'\s*select = \["E", .*', "the pycodestyle error class of ruff"),
     ("python/pops/codegen/program_emit_principal.py", '"p"', r'\s*letter = "p" if primitive else "u"',
      "the local name of the emitted array argument, not a selected primitive"),
-    ("include/pops/numerics/spatial/embedded_boundary/cut_geometry.hpp", "gradient", r".*",
+    ("include/pops/numerics/spatial/embedded_boundary/cut_geometry.hpp", "gradient",
+     r".*\bgradient(\[(axis|face_axis)\]|, (Real&? )?intercept\)|\{\}).*",
      "the slope vector of the linear level-set fit that measures cut-cell fractions (geometry of "
-     "the support, section 4.3), not a field operator; the whole file is that geometry"),
+     "the support, section 4.3), not a field operator"),
     ("src/runtime/amr/amr_system.cpp", "divergence",
      r'\s*rollback(_active_field_candidate_collectively)?\((lane, )?'
      r'"[a-z ]*divergence rollback"\);',
@@ -541,6 +626,20 @@ GENERIC_SENSES = (
     ("python/pops/time/_program/inspection.py", "pressure",
      r'\s*"many live scratch buffers: GPU memory pressure / allocator churn; consider reuse"\),',
      "memory pressure on a GPU, not the physical pressure"),
+    ("python/pops/time/_program/inspection.py", "lu",
+     r'\s*lu = last_use\.get\(v\.id, d\).*'
+     r'|\s*"def_index": d, "last_use_index": lu, "live_span": lu - d\}\)',
+     "the index of the last use of a scratch value, not the LU factorization"),
+    ("python/pops/physics/_authoring_codegen.py", "cg", r".*\b_cg(_compile\(\)|\.\w+\(|$).*",
+     "the local alias of the pops.codegen modules (_cg, _cg_compile), not the conjugate gradient"),
+    ("python/pops/moments/sources.py", "cg",
+     r"\s*cg = \{\(0, 0\): 1\.0, .*|\s*cij = cg\.get\(\(i, j\), 0\.0\)",
+     "the central moments Cg(i, j) of the matched Gaussian (Isserlis), not the conjugate gradient; "
+     "that local Maxwellian is knowledge of its own, listed under maxwellian (maxwellian_moments)"),
+    ("python/pops/codegen/module_emit_riemann.py", "fac",
+     r".*(const pops::Real fac = r \* \(s - un\) / \(s - sStar\);|Us\[(c|%d|in_)\] = fac\b).*",
+     "the local factor of the emitted HLLC star state, not the FAC multigrid; that flux is "
+     "listed under hllc"),
 )
 
 
@@ -561,7 +660,7 @@ class Occurrence:
     path: str
     line: int  # 0 when the term is in the file path itself
     term: str
-    excerpt: str
+    excerpt: str  # the spelling of the site: the tokens of its line that hold the term
 
     @property
     def key(self) -> tuple[str, str]:
@@ -571,26 +670,34 @@ class Occurrence:
         return "%s:%d %s | %s" % (self.path, self.line, self.term, self.excerpt)
 
 
-def _excerpt(lines: list[str], line: int) -> str:
-    if line == 0:
-        return "(path)"
-    if 1 <= line <= len(lines):
-        return " ".join(lines[line - 1].split())[:110]
-    return ""
+EXCERPT_WIDTH = 160
+
+
+def _spelling(token: str, kind: str) -> str:
+    text = " ".join(token.split())
+    return '"%s"' % text if kind == "string" else text
 
 
 def cf2_sites_in_text(rel: str, text: str, kind: str):
-    """(Occurrence, generic-sense entry or None) for every CF2 site of one file."""
+    """(Occurrence, generic-sense entry or None) for every CF2 site of one file.
+
+    A site is a (line, term). Its excerpt is its spelling: the distinct tokens of the line that
+    hold the term, sorted, string literals quoted, a link as its expression, ``(path)`` for the
+    file path. The ratchet pairs sites with list entries by this spelling (ratchet.py), so an edit
+    elsewhere on the line keeps the site, and a new spelling of the term is a new site.
+    """
     lines = text.splitlines()
-    found: dict[tuple[int, str], Occurrence] = {}
+    spellings: dict[tuple[int, str], set[str]] = {}
     for term in terms_in(rel, "path"):
-        found[(0, term)] = Occurrence(rel, 0, term, "(path)")
+        spellings[(0, term)] = {"(path)"}
     for line, token, token_kind in LEXERS[kind](text):
         for term in terms_in(token, token_kind):
-            found.setdefault((line, term), Occurrence(rel, line, term, _excerpt(lines, line)))
-    for occurrence in sorted(found.values()):
-        source_line = lines[occurrence.line - 1] if occurrence.line else ""
-        yield occurrence, generic_sense(rel, occurrence.term, source_line)
+            spellings.setdefault((line, term), set()).add(_spelling(token, token_kind))
+    for (line, term), spelled in sorted(spellings.items()):
+        excerpt = " ".join(sorted(spelled))[:EXCERPT_WIDTH].rstrip()
+        occurrence = Occurrence(rel, line, term, excerpt)
+        source_line = lines[line - 1] if 0 < line <= len(lines) else ""
+        yield occurrence, generic_sense(rel, term, source_line)
 
 
 def cf2_sites(rel: str, root: pathlib.Path = REPO_ROOT):
@@ -604,10 +711,14 @@ def cf2_sites(rel: str, root: pathlib.Path = REPO_ROOT):
 
 def scan_cf2(root: pathlib.Path = REPO_ROOT, engine: FrozenEngine | None = None):
     """(occurrences that are knowledge, generic-sense entries that matched at least once)."""
+    engine = engine or load_cf0()
     occurrences: list[Occurrence] = []
     used = set()
     for rel in frozen_engine_files(engine, root):
+        native = engine.is_native(rel)
         for occurrence, sense in cf2_sites(rel, root):
+            if native and occurrence.term in CORE_ONLY:
+                continue  # a qualified substitution may name its generic algorithm (FC6)
             if sense is None:
                 occurrences.append(occurrence)
             else:

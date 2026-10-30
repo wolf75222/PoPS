@@ -6,7 +6,9 @@ issue that takes the site over, by the first matching rule below. The rules foll
 native-solver sites until Phase 2, except a named field operator (G10) and a named boundary family
 (G04), which go to their mechanism even inside a native solver. The owner of each site stays with N2
 and its audit (same section); the rules for the terms that the early audit of N2 added (29/10) are
-its own. A slice that moves a site to another issue edits the rule, not the list.
+its own, and the solve algorithms that the independent review of N2 added (30/10) are N9's outside
+the paths that another issue takes over whole. A slice that moves a site to another issue edits the
+rule, not the list.
 """
 from __future__ import annotations
 
@@ -89,6 +91,10 @@ OWNER_RULES = (
     ("N9", _NATIVE_SOLVERS, None,
      "IR24: the other knowledge of the native solvers (Krylov, multigrid, FFT, polar, AMR tensor), "
      "kept until Phase 2 (18.3)"),
+    ("N9", None, _labels("solver"),
+     "the solve algorithms that the rest of the core names or selects (Newton, Krylov methods, "
+     "multigrid, FFT, LU): pops.lib.solve references that N9 lowers or binds as qualified "
+     "substitutions (SV4, SV12, IR24), Phase 2"),
     ("N8", None, _labels("controller"),
      "named controllers: controllers are library functions (section 15, 5.11), compiled step "
      "control, Phase 1"),
