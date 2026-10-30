@@ -8,3 +8,5 @@
 
 # ADC-118: repo-wide clang-format sweep across include/, python/, tests/ (no functional change).
 78816b091ed18b7c0be8926bb1e25ec9b6e190ca
+# N5 (ROM-84): clang-format 19.1.7 sweep of the C++ tree before API 0.3 lands (mechanical; see the commit message).
+6ec7993c017875535817d9fcdcb7ef9059354b9a

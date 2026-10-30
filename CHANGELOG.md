@@ -296,6 +296,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   reformat lines it does not touch. `quality.yml` keeps its whole-tree check through the same
   script, `scripts/check_clang_format.sh`. The historical SDK header snapshots that tests pin by
   SHA-256 are listed in the new `.clang-format-ignore`, which both checks honor.
+- Reformat the 161 C++ files that the blocking `format` job of `quality.yml` refused, with the
+  pinned clang-format 19.1.7, in one mechanical commit listed in `.git-blame-ignore-revs`. Besides
+  whitespace, it splits six long literals, adds closing namespace comments, and re-indents the
+  embedded C++ of three `R"CPP(...)CPP"` test program sources (same tokens). Three line budgets of
+  the architecture tests grow by the measured formatter delta, and the engine guard lists take the
+  new line numbers.
 
 ## [1.0.0] - 2026-07-16
 
