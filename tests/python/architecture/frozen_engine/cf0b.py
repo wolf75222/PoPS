@@ -20,15 +20,15 @@ The scan reads source only. Imports inside ``pops.lib`` itself are the library's
 private module of the library is one site, at its path), so ``from ._factory import x`` adds no site
 beyond ``lib/time/_factory.py``.
 
-A site is one term on one line. Its excerpt is its spelling, what holds the term there: the
-dotted name of an import or a reference (the module when the module alone is a site), the
-attribute (``._frame``) or the string literal. The ratchet pairs sites with list entries by it, so
-an edit elsewhere on a listed line keeps the site, and a new spelling is a new site.
+A site is one occurrence of a term, and its excerpt is its spelling: the dotted name of an import
+or a reference (the module when the module alone is a site), the attribute (``._frame``) or the
+string literal. The ratchet pairs sites with list entries by spelling within each (path, term),
+counted with multiplicity, so an edit elsewhere on a listed line or a re-wrap keeps the site, while
+a new spelling, or one more occurrence of a listed one, is a new site.
 """
 from __future__ import annotations
 
 import ast
-import collections
 import dataclasses
 import pathlib
 
@@ -119,16 +119,20 @@ def _target_term(target: str, library_module: str) -> str | None:
 
 def _import_terms(record: pysource.Import, library_module: str, native_top: str):
     """(term, spelling) of each site of one import. The spelling is the dotted name that holds the
-    term: the module when the module alone is a site, the module and the name otherwise."""
+    term: the module when the module alone is a site (once, however many names the statement
+    takes from it), the module and the name otherwise."""
     module, names = record.module, record.names
     if module.split(".")[0] == native_top:
         yield "native-tree-import", module
         return
     module_term = _target_term(module, library_module) if names else None
+    spelled = set()
     for target in [module] if not names else ["%s.%s" % (module, name) for name in names]:
         term = _target_term(target, library_module)
-        if term:
-            yield term, module if term == module_term else target
+        spelling = module if term == module_term else target
+        if term and (term, spelling) not in spelled:
+            spelled.add((term, spelling))
+            yield term, spelling
 
 
 def route_terms(node: ast.AST, names: pysource.Names, library_module: str):
@@ -270,29 +274,27 @@ def python_sites(rel: str, text: str, *, library_module: str, native_tree: str,
 
 
 def scan_library(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine | None = None):
-    """Every CF0b site of the checkout: one per (path, line, term), its excerpt the spellings of
-    the term on that line."""
+    """Every CF0b site of the checkout: one per occurrence of a term."""
     engine = engine or scan.load_cf0()
     library = library_root(engine)
     library_module = pysource.module_name(library.rstrip("/"))
     files = [rel for rel in scan.tracked_files(root) if rel.startswith(library)]
     texts = {rel: (root / rel).read_text(encoding="utf-8") for rel in files if rel.endswith(".py")}
-    spellings = collections.defaultdict(set)  # (path, line, term) -> spellings
+    sites: list[Site] = []
     for rel in files:
         inner = pathlib.PurePosixPath(rel[len(library):])
         if pysource.is_cpp_file(rel):
-            spellings[(rel, 0, "cpp-file")].add("(path)")
+            sites.append(Site(rel, 0, "cpp-file", "(path)"))
         if any(pysource.is_private_part(part) for part in inner.with_suffix("").parts) \
                 and rel.endswith(".py"):
-            spellings[(rel, 0, "private-module")].add("(path)")
+            sites.append(Site(rel, 0, "private-module", "(path)"))
         if rel not in texts:
             continue
         for line, term, spelling in python_sites(rel, texts[rel], library_module=library_module,
                                                  native_tree=engine.native_tree,
                                                  private_attributes=True):
-            spellings[(rel, line, term)].add(spelling)
-    return sorted(Site(rel, line, term, pysource.site_excerpt(spelled))
-                  for (rel, line, term), spelled in spellings.items())
+            sites.append(Site(rel, line, term, pysource.site_excerpt(spelling)))
+    return sorted(sites)
 
 
 # (issue, library sub-paths or None, reason): the first matching rule names the issue that removes a

@@ -21,11 +21,12 @@ import dataclasses
 
 import pytest
 
-from tests.python.architecture.frozen_engine import cf0b, ratchet, scan
+from tests.python.architecture.frozen_engine import cf0b, pysource, ratchet, scan
 
-# The number of sites of each term in cf0b_exceptions.txt at b6e64c1d. A total may only go down
-# (MG6); never raise one: remove the occurrence instead.
-B6_TERM_TOTALS = {"private-import": 11, "private-module": 3, "private-attribute": 6}
+# The number of sites of each term in cf0b_exceptions.txt at b6e64c1d, one per occurrence: the
+# seven private-attribute sites are on six lines (electrostatic_lorentz.py:52 reads two). A total
+# may only go down (MG6); never raise one: remove the occurrence instead.
+B6_TERM_TOTALS = {"private-import": 11, "private-module": 3, "private-attribute": 7}
 
 # CF0b at b6e64c1d, verbatim from section 16.1 (all under python/pops/): lib/time/dirk.py:9,
 # euler.py:7, imex.py:7-8, rk.py:9, ssprk.py:8, strang.py:25, lib/amr/__init__.py:374,435,
@@ -47,11 +48,11 @@ SPEC_B6_SITES = collections.Counter({
     ("python/pops/lib/initial/_bootstrap_program.py", "private-module"): 1,
 })
 # The b6 sites that the audit of lot 2 added (Linear N2, ROM-81): the library reads private
-# attributes of a core model to find its frame and state (electrostatic_lorentz.py:32,50,52,55),
-# and writes the provenance of a core Program (_factory.py:26,34). Section 16.1 names imports; its
-# intention covers these reads and writes (A4).
+# attributes of a core model to find its frame and state (electrostatic_lorentz.py:32,50,55 and
+# two on 52), and writes the provenance of a core Program (_factory.py:26,34). Section 16.1 names
+# imports; its intention covers these reads and writes (A4).
 AUDIT_B6_SITES = collections.Counter({
-    ("python/pops/lib/models/electrostatic_lorentz.py", "private-attribute"): 4,
+    ("python/pops/lib/models/electrostatic_lorentz.py", "private-attribute"): 5,
     ("python/pops/lib/time/_factory.py", "private-attribute"): 2,
 })
 
@@ -123,8 +124,9 @@ def test_every_exception_names_the_issue_that_removes_it(listed):
 
 
 def test_exception_list_is_sorted_and_well_formed(listed):
+    # An entry may repeat: a line that spells a term twice holds two sites, and the gate pairs
+    # them with multiplicity, so a repeat that no site matches fails it as useless.
     assert listed == sorted(listed), "cf0b_exceptions.txt must stay sorted (refresh_exceptions.py)"
-    assert len(set(listed)) == len(listed), "cf0b_exceptions.txt has duplicate entries"
     assert all(entry.term in cf0b.TERMS for entry in listed)
 
 
@@ -136,9 +138,16 @@ def test_library_is_the_path_that_cf0_excludes():
 # ---------------------------------------------------------------------------------------------
 # Controls: the scanner refuses what CF0b refuses, and only that.
 # ---------------------------------------------------------------------------------------------
-def _spellings(source, rel="python/pops/lib/time/probe.py"):
-    return sorted({(term, spelling) for _, term, spelling in cf0b.python_sites(
-        rel, source, library_module="pops.lib", native_tree="native/", private_attributes=True)})
+def _sites(source, rel="python/pops/lib/time/probe.py"):
+    return sorted(cf0b.Site(rel, line, term, pysource.site_excerpt(spelling))
+                  for line, term, spelling in cf0b.python_sites(
+                      rel, source, library_module="pops.lib", native_tree="native/",
+                      private_attributes=True))
+
+
+def _spellings(source):
+    """(term, spelling) of each site, one per occurrence."""
+    return sorted((site.term, site.excerpt) for site in _sites(source))
 
 
 def _terms(source):
@@ -212,9 +221,10 @@ def test_scanner_accepts_the_public_surface(source):
     assert _terms(source) == []
 
 
-def test_a_site_is_its_spelling_on_its_line():
-    # The ratchet pairs a site with its entry by this spelling: an edit elsewhere on a listed line
-    # keeps the site, and a new private module, name or attribute is a new site.
+def test_a_site_is_one_occurrence_of_its_spelling():
+    # The ratchet pairs sites with entries by this spelling, counted with multiplicity: an edit
+    # elsewhere on a listed line keeps the site, and a new private module, name or attribute, or
+    # one more access to a listed one, is a new site. A module is spelled once per import.
     tableau = [("private-import", "pops.time._methods.tableau")]
     assert _spellings("from pops.time._methods.tableau import RungeKuttaTableau\n") == tableau
     assert _spellings("from pops.time._methods.tableau import (ButcherTableau,\n"
@@ -226,8 +236,31 @@ def test_a_site_is_its_spelling_on_its_line():
     assert _spellings("def f(model):\n    return getattr(model, '_frame', None)\n") == frame
     assert _spellings("def f(model):\n    return model._frame\n") == frame
     assert _spellings("def f(model):\n    return model._state\n") != frame
+    assert _spellings("def f(model, other):\n    return model._frame, other._frame\n") == frame * 2
+    assert _spellings("def f(model):\n    return getattr(model._dsl, '_m', model)\n") == [
+        ("private-attribute", "._dsl"), ("private-attribute", "._m")]
     assert _spellings("import pops.time\npops.time._registry = {}\n") == [
         ("private-access", "pops.time._registry")]
+
+
+def test_a_re_wrap_keeps_the_list_and_a_partial_removal_shrinks_it():
+    # Review of #689 (R5): a site is not its line. A re-wrap that moves an occurrence to another
+    # line passes the gate, removing one of two occurrences on a line leaves one useless entry
+    # (refresh_exceptions.py drops it), and one more occurrence on a listed line is new.
+    def reads(body):
+        return _sites("def f(model):\n    return %s\n" % body)
+
+    listed = reads("getattr(getattr(model, '_dsl', None), '_m', model)")
+    rewrapped = reads("getattr(\n        getattr(model, '_dsl', None),\n        '_m', model)")
+    assert [site.line for site in rewrapped] != [site.line for site in listed]
+    assert ratchet.compare(rewrapped, listed).clean
+    partial = ratchet.compare(reads("getattr(model, '_m', model)"), listed)
+    assert not partial.new
+    assert [entry.excerpt for entries, _ in partial.useless.values() for entry in entries] == [
+        "._dsl"]
+    again = ratchet.compare(reads("getattr(getattr(model, '_dsl', None), '_m', model) or model._m"),
+                            listed)
+    assert [site.excerpt for sites, _ in again.new.values() for site in sites] == ["._m"]
 
 
 def test_scanner_reports_private_modules_and_cpp_files(tmp_path, monkeypatch):

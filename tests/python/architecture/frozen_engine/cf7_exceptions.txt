@@ -2,9 +2,11 @@
 # work in the core paths and the native component tree. Written by cf7.py and
 # refresh_exceptions.py.
 #
-# Each line: <path>:<line> <term> <issue> | <spelling>. The term is the name of the limit, or the
-# label of an anchored site (cf7.ANCHORED_SITES); the spelling is the limit and its value (the
-# source line of an anchored site), so a cap whose value changes is a new site. The list only shrinks: a slice that removes a cap
+# Each line: <path>:<line> <term> <issue> | <spelling>, one per occurrence of a limit. The term is
+# the name of the limit, or the label of an anchored site (cf7.ANCHORED_SITES); the spelling is the
+# limit and its value (the source line of an anchored site), so a cap whose value changes is a new
+# site. The ratchet pairs sites with entries by spelling within each (path, term), counted with
+# multiplicity, and takes the line only as a hint. The list only shrinks: a slice that removes a cap
 # removes its line in the same PR (refresh_exceptions.py cf7), and a new cap fails
 # test_cf7_no_capped_analysis.py. At the exit of Phase 1 it holds only the caps of the two
 # interpreters of C44 (G04+G07, G06; section 18.3); at the exit of Phase 2 it is empty.

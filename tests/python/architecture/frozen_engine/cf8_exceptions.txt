@@ -1,13 +1,15 @@
 # CF8 exception list of b6e64c1d (spec 0.3, section 16.2; B2, B3, B5, A7; MG6): infrastructure and
 # native code in the case files of cases.toml. Written by cf8.py and refresh_exceptions.py.
 #
-# Each line: <path>:<line> <term> <issue> | <spelling>. The term is the keyword that writes a derived
-# size or a runtime resource (capacity, byte_capacity, ghost_depth, radius, components, dimension,
-# field_components, depth, slots, ...),
-# or a kind of native code (cf8.NATIVE_TERMS, cpp-file). The spelling is where the size is written,
-# without its value (StencilFlux(radius=)), so a case may edit a listed line until the site goes. The issue is the one whose mechanism makes
-# the written value unnecessary (cf8.OWNER_RULES, a proposal). The list only shrinks: a slice that
-# removes a site removes its line in the same PR (refresh_exceptions.py cf8), and a new site fails
+# Each line: <path>:<line> <term> <issue> | <spelling>, one per occurrence of a term. The term is
+# the keyword that writes a derived size or a runtime resource (capacity, byte_capacity,
+# ghost_depth, radius, components, dimension, field_components, depth, slots, ...), or a kind of
+# native code (cf8.NATIVE_TERMS, cpp-file). The spelling is where the size is written, without its
+# value (StencilFlux(radius=)); the ratchet pairs sites with entries by it within each (path, term),
+# counted with multiplicity, and takes the line only as a hint, so a case may edit or re-wrap a
+# listed line until the site goes. The issue is the one whose mechanism makes the written value
+# unnecessary (cf8.OWNER_RULES, a proposal). The list only shrinks: a slice that removes a site
+# removes its line in the same PR (refresh_exceptions.py cf8), and a new site fails
 # test_cf8_case_files.py. At b6 the case files hold no C++ file, no C++ string and no C++ entry
 # route of A7.
 

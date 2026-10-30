@@ -97,8 +97,9 @@ def test_every_exception_names_the_issue_that_removes_it(listed):
 
 
 def test_exception_list_is_sorted_and_well_formed(listed):
+    # An entry may repeat: a line that writes a size twice holds two sites, and the gate pairs
+    # them with multiplicity, so a repeat that no site matches fails it as useless.
     assert listed == sorted(listed), "cf8_exceptions.txt must stay sorted (refresh_exceptions.py)"
-    assert len(set(listed)) == len(listed), "cf8_exceptions.txt has duplicate entries"
 
 
 def test_case_paths_cover_the_b6_corpus_and_exist():
@@ -126,12 +127,17 @@ def _spellings(source):
 
 
 def test_a_size_is_spelled_where_it_is_written_without_its_value():
-    # The ratchet pairs a site with its entry by this spelling: a case may edit a listed line, and
-    # its value, until the owner of the site removes it; the size written in another call is new.
+    # The ratchet pairs sites with entries by this spelling, counted with multiplicity: a case may
+    # edit or re-wrap a listed line, and change its value, until the owner of the site removes it;
+    # the size written in another call, or in one more call, is new.
     listed = _spellings("flux = pops.StencilFlux(body, components=1, radius=1)\n")
     assert listed == ["StencilFlux(components=)", "StencilFlux(radius=)"]
     assert _spellings("flux = pops.StencilFlux(new_body, components=1, radius=2)\n") == listed
+    assert _spellings("flux = pops.StencilFlux(body,\n                        components=1,\n"
+                      "                        radius=1)\n") == listed
     assert _spellings("flux = pops.TraceFlux(body, components=1, radius=1)\n") != listed
+    assert _spellings("f, g = pops.StencilFlux(a, radius=1), pops.StencilFlux(b, radius=1)\n") == [
+        "StencilFlux(radius=)"] * 2
     assert _spellings("def build(ghost_depth=2):\n    config.capacity = 4096\n") == [
         ".capacity =", "def build(ghost_depth=)"]
     assert _spellings("s = pops.Storage(**{\"byte_capacity\": 8})\n") == [

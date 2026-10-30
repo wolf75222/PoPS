@@ -1,13 +1,15 @@
 # CF0b exception list of b6e64c1d (spec 0.3, section 16.1; A4, A7; MG6): what python/pops/lib/
 # reaches beyond the public pops surface. Written by cf0b.py and refresh_exceptions.py.
 #
-# Each line: <path>:<line> <term> <issue> | <spelling>. Line 0 is a site in the path itself (a
-# private module of the library). The spelling is what holds the term on its line (the dotted
-# name of an import or a reference, an attribute, a string); the ratchet pairs sites by it. The terms are cf0b.TERMS. The list only shrinks: a slice that
-# removes a site removes its line in the same PR (refresh_exceptions.py cf0b), and a new site fails
-# test_cf0b_library_boundary.py. It is the list that CF0b names at b6, line for line, plus the six
-# lines where the library reads or writes a private attribute of a core object (private-attribute,
-# found by the lot 2 audit), and it is empty at the exit of Phase 1 (section 18).
+# Each line: <path>:<line> <term> <issue> | <spelling>, one per occurrence of a term. Line 0 is a
+# site in the path itself (a private module of the library). The spelling is what holds the term
+# (the dotted name of an import or a reference, an attribute, a string); the ratchet pairs sites
+# with entries by it within each (path, term), counted with multiplicity, and takes the line only as
+# a hint. The terms are cf0b.TERMS. The list only shrinks: a slice that removes a site removes its
+# line in the same PR (refresh_exceptions.py cf0b), and a new site fails
+# test_cf0b_library_boundary.py. It is the list that CF0b names at b6, line for line, plus the
+# seven reads and writes of a private attribute of a core object, on six lines, that the lot 2 audit
+# found (private-attribute), and it is empty at the exit of Phase 1 (section 18).
 
 python/pops/lib/amr/__init__.py:374 private-import N12 | pops._generated_component_interfaces
 python/pops/lib/amr/__init__.py:435 private-import N12 | pops._generated_component_interfaces
@@ -16,7 +18,8 @@ python/pops/lib/initial/__init__.py:440 private-import N8 | pops.analytic._cell_
 python/pops/lib/initial/_bootstrap_program.py:0 private-module N8 | (path)
 python/pops/lib/models/electrostatic_lorentz.py:32 private-attribute N3 | ._frame
 python/pops/lib/models/electrostatic_lorentz.py:50 private-attribute N3 | ._m
-python/pops/lib/models/electrostatic_lorentz.py:52 private-attribute N3 | ._dsl ._m
+python/pops/lib/models/electrostatic_lorentz.py:52 private-attribute N3 | ._dsl
+python/pops/lib/models/electrostatic_lorentz.py:52 private-attribute N3 | ._m
 python/pops/lib/models/electrostatic_lorentz.py:55 private-attribute N3 | ._cons_names
 python/pops/lib/time/_factory.py:0 private-module N8 | (path)
 python/pops/lib/time/_factory.py:26 private-attribute N8 | ._provenance_context

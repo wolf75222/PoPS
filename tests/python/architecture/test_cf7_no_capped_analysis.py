@@ -151,8 +151,9 @@ def test_anchors_only_go():
 
 
 def test_exception_list_is_sorted_and_well_formed(listed):
+    # An entry may repeat: a line that holds a limit twice holds two sites, and the gate pairs
+    # them with multiplicity, so a repeat that no site matches fails it as useless.
     assert listed == sorted(listed), "cf7_exceptions.txt must stay sorted (refresh_exceptions.py)"
-    assert len(set(listed)) == len(listed), "cf7_exceptions.txt has duplicate entries"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -210,8 +211,9 @@ def test_scanner_ignores_what_is_not_an_analysis_cap_in_cpp(source):
 
 
 def test_a_cap_is_spelled_by_its_name_and_value(tmp_path, monkeypatch):
-    # The ratchet pairs a site with its entry by this spelling: an edit elsewhere on the line keeps
-    # the site, while a raised cap is a new site, so a listed cap leaves the list only by removal.
+    # The ratchet pairs sites with entries by this spelling, counted with multiplicity: an edit
+    # elsewhere on the line or a re-wrap keeps the site, while a raised cap is a new site, so a
+    # listed cap leaves the list only by removal.
     rel = "include/pops/runtime/probe.hpp"
 
     def spelled(source):
@@ -223,6 +225,7 @@ def test_a_cap_is_spelled_by_its_name_and_value(tmp_path, monkeypatch):
     listed = spelled("inline constexpr int kMaxProgramNodes = 64;\n")
     assert listed == [("kMaxProgramNodes", "kMaxProgramNodes = 64")]
     assert spelled("inline constexpr std::size_t kMaxProgramNodes = 64;  // nodes\n") == listed
+    assert spelled("inline constexpr int\n    kMaxProgramNodes = 64;\n") == listed
     assert spelled("inline constexpr int kMaxProgramNodes = 128;\n") != listed
 
 

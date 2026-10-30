@@ -21,16 +21,16 @@ it: a keyword argument, a parameter default, an attribute assignment or a key of
 argument. Library objects reach no C++ entry route either (CF0b), so a case cannot reach one through
 ``pops.lib``. The exception list of b6 (``cf8_exceptions.txt``) only shrinks (MG6).
 
-A site is one term on one line. Its excerpt is its spelling: where the size is written, without
-its value (``StencilFlux(radius=)``, ``def build(ghost_depth=)``, ``.capacity =``), or the spelling
-of CF0b for native code. The ratchet pairs sites with list entries by it, so a case may edit a
-listed line, and change a listed value, until the issue that owns the site removes it; the same
-size written in another call is a new site.
+A site is one occurrence of a term, and its excerpt is its spelling: where the size is written,
+without its value (``StencilFlux(radius=)``, ``def build(ghost_depth=)``, ``.capacity =``), or the
+spelling of CF0b for native code. The ratchet pairs sites with list entries by spelling within each
+(path, term), counted with multiplicity, so a case may edit or re-wrap a listed line, and change a
+listed value, until the issue that owns the site removes it; the same size written in another call,
+or once more in the same call, is a new site.
 """
 from __future__ import annotations
 
 import ast
-import collections
 import dataclasses
 import pathlib
 import tomllib
@@ -166,25 +166,23 @@ def case_files(root: pathlib.Path = scan.REPO_ROOT, paths=None) -> list[str]:
 
 def scan_cases(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine | None = None,
                paths=None):
-    """Every CF8 site of the case files of the checkout: one per (path, line, term), its excerpt
-    the spellings of the term on that line."""
+    """Every CF8 site of the case files of the checkout: one per occurrence of a term."""
     engine = engine or scan.load_cf0()
     library_module = pysource.module_name(cf0b.library_root(engine).rstrip("/"))
-    spellings = collections.defaultdict(set)  # (path, line, term) -> spellings
+    sites: list[Site] = []
     for rel in case_files(root, paths):
         if pysource.is_cpp_file(rel):
-            spellings[(rel, 0, "cpp-file")].add("(path)")
+            sites.append(Site(rel, 0, "cpp-file", "(path)"))
         if not rel.endswith(".py"):
             continue
         text = (root / rel).read_text(encoding="utf-8")
         for line, name, spelling in infrastructure_sites(ast.parse(text)):
-            spellings[(rel, line, name)].add(spelling)
+            sites.append(Site(rel, line, name, pysource.site_excerpt(spelling)))
         for line, term, spelling in cf0b.python_sites(rel, text, library_module=library_module,
                                                       native_tree=engine.native_tree):
             if term in NATIVE_TERMS:
-                spellings[(rel, line, term)].add(spelling)
-    return sorted(Site(rel, line, term, pysource.site_excerpt(spelled))
-                  for (rel, line, term), spelled in spellings.items())
+                sites.append(Site(rel, line, term, pysource.site_excerpt(spelling)))
+    return sorted(sites)
 
 
 def kind_of(term: str) -> str:
