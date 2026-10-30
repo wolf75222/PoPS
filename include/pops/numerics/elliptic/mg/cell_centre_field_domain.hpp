@@ -54,7 +54,8 @@ struct IntersectCellCentreBallKernel {
   Geometry<Dim> geometry;
   CellCentreBallDomain domain;
   POPS_HD void operator()(const Index<Dim>& cell) const {
-    if (!domain.contains(geometry, cell)) active(cell, 0) = Real(0);
+    if (!domain.contains(geometry, cell))
+      active(cell, 0) = Real(0);
   }
 };
 
@@ -64,7 +65,8 @@ struct ProjectCellCentreBallKernel {
   Geometry<Dim> geometry;
   CellCentreBallDomain domain;
   POPS_HD void operator()(const Index<Dim>& cell) const {
-    if (!domain.contains(geometry, cell)) phi(cell, 0) = Real(0);
+    if (!domain.contains(geometry, cell))
+      phi(cell, 0) = Real(0);
   }
 };
 

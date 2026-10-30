@@ -268,10 +268,9 @@ void add_compiled_model(System<Dim>& system, const std::string& name, Model mode
   ensure_compiled_system_execution_lane(system, name);
   ensure_compiled_system_state_route(system, name);
   install_prepared_block(
-      system, prepare_compiled_system_block<Dim>(system, name, std::move(model), limiter, riemann,
-                                                 reconstruction, time, gamma, substeps, evolve,
-                                                 stride, positivity_floor, newton,
-                                                 newton_diagnostics));
+      system, prepare_compiled_system_block<Dim>(
+                  system, name, std::move(model), limiter, riemann, reconstruction, time, gamma,
+                  substeps, evolve, stride, positivity_floor, newton, newton_diagnostics));
 }
 
 }  // namespace pops

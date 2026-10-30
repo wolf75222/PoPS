@@ -12,7 +12,10 @@
 #include <string_view>
 #include <utility>
 
-namespace pops { template <int> class AmrSystem; }
+namespace pops {
+template <int>
+class AmrSystem;
+}
 
 namespace pops::runtime::system::detail {
 
@@ -21,9 +24,9 @@ namespace pops::runtime::system::detail {
 // expression's explicit event permissions and clean read-only reuse stays valid.
 // External input upload is not expression evaluation.
 template <class Registry, class Transaction>
-void require_stability_auxiliary_permissions(
-    const Registry& registry, const Transaction& transaction,
-    const AuxiliaryEvaluationPoint& point) {
+void require_stability_auxiliary_permissions(const Registry& registry,
+                                             const Transaction& transaction,
+                                             const AuxiliaryEvaluationPoint& point) {
   if (point.event != AuxiliaryEvaluationEvent::before_stability)
     return;
   for (const auto index : registry.topological_order()) {
@@ -49,8 +52,10 @@ class NativeAcceptedAuxiliaryPoint {
     result.level = level;
     return result;
   }
+
  private:
-  template <int> friend class ::pops::AmrSystem;
+  template <int>
+  friend class ::pops::AmrSystem;
   NativeAcceptedAuxiliaryPoint(multiblock::BoundaryEvaluationPoint point, std::size_t levels,
                                std::function<void()> validate)
       : point_(std::move(point)), levels_(levels), validate_(std::move(validate)) {}
@@ -65,8 +70,8 @@ template <class Authenticate>
 AuxiliaryEvaluationPoint prepare_auxiliary_consumer_point(
     const multiblock::BoundaryEvaluationPoint& point, std::uint64_t topology,
     std::uint64_t generation, int sequence, AuxiliaryEvaluationEvent event,
-    const ExecutionLane& lane, std::string_view consumer, int block,
-    std::string_view operation, Authenticate&& authenticate) {
+    const ExecutionLane& lane, std::string_view consumer, int block, std::string_view operation,
+    Authenticate&& authenticate) {
   AuxiliaryEvaluationPoint auxiliary;
   std::string contract;
   std::exception_ptr error;
@@ -85,7 +90,11 @@ AuxiliaryEvaluationPoint prepare_auxiliary_consumer_point(
     auxiliary.qualify_physical_evaluation(point);
     ExactContractBuilder exact;
     exact.text("pops.runtime.auxiliary-consumer-preparation")
-        .scalar(std::uint32_t{1}).text(operation).text(consumer).scalar(block).scalar(topology);
+        .scalar(std::uint32_t{1})
+        .text(operation)
+        .text(consumer)
+        .scalar(block)
+        .scalar(topology);
     auxiliary.serialize_exact(exact);
     contract = std::move(exact).release();
   } catch (...) {
@@ -93,7 +102,8 @@ AuxiliaryEvaluationPoint prepare_auxiliary_consumer_point(
   }
   auxiliary_ghost_detail::rethrow_collective_failure(
       error, &lane, "auxiliary consumer preparation failed collectively");
-  if (!all_ranks_agree_exact_ordered_byte_pairs({{"auxiliary-consumer-preparation", contract}}, lane))
+  if (!all_ranks_agree_exact_ordered_byte_pairs({{"auxiliary-consumer-preparation", contract}},
+                                                lane))
     throw std::invalid_argument("auxiliary consumer event/point/source differs across MPI ranks");
   return auxiliary;
 }

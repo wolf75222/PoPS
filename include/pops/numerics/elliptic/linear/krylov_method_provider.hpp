@@ -179,19 +179,20 @@ class PreparedKrylovMethod {
 
   [[nodiscard]] KrylovMethodValidation validate_controls(
       const KrylovMethodControls& controls) const noexcept {
-    if (provider_ &&
-        (controls.physical_norm != KrylovPhysicalNorm::metric_l2 &&
-         controls.physical_norm != KrylovPhysicalNorm::component_linf))
+    if (provider_ && (controls.physical_norm != KrylovPhysicalNorm::metric_l2 &&
+                      controls.physical_norm != KrylovPhysicalNorm::component_linf))
       return KrylovMethodValidation::reject(29, "physical stopping norm is invalid");
     if (provider_ && !provider_->supports_physical_norm(controls.physical_norm))
-      return KrylovMethodValidation::reject(30, "physical stopping norm is not supported by this method");
+      return KrylovMethodValidation::reject(
+          30, "physical stopping norm is not supported by this method");
     return provider_ ? provider_->validate_controls(controls, options_)
                      : KrylovMethodValidation::reject(1, "no prepared Krylov method provider");
   }
   [[nodiscard]] KrylovMethodValidation validate_problem(
       const KrylovMethodProblemFacts<Dim>& facts) const noexcept {
     if (facts.physical_norm == KrylovPhysicalNorm::component_linf && facts.has_nullspace)
-      return KrylovMethodValidation::reject(31, "infinity physical stopping requires a nonsingular problem");
+      return KrylovMethodValidation::reject(
+          31, "infinity physical stopping requires a nonsingular problem");
     return provider_ ? provider_->validate_problem(facts, options_)
                      : KrylovMethodValidation::reject(1, "no prepared Krylov method provider");
   }

@@ -16,9 +16,7 @@ using ExactBrick = std::remove_cvref_t<Brick>;
 template <class Brick>
 concept ExactPhysicsBrickContract =
     requires(const ExactBrick<Brick>& brick, ExactContractBuilder& contract) {
-      {
-        ExactBrick<Brick>::provider_identity()
-      } noexcept -> std::same_as<PreparedProviderIdentity>;
+      { ExactBrick<Brick>::provider_identity() } noexcept -> std::same_as<PreparedProviderIdentity>;
       { brick.serialize_exact_parameters(contract) } -> std::same_as<void>;
     };
 

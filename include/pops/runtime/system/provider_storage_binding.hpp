@@ -51,9 +51,10 @@ template <int Dim, int Count>
 /// Non-cell-centred, vector, or differently decomposed values must be projected by their provider
 /// before this seam.  Sampling them as a scalar cell-centred field would silently change the model.
 template <int Dim, int Count>
-void require_pointwise_provider_groups(
-    const MultiFab<Dim>& state, const AuxiliaryStorageGroups<Dim>* storage,
-    const ResolvedAuxiliaryConsumerPlan<Dim>* plan, const char* operation) {
+void require_pointwise_provider_groups(const MultiFab<Dim>& state,
+                                       const AuxiliaryStorageGroups<Dim>* storage,
+                                       const ResolvedAuxiliaryConsumerPlan<Dim>* plan,
+                                       const char* operation) {
   if constexpr (Count == 0) {
     // An unrelated consumer can still own provider groups in the same System.  This consumer must
     // neither inspect nor require them: its compact ABI is exactly empty.

@@ -42,8 +42,9 @@ struct PolarTensorCapabilities {
   static constexpr bool tensor_cross_terms = available;
   static constexpr bool distributed_halos = available;
   static constexpr std::string_view unavailable_reason =
-      available ? std::string_view{}
-                : std::string_view{"polar tensor elliptic operator has exactly the axes (r, theta)"};
+      available
+          ? std::string_view{}
+          : std::string_view{"polar tensor elliptic operator has exactly the axes (r, theta)"};
 };
 
 static_assert(!PolarTensorCapabilities<1>::available);
@@ -90,54 +91,44 @@ struct ApplyKernel {
     const Real radius_low = radial_lower + radial_offset * dr;
     const Real radius_high = radial_lower + (radial_offset + Real(1)) * dr;
 
-    const Real rr_high =
-        Real(0.5) * (radial_radial(center) + radial_radial(radial_high));
+    const Real rr_high = Real(0.5) * (radial_radial(center) + radial_radial(radial_high));
     const Real rr_low = Real(0.5) * (radial_radial(center) + radial_radial(radial_low));
-    Real value =
-        (radius_high * rr_high * (phi(radial_high) - phi(center)) -
-         radius_low * rr_low * (phi(center) - phi(radial_low))) *
-        (inverse_dr * inverse_dr / radius);
+    Real value = (radius_high * rr_high * (phi(radial_high) - phi(center)) -
+                  radius_low * rr_low * (phi(center) - phi(radial_low))) *
+                 (inverse_dr * inverse_dr / radius);
 
-    const Real tt_high = Real(0.5) *
-                         (azimuthal_azimuthal(center) +
-                          azimuthal_azimuthal(azimuthal_high));
+    const Real tt_high =
+        Real(0.5) * (azimuthal_azimuthal(center) + azimuthal_azimuthal(azimuthal_high));
     const Real tt_low =
-        Real(0.5) * (azimuthal_azimuthal(center) +
-                     azimuthal_azimuthal(azimuthal_low));
+        Real(0.5) * (azimuthal_azimuthal(center) + azimuthal_azimuthal(azimuthal_low));
     value += (tt_high * (phi(azimuthal_high) - phi(center)) -
               tt_low * (phi(center) - phi(azimuthal_low))) *
              (inverse_dtheta * inverse_dtheta / (radius * radius));
 
     if (has_radial_azimuthal) {
-      const Real rt_high =
-          Real(0.5) * (radial_azimuthal(center) + radial_azimuthal(radial_high));
-      const Real rt_low =
-          Real(0.5) * (radial_azimuthal(center) + radial_azimuthal(radial_low));
-      const Real theta_gradient_high =
-          (phi(Index<Dim>{i, j + 1}) + phi(Index<Dim>{i + 1, j + 1}) -
-           phi(Index<Dim>{i, j - 1}) - phi(Index<Dim>{i + 1, j - 1})) *
-          (Real(0.25) * inverse_dtheta);
-      const Real theta_gradient_low =
-          (phi(Index<Dim>{i - 1, j + 1}) + phi(Index<Dim>{i, j + 1}) -
-           phi(Index<Dim>{i - 1, j - 1}) - phi(Index<Dim>{i, j - 1})) *
-          (Real(0.25) * inverse_dtheta);
-      value += (rt_high * theta_gradient_high - rt_low * theta_gradient_low) *
-               (inverse_dr / radius);
+      const Real rt_high = Real(0.5) * (radial_azimuthal(center) + radial_azimuthal(radial_high));
+      const Real rt_low = Real(0.5) * (radial_azimuthal(center) + radial_azimuthal(radial_low));
+      const Real theta_gradient_high = (phi(Index<Dim>{i, j + 1}) + phi(Index<Dim>{i + 1, j + 1}) -
+                                        phi(Index<Dim>{i, j - 1}) - phi(Index<Dim>{i + 1, j - 1})) *
+                                       (Real(0.25) * inverse_dtheta);
+      const Real theta_gradient_low = (phi(Index<Dim>{i - 1, j + 1}) + phi(Index<Dim>{i, j + 1}) -
+                                       phi(Index<Dim>{i - 1, j - 1}) - phi(Index<Dim>{i, j - 1})) *
+                                      (Real(0.25) * inverse_dtheta);
+      value +=
+          (rt_high * theta_gradient_high - rt_low * theta_gradient_low) * (inverse_dr / radius);
     }
 
     if (has_azimuthal_radial) {
       const Real tr_high =
           Real(0.5) * (azimuthal_radial(center) + azimuthal_radial(azimuthal_high));
-      const Real tr_low =
-          Real(0.5) * (azimuthal_radial(center) + azimuthal_radial(azimuthal_low));
+      const Real tr_low = Real(0.5) * (azimuthal_radial(center) + azimuthal_radial(azimuthal_low));
       const Real radial_gradient_high =
-          (phi(Index<Dim>{i + 1, j}) + phi(Index<Dim>{i + 1, j + 1}) -
-           phi(Index<Dim>{i - 1, j}) - phi(Index<Dim>{i - 1, j + 1})) *
+          (phi(Index<Dim>{i + 1, j}) + phi(Index<Dim>{i + 1, j + 1}) - phi(Index<Dim>{i - 1, j}) -
+           phi(Index<Dim>{i - 1, j + 1})) *
           (Real(0.25) * inverse_dr);
-      const Real radial_gradient_low =
-          (phi(Index<Dim>{i + 1, j - 1}) + phi(Index<Dim>{i + 1, j}) -
-           phi(Index<Dim>{i - 1, j - 1}) - phi(Index<Dim>{i - 1, j})) *
-          (Real(0.25) * inverse_dr);
+      const Real radial_gradient_low = (phi(Index<Dim>{i + 1, j - 1}) + phi(Index<Dim>{i + 1, j}) -
+                                        phi(Index<Dim>{i - 1, j - 1}) - phi(Index<Dim>{i - 1, j})) *
+                                       (Real(0.25) * inverse_dr);
       value += (tr_high * radial_gradient_high - tr_low * radial_gradient_low) *
                (inverse_dtheta / radius);
     }
@@ -171,22 +162,16 @@ struct InverseDiagonalKernel {
     const Real radius = radial_lower + (radial_offset + Real(0.5)) * dr;
     const Real radius_low = radial_lower + radial_offset * dr;
     const Real radius_high = radial_lower + (radial_offset + Real(1)) * dr;
-    const Real rr_high =
-        Real(0.5) * (radial_radial(center) + radial_radial(radial_high));
+    const Real rr_high = Real(0.5) * (radial_radial(center) + radial_radial(radial_high));
     const Real rr_low = Real(0.5) * (radial_radial(center) + radial_radial(radial_low));
-    const Real tt_high = Real(0.5) *
-                         (azimuthal_azimuthal(center) +
-                          azimuthal_azimuthal(azimuthal_high));
+    const Real tt_high =
+        Real(0.5) * (azimuthal_azimuthal(center) + azimuthal_azimuthal(azimuthal_high));
     const Real tt_low =
-        Real(0.5) * (azimuthal_azimuthal(center) +
-                     azimuthal_azimuthal(azimuthal_low));
-    const Real radial_low_coefficient =
-        radius_low * rr_low * (inverse_dr * inverse_dr / radius);
-    const Real radial_high_coefficient =
-        radius_high * rr_high * (inverse_dr * inverse_dr / radius);
+        Real(0.5) * (azimuthal_azimuthal(center) + azimuthal_azimuthal(azimuthal_low));
+    const Real radial_low_coefficient = radius_low * rr_low * (inverse_dr * inverse_dr / radius);
+    const Real radial_high_coefficient = radius_high * rr_high * (inverse_dr * inverse_dr / radius);
     Real diagonal = -(radial_low_coefficient + radial_high_coefficient) -
-                    (tt_low + tt_high) *
-                        (inverse_dtheta * inverse_dtheta / (radius * radius));
+                    (tt_low + tt_high) * (inverse_dtheta * inverse_dtheta / (radius * radius));
     if (i == radial_origin)
       diagonal += radial_low_coefficient * lower_ghost_scale;
     if (i == radial_last)
@@ -205,29 +190,24 @@ struct JacobiKernel {
   }
 };
 
-inline std::size_t checked_multiply(std::size_t left, std::size_t right,
-                                    const char* operation) {
+inline std::size_t checked_multiply(std::size_t left, std::size_t right, const char* operation) {
   if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left)
     throw std::length_error(operation);
   return left * right;
 }
 
 template <int Dim>
-HaloScheduleBudget exact_halo_budget(const mesh::BoxArray<Dim>& layout,
-                                     const Box<Dim>& domain) {
+HaloScheduleBudget exact_halo_budget(const mesh::BoxArray<Dim>& layout, const Box<Dim>& domain) {
   const std::size_t boxes = layout.size();
   const std::size_t pairs = checked_multiply(boxes, boxes, "polar halo pair budget overflow");
   std::size_t images = 1;
   for (int axis = 0; axis < Dim; ++axis)
     images = checked_multiply(images, 3, "polar halo image budget overflow");
-  const std::size_t work =
-      checked_multiply(pairs, images, "polar halo work budget overflow");
+  const std::size_t work = checked_multiply(pairs, images, "polar halo work budget overflow");
   const std::size_t jobs =
-      checked_multiply(work, static_cast<std::size_t>(2 * Dim),
-                       "polar halo job budget overflow");
+      checked_multiply(work, static_cast<std::size_t>(2 * Dim), "polar halo job budget overflow");
   const std::size_t cells = static_cast<std::size_t>(domain.numPts());
-  const std::size_t elements =
-      checked_multiply(jobs, cells, "polar halo element budget overflow");
+  const std::size_t elements = checked_multiply(jobs, cells, "polar halo element budget overflow");
   return {mesh::BoxArrayValidationBudget{boxes, pairs},
           work,
           jobs,
@@ -291,15 +271,13 @@ PhysicalBoundaryConditions<Dim> coefficient_boundary(
 
 inline std::size_t host_offset(const Box<2>& storage, int i, int j) {
   return static_cast<std::size_t>(i - storage.lo[0]) +
-         static_cast<std::size_t>(j - storage.lo[1]) *
-             static_cast<std::size_t>(storage.length(0));
+         static_cast<std::size_t>(j - storage.lo[1]) * static_cast<std::size_t>(storage.length(0));
 }
 
 template <int Dim>
 void require_same_scalar_layout(const MultiFab<Dim>& reference, const MultiFab<Dim>& field,
                                 const char* role) {
-  if (reference.layout() != field.layout() ||
-      reference.distribution() != field.distribution() ||
+  if (reference.layout() != field.layout() || reference.distribution() != field.distribution() ||
       reference.local_rank() != field.local_rank() || field.ncomp() != 1)
     throw std::invalid_argument(std::string("polar tensor ") + role +
                                 " differs from the exact solver layout");
@@ -341,9 +319,8 @@ void apply_polar_tensor(const MultiFab<Dim>& phi, const PolarGeometry<Dim>& geom
             azimuthal_azimuthal.fab(local).view(),
             radial_azimuthal ? radial_azimuthal->fab(local).view() : empty,
             azimuthal_radial ? azimuthal_radial->fab(local).view() : empty,
-            radial_azimuthal != nullptr, azimuthal_radial != nullptr,
-            geometry.domain().lo[0], geometry.radial_lower(), geometry.dr(), inverse_dr,
-            inverse_dtheta});
+            radial_azimuthal != nullptr, azimuthal_radial != nullptr, geometry.domain().lo[0],
+            geometry.radial_lower(), geometry.dr(), inverse_dr, inverse_dtheta});
   }
 }
 
@@ -356,8 +333,7 @@ concept PolarLinearSolver = requires(Solver solver, const Solver constant_solver
   { solver.phi() } -> std::same_as<typename Solver::field_type&>;
   { solver.solve() } -> std::same_as<SolveReport>;
   { constant_solver.residual() } -> std::convertible_to<Real>;
-  { constant_solver.geom() } ->
-      std::same_as<const PolarGeometry<Solver::dimension>&>;
+  { constant_solver.geom() } -> std::same_as<const PolarGeometry<Solver::dimension>&>;
 };
 
 template <int Dim>
@@ -443,8 +419,7 @@ class PolarTensorKrylovSolver {
 
       report.reference_residual_norm = reduce_norm_inf(residual_);
       const Real tolerance = std::max(options_.absolute_tolerance,
-                                      options_.relative_tolerance *
-                                          report.reference_residual_norm);
+                                      options_.relative_tolerance * report.reference_residual_norm);
       if (report.reference_residual_norm <= tolerance) {
         report.evaluations = 1;
         report.residual_norm = report.reference_residual_norm;
@@ -586,27 +561,25 @@ class PolarTensorKrylovSolver {
 
   void prepare_boundaries_and_halo_() {
     const Extent<Dim> ghosts = unit_ghosts_();
-    full_physical_ = std::make_unique<PreparedPhysicalBoundary<Dim>>(
-        prepare_physical_boundary(geometry_.domain(), ghosts, boundary_,
-                                  BoundaryScheduleBudget{8}));
-    homogeneous_physical_ = std::make_unique<PreparedPhysicalBoundary<Dim>>(
-        prepare_physical_boundary(geometry_.domain(), ghosts, homogeneous_boundary_,
-                                  BoundaryScheduleBudget{8}));
-    coefficient_physical_ = std::make_unique<PreparedPhysicalBoundary<Dim>>(
-        prepare_physical_boundary(geometry_.domain(), ghosts, coefficient_boundary_,
-                                  BoundaryScheduleBudget{8}));
+    full_physical_ = std::make_unique<PreparedPhysicalBoundary<Dim>>(prepare_physical_boundary(
+        geometry_.domain(), ghosts, boundary_, BoundaryScheduleBudget{8}));
+    homogeneous_physical_ =
+        std::make_unique<PreparedPhysicalBoundary<Dim>>(prepare_physical_boundary(
+            geometry_.domain(), ghosts, homogeneous_boundary_, BoundaryScheduleBudget{8}));
+    coefficient_physical_ =
+        std::make_unique<PreparedPhysicalBoundary<Dim>>(prepare_physical_boundary(
+            geometry_.domain(), ghosts, coefficient_boundary_, BoundaryScheduleBudget{8}));
     halo_schedule_ = std::make_unique<HaloSchedule<Dim>>(prepare_halo_schedule(
         trial_, geometry_.domain(), boundary_.topology(),
         polar_tensor_detail::exact_halo_budget(trial_.layout(), geometry_.domain())));
     const bool remote = all_reduce_max(halo_schedule_->has_remote_jobs() ? 1L : 0L) != 0;
     if (remote) {
-      halo_lane_ = std::make_unique<ExecutionLane>(ExecutionLane::duplicate_world_collectively(
-          "pops.polar-tensor.exact-rank2/halo"));
+      halo_lane_ = std::make_unique<ExecutionLane>(
+          ExecutionLane::duplicate_world_collectively("pops.polar-tensor.exact-rank2/halo"));
       HaloExchangeContext context{};
       context.context_generation = 1;
       context.schedule_generation = 1;
-      halo_exchange_ =
-          std::make_unique<HaloExchange<Dim>>(*halo_schedule_, *halo_lane_, context);
+      halo_exchange_ = std::make_unique<HaloExchange<Dim>>(*halo_schedule_, *halo_lane_, context);
     }
   }
 
@@ -647,20 +620,18 @@ class PolarTensorKrylovSolver {
     const Real inverse_dr = Real(1) / geometry_.dr();
     const Real inverse_dtheta = Real(1) / geometry_.dtheta();
     for (std::size_t local = 0; local < inverse_diagonal_.local_size(); ++local)
-      for_each_cell(
-          inverse_diagonal_.box(local),
-          polar_tensor_detail::InverseDiagonalKernel<Dim>{
-              std::as_const(radial_radial_field_()).fab(local).view(),
-              std::as_const(azimuthal_azimuthal_field_()).fab(local).view(),
-              inverse_diagonal_.fab(local).view(), geometry_.domain().lo[0],
-              geometry_.domain().hi[0], geometry_.radial_lower(), geometry_.dr(), inverse_dr,
-              inverse_dtheta, lower_scale, upper_scale});
+      for_each_cell(inverse_diagonal_.box(local),
+                    polar_tensor_detail::InverseDiagonalKernel<Dim>{
+                        std::as_const(radial_radial_field_()).fab(local).view(),
+                        std::as_const(azimuthal_azimuthal_field_()).fab(local).view(),
+                        inverse_diagonal_.fab(local).view(), geometry_.domain().lo[0],
+                        geometry_.domain().hi[0], geometry_.radial_lower(), geometry_.dr(),
+                        inverse_dr, inverse_dtheta, lower_scale, upper_scale});
     if (options_.preconditioner == PolarPreconditioner::radial_line)
       build_radial_lines_(lower_scale, upper_scale);
-    pin_gauge_ = !polar_tensor_detail::fixes_gauge(
-                     boundary_.at(Face<Dim>{0, BoundarySide::lower})) &&
-                 !polar_tensor_detail::fixes_gauge(
-                     boundary_.at(Face<Dim>{0, BoundarySide::upper}));
+    pin_gauge_ =
+        !polar_tensor_detail::fixes_gauge(boundary_.at(Face<Dim>{0, BoundarySide::lower})) &&
+        !polar_tensor_detail::fixes_gauge(boundary_.at(Face<Dim>{0, BoundarySide::upper}));
     coefficients_ready_ = true;
   }
 
@@ -668,8 +639,7 @@ class PolarTensorKrylovSolver {
     field_type& radial_radial = radial_radial_field_();
     field_type& azimuthal_azimuthal = azimuthal_azimuthal_field_();
     for (const Box<Dim>& box : radial_radial.layout().boxes())
-      if (box.lo[0] != geometry_.domain().lo[0] ||
-          box.hi[0] != geometry_.domain().hi[0])
+      if (box.lo[0] != geometry_.domain().lo[0] || box.hi[0] != geometry_.domain().hi[0])
         throw std::invalid_argument(
             "polar radial-line preconditioner requires every patch to span the radial domain");
 
@@ -703,28 +673,27 @@ class PolarTensorKrylovSolver {
           const Real radius = geometry_.r_cell(i);
           const Real low_radius = geometry_.r_face(i);
           const Real high_radius = geometry_.r_face(i + 1);
-          const Real rr_high = Real(0.5) *
-                               (rr(polar_tensor_detail::host_offset(rr_storage, i, j)) +
-                                rr(polar_tensor_detail::host_offset(rr_storage, i + 1, j)));
-          const Real rr_low = Real(0.5) *
-                              (rr(polar_tensor_detail::host_offset(rr_storage, i, j)) +
-                               rr(polar_tensor_detail::host_offset(rr_storage, i - 1, j)));
-          const Real tt_high = Real(0.5) *
-                               (tt(polar_tensor_detail::host_offset(tt_storage, i, j)) +
-                                tt(polar_tensor_detail::host_offset(tt_storage, i, j + 1)));
-          const Real tt_low = Real(0.5) *
-                              (tt(polar_tensor_detail::host_offset(tt_storage, i, j)) +
-                               tt(polar_tensor_detail::host_offset(tt_storage, i, j - 1)));
+          const Real rr_high =
+              Real(0.5) * (rr(polar_tensor_detail::host_offset(rr_storage, i, j)) +
+                           rr(polar_tensor_detail::host_offset(rr_storage, i + 1, j)));
+          const Real rr_low =
+              Real(0.5) * (rr(polar_tensor_detail::host_offset(rr_storage, i, j)) +
+                           rr(polar_tensor_detail::host_offset(rr_storage, i - 1, j)));
+          const Real tt_high =
+              Real(0.5) * (tt(polar_tensor_detail::host_offset(tt_storage, i, j)) +
+                           tt(polar_tensor_detail::host_offset(tt_storage, i, j + 1)));
+          const Real tt_low =
+              Real(0.5) * (tt(polar_tensor_detail::host_offset(tt_storage, i, j)) +
+                           tt(polar_tensor_detail::host_offset(tt_storage, i, j - 1)));
           const Real lower_coefficient =
               low_radius * rr_low / (radius * geometry_.dr() * geometry_.dr());
           const Real upper_coefficient =
               high_radius * rr_high / (radius * geometry_.dr() * geometry_.dr());
           const Real azimuthal_diagonal =
-              (tt_low + tt_high) /
-              (radius * radius * geometry_.dtheta() * geometry_.dtheta());
-          const std::size_t entry = static_cast<std::size_t>(theta) *
-                                        static_cast<std::size_t>(radial_cells) +
-                                    static_cast<std::size_t>(radial);
+              (tt_low + tt_high) / (radius * radius * geometry_.dtheta() * geometry_.dtheta());
+          const std::size_t entry =
+              static_cast<std::size_t>(theta) * static_cast<std::size_t>(radial_cells) +
+              static_cast<std::size_t>(radial);
           lower[entry] = radial == 0 ? Real(0) : lower_coefficient;
           upper[entry] = radial == radial_cells - 1 ? Real(0) : upper_coefficient;
           diagonal[entry] = -(lower_coefficient + upper_coefficient) - azimuthal_diagonal;
@@ -766,20 +735,19 @@ class PolarTensorKrylovSolver {
       const int local_theta = static_cast<int>(valid.length(1));
       for (int theta = 0; theta < local_theta; ++theta) {
         const int j = valid.lo[1] + theta;
-        const std::size_t base = static_cast<std::size_t>(theta) *
-                                 static_cast<std::size_t>(radial_cells);
+        const std::size_t base =
+            static_cast<std::size_t>(theta) * static_cast<std::size_t>(radial_cells);
         Real pivot = line_diagonal_[local][base];
         if (!finite_nonzero_(pivot))
           throw std::runtime_error("polar radial-line preconditioner found a null pivot");
         modified_upper[0] = line_upper_[local][base] / pivot;
-        solution[0] = input_host(polar_tensor_detail::host_offset(
-                          input_storage, geometry_.domain().lo[0], j)) /
+        solution[0] = input_host(polar_tensor_detail::host_offset(input_storage,
+                                                                  geometry_.domain().lo[0], j)) /
                       pivot;
         for (int radial = 1; radial < radial_cells; ++radial) {
           const std::size_t entry = base + static_cast<std::size_t>(radial);
           pivot = line_diagonal_[local][entry] -
-                  line_lower_[local][entry] *
-                      modified_upper[static_cast<std::size_t>(radial - 1)];
+                  line_lower_[local][entry] * modified_upper[static_cast<std::size_t>(radial - 1)];
           if (!finite_nonzero_(pivot))
             throw std::runtime_error("polar radial-line preconditioner found a null pivot");
           modified_upper[static_cast<std::size_t>(radial)] =
@@ -787,8 +755,7 @@ class PolarTensorKrylovSolver {
           const int i = geometry_.domain().lo[0] + radial;
           solution[static_cast<std::size_t>(radial)] =
               (input_host(polar_tensor_detail::host_offset(input_storage, i, j)) -
-               line_lower_[local][entry] *
-                   solution[static_cast<std::size_t>(radial - 1)]) /
+               line_lower_[local][entry] * solution[static_cast<std::size_t>(radial - 1)]) /
               pivot;
         }
         for (int radial = radial_cells - 2; radial >= 0; --radial)
@@ -847,8 +814,7 @@ class PolarTensorKrylovSolver {
                               ? report.residual_norm / report.reference_residual_norm
                               : report.residual_norm;
     const Real tolerance = std::max(options_.absolute_tolerance,
-                                    options_.relative_tolerance *
-                                        report.reference_residual_norm);
+                                    options_.relative_tolerance * report.reference_residual_norm);
     if (!std::isfinite(static_cast<double>(report.residual_norm)) ||
         report.residual_norm > tolerance)
       return fail_(report, SolveStatus::kInadmissibleCandidate, report.iters,
@@ -865,8 +831,7 @@ class PolarTensorKrylovSolver {
     last_report_ = report;
   }
 
-  SolveReport fail_(SolveReport report, SolveStatus status, int iterations,
-                    std::string reason) {
+  SolveReport fail_(SolveReport report, SolveStatus status, int iterations, std::string reason) {
     report.iters = iterations;
     report.residual_norm = reduce_norm_inf(residual_);
     report.rel_residual = report.reference_residual_norm > Real(0)
@@ -918,8 +883,7 @@ static_assert(PolarLinearSolver<PolarTensorKrylovSolver<2>>);
 
 template <int Dim>
 struct PolarTensorProvider {
-  static_assert(Dim >= 1 && Dim <= 3,
-                "PolarTensorProvider only supports dimensions 1, 2, and 3");
+  static_assert(Dim >= 1 && Dim <= 3, "PolarTensorProvider only supports dimensions 1, 2, and 3");
 
   static constexpr bool available = PolarTensorCapabilities<Dim>::available;
   static constexpr std::string_view rejection_reason() noexcept {
@@ -928,8 +892,8 @@ struct PolarTensorProvider {
 
   template <int ExactDim = Dim>
     requires(PolarTensorCapabilities<ExactDim>::available)
-  static PolarTensorKrylovSolver<ExactDim> build(
-      PolarEllipticBuildRequest<ExactDim> request, PolarTensorOptions options = {}) {
+  static PolarTensorKrylovSolver<ExactDim> build(PolarEllipticBuildRequest<ExactDim> request,
+                                                 PolarTensorOptions options = {}) {
     return PolarTensorKrylovSolver<ExactDim>{std::move(request), options};
   }
 };

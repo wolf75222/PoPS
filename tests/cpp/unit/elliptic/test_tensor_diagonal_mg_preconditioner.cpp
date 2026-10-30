@@ -28,23 +28,25 @@ struct Domain {
 
 Domain domain() {
   const pops::Box<2> box{pops::Index<2>{0, 0}, pops::Index<2>{7, 7}};
-  auto geometry = pops::Geometry<2>::from_bounds(
-      box, pops::RealVector<2>{0, 0}, pops::RealVector<2>{1, 1});
+  auto geometry =
+      pops::Geometry<2>::from_bounds(box, pops::RealVector<2>{0, 0}, pops::RealVector<2>{1, 1});
   pops::mesh::BoxArray<2> boxes{std::vector<pops::Box<2>>{box}};
-  const pops::mesh::RankSpace<2> ranks{pops::Index<2>{0, 0},
+  const pops::mesh::RankSpace<2> ranks{
+      pops::Index<2>{0, 0},
       pops::Extent<2>{static_cast<std::int64_t>(pops::n_ranks()), std::int64_t{1}}};
   auto distribution = pops::mesh::Distribution<2>::partitioned(
       boxes, ranks, std::vector<pops::Index<2>>{pops::Index<2>{0, 0}});
   std::array<pops::PhysicalBoundaryFace, 4> faces;
   faces.fill({pops::PhysicalBoundaryKind::dirichlet, Real(0)});
-  pops::PhysicalBoundaryConditions<2> boundary{pops::BoundaryTopology<2>::physical(), faces,
+  pops::PhysicalBoundaryConditions<2> boundary{
+      pops::BoundaryTopology<2>::physical(), faces,
       pops::RealVector<2>{geometry.spacing(0), geometry.spacing(1)}};
   return {geometry, boxes, distribution, pops::Index<2>{pops::my_rank(), 0}, boundary};
 }
 
 std::shared_ptr<Field> field(const Domain& dom, int components) {
   return std::make_shared<Field>(dom.boxes, dom.distribution, dom.rank, components,
-                                pops::Extent<2>{1, 1});
+                                 pops::Extent<2>{1, 1});
 }
 
 void tensor(Field& values, Real diagonal, Real cross) {
@@ -63,10 +65,10 @@ Real compare(const Field& first, const Field& second, Real scale, const pops::Ex
   for (std::size_t local = 0; local < first.local_size(); ++local) {
     const auto a = first.fab(local).view();
     const auto b = second.fab(local).view();
-    error = std::max(error, pops::for_each_cell_reduce_max(first.box(local),
-      [=] POPS_HD(const pops::Index<2>& cell) {
-        return Kokkos::abs(a(cell, 0) - scale * b(cell, 0));
-      }));
+    error = std::max(error, pops::for_each_cell_reduce_max(
+                                first.box(local), [=] POPS_HD(const pops::Index<2>& cell) {
+                                  return Kokkos::abs(a(cell, 0) - scale * b(cell, 0));
+                                }));
   }
   return pops::all_reduce_max(error, lane);
 }

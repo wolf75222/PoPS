@@ -34,8 +34,7 @@ void require_prepared_eb_ghost_contract(const MultiFab<Dim, MemorySpace>& state,
     const auto& inverse_ghosts = inverse_volume_fraction.fab(local).ghosts();
     for (int axis = 0; axis < Dim; ++axis) {
       if (state_ghosts[axis] < 1)
-        throw std::invalid_argument(
-            "prepared EB residual requires state ghosts on every axis");
+        throw std::invalid_argument("prepared EB residual requires state ghosts on every axis");
       if (mask_ghosts[axis] < 1)
         throw std::invalid_argument(
             "prepared EB residual requires active_mask ghosts on every axis");
@@ -91,7 +90,6 @@ void require_prepared_eb_aperture_contract(const MultiFab<Dim, MemorySpace>& sta
 }
 
 }  // namespace embedded_operator_detail
-
 
 template <int Dim>
 struct EmbeddedBoundaryCapabilities {
@@ -172,7 +170,8 @@ class PreparedEmbeddedBoundaryMetric {
 
   template <class MemorySpace>
   static PreparedEmbeddedBoundaryMetric prepare(
-      BaseMetric base, const Fab<Dim, MemorySpace>& inverse_volume_fraction, const Box<Dim>& cells) {
+      BaseMetric base, const Fab<Dim, MemorySpace>& inverse_volume_fraction,
+      const Box<Dim>& cells) {
     if (inverse_volume_fraction.ncomp() != 1 || !(inverse_volume_fraction.box() == cells))
       throw std::invalid_argument(
           "prepared embedded-boundary inverse-volume field does not match the patch");
@@ -235,7 +234,8 @@ class PreparedEmbeddedBoundaryOperator {
         positivity_floor_(positivity_floor) {}
 
   template <class MemorySpace>
-  void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& active_cells,
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         const Fab<Dim, MemorySpace>& active_cells,
                          const Fab<Dim, MemorySpace>& inverse_volume_fraction,
                          Fab<Dim, MemorySpace>& residual,
                          BoundaryFaceOmission<Dim> omission = {}) const
@@ -250,8 +250,7 @@ class PreparedEmbeddedBoundaryOperator {
   }
 
   template <class MemorySpace>
-  void assemble_residual(const Fab<Dim, MemorySpace>& state,
-                         const Fab<Dim, MemorySpace>& providers,
+  void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& providers,
                          const Fab<Dim, MemorySpace>& active_cells,
                          const Fab<Dim, MemorySpace>& inverse_volume_fraction,
                          Fab<Dim, MemorySpace>& residual,
@@ -282,7 +281,8 @@ class PreparedEmbeddedBoundaryOperator {
   }
 
   template <class MemorySpace>
-  void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& active_cells,
+  void assemble_residual(const Fab<Dim, MemorySpace>& state,
+                         const Fab<Dim, MemorySpace>& active_cells,
                          const Fab<Dim, MemorySpace>& inverse_volume_fraction,
                          const Fab<Dim, MemorySpace>& face_aperture_lower,
                          const Fab<Dim, MemorySpace>& face_aperture_upper,
@@ -299,8 +299,7 @@ class PreparedEmbeddedBoundaryOperator {
   }
 
   template <class MemorySpace>
-  void assemble_residual(const Fab<Dim, MemorySpace>& state,
-                         const Fab<Dim, MemorySpace>& providers,
+  void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& providers,
                          const Fab<Dim, MemorySpace>& active_cells,
                          const Fab<Dim, MemorySpace>& inverse_volume_fraction,
                          const Fab<Dim, MemorySpace>& face_aperture_lower,

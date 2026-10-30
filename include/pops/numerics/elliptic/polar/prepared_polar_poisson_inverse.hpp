@@ -50,9 +50,12 @@ class PreparedPolarPoissonInverse {
   static constexpr std::size_t maximum_patches = 4096;
 
   PreparedPolarPoissonInverse(const field_type& prototype, const Geometry<Dim>& geometry,
-                             const PreparedPhysicalBoundary<Dim>& boundary,
-                             options_type options, const ExecutionLane& lane) noexcept
-      : prototype_(&prototype), geometry_(geometry), boundary_(&boundary), options_(options),
+                              const PreparedPhysicalBoundary<Dim>& boundary, options_type options,
+                              const ExecutionLane& lane) noexcept
+      : prototype_(&prototype),
+        geometry_(geometry),
+        boundary_(&boundary),
+        options_(options),
         lane_(&lane) {}
 
   PreparedPolarPoissonInverse(const PreparedPolarPoissonInverse&) = delete;
@@ -81,16 +84,27 @@ class PreparedPolarPoissonInverse {
       ExactContractBuilder builder;
       builder.text("pops.prepared-fv-polar-poisson-inverse@1")
           .text("real-half-DFT;FV-sine-symbol;radial-Thomas;exact-numeric-replicas")
-          .text(lane_->identity()).scalar(Dim).scalar(prototype_->ncomp())
-          .scalar(options_.zero_flux_faces).scalar(options_.dirichlet_faces)
-          .scalar(options_.arithmetic_diagonal).scalar(prototype_->distribution().mode())
-          .scalar(maximum_radial_cells).scalar(maximum_angular_cells).scalar(maximum_cells)
-          .scalar(maximum_transform_products).scalar(maximum_storage_bytes)
-          .scalar(maximum_patches).scalar(dimensions.storage_bytes);
+          .text(lane_->identity())
+          .scalar(Dim)
+          .scalar(prototype_->ncomp())
+          .scalar(options_.zero_flux_faces)
+          .scalar(options_.dirichlet_faces)
+          .scalar(options_.arithmetic_diagonal)
+          .scalar(prototype_->distribution().mode())
+          .scalar(maximum_radial_cells)
+          .scalar(maximum_angular_cells)
+          .scalar(maximum_cells)
+          .scalar(maximum_transform_products)
+          .scalar(maximum_storage_bytes)
+          .scalar(maximum_patches)
+          .scalar(dimensions.storage_bytes);
       for (int axis = 0; axis < Dim; ++axis) {
-        builder.scalar(geometry_.domain().lo[axis]).scalar(geometry_.domain().hi[axis])
-            .scalar(geometry_.lower()[axis]).scalar(geometry_.upper()[axis])
-            .scalar(geometry_.spacing(axis)).scalar(prototype_->ghosts()[axis])
+        builder.scalar(geometry_.domain().lo[axis])
+            .scalar(geometry_.domain().hi[axis])
+            .scalar(geometry_.lower()[axis])
+            .scalar(geometry_.upper()[axis])
+            .scalar(geometry_.spacing(axis))
+            .scalar(prototype_->ghosts()[axis])
             .scalar(prototype_->rank_space().origin()[axis])
             .scalar(prototype_->rank_space().extent()[axis])
             .scalar(boundary_->schedule().ghosts()[axis]);
@@ -98,7 +112,10 @@ class PreparedPolarPoissonInverse {
           const Face<Dim> face{axis, side};
           const auto& law = boundary_->conditions().at(face);
           builder.scalar(boundary_->conditions().topology().is_periodic(face))
-              .scalar(law.kind).scalar(law.value).scalar(law.alpha).scalar(law.beta);
+              .scalar(law.kind)
+              .scalar(law.value)
+              .scalar(law.alpha)
+              .scalar(law.beta);
         }
       }
       builder.scalar(prototype_->layout().size());
@@ -113,7 +130,8 @@ class PreparedPolarPoissonInverse {
       invalid = 1;
     }
     if (all_reduce_max(invalid, *lane_) != 0)
-      throw std::invalid_argument("polar inverse geometry, boundary, ownership or size is unsupported");
+      throw std::invalid_argument(
+          "polar inverse geometry, boundary, ownership or size is unsupported");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{"pops.prepared-fv-polar-poisson-inverse@1", contract}}, *lane_))
       throw std::invalid_argument("polar inverse prepared inputs differ between ranks");
@@ -157,17 +175,18 @@ class PreparedPolarPoissonInverse {
           const auto source = in.fab(local).view();
           const auto box = in.box(local);
           const std::size_t width = static_cast<std::size_t>(box.length(0));
-          Kokkos::parallel_for(state.pack_label, Range(0, static_cast<std::size_t>(box.numPts())),
+          Kokkos::parallel_for(
+              state.pack_label, Range(0, static_cast<std::size_t>(box.numPts())),
               KOKKOS_LAMBDA(const std::size_t ordinal) {
-            Index<Dim> index = box.lo;
-            index[0] += static_cast<int>(ordinal % width);
-            index[1] += static_cast<int>(ordinal / width);
-            const std::size_t i = static_cast<std::size_t>(
-                static_cast<std::int64_t>(index[0]) - domain.lo[0]);
-            const std::size_t j = static_cast<std::size_t>(
-                static_cast<std::int64_t>(index[1]) - domain.lo[1]);
-            values(j * nr + i) = source(index, 0);
-          });
+                Index<Dim> index = box.lo;
+                index[0] += static_cast<int>(ordinal % width);
+                index[1] += static_cast<int>(ordinal / width);
+                const std::size_t i =
+                    static_cast<std::size_t>(static_cast<std::int64_t>(index[0]) - domain.lo[0]);
+                const std::size_t j =
+                    static_cast<std::size_t>(static_cast<std::int64_t>(index[1]) - domain.lo[1]);
+                values(j * nr + i) = source(index, 0);
+              });
         }
         Kokkos::fence();
         Kokkos::deep_copy(state.host_values, values);
@@ -216,7 +235,8 @@ class PreparedPolarPoissonInverse {
         const std::size_t pivot_offset = 2 * state.shape.table;
         const std::size_t upper_offset = pivot_offset + state.shape.modal;
         const std::size_t lower_offset = upper_offset + state.shape.modal;
-        Kokkos::parallel_for(state.forward_label, Range(0, state.shape.modal),
+        Kokkos::parallel_for(
+            state.forward_label, Range(0, state.shape.modal),
             KOKKOS_LAMBDA(const std::size_t ordinal) {
               const std::size_t mode = ordinal / nr;
               const std::size_t i = ordinal % nr;
@@ -230,8 +250,8 @@ class PreparedPolarPoissonInverse {
               real(ordinal) = cosine_sum;
               imaginary(ordinal) = sine_sum;
             });
-        Kokkos::parallel_for(state.radial_label, Range(0, nm),
-            KOKKOS_LAMBDA(const std::size_t mode) {
+        Kokkos::parallel_for(
+            state.radial_label, Range(0, nm), KOKKOS_LAMBDA(const std::size_t mode) {
               const std::size_t base = mode * nr;
               Real previous_real = 0;
               Real previous_imaginary = 0;
@@ -252,15 +272,17 @@ class PreparedPolarPoissonInverse {
                 imaginary(ordinal) -= upper * imaginary(ordinal + 1);
               }
             });
-        Kokkos::parallel_for(state.backward_label, Range(0, state.shape.cells),
+        Kokkos::parallel_for(
+            state.backward_label, Range(0, state.shape.cells),
             KOKKOS_LAMBDA(const std::size_t ordinal) {
               const std::size_t j = ordinal / nr;
               const std::size_t i = ordinal % nr;
               Real sum = real(i);
               for (std::size_t mode = 1; mode < nm; ++mode) {
                 const Real weight = 2 * mode == nt ? Real(1) : Real(2);
-                sum += weight * (real(mode * nr + i) * coefficients(mode * nt + j) +
-                    imaginary(mode * nr + i) * coefficients(sine_offset + mode * nt + j));
+                sum +=
+                    weight * (real(mode * nr + i) * coefficients(mode * nt + j) +
+                              imaginary(mode * nr + i) * coefficients(sine_offset + mode * nt + j));
               }
               values(ordinal) = sum / static_cast<Real>(nt);
             });
@@ -281,17 +303,18 @@ class PreparedPolarPoissonInverse {
           const auto target = out.fab(local).view();
           const auto box = out.box(local);
           const std::size_t width = static_cast<std::size_t>(box.length(0));
-          Kokkos::parallel_for(state.scatter_label, Range(0, static_cast<std::size_t>(box.numPts())),
+          Kokkos::parallel_for(
+              state.scatter_label, Range(0, static_cast<std::size_t>(box.numPts())),
               KOKKOS_LAMBDA(const std::size_t ordinal) {
-            Index<Dim> index = box.lo;
-            index[0] += static_cast<int>(ordinal % width);
-            index[1] += static_cast<int>(ordinal / width);
-            const std::size_t i = static_cast<std::size_t>(
-                static_cast<std::int64_t>(index[0]) - domain.lo[0]);
-            const std::size_t j = static_cast<std::size_t>(
-                static_cast<std::int64_t>(index[1]) - domain.lo[1]);
-            target(index, 0) = values(j * nr + i);
-          });
+                Index<Dim> index = box.lo;
+                index[0] += static_cast<int>(ordinal % width);
+                index[1] += static_cast<int>(ordinal / width);
+                const std::size_t i =
+                    static_cast<std::size_t>(static_cast<std::int64_t>(index[0]) - domain.lo[0]);
+                const std::size_t j =
+                    static_cast<std::size_t>(static_cast<std::int64_t>(index[1]) - domain.lo[1]);
+                target(index, 0) = values(j * nr + i);
+              });
         }
         Kokkos::fence();
       } catch (...) {
@@ -338,8 +361,10 @@ class PreparedPolarPoissonInverse {
     std::string scatter_label = "polar_inverse_scatter";
 
     State(const field_type& prototype, Dimensions dimensions)
-        : layout(prototype.layout()), distribution(prototype.distribution()),
-          local_rank(prototype.local_rank()), local_indices(prototype.local_global_indices()),
+        : layout(prototype.layout()),
+          distribution(prototype.distribution()),
+          local_rank(prototype.local_rank()),
+          local_indices(prototype.local_global_indices()),
           shape(dimensions) {
       values = device_view("polar_inverse_values", shape.cells);
       ::pops::detail::record_fab_allocation(shape.cells * sizeof(Real));
@@ -390,8 +415,8 @@ class PreparedPolarPoissonInverse {
         for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
           const Face<Dim> face{axis, side};
           const auto& law = conditions.at(face);
-          if (conditions.topology().is_periodic(face) != (axis == 1) ||
-              !std::isfinite(law.value) || !std::isfinite(law.alpha) || !std::isfinite(law.beta))
+          if (conditions.topology().is_periodic(face) != (axis == 1) || !std::isfinite(law.value) ||
+              !std::isfinite(law.alpha) || !std::isfinite(law.beta))
             throw std::invalid_argument("polar inverse topology is unsupported");
         }
       }
@@ -411,14 +436,15 @@ class PreparedPolarPoissonInverse {
       if (result.cells > maximum_cells ||
           product_(result.nr, result.table) > maximum_transform_products)
         throw std::length_error("polar inverse direct-transform work exceeds its fixed bound");
-      result.coefficient_count = sum_(sum_(product_(2, result.table), product_(2, result.modal)),
-                                      result.nr);
-      const std::size_t real_values = sum_(sum_(product_(4, result.cells),
-                                               product_(2, result.coefficient_count)),
-                                         product_(2, result.modal));
-      const std::size_t metadata = sum_(sum_(sizeof(State), 128),
-          product_(prototype_->layout().size(),
-              2 * sizeof(Box<Dim>) + sizeof(Index<Dim>) + sizeof(std::size_t)));
+      result.coefficient_count =
+          sum_(sum_(product_(2, result.table), product_(2, result.modal)), result.nr);
+      const std::size_t real_values =
+          sum_(sum_(product_(4, result.cells), product_(2, result.coefficient_count)),
+               product_(2, result.modal));
+      const std::size_t metadata =
+          sum_(sum_(sizeof(State), 128),
+               product_(prototype_->layout().size(),
+                        2 * sizeof(Box<Dim>) + sizeof(Index<Dim>) + sizeof(std::size_t)));
       result.storage_bytes = sum_(product_(real_values, sizeof(Real)), metadata);
       if (result.storage_bytes > maximum_storage_bytes ||
           result.cells > static_cast<std::size_t>(std::numeric_limits<int>::max()) / 2)
@@ -427,9 +453,10 @@ class PreparedPolarPoissonInverse {
           prototype_->rank_space().linear_rank(prototype_->local_rank()) !=
               static_cast<std::size_t>(lane_->rank()) ||
           !prototype_->distribution().matches_layout(prototype_->layout()))
-        throw std::invalid_argument("polar inverse field rank space differs from its execution lane");
-      if (!prototype_->layout().tiles_exactly(domain,
-              {maximum_patches, maximum_patches * (maximum_patches - 1) / 2}))
+        throw std::invalid_argument(
+            "polar inverse field rank space differs from its execution lane");
+      if (!prototype_->layout().tiles_exactly(
+              domain, {maximum_patches, maximum_patches * (maximum_patches - 1) / 2}))
         throw std::invalid_argument("polar inverse requires a disjoint complete coarse tiling");
       return result;
     }
@@ -447,33 +474,35 @@ class PreparedPolarPoissonInverse {
     const Real pi = std::numbers::pi_v<Real>;
     for (std::size_t mode = 0; mode < nm; ++mode) {
       for (std::size_t j = 0; j < nt; ++j) {
-        const Real angle = Real(2) * pi * static_cast<Real>(mode) * static_cast<Real>(j) /
-                           static_cast<Real>(nt);
+        const Real angle =
+            Real(2) * pi * static_cast<Real>(mode) * static_cast<Real>(j) / static_cast<Real>(nt);
         // These two columns have no sine partner; keep their exact normalization explicit.
-        host(mode * nt + j) = mode == 0 ? Real(1) :
-            (2 * mode == nt ? (j % 2 == 0 ? Real(1) : Real(-1)) : std::cos(angle));
-        host(sine_offset + mode * nt + j) =
-            mode == 0 || 2 * mode == nt ? Real(0) : std::sin(angle);
+        host(mode * nt + j) =
+            mode == 0 ? Real(1)
+                      : (2 * mode == nt ? (j % 2 == 0 ? Real(1) : Real(-1)) : std::cos(angle));
+        host(sine_offset + mode * nt + j) = mode == 0 || 2 * mode == nt ? Real(0) : std::sin(angle);
       }
       const Real sine = std::sin(pi * static_cast<Real>(mode) / static_cast<Real>(nt));
-      const Real lambda = ((Real(4) * sine * sine) * angular_inverse_spacing) *
-                          angular_inverse_spacing;
+      const Real lambda =
+          ((Real(4) * sine * sine) * angular_inverse_spacing) * angular_inverse_spacing;
       Real previous_upper = 0;
       for (std::size_t i = 0; i < nr; ++i) {
         const int index = static_cast<int>(static_cast<std::int64_t>(geometry_.domain().lo[0]) + i);
         const Real radius = geometry_.cell_coordinate(0, index);
         // Match native sampled metric arithmetic, including one-sided physical-face
         // extrapolation. In particular, do not replace these with ideal (i+1)*h faces.
-        const Real lower_face = i == 0 ? Real(0) :
-            Real(0.5) * (geometry_.cell_coordinate(0, index - 1) + radius);
-        const Real upper_face = i + 1 == nr ?
-            Real(1.5) * radius - Real(0.5) * geometry_.cell_coordinate(0, index - 1) :
-            Real(0.5) * (radius + geometry_.cell_coordinate(0, index + 1));
+        const Real lower_face =
+            i == 0 ? Real(0) : Real(0.5) * (geometry_.cell_coordinate(0, index - 1) + radius);
+        const Real upper_face =
+            i + 1 == nr ? Real(1.5) * radius - Real(0.5) * geometry_.cell_coordinate(0, index - 1)
+                        : Real(0.5) * (radius + geometry_.cell_coordinate(0, index + 1));
         const Real lower = (-lower_face * radial_inverse_spacing) * radial_inverse_spacing;
-        const Real upper = i + 1 == nr ? Real(0) :
-            (-upper_face * radial_inverse_spacing) * radial_inverse_spacing;
+        const Real upper =
+            i + 1 == nr ? Real(0) : (-upper_face * radial_inverse_spacing) * radial_inverse_spacing;
         const Real diagonal = ((lower_face + (i + 1 == nr ? Real(2) : Real(1)) * upper_face) *
-            radial_inverse_spacing) * radial_inverse_spacing + lambda * (Real(1) / radius);
+                               radial_inverse_spacing) *
+                                  radial_inverse_spacing +
+                              lambda * (Real(1) / radius);
         const Real pivot = diagonal - lower * previous_upper;
         const Real inverse_pivot = Real(1) / pivot;
         if (!std::isfinite(radius) || !(radius > 0) || !std::isfinite(lower) ||
@@ -494,7 +523,8 @@ class PreparedPolarPoissonInverse {
 
   bool matches_(const field_type& field) const noexcept {
     return state_ && field.ncomp() == 1 && field.layout() == state_->layout &&
-           field.distribution() == state_->distribution && field.local_rank() == state_->local_rank &&
+           field.distribution() == state_->distribution &&
+           field.local_rank() == state_->local_rank &&
            field.local_global_indices() == state_->local_indices &&
            field.local_size() == state_->local_indices.size();
   }
@@ -506,7 +536,8 @@ class PreparedPolarPoissonInverse {
     } catch (...) {
     }
     auto result = PreparedApplyResult::unknown_failure();
-    const std::size_t count = phase.size() < result.kPhaseCapacity ? phase.size() : result.kPhaseCapacity;
+    const std::size_t count =
+        phase.size() < result.kPhaseCapacity ? phase.size() : result.kPhaseCapacity;
     std::memcpy(result.phase_bytes.data(), phase.data(), count);
     result.phase_size = static_cast<std::uint8_t>(count);
     result.phase_truncated = count != phase.size();

@@ -47,11 +47,9 @@ class PolarGeometry {
         !(radial_upper > radial_lower))
       throw std::invalid_argument(
           "polar annulus requires finite radii with 0 < radial_lower < radial_upper");
-    constexpr Real two_pi =
-        Real(6.283185307179586476925286766559005768394338798750211641949889L);
-    return PolarGeometry{Geometry<Dim>::from_bounds(
-        domain, RealVector<Dim>{radial_lower, Real(0)},
-        RealVector<Dim>{radial_upper, two_pi})};
+    constexpr Real two_pi = Real(6.283185307179586476925286766559005768394338798750211641949889L);
+    return PolarGeometry{Geometry<Dim>::from_bounds(domain, RealVector<Dim>{radial_lower, Real(0)},
+                                                    RealVector<Dim>{radial_upper, two_pi})};
   }
 
   const Geometry<Dim>& cartesian_mapping() const noexcept { return mapping_; }
@@ -61,9 +59,7 @@ class PolarGeometry {
   Real dr() const noexcept { return mapping_.spacing(0); }
   Real dtheta() const noexcept { return mapping_.spacing(1); }
 
-  Real r_cell(int radial_index) const noexcept {
-    return mapping_.cell_coordinate(0, radial_index);
-  }
+  Real r_cell(int radial_index) const noexcept { return mapping_.cell_coordinate(0, radial_index); }
   Real r_face(int radial_face_index) const noexcept {
     return mapping_.face_coordinate(0, radial_face_index);
   }

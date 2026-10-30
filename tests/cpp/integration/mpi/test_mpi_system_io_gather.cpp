@@ -130,7 +130,8 @@ void prove_exact_marshaling(int rank, int processes, Check&& check) {
   check(field.local_size() == 2, "signed-zero witness must own multiple patches on every rank");
   const auto same_bytes = [](const std::vector<double>& left, const std::vector<double>& right) {
     return left.size() == right.size() &&
-           (left.empty() || std::memcmp(left.data(), right.data(), left.size() * sizeof(double)) == 0);
+           (left.empty() ||
+            std::memcmp(left.data(), right.data(), left.size() * sizeof(double)) == 0);
   };
   const auto resident_bits_match = [&](const MultiFab<Dim>& resident) {
     bool matches = true;
@@ -174,7 +175,8 @@ void prove_exact_marshaling(int rank, int processes, Check&& check) {
     }
     check(rejected, "rank-divergent restore payload was accepted");
     check(resident_bits_match(field), "rejected restore mutated resident value bits");
-    const auto after_rejection = runtime::system::marshaling::gather_global(field, fixture.domain, 2);
+    const auto after_rejection =
+        runtime::system::marshaling::gather_global(field, fixture.domain, 2);
     check(after_rejection == payload, "rejected restore mutated resident data");
     check(same_bytes(after_rejection, payload), "rejected restore round-trip changed value bits");
   }
@@ -186,7 +188,8 @@ void prove_exact_marshaling(int rank, int processes, Check&& check) {
   replica.set_val(Real{-23});
   runtime::system::marshaling::write_global(replica, fixture.domain, payload, 2);
   check(resident_bits_match(replica), "replicated restore changed resident value bits");
-  const auto replica_result = runtime::system::marshaling::gather_global(replica, fixture.domain, 2);
+  const auto replica_result =
+      runtime::system::marshaling::gather_global(replica, fixture.domain, 2);
   check(replica_result == payload, "replicated round-trip double-counted the payload");
   check(same_bytes(replica_result, payload), "replicated round-trip changed value bits");
   if (processes > 1) {

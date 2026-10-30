@@ -41,7 +41,7 @@ inline void install_amr_runtime_authority(AmrSystem<Dim>& system, std::string_vi
 template <int Dim>
 inline std::shared_ptr<runtime::program::AmrProgramContext<Dim>>
 install_forward_euler_program_context(AmrSystem<Dim>& system, bool solve_default_field,
-                                     const std::string& primary_clock = "test.clock.macro") {
+                                      const std::string& primary_clock = "test.clock.macro") {
   std::vector<int> block_map(static_cast<std::size_t>(system.n_blocks()));
   std::iota(block_map.begin(), block_map.end(), 0);
   if (system.engine() == nullptr)

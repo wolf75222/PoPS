@@ -416,7 +416,7 @@ TEST(test_amr_synchronized_continuation, AttemptAuthoritySurvivesPreparedEngineR
   EXPECT_EQ(engine.last_allocated_attempt(), 2u);
   auto replacement = prepare_engine(hierarchy);
   replacement.restore_attempt_authority(engine.last_allocated_attempt(),
-                                         engine.last_accepted_attempt());
+                                        engine.last_accepted_attempt());
   EXPECT_EQ(replacement.begin_synchronized(window), 3u);
   replacement.resume_synchronized([](auto) {});
   replacement.finish_synchronized([](auto&) {}, [](std::size_t, std::size_t, const auto&) {});
@@ -424,7 +424,8 @@ TEST(test_amr_synchronized_continuation, AttemptAuthoritySurvivesPreparedEngineR
   EXPECT_EQ(replacement.last_allocated_attempt(), 3u);
 }
 
-TEST(test_amr_synchronized_continuation, AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow) {
+TEST(test_amr_synchronized_continuation,
+     AttemptAuthorityRejectsCorruptActiveAsymmetricAndOverflow) {
   auto hierarchy = make_hierarchy<1>();
   auto engine = prepare_engine(hierarchy);
   const pops::amr::ClockWindow window{{0, 0, {0, 1}, 0.0}, {0, 0, {1, 1}, 0.25}};

@@ -18,27 +18,22 @@ constexpr pops::Real kPi = pops::Real(3.141592653589793238462643383279502884L);
 
 std::size_t offset(const pops::Box<kDim>& storage, int i, int j) {
   return static_cast<std::size_t>(i - storage.lo[0]) +
-         static_cast<std::size_t>(j - storage.lo[1]) *
-             static_cast<std::size_t>(storage.length(0));
+         static_cast<std::size_t>(j - storage.lo[1]) * static_cast<std::size_t>(storage.length(0));
 }
 
 pops::PolarEllipticBuildRequest<kDim> request(int radial_cells, int azimuthal_cells,
-                                              pops::Real low_value,
-                                              pops::Real high_value) {
+                                              pops::Real low_value, pops::Real high_value) {
   const pops::Box<kDim> domain{pops::Index<kDim>{0, 0},
-                              pops::Index<kDim>{radial_cells - 1, azimuthal_cells - 1}};
+                               pops::Index<kDim>{radial_cells - 1, azimuthal_cells - 1}};
   const auto geometry = pops::PolarGeometry<kDim>::annulus(domain, kRmin, kRmax);
   const pops::mesh::BoxArray<kDim> boxes(std::vector<pops::Box<kDim>>{domain});
-  const pops::mesh::RankSpace<kDim> ranks{pops::Index<kDim>{0, 0},
-                                         pops::Extent<kDim>{1, 1}};
+  const pops::mesh::RankSpace<kDim> ranks{pops::Index<kDim>{0, 0}, pops::Extent<kDim>{1, 1}};
   const auto distribution = pops::mesh::Distribution<kDim>::partitioned(
       boxes, ranks, std::vector<pops::Index<kDim>>{pops::Index<kDim>{0, 0}});
   std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
-  faces[static_cast<std::size_t>(
-      pops::Face<kDim>{0, pops::BoundarySide::lower}.ordinal())] = {
+  faces[static_cast<std::size_t>(pops::Face<kDim>{0, pops::BoundarySide::lower}.ordinal())] = {
       pops::PhysicalBoundaryKind::dirichlet, low_value};
-  faces[static_cast<std::size_t>(
-      pops::Face<kDim>{0, pops::BoundarySide::upper}.ordinal())] = {
+  faces[static_cast<std::size_t>(pops::Face<kDim>{0, pops::BoundarySide::upper}.ordinal())] = {
       pops::PhysicalBoundaryKind::dirichlet, high_value};
   return {geometry,
           boxes,
@@ -52,8 +47,7 @@ pops::PolarEllipticBuildRequest<kDim> request(int radial_cells, int azimuthal_ce
 
 pops::Real radial_profile(pops::Real radius) {
   const pops::Real wave = kPi / (kRmax - kRmin);
-  return pops::Real(1) + pops::Real(0.5) * (radius - kRmin) +
-         std::sin(wave * (radius - kRmin));
+  return pops::Real(1) + pops::Real(0.5) * (radius - kRmin) + std::sin(wave * (radius - kRmin));
 }
 
 pops::Real exact_solution(pops::Real radius, pops::Real theta) {
@@ -80,8 +74,7 @@ void fill_rhs(pops::PolarPoissonSolver<kDim>& solver) {
   const auto& storage = fab.grown_box();
   for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
     for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-      host(offset(storage, i, j)) =
-          exact_rhs(solver.geom().r_cell(i), solver.geom().theta_cell(j));
+      host(offset(storage, i, j)) = exact_rhs(solver.geom().r_cell(i), solver.geom().theta_cell(j));
   fab.copy_from_host(host);
 }
 
@@ -98,8 +91,7 @@ pops::Real error_l2(const pops::PolarPoissonSolver<kDim>& solver) {
       const pops::Real radius = solver.geom().r_cell(i);
       const pops::Real weight = radius * solver.geom().dr() * solver.geom().dtheta();
       const pops::Real difference =
-          host(offset(storage, i, j)) -
-          exact_solution(radius, solver.geom().theta_cell(j));
+          host(offset(storage, i, j)) - exact_solution(radius, solver.geom().theta_cell(j));
       error += difference * difference * weight;
       measure += weight;
     }

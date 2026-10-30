@@ -23,7 +23,7 @@ namespace py = pybind11;
 // ObserverMpiLane::communicator() alone returns an inactive view after close. Its rank() accessor
 // authenticates openness; a closed owner must never silently turn this protocol into local work.
 // As for the existing byte APIs, close is allowed only after every observer worker has joined.
-template<class Communicator>
+template <class Communicator>
 CommunicatorView open_communicator(const Communicator& owner) {
   (void)owner.rank();
   return owner.communicator();
@@ -31,7 +31,7 @@ CommunicatorView open_communicator(const Communicator& owner) {
 
 // Only nothrow moves leave this phase after its collective. Python objects are destroyed with
 // the GIL held, including the pending local result when another rank could not prepare its value.
-template<class Operation>
+template <class Operation>
 auto prepare(const CommunicatorView& communicator, Operation&& operation) {
   using Value = std::invoke_result_t<Operation>;
   static_assert(!std::is_void_v<Value> && std::is_nothrow_move_constructible_v<Value>);
@@ -70,7 +70,7 @@ inline std::string_view exact_bytes(py::handle value) {
   return {data, static_cast<std::size_t>(length)};
 }
 
-template<class Communicator>
+template <class Communicator>
 py::object collective_prepare(const Communicator& owner, py::handle callback) {
   const auto communicator = open_communicator(owner);
   return prepare(communicator, [&]() -> py::object {
@@ -83,7 +83,7 @@ py::object collective_prepare(const Communicator& owner, py::handle callback) {
 // Immutable Python bytes remain alive as binding arguments while the GIL is released. We borrow
 // their storage locally; no pointer is transmitted. Fixed stack chunks bound extra comparison
 // memory independently of payload length and rank count, and preserve exact embedded NUL bytes.
-template<class Communicator>
+template <class Communicator>
 bool agree_control_bytes(const Communicator& owner, py::handle schema, py::handle payload) {
   const auto communicator = open_communicator(owner);
   const auto values = prepare(communicator, [&] {
@@ -114,12 +114,10 @@ bool agree_control_bytes(const Communicator& owner, py::handle schema, py::handl
   return same;
 }
 
-template<class Communicator>
+template <class Communicator>
 py::tuple allgather_bytes(const Communicator& owner, py::handle payload) {
   const auto communicator = open_communicator(owner);
-  const auto native = prepare(communicator, [&] {
-    return std::string(exact_bytes(payload));
-  });
+  const auto native = prepare(communicator, [&] { return std::string(exact_bytes(payload)); });
   std::vector<std::string> gathered;
   {
     py::gil_scoped_release release;
@@ -132,4 +130,4 @@ py::tuple allgather_bytes(const Communicator& owner, py::handle payload) {
     return result;
   });
 }
-} // namespace pops::python_collective
+}  // namespace pops::python_collective

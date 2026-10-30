@@ -117,9 +117,10 @@ std::shared_ptr<pops::component::LoadedComponent> provider(const pops::Execution
             const auto execution =
                 pops::component::physical_transfer_detail::execution_instance<ExecutionSpace>(
                     request->execution);
-            Kokkos::parallel_for("amr_test_failure_exact_residence",
-                                Kokkos::RangePolicy<ExecutionSpace>(execution, 0, 1),
-                                KOKKOS_LAMBDA(const int) { destination[0] = -444.0; });
+            Kokkos::parallel_for(
+                "amr_test_failure_exact_residence",
+                Kokkos::RangePolicy<ExecutionSpace>(execution, 0, 1),
+                KOKKOS_LAMBDA(const int) { destination[0] = -444.0; });
             execution.fence();
           }
           *status = {sizeof(PopsComponentStatusV1), TEST_INTEGRAL_FAILURE,
@@ -132,9 +133,8 @@ std::shared_ptr<pops::component::LoadedComponent> provider(const pops::Execution
         integral.weight_count = request->weight_count;
         for (int axis = 0; axis < request->dimension; ++axis)
           integral.weight_offsets[axis] = request->weight_offsets[axis];
-        return pops::component::apply_physical_support_integral(integral, request->source,
-                                                                request->destination, status,
-                                                                &request->execution);
+        return pops::component::apply_physical_support_integral(
+            integral, request->source, request->destination, status, &request->execution);
       }
 #if TEST_TRANSFER_LEGACY
       const PopsTransferApiV1 table{{sizeof(PopsTransferApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
@@ -659,7 +659,7 @@ TEST(AmrLayoutTransfer, CoverageForgeryAndBudgetsFailBeforeCandidatePublication)
   ASSERT_GT(transfer->prepared_bytes(), 0u);
   too_small.budget.prepared_bytes = transfer->prepared_bytes() - 1;
   EXPECT_THROW(Transfer::prepare(high.endpoint(), low.endpoint(), too_small, component,
-                                execution(lane), lane),
+                                 execution(lane), lane),
                std::exception);
   for (std::size_t local = 0; local < high.coverage[0].local_size(); ++local)
     high.coverage[0].fab(local).set_val(1);
@@ -897,13 +897,13 @@ TEST(AmrLayoutTransfer, ExecutionResidenceMustMatchTheActualNativeFields) {
                                   ? POPS_MEMORY_SPACE_DEVICE_V1
                                   : POPS_MEMORY_SPACE_HOST_V1;
   try {
-    Transfer::prepare(high.endpoint(), low.endpoint(), specification(high, low),
-                      component, incompatible, lane);
+    Transfer::prepare(high.endpoint(), low.endpoint(), specification(high, low), component,
+                      incompatible, lane);
     ADD_FAILURE() << "incompatible execution residence was accepted";
   } catch (const std::exception& error) {
     // A collective MPI refusal preserves the reason while using runtime_error on every rank.
-    EXPECT_NE(std::string(error.what()).find(
-                  "AMR physical execution memory differs from native field storage"),
+    EXPECT_NE(std::string(error.what())
+                  .find("AMR physical execution memory differs from native field storage"),
               std::string::npos);
   }
   for (const auto& field : low.state)

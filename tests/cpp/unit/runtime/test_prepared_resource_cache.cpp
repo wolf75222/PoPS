@@ -130,8 +130,8 @@ TEST(PreparedResourceCache, FailedInitialConstructionRemainsCollectivelyRetryabl
   PreparedResourceCache cache;
   int constructions = 0;
   EXPECT_THROW(cache.acquire<BufferedResource>(
-                   5, 0, 0, lane, [](const BufferedResource&) { return true; },
-                   8, lane.rank() == 0, constructions),
+                   5, 0, 0, lane, [](const BufferedResource&) { return true; }, 8, lane.rank() == 0,
+                   constructions),
                std::runtime_error);
   auto& result = cache.acquire<BufferedResource>(
       5, 0, 0, lane, [](const BufferedResource&) { return true; }, 8, false, constructions);

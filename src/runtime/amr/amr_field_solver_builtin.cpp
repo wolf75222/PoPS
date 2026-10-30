@@ -75,18 +75,23 @@ template <int Dim>
 BuiltinOptions decode_options(const PreparedProviderOptions& options) {
   if (options.schema_identity == "pops.amr.field-solver-options.red-black-geometric-mg@1" ||
       options.schema_identity == "pops.amr.field-solver-options.red-black-geometric-mg@2") {
-    const bool roundoff_contract = options.schema_identity == "pops.amr.field-solver-options.red-black-geometric-mg@2";
-    if (options.values.size() != (roundoff_contract ? 26u : 24u)) throw std::invalid_argument("invalid explicit geometric FAC option schema");
+    const bool roundoff_contract =
+        options.schema_identity == "pops.amr.field-solver-options.red-black-geometric-mg@2";
+    if (options.values.size() != (roundoff_contract ? 26u : 24u))
+      throw std::invalid_argument("invalid explicit geometric FAC option schema");
     PreparedProviderOptions mg;
-    mg.schema_identity = roundoff_contract ? "pops.system.red-black-geometric-mg-options@2" : "pops.system.red-black-geometric-mg-options@1";
+    mg.schema_identity = roundoff_contract ? "pops.system.red-black-geometric-mg-options@2"
+                                           : "pops.system.red-black-geometric-mg-options@1";
     for (const auto& [name, value] : options.values)
-      if (!name.starts_with("fac.")) mg.values.emplace(name, value);
+      if (!name.starts_with("fac."))
+        mg.values.emplace(name, value);
     BuiltinOptions result;
     result.mg = runtime::system::decode_red_black_geometric_mg_options<Dim>(mg);
     result.explicit_red_black = true;
     const auto integer = [&](const char* name) {
       const auto value = option<std::int64_t>(options, name);
-      if (value < 0 || value > std::numeric_limits<int>::max()) throw std::invalid_argument("explicit FAC option overflows its native range");
+      if (value < 0 || value > std::numeric_limits<int>::max())
+        throw std::invalid_argument("explicit FAC option overflows its native range");
       return static_cast<int>(value);
     };
     result.fac.max_iters = integer("fac.max_iters");
@@ -144,8 +149,8 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
     if (mode_ == ExactFieldHierarchyMode::composite) {
       if (options_.explicit_red_black) {
         partitioned_ = std::make_unique<elliptic::amr::CompositeFacPoisson<Dim, MemorySpace>>(
-            make_partitioned_fac_request(request.hierarchy), options_.fac, request.reaction,
-            &lane, false, true, options_.mg);
+            make_partitioned_fac_request(request.hierarchy), options_.fac, request.reaction, &lane,
+            false, true, options_.mg);
         return;
       }
       if (hierarchy_needs_partitioned_fac(request.hierarchy, lane)) {
@@ -166,7 +171,9 @@ class BuiltinExactAmrFieldSolver final : public ExactAmrFieldSolver<Dim, MemoryS
     }
   }
 
-  std::string_view provider_identity() const noexcept override { return options_.explicit_red_black ? "red_black_geometric_mg" : "geometric_mg"; }
+  std::string_view provider_identity() const noexcept override {
+    return options_.explicit_red_black ? "red_black_geometric_mg" : "geometric_mg";
+  }
   std::string_view exact_prepared_contract() const noexcept override { return contract_; }
   bool couples_hierarchy_levels() const noexcept override {
     return static_cast<bool>(composite_) || static_cast<bool>(partitioned_);
@@ -338,10 +345,14 @@ class BuiltinExactAmrFieldSolverProvider final
   using request_type = ExactAmrFieldSolverBuildRequest<Dim>;
   using solver_type = ExactAmrFieldSolver<Dim, MemorySpace>;
 
-  explicit BuiltinExactAmrFieldSolverProvider(bool explicit_red_black = false) : explicit_red_black_(explicit_red_black) {}
-  std::string_view identity() const noexcept override { return explicit_red_black_ ? "red_black_geometric_mg" : "geometric_mg"; }
+  explicit BuiltinExactAmrFieldSolverProvider(bool explicit_red_black = false)
+      : explicit_red_black_(explicit_red_black) {}
+  std::string_view identity() const noexcept override {
+    return explicit_red_black_ ? "red_black_geometric_mg" : "geometric_mg";
+  }
   std::string_view collective_contract() const noexcept override {
-    return explicit_red_black_ ? "pops.amr.field-solver.red-black-geometric-mg.field-domain-fac@1" : "pops.amr.field-solver.geometric-mg.exact-ranked@3";
+    return explicit_red_black_ ? "pops.amr.field-solver.red-black-geometric-mg.field-domain-fac@1"
+                               : "pops.amr.field-solver.geometric-mg.exact-ranked@3";
   }
   PreparedProviderSupport supports(const request_type& request,
                                    const ExecutionLane& lane) const noexcept override {
@@ -349,20 +360,25 @@ class BuiltinExactAmrFieldSolverProvider final
       (void)lane;
       const BuiltinOptions decoded = decode_options<Dim>(request.provider_options);
       if (decoded.explicit_red_black != explicit_red_black_)
-        return PreparedProviderSupport::reject(7, "AMR solver algorithm/options authority mismatch");
+        return PreparedProviderSupport::reject(7,
+                                               "AMR solver algorithm/options authority mismatch");
       if (request.hierarchy.levels.empty() ||
           request.hierarchy.ratios.size() + 1 != request.hierarchy.levels.size())
         return PreparedProviderSupport::reject(1, "AMR hierarchy is incomplete");
       if (!std::isfinite(static_cast<double>(request.reaction)) || request.reaction < Real(0))
         return PreparedProviderSupport::reject(2, "reaction coefficient is invalid");
       if (explicit_red_black_) {
-        if (request.reaction != Real(0)) return PreparedProviderSupport::reject(8, "explicit geometric FAC supports Poisson only");
+        if (request.reaction != Real(0))
+          return PreparedProviderSupport::reject(8, "explicit geometric FAC supports Poisson only");
         for (const auto& level : request.hierarchy.levels)
           for (int axis = 0; axis < Dim; ++axis)
             for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
               const Face<Dim> face{axis, side};
-              if (level.boundary.topology().is_periodic(face) || level.boundary.at(face).kind != PhysicalBoundaryKind::dirichlet || level.boundary.at(face).value != Real(0))
-                return PreparedProviderSupport::reject(9, "explicit geometric FAC requires zero Dirichlet physical faces");
+              if (level.boundary.topology().is_periodic(face) ||
+                  level.boundary.at(face).kind != PhysicalBoundaryKind::dirichlet ||
+                  level.boundary.at(face).value != Real(0))
+                return PreparedProviderSupport::reject(
+                    9, "explicit geometric FAC requires zero Dirichlet physical faces");
             }
       }
       if (request.mode == ExactFieldHierarchyMode::level_local) {
@@ -391,6 +407,7 @@ class BuiltinExactAmrFieldSolverProvider final
         request, expected_prepared_contract(request, lane),
         decode_options<Dim>(request.provider_options), lane);
   }
+
  private:
   bool explicit_red_black_ = false;
 };

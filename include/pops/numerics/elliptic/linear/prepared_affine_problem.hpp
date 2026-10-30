@@ -2581,11 +2581,9 @@ class PreparedAffineLinearProblem {
     detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), constant_);
   }
 
-  PreparedEquationReference prepare_compatibility_rhs_prepared_(MultiFab<Dim>& out,
-                                                                const MultiFab<Dim>& rhs,
-                                                                std::span<double> metric_scratch,
-                                                                const ExecutionLane& lane,
-                                                                KrylovPhysicalNorm physical_norm) const {
+  PreparedEquationReference prepare_compatibility_rhs_prepared_(
+      MultiFab<Dim>& out, const MultiFab<Dim>& rhs, std::span<double> metric_scratch,
+      const ExecutionLane& lane, KrylovPhysicalNorm physical_norm) const {
     require_hot_apply_ready_();
     // Form the exact floating-point R(0)=b-A(0) first. The scale-safe norm below avoids squaring
     // overflow/underflow without globally rescaling b and A(0) before subtraction, which could
@@ -2593,9 +2591,10 @@ class PreparedAffineLinearProblem {
     detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), constant_);
     // Select the reference on the raw stored R(0), before the compatibility normalization.
     // Recovering Linf from a Euclidean-normalized field would introduce another rounding step.
-    const Real reference = physical_norm == KrylovPhysicalNorm::component_linf
-        ? detail::PreparedFieldAlgebra::max_abs(out, vector_distribution_, metric_scratch, lane)
-        : metric_.norm(out, metric_scratch, lane);
+    const Real reference =
+        physical_norm == KrylovPhysicalNorm::component_linf
+            ? detail::PreparedFieldAlgebra::max_abs(out, vector_distribution_, metric_scratch, lane)
+            : metric_.norm(out, metric_scratch, lane);
     if (!std::isfinite(static_cast<double>(reference)))
       return {reference};
     if (reference > Real(0)) {
@@ -2852,7 +2851,8 @@ struct PreparedProblemAccess {
       const PreparedAffineLinearProblem<Dim>& problem, MultiFab<Dim>& out, const MultiFab<Dim>& rhs,
       std::span<double> metric_scratch, const ExecutionLane& lane,
       KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2) {
-    return problem.prepare_compatibility_rhs_prepared_(out, rhs, metric_scratch, lane, physical_norm);
+    return problem.prepare_compatibility_rhs_prepared_(out, rhs, metric_scratch, lane,
+                                                       physical_norm);
   }
   static void require_nullspace_compatible(const PreparedAffineLinearProblem<Dim>& problem,
                                            const MultiFab<Dim>& normalized_rhs,

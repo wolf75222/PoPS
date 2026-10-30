@@ -14,17 +14,17 @@
 namespace pops::nd {
 
 template <int Dim>
-POPS_HD Real incident_face_frequency_at(
-    const FaceFieldView<const Real, Dim>& speeds, const Index<Dim>& cell,
-    const std::array<Real, static_cast<std::size_t>(Dim)>& inverse_spacing) {
+POPS_HD Real
+incident_face_frequency_at(const FaceFieldView<const Real, Dim>& speeds, const Index<Dim>& cell,
+                           const std::array<Real, static_cast<std::size_t>(Dim)>& inverse_spacing) {
   Real result = Real(0);
   for (int axis = 0; axis < Dim; ++axis) {
     Index<Dim> upper = cell;
     ++upper[axis];
     const Real lower_speed = speeds.axes[axis](cell, 0);
     const Real upper_speed = speeds.axes[axis](upper, 0);
-    if (!Kokkos::isfinite(lower_speed) || !Kokkos::isfinite(upper_speed) ||
-        lower_speed < Real(0) || upper_speed < Real(0))
+    if (!Kokkos::isfinite(lower_speed) || !Kokkos::isfinite(upper_speed) || lower_speed < Real(0) ||
+        upper_speed < Real(0))
       return std::numeric_limits<Real>::infinity();
     result += Kokkos::max(lower_speed, upper_speed) * inverse_spacing[axis];
   }
@@ -35,16 +35,15 @@ POPS_HD Real incident_face_frequency_at(
 /// The caller performs the communicator reduction using its prepared execution lane.
 /// Speeds must come from the exact FluxEvaluation used to publish the shared face flux.
 template <int Dim, class MemorySpace>
-Real maximum_incident_face_frequency(
-    const MultiFab<Dim, MemorySpace>& state,
-    const std::vector<FaceField<Dim, MemorySpace>>& speeds,
-    const Geometry<Dim>& geometry,
-    MultiFab<Dim, MemorySpace>& frequency_scratch) {
+Real maximum_incident_face_frequency(const MultiFab<Dim, MemorySpace>& state,
+                                     const std::vector<FaceField<Dim, MemorySpace>>& speeds,
+                                     const Geometry<Dim>& geometry,
+                                     MultiFab<Dim, MemorySpace>& frequency_scratch) {
   if (state.layout() != frequency_scratch.layout() ||
       state.distribution() != frequency_scratch.distribution() ||
       state.local_rank() != frequency_scratch.local_rank() ||
-      state.local_size() != frequency_scratch.local_size() ||
-      frequency_scratch.ncomp() != 1 || speeds.size() != state.local_size())
+      state.local_size() != frequency_scratch.local_size() || frequency_scratch.ncomp() != 1 ||
+      speeds.size() != state.local_size())
     throw std::invalid_argument("face frequency scratch differs from the prepared state layout");
   std::array<Real, Dim> inverse_spacing{};
   for (int axis = 0; axis < Dim; ++axis) {

@@ -41,7 +41,8 @@ class PreparedHierarchyCandidateFieldOperator {
  public:
   static constexpr std::string_view identity = "pops.hierarchy.original-field-candidate-operator@1";
   virtual ~PreparedHierarchyCandidateFieldOperator() = default;
-  virtual std::unique_ptr<PreparedHierarchyCandidateEvaluation<Dim>> make_candidate_evaluation() const = 0;
+  virtual std::unique_ptr<PreparedHierarchyCandidateEvaluation<Dim>> make_candidate_evaluation()
+      const = 0;
 };
 
 template <int Dim>

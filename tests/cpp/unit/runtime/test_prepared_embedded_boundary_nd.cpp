@@ -138,8 +138,8 @@ TEST(PreparedEmbeddedBoundaryND, CutGeometryUsesOneAxisLoopInOneTwoAndThreeDimen
 TEST(PreparedEmbeddedBoundaryND, Dim3VolumeIsPlaneReconstructionNotAxisProduct) {
   pops::RealVector<3> lower_samples{-0.5, -0.5, -0.5};
   pops::RealVector<3> upper_samples{0.3, 0.3, 0.3};
-  const auto cut = pops::nd::cut_cell_fractions_from_samples<3>(pops::Real(-0.1), lower_samples,
-                                                                upper_samples);
+  const auto cut =
+      pops::nd::cut_cell_fractions_from_samples<3>(pops::Real(-0.1), lower_samples, upper_samples);
   pops::Real product = pops::Real(1);
   for (int axis = 0; axis < 3; ++axis) {
     EXPECT_DOUBLE_EQ(cut.lower[axis], pops::Real(1));
@@ -167,16 +167,14 @@ TEST(PreparedEmbeddedBoundaryND, Dim3VolumeIsPlaneReconstructionNotAxisProduct) 
 TEST(PreparedEmbeddedBoundaryND, Dim12VolumeStaysAxisProductBitCompatible) {
   pops::RealVector<1> lower1{-0.4};
   pops::RealVector<1> upper1{0.2};
-  const auto cut1 =
-      pops::nd::cut_cell_fractions_from_samples<1>(pops::Real(-0.1), lower1, upper1);
+  const auto cut1 = pops::nd::cut_cell_fractions_from_samples<1>(pops::Real(-0.1), lower1, upper1);
   EXPECT_DOUBLE_EQ(cut1.volume_fraction, pops::Real(0.5) * (cut1.lower[0] + cut1.upper[0]));
   EXPECT_DOUBLE_EQ(cut1.face_lower[0], pops::Real(1));
   EXPECT_DOUBLE_EQ(cut1.face_upper[0], pops::Real(0));
 
   pops::RealVector<2> lower2{-0.4, -0.4};
   pops::RealVector<2> upper2{0.2, -0.4};
-  const auto cut2 =
-      pops::nd::cut_cell_fractions_from_samples<2>(pops::Real(-0.1), lower2, upper2);
+  const auto cut2 = pops::nd::cut_cell_fractions_from_samples<2>(pops::Real(-0.1), lower2, upper2);
   EXPECT_DOUBLE_EQ(cut2.volume_fraction, pops::Real(0.5) * (cut2.lower[0] + cut2.upper[0]) *
                                              pops::Real(0.5) * (cut2.lower[1] + cut2.upper[1]));
 }
@@ -184,8 +182,8 @@ TEST(PreparedEmbeddedBoundaryND, Dim12VolumeStaysAxisProductBitCompatible) {
 TEST(PreparedEmbeddedBoundaryND, Dim3NonplanarSamplesUseCubeTriangulationNotSinglePlane) {
   pops::RealVector<3> lower_samples{-0.8, -0.1, -0.9};
   pops::RealVector<3> upper_samples{0.4, 0.6, 0.2};
-  const auto cut = pops::nd::cut_cell_fractions_from_samples<3>(pops::Real(-0.2), lower_samples,
-                                                                upper_samples);
+  const auto cut =
+      pops::nd::cut_cell_fractions_from_samples<3>(pops::Real(-0.2), lower_samples, upper_samples);
   pops::RealVector<3> gradient{};
   pops::Real intercept = pops::Real(0);
   pops::nd::cut_geometry_detail::linear_level_set_from_samples<3>(
@@ -208,8 +206,8 @@ TEST(PreparedEmbeddedBoundaryND, Dim3AxisAlignedPlaneHasConservativeFaceAperture
   // Neighbour-centre samples of phi = z - 0.7. Volume of {z < 0.7} is 0.7, not the 1-D product 0.6.
   pops::RealVector<3> lower_samples{-0.2, -0.2, -1.2};
   pops::RealVector<3> upper_samples{-0.2, -0.2, 0.8};
-  const auto cut = pops::nd::cut_cell_fractions_from_samples<3>(pops::Real(-0.2), lower_samples,
-                                                                upper_samples);
+  const auto cut =
+      pops::nd::cut_cell_fractions_from_samples<3>(pops::Real(-0.2), lower_samples, upper_samples);
   const pops::Real product = pops::Real(0.5) * (cut.lower[2] + cut.upper[2]);
   EXPECT_DOUBLE_EQ(cut.lower[2], pops::Real(1));
   EXPECT_DOUBLE_EQ(cut.upper[2], pops::Real(0.2));
@@ -247,8 +245,8 @@ struct SampleFinePhi {
   pops::FieldView<pops::Real, Dim> phi{};
 
   POPS_HD void operator()(const pops::Index<Dim>& index) const {
-    phi(index) = (static_cast<pops::Real>(index[0]) + pops::Real(0.5)) / pops::Real(4) -
-                 pops::Real(0.5);
+    phi(index) =
+        (static_cast<pops::Real>(index[0]) + pops::Real(0.5)) / pops::Real(4) - pops::Real(0.5);
   }
 };
 
@@ -262,9 +260,9 @@ TEST(PreparedEmbeddedBoundaryND, CutCellFractionTransferIsInvokedOnUniformRatioB
   pops::for_each_cell(fine_phi.grown_box(), SampleFinePhi<2>{fine_phi.view()});
 
   const pops::amr::RefinementRatio<2> ratio(2, 2);
-  pops::nd::apply_cut_cell_fraction_amr_transfer(
-      std::as_const(fine_phi).view(), coarse_volume.view(), fine_volume.view(),
-      aperture_residual.view(), coarse_domain, ratio);
+  pops::nd::apply_cut_cell_fraction_amr_transfer(std::as_const(fine_phi).view(),
+                                                 coarse_volume.view(), fine_volume.view(),
+                                                 aperture_residual.view(), coarse_domain, ratio);
 
   pops::sync_host();
   const pops::Index<2> coarse{};
@@ -273,8 +271,8 @@ TEST(PreparedEmbeddedBoundaryND, CutCellFractionTransferIsInvokedOnUniformRatioB
     pops::Index<2> fine{};
     fine[0] = child % 2;
     fine[1] = child / 2;
-    children[child] = pops::nd::cut_cell_fractions_from_phi_cell(std::as_const(fine_phi).view(),
-                                                                 fine);
+    children[child] =
+        pops::nd::cut_cell_fractions_from_phi_cell(std::as_const(fine_phi).view(), fine);
   }
   const auto restricted = pops::nd::restrict_cut_cell_fractions(children, 4);
   EXPECT_DOUBLE_EQ(std::as_const(coarse_volume).view()(coarse), restricted.volume_fraction);

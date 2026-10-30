@@ -272,8 +272,7 @@ int run_collective_history_remap_refusal() {
   } catch (const std::runtime_error& error) {
     refusal_reason = error.what();
     refused = refusal_reason.rfind(
-                  "AMR Program hierarchy-state publication failed collectively; rank 0:", 0) ==
-                  0 &&
+                  "AMR Program hierarchy-state publication failed collectively; rank 0:", 0) == 0 &&
               refusal_reason.find("AMR Program accepted history remap has invalid ring metadata") !=
                   std::string::npos;
   }

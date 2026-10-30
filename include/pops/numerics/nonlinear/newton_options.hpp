@@ -24,7 +24,7 @@ struct NewtonOptions {
 };
 
 inline NewtonOptions newton_options_from_abi(int max_iters, double rel_tol, double abs_tol,
-                                            double fd_eps, double damping) {
+                                             double fd_eps, double damping) {
   NewtonOptions options;
   options.max_iters = max_iters;
   options.rel_tol = static_cast<Real>(rel_tol);
@@ -35,7 +35,7 @@ inline NewtonOptions newton_options_from_abi(int max_iters, double rel_tol, doub
 }
 
 inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& options,
-                                                      bool diagnostics) {
+                                                       bool diagnostics) {
   EffectiveNewtonOptions out;
   out.max_iters = options.max_iters;
   out.rel_tol = static_cast<double>(options.rel_tol);
@@ -43,11 +43,10 @@ inline EffectiveNewtonOptions effective_newton_options(const NewtonOptions& opti
   out.fd_eps = static_cast<double>(options.fd_eps);
   out.damping = static_cast<double>(options.damping);
   out.diagnostics = diagnostics;
-  out.non_default = options.max_iters != kNewtonDefaultMaxIters ||
-                    options.rel_tol != kNewtonDefaultRelTol ||
-                    options.abs_tol != kNewtonDefaultAbsTol ||
-                    options.fd_eps != kNewtonDefaultFdEps ||
-                    options.damping != kNewtonDefaultDamping || diagnostics;
+  out.non_default =
+      options.max_iters != kNewtonDefaultMaxIters || options.rel_tol != kNewtonDefaultRelTol ||
+      options.abs_tol != kNewtonDefaultAbsTol || options.fd_eps != kNewtonDefaultFdEps ||
+      options.damping != kNewtonDefaultDamping || diagnostics;
   return out;
 }
 

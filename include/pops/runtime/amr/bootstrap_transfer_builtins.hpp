@@ -84,31 +84,33 @@ template <int Dim, class MemorySpace>
 /// Sibling of volume-average restriction: invoke CutCellFractions restrict on one uniform-ratio
 /// coarse region. This is not a second PreparedTransfer kind and not a second reflux engine.
 template <int Dim>
-void apply_cut_cell_fraction_restriction(
-    FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_volume,
-    const Box<Dim>& coarse_region, const ::pops::amr::RefinementRatio<Dim>& ratio,
-    ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
-    Real theta_min = ::pops::kEbCutFractionFloor) {
+void apply_cut_cell_fraction_restriction(FieldView<const Real, Dim> fine_phi,
+                                         FieldView<Real, Dim> coarse_volume,
+                                         const Box<Dim>& coarse_region,
+                                         const ::pops::amr::RefinementRatio<Dim>& ratio,
+                                         ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
+                                         Real theta_min = ::pops::kEbCutFractionFloor) {
   nd::apply_cut_cell_fraction_restriction(fine_phi, coarse_volume, coarse_region, ratio, mapping,
                                           theta_min);
 }
 
 template <int Dim>
-void apply_cut_cell_fraction_prolongation(
-    FieldView<const Real, Dim> coarse_volume, FieldView<Real, Dim> fine_volume,
-    const Box<Dim>& coarse_region, const ::pops::amr::RefinementRatio<Dim>& ratio,
-    ::pops::amr::transfer::IndexMapping<Dim> mapping = {}) {
+void apply_cut_cell_fraction_prolongation(FieldView<const Real, Dim> coarse_volume,
+                                          FieldView<Real, Dim> fine_volume,
+                                          const Box<Dim>& coarse_region,
+                                          const ::pops::amr::RefinementRatio<Dim>& ratio,
+                                          ::pops::amr::transfer::IndexMapping<Dim> mapping = {}) {
   nd::apply_cut_cell_fraction_prolongation(coarse_volume, fine_volume, coarse_region, ratio,
                                            mapping);
 }
 
 template <int Dim>
-void apply_cut_cell_face_aperture_reflux(
-    FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_residual,
-    const Box<Dim>& coarse_region, int axis, bool upper,
-    const ::pops::amr::RefinementRatio<Dim>& ratio,
-    ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
-    Real theta_min = ::pops::kEbCutFractionFloor) {
+void apply_cut_cell_face_aperture_reflux(FieldView<const Real, Dim> fine_phi,
+                                         FieldView<Real, Dim> coarse_residual,
+                                         const Box<Dim>& coarse_region, int axis, bool upper,
+                                         const ::pops::amr::RefinementRatio<Dim>& ratio,
+                                         ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
+                                         Real theta_min = ::pops::kEbCutFractionFloor) {
   nd::apply_cut_cell_face_aperture_reflux(fine_phi, coarse_residual, coarse_region, axis, upper,
                                           ratio, mapping, theta_min);
 }

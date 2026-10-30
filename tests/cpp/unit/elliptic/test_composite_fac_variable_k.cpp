@@ -91,7 +91,9 @@ pops::EllipticBuildRequest<Dim> request(const pops::Geometry<Dim>& geometry,
           {distribution.box_count(), pairs}};
 }
 
-pops::Real exact(pops::Real x, pops::Real y) { return std::sin(kPi * x) * std::sin(kPi * y); }
+pops::Real exact(pops::Real x, pops::Real y) {
+  return std::sin(kPi * x) * std::sin(kPi * y);
+}
 
 pops::Real conductivity(pops::Real x, pops::Real y) {
   return pops::Real(1) +
@@ -152,7 +154,8 @@ double solve_error(int cells) {
   const pops::Box<Dim> domain{pops::Index<Dim>{}, ranked<pops::Index<Dim>, Dim>(cells - 1)};
   const auto coarse_geometry = pops::Geometry<Dim>::from_bounds(
       domain, pops::RealVector<Dim>{}, ranked<pops::RealVector<Dim>, Dim>(pops::Real(1)));
-  const auto fine_geometry = coarse_geometry.refine(ranked<pops::Extent<Dim>, Dim>(std::int64_t{2}));
+  const auto fine_geometry =
+      coarse_geometry.refine(ranked<pops::Extent<Dim>, Dim>(std::int64_t{2}));
   pops::Index<Dim> coarse_lo{};
   pops::Index<Dim> coarse_hi{};
   pops::Index<Dim> fine_lo{};
@@ -189,17 +192,16 @@ double solve_error(int cells) {
     fill_scalar(solver.rhs_level(level), geometry, manufactured_rhs);
     solver.phi_level(level).set_val(pops::Real(0));
   }
-  solver.install_nullspace(
-      pops::FieldNullspacePlan<Dim>{},
-      std::vector<pops::PreparedVectorDistribution<Dim>>(
-          static_cast<std::size_t>(solver.n_levels()),
-          pops::PreparedVectorDistribution<Dim>::replicated()));
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           std::vector<pops::PreparedVectorDistribution<Dim>>(
+                               static_cast<std::size_t>(solver.n_levels()),
+                               pops::PreparedVectorDistribution<Dim>::replicated()));
   const pops::SolveReport report = solver.solve();
   if (!report.solved())
-    throw std::runtime_error(report.reason + " residual=" +
-                             std::to_string(static_cast<double>(report.residual_norm)) +
-                             " rel=" + std::to_string(static_cast<double>(report.rel_residual)) +
-                             " iters=" + std::to_string(report.iters));
+    throw std::runtime_error(
+        report.reason + " residual=" + std::to_string(static_cast<double>(report.residual_norm)) +
+        " rel=" + std::to_string(static_cast<double>(report.rel_residual)) +
+        " iters=" + std::to_string(report.iters));
   const pops::Box<Dim> measured = fine_patch.grow(-std::max(2, cells / 4));
   return interior_error(solver.phi_level(1), fine_geometry, measured);
 }
@@ -209,7 +211,8 @@ double solve_constant_weighted(int cells) {
   const pops::Box<Dim> domain{pops::Index<Dim>{}, ranked<pops::Index<Dim>, Dim>(cells - 1)};
   const auto coarse_geometry = pops::Geometry<Dim>::from_bounds(
       domain, pops::RealVector<Dim>{}, ranked<pops::RealVector<Dim>, Dim>(pops::Real(1)));
-  const auto fine_geometry = coarse_geometry.refine(ranked<pops::Extent<Dim>, Dim>(std::int64_t{2}));
+  const auto fine_geometry =
+      coarse_geometry.refine(ranked<pops::Extent<Dim>, Dim>(std::int64_t{2}));
   pops::Index<Dim> fine_lo{};
   pops::Index<Dim> fine_hi{};
   for (int axis = 0; axis < Dim; ++axis) {
@@ -247,22 +250,21 @@ double solve_constant_weighted(int cells) {
            ++ordinal) {
         const auto index = index_from_ordinal(fab.box(), ordinal);
         host(storage_ordinal(fab.grown_box(), index)) =
-            pops::Real(2) * pi * pi * exact(geometry.cell_coordinate(0, index[0]),
-                                            geometry.cell_coordinate(1, index[1]));
+            pops::Real(2) * pi * pi *
+            exact(geometry.cell_coordinate(0, index[0]), geometry.cell_coordinate(1, index[1]));
       }
       fab.copy_from_host(host);
     }
     solver.phi_level(level).set_val(pops::Real(0));
   }
-  solver.install_nullspace(
-      pops::FieldNullspacePlan<Dim>{},
-      std::vector<pops::PreparedVectorDistribution<Dim>>(
-          2, pops::PreparedVectorDistribution<Dim>::replicated()));
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           std::vector<pops::PreparedVectorDistribution<Dim>>(
+                               2, pops::PreparedVectorDistribution<Dim>::replicated()));
   const pops::SolveReport report = solver.solve();
   if (!report.solved())
-    throw std::runtime_error(report.reason + " residual=" +
-                             std::to_string(static_cast<double>(report.residual_norm)) +
-                             " rel=" + std::to_string(static_cast<double>(report.rel_residual)));
+    throw std::runtime_error(
+        report.reason + " residual=" + std::to_string(static_cast<double>(report.residual_norm)) +
+        " rel=" + std::to_string(static_cast<double>(report.rel_residual)));
   return interior_error(solver.phi_level(1), fine_geometry, fine_patch.grow(-2));
 }
 

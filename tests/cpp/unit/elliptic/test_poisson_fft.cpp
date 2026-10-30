@@ -181,8 +181,8 @@ void expect_device_cartesian_fft() {
   pops::Real lambda = pops::Real(0);
   for (int axis = 0; axis < Dim; ++axis) {
     const pops::Real h = static_cast<pops::Real>(lengths[axis]) / extents[axis];
-    lambda += (pops::Real(2) * std::cos(pops::Real(2) * kPi / extents[axis]) - pops::Real(2)) /
-              (h * h);
+    lambda +=
+        (pops::Real(2) * std::cos(pops::Real(2) * kPi / extents[axis]) - pops::Real(2)) / (h * h);
   }
   for (std::size_t ordinal = 0; ordinal < fft.local_cell_count(); ++ordinal)
     EXPECT_NEAR(host_phi[ordinal].real(), host_rhs[ordinal].real() / lambda, 1e-11);

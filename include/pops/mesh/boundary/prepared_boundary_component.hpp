@@ -649,11 +649,19 @@ class PreparedBoundaryComponent final {
 
     const bool initial = point.dt == 0.0;
     if (initial) {
-      const PopsLogicalTimeV1 exact_initial{sizeof(PopsLogicalTimeV1), point.clock.c_str(),
-          point.tick, point.level, point.substep, point.stage,
-          point.stage_fraction.numerator, point.stage_fraction.denominator, point.dt, point.physical_time};
+      const PopsLogicalTimeV1 exact_initial{sizeof(PopsLogicalTimeV1),
+                                            point.clock.c_str(),
+                                            point.tick,
+                                            point.level,
+                                            point.substep,
+                                            point.stage,
+                                            point.stage_fraction.numerator,
+                                            point.stage_fraction.denominator,
+                                            point.dt,
+                                            point.physical_time};
       component::validate_accepted_initial_ghost_point(exact_initial, 1);
-      (void)accepted_initial_ghost_api(); // Explicit additive capability, never V1 callback at dt0.
+      (void)
+          accepted_initial_ghost_api();  // Explicit additive capability, never V1 callback at dt0.
     }
     auto& scratch = invocation_scratch_(session, state, geometry);
     for (auto& patch : scratch.patches)
@@ -819,10 +827,13 @@ class PreparedBoundaryComponent final {
                                                scratch.parameters.data(),
                                                logical_time,
                                                session.patch_execution().view()};
-      const int code = initial
-          ? component::apply_accepted_initial_ghost(accepted_initial_ghost_api(), session.state(),
-                PopsAcceptedInitialGhostRequestV1{sizeof(PopsAcceptedInitialGhostRequestV1), 1, request}, status)
-          : component::apply_ghost_boundary(session.ghost_api(), session.state(), request, status);
+      const int code = initial ? component::apply_accepted_initial_ghost(
+                                     accepted_initial_ghost_api(), session.state(),
+                                     PopsAcceptedInitialGhostRequestV1{
+                                         sizeof(PopsAcceptedInitialGhostRequestV1), 1, request},
+                                     status)
+                               : component::apply_ghost_boundary(session.ghost_api(),
+                                                                 session.state(), request, status);
       require_success(code, status, "apply_region_batch");
       if (std::any_of(patch.output.begin(), patch.output.begin() + values,
                       [](double value) { return !std::isfinite(value); }))

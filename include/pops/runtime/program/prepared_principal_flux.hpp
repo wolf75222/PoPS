@@ -40,8 +40,8 @@ class PreparedPrincipalFlux {
     return field.layout() == candidate_.layout() &&
            field.distribution() == candidate_.distribution() &&
            field.local_rank() == candidate_.local_rank() &&
-           field.local_size() == candidate_.local_size() &&
-           field.ncomp() == Components && field.ghosts() == candidate_.ghosts();
+           field.local_size() == candidate_.local_size() && field.ncomp() == Components &&
+           field.ghosts() == candidate_.ghosts();
   }
 
   void collective_error_(std::exception_ptr error, const char* message) const {
@@ -58,7 +58,8 @@ class PreparedPrincipalFlux {
     for (int axis = 0; axis < Dim; ++axis)
       invalid |= input.ghosts()[axis] < Reconstruction::n_ghost;
     if (all_reduce_max(invalid, *lane_) != 0)
-      throw std::invalid_argument("principal input layout or halo differs from its prepared contract");
+      throw std::invalid_argument(
+          "principal input layout or halo differs from its prepared contract");
   }
 
   template <int Axis, class Model, class Reconstruction, class Numerical>
@@ -69,7 +70,8 @@ class PreparedPrincipalFlux {
       const auto flux = flux_[local].view().template axis<Axis>();
       const auto bound = bound_[local].view().template axis<Axis>();
       for_each_face<Axis>(input.box(local), [=] POPS_HD(const FaceIndex<Dim, Axis>& face) {
-        const auto pair = nd::reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
+        const auto pair =
+            nd::reconstruct_face_pair<Axis, Variables>(model, state, face, reconstruction);
         const Real invalid = std::numeric_limits<Real>::quiet_NaN();
         Real speed = invalid;
         typename Model::State integrated{};
@@ -77,11 +79,12 @@ class PreparedPrincipalFlux {
           integrated[component] = invalid;
         if (pair.succeeded()) {
           // Positive-axis face density is integrated once; both cell incidences read it.
-          const auto evaluation = nd::evaluate_axis_flux<Axis>(numerical, model, pair.left, pair.right);
+          const auto evaluation =
+              nd::evaluate_axis_flux<Axis>(numerical, model, pair.left, pair.right);
           if (evaluation.succeeded()) {
             Index<Dim> adjacent = face.coordinate;
-            const Real measure = nd::metric_face_context<Axis, MetricFaceSide::Lower>(
-                metric, adjacent).face_measure;
+            const Real measure =
+                nd::metric_face_context<Axis, MetricFaceSide::Lower>(metric, adjacent).face_measure;
             const auto density = evaluation.checked_density().value;
             speed = evaluation.stability.value;
             for (int component = 0; component < Components; ++component)
@@ -135,7 +138,9 @@ class PreparedPrincipalFlux {
         offset += count;
       }
       device_fence();
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     collective_error_(error, "principal input packing failed collectively");
   }
 
@@ -175,7 +180,9 @@ class PreparedPrincipalFlux {
         offset += count;
       }
       device_fence();
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     collective_error_(error, "principal output publication failed collectively");
   }
 
@@ -205,7 +212,9 @@ class PreparedPrincipalFlux {
         offset += count;
       }
       device_fence();
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     collective_error_(error, "principal prepared halo packing failed collectively");
   }
 
@@ -216,27 +225,32 @@ class PreparedPrincipalFlux {
     std::exception_ptr error;
     try {
       if (!evaluated_ || first < 0 || count < 1 || first > Components - count)
-        throw std::invalid_argument("principal face projection has no completed exact component range");
+        throw std::invalid_argument(
+            "principal face projection has no completed exact component range");
       result.reserve(flux_.size());
       for (std::size_t local = 0; local < flux_.size(); ++local) {
         result.emplace_back(candidate_.box(local), count);
         const auto source = std::as_const(flux_[local]).view();
         const auto target = result.back().view();
         for (int axis = 0; axis < Dim; ++axis)
-          for_each_cell(nd::face_box(candidate_.box(local), axis), [=] POPS_HD(const Index<Dim>& face) {
-            for (int component = 0; component < count; ++component)
-              target.axes[axis](face, component) = source.axes[axis](face, first + component);
-          });
+          for_each_cell(
+              nd::face_box(candidate_.box(local), axis), [=] POPS_HD(const Index<Dim>& face) {
+                for (int component = 0; component < count; ++component)
+                  target.axes[axis](face, component) = source.axes[axis](face, first + component);
+              });
       }
       device_fence();
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     collective_error_(error, "principal component face projection failed collectively");
     return result;
   }
 
   template <class Context>
   PreparedPrincipalFlux(Context& ctx, Field& prototype)
-      : geometry_(ctx.geometry()), metric_(make_metric_(geometry_)),
+      : geometry_(ctx.geometry()),
+        metric_(make_metric_(geometry_)),
         lane_(&ctx.prepared_execution_lane()) {
     std::exception_ptr error;
     try {
@@ -244,8 +258,8 @@ class PreparedPrincipalFlux {
         throw std::invalid_argument("principal carrier component count differs from its signature");
       candidate_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(),
                          Components, prototype.ghosts());
-      status_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(),
-                      1, prototype.ghosts());
+      status_ = Field(prototype.layout(), prototype.distribution(), prototype.local_rank(), 1,
+                      prototype.ghosts());
       flux_.reserve(prototype.local_size());
       bound_.reserve(prototype.local_size());
       for (std::size_t local = 0; local < prototype.local_size(); ++local) {
@@ -263,7 +277,8 @@ class PreparedPrincipalFlux {
         unsupported_boundary |= !boundary_->topology().is_periodic(Face<Dim>{axis, side});
     if (all_reduce_max(unsupported_boundary, *lane_) != 0)
       throw std::invalid_argument(
-          "principal group requires periodic boundaries until its joint physical boundary adapter is prepared");
+          "principal group requires periodic boundaries until its joint physical boundary adapter "
+          "is prepared");
   }
 
   bool matches_preparation(const Geometry<Dim>& geometry, const ExecutionLane& lane,
@@ -278,7 +293,8 @@ class PreparedPrincipalFlux {
   }
 
   template <class Model, class Reconstruction, class Numerical>
-  const Field& evaluate(Field& input, Model model, Reconstruction reconstruction, Numerical numerical) {
+  const Field& evaluate(Field& input, Model model, Reconstruction reconstruction,
+                        Numerical numerical) {
     evaluated_ = false;
     require_input_<Reconstruction>(input);
     boundary_->fill_halo(input);
@@ -311,19 +327,26 @@ class PreparedPrincipalFlux {
           for (int component = 0; component < Components; ++component)
             result(cell, component) = residual.value[component];
           status(cell, 0) = residual.succeeded() && Kokkos::isfinite(frequency)
-                               ? frequency : std::numeric_limits<Real>::infinity();
+                                ? frequency
+                                : std::numeric_limits<Real>::infinity();
         });
       }
       device_fence();
     } catch (...) {
       error = std::current_exception();
-      try { device_fence(); } catch (...) {}
+      try {
+        device_fence();
+      } catch (...) {
+      }
     }
     collective_error_(error, "principal face evaluation failed collectively");
     Real local_frequency = 0;
     error = nullptr;
-    try { local_frequency = reduce_max_local(status_); }
-    catch (...) { error = std::current_exception(); }
+    try {
+      local_frequency = reduce_max_local(status_);
+    } catch (...) {
+      error = std::current_exception();
+    }
     collective_error_(error, "principal stability reduction failed collectively");
     frequency_ = all_reduce_max(local_frequency, *lane_);
     if (!std::isfinite(frequency_))

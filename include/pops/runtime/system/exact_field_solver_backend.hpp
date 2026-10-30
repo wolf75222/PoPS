@@ -171,23 +171,28 @@ class RedBlackGeometricMgFieldSolverBackend final : public ExactFieldSolverBacke
   using request_type = EllipticBuildRequest<Dim>;
 
   RedBlackGeometricMgFieldSolverBackend(request_type request, const ExecutionLane& lane,
-      elliptic::mg::GeometricMultigridOptions options, std::string identity)
+                                        elliptic::mg::GeometricMultigridOptions options,
+                                        std::string identity)
       : identity_(std::move(identity)), solver_(std::move(request), lane, std::move(options)) {
-    if (identity_.empty()) throw std::invalid_argument("red-black MG requires its prepared provider identity");
+    if (identity_.empty())
+      throw std::invalid_argument("red-black MG requires its prepared provider identity");
   }
 
   static std::unique_ptr<ExactFieldSolverBackend<Dim>> prepare_collectively(
       const Geometry<Dim>& geometry, const mesh::BoxArray<Dim>& layout,
       const mesh::Distribution<Dim>& distribution, Index<Dim> local_rank,
-      const BoundaryTopology<Dim>& topology, const elliptic::nd::CartesianPoissonOptions<Dim>& boundary,
-      const PreparedProviderOptions& encoded_options, const ExecutionLane& lane, std::string_view identity) {
+      const BoundaryTopology<Dim>& topology,
+      const elliptic::nd::CartesianPoissonOptions<Dim>& boundary,
+      const PreparedProviderOptions& encoded_options, const ExecutionLane& lane,
+      std::string_view identity) {
     std::optional<request_type> request;
     std::optional<elliptic::mg::GeometricMultigridOptions> options;
     std::optional<std::string> captured_identity;
     void* storage = nullptr;
     std::exception_ptr local_error;
     try {
-      if (identity.empty()) throw std::invalid_argument("red-black MG provider identity is empty");
+      if (identity.empty())
+        throw std::invalid_argument("red-black MG provider identity is empty");
       captured_identity.emplace(identity);
       options.emplace(decode_red_black_geometric_mg_options<Dim>(encoded_options));
       std::array<PhysicalBoundaryFace, 2 * Dim> faces{};
@@ -198,31 +203,44 @@ class RedBlackGeometricMgFieldSolverBackend final : public ExactFieldSolverBacke
           const auto ordinal = static_cast<std::size_t>(Face<Dim>{axis, side}.ordinal());
           if (topology.is_periodic(Face<Dim>{axis, side}) ||
               boundary.boundaries[ordinal] != elliptic::nd::CartesianBoundaryKind::dirichlet ||
-              boundary.boundary_values[ordinal] != Real(0) || boundary.boundary_alpha[ordinal] != Real(1) ||
+              boundary.boundary_values[ordinal] != Real(0) ||
+              boundary.boundary_alpha[ordinal] != Real(1) ||
               boundary.boundary_beta[ordinal] != Real(0))
-            throw std::invalid_argument("prepared red-black field MG requires static zero Dirichlet physical faces");
+            throw std::invalid_argument(
+                "prepared red-black field MG requires static zero Dirichlet physical faces");
           faces[ordinal] = PhysicalBoundaryFace{PhysicalBoundaryKind::dirichlet, Real(0)};
         }
       }
       request.emplace(request_type{geometry, layout, distribution, local_rank,
-          PhysicalBoundaryConditions<Dim>{topology, faces, spacing}, Extent<Dim>{},
-          elliptic::mg::detail::unit_ghosts<Dim>(), elliptic::mg::detail::exact_layout_budget(layout)});
+                                   PhysicalBoundaryConditions<Dim>{topology, faces, spacing},
+                                   Extent<Dim>{}, elliptic::mg::detail::unit_ghosts<Dim>(),
+                                   elliptic::mg::detail::exact_layout_budget(layout)});
       storage = ::operator new(sizeof(RedBlackGeometricMgFieldSolverBackend));
-    } catch (...) { local_error = std::current_exception(); }
+    } catch (...) {
+      local_error = std::current_exception();
+    }
     if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
       ::operator delete(storage);
-      if (lane.size() == 1 && local_error) std::rethrow_exception(local_error);
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
       throw std::runtime_error("red-black geometric field MG preparation failed collectively");
     }
     RedBlackGeometricMgFieldSolverBackend* prepared = nullptr;
     std::exception_ptr construction_error;
     try {
-      prepared = ::new (storage) RedBlackGeometricMgFieldSolverBackend(std::move(*request), lane,
-          std::move(*options), std::move(*captured_identity));
-    } catch (...) { ::operator delete(storage); construction_error = std::current_exception(); }
+      prepared = ::new (storage) RedBlackGeometricMgFieldSolverBackend(
+          std::move(*request), lane, std::move(*options), std::move(*captured_identity));
+    } catch (...) {
+      ::operator delete(storage);
+      construction_error = std::current_exception();
+    }
     if (all_reduce_max(construction_error ? 1L : 0L, lane) != 0) {
-      if (prepared) { prepared->~RedBlackGeometricMgFieldSolverBackend(); ::operator delete(storage); }
-      if (lane.size() == 1 && construction_error) std::rethrow_exception(construction_error);
+      if (prepared) {
+        prepared->~RedBlackGeometricMgFieldSolverBackend();
+        ::operator delete(storage);
+      }
+      if (lane.size() == 1 && construction_error)
+        std::rethrow_exception(construction_error);
       throw std::runtime_error("red-black geometric field MG construction failed collectively");
     }
     return std::unique_ptr<ExactFieldSolverBackend<Dim>>(prepared);
@@ -234,28 +252,36 @@ class RedBlackGeometricMgFieldSolverBackend final : public ExactFieldSolverBacke
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim>) override {
     throw std::invalid_argument("red-black field MG has no dynamic-boundary authority");
   }
-  void validate_boundary_kernel_replacement(const std::optional<CompiledFieldBoundaryKernel<Dim>>& kernel) const override {
-    if (kernel) throw std::invalid_argument("red-black field MG has no dynamic-boundary authority");
+  void validate_boundary_kernel_replacement(
+      const std::optional<CompiledFieldBoundaryKernel<Dim>>& kernel) const override {
+    if (kernel)
+      throw std::invalid_argument("red-black field MG has no dynamic-boundary authority");
   }
   void replace_boundary_kernel(std::optional<CompiledFieldBoundaryKernel<Dim>>) noexcept override {}
-  void set_boundary_contexts(std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts) override {
-    if (contexts) throw std::invalid_argument("red-black field MG rejects dynamic boundary contexts");
+  void set_boundary_contexts(
+      std::shared_ptr<const PreparedFieldBoundaryContextSet<Dim>> contexts) override {
+    if (contexts)
+      throw std::invalid_argument("red-black field MG rejects dynamic boundary contexts");
   }
   void install_newton(FieldNewtonOptions) override {
     throw std::invalid_argument("red-black field MG has no Newton authority");
   }
-  void install_nullspace(FieldNullspacePlan<Dim> plan, PreparedVectorDistribution<Dim> distribution) override {
+  void install_nullspace(FieldNullspacePlan<Dim> plan,
+                         PreparedVectorDistribution<Dim> distribution) override {
     solver_.install_nullspace(std::move(plan), std::move(distribution));
   }
   SolveReport solve(const field_type& warm_start, const ExecutionLane& lane) override {
-    if (!solver_.borrows_execution_lane(lane)) throw std::invalid_argument("red-black field MG received a foreign execution lane");
+    if (!solver_.borrows_execution_lane(lane))
+      throw std::invalid_argument("red-black field MG received a foreign execution lane");
     elliptic::mg::copy_scalar_valid(warm_start, solver_.phi());
     return solver_.solve();
   }
   int maximum_iterations() const noexcept override { return solver_.maximum_iterations(); }
   bool materialized() const noexcept override { return true; }
   std::string_view provider_identity() const noexcept override { return identity_; }
-  std::vector<runtime::field::FieldTopologyReportRow> topology_report() const override { return {}; }
+  std::vector<runtime::field::FieldTopologyReportRow> topology_report() const override {
+    return {};
+  }
 
  private:
   std::string identity_;

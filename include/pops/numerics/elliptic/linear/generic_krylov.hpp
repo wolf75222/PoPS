@@ -329,10 +329,9 @@ inline Real workspace_physical_residual_norm(const PreparedAffineLinearProblem<D
                                              const MultiFab<Dim>& value,
                                              KrylovPhysicalNorm physical_norm) {
   if (physical_norm == KrylovPhysicalNorm::component_linf)
-    return PreparedFieldAlgebra::max_abs(
-        value, problem.vector_distribution(),
-        KrylovWorkspaceAccess::metric_reduction_scratch(workspace),
-        KrylovWorkspaceAccess::execution_lane(workspace));
+    return PreparedFieldAlgebra::max_abs(value, problem.vector_distribution(),
+                                         KrylovWorkspaceAccess::metric_reduction_scratch(workspace),
+                                         KrylovWorkspaceAccess::execution_lane(workspace));
   return workspace_residual_norm(problem, workspace, value);
 }
 
@@ -478,9 +477,8 @@ template <int Dim>
 inline void validate_controls(const KrylovControls<Dim>& controls) {
   if (!controls.failure_actions.valid())
     throw std::invalid_argument("prepared Krylov numerical failure actions are invalid");
-  const KrylovMethodValidation validation = controls.method.validate_controls(
-      KrylovMethodControls{controls.rel_tol, controls.abs_tol, controls.max_iterations,
-                           controls.physical_norm});
+  const KrylovMethodValidation validation = controls.method.validate_controls(KrylovMethodControls{
+      controls.rel_tol, controls.abs_tol, controls.max_iterations, controls.physical_norm});
   if (!validation.accepted())
     throw std::invalid_argument("prepared Krylov provider '" +
                                 std::string(controls.method.identity()) +
@@ -550,8 +548,8 @@ inline void append_controls(KrylovCollectivePayload& payload,
   payload.append(static_cast<std::uint8_t>(controls.failure_actions.breakdown));
   payload.append(static_cast<std::uint8_t>(controls.failure_actions.iteration_limit));
   payload.append(static_cast<std::uint8_t>(controls.physical_norm));
-  payload.append(static_cast<std::uint64_t>(
-      controls.diagnostic_trace ? GmresDiagnosticTrace::capacity : 0));
+  payload.append(
+      static_cast<std::uint64_t>(controls.diagnostic_trace ? GmresDiagnosticTrace::capacity : 0));
 }
 
 template <int Dim>
@@ -589,7 +587,8 @@ inline void collective_solve_preflight(const PreparedAffineLinearProblem<Dim>& p
   const KrylovMethodProblemFacts<Dim> method_facts{
       problem.properties(),          problem.footprint(),
       problem.vector_distribution(), problem.metric().robust_payload_width(),
-      problem.has_nullspace(),       problem.has_preconditioner(), controls.physical_norm};
+      problem.has_nullspace(),       problem.has_preconditioner(),
+      controls.physical_norm};
   const KrylovMethodValidation problem_validation = controls.method.validate_problem(method_facts);
   payload.append(problem_validation.code);
   if (local_failure == 0 && !problem_validation.accepted())
@@ -607,9 +606,9 @@ inline void collective_solve_preflight(const PreparedAffineLinearProblem<Dim>& p
     if (!agrees)
       throw std::logic_error(
           "prepared Krylov collective contract differs across communicator ranks");
-    const KrylovMethodValidation control_validation = controls.method.validate_controls(
-        KrylovMethodControls{controls.rel_tol, controls.abs_tol, controls.max_iterations,
-                             controls.physical_norm});
+    const KrylovMethodValidation control_validation =
+        controls.method.validate_controls(KrylovMethodControls{
+            controls.rel_tol, controls.abs_tol, controls.max_iterations, controls.physical_norm});
     const KrylovMethodValidation local_validation =
         control_validation.accepted() ? problem_validation : control_validation;
     if (!local_validation.accepted())
@@ -756,10 +755,10 @@ inline SolveReport prepared_apply_failure_report(const SolveNormalization& norma
 }
 
 template <int Dim>
-inline Real physical_true_residual_norm(const PreparedAffineLinearProblem<Dim>& problem,
-                                        KrylovWorkspace<Dim>& workspace, MultiFab<Dim>& scratch,
-                                        const MultiFab<Dim>& rhs, const MultiFab<Dim>& iterate,
-                                        KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2) {
+inline Real physical_true_residual_norm(
+    const PreparedAffineLinearProblem<Dim>& problem, KrylovWorkspace<Dim>& workspace,
+    MultiFab<Dim>& scratch, const MultiFab<Dim>& rhs, const MultiFab<Dim>& iterate,
+    KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2) {
   workspace_true_residual(problem, workspace, scratch, rhs, iterate);
   return workspace_physical_residual_norm(problem, workspace, scratch, physical_norm);
 }
@@ -778,8 +777,8 @@ inline ResidualMeasurement physical_true_residual_measurement(
     const PreparedAffineLinearProblem<Dim>& problem, KrylovWorkspace<Dim>& workspace,
     MultiFab<Dim>& scratch, const MultiFab<Dim>& rhs, const MultiFab<Dim>& iterate,
     KrylovPhysicalNorm physical_norm = KrylovPhysicalNorm::metric_l2) {
-  const Real physical = physical_true_residual_norm(problem, workspace, scratch, rhs, iterate,
-                                                   physical_norm);
+  const Real physical =
+      physical_true_residual_norm(problem, workspace, scratch, rhs, iterate, physical_norm);
   return {physical, std::numeric_limits<Real>::quiet_NaN()};
 }
 
@@ -1493,8 +1492,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
       // where the previous true physical residual exceeded tau. Multi-column sums retain their
       // established path; rounding individual terms towards adjacent values could introduce drift.
       const ScaledScalar coefficient =
-          KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, 0,
-                                                             restart);
+          KrylovWorkspaceAccess::scaled_solution_coefficient(workspace, 0, restart);
       // A rejected non-decreasing true residual can signal a cycle between
       // adjacent values. Shorten the next complete correction while retaining
       // recovery of masked lost updates. This proposes another candidate; the
@@ -1512,8 +1510,8 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
             basis(column));
     }
 
-    measurement = physical_true_residual_measurement(
-        problem, workspace, applied_or_residual, rhs, iterate, controls.physical_norm);
+    measurement = physical_true_residual_measurement(problem, workspace, applied_or_residual, rhs,
+                                                     iterate, controls.physical_norm);
     if (controls.diagnostic_trace) {
       diagnostic.end_iteration = iterations;
       diagnostic.dimension = dimension;
@@ -1525,7 +1523,8 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
           KrylovWorkspaceAccess::scaled_rotated_rhs(workspace, dimension, restart);
       diagnostic.estimate_threshold = estimate_threshold;
       diagnostic.end_flags = (estimate_reached ? 1u : 0u) | (last_lucky_breakdown ? 2u : 0u) |
-          (iterations == controls.max_iterations ? 4u : 0u) | (dimension == restart ? 8u : 0u);
+                             (iterations == controls.max_iterations ? 4u : 0u) |
+                             (dimension == restart ? 8u : 0u);
       controls.diagnostic_trace->append(diagnostic);
     }
     if (!finite(measurement.physical))
@@ -1567,8 +1566,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
       }
       const Real global_count = all_reduce_sum(local_count, lane);
       constexpr int maximum_quantized_components = 6;
-      if (global_count >= Real(1) &&
-          global_count <= Real(maximum_quantized_components)) {
+      if (global_count >= Real(1) && global_count <= Real(maximum_quantized_components)) {
         PreparedFieldAlgebra::zero(unconverged_components);
         int labels = 0;
         for (; labels < static_cast<int>(global_count); ++labels) {
@@ -1577,16 +1575,18 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
             const auto residual = std::as_const(applied_or_residual.fab(local)).view();
             const auto marked = std::as_const(unconverged_components.fab(local)).view();
             const int components = applied_or_residual.ncomp();
-            local_peak = std::max(local_peak, for_each_cell_reduce_max(
-                applied_or_residual.box(local), [=] POPS_HD(const Index<Dim>& index) {
-                  Real peak = Real(0);
-                  for (int component = 0; component < components; ++component) {
-                    const Real magnitude = Kokkos::abs(residual(index, component));
-                    if (marked(index, component) == Real(0) && magnitude > threshold)
-                      peak = Kokkos::max(peak, magnitude);
-                  }
-                  return peak;
-                }));
+            local_peak =
+                std::max(local_peak,
+                         for_each_cell_reduce_max(
+                             applied_or_residual.box(local), [=] POPS_HD(const Index<Dim>& index) {
+                               Real peak = Real(0);
+                               for (int component = 0; component < components; ++component) {
+                                 const Real magnitude = Kokkos::abs(residual(index, component));
+                                 if (marked(index, component) == Real(0) && magnitude > threshold)
+                                   peak = Kokkos::max(peak, magnitude);
+                               }
+                               return peak;
+                             }));
           }
           const Real peak = all_reduce_max(local_peak, lane);
           if (!(peak > threshold))
@@ -1623,9 +1623,8 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem<Dim>& problem,
                   const int bit = static_cast<int>(Kokkos::abs(label)) - 1;
                   if (bit < 0 || (selection & (1 << bit)) == 0)
                     continue;
-                  const Real toward = label > Real(0)
-                                          ? std::numeric_limits<Real>::infinity()
-                                          : -std::numeric_limits<Real>::infinity();
+                  const Real toward = label > Real(0) ? std::numeric_limits<Real>::infinity()
+                                                      : -std::numeric_limits<Real>::infinity();
 #if defined(KOKKOS_ENABLE_SYCL)
                   const Real adjacent = sycl::nextafter(values(index, component), toward);
 #else
@@ -1975,8 +1974,8 @@ inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
     if (!apply_failed) {
       detail::require_exact_scientific_boundary(problem, workspace, compatibility_rhs,
                                                 "prepared incompatible-RHS terminal true residual");
-      residual = detail::workspace_physical_residual_norm(
-          problem, workspace, compatibility_rhs, controls.physical_norm);
+      residual = detail::workspace_physical_residual_norm(problem, workspace, compatibility_rhs,
+                                                          controls.physical_norm);
     }
     SolveReport incompatible =
         apply_failed
@@ -2016,9 +2015,8 @@ inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
   // isometric permutation must be rejected even though its scalar norm is unchanged.
   detail::require_exact_scientific_boundary(problem, workspace, initial_residual,
                                             "prepared initial true residual");
-  const Real initial_physical =
-      detail::workspace_physical_residual_norm(problem, workspace, initial_residual,
-                                               controls.physical_norm);
+  const Real initial_physical = detail::workspace_physical_residual_norm(
+      problem, workspace, initial_residual, controls.physical_norm);
   if (!detail::finite(initial_physical))
     return detail::report_physical(report_normalization, initial_physical, 0,
                                    SolveStatus::kInvalidEvaluation);
@@ -2102,8 +2100,8 @@ inline SolveReport detail::PreparedKrylovInvocationAccess::execute(
   if (!final_apply_failed) {
     detail::require_exact_scientific_boundary(problem, workspace, compatibility_rhs,
                                               "prepared final true residual");
-    final_residual = detail::workspace_physical_residual_norm(
-        problem, workspace, compatibility_rhs, controls.physical_norm);
+    final_residual = detail::workspace_physical_residual_norm(problem, workspace, compatibility_rhs,
+                                                              controls.physical_norm);
   }
   if (final_apply_failed) {
     result.mark_failed(

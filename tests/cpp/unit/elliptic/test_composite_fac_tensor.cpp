@@ -327,9 +327,9 @@ TEST(test_composite_fac_tensor, discontinuous_spd_tensor_solves_the_positive_ene
     const int fine_cells = geometry.domain().length(0);
     const mesh::BoxArray<2> full_fine(std::vector<Box<2>>{geometry.domain()});
     request.levels[1].layout = full_fine;
-    request.levels[1].distribution = mesh::Distribution<2>::partitioned(
-        full_fine, request.levels[0].distribution.rank_space(),
-        std::vector<Index<2>>{Index<2>{0, 0}});
+    request.levels[1].distribution =
+        mesh::Distribution<2>::partitioned(full_fine, request.levels[0].distribution.rank_space(),
+                                           std::vector<Index<2>>{Index<2>{0, 0}});
     auto solver = prepare_hierarchy_tensor_solver_collectively(
         *registry, tensor_elliptic_detail::kCompositeTensorProvider, std::move(request), lane);
     for (int level = 0; level < solver->level_count(); ++level) {

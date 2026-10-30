@@ -441,10 +441,13 @@ void verify_exact_ranked_trajectory() {
     encoded << std::hexfloat << value;
     return encoded.str();
   };
-  ::testing::Test::RecordProperty("unfloored_mass_change", exact_real(unfloored.mass_after - unfloored.mass_before));
-  ::testing::Test::RecordProperty("floored_mass_change", exact_real(floored.mass_after - floored.mass_before));
-  ::testing::Test::RecordProperty("fine_interior_floor_effect", exact_real(
-      max_difference(floored.fine_interior_after, unfloored.fine_interior_after)));
+  ::testing::Test::RecordProperty("unfloored_mass_change",
+                                  exact_real(unfloored.mass_after - unfloored.mass_before));
+  ::testing::Test::RecordProperty("floored_mass_change",
+                                  exact_real(floored.mass_after - floored.mass_before));
+  ::testing::Test::RecordProperty(
+      "fine_interior_floor_effect",
+      exact_real(max_difference(floored.fine_interior_after, unfloored.fine_interior_after)));
   constexpr double tolerance = 2e-10;
   EXPECT_NEAR(unfloored.mass_rolled_back, unfloored.mass_before, tolerance);
   EXPECT_NEAR(floored.mass_rolled_back, floored.mass_before, tolerance);

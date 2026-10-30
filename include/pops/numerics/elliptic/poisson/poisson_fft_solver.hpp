@@ -508,8 +508,7 @@ class PoissonFFTSolver {
       if (request.distribution.rank_space().extent()[axis] != 1)
         ++process_axes;
     if (ranks > 1 && process_axes != 1)
-      throw std::invalid_argument(
-          "Poisson FFT rank space must be a one-dimensional process grid");
+      throw std::invalid_argument("Poisson FFT rank space must be a one-dimensional process grid");
 
     fft_solver_detail::validate_periodic_boundary(request.geometry, request.boundary);
     for (int axis = 0; axis < Dim; ++axis)

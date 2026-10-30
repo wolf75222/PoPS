@@ -268,7 +268,8 @@ struct FiniteOwnedDotKernel {
     const Real b = right(index, component);
     const Real product = a * b;
     return Kokkos::isfinite(a) && Kokkos::isfinite(b) && Kokkos::isfinite(product)
-               ? product : std::numeric_limits<Real>::infinity();
+               ? product
+               : std::numeric_limits<Real>::infinity();
   }
 };
 
@@ -688,7 +689,8 @@ FiniteCompensatedSum dot_owned_active_all_finite_sum_local(
   for (int component = 0; component < left.ncomp(); ++component) {
     for (std::size_t local = 0; local < left.local_size(); ++local) {
       const auto patch = for_each_cell_reduce_finite_sum(
-          left.box(local), mf_arith_detail::FiniteOwnedDotKernel<Dim>{
+          left.box(local),
+          mf_arith_detail::FiniteOwnedDotKernel<Dim>{
               left.fab(local).view(), right.fab(local).view(),
               active_cells ? active_cells->fab(local).view() : FieldView<const Real, Dim>{},
               coverage_cells ? coverage_cells->fab(local).view() : FieldView<const Real, Dim>{},
@@ -703,16 +705,16 @@ FiniteCompensatedSum dot_owned_active_all_finite_sum_local(
 
 template <int Dim, class MemorySpace>
 Real dot_owned_active_all_finite_local(const MultiFab<Dim, MemorySpace>& left,
-                                      const MultiFab<Dim, MemorySpace>& right,
-                                      const MultiFab<Dim, MemorySpace>* active_cells,
-                                      const MultiFab<Dim, MemorySpace>* coverage_cells = nullptr) {
+                                       const MultiFab<Dim, MemorySpace>& right,
+                                       const MultiFab<Dim, MemorySpace>* active_cells,
+                                       const MultiFab<Dim, MemorySpace>* coverage_cells = nullptr) {
   return dot_owned_active_all_finite_sum_local(left, right, active_cells, coverage_cells).value();
 }
 
 /// dot-all@1 transports the two-word summaries, never fields or finalized rank scalars.
 /// All ranks merge in communicator order; device reduction trees can still differ.
 inline Real collective_finite_compensated_sum(const FiniteCompensatedSum& local,
-                                             const CommunicatorView& communicator) {
+                                              const CommunicatorView& communicator) {
   if (all_reduce_max(local.finite() ? 0L : 1L, communicator) != 0)
     throw std::overflow_error("Program dot_all local summary is nonfinite");
 #ifdef POPS_HAS_MPI

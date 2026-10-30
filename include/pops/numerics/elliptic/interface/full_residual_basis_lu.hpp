@@ -27,8 +27,9 @@ class FullResidualBasisLU final {
   }
   static std::size_t required_bytes(std::size_t n, std::size_t external_bytes = 0) {
     // One in-place matrix, caller RHS/output, pivot indices and external map/towers.
-    return checked_add(external_bytes, checked_add(checked_product(checked_product(n, n), sizeof(Real)),
-        checked_product(n, 2 * sizeof(Real) + sizeof(std::size_t))));
+    return checked_add(external_bytes,
+                       checked_add(checked_product(checked_product(n, n), sizeof(Real)),
+                                   checked_product(n, 2 * sizeof(Real) + sizeof(std::size_t))));
   }
   void allocate(std::size_t n) {
     ready_ = false;
@@ -41,22 +42,28 @@ class FullResidualBasisLU final {
   void factor() {
     ready_ = false;
     for (Real value : values_)
-      if (!std::isfinite(value)) throw std::invalid_argument("FullResidualBasisLU@1 nonfinite original Jacobian");
+      if (!std::isfinite(value))
+        throw std::invalid_argument("FullResidualBasisLU@1 nonfinite original Jacobian");
     for (std::size_t k = 0; k < n_; ++k) {
       std::size_t pivot = k;
       for (std::size_t row = k + 1; row < n_; ++row)
-        if (std::abs(entry(row, k)) > std::abs(entry(pivot, k))) pivot = row;
+        if (std::abs(entry(row, k)) > std::abs(entry(pivot, k)))
+          pivot = row;
       if (entry(pivot, k) == Real(0))
-        throw std::invalid_argument("FullResidualBasisLU@1 singular full original Jacobian on active quotient");
+        throw std::invalid_argument(
+            "FullResidualBasisLU@1 singular full original Jacobian on active quotient");
       pivots_[k] = pivot;
       if (pivot != k)
-        for (std::size_t column = 0; column < n_; ++column) std::swap(entry(k, column), entry(pivot, column));
+        for (std::size_t column = 0; column < n_; ++column)
+          std::swap(entry(k, column), entry(pivot, column));
       for (std::size_t row = k + 1; row < n_; ++row) {
         entry(row, k) /= entry(k, k);
-        if (!std::isfinite(entry(row, k))) throw std::invalid_argument("FullResidualBasisLU@1 nonfinite pivot factor");
+        if (!std::isfinite(entry(row, k)))
+          throw std::invalid_argument("FullResidualBasisLU@1 nonfinite pivot factor");
         for (std::size_t column = k + 1; column < n_; ++column) {
           entry(row, column) -= entry(row, k) * entry(k, column);
-          if (!std::isfinite(entry(row, column))) throw std::invalid_argument("FullResidualBasisLU@1 nonfinite factorization");
+          if (!std::isfinite(entry(row, column)))
+            throw std::invalid_argument("FullResidualBasisLU@1 nonfinite factorization");
         }
       }
     }
@@ -66,18 +73,25 @@ class FullResidualBasisLU final {
     if (!ready_ || rhs.size() != n_ || result.size() != n_)
       throw std::logic_error("FullResidualBasisLU@1 missing factor/active vector shape");
     std::copy(rhs.begin(), rhs.end(), result.begin());
-    for (Real value : result) if (!std::isfinite(value)) throw std::invalid_argument("FullResidualBasisLU@1 nonfinite RHS");
+    for (Real value : result)
+      if (!std::isfinite(value))
+        throw std::invalid_argument("FullResidualBasisLU@1 nonfinite RHS");
     for (std::size_t k = 0; k < n_; ++k) {
-      if (pivots_[k] != k) std::swap(result[k], result[pivots_[k]]);
+      if (pivots_[k] != k)
+        std::swap(result[k], result[pivots_[k]]);
     }
     for (std::size_t row = 0; row < n_; ++row)
-      for (std::size_t column = 0; column < row; ++column) result[row] -= values_[row * n_ + column] * result[column];
+      for (std::size_t column = 0; column < row; ++column)
+        result[row] -= values_[row * n_ + column] * result[column];
     for (std::size_t row = n_; row-- > 0;) {
-      for (std::size_t column = row + 1; column < n_; ++column) result[row] -= values_[row * n_ + column] * result[column];
+      for (std::size_t column = row + 1; column < n_; ++column)
+        result[row] -= values_[row * n_ + column] * result[column];
       result[row] /= values_[row * n_ + row];
-      if (!std::isfinite(result[row])) throw std::invalid_argument("FullResidualBasisLU@1 nonfinite triangular solution");
+      if (!std::isfinite(result[row]))
+        throw std::invalid_argument("FullResidualBasisLU@1 nonfinite triangular solution");
     }
   }
+
  private:
   std::size_t n_ = 0;
   std::vector<Real> values_;

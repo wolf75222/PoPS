@@ -60,7 +60,8 @@ inline constexpr std::string_view typed_marker = "\xffPOPS-TYPED-FAILURE-1";
 inline std::string encode(const StepAttemptRejected& rejected, StepRejectionContract contract) {
   std::string bytes(contract.schema);
   const bool typed = !rejected.typed_failure_schema().empty();
-  if (typed) bytes.append(typed_marker);
+  if (typed)
+    bytes.append(typed_marker);
   append_u64(bytes, static_cast<std::uint64_t>(rejected.status()));
   append_u64(bytes, static_cast<std::uint64_t>(rejected.disposition()));
   append_u64(bytes, rejected.reason_code());
@@ -69,7 +70,8 @@ inline std::string encode(const StepAttemptRejected& rejected, StepRejectionCont
     bytes.append(text);
   }
   if (typed) {
-    for (const std::string_view value : {rejected.typed_failure_schema(), rejected.typed_failure_payload()}) {
+    for (const std::string_view value :
+         {rejected.typed_failure_schema(), rejected.typed_failure_payload()}) {
       append_u64(bytes, static_cast<std::uint64_t>(value.size()));
       bytes.append(value);
     }
@@ -82,7 +84,8 @@ inline Envelope decode(std::string_view bytes, StepRejectionContract contract) {
     throw std::runtime_error("collective step rejection envelope has another schema");
   std::size_t cursor = contract.schema.size();
   const bool typed = bytes.substr(cursor).starts_with(typed_marker);
-  if (typed) cursor += typed_marker.size();
+  if (typed)
+    cursor += typed_marker.size();
   const auto status = read_u64(bytes, cursor), disposition = read_u64(bytes, cursor);
   const auto reason = read_u64(bytes, cursor);
   if (status > static_cast<std::uint64_t>(SolveStatus::kSafeguardFailure) ||
@@ -94,8 +97,8 @@ inline Envelope decode(std::string_view bytes, StepRejectionContract contract) {
                   static_cast<std::uint32_t>(reason),
                   {},
                   {}};
-  std::string* fields[] = {&result.phase, &result.detail,
-                           &result.typed_failure_schema, &result.typed_failure_payload};
+  std::string* fields[] = {&result.phase, &result.detail, &result.typed_failure_schema,
+                           &result.typed_failure_payload};
   for (int field = 0; field < (typed ? 4 : 2); ++field) {
     auto* text = fields[field];
     const auto size = read_u64(bytes, cursor);
@@ -106,7 +109,8 @@ inline Envelope decode(std::string_view bytes, StepRejectionContract contract) {
     text->assign(bytes.substr(cursor, static_cast<std::size_t>(size)));
     cursor += static_cast<std::size_t>(size);
   }
-  if (cursor != bytes.size() || (typed && (result.typed_failure_schema.empty() || result.typed_failure_payload.empty())) ||
+  if (cursor != bytes.size() ||
+      (typed && (result.typed_failure_schema.empty() || result.typed_failure_payload.empty())) ||
       (contract.require_phase && result.phase.empty()) ||
       (contract.require_detail && result.detail.empty()))
     throw std::runtime_error("collective step rejection envelope is incomplete");

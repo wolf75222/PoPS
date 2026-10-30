@@ -93,7 +93,8 @@ struct ProjectFieldDomainKernel {
   FieldView<Real, Dim> values;
   FieldView<const Real, Dim> active;
   POPS_HD void operator()(const Index<Dim>& cell) const {
-    if (active(cell, 0) == Real(0)) values(cell, 0) = Real(0);
+    if (active(cell, 0) == Real(0))
+      values(cell, 0) = Real(0);
   }
 };
 
@@ -102,7 +103,8 @@ struct InvalidDiagonalCoefficientKernel {
   FieldView<const Real, Dim> values;
   POPS_HD Real operator()(const Index<Dim>& cell) const {
     for (int axis = 0; axis < Dim; ++axis)
-      if (!Kokkos::isfinite(values(cell, axis)) || values(cell, axis) <= Real(0)) return Real(1);
+      if (!Kokkos::isfinite(values(cell, axis)) || values(cell, axis) <= Real(0))
+        return Real(1);
     return Real(0);
   }
 };
@@ -112,7 +114,9 @@ struct InvalidFieldConductorKernel {
   FieldView<const Real, Dim> phi, active;
   POPS_HD Real operator()(const Index<Dim>& cell) const {
     return !Kokkos::isfinite(phi(cell, 0)) ||
-        (active(cell, 0) == Real(0) && phi(cell, 0) != Real(0)) ? Real(1) : Real(0);
+                   (active(cell, 0) == Real(0) && phi(cell, 0) != Real(0))
+               ? Real(1)
+               : Real(0);
   }
 };
 
@@ -126,20 +130,25 @@ struct StaircaseRedBlackKernel {
   bool diagonal_coefficient = false;
   POPS_HD void operator()(const Index<Dim>& cell) const {
     int parity = 0;
-    for (int axis = 0; axis < Dim; ++axis) parity += cell[axis];
-    if ((parity & 1) != color || active(cell, 0) == Real(0)) return;
+    for (int axis = 0; axis < Dim; ++axis)
+      parity += cell[axis];
+    if ((parity & 1) != color || active(cell, 0) == Real(0))
+      return;
     Real off = Real(0), diagonal = Real(0);
     for (int axis = 0; axis < Dim; ++axis) {
       Index<Dim> lower = cell, upper = cell;
-      --lower[axis]; ++upper[axis];
+      --lower[axis];
+      ++upper[axis];
       if (coefficient.data == nullptr) {
         off += (phi(upper, 0) + phi(lower, 0)) * inverse_spacing_squared[axis];
         diagonal += Real(2) * inverse_spacing_squared[axis];
       } else {
         const int component = diagonal_coefficient ? axis : 0;
         const Real centre = coefficient(cell, component);
-        const Real low = harmonic_face_coefficient(centre, coefficient(lower, component)) * inverse_spacing_squared[axis];
-        const Real high = harmonic_face_coefficient(centre, coefficient(upper, component)) * inverse_spacing_squared[axis];
+        const Real low = harmonic_face_coefficient(centre, coefficient(lower, component)) *
+                         inverse_spacing_squared[axis];
+        const Real high = harmonic_face_coefficient(centre, coefficient(upper, component)) *
+                          inverse_spacing_squared[axis];
         off += high * phi(upper, 0) + low * phi(lower, 0);
         diagonal += low + high;
       }
@@ -156,18 +165,25 @@ struct StaircaseResidualKernel {
   Real inverse_spacing_squared[Dim]{};
   bool diagonal_coefficient = false;
   POPS_HD void operator()(const Index<Dim>& cell) const {
-    if (active(cell, 0) == Real(0)) { residual(cell, 0) = Real(0); return; }
+    if (active(cell, 0) == Real(0)) {
+      residual(cell, 0) = Real(0);
+      return;
+    }
     Real laplacian = Real(0);
     for (int axis = 0; axis < Dim; ++axis) {
       Index<Dim> lower = cell, upper = cell;
-      --lower[axis]; ++upper[axis];
+      --lower[axis];
+      ++upper[axis];
       if (coefficient.data == nullptr)
-        laplacian += (phi(upper, 0) - Real(2) * phi(cell, 0) + phi(lower, 0)) * inverse_spacing_squared[axis];
+        laplacian += (phi(upper, 0) - Real(2) * phi(cell, 0) + phi(lower, 0)) *
+                     inverse_spacing_squared[axis];
       else {
         const int component = diagonal_coefficient ? axis : 0;
         const Real centre = coefficient(cell, component);
-        const Real low = harmonic_face_coefficient(centre, coefficient(lower, component)) * inverse_spacing_squared[axis];
-        const Real high = harmonic_face_coefficient(centre, coefficient(upper, component)) * inverse_spacing_squared[axis];
+        const Real low = harmonic_face_coefficient(centre, coefficient(lower, component)) *
+                         inverse_spacing_squared[axis];
+        const Real high = harmonic_face_coefficient(centre, coefficient(upper, component)) *
+                          inverse_spacing_squared[axis];
         laplacian += high * phi(upper, 0) + low * phi(lower, 0) - (low + high) * phi(cell, 0);
       }
     }
@@ -385,14 +401,19 @@ std::string options_contract(const GeometricMultigridOptions& options) {
       .scalar(options.coarse_cell_threshold)
       .scalar(options.jacobi_relaxation)
       .scalar(options.reaction);
-  if (options.smoother != GeometricSmoother::damped_jacobi || options.prolongation != GeometricProlongation::multilinear || options.pre_smooth_bottom)
-    contract.text("pops.geometric-mg.explicit-cycle@1").scalar(options.smoother)
-        .scalar(options.prolongation).scalar(options.pre_smooth_bottom);
+  if (options.smoother != GeometricSmoother::damped_jacobi ||
+      options.prolongation != GeometricProlongation::multilinear || options.pre_smooth_bottom)
+    contract.text("pops.geometric-mg.explicit-cycle@1")
+        .scalar(options.smoother)
+        .scalar(options.prolongation)
+        .scalar(options.pre_smooth_bottom);
   if (options.field_domain) {
     options.field_domain->validate<Dim>();
     contract.text("pops.field-domain.strict-cell-centre-ball@1")
-        .scalar(static_cast<std::int32_t>(options.field_domain->dimension)).scalar(options.field_domain->radius);
-    for (const Real coordinate : options.field_domain->centre) contract.scalar(coordinate);
+        .scalar(static_cast<std::int32_t>(options.field_domain->dimension))
+        .scalar(options.field_domain->radius);
+    for (const Real coordinate : options.field_domain->centre)
+      contract.scalar(coordinate);
   }
   if (options.roundoff_aware_residual)
     contract.text("pops.residual-evaluation.binary64-five-point.gamma-bound@1");
@@ -401,8 +422,10 @@ std::string options_contract(const GeometricMultigridOptions& options) {
 
 template <int Dim>
 void validate_options(const GeometricMultigridOptions& options) {
-  if ((options.smoother != GeometricSmoother::damped_jacobi && options.smoother != GeometricSmoother::red_black_gauss_seidel) ||
-      (options.prolongation != GeometricProlongation::multilinear && options.prolongation != GeometricProlongation::constant_injection))
+  if ((options.smoother != GeometricSmoother::damped_jacobi &&
+       options.smoother != GeometricSmoother::red_black_gauss_seidel) ||
+      (options.prolongation != GeometricProlongation::multilinear &&
+       options.prolongation != GeometricProlongation::constant_injection))
     throw std::invalid_argument("geometric MG algorithm controls have no exact native realization");
   if (!std::isfinite(static_cast<double>(options.relative_tolerance)) ||
       options.relative_tolerance <= Real(0) ||
@@ -416,14 +439,17 @@ void validate_options(const GeometricMultigridOptions& options) {
     throw std::invalid_argument("geometric MG controls are invalid");
   if (options.field_domain) {
     options.field_domain->validate<Dim>();
-    if (options.reaction != Real(0) || options.smoother != GeometricSmoother::red_black_gauss_seidel)
+    if (options.reaction != Real(0) ||
+        options.smoother != GeometricSmoother::red_black_gauss_seidel)
       throw std::invalid_argument("staircase field-domain MG implements constant Poisson only");
   }
   if (options.smoother == GeometricSmoother::red_black_gauss_seidel && options.reaction != Real(0))
     throw std::invalid_argument("red-black MG reaction operator is not prepared");
   if (options.roundoff_aware_residual &&
-      (std::numeric_limits<Real>::digits != 53 || options.smoother != GeometricSmoother::red_black_gauss_seidel))
-    throw std::invalid_argument("roundoff-aware residual requires explicit binary64 red-black five-point authority");
+      (std::numeric_limits<Real>::digits != 53 ||
+       options.smoother != GeometricSmoother::red_black_gauss_seidel))
+    throw std::invalid_argument(
+        "roundoff-aware residual requires explicit binary64 red-black five-point authority");
 }
 
 template <int Dim>
@@ -580,8 +606,10 @@ class GeometricMG {
 
   /// One explicitly prepared V-cycle for a linear preconditioner; never a converged field solve.
   void apply_one_cycle(const field_type& input, field_type& correction) {
-    if (options_.smoother != GeometricSmoother::red_black_gauss_seidel || boundary_kernel_ || newton_workspace_ || !nullspace_workspace_)
-      throw std::logic_error("single geometric V-cycle requires a static prepared linear authority");
+    if (options_.smoother != GeometricSmoother::red_black_gauss_seidel || boundary_kernel_ ||
+        newton_workspace_ || !nullspace_workspace_)
+      throw std::logic_error(
+          "single geometric V-cycle requires a static prepared linear authority");
     copy_scalar_valid(input, rhs());
     nullspace_workspace_->require_compatible(rhs());
     phi().set_val(Real(0));
@@ -596,23 +624,27 @@ class GeometricMG {
     Level& fine = *levels_.front();
     if (fine.coefficient || fine.diagonal_coefficient)
       throw std::logic_error("MG coefficient authority is already installed");
-    fine.diagonal_coefficient.emplace(fine.phi.layout(), fine.phi.distribution(), fine.phi.local_rank(), Dim, detail::unit_ghosts<Dim>());
+    fine.diagonal_coefficient.emplace(fine.phi.layout(), fine.phi.distribution(),
+                                      fine.phi.local_rank(), Dim, detail::unit_ghosts<Dim>());
     copy_vector_valid_(conductivity, *fine.diagonal_coefficient);
     for (std::size_t level = 1; level < levels_.size(); ++level) {
       Level& coarse = *levels_[level];
-      coarse.diagonal_coefficient.emplace(coarse.phi.layout(), coarse.phi.distribution(), coarse.phi.local_rank(), Dim, detail::unit_ghosts<Dim>());
-      restrict_matching_patches_(*levels_[level-1]->diagonal_coefficient, *coarse.diagonal_coefficient);
+      coarse.diagonal_coefficient.emplace(coarse.phi.layout(), coarse.phi.distribution(),
+                                          coarse.phi.local_rank(), Dim, detail::unit_ghosts<Dim>());
+      restrict_matching_patches_(*levels_[level - 1]->diagonal_coefficient,
+                                 *coarse.diagonal_coefficient);
     }
     for (std::size_t index = 0; index < levels_.size(); ++index) {
       Level& level = *levels_[index];
-      level.diagonal_halo_schedule.emplace(prepare_halo_schedule(*level.diagonal_coefficient,
-          level.geometry.domain(), level.boundary.topology(),
+      level.diagonal_halo_schedule.emplace(prepare_halo_schedule(
+          *level.diagonal_coefficient, level.geometry.domain(), level.boundary.topology(),
           detail::exact_halo_budget(level.phi.layout(), level.geometry.domain())));
       if (all_reduce_max(level.diagonal_halo_schedule->has_remote_jobs() ? 1L : 0L, *lane_) != 0) {
         HaloExchangeContext context{};
         context.context_generation = index + 1048576;
         context.schedule_generation = index + 1048576;
-        level.diagonal_exchange = std::make_unique<HaloExchange<Dim, MemorySpace>>(*level.diagonal_halo_schedule, *lane_, context);
+        level.diagonal_exchange = std::make_unique<HaloExchange<Dim, MemorySpace>>(
+            *level.diagonal_halo_schedule, *lane_, context);
       }
       fill_coefficient_ghosts_(level);
     }
@@ -623,14 +655,17 @@ class GeometricMG {
   void refresh_diagonal_coefficient(const field_type& conductivity) {
     validate_diagonal_coefficient_(conductivity);
     if (levels_.empty() || !levels_.front()->diagonal_coefficient || conductivity.ncomp() != Dim ||
-        conductivity.layout() != phi().layout() || conductivity.distribution() != phi().distribution() ||
+        conductivity.layout() != phi().layout() ||
+        conductivity.distribution() != phi().distribution() ||
         conductivity.local_rank() != phi().local_rank())
       throw std::invalid_argument("diagonal MG refresh requires its exact prepared field storage");
     copy_vector_valid_(conductivity, *levels_.front()->diagonal_coefficient);
     for (std::size_t level = 1; level < levels_.size(); ++level) {
-      restrict_matching_patches_(*levels_[level-1]->diagonal_coefficient, *levels_[level]->diagonal_coefficient);
+      restrict_matching_patches_(*levels_[level - 1]->diagonal_coefficient,
+                                 *levels_[level]->diagonal_coefficient);
     }
-    for (auto& level : levels_) fill_coefficient_ghosts_(*level);
+    for (auto& level : levels_)
+      fill_coefficient_ghosts_(*level);
   }
 
   /// Owned FAB field buffers only; communicator/halo metadata is deliberately not counted.
@@ -638,9 +673,11 @@ class GeometricMG {
     std::size_t count = 0;
     for (const auto& level : levels_) {
       count += 6 * level->phi.local_size();
-      for (const auto* field : {&level->coefficient, &level->diagonal_coefficient,
-                               &level->inverse_volume, &level->aperture_lower, &level->aperture_upper})
-        if (*field) count += (*field)->local_size();
+      for (const auto* field :
+           {&level->coefficient, &level->diagonal_coefficient, &level->inverse_volume,
+            &level->aperture_lower, &level->aperture_upper})
+        if (*field)
+          count += (*field)->local_size();
     }
     return count;
   }
@@ -769,8 +806,11 @@ class GeometricMG {
 
   SolveReport solve() {
     Level& fine = *levels_.front();
-    if (options_.roundoff_aware_residual && (uses_weighted_operator_(fine) || fine.diagonal_coefficient || newton_workspace_ || boundary_kernel_))
-      throw std::invalid_argument("five-point residual roundoff policy has no weighted/nonlinear operator authority");
+    if (options_.roundoff_aware_residual &&
+        (uses_weighted_operator_(fine) || fine.diagonal_coefficient || newton_workspace_ ||
+         boundary_kernel_))
+      throw std::invalid_argument(
+          "five-point residual roundoff policy has no weighted/nonlinear operator authority");
     if (!nullspace_workspace_)
       throw std::logic_error("geometric MG solve has no prepared nullspace authority");
     try {
@@ -817,7 +857,8 @@ class GeometricMG {
       last_report_ = report;
       return last_report_;
     }
-    Real stop = report.residual_evaluation ? report.residual_evaluation->applied_threshold : requested_stop;
+    Real stop =
+        report.residual_evaluation ? report.residual_evaluation->applied_threshold : requested_stop;
     if (reference <= stop) {
       if (!valid_field_domain_(fine)) {
         report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
@@ -827,7 +868,8 @@ class GeometricMG {
       }
       fill_ghosts_(fine);
       report.mark_solved(report.residual_evaluation && report.residual_evaluation->roundoff_limited
-                            ? "geometric_mg_roundoff_evaluation_limited" : "geometric_mg_initial_residual");
+                             ? "geometric_mg_roundoff_evaluation_limited"
+                             : "geometric_mg_initial_residual");
       last_report_ = report;
       return last_report_;
     }
@@ -858,7 +900,8 @@ class GeometricMG {
         last_report_ = report;
         return last_report_;
       }
-      stop = report.residual_evaluation ? report.residual_evaluation->applied_threshold : requested_stop;
+      stop = report.residual_evaluation ? report.residual_evaluation->applied_threshold
+                                        : requested_stop;
       if (report.residual_norm <= stop) {
         if (!valid_field_domain_(fine)) {
           report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
@@ -867,8 +910,10 @@ class GeometricMG {
           return last_report_;
         }
         fill_ghosts_(fine);
-        report.mark_solved(report.residual_evaluation && report.residual_evaluation->roundoff_limited
-                              ? "geometric_mg_roundoff_evaluation_limited" : "geometric_mg_converged");
+        report.mark_solved(report.residual_evaluation &&
+                                   report.residual_evaluation->roundoff_limited
+                               ? "geometric_mg_roundoff_evaluation_limited"
+                               : "geometric_mg_converged");
         last_report_ = report;
         return last_report_;
       }
@@ -976,7 +1021,8 @@ class GeometricMG {
         Level& level = *levels_.back();
         for (std::size_t local = 0; local < level.active.local_size(); ++local)
           for_each_cell(level.active.box(local), detail::SampleFieldDomainKernel<Dim>{
-              level.active.fab(local).view(), level.geometry, *options_.field_domain});
+                                                     level.active.fab(local).view(), level.geometry,
+                                                     *options_.field_domain});
         Kokkos::fence();
       }
       if (!coarsenable_(level_geometry, level_layout, options_))
@@ -1014,7 +1060,9 @@ class GeometricMG {
     used_fft_coarse_ = false;
     fft_bottom_attempted_ = false;
     fft_bottom_report_ = {};
-    if (levels_.empty() || options_.smoother == GeometricSmoother::red_black_gauss_seidel || options_.field_domain || uses_weighted_operator_(*levels_.back()) || options_.reaction != Real(0))
+    if (levels_.empty() || options_.smoother == GeometricSmoother::red_black_gauss_seidel ||
+        options_.field_domain || uses_weighted_operator_(*levels_.back()) ||
+        options_.reaction != Real(0))
       return;
     fft_bottom_ = ::pops::elliptic::PoissonFftMultiFabAdapter<Dim>::try_make(
         fft_request_from_level_(*levels_.back()), *lane_, options_.reaction, false, false);
@@ -1221,9 +1269,12 @@ class GeometricMG {
 
   void fill_coefficient_ghosts_(Level& level) {
     if (level.diagonal_coefficient) {
-      if (!level.diagonal_halo_schedule) throw std::logic_error("diagonal MG coefficient lost its exact component halo authority");
-      if (level.diagonal_exchange) level.diagonal_exchange->execute(*level.diagonal_coefficient, *lane_);
-      else fill_boundary(*level.diagonal_coefficient, *level.diagonal_halo_schedule);
+      if (!level.diagonal_halo_schedule)
+        throw std::logic_error("diagonal MG coefficient lost its exact component halo authority");
+      if (level.diagonal_exchange)
+        level.diagonal_exchange->execute(*level.diagonal_coefficient, *lane_);
+      else
+        fill_boundary(*level.diagonal_coefficient, *level.diagonal_halo_schedule);
       fill_physical_boundary(*level.diagonal_coefficient, level.coefficient_boundary);
     }
     if (!level.coefficient)
@@ -1255,13 +1306,19 @@ class GeometricMG {
           fill_coefficient_ghosts_(level);
           for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
             detail::StaircaseRedBlackKernel<Dim> kernel{
-                level.phi.fab(local).view(), std::as_const(level.rhs).fab(local).view(),
+                level.phi.fab(local).view(),
+                std::as_const(level.rhs).fab(local).view(),
                 std::as_const(level.active).fab(local).view(),
-                level.diagonal_coefficient ? std::as_const(*level.diagonal_coefficient).fab(local).view() :
-                (level.coefficient ? std::as_const(*level.coefficient).fab(local).view() : FieldView<const Real, Dim>{}),
-                {}, color, level.diagonal_coefficient.has_value()};
+                level.diagonal_coefficient
+                    ? std::as_const(*level.diagonal_coefficient).fab(local).view()
+                    : (level.coefficient ? std::as_const(*level.coefficient).fab(local).view()
+                                         : FieldView<const Real, Dim>{}),
+                {},
+                color,
+                level.diagonal_coefficient.has_value()};
             for (int axis = 0; axis < Dim; ++axis)
-              kernel.inverse_spacing_squared[axis] = Real(1) / (level.geometry.spacing(axis) * level.geometry.spacing(axis));
+              kernel.inverse_spacing_squared[axis] =
+                  Real(1) / (level.geometry.spacing(axis) * level.geometry.spacing(axis));
             for_each_cell(level.phi.box(local), kernel);
           }
           Kokkos::fence();
@@ -1289,13 +1346,19 @@ class GeometricMG {
       fill_coefficient_ghosts_(level);
       for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
         detail::StaircaseResidualKernel<Dim> kernel{
-            std::as_const(level.phi).fab(local).view(), std::as_const(level.rhs).fab(local).view(),
-            std::as_const(level.active).fab(local).view(), level.residual.fab(local).view(),
-            level.diagonal_coefficient ? std::as_const(*level.diagonal_coefficient).fab(local).view() :
-            (level.coefficient ? std::as_const(*level.coefficient).fab(local).view() : FieldView<const Real, Dim>{}),
-            {}, level.diagonal_coefficient.has_value()};
+            std::as_const(level.phi).fab(local).view(),
+            std::as_const(level.rhs).fab(local).view(),
+            std::as_const(level.active).fab(local).view(),
+            level.residual.fab(local).view(),
+            level.diagonal_coefficient
+                ? std::as_const(*level.diagonal_coefficient).fab(local).view()
+                : (level.coefficient ? std::as_const(*level.coefficient).fab(local).view()
+                                     : FieldView<const Real, Dim>{}),
+            {},
+            level.diagonal_coefficient.has_value()};
         for (int axis = 0; axis < Dim; ++axis)
-          kernel.inverse_spacing_squared[axis] = Real(1) / (level.geometry.spacing(axis) * level.geometry.spacing(axis));
+          kernel.inverse_spacing_squared[axis] =
+              Real(1) / (level.geometry.spacing(axis) * level.geometry.spacing(axis));
         for_each_cell(level.residual.box(local), kernel);
       }
       Kokkos::fence();
@@ -1312,7 +1375,8 @@ class GeometricMG {
 
   void v_cycle_(std::size_t level_index) {
     Level& level = *levels_.at(level_index);
-    if (options_.pre_smooth_bottom) smooth_(level, options_.pre_sweeps);
+    if (options_.pre_smooth_bottom)
+      smooth_(level, options_.pre_sweeps);
     if (level_index + 1 == levels_.size()) {
       if (fft_bottom_) {
         fft_bottom_report_ = fft_bottom_->apply(level.rhs, level.phi);
@@ -1327,7 +1391,8 @@ class GeometricMG {
       return;
     }
 
-    if (!options_.pre_smooth_bottom) smooth_(level, options_.pre_sweeps);
+    if (!options_.pre_smooth_bottom)
+      smooth_(level, options_.pre_sweeps);
     compute_residual_(level);
     Level& coarse = *levels_.at(level_index + 1);
     coarse.phi.set_val(Real(0));
@@ -1336,7 +1401,8 @@ class GeometricMG {
         detail::exact_copy_budget(coarse.rhs.layout(), coarsen(level.residual.layout(), 2));
     if (options_.smoother == GeometricSmoother::red_black_gauss_seidel)
       restrict_matching_patches_(level.residual, coarse.rhs);
-    else average_down(level.residual, coarse.rhs, 2, restriction_budget);
+    else
+      average_down(level.residual, coarse.rhs, 2, restriction_budget);
     v_cycle_(level_index + 1);
 
     // The hierarchy retains exact paired patches and owners at every coarsening.
@@ -1345,10 +1411,12 @@ class GeometricMG {
     for (std::size_t local = 0; local < level.correction.local_size(); ++local) {
       if (options_.prolongation == GeometricProlongation::constant_injection)
         for_each_cell(level.correction.box(local), detail::InjectCorrectionKernel<Dim>{
-            std::as_const(coarse.phi).fab(local).view(), level.correction.fab(local).view()});
-      else for_each_cell(level.correction.box(local), detail::ProlongCorrectionKernel<Dim>{
-                                                     std::as_const(coarse.phi).fab(local).view(),
-                                                     level.correction.fab(local).view()});
+                                                       std::as_const(coarse.phi).fab(local).view(),
+                                                       level.correction.fab(local).view()});
+      else
+        for_each_cell(level.correction.box(local), detail::ProlongCorrectionKernel<Dim>{
+                                                       std::as_const(coarse.phi).fab(local).view(),
+                                                       level.correction.fab(local).view()});
     }
     Kokkos::fence();
     saxpy(level.phi, Real(1), level.correction);
@@ -1361,64 +1429,91 @@ class GeometricMG {
   }
 
   void project_field_domain_(Level& level) {
-    if (!options_.field_domain) return;
+    if (!options_.field_domain)
+      return;
     for (std::size_t local = 0; local < level.phi.local_size(); ++local)
       for_each_cell(level.phi.box(local), detail::ProjectFieldDomainKernel<Dim>{
-          level.phi.fab(local).view(), std::as_const(level.active).fab(local).view()});
+                                              level.phi.fab(local).view(),
+                                              std::as_const(level.active).fab(local).view()});
     Kokkos::fence();
   }
 
   bool valid_field_domain_(const Level& level) const {
-    if (!options_.field_domain) return true;
+    if (!options_.field_domain)
+      return true;
     long failure = 0;
     for (std::size_t local = 0; local < level.phi.local_size(); ++local)
-      if (for_each_cell_reduce_max(level.phi.box(local), detail::InvalidFieldConductorKernel<Dim>{
-          level.phi.fab(local).view(), level.active.fab(local).view()}) != Real(0)) failure = 1;
+      if (for_each_cell_reduce_max(
+              level.phi.box(local),
+              detail::InvalidFieldConductorKernel<Dim>{level.phi.fab(local).view(),
+                                                       level.active.fab(local).view()}) != Real(0))
+        failure = 1;
     return all_reduce_max(failure, *lane_) == 0;
   }
 
   void validate_diagonal_coefficient_(const field_type& conductivity) const {
-    long failure = options_.field_domain || options_.smoother != GeometricSmoother::red_black_gauss_seidel ||
-        conductivity.ncomp() != Dim || conductivity.layout() != phi().layout() ||
-        conductivity.distribution() != phi().distribution() || conductivity.local_rank() != phi().local_rank();
+    long failure = options_.field_domain ||
+                   options_.smoother != GeometricSmoother::red_black_gauss_seidel ||
+                   conductivity.ncomp() != Dim || conductivity.layout() != phi().layout() ||
+                   conductivity.distribution() != phi().distribution() ||
+                   conductivity.local_rank() != phi().local_rank();
     if (!failure)
       for (std::size_t local = 0; local < conductivity.local_size(); ++local)
-        if (for_each_cell_reduce_max(conductivity.box(local), detail::InvalidDiagonalCoefficientKernel<Dim>{conductivity.fab(local).view()}) != Real(0))
+        if (for_each_cell_reduce_max(conductivity.box(local),
+                                     detail::InvalidDiagonalCoefficientKernel<Dim>{
+                                         conductivity.fab(local).view()}) != Real(0))
           failure = 1;
     if (all_reduce_max(failure, *lane_) != 0)
-      throw std::invalid_argument("diagonal MG coefficient requires finite positive values and exact full-layout red-black authority");
+      throw std::invalid_argument(
+          "diagonal MG coefficient requires finite positive values and exact full-layout red-black "
+          "authority");
   }
 
-  bool update_roundoff_evidence_(SolveReport& report, const Level& level, Real requested, bool initial) const {
-    if (!options_.roundoff_aware_residual) return true;
+  bool update_roundoff_evidence_(SolveReport& report, const Level& level, Real requested,
+                                 bool initial) const {
+    if (!options_.roundoff_aware_residual)
+      return true;
     Real local_bound = Real(0);
     for (std::size_t local = 0; local < level.phi.local_size(); ++local) {
       roundoff::FivePointBoundKernel<Dim> kernel{level.phi.fab(local).view(),
-          level.rhs.fab(local).view(), level.active.fab(local).view(), {}, roundoff::stencil_gamma<Dim>()};
+                                                 level.rhs.fab(local).view(),
+                                                 level.active.fab(local).view(),
+                                                 {},
+                                                 roundoff::stencil_gamma<Dim>()};
       for (int axis = 0; axis < Dim; ++axis) {
         const Real h = level.geometry.spacing(axis);
-        const Real square = h*h;
+        const Real square = h * h;
         kernel.inverse_spacing_squared[axis] = roundoff::normal_or_zero(square) && square > Real(0)
-            ? Real(1)/square : std::numeric_limits<Real>::infinity();
+                                                   ? Real(1) / square
+                                                   : std::numeric_limits<Real>::infinity();
       }
       local_bound = std::max(local_bound, for_each_cell_reduce_max(level.phi.box(local), kernel));
     }
     const Real bound = static_cast<Real>(all_reduce_max(static_cast<double>(local_bound), *lane_));
-    if (!std::isfinite(static_cast<double>(bound)) || !std::isfinite(static_cast<double>(requested))) return false;
+    if (!std::isfinite(static_cast<double>(bound)) ||
+        !std::isfinite(static_cast<double>(requested)))
+      return false;
     if (initial) {
       Real local_rhs = Real(0);
       for (std::size_t local = 0; local < level.rhs.local_size(); ++local)
-        local_rhs = std::max(local_rhs, for_each_cell_reduce_max(level.rhs.box(local),
-            roundoff::AbsoluteMagnitudeKernel<Dim>{level.rhs.fab(local).view(), level.active.fab(local).view()}));
-      const Real rhs_norm = static_cast<Real>(all_reduce_max(static_cast<double>(local_rhs), *lane_));
-      report.residual_evaluation = ResidualEvaluationEvidence{report.residual_norm, rhs_norm,
-          bound, bound, requested, std::max(requested, bound), false};
+        local_rhs = std::max(
+            local_rhs,
+            for_each_cell_reduce_max(level.rhs.box(local), roundoff::AbsoluteMagnitudeKernel<Dim>{
+                                                               level.rhs.fab(local).view(),
+                                                               level.active.fab(local).view()}));
+      const Real rhs_norm =
+          static_cast<Real>(all_reduce_max(static_cast<double>(local_rhs), *lane_));
+      report.residual_evaluation =
+          ResidualEvaluationEvidence{report.residual_norm,       rhs_norm, bound, bound, requested,
+                                     std::max(requested, bound), false};
     }
     auto& evidence = *report.residual_evaluation;
     evidence.evaluation_bound = bound;
     evidence.applied_threshold = std::max(requested, bound);
-    evidence.roundoff_limited = report.residual_norm > requested && report.residual_norm <= evidence.applied_threshold;
-    evidence.relative_to_rhs_upper = roundoff::relative_physical_residual_upper(report.residual_norm, bound, evidence.rhs_norm);
+    evidence.roundoff_limited =
+        report.residual_norm > requested && report.residual_norm <= evidence.applied_threshold;
+    evidence.relative_to_rhs_upper =
+        roundoff::relative_physical_residual_upper(report.residual_norm, bound, evidence.rhs_norm);
     return evidence.valid();
   }
 
@@ -1429,10 +1524,12 @@ class GeometricMG {
       throw std::invalid_argument("prepared MG restriction lost exact paired local storage");
     const auto ratio = detail::ratio_two<Dim>();
     for (std::size_t local = 0; local < fine.local_size(); ++local) {
-      if (fine.global_index(local) != coarse.global_index(local) || coarsen(fine.box(local), ratio) != coarse.box(local))
+      if (fine.global_index(local) != coarse.global_index(local) ||
+          coarsen(fine.box(local), ratio) != coarse.box(local))
         throw std::invalid_argument("prepared MG restriction lost exact paired patch identities");
       for_each_cell(coarse.box(local), refinement_detail::AverageDownKernel<Dim>{
-          coarse.fab(local).view(), fine.fab(local).view(), ratio, std::int64_t{1} << Dim, fine.ncomp()});
+                                           coarse.fab(local).view(), fine.fab(local).view(), ratio,
+                                           std::int64_t{1} << Dim, fine.ncomp()});
     }
     Kokkos::fence();
   }

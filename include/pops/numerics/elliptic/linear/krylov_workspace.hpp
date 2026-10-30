@@ -80,9 +80,15 @@ struct GmresDiagnosticTrace {
   std::array<Cycle, capacity> cycles{};
   std::size_t size = 0;
   bool overflow = false;
-  void reset() noexcept { size = 0; overflow = false; }
+  void reset() noexcept {
+    size = 0;
+    overflow = false;
+  }
   void append(const Cycle& cycle) noexcept {
-    if (size == capacity) { overflow = true; return; }
+    if (size == capacity) {
+      overflow = true;
+      return;
+    }
     cycles[size++] = cycle;
   }
 };

@@ -283,11 +283,11 @@ double maxdiff(const pops::StateVec<N>& a, const pops::StateVec<N>& b) {
 }
 
 template <class Policy, class Model>
-typename Model::State face_density(
-    const Policy& policy, const Model& model, const typename Model::State& left,
-    const pops::ProviderValues<0>& left_providers,
-    const typename Model::State& right,
-    const pops::ProviderValues<0>& right_providers, int axis) {
+typename Model::State face_density(const Policy& policy, const Model& model,
+                                   const typename Model::State& left,
+                                   const pops::ProviderValues<0>& left_providers,
+                                   const typename Model::State& right,
+                                   const pops::ProviderValues<0>& right_providers, int axis) {
   pops::FluxProviderValues<Model> left_values{}, right_values{};
   return pops::evaluate_numerical_flux(
              policy, model, left, pops::bind_flux_providers<Model>(left_values), right,

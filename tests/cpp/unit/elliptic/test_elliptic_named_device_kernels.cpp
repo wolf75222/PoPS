@@ -126,8 +126,8 @@ void projection_preserves_mask_and_active_storage() {
   PaddedField<Dim> values(true), active(false, 1);
   auto data = Kokkos::create_mirror_view(values.storage);
   auto mask = Kokkos::create_mirror_view(active.storage);
-  const Real masks[]{Real(-1), Real(0), Real(0.49), Real(0.5), Real(1),
-                     std::numeric_limits<Real>::quiet_NaN()};
+  const Real masks[]{Real(-1),  Real(0), Real(0.49),
+                     Real(0.5), Real(1), std::numeric_limits<Real>::quiet_NaN()};
   for (std::size_t index = 0; index < values.size; ++index) {
     data(index) = Real(index) / Real(8) + Real(2);
     mask(index) = Real(-73);
@@ -287,13 +287,31 @@ TEST(EllipticNamedDeviceKernels, SolverSlabDim3) {
   solver_slab_transfers_preserve_exact_bits_and_padding<3>();
 }
 
-TEST(EllipticNamedDeviceKernels, CopiesDim1) { copies_preserve_outside_ranges_and_components<1>(); }
-TEST(EllipticNamedDeviceKernels, CopiesDim2) { copies_preserve_outside_ranges_and_components<2>(); }
-TEST(EllipticNamedDeviceKernels, CopiesDim3) { copies_preserve_outside_ranges_and_components<3>(); }
-TEST(EllipticNamedDeviceKernels, ProjectionDim1) { projection_preserves_mask_and_active_storage<1>(); }
-TEST(EllipticNamedDeviceKernels, ProjectionDim2) { projection_preserves_mask_and_active_storage<2>(); }
-TEST(EllipticNamedDeviceKernels, ProjectionDim3) { projection_preserves_mask_and_active_storage<3>(); }
-TEST(EllipticNamedDeviceKernels, SlabDim1) { slab_pack_unpack_keeps_slab_order_and_views<1>(); }
-TEST(EllipticNamedDeviceKernels, SlabDim2) { slab_pack_unpack_keeps_slab_order_and_views<2>(); }
-TEST(EllipticNamedDeviceKernels, SlabDim3) { slab_pack_unpack_keeps_slab_order_and_views<3>(); }
+TEST(EllipticNamedDeviceKernels, CopiesDim1) {
+  copies_preserve_outside_ranges_and_components<1>();
+}
+TEST(EllipticNamedDeviceKernels, CopiesDim2) {
+  copies_preserve_outside_ranges_and_components<2>();
+}
+TEST(EllipticNamedDeviceKernels, CopiesDim3) {
+  copies_preserve_outside_ranges_and_components<3>();
+}
+TEST(EllipticNamedDeviceKernels, ProjectionDim1) {
+  projection_preserves_mask_and_active_storage<1>();
+}
+TEST(EllipticNamedDeviceKernels, ProjectionDim2) {
+  projection_preserves_mask_and_active_storage<2>();
+}
+TEST(EllipticNamedDeviceKernels, ProjectionDim3) {
+  projection_preserves_mask_and_active_storage<3>();
+}
+TEST(EllipticNamedDeviceKernels, SlabDim1) {
+  slab_pack_unpack_keeps_slab_order_and_views<1>();
+}
+TEST(EllipticNamedDeviceKernels, SlabDim2) {
+  slab_pack_unpack_keeps_slab_order_and_views<2>();
+}
+TEST(EllipticNamedDeviceKernels, SlabDim3) {
+  slab_pack_unpack_keeps_slab_order_and_views<3>();
+}
 }  // namespace

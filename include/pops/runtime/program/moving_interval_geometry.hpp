@@ -21,7 +21,8 @@ namespace pops::runtime::program {
 /// @1 fixes the rounding of the relative integrated face amount explicitly.
 /// @0 is retained only for exact historical POPSEX03 receipt interpretation.
 enum class MovingRelativeAmountConvention : std::uint64_t { kLegacyExpression = 0, kFused = 1 };
-inline Real moving_relative_face_amount(Real physical_amount, Real density, Real sweep,
+inline Real moving_relative_face_amount(
+    Real physical_amount, Real density, Real sweep,
     MovingRelativeAmountConvention convention = MovingRelativeAmountConvention::kFused) {
   if (convention == MovingRelativeAmountConvention::kFused)
     return std::fma(-density, sweep, physical_amount);
@@ -30,7 +31,8 @@ inline Real moving_relative_face_amount(Real physical_amount, Real density, Real
   throw std::invalid_argument("unknown moving relative face amount realization");
 }
 
-template <int Dim> class ProgramContext;
+template <int Dim>
+class ProgramContext;
 
 /// Device-copyable quadrature coordinates; the exact logical/attempt authority
 /// stays on the host RuntimeIntervalEvaluation rather than in a kernel capture.
@@ -62,12 +64,14 @@ struct MovingIntervalInputs {
 template <int Dim>
 class RuntimeIntervalEvaluation {
   friend class ProgramContext<Dim>;
+
  public:
   const runtime::multiblock::BoundaryEvaluationPoint& point() const noexcept { return point_; }
   const std::string& physical_frame() const noexcept { return physical_frame_; }
   const std::string& quadrature_identity() const noexcept { return quadrature_; }
   double interval_begin() const noexcept { return point_.physical_time; }
   double interval_end() const noexcept { return point_.physical_time + point_.dt; }
+
  private:
   RuntimeIntervalEvaluation() = default;
   const ProgramContext<Dim>* owner_ = nullptr;
@@ -88,7 +92,8 @@ struct MovingIntervalReceipt {
   runtime::multiblock::BoundaryEvaluationPoint point;
   std::string physical_frame, quadrature_identity;
   Real geometry_tolerance = 0;
-  MovingRelativeAmountConvention relative_amount_convention = MovingRelativeAmountConvention::kFused;
+  MovingRelativeAmountConvention relative_amount_convention =
+      MovingRelativeAmountConvention::kFused;
   MultiFab<Dim> previous_state, previous_measures, integrated_source;
   std::vector<nd::FaceField<Dim>> previous_coordinates, physical_flux, face_density;
 };
@@ -118,12 +123,14 @@ struct MovingIntervalGeometry {
 template <int Dim>
 class PreparedMovingIntervalUpdate {
   friend class ProgramContext<Dim>;
+
  public:
   PreparedMovingIntervalUpdate(PreparedMovingIntervalUpdate&&) = default;
   PreparedMovingIntervalUpdate& operator=(PreparedMovingIntervalUpdate&&) = default;
   PreparedMovingIntervalUpdate(const PreparedMovingIntervalUpdate&) = delete;
   const MultiFab<Dim>& state() const noexcept { return state_; }
   const MovingIntervalGeometry<Dim>& geometry() const noexcept { return geometry_; }
+
  private:
   PreparedMovingIntervalUpdate() = default;
   const ProgramContext<Dim>* owner_ = nullptr;

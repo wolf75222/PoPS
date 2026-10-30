@@ -47,7 +47,9 @@ struct AmrInteractionHistorySnapshotTestAccess {
   static void restore_old_image(const Context& context, std::shared_ptr<const Image> image) {
     context.interaction_history_snapshots_.insert_or_assign({0, "tracer.prior"}, std::move(image));
   }
-  static Image& corrupt_image(const Context& context) { return const_cast<Image&>(*image(context)); }
+  static Image& corrupt_image(const Context& context) {
+    return const_cast<Image&>(*image(context));
+  }
   static void pending_remap(Context& context, int level) {
     context.pending_history_remaps_.try_emplace(key(context, level));
   }
@@ -78,7 +80,8 @@ struct ScalarModel {
     return {"tests.history-macro-snapshot.scalar", 1};
   }
   void serialize_exact_parameters(pops::ExactContractBuilder& proof) const {
-    for (int axis = 0; axis < Dim; ++axis) proof.scalar(law.velocity()[axis]);
+    for (int axis = 0; axis < Dim; ++axis)
+      proof.scalar(law.velocity()[axis]);
   }
   static pops::VariableSet conservative_vars() {
     return {pops::VariableKind::Conservative, {"u"}, 1, {pops::VariableRole::Scalar}};
@@ -87,10 +90,16 @@ struct ScalarModel {
     return {pops::VariableKind::Primitive, {"u"}, 1, {pops::VariableRole::Scalar}};
   }
   POPS_HD auto recover(const State& state) const { return law.recover(state); }
-  POPS_HD auto make_conservative(const Primitive& state) const { return law.make_conservative(state); }
+  POPS_HD auto make_conservative(const Primitive& state) const {
+    return law.make_conservative(state);
+  }
   POPS_HD auto admissibility(const State& state) const { return law.admissibility(state); }
-  template <int Axis> POPS_HD State flux(const State& state) const { return law.template flux<Axis>(state); }
-  template <int Axis> POPS_HD pops::Real max_wave_speed(const State& state) const {
+  template <int Axis>
+  POPS_HD State flux(const State& state) const {
+    return law.template flux<Axis>(state);
+  }
+  template <int Axis>
+  POPS_HD pops::Real max_wave_speed(const State& state) const {
     return law.template max_wave_speed<Axis>(state);
   }
   template <int Axis>
@@ -105,10 +114,16 @@ inline void expect_constant(const Field& field, pops::Real expected, bool grown 
   for (std::size_t local = 0; local < field.local_size(); ++local) {
     const auto view = field.fab(local).view();
     const auto box = grown ? field.fab(local).grown_box() : field.box(local);
-    EXPECT_EQ(pops::for_each_cell_reduce_max(box, [=] POPS_HD(const pops::Index<Dim>& cell) {
-      return std::bit_cast<pops::runtime::program::InteractionRealWord>(view(cell, 0)) ==
-          std::bit_cast<pops::runtime::program::InteractionRealWord>(expected) ? pops::Real(0) : pops::Real(1);
-    }), pops::Real(0));
+    EXPECT_EQ(
+        pops::for_each_cell_reduce_max(
+            box,
+            [=] POPS_HD(const pops::Index<Dim>& cell) {
+              return std::bit_cast<pops::runtime::program::InteractionRealWord>(view(cell, 0)) ==
+                             std::bit_cast<pops::runtime::program::InteractionRealWord>(expected)
+                         ? pops::Real(0)
+                         : pops::Real(1);
+            }),
+        pops::Real(0));
   }
 }
 
@@ -135,12 +150,16 @@ struct Fixture {
     pops::test::install_amr_runtime_authority(system, "tests.history-macro-snapshot/runtime");
     system.set_temporal_relations({ratio}, {1}, {"integral_only"});
     system.install_block_state_route("tracer", "state/tracer");
-    pops::add_compiled_model<Dim>(system, "tracer", ScalarModel{}, "minmod", "rusanov",
-        "conservative", "explicit", static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1,
-        {}, {}, 0., static_cast<double>(pops::kWenoEpsilon), false,
-        "tests.history-macro-snapshot/flux");
+    pops::add_compiled_model<Dim>(
+        system, "tracer", ScalarModel{}, "minmod", "rusanov", "conservative", "explicit",
+        static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.,
+        static_cast<double>(pops::kWenoEpsilon), false, "tests.history-macro-snapshot/flux");
     std::size_t cells = 1, centre = 0, stride = 1;
-    for (int axis = 0; axis < Dim; ++axis) { centre += 4 * stride; stride *= 8; cells *= 8; }
+    for (int axis = 0; axis < Dim; ++axis) {
+      centre += 4 * stride;
+      stride *= 8;
+      cells *= 8;
+    }
     std::vector<double> initial(cells, .25);
     initial[centre] = 1.;
     system.set_conservative_state("tracer", initial);
@@ -155,26 +174,36 @@ struct Fixture {
     context = pops::runtime::program::make_program_execution_provider(&system);
     context->configure_primary_clock("clock.macro");
     context->declare_clock_relation("clock.macro", "clock.level.1", ratio);
-    context->install([this](double dt) {
-      context->advance_hierarchy(dt, [&](double local_dt) { if (body) body(local_dt); });
-    }, context);
+    context->install(
+        [this](double dt) {
+          context->advance_hierarchy(dt, [&](double local_dt) {
+            if (body)
+              body(local_dt);
+          });
+        },
+        context);
     system.set_program_block_map({0});
     using Budget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
     system.install_prepared_amr_program_flux_expression_budget(
         "tests.history-macro-snapshot/flux-budget", std::vector<Budget>(1, Budget{2, 1}), 0, 0);
     context->for_each_program_resource_level([&](int) {
       context->state(0).set_val(pops::Real(2));
-      context->register_history(kName, 2, 1, 0, "tracer.U", "cell.scalar", "clock.macro", "none", ghosts);
+      context->register_history(kName, 2, 1, 0, "tracer.U", "cell.scalar", "clock.macro", "none",
+                                ghosts);
     });
-    if (declare) { declaration(100, 1); declaration(101, 2); }
+    if (declare) {
+      declaration(100, 1);
+      declaration(101, 2);
+    }
   }
   void declaration(std::int64_t id, int lag, std::uint64_t bytes = 0) const {
-    context->declare_spatial_interaction_history_source(id, 0, kName, lag,
-        "tracer.U", "cell.scalar", "clock.macro", "none", bytes ? bytes : budget, kIdentity);
+    context->declare_spatial_interaction_history_source(id, 0, kName, lag, "tracer.U",
+                                                        "cell.scalar", "clock.macro", "none",
+                                                        bytes ? bytes : budget, kIdentity);
   }
   void store(pops::Real value) const {
     auto& sample = context->scalar_scratch(900, 0, context->state(0), 1,
-        ghosts < 0 ? context->state(0).ghosts()[0] : ghosts);
+                                           ghosts < 0 ? context->state(0).ghosts()[0] : ghosts);
     sample.set_val(value);
     context->store_history(kName, sample, 0);
     context->rotate_histories("clock.macro");
@@ -186,9 +215,10 @@ struct Fixture {
   }
   Field& interaction(std::int64_t id = 100, int lag = 1) const {
     const std::array<int, 1> components{0};
-    return context->spatial_interaction_history_owned(id, 0, context->history(kName, lag, 0),
-        components, budget, kIdentity, "clock.macro", false, kName, lag,
-        "tracer.U", "cell.scalar", "none", [] POPS_HD(const auto&, const auto&) { return pops::Real(1); });
+    return context->spatial_interaction_history_owned(
+        id, 0, context->history(kName, lag, 0), components, budget, kIdentity, "clock.macro", false,
+        kName, lag, "tracer.U", "cell.scalar", "none",
+        [] POPS_HD(const auto&, const auto&) { return pops::Real(1); });
   }
   // Independent weighted composite oracle, using actual active/coverage/volume masks.
   pops::Real composite_integral(pops::Real value) const {
@@ -199,15 +229,21 @@ struct Fixture {
       const auto& coverage = system.prepared_amr_block_level_coverage_mask(0, level);
       const auto geom = system.prepared_amr_level_geometry(level);
       pops::Real volume = 1;
-      for (int axis = 0; axis < Dim; ++axis) volume *= geom.spacing(axis);
+      for (int axis = 0; axis < Dim; ++axis)
+        volume *= geom.spacing(axis);
       for (std::size_t global = 0; global < field.layout().size(); ++global) {
-        if (!field.contains_local(global) || (field.distribution().replicated() && pops::my_rank() != 0)) continue;
+        if (!field.contains_local(global) ||
+            (field.distribution().replicated() && pops::my_rank() != 0))
+          continue;
         const auto c = coverage.fab_global(global).view();
-        const auto a = active ? active->fab_global(global).view() : pops::FieldView<const pops::Real, Dim>{};
+        const auto a =
+            active ? active->fab_global(global).view() : pops::FieldView<const pops::Real, Dim>{};
         const bool has_active = active;
-        local_sum += pops::for_each_cell_reduce_sum(field.layout()[global], [=] POPS_HD(const pops::Index<Dim>& cell) {
-          return (!has_active || a(cell, 0) == 1) && c(cell, 0) == 1 ? volume * value : pops::Real(0);
-        });
+        local_sum += pops::for_each_cell_reduce_sum(
+            field.layout()[global], [=] POPS_HD(const pops::Index<Dim>& cell) {
+              return (!has_active || a(cell, 0) == 1) && c(cell, 0) == 1 ? volume * value
+                                                                         : pops::Real(0);
+            });
       }
     });
     return pops::all_reduce_sum(local_sum, context->prepared_execution_lane());
@@ -216,9 +252,13 @@ struct Fixture {
     const auto& coverage = system.prepared_amr_block_level_coverage_mask(0, context->level());
     for (std::size_t local = 0; local < output.local_size(); ++local) {
       const auto result = output.fab(local).view(), mask = coverage.fab(local).view();
-      EXPECT_EQ(pops::for_each_cell_reduce_max(output.box(local), [=] POPS_HD(const pops::Index<Dim>& cell) {
-        return Kokkos::abs(result(cell, 0) - (mask(cell, 0) == 1 ? expected : pops::Real(0)));
-      }), pops::Real(0));
+      EXPECT_EQ(pops::for_each_cell_reduce_max(
+                    output.box(local),
+                    [=] POPS_HD(const pops::Index<Dim>& cell) {
+                      return Kokkos::abs(result(cell, 0) -
+                                         (mask(cell, 0) == 1 ? expected : pops::Real(0)));
+                    }),
+                pops::Real(0));
     }
   }
 };

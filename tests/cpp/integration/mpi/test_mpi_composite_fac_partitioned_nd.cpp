@@ -733,8 +733,8 @@ void expect_field_domain_interface_residual() {
   }
   pops::elliptic::mg::GeometricMultigridOptions geometric;
   geometric.smoother = pops::elliptic::mg::GeometricSmoother::red_black_gauss_seidel;
-  geometric.field_domain = pops::elliptic::mg::CellCentreBallDomain{
-      2, {Real(0.5), Real(0.5), Real(0)}, Real(0.4)};
+  geometric.field_domain =
+      pops::elliptic::mg::CellCentreBallDomain{2, {Real(0.5), Real(0.5), Real(0)}, Real(0.4)};
   geometric.roundoff_aware_residual = true;
   geometric.minimum_coarse_extent = 2;
   geometric.bottom_sweeps = 50;
@@ -744,8 +744,8 @@ void expect_field_domain_interface_residual() {
   options.rel_tol = Real(1e-8);
   options.abs_tol = Real(0);
   options.coarse_cycles = 50;
-  CompositeFacPoisson<2> solver(std::move(hierarchy), options, Real(0), nullptr,
-                               false, false, geometric);
+  CompositeFacPoisson<2> solver(std::move(hierarchy), options, Real(0), nullptr, false, false,
+                                geometric);
   for (int level = 0; level < solver.n_levels(); ++level)
     solver.rhs_level(level).set_val(Real(1));
   const auto report = solver.solve();

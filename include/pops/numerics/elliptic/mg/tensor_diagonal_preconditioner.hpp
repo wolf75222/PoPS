@@ -33,26 +33,31 @@ class Session {
           std::shared_ptr<const field_type> coefficients, Geometry<Dim> geometry,
           PhysicalBoundaryConditions<Dim> boundary, GeometricMultigridOptions options,
           PreparedVectorDistribution<Dim> distribution, const ExecutionLane& lane)
-      : prototype_(std::move(prototype)), coefficients_(std::move(coefficients)),
-        geometry_(std::move(geometry)), boundary_(std::move(boundary)), options_(options),
-        distribution_(std::move(distribution)), lane_(&lane) {}
+      : prototype_(std::move(prototype)),
+        coefficients_(std::move(coefficients)),
+        geometry_(std::move(geometry)),
+        boundary_(std::move(boundary)),
+        options_(options),
+        distribution_(std::move(distribution)),
+        lane_(&lane) {}
 
   void prepare() {
     const bool invalid = !prototype_ || !coefficients_ ||
-        (prototype_ && prototype_->ncomp() != 1) ||
-        (coefficients_ && coefficients_->ncomp() != Dim * Dim) ||
-        (prototype_ && coefficients_ &&
-         (prototype_->layout() != coefficients_->layout() ||
-          prototype_->distribution() != coefficients_->distribution() ||
-          prototype_->local_rank() != coefficients_->local_rank()));
+                         (prototype_ && prototype_->ncomp() != 1) ||
+                         (coefficients_ && coefficients_->ncomp() != Dim * Dim) ||
+                         (prototype_ && coefficients_ &&
+                          (prototype_->layout() != coefficients_->layout() ||
+                           prototype_->distribution() != coefficients_->distribution() ||
+                           prototype_->local_rank() != coefficients_->local_rank()));
     if (all_reduce_max(invalid ? 1L : 0L, *lane_) != 0)
       throw std::invalid_argument("tensor diagonal MG requires its exact scalar/tensor layout");
 
     if (!diagonal_) {
       long allocation_failure = 0;
       try {
-        diagonal_ = std::make_unique<field_type>(prototype_->layout(), prototype_->distribution(),
-            prototype_->local_rank(), Dim, detail::unit_ghosts<Dim>());
+        diagonal_ =
+            std::make_unique<field_type>(prototype_->layout(), prototype_->distribution(),
+                                         prototype_->local_rank(), Dim, detail::unit_ghosts<Dim>());
       } catch (...) {
         allocation_failure = 1;
       }
@@ -62,12 +67,13 @@ class Session {
       }
     }
     for (int local = 0; local < diagonal_->local_size(); ++local)
-      for_each_cell(diagonal_->box(local), ExtractDiagonal<Dim>{
-          coefficients_->fab(local).view(), diagonal_->fab(local).view()});
+      for_each_cell(diagonal_->box(local), ExtractDiagonal<Dim>{coefficients_->fab(local).view(),
+                                                                diagonal_->fab(local).view()});
 
     if (!solver_) {
-      solver_ = std::make_unique<GeometricMG<Dim>>(geometry_, prototype_->layout(),
-          prototype_->distribution(), prototype_->local_rank(), boundary_, *lane_, options_);
+      solver_ = std::make_unique<GeometricMG<Dim>>(
+          geometry_, prototype_->layout(), prototype_->distribution(), prototype_->local_rank(),
+          boundary_, *lane_, options_);
       long nullspace_failure = 0;
       try {
         solver_->install_nullspace(FieldNullspacePlan<Dim>{}, distribution_);
@@ -93,7 +99,8 @@ class Session {
   std::size_t allocation_count() const noexcept {
     // Field OBJECTS, including zero-owner objects, must agree across the prepared MPI lane.
     // Communication metadata and rank-dependent FAB bytes are deliberately not called fields.
-    return (diagonal_ ? 1u : 0u) + (solver_ ? 7u * static_cast<std::size_t>(solver_->num_levels()) : 0u);
+    return (diagonal_ ? 1u : 0u) +
+           (solver_ ? 7u * static_cast<std::size_t>(solver_->num_levels()) : 0u);
   }
 
  private:

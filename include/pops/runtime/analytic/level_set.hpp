@@ -77,9 +77,8 @@ struct NonFiniteLevelSetIndicator {
 };
 
 template <int Dim>
-void validate_materialization_request(const AnalyticProgram& program,
-                                      const Geometry<Dim>& geometry, const Box<Dim>& valid,
-                                      int n_ghost) {
+void validate_materialization_request(const AnalyticProgram& program, const Geometry<Dim>& geometry,
+                                      const Box<Dim>& valid, int n_ghost) {
   (void)make_analytic_level_set<Dim>(program);
   if (geometry.domain().empty())
     throw std::invalid_argument("analytic level set: geometry domain must not be empty");
@@ -144,9 +143,8 @@ AnalyticLevelSetMaterialization<Dim, MemorySpace> materialize_analytic_level_set
 /// Strong transactional replacement for runtime owners that already hold a materialization.
 template <int Dim, class MemorySpace>
 void replace_analytic_level_set_materialization(
-    AnalyticLevelSetMaterialization<Dim, MemorySpace>& destination,
-    const AnalyticProgram& program, const Geometry<Dim>& geometry, const Box<Dim>& valid,
-    int n_ghost) {
+    AnalyticLevelSetMaterialization<Dim, MemorySpace>& destination, const AnalyticProgram& program,
+    const Geometry<Dim>& geometry, const Box<Dim>& valid, int n_ghost) {
   auto staged = materialize_analytic_level_set<Dim, MemorySpace>(program, geometry, valid, n_ghost);
   destination = std::move(staged);
 }

@@ -21,28 +21,29 @@ struct TensorSeamMeasurement {
 // Solve the same manufactured problem with a half-domain refined patch translated
 // in the periodic direction. offset=0 has a seam with no opposite fine peer;
 // offset=n/2 is interior; offset=3*n/2 splits the patch across the seam.
-inline TensorSeamMeasurement tensor_periodic_seam_witness(
-    int n, int fine_offset, bool replicated_parent, const ExecutionLane& lane) {
+inline TensorSeamMeasurement tensor_periodic_seam_witness(int n, int fine_offset,
+                                                          bool replicated_parent,
+                                                          const ExecutionLane& lane) {
   using namespace runtime::program::tensor_fac;
   using Field = MultiFab<2>;
   constexpr Real pi = Real(3.141592653589793238462643383279502884L);
-  if (n < 8 || n % 4 != 0 || fine_offset < 0 || fine_offset >= 2 * n ||
-      fine_offset % 2 != 0 || (lane.size() != 1 && lane.size() != 2))
+  if (n < 8 || n % 4 != 0 || fine_offset < 0 || fine_offset >= 2 * n || fine_offset % 2 != 0 ||
+      (lane.size() != 1 && lane.size() != 2))
     throw std::invalid_argument("invalid tensor periodic seam witness layout");
   const mesh::RankSpace<2> ranks{Index<2>{0, 0}, Extent<2>{lane.size(), 1}};
   const Index<2> rank{lane.rank(), 0};
   const Box<2> domain{Index<2>{0, 0}, Index<2>{n - 1, n - 1}};
-  const Geometry<2> coarse_geometry = Geometry<2>::from_bounds(
-      domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
-  const std::array<Geometry<2>, 2> geometry{
-      coarse_geometry, coarse_geometry.refine(Extent<2>{2, 2})};
+  const Geometry<2> coarse_geometry =
+      Geometry<2>::from_bounds(domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
+  const std::array<Geometry<2>, 2> geometry{coarse_geometry,
+                                            coarse_geometry.refine(Extent<2>{2, 2})};
   std::vector<PhysicalBoundaryConditions<2>> boundary;
   boundary.reserve(2);
   for (int level = 0; level < 2; ++level) {
     std::array<PhysicalBoundaryFace, 4> faces{};
     for (BoundarySide side : {BoundarySide::lower, BoundarySide::upper})
-      faces[static_cast<std::size_t>(Face<2>{0, side}.ordinal())] =
-          {PhysicalBoundaryKind::dirichlet, Real(0)};
+      faces[static_cast<std::size_t>(Face<2>{0, side}.ordinal())] = {
+          PhysicalBoundaryKind::dirichlet, Real(0)};
     boundary.push_back(PhysicalBoundaryConditions<2>{
         BoundaryTopology<2>::axis_periodic(std::array<bool, 2>{false, true}), faces,
         RealVector<2>{geometry[level].spacing(0), geometry[level].spacing(1)}});
@@ -51,22 +52,23 @@ inline TensorSeamMeasurement tensor_periodic_seam_witness(
   std::vector<Index<2>> parent_owners;
   const int parent_parts = replicated_parent ? 1 : lane.size();
   for (int part = 0; part < parent_parts; ++part) {
-    parent_boxes.push_back({Index<2>{0, part * n / parent_parts},
-                            Index<2>{n - 1, (part + 1) * n / parent_parts - 1}});
+    parent_boxes.push_back(
+        {Index<2>{0, part * n / parent_parts}, Index<2>{n - 1, (part + 1) * n / parent_parts - 1}});
     parent_owners.push_back(Index<2>{part, 0});
   }
   const mesh::BoxArray<2> parent_layout(std::move(parent_boxes));
-  const auto parent_distribution = replicated_parent
-      ? mesh::Distribution<2>::replicated(parent_layout, ranks)
-      : mesh::Distribution<2>::partitioned(parent_layout, ranks, std::move(parent_owners));
+  const auto parent_distribution =
+      replicated_parent
+          ? mesh::Distribution<2>::replicated(parent_layout, ranks)
+          : mesh::Distribution<2>::partitioned(parent_layout, ranks, std::move(parent_owners));
   std::vector<Box<2>> fine_boxes;
   std::vector<Index<2>> fine_owners;
   for (int part = 0; part < lane.size(); ++part) {
     const int lower_x = n / 2 + part * n / lane.size();
     const int upper_x = n / 2 + (part + 1) * n / lane.size() - 1;
     const int upper_y = fine_offset + n - 1;
-    fine_boxes.push_back({Index<2>{lower_x, fine_offset},
-                          Index<2>{upper_x, std::min(upper_y, 2 * n - 1)}});
+    fine_boxes.push_back(
+        {Index<2>{lower_x, fine_offset}, Index<2>{upper_x, std::min(upper_y, 2 * n - 1)}});
     fine_owners.push_back(Index<2>{part, 0});
     if (upper_y >= 2 * n) {
       fine_boxes.push_back({Index<2>{lower_x, 0}, Index<2>{upper_x, upper_y - 2 * n}});
@@ -77,25 +79,27 @@ inline TensorSeamMeasurement tensor_periodic_seam_witness(
   const auto fine_distribution =
       mesh::Distribution<2>::partitioned(fine_layout, ranks, std::move(fine_owners));
   const std::array<mesh::BoxArray<2>, 2> layouts{parent_layout, fine_layout};
-  const std::array<mesh::Distribution<2>, 2> distributions{
-      parent_distribution, fine_distribution};
+  const std::array<mesh::Distribution<2>, 2> distributions{parent_distribution, fine_distribution};
   std::array<std::array<std::unique_ptr<Field>, 4>, 2> coefficients;
   std::array<std::unique_ptr<Field>, 2> rhs, initial, solution;
   std::array<LevelBinding<2, Field::memory_space>, 2> bindings;
   const Real phase = Real(fine_offset) / Real(2 * n);
   auto offset = [](const Box<2>& box, int i, int j) {
     return static_cast<std::size_t>(i - box.lo[0]) +
-        static_cast<std::size_t>(j - box.lo[1]) * static_cast<std::size_t>(box.length(0));
+           static_cast<std::size_t>(j - box.lo[1]) * static_cast<std::size_t>(box.length(0));
   };
   for (int level = 0; level < 2; ++level) {
-    rhs[level] = std::make_unique<Field>(layouts[level], distributions[level], rank, 1, Extent<2>{});
-    initial[level] = std::make_unique<Field>(layouts[level], distributions[level], rank, 1, Extent<2>{1, 1});
-    solution[level] = std::make_unique<Field>(layouts[level], distributions[level], rank, 1, Extent<2>{1, 1});
+    rhs[level] =
+        std::make_unique<Field>(layouts[level], distributions[level], rank, 1, Extent<2>{});
+    initial[level] =
+        std::make_unique<Field>(layouts[level], distributions[level], rank, 1, Extent<2>{1, 1});
+    solution[level] =
+        std::make_unique<Field>(layouts[level], distributions[level], rank, 1, Extent<2>{1, 1});
     initial[level]->set_val(Real(0));
     solution[level]->set_val(Real(0));
     for (int slot = 0; slot < 4; ++slot) {
-      coefficients[level][slot] = std::make_unique<Field>(
-          layouts[level], distributions[level], rank, 1, Extent<2>{1, 1});
+      coefficients[level][slot] =
+          std::make_unique<Field>(layouts[level], distributions[level], rank, 1, Extent<2>{1, 1});
       // Poison every ghost: successful preparation must fill it from its owner.
       coefficients[level][slot]->set_val(std::numeric_limits<Real>::quiet_NaN());
     }
@@ -117,20 +121,24 @@ inline TensorSeamMeasurement tensor_periodic_seam_witness(
           const Real axx = Real(1) + Real(0.1) * std::cos(Real(2) * pi * y);
           const std::array<Real, 4> tensor{axx, Real(0.15), Real(-0.1), Real(1.5)};
           for (int slot = 0; slot < 4; ++slot)
-            tensor_host[slot](offset(coefficients[level][slot]->fab(local).grown_box(), i, j)) = tensor[slot];
+            tensor_host[slot](offset(coefficients[level][slot]->fab(local).grown_box(), i, j)) =
+                tensor[slot];
           right_host(offset(right.grown_box(), i, j)) =
-              pi * pi * (axx + Real(6)) * wave + Real(0.1) * pi * pi *
-              std::cos(pi * x) * std::sin(Real(2) * pi * y);
+              pi * pi * (axx + Real(6)) * wave +
+              Real(0.1) * pi * pi * std::cos(pi * x) * std::sin(Real(2) * pi * y);
         }
       right.copy_from_host(right_host);
       for (int slot = 0; slot < 4; ++slot)
         coefficients[level][slot]->fab(local).copy_from_host(tensor_host[slot]);
     }
     bindings[level] = LevelBinding<2, Field::memory_space>{
-        &geometry[level], &boundary[level],
-        {coefficients[level][0].get(), coefficients[level][1].get(),
-         coefficients[level][2].get(), coefficients[level][3].get()},
-        rhs[level].get(), initial[level].get(), solution[level].get()};
+        &geometry[level],
+        &boundary[level],
+        {coefficients[level][0].get(), coefficients[level][1].get(), coefficients[level][2].get(),
+         coefficients[level][3].get()},
+        rhs[level].get(),
+        initial[level].get(),
+        solution[level].get()};
   }
   const std::array<amr::RefinementRatio<2>, 1> ratios{
       amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
@@ -170,8 +178,9 @@ inline TensorSeamMeasurement tensor_periodic_seam_witness(
           if (level == 1) {
             const Real x = geometry[level].cell_coordinate(0, i);
             const Real y = geometry[level].cell_coordinate(1, j) - phase;
-            result.maximum_error = std::max(result.maximum_error,
-                std::abs(value - std::sin(pi * x) * std::cos(Real(2) * pi * y)));
+            result.maximum_error =
+                std::max(result.maximum_error,
+                         std::abs(value - std::sin(pi * x) * std::cos(Real(2) * pi * y)));
           }
         }
     }

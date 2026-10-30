@@ -163,8 +163,8 @@ Real maximum_constant_error(const MultiFab<Dim>& field, const ExecutionLane& lan
 
 template <int Dim>
 void expect_replicated_coarse_fac() {
-  const ExecutionLane lane = ExecutionLane::world(
-      "pops.test.composite-fac.replicated-coarse:" + std::to_string(Dim));
+  const ExecutionLane lane =
+      ExecutionLane::world("pops.test.composite-fac.replicated-coarse:" + std::to_string(Dim));
   pops::CompositeFacOptions options;
   options.max_iters = 40;
   options.fine_sweeps = 4;

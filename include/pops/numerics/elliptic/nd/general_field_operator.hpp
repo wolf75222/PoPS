@@ -24,12 +24,20 @@ inline void general_field_local_phase(const ExecutionLane& lane, Operation&& ope
     operation();
   } else {
     std::exception_ptr error;
-    try { operation(); } catch (...) { error = std::current_exception(); }
-    try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
+    try {
+      operation();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    try {
+      Kokkos::fence();
+    } catch (...) {
+      if (!error)
+        error = std::current_exception();
+    }
     collectively_rethrow_exception(error, lane, "general field candidate local phase");
   }
 }
-
 
 /// The scalar Program closure is exactly the cell-centred zero conormal flux closure
 /// when the physical relation says homogeneous Neumann. This adapter authenticates
@@ -57,7 +65,8 @@ inline void require_field_boundary(
 /// remain admissible; this general application makes no SPD certificate.
 /// Reaction is the complete component matrix supplied by the authored equation.
 template <int Dim, int Components, int CoefficientComponents = Components,
-          bool ArithmeticFaces = (CoefficientComponents != Components), bool GuardLocalPhases = false>
+          bool ArithmeticFaces = (CoefficientComponents != Components),
+          bool GuardLocalPhases = false>
 inline void apply_general_field(
     MultiFab<Dim>& output, MultiFab<Dim>& input, const MultiFab<Dim>& coefficients,
     const runtime::program::PreparedScalarBoundarySession<Dim>& boundary,
@@ -92,47 +101,47 @@ inline void apply_general_field(
   boundary.fill(input);
   const Geometry<Dim> geometry = boundary.geometry();
   general_field_local_phase<GuardLocalPhases>(boundary.lane(), [&] {
-  for (std::size_t local = 0; local < output.local_size(); ++local) {
-    const auto result = output.fab(local).view();
-    const auto value = std::as_const(input).fab(local).view();
-    const auto coefficient = coefficients.fab(local).view();
-    for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-      for (int component = 0; component < Components; ++component) {
-        Real image = Real(0);
-        for (int other = 0; other < Components; ++other) {
-          if constexpr (CoefficientComponents == Components) {
-            if (other != component)
-              continue;
-          }
-          const int slot =
-              CoefficientComponents == Components ? component : component * Components + other;
-          for (int axis = 0; axis < Dim; ++axis) {
-            Index<Dim> lower = cell, upper = cell;
-            --lower[axis];
-            ++upper[axis];
-            const Real center = coefficient(cell, slot);
-            Real low, high;
-            if constexpr (!ArithmeticFaces) {
-              low = harmonic_tensor_face_average(coefficient(lower, slot), center);
-              high = harmonic_tensor_face_average(center, coefficient(upper, slot));
-            } else {
-              // Arithmetic averaging preserves the complete matrix law;
-              // the strict SPD route also retains symmetry and positivity.
-              low = Real(0.5) * coefficient(lower, slot) + Real(0.5) * center;
-              high = Real(0.5) * center + Real(0.5) * coefficient(upper, slot);
+    for (std::size_t local = 0; local < output.local_size(); ++local) {
+      const auto result = output.fab(local).view();
+      const auto value = std::as_const(input).fab(local).view();
+      const auto coefficient = coefficients.fab(local).view();
+      for_each_cell(output.box(local), [=] POPS_HD(const Index<Dim>& cell) {
+        for (int component = 0; component < Components; ++component) {
+          Real image = Real(0);
+          for (int other = 0; other < Components; ++other) {
+            if constexpr (CoefficientComponents == Components) {
+              if (other != component)
+                continue;
             }
-            const Real spacing = geometry.spacing(axis);
-            image -= (high * (value(upper, other) - value(cell, other)) -
-                      low * (value(cell, other) - value(lower, other))) /
-                     (spacing * spacing);
+            const int slot =
+                CoefficientComponents == Components ? component : component * Components + other;
+            for (int axis = 0; axis < Dim; ++axis) {
+              Index<Dim> lower = cell, upper = cell;
+              --lower[axis];
+              ++upper[axis];
+              const Real center = coefficient(cell, slot);
+              Real low, high;
+              if constexpr (!ArithmeticFaces) {
+                low = harmonic_tensor_face_average(coefficient(lower, slot), center);
+                high = harmonic_tensor_face_average(center, coefficient(upper, slot));
+              } else {
+                // Arithmetic averaging preserves the complete matrix law;
+                // the strict SPD route also retains symmetry and positivity.
+                low = Real(0.5) * coefficient(lower, slot) + Real(0.5) * center;
+                high = Real(0.5) * center + Real(0.5) * coefficient(upper, slot);
+              }
+              const Real spacing = geometry.spacing(axis);
+              image -= (high * (value(upper, other) - value(cell, other)) -
+                        low * (value(cell, other) - value(lower, other))) /
+                       (spacing * spacing);
+            }
           }
+          for (int other = 0; other < Components; ++other)
+            image += reaction[component * Components + other] * value(cell, other);
+          result(cell, component) = image;
         }
-        for (int other = 0; other < Components; ++other)
-          image += reaction[component * Components + other] * value(cell, other);
-        result(cell, component) = image;
-      }
-    });
-  }
+      });
+    }
   });
 }
 
@@ -149,49 +158,50 @@ inline void prepare_general_field_coefficients(
       throw std::invalid_argument("field coefficient matrix has the wrong component count");
   }
   general_field_local_phase<GuardLocalPhases>(boundary.lane(), [&] {
-  for (std::size_t local = 0; local < coefficients.local_size(); ++local) {
-    const auto values = std::as_const(coefficients).fab(local).view();
-    invalid +=
-        for_each_cell_reduce_sum(coefficients.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-          Real result = Real(0);
-          if constexpr (!RequireSPD) {
-            for (int component = 0; component < components; ++component)
-              if (!std::isfinite(values(cell, component)))
+    for (std::size_t local = 0; local < coefficients.local_size(); ++local) {
+      const auto values = std::as_const(coefficients).fab(local).view();
+      invalid += for_each_cell_reduce_sum(coefficients.box(local), [=] POPS_HD(
+                                                                       const Index<Dim>& cell) {
+        Real result = Real(0);
+        if constexpr (!RequireSPD) {
+          for (int component = 0; component < components; ++component)
+            if (!std::isfinite(values(cell, component)))
+              return Real(1);
+        } else if constexpr (Components > 1 && CoefficientComponents == Components * Components) {
+          std::array<Real, Components * Components> matrix{};
+          for (int i = 0; i < Components; ++i)
+            for (int j = 0; j < Components; ++j) {
+              const Real value = values(cell, i * Components + j);
+              if (!std::isfinite(value) || value != values(cell, j * Components + i))
                 return Real(1);
-          } else if constexpr (Components > 1 && CoefficientComponents == Components * Components) {
-            std::array<Real, Components * Components> matrix{};
-            for (int i = 0; i < Components; ++i)
-              for (int j = 0; j < Components; ++j) {
-                const Real value = values(cell, i * Components + j);
-                if (!std::isfinite(value) || value != values(cell, j * Components + i))
-                  return Real(1);
-                matrix[i * Components + j] = value;
-              }
-            // A strict local LDL factorization certifies the selected CG principal part.
-            for (int k = 0; k < Components; ++k) {
-              const Real pivot = matrix[k * Components + k];
-              if (!(pivot > Real(0)) || !std::isfinite(pivot))
-                return Real(1);
-              for (int i = k + 1; i < Components; ++i)
-                for (int j = k + 1; j < Components; ++j)
-                  matrix[i * Components + j] -=
-                      matrix[i * Components + k] * (matrix[k * Components + j] / pivot);
+              matrix[i * Components + j] = value;
             }
-          } else {
-            for (int component = 0; component < components; ++component) {
-              const Real value = values(cell, component);
-              if (!(value > Real(0)) || value > std::numeric_limits<Real>::max())
-                result += Real(1);
-            }
+          // A strict local LDL factorization certifies the selected CG principal part.
+          for (int k = 0; k < Components; ++k) {
+            const Real pivot = matrix[k * Components + k];
+            if (!(pivot > Real(0)) || !std::isfinite(pivot))
+              return Real(1);
+            for (int i = k + 1; i < Components; ++i)
+              for (int j = k + 1; j < Components; ++j)
+                matrix[i * Components + j] -=
+                    matrix[i * Components + k] * (matrix[k * Components + j] / pivot);
           }
-          return result;
-        });
-  }
+        } else {
+          for (int component = 0; component < components; ++component) {
+            const Real value = values(cell, component);
+            if (!(value > Real(0)) || value > std::numeric_limits<Real>::max())
+              result += Real(1);
+          }
+        }
+        return result;
+      });
+    }
   });
   if (all_reduce_max(invalid, boundary.lane()) != Real(0))
-    throw std::invalid_argument(RequireSPD
-        ? "field diffusion matrix must be finite, symmetric and strictly positive definite"
-        : "general coupled field coefficients must be finite");
+    throw std::invalid_argument(
+        RequireSPD
+            ? "field diffusion matrix must be finite, symmetric and strictly positive definite"
+            : "general coupled field coefficients must be finite");
   boundary.fill(coefficients);
 }
 

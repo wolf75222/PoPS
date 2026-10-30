@@ -197,7 +197,8 @@ TEST(test_block_inverse, N4BalancedInverseSatisfiesOriginalMatrix) {
         residual += term;
         magnitude += std::fabs(term);
       }
-      EXPECT_LE(std::fabs(residual), Real(4 * 8) * std::numeric_limits<Real>::epsilon() * magnitude);
+      EXPECT_LE(std::fabs(residual),
+                Real(4 * 8) * std::numeric_limits<Real>::epsilon() * magnitude);
     }
 }
 
@@ -317,9 +318,9 @@ TEST(test_block_inverse, RelativePivotDecisionIsIndependentOfRowUnits) {
   const Real large = std::sqrt(std::numeric_limits<Real>::max());
   const Real small = Real(1) / large;
   for (Real scale : {small, Real(1), large}) {
-    const Real matrix[2][2] = {{scale, scale}, {1, Real(1) + Real(8)*epsilon}};
+    const Real matrix[2][2] = {{scale, scale}, {1, Real(1) + Real(8) * epsilon}};
     Real inverse[2][2] = {{9, 9}, {9, 9}};
-    EXPECT_FALSE(block_inverse(matrix, inverse, Real(64)*epsilon));
+    EXPECT_FALSE(block_inverse(matrix, inverse, Real(64) * epsilon));
     for (const auto& row : inverse)
       for (Real value : row)
         EXPECT_EQ(value, Real(9));

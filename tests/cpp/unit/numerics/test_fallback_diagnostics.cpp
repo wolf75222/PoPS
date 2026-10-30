@@ -82,8 +82,7 @@ TEST(test_fallback_diagnostics, counters_and_report_track_triggered_fallbacks) {
   const FallbackDiagnosticEntry* eig = find_entry(report, "linalg.dense_eig.gershgorin");
   ASSERT_NE(fft, nullptr);
   ASSERT_NE(eig, nullptr);
-  EXPECT_TRUE(fft->policy == "allowed_with_counter")
-      << "FFT fallback report carries policy";
+  EXPECT_TRUE(fft->policy == "allowed_with_counter") << "FFT fallback report carries policy";
   if (!poisson_fft_fftw_configured())
     EXPECT_GT(fft->count, 0u) << "FFT fallback report carries count";
   EXPECT_TRUE(eig->count > 0 && eig->semantics_changed)

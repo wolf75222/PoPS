@@ -230,8 +230,8 @@ std::vector<LevelContract<Dim>> endpoint_contract(const AmrTransferEndpoint<Dim>
     if (state.ncomp() <= 0 || state.rank_space().size() != static_cast<std::size_t>(lane.size()) ||
         state.rank_space().linear_rank(state.local_rank()) != static_cast<std::size_t>(lane.rank()))
       throw std::invalid_argument("AMR transfer endpoint differs from its execution rank space");
-    const std::array<const MultiFab<Dim>*, 3> measure_fields{
-        view.coverage, view.activity, view.relative_measure};
+    const std::array<const MultiFab<Dim>*, 3> measure_fields{view.coverage, view.activity,
+                                                             view.relative_measure};
     for (const auto* mask : measure_fields)
       if (mask && (mask->ncomp() != 1 || mask->layout() != state.layout() ||
                    mask->distribution() != state.distribution() ||
@@ -374,9 +374,9 @@ void write_fab(Fab<Dim>& fab, const std::vector<double>& values) {
 }
 
 template <int Dim>
-PopsConstFieldViewV1 source_abi(const double* values, PopsMemorySpaceV1 memory,
-                              const Box<Dim>& box, int components,
-                              const char* layout_identity, const char* patch_identity) {
+PopsConstFieldViewV1 source_abi(const double* values, PopsMemorySpaceV1 memory, const Box<Dim>& box,
+                                int components, const char* layout_identity,
+                                const char* patch_identity) {
   PopsConstFieldViewV1 view{};
   view.struct_size = sizeof(view);
   view.data = values;
@@ -399,8 +399,7 @@ PopsConstFieldViewV1 source_abi(const double* values, PopsMemorySpaceV1 memory,
 }
 
 PopsFieldViewV1 scalar_abi(double* values, std::size_t components, PopsMemorySpaceV1 memory,
-                          int dimension, const char* layout_identity,
-                          const char* patch_identity) {
+                           int dimension, const char* layout_identity, const char* patch_identity) {
   PopsFieldViewV1 view{};
   view.struct_size = sizeof(view);
   view.data = values;
@@ -432,16 +431,20 @@ class IntegralBuffers {
 
   IntegralBuffers(const PopsExecutionContextV1& context, const std::vector<double>& source,
                   std::vector<double>& destination)
-      : execution_(component::physical_transfer_detail::execution_instance<ExecutionSpace>(context)),
-        source_data_(source.data()), destination_data_(destination.data()) {
+      : execution_(
+            component::physical_transfer_detail::execution_instance<ExecutionSpace>(context)),
+        source_data_(source.data()),
+        destination_data_(destination.data()) {
     if constexpr (!std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
-      using Host = Kokkos::View<const double*, Kokkos::HostSpace,
-                                Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      using Host =
+          Kokkos::View<const double*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
       try {
-        source_ = View(Kokkos::view_alloc(execution_, Kokkos::WithoutInitializing,
-                                         "pops_amr_integral_source"), source.size());
+        source_ = View(
+            Kokkos::view_alloc(execution_, Kokkos::WithoutInitializing, "pops_amr_integral_source"),
+            source.size());
         destination_ = View(Kokkos::view_alloc(execution_, Kokkos::WithoutInitializing,
-                                              "pops_amr_integral_destination"), destination.size());
+                                               "pops_amr_integral_destination"),
+                            destination.size());
         Kokkos::deep_copy(execution_, source_, Host(source.data(), source.size()));
         // Preserve the same borrowed destination contents as the Host invocation, including retry.
         Kokkos::deep_copy(execution_, destination_, Host(destination.data(), destination.size()));
@@ -469,8 +472,8 @@ class IntegralBuffers {
   }
   void capture_result(std::vector<double>& destination) const {
     if constexpr (!std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
-      using Host = Kokkos::View<double*, Kokkos::HostSpace,
-                                Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      using Host =
+          Kokkos::View<double*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
       Kokkos::deep_copy(execution_, Host(destination.data(), destination.size()), destination_);
       execution_.fence();
     }
@@ -485,7 +488,7 @@ class IntegralBuffers {
 
 template <class MemorySpace>
 std::size_t integral_backend_bytes(std::size_t source, std::size_t destination,
-                                  std::size_t weights) {
+                                   std::size_t weights) {
   if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>)
     return 0;
   const auto limit = std::numeric_limits<std::size_t>::max();
@@ -590,13 +593,14 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
           &map.provider_manifest_identity, &map.source_block, &map.target_block})
       require_text(*id);
     const bool scalar = map.mapped_field_components != 0;
-    if (scalar && (map.mapped_field_components != 1 || components != 1 ||
-                   map.program_invocation.empty() ||
-                   map.synchronization_identity != "pops://synchronization/program-point@1"))
-      throw std::invalid_argument("AMR scalar endpoint@1 requires a scalar Program-point candidate");
+    if (scalar &&
+        (map.mapped_field_components != 1 || components != 1 || map.program_invocation.empty() ||
+         map.synchronization_identity != "pops://synchronization/program-point@1"))
+      throw std::invalid_argument(
+          "AMR scalar endpoint@1 requires a scalar Program-point candidate");
     const std::string_view representation = scalar
-        ? "pops://representations/cell-field-observation@1"
-        : "pops://representations/cell-average@1";
+                                                ? "pops://representations/cell-field-observation@1"
+                                                : "pops://representations/cell-average@1";
     if (!map.physical_contract || map.source_layout_identity != source.layout_identity ||
         map.target_layout_identity != target.layout_identity ||
         source.layout_identity == target.layout_identity ||
@@ -993,8 +997,8 @@ struct PreparedAmrLayoutTransfer<Dim>::Impl {
         real(result, weight);
     }
     const std::array<std::size_t, 5> budget_values{
-        spec.budget.destination_cells, spec.budget.intersection_probes,
-        spec.budget.canonical_jobs, spec.budget.transported_elements, spec.budget.prepared_bytes};
+        spec.budget.destination_cells, spec.budget.intersection_probes, spec.budget.canonical_jobs,
+        spec.budget.transported_elements, spec.budget.prepared_bytes};
     for (auto value : budget_values)
       integer(result, value);
     return result;
@@ -1398,7 +1402,8 @@ AmrLayoutTransferBudget PreparedAmrLayoutTransfer<Dim>::capacity_budget(
   // One contribution's region is bounded by the complete resolved source cell capacity.
   charge(integral_backend_bytes<typename Fab<Dim>::memory_space>(
              multiply(source_cells, static_cast<std::size_t>(components)),
-             static_cast<std::size_t>(components), multiply(source_cells, Dim)), 1);
+             static_cast<std::size_t>(components), multiply(source_cells, Dim)),
+         1);
   charge(jobs, sizeof(typename Impl::Contribution) +
                    16 * sizeof(mesh::parallel::RegionTransferJob<Dim>) + 2 * sizeof(Box<Dim>) +
                    2 * sizeof(Index<Dim>));
@@ -1478,14 +1483,14 @@ AmrLayoutTransferReceipt PreparedAmrLayoutTransfer<Dim>::apply(
           execution_view(p_->execution), contribution.captured, contribution.result);
       PopsTransferIntegralRequestV2 request{};
       request.struct_size = sizeof(request);
-      request.source = source_abi(buffers.source_data(), buffers.memory,
-                                 contribution.source_region, p_->components,
-                                 p_->spec.authentication.source_layout_identity.c_str(),
-                                 contribution.source_patch_identity.c_str());
-      request.destination = scalar_abi(buffers.destination_data(), contribution.result.size(),
-                                      buffers.memory, Dim,
-                                      p_->spec.authentication.target_layout_identity.c_str(),
-                                      contribution.target_patch_identity.c_str());
+      request.source =
+          source_abi(buffers.source_data(), buffers.memory, contribution.source_region,
+                     p_->components, p_->spec.authentication.source_layout_identity.c_str(),
+                     contribution.source_patch_identity.c_str());
+      request.destination =
+          scalar_abi(buffers.destination_data(), contribution.result.size(), buffers.memory, Dim,
+                     p_->spec.authentication.target_layout_identity.c_str(),
+                     contribution.target_patch_identity.c_str());
       request.dimension = Dim;
       request.operation = static_cast<PopsTransferOperationV1>(p_->spec.authentication.operation);
       request.physical_contract_identity = p_->spec.physical_contract_identity.c_str();

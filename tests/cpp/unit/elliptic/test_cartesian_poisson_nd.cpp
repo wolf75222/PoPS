@@ -164,10 +164,11 @@ void expect_manufactured_mode(CartesianBoundaryKind boundary) {
       boundary == CartesianBoundaryKind::periodic ? CartesianBoundaryKind::dirichlet : boundary);
   options.relative_tolerance = Real{1e-12};
   options.maximum_iterations = 32;
-  CartesianPoissonSolver<Dim> solver(geometry, layout, distribution, world_rank_coordinate<Dim>(), topology,
-                                     options, lane);
+  CartesianPoissonSolver<Dim> solver(geometry, layout, distribution, world_rank_coordinate<Dim>(),
+                                     topology, options, lane);
   install_mode_nullspace(solver, geometry, boundary);
-  MultiFab<Dim> warm_start(layout, distribution, world_rank_coordinate<Dim>(), 1, uniform_extent<Dim>(1));
+  MultiFab<Dim> warm_start(layout, distribution, world_rank_coordinate<Dim>(), 1,
+                           uniform_extent<Dim>(1));
   warm_start.set_val(Real{0});
 
   const Real pi = std::acos(Real{-1});
@@ -204,7 +205,8 @@ void expect_exact_marshaling_round_trip() {
   const BoxArray<Dim> layout = BoxArray<Dim>::from_domain(domain, patch);
   const RankSpace<Dim> ranks{Index<Dim>{}, world_rank_extent<Dim>()};
   const auto distribution = Distribution<Dim>::replicated(layout, ranks);
-  MultiFab<Dim> field(layout, distribution, world_rank_coordinate<Dim>(), 2, uniform_extent<Dim>(1));
+  MultiFab<Dim> field(layout, distribution, world_rank_coordinate<Dim>(), 2,
+                      uniform_extent<Dim>(1));
   field.set_val(Real{-9});
 
   const std::size_t cells = runtime::system::marshaling::checked_cell_count(domain);
@@ -266,7 +268,8 @@ void expect_exact_ranked_newton() {
   options.linear_tolerance = Real(1e-12);
   options.linear_max_iterations = 8;
   options.restart = 4;
-  FieldNewtonKrylovWorkspace<Dim> workspace(layout, distribution, world_rank_coordinate<Dim>(), options);
+  FieldNewtonKrylovWorkspace<Dim> workspace(layout, distribution, world_rank_coordinate<Dim>(),
+                                            options);
   MultiFab<Dim> iterate(layout, distribution, world_rank_coordinate<Dim>(), 1, Extent<Dim>{});
   iterate.set_val(Real(1));
 
@@ -324,8 +327,8 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   options.relative_tolerance = Real{1e-12};
   runtime::field::NamedFieldOutput<2> output(3, 1);
   runtime::system::ExactNamedField<2> provider("electric", "plasma", output, geometry, layout,
-                                               distribution, world_rank_coordinate<2>(), topology, options, 1,
-                                               lane);
+                                               distribution, world_rank_coordinate<2>(), topology,
+                                               options, 1, lane);
   PreparedFieldNullspace<2> prepared_nullspace;
   prepared_nullspace.provider_identity = "tests.constant-nullspace";
   prepared_nullspace.provider_version = 1;
@@ -365,7 +368,8 @@ TEST(test_cartesian_poisson_nd, named_provider_publishes_only_after_candidate_ac
   EXPECT_GT(reduce_max_local(provider.accepted_outputs(), 2), Real{0});
 }
 
-TEST(test_cartesian_poisson_nd, warm_start_is_separate_from_outputs_and_refuses_nonfinite_collectively) {
+TEST(test_cartesian_poisson_nd,
+     warm_start_is_separate_from_outputs_and_refuses_nonfinite_collectively) {
   const ExecutionLane lane = ExecutionLane::world("tests.cartesian-poisson.warm-start");
   const Box<2> domain{Index<2>{0, 0}, Index<2>{7, 7}};
   const auto geometry = Geometry<2>::from_bounds(domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
@@ -377,7 +381,7 @@ TEST(test_cartesian_poisson_nd, warm_start_is_separate_from_outputs_and_refuses_
   const auto options = CartesianPoissonOptions<2>::from_topology(topology);
   runtime::field::NamedFieldOutput<2> output(3, 1);
   runtime::system::ExactNamedField<2> field("warm", "plasma", output, geometry, layout,
-      distribution, local_rank, topology, options, 1, lane);
+                                            distribution, local_rank, topology, options, 1, lane);
   const auto before = field.accepted_state();
   EXPECT_FALSE(field.last_accepted_solve_report().has_value());
   MultiFab<2> seed(layout, distribution, local_rank, 1, Extent<2>{});
@@ -407,12 +411,15 @@ TEST(test_cartesian_poisson_nd, warm_start_is_separate_from_outputs_and_refuses_
   nullspace.provider_identity = "tests.warm-start.constant-nullspace";
   nullspace.provider_version = 1;
   nullspace.exact_prepared_contract = "tests.warm-start.constant-nullspace@1";
-  nullspace.plan = constant_mean_zero_nullspace<2>(
-      "warm-constant-mode", "unit-test", geometry.spacing(0) * geometry.spacing(1));
+  nullspace.plan = constant_mean_zero_nullspace<2>("warm-constant-mode", "unit-test",
+                                                   geometry.spacing(0) * geometry.spacing(1));
   field.install_nullspace(std::move(nullspace), PreparedVectorDistribution<2>::replicated());
-  field.add_rhs(0, [](const MultiFab<2>& source, MultiFab<2>& rhs) {
-    elliptic::nd::detail::copy_component(source, 0, rhs, 0);
-  }, Real(1));
+  field.add_rhs(
+      0,
+      [](const MultiFab<2>& source, MultiFab<2>& rhs) {
+        elliptic::nd::detail::copy_component(source, 0, rhs, 0);
+      },
+      Real(1));
   seed.set_val(Real(0));
   const std::vector<const MultiFab<2>*> states{&seed};
   auto solved = field.solve_candidate(states, nullptr, lane);
@@ -449,24 +456,34 @@ TEST(test_cartesian_poisson_nd, warm_start_is_separate_from_outputs_and_refuses_
 TEST(test_cartesian_poisson_nd, exact_report_consensus_authenticates_roundoff_evidence) {
   const ExecutionLane lane = ExecutionLane::world("tests.solve-report.roundoff-consensus");
   SolveReport report;
-  report.residual_evaluation = ResidualEvaluationEvidence{
-      Real(1), Real(2), Real(3), Real(4), Real(5), Real(6), false, Real(7)};
+  report.residual_evaluation = ResidualEvaluationEvidence{Real(1), Real(2), Real(3), Real(4),
+                                                          Real(5), Real(6), false,   Real(7)};
   report.mark_solved("roundoff-consensus-test");
   ExactSolveReportConsensusScratch scratch;
   EXPECT_TRUE(scratch.agrees(report, lane));
-  if (lane.size() == 1) return;
+  if (lane.size() == 1)
+    return;
   const std::array<Real ResidualEvaluationEvidence::*, 6> quantities{
-      &ResidualEvaluationEvidence::initial_residual_norm, &ResidualEvaluationEvidence::rhs_norm,
-      &ResidualEvaluationEvidence::initial_evaluation_bound, &ResidualEvaluationEvidence::evaluation_bound,
-      &ResidualEvaluationEvidence::requested_threshold, &ResidualEvaluationEvidence::applied_threshold};
+      &ResidualEvaluationEvidence::initial_residual_norm,
+      &ResidualEvaluationEvidence::rhs_norm,
+      &ResidualEvaluationEvidence::initial_evaluation_bound,
+      &ResidualEvaluationEvidence::evaluation_bound,
+      &ResidualEvaluationEvidence::requested_threshold,
+      &ResidualEvaluationEvidence::applied_threshold};
   for (int difference = 0; difference < 10; ++difference) {
     auto changed = report;
     if (lane.rank() == 0) {
-      if (difference == 0) changed.residual_evaluation.reset();
-      else if (difference == 1) changed.residual_evaluation->roundoff_limited = true;
-      else if (difference == 2) changed.residual_evaluation->relative_to_rhs_upper.reset();
-      else if (difference == 3) changed.residual_evaluation->relative_to_rhs_upper = Real(8);
-      else (*changed.residual_evaluation).*quantities[static_cast<std::size_t>(difference-4)] += Real(1);
+      if (difference == 0)
+        changed.residual_evaluation.reset();
+      else if (difference == 1)
+        changed.residual_evaluation->roundoff_limited = true;
+      else if (difference == 2)
+        changed.residual_evaluation->relative_to_rhs_upper.reset();
+      else if (difference == 3)
+        changed.residual_evaluation->relative_to_rhs_upper = Real(8);
+      else
+        (*changed.residual_evaluation).*quantities[static_cast<std::size_t>(difference - 4)] +=
+            Real(1);
     }
     EXPECT_FALSE(scratch.agrees(changed, lane)) << "evidence field " << difference;
   }
@@ -487,10 +504,12 @@ TEST(test_cartesian_poisson_nd, remote_halo_requirement_fails_before_candidate_m
   warm_start.set_val(Real{5});
   if (lane.size() == 1)
     EXPECT_THROW((void)CartesianPoissonSolver<1>(geometry, layout, distribution, local_rank,
-                                                topology, options, lane), std::logic_error);
+                                                 topology, options, lane),
+                 std::logic_error);
   else
     EXPECT_THROW((void)CartesianPoissonSolver<1>(geometry, layout, distribution, local_rank,
-                                                topology, options, lane), std::runtime_error);
+                                                 topology, options, lane),
+                 std::runtime_error);
   for (std::size_t local = 0; local < warm_start.local_size(); ++local) {
     const auto& fab = static_cast<const MultiFab<1>&>(warm_start).fab(local);
     auto host = fab.create_host_mirror();

@@ -369,7 +369,8 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
       components = source->sp[static_cast<std::size_t>(source_block_index)].ncomp;
     } else {
       components = spec.mapped_field_components;
-      source_field_shape.emplace(source->ba, source->dm, source->local_rank, components, Extent<Dim>{});
+      source_field_shape.emplace(source->ba, source->dm, source->local_rank, components,
+                                 Extent<Dim>{});
     }
     const mesh::BoxArray<Dim> carrier =
         spec.physical_contract
@@ -430,9 +431,11 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     if (mapped_field && (spec.mapped_field_components != 1 || !spec.physical_contract ||
                          spec.program_invocation.empty() ||
                          spec.synchronization_identity != "pops://synchronization/program-point@1"))
-      throw std::invalid_argument("consumed Field transfer requires an exact scalar Program-point physical port");
+      throw std::invalid_argument(
+          "consumed Field transfer requires an exact scalar Program-point physical port");
     const std::string_view representation = mapped_field
-        ? "pops://representations/cell-field-observation@1" : kCellAverageRepresentation;
+                                                ? "pops://representations/cell-field-observation@1"
+                                                : kCellAverageRepresentation;
     if (spec.source_representation != representation ||
         spec.target_representation != representation)
       throw std::invalid_argument(
@@ -474,14 +477,15 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
     if (!source->dm.matches_layout(source->ba) || !target->dm.matches_layout(target->ba))
       throw std::invalid_argument("prepared System transfer received an invalid native layout");
     if (!mapped_field) {
-    const auto& source_block = source->blocks_.find(spec.source_block);
-    const auto& target_block = target->blocks_.find(spec.target_block);
-    if (source_block.ncomp != target_block.ncomp || source_block.ncomp <= 0)
-      throw std::invalid_argument("prepared System transfer source/target provider widths differ");
-    if (source_block.U.layout() != source->ba || source_block.U.distribution() != source->dm ||
-        target_block.U.layout() != target->ba || target_block.U.distribution() != target->dm)
-      throw std::invalid_argument(
-          "prepared System transfer block storage differs from its owning layout");
+      const auto& source_block = source->blocks_.find(spec.source_block);
+      const auto& target_block = target->blocks_.find(spec.target_block);
+      if (source_block.ncomp != target_block.ncomp || source_block.ncomp <= 0)
+        throw std::invalid_argument(
+            "prepared System transfer source/target provider widths differ");
+      if (source_block.U.layout() != source->ba || source_block.U.distribution() != source->dm ||
+          target_block.U.layout() != target->ba || target_block.U.distribution() != target->dm)
+        throw std::invalid_argument(
+            "prepared System transfer block storage differs from its owning layout");
     }
     if (source_owner->lifecycle_state() == "assembling" ||
         target_owner->lifecycle_state() == "assembling")
@@ -499,13 +503,15 @@ struct PreparedSystemLayoutTransfer<Dim>::Impl {
   }
 
   void validate_physical_contract(bool moment) const {
-    if (execution.memory_space != component::physical_transfer_detail::memory_kind<
-                                      typename field_type::memory_space>())
-      throw std::invalid_argument("physical maps execution memory differs from native field storage");
+    if (execution.memory_space !=
+        component::physical_transfer_detail::memory_kind<typename field_type::memory_space>())
+      throw std::invalid_argument(
+          "physical maps execution memory differs from native field storage");
     if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 &&
         !component::physical_transfer_detail::supports_device_context(
             execution_abi, static_cast<PopsMemorySpaceV1>(execution.memory_space)))
-      throw std::invalid_argument("physical maps require a supported authenticated backend memory lane");
+      throw std::invalid_argument(
+          "physical maps require a supported authenticated backend memory lane");
     if (source->dm.rank_space() != target->dm.rank_space() ||
         source->local_rank != target->local_rank ||
         source->dm.rank_space().size() != static_cast<std::size_t>(communicator.size()) ||
@@ -740,9 +746,8 @@ std::shared_ptr<PreparedSystemLayoutTransfer<Dim>> PreparedSystemLayoutTransfer<
                                      std::move(execution), communicator);
   });
   std::string payload;
-  collectively_validate(communicator, "layout-transfer consensus payload preparation", [&] {
-    payload = pending->consensus_payload();
-  });
+  collectively_validate(communicator, "layout-transfer consensus payload preparation",
+                        [&] { payload = pending->consensus_payload(); });
   if (!all_ranks_agree_exact_ordered_byte_pairs({{"prepared-system-layout-transfer-v3", payload}},
                                                 communicator))
     throw std::invalid_argument(
@@ -753,9 +758,8 @@ std::shared_ptr<PreparedSystemLayoutTransfer<Dim>> PreparedSystemLayoutTransfer<
   // Warm the prepared transport against the accepted storage used to define its layout.
   // A Program-point route has no suspended stage port until execution reaches its barrier.
   if (pending->spec.mapped_field_components == 0) {
-    collectively_validate(communicator, "layout-transfer warmup source authority", [&] {
-      pending->validate_source_storage(pending->source_state());
-    });
+    collectively_validate(communicator, "layout-transfer warmup source authority",
+                          [&] { pending->validate_source_storage(pending->source_state()); });
     collectively_validate(communicator, "prepared System layout-transfer warmup",
                           [&] { pending->capture_source(pending->source_state()); });
   }
@@ -806,9 +810,8 @@ void PreparedSystemLayoutTransfer<Dim>::capture(std::uint64_t generation, std::u
     if (p_->captured_attempt != 0 && p_->captured_attempt != attempt)
       throw std::logic_error("layout-transfer source was already captured for another attempt");
   });
-  collectively_validate(p_->communicator, "layout-transfer source storage authority", [&] {
-    p_->validate_source_storage(p_->source_transfer_state());
-  });
+  collectively_validate(p_->communicator, "layout-transfer source storage authority",
+                        [&] { p_->validate_source_storage(p_->source_transfer_state()); });
   collectively_validate(p_->communicator, "layout-transfer source capture",
                         [&] { p_->capture_source(p_->source_transfer_state()); });
   p_->captured_attempt = attempt;
@@ -826,7 +829,8 @@ SystemLayoutTransferReceipt PreparedSystemLayoutTransfer<Dim>::apply(std::uint64
       const auto& candidate = p_->target_transfer_state();
       if (candidate.layout() != p_->target->ba || candidate.distribution() != p_->target->dm ||
           candidate.local_rank() != p_->target->local_rank || candidate.ncomp() != p_->components)
-        throw std::invalid_argument("consumed Field transfer target changed its private candidate authority");
+        throw std::invalid_argument(
+            "consumed Field transfer target changed its private candidate authority");
     }
     if (p_->applied)
       throw std::logic_error("layout-transfer attempt was already applied");

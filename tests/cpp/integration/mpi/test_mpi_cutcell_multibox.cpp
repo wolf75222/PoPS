@@ -81,8 +81,8 @@ struct SampleFinePhi {
   pops::FieldView<pops::Real, Dim> phi{};
 
   POPS_HD void operator()(const pops::Index<Dim>& index) const {
-    phi(index) = (static_cast<pops::Real>(index[0]) + pops::Real(0.5)) / pops::Real(4) -
-                 pops::Real(0.5);
+    phi(index) =
+        (static_cast<pops::Real>(index[0]) + pops::Real(0.5)) / pops::Real(4) - pops::Real(0.5);
   }
 };
 
@@ -142,15 +142,15 @@ int run_mpi_cutcell_multibox(int argc, char** argv) {
                                             rank_space.coordinate(ranks == 1 ? 0 : 1)};
       const auto distribution =
           pops::mesh::Distribution<kDim>::partitioned(layout, rank_space, owners);
-      const pops::Index<kDim> local_rank = rank_space.coordinate(static_cast<std::size_t>(lane.rank()));
+      const pops::Index<kDim> local_rank =
+          rank_space.coordinate(static_cast<std::size_t>(lane.rank()));
       const pops::MultiFab<kDim> prototype{layout, distribution, local_rank, 1,
                                            filled_extent<kDim>(1)};
-      const auto prepared =
-          pops::runtime::system::prepare_embedded_boundary_geometry_collectively(
-              {"x", "constant", "sub"}, {0.0, 0.5, 0.0}, geometry,
-              pops::BoundaryTopology<kDim>::physical(), prototype,
-              pops::runtime::system::PreparedEmbeddedBoundaryMode::cut_cell, pops::EbThresholds{},
-              7, lane);
+      const auto prepared = pops::runtime::system::prepare_embedded_boundary_geometry_collectively(
+          {"x", "constant", "sub"}, {0.0, 0.5, 0.0}, geometry,
+          pops::BoundaryTopology<kDim>::physical(), prototype,
+          pops::runtime::system::PreparedEmbeddedBoundaryMode::cut_cell, pops::EbThresholds{}, 7,
+          lane);
 
       pops::runtime::system::require_prepared_eb_active_mask_matches_phi(*prepared, lane);
 
@@ -200,10 +200,9 @@ int run_mpi_cutcell_multibox(int argc, char** argv) {
       for (std::size_t local = 0; local < residual.local_size(); ++local) {
         local_balance += pops::for_each_cell_reduce_sum(
             residual.box(local),
-            SumVolumeWeightedResidual<kDim>{
-                std::as_const(residual.fab(local)).view(),
-                prepared->active_mask().fab(local).view(),
-                prepared->inverse_volume_fraction().fab(local).view()});
+            SumVolumeWeightedResidual<kDim>{std::as_const(residual.fab(local)).view(),
+                                            prepared->active_mask().fab(local).view(),
+                                            prepared->inverse_volume_fraction().fab(local).view()});
       }
       const double global_balance = pops::all_reduce_sum(static_cast<double>(local_balance));
       EXPECT_NEAR(global_balance, 0.0, 2e-10);

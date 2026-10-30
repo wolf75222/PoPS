@@ -231,7 +231,8 @@ static int pops_run_test_program_abi_symbols(int argc, char** argv) {
   try {
     using HashFn = const char* (*)();
     const auto hash = reinterpret_cast<HashFn>(pops::dynlib::sym(h, "pops_program_hash"));
-    if (!hash) throw std::runtime_error("owned Program hash symbol is absent");
+    if (!hash)
+      throw std::runtime_error("owned Program hash symbol is absent");
     const auto clocks = pops::runtime::program::read_program_owned_clock_manifest(h, hash());
     if (clocks.primary_clock_identity != "symbol-presence-clock" ||
         clocks.logical_clock_identities != std::vector<std::string>{"symbol-presence-clock"})

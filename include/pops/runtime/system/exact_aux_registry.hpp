@@ -637,9 +637,11 @@ class ExactAuxiliaryRegistry final {
         for (const auto producer : dependency_providers_[topological_order_[reverse]])
           required[producer] = true;
     for (const auto consumer : topological_order_) {
-      if (!required[consumer]) continue;
+      if (!required[consumer])
+        continue;
       for (const auto producer : dependency_providers_[consumer])
-        if (due[producer]) due[consumer] = true;
+        if (due[producer])
+          due[consumer] = true;
       if (!due[consumer] && !accepted_points_[consumer])
         throw std::logic_error("auxiliary invalidation drain has an unpublished prerequisite");
     }

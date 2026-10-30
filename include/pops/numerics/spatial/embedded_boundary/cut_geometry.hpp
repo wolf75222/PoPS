@@ -151,7 +151,9 @@ POPS_HD inline Real unit_cube_halfspace(Real nx, Real ny, Real nz, Real alpha) {
   return volume / (Real(6) * nx * ny * nz);
 }
 
-POPS_HD inline Real abs_real(Real value) { return value < Real(0) ? -value : value; }
+POPS_HD inline Real abs_real(Real value) {
+  return value < Real(0) ? -value : value;
+}
 
 POPS_HD inline Real tet_volume(const Real a[3], const Real b[3], const Real c[3], const Real d[3]) {
   const Real ab0 = b[0] - a[0];
@@ -163,8 +165,8 @@ POPS_HD inline Real tet_volume(const Real a[3], const Real b[3], const Real c[3]
   const Real ad0 = d[0] - a[0];
   const Real ad1 = d[1] - a[1];
   const Real ad2 = d[2] - a[2];
-  const Real det = ab0 * (ac1 * ad2 - ac2 * ad1) - ab1 * (ac0 * ad2 - ac2 * ad0) +
-                   ab2 * (ac0 * ad1 - ac1 * ad0);
+  const Real det =
+      ab0 * (ac1 * ad2 - ac2 * ad1) - ab1 * (ac0 * ad2 - ac2 * ad0) + ab2 * (ac0 * ad1 - ac1 * ad0);
   return abs_real(det) / Real(6);
 }
 
@@ -581,9 +583,8 @@ POPS_HD inline Real reflux_cut_face_aperture(Real coarse_aperture, const Real* f
 inline constexpr int kMaxUniformCutCellFineChildren = 8;
 
 template <int Dim>
-POPS_HD CutCellFractions<Dim> cut_cell_fractions_from_phi_cell(FieldView<const Real, Dim> phi,
-                                                               const Index<Dim>& index,
-                                                               Real theta_min = kEbCutFractionFloor) {
+POPS_HD CutCellFractions<Dim> cut_cell_fractions_from_phi_cell(
+    FieldView<const Real, Dim> phi, const Index<Dim>& index, Real theta_min = kEbCutFractionFloor) {
   RealVector<Dim> lower{};
   RealVector<Dim> upper{};
   for (int axis = 0; axis < Dim; ++axis) {
@@ -607,8 +608,7 @@ POPS_HD Index<Dim> fine_child_index(const Index<Dim>& coarse,
   Index<Dim> fine{};
   int rem = child_id;
   for (int axis = 0; axis < Dim; ++axis) {
-    const std::int64_t rel =
-        static_cast<std::int64_t>(coarse[axis]) - mapping.coarse_origin[axis];
+    const std::int64_t rel = static_cast<std::int64_t>(coarse[axis]) - mapping.coarse_origin[axis];
     fine[axis] = static_cast<int>(static_cast<std::int64_t>(mapping.fine_origin[axis]) +
                                   rel * ratio[axis] + rem % ratio[axis]);
     rem /= ratio[axis];
@@ -647,9 +647,8 @@ struct RestrictCutCellVolumeKernel {
   POPS_HD void operator()(const Index<Dim>& coarse) const {
     CutCellFractions<Dim> fine[kMaxUniformCutCellFineChildren];
     for (int child = 0; child < fine_count; ++child)
-      fine[child] = cut_cell_fractions_from_phi_cell(fine_phi,
-                                                     fine_child_index(coarse, ratio, mapping, child),
-                                                     theta_min);
+      fine[child] = cut_cell_fractions_from_phi_cell(
+          fine_phi, fine_child_index(coarse, ratio, mapping, child), theta_min);
     coarse_volume(coarse) = restrict_cut_cell_fractions(fine, fine_count).volume_fraction;
   }
 };
@@ -703,10 +702,8 @@ struct RefluxCutCellFaceKernel {
           upper ? fine[child].face_upper[axis] : fine[child].face_lower[axis];
     }
     const CutCellFractions<Dim> restricted = restrict_cut_cell_fractions(fine, fine_count);
-    const Real coarse_aperture =
-        upper ? restricted.face_upper[axis] : restricted.face_lower[axis];
-    coarse_residual(coarse) =
-        reflux_cut_face_aperture(coarse_aperture, covering, covering_count);
+    const Real coarse_aperture = upper ? restricted.face_upper[axis] : restricted.face_lower[axis];
+    coarse_residual(coarse) = reflux_cut_face_aperture(coarse_aperture, covering, covering_count);
   }
 };
 
@@ -714,11 +711,12 @@ struct RefluxCutCellFaceKernel {
 
 /// Fine-to-coarse volume restriction on the existing CutCellFractions metric.
 template <int Dim>
-void apply_cut_cell_fraction_restriction(
-    FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_volume,
-    const Box<Dim>& coarse_region, const ::pops::amr::RefinementRatio<Dim>& ratio,
-    ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
-    Real theta_min = kEbCutFractionFloor) {
+void apply_cut_cell_fraction_restriction(FieldView<const Real, Dim> fine_phi,
+                                         FieldView<Real, Dim> coarse_volume,
+                                         const Box<Dim>& coarse_region,
+                                         const ::pops::amr::RefinementRatio<Dim>& ratio,
+                                         ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
+                                         Real theta_min = kEbCutFractionFloor) {
   const int fine_count = static_cast<int>(ratio.child_count());
   cut_geometry_detail::require_uniform_cut_cell_ratio(fine_count);
   ::pops::for_each_cell(coarse_region,
@@ -729,34 +727,33 @@ void apply_cut_cell_fraction_restriction(
 
 /// Coarse-to-fine volume injection on the existing CutCellFractions metric.
 template <int Dim>
-void apply_cut_cell_fraction_prolongation(
-    FieldView<const Real, Dim> coarse_volume, FieldView<Real, Dim> fine_volume,
-    const Box<Dim>& coarse_region, const ::pops::amr::RefinementRatio<Dim>& ratio,
-    ::pops::amr::transfer::IndexMapping<Dim> mapping = {}) {
+void apply_cut_cell_fraction_prolongation(FieldView<const Real, Dim> coarse_volume,
+                                          FieldView<Real, Dim> fine_volume,
+                                          const Box<Dim>& coarse_region,
+                                          const ::pops::amr::RefinementRatio<Dim>& ratio,
+                                          ::pops::amr::transfer::IndexMapping<Dim> mapping = {}) {
   const int fine_count = static_cast<int>(ratio.child_count());
   cut_geometry_detail::require_uniform_cut_cell_ratio(fine_count);
-  ::pops::for_each_cell(coarse_region,
-                        cut_geometry_detail::ProlongCutCellVolumeKernel<Dim>{
-                            coarse_volume, fine_volume, ratio, mapping, fine_count});
+  ::pops::for_each_cell(coarse_region, cut_geometry_detail::ProlongCutCellVolumeKernel<Dim>{
+                                           coarse_volume, fine_volume, ratio, mapping, fine_count});
   ::pops::device_fence();
 }
 
 /// Coarse-face aperture reflux residual on the existing CutCellFractions metric.
 template <int Dim>
-void apply_cut_cell_face_aperture_reflux(
-    FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_residual,
-    const Box<Dim>& coarse_region, int axis, bool upper,
-    const ::pops::amr::RefinementRatio<Dim>& ratio,
-    ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
-    Real theta_min = kEbCutFractionFloor) {
+void apply_cut_cell_face_aperture_reflux(FieldView<const Real, Dim> fine_phi,
+                                         FieldView<Real, Dim> coarse_residual,
+                                         const Box<Dim>& coarse_region, int axis, bool upper,
+                                         const ::pops::amr::RefinementRatio<Dim>& ratio,
+                                         ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
+                                         Real theta_min = kEbCutFractionFloor) {
   if (axis < 0 || axis >= Dim)
     throw std::invalid_argument("cut-cell face reflux axis is outside the compile-time rank");
   const int fine_count = static_cast<int>(ratio.child_count());
   cut_geometry_detail::require_uniform_cut_cell_ratio(fine_count);
-  ::pops::for_each_cell(coarse_region,
-                        cut_geometry_detail::RefluxCutCellFaceKernel<Dim>{
-                            fine_phi, coarse_residual, ratio, mapping, theta_min, fine_count, axis,
-                            upper});
+  ::pops::for_each_cell(coarse_region, cut_geometry_detail::RefluxCutCellFaceKernel<Dim>{
+                                           fine_phi, coarse_residual, ratio, mapping, theta_min,
+                                           fine_count, axis, upper});
   ::pops::device_fence();
 }
 
@@ -766,8 +763,7 @@ void apply_cut_cell_fraction_amr_transfer(
     FieldView<const Real, Dim> fine_phi, FieldView<Real, Dim> coarse_volume,
     FieldView<Real, Dim> fine_volume, FieldView<Real, Dim> coarse_aperture_residual,
     const Box<Dim>& coarse_region, const ::pops::amr::RefinementRatio<Dim>& ratio,
-    ::pops::amr::transfer::IndexMapping<Dim> mapping = {},
-    Real theta_min = kEbCutFractionFloor) {
+    ::pops::amr::transfer::IndexMapping<Dim> mapping = {}, Real theta_min = kEbCutFractionFloor) {
   apply_cut_cell_fraction_restriction(fine_phi, coarse_volume, coarse_region, ratio, mapping,
                                       theta_min);
   apply_cut_cell_fraction_prolongation(cut_geometry_detail::as_const_field(coarse_volume),

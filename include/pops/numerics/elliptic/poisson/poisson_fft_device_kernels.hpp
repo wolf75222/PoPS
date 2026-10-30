@@ -225,9 +225,9 @@ struct PoissonFFTDeviceKernels {
           const int frequency = last_axis_bit_reversed
                                     ? reverse_bits_(stored_frequency, device_cells[Dim - 1])
                                     : stored_frequency;
-          lambda +=
-              (2.0 * Kokkos::cos(2.0 * std::numbers::pi * frequency / device_cells[Dim - 1]) - 2.0) /
-              (device_spacing[Dim - 1] * device_spacing[Dim - 1]);
+          lambda += (2.0 * Kokkos::cos(2.0 * std::numbers::pi * frequency / device_cells[Dim - 1]) -
+                     2.0) /
+                    (device_spacing[Dim - 1] * device_spacing[Dim - 1]);
           values[ordinal] =
               Kokkos::abs(lambda) < 1e-14 ? complex_type(0.0, 0.0) : values[ordinal] / lambda;
         });

@@ -48,8 +48,10 @@ struct ConfiguredFieldOptions {
 ConfiguredFieldOptions decode_configured_field_options(std::string_view family_route,
                                                        const PreparedProviderOptions& options) {
   if (family_route == "red_black_geometric_mg") {
-    const auto decoded = runtime::system::decode_red_black_geometric_mg_options<kNativeDimension>(options);
-    return {static_cast<double>(decoded.relative_tolerance), static_cast<double>(decoded.absolute_tolerance), decoded.maximum_cycles};
+    const auto decoded =
+        runtime::system::decode_red_black_geometric_mg_options<kNativeDimension>(options);
+    return {static_cast<double>(decoded.relative_tolerance),
+            static_cast<double>(decoded.absolute_tolerance), decoded.maximum_cycles};
   }
   if (family_route == "geometric_mg")
     throw std::invalid_argument(
@@ -257,9 +259,10 @@ PhysicalBoundaryConditions<Dim> System<Dim>::prepared_field_boundary_conditions(
     throw std::out_of_range("Program field boundary names an invalid runtime block");
   if (provider_slot.empty() && p_->field_plans_.size() != 1)
     throw std::invalid_argument(
-        "Program field boundary requires an exact installed slot when the field plan is absent or ambiguous");
+        "Program field boundary requires an exact installed slot when the field plan is absent or "
+        "ambiguous");
   const auto found = provider_slot.empty() ? p_->field_plans_.begin()
-                                         : p_->field_plans_.find(std::string(provider_slot));
+                                           : p_->field_plans_.find(std::string(provider_slot));
   if (found == p_->field_plans_.end())
     throw std::invalid_argument("Program field boundary names an unknown installed slot");
   const auto& plan = found->second;
@@ -287,18 +290,23 @@ PhysicalBoundaryConditions<Dim> System<Dim>::prepared_field_boundary_conditions(
     for (std::size_t ordinal : {lower, upper}) {
       const auto& kind = plan.boundary_kind[ordinal];
       auto& face = faces[ordinal];
-      if (kind == "periodic") face.kind = PhysicalBoundaryKind::external;
-      else if (kind == "dirichlet") face.kind = PhysicalBoundaryKind::dirichlet;
-      else if (kind == "neumann") face.kind = PhysicalBoundaryKind::neumann;
-      else if (kind == "mixed") face.kind = PhysicalBoundaryKind::robin;
-      else throw std::invalid_argument("Program field boundary kind is unsupported");
+      if (kind == "periodic")
+        face.kind = PhysicalBoundaryKind::external;
+      else if (kind == "dirichlet")
+        face.kind = PhysicalBoundaryKind::dirichlet;
+      else if (kind == "neumann")
+        face.kind = PhysicalBoundaryKind::neumann;
+      else if (kind == "mixed")
+        face.kind = PhysicalBoundaryKind::robin;
+      else
+        throw std::invalid_argument("Program field boundary kind is unsupported");
       face.alpha = static_cast<Real>(plan.boundary_alpha[ordinal]);
       face.beta = static_cast<Real>(plan.boundary_beta[ordinal]);
       face.value = static_cast<Real>(plan.boundary_value[ordinal]);
     }
   }
   return PhysicalBoundaryConditions<Dim>(BoundaryTopology<Dim>::axis_periodic(periodic), faces,
-                                          spacing);
+                                         spacing);
 }
 
 template <int Dim>

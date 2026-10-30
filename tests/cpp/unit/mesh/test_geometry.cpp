@@ -23,9 +23,9 @@ TEST(test_geometry, swept_interval_uses_actual_endpoints_and_preserves_constant_
   Real old_total = 0, new_total = 0, amount_total = 0;
   for (int cell = 0; cell < 3; ++cell) {
     const auto geometry = pops::SweptInterval::prepare(
-        old_faces[cell], old_faces[cell + 1],
-        old_faces[cell] + displacements[cell], old_faces[cell + 1] + displacements[cell + 1],
-        displacements[cell], displacements[cell + 1], tol);
+        old_faces[cell], old_faces[cell + 1], old_faces[cell] + displacements[cell],
+        old_faces[cell + 1] + displacements[cell + 1], displacements[cell], displacements[cell + 1],
+        tol);
     const Real amount = geometry.updated_amount(density * geometry.old_measure(), density, density,
                                                 Real(.12), Real(.12), 0);
     EXPECT_NEAR(amount / geometry.new_measure(), density, tol * density);
@@ -42,18 +42,17 @@ TEST(test_geometry, swept_interval_refuses_stale_duration_even_with_matching_tot
   // Both cells still sum to length one. The dt=.1 sweep is nevertheless
   // incompatible with the actual endpoints of the dt=.2 attempt.
   const Real tol = 32 * std::numeric_limits<Real>::epsilon();
-  EXPECT_THROW((void)pops::SweptInterval::prepare(0, Real(.5), 0, Real(.52),
-                                                  0, Real(.01), tol), std::invalid_argument);
-  EXPECT_THROW((void)pops::SweptInterval::prepare(0, 1, 0, 0, 0, -1, tol),
+  EXPECT_THROW((void)pops::SweptInterval::prepare(0, Real(.5), 0, Real(.52), 0, Real(.01), tol),
                std::invalid_argument);
+  EXPECT_THROW((void)pops::SweptInterval::prepare(0, 1, 0, 0, 0, -1, tol), std::invalid_argument);
 }
 
 TEST(test_geometry, swept_interval_physical_flux_and_source_are_integrated_exactly_once) {
-  const auto geometry = pops::SweptInterval::prepare(0, Real(.5), 0, Real(.6),
-                                                     0, Real(.1), Real(1e-6));
+  const auto geometry =
+      pops::SweptInterval::prepare(0, Real(.5), 0, Real(.6), 0, Real(.1), Real(1e-6));
   // Q=1, physical net=.3, mesh amount=.3, source=.2 -> Q+=1.2.
-  EXPECT_NEAR(geometry.updated_amount(1, 2, 3, Real(.1), Real(.4), Real(.2)),
-              Real(1.2), 16 * std::numeric_limits<Real>::epsilon());
+  EXPECT_NEAR(geometry.updated_amount(1, 2, 3, Real(.1), Real(.4), Real(.2)), Real(1.2),
+              16 * std::numeric_limits<Real>::epsilon());
 }
 
 static_assert(Geometry<1>::rank == 1 && Geometry<2>::rank == 2 && Geometry<3>::rank == 3);

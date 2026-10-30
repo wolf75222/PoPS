@@ -69,9 +69,8 @@ class FieldNewtonKrylovWorkspace final {
 
   template <class ResidualProvider, class JvpProvider, class GaugeProvider>
   SolveReport solve(field_type& iterate, ResidualProvider&& evaluate_residual,
-                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge,
-                    const ExecutionLane& lane, bool guard_local = false,
-                    bool verify_true_correction = false) {
+                    JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge, const ExecutionLane& lane,
+                    bool guard_local = false, bool verify_true_correction = false) {
     auto&& residual_provider = evaluate_residual;
     auto&& jvp_provider = apply_jvp;
     auto&& gauge_provider = apply_gauge;
@@ -208,14 +207,18 @@ class FieldNewtonKrylovWorkspace final {
         ++result.evaluations;
         for (int row = 0; row <= column; ++row) {
           Real product = 0;
-          local_phase_(lane, [&] { product = dot_all_local(work_, basis_[static_cast<std::size_t>(row)]); });
+          local_phase_(
+              lane, [&] { product = dot_all_local(work_, basis_[static_cast<std::size_t>(row)]); });
           h_(row, column) = static_cast<Real>(all_reduce_sum(product, lane));
-          local_phase_(lane, [&] { saxpy(work_, -h_(row, column), basis_[static_cast<std::size_t>(row)]); });
+          local_phase_(
+              lane, [&] { saxpy(work_, -h_(row, column), basis_[static_cast<std::size_t>(row)]); });
         }
         h_(column + 1, column) = norm_(work_, lane);
         if (h_(column + 1, column) > Real(0)) {
           copy_(work_, basis_[static_cast<std::size_t>(column + 1)], lane);
-          local_phase_(lane, [&] { scale(basis_[static_cast<std::size_t>(column + 1)], Real(1) / h_(column + 1, column)); });
+          local_phase_(lane, [&] {
+            scale(basis_[static_cast<std::size_t>(column + 1)], Real(1) / h_(column + 1, column));
+          });
         }
 
         for (int rotation = 0; rotation < column; ++rotation) {
@@ -253,7 +256,8 @@ class FieldNewtonKrylovWorkspace final {
         return result;
       bool updated = false;
       local_phase_(lane, [&] { updated = update_correction_(used); });
-      if (!updated) return result;
+      if (!updated)
+        return result;
       if (cycle_converged && !verify_true_correction_) {
         result.converged = true;
         return result;
@@ -300,11 +304,11 @@ class FieldNewtonKrylovWorkspace final {
 
   void copy_(const field_type& source, field_type& destination, const ExecutionLane& lane) {
     local_phase_(lane, [&] {
-    if (source.layout() != destination.layout() ||
-        source.distribution() != destination.distribution() ||
-        source.local_rank() != destination.local_rank() || source.ncomp() != destination.ncomp())
-      throw std::invalid_argument("field Newton workspace layout differs from its vector");
-    lincomb(destination, Real(1), source, Real(0), source);
+      if (source.layout() != destination.layout() ||
+          source.distribution() != destination.distribution() ||
+          source.local_rank() != destination.local_rank() || source.ncomp() != destination.ncomp())
+        throw std::invalid_argument("field Newton workspace layout differs from its vector");
+      lincomb(destination, Real(1), source, Real(0), source);
     });
   }
 
@@ -328,10 +332,22 @@ class FieldNewtonKrylovWorkspace final {
 
   template <class Operation>
   void local_phase_(const ExecutionLane& lane, Operation&& operation) const {
-    if (!guard_local_) { operation(); return; }
+    if (!guard_local_) {
+      operation();
+      return;
+    }
     std::exception_ptr error;
-    try { operation(); } catch (...) { error = std::current_exception(); }
-    try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
+    try {
+      operation();
+    } catch (...) {
+      error = std::current_exception();
+    }
+    try {
+      Kokkos::fence();
+    } catch (...) {
+      if (!error)
+        error = std::current_exception();
+    }
     collectively_rethrow_exception(error, lane, "field Newton candidate local phase");
   }
 

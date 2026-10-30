@@ -290,10 +290,12 @@ TEST(test_amr_multiblock_implicit_transaction,
   };
   const auto accepted_carriers = system.checkpoint_state_carriers();
   system.begin_step_transaction();
-  EXPECT_THROW(system.prepare_checkpoint_capture(), std::exception); // No completed advance yet.
+  EXPECT_THROW(system.prepare_checkpoint_capture(), std::exception);  // No completed advance yet.
   system.set_clock(dt + 0.1, 2);
-  EXPECT_THROW(system.prepare_checkpoint_capture(), std::exception); // A setter cannot mint completion.
-  system.rollback_step_transaction(); // Restore the genuine clock/cadence image, not only its time.
+  EXPECT_THROW(system.prepare_checkpoint_capture(),
+               std::exception);  // A setter cannot mint completion.
+  system
+      .rollback_step_transaction();  // Restore the genuine clock/cadence image, not only its time.
   system.begin_step_transaction();
   nested_steps();
   const auto attempted_slow = system.block_level_state_global("slow", 0);
@@ -342,7 +344,8 @@ TEST(test_amr_multiblock_implicit_transaction,
   const auto final_carriers = system.prepared_checkpoint_state_carriers(final_capture);
   system.commit_step_transaction();
   EXPECT_NO_THROW(system.validate_committed_checkpoint_capture(final_capture));
-  EXPECT_THROW(system.checkpoint_state_carriers(), std::exception); // Commit alone is not finalize.
+  EXPECT_THROW(system.checkpoint_state_carriers(),
+               std::exception);  // Commit alone is not finalize.
   system.finalize_step_transaction();
   EXPECT_THROW(system.validate_committed_checkpoint_capture(final_capture), std::exception);
   EXPECT_EQ(system.checkpoint_state_carriers(), final_carriers);

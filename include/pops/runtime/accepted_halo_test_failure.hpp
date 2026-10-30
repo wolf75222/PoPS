@@ -12,7 +12,8 @@ struct AcceptedHaloTestFailureRequest {
   int block = -1;
   int level = -1;
   int rank = -1;
-  friend bool operator==(const AcceptedHaloTestFailureRequest&, const AcceptedHaloTestFailureRequest&) = default;
+  friend bool operator==(const AcceptedHaloTestFailureRequest&,
+                         const AcceptedHaloTestFailureRequest&) = default;
 };
 struct AcceptedHaloTestFailureReceipt {
   AcceptedHaloTestFailureRequest request;
@@ -28,10 +29,12 @@ struct AcceptedHaloTestFailureReceipt {
   double dt = 0;
 };
 inline void validate_accepted_halo_test_failure_request(const AcceptedHaloTestFailureRequest& r,
-                                                       std::size_t blocks, std::size_t levels, int ranks) {
+                                                        std::size_t blocks, std::size_t levels,
+                                                        int ranks) {
   if (r.version != 1 || r.phase != AcceptedHaloTestFailurePhase::after_block_level_preparation ||
       r.block < 0 || static_cast<std::size_t>(r.block) >= blocks || r.level < 0 ||
       static_cast<std::size_t>(r.level) >= levels || r.rank < 0 || r.rank >= ranks)
-    throw std::invalid_argument("accepted halo test failure request has unsupported version/phase/target");
+    throw std::invalid_argument(
+        "accepted halo test failure request has unsupported version/phase/target");
 }
-} // namespace pops
+}  // namespace pops

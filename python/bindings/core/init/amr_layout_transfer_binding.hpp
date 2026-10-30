@@ -168,21 +168,23 @@ inline void bind(py::module_& module, py::class_<pops::AmrSystem<pops::kNativeDi
       .def("reject_attempt", &Session::reject_attempt, py::arg("generation"), py::arg("attempt"))
       .def("finalize_transaction", &Session::finalize_transaction, py::arg("generation"))
       .def("rollback_transaction", &Session::rollback_transaction, py::arg("generation"));
-  cls.def("_layout_transfer_scalar_capacity_budget",
-          [](pops::AmrSystem<pops::kNativeDimension>& source,
-             pops::AmrSystem<pops::kNativeDimension>& target, const std::string& source_field,
-             const std::string& target_field, std::size_t source_cells, std::size_t target_cells) {
-            const auto budget = Session::scalar_capacity_budget(
-                source, target, source_field, target_field, source_cells, target_cells);
-            py::dict result;
-            result["destination_cells"] = budget.destination_cells;
-            result["intersection_probes"] = budget.intersection_probes;
-            result["canonical_jobs"] = budget.canonical_jobs;
-            result["transported_elements"] = budget.transported_elements;
-            result["prepared_bytes"] = budget.prepared_bytes;
-            return result;
-          }, py::arg("target"), py::arg("source_field"), py::arg("target_field"),
-          py::arg("source_cells"), py::arg("target_cells"));
+  cls.def(
+      "_layout_transfer_scalar_capacity_budget",
+      [](pops::AmrSystem<pops::kNativeDimension>& source,
+         pops::AmrSystem<pops::kNativeDimension>& target, const std::string& source_field,
+         const std::string& target_field, std::size_t source_cells, std::size_t target_cells) {
+        const auto budget = Session::scalar_capacity_budget(
+            source, target, source_field, target_field, source_cells, target_cells);
+        py::dict result;
+        result["destination_cells"] = budget.destination_cells;
+        result["intersection_probes"] = budget.intersection_probes;
+        result["canonical_jobs"] = budget.canonical_jobs;
+        result["transported_elements"] = budget.transported_elements;
+        result["prepared_bytes"] = budget.prepared_bytes;
+        return result;
+      },
+      py::arg("target"), py::arg("source_field"), py::arg("target_field"), py::arg("source_cells"),
+      py::arg("target_cells"));
   cls.def("_layout_transfer_capacity_budget",
           [](pops::AmrSystem<pops::kNativeDimension>& source,
              pops::AmrSystem<pops::kNativeDimension>& target, const std::string& source_block,
@@ -209,18 +211,22 @@ inline void bind(py::module_& module, py::class_<pops::AmrSystem<pops::kNativeDi
         try {
           prepared_spec.emplace(physical_specification(spec, physical));
           prepared_execution.emplace(execution(context));
-        } catch (...) { error = std::current_exception(); }
+        } catch (...) {
+          error = std::current_exception();
+        }
 #ifdef POPS_HAS_MPI
         const auto& world = pops::WorldCommunicator::world();
         if (pops::all_reduce_max(error ? 1L : 0L, world.communicator()) != 0) {
-          if (world.size() == 1 && error) std::rethrow_exception(error);
+          if (world.size() == 1 && error)
+            std::rethrow_exception(error);
           throw std::runtime_error("AMR transfer DTO preparation failed collectively");
         }
 #else
-        if (error) std::rethrow_exception(error);
+        if (error)
+          std::rethrow_exception(error);
 #endif
-        return Session::prepare(source, target, std::move(component),
-                                std::move(*prepared_spec), std::move(*prepared_execution));
+        return Session::prepare(source, target, std::move(component), std::move(*prepared_spec),
+                                std::move(*prepared_execution));
       },
       py::arg("target"), py::arg("component"), py::arg("spec"), py::arg("execution"),
       py::arg("physical"), py::keep_alive<0, 1>(), py::keep_alive<0, 2>());
