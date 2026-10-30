@@ -1924,6 +1924,20 @@ TEST(ContinuationImage, DeviceArrayHostCopiesAreExplicitAndCounted) {
   EXPECT_EQ(copy(1), 5);
   EXPECT_EQ(residency.device_to_host_bytes.load(), 32u);
   EXPECT_EQ(residency.transfers.load(), 3u);
+  // A host loop copies the Array once, one counted copy per column, typed by its element.
+  const auto lane = ExecutionLane::world();
+  fd::HostView<std::int64_t> loop_copy;
+  finite_collective::to_host(array, &residency, lane, loop_copy);
+  EXPECT_EQ(loop_copy.label(), "pops_finite_host:k");
+  EXPECT_EQ(loop_copy(2), 6);
+  EXPECT_EQ(residency.device_to_host_bytes.load(), 56u);
+  EXPECT_EQ(residency.transfers.load(), 4u);
+  fd::HostView<Real> other_type;
+  EXPECT_THROW(finite_collective::to_host(array, &residency, lane, other_type), std::logic_error);
+  fd::HostView<std::int64_t> extra;
+  EXPECT_THROW(finite_collective::to_host(array, &residency, lane, loop_copy, extra),
+               std::logic_error);
+  EXPECT_EQ(residency.transfers.load(), 4u);
   // The first failing lane is one control scalar reduced on the device.
   finite_kokkos::View<unsigned char> flags("pops_finite_control:flags", 5);
   Kokkos::deep_copy(flags, static_cast<unsigned char>(0));

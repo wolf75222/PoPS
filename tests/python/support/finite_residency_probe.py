@@ -7,9 +7,11 @@ POPS_KOKKOS_RESIDENCY_OUTPUT at the file where that library writes one line per 
 
 KIND "device" maps, gathers and folds a replicated Array: every array operation has a device
 lowering, so no array byte may cross inside a step. KIND "host" adds a map whose body creates a
-domain, an operation without a device lowering: its host evaluation reads the device Array one
-element at a time and publishes its result, the negative control which shows that the library
-sees array data cross.
+domain, an operation without a device lowering: its host evaluation copies the device Array it
+reads to the host once and publishes its result, the negative control which shows that the
+library sees array data cross. KIND "fold" adds a fold whose carry is an Array, which the host
+sequences: each iteration reads one element of its carry, and the Array that the fold reads
+without redefining it is copied once.
 """
 from __future__ import annotations
 
@@ -23,7 +25,8 @@ import numpy as np
 STEPS = 2
 DT = 0.01
 COUNT = 257
-KINDS = ("device", "host")
+FOLDS = 4
+KINDS = ("device", "host", "fold")
 
 
 def build(kind):
@@ -55,6 +58,18 @@ def build(kind):
                              even=element["even"])
 
         values = p.map(domain, shifted)
+    elif kind == "fold":
+        weights = computed
+
+        # The carry is unchanged: its element 0 is computed[COUNT - 1] and weights[k] is computed[k].
+        def iteration(b, old, k):
+            first = old[b.index(b.domain(old), 0)]
+            weight = weights[b.index(domain, k)]
+            shift = first["exact"] - weight["exact"] - (COUNT - 1 - k)
+            return b.map(b.domain(old), lambda c, i: c.product(
+                exact=old[i]["exact"] + shift, value=old[i]["value"], even=old[i]["even"]))
+
+        values = p.fold(values, FOLDS, iteration)
     total = p.reduce(values, p.product(k=p.int64(0), x=p.float64(0), position=p.int64(0)),
                      lambda b, s, x: b.product(
                          k=s["k"] + (x["exact"] - big) * (s["position"] + 1),
@@ -94,7 +109,7 @@ def _counter(dso, name, restype=ctypes.c_uint64):
 def main(argv):
     if len(argv) != 2 or argv[0] not in KINDS:
         raise SystemExit("usage: python -m tests.python.support.finite_residency_probe "
-                         "{device,host} REPORT")
+                         "{device,host,fold} REPORT")
     from tests.python.support.api_v02_native import execute_case
     from tests.python.support.public_native_profile import native_profile
 

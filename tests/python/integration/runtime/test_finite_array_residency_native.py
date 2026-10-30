@@ -3,8 +3,9 @@
 The Kokkos Tools library of ``tests/python/support/kokkos_residency_tool.cpp`` reports the deep
 copies that each step makes. A Program whose array operations all have a device lowering moves no
 array byte inside a step. A Program with one host-placed map is the negative control: the library
-sees its element reads and its publication, and the residency counters of the Program DSO count
-the same bytes (PF2).
+sees the one host copy of the Array it reads and its publication, and the residency counters of
+the Program DSO count the same bytes (PF2). A fold sequenced on the host reads one element of its
+carry per iteration and copies once the Array it reads without redefining it.
 """
 import json
 import os
@@ -83,17 +84,37 @@ def test_host_placed_map_is_seen_crossing_and_is_counted(
         residency_tool, tmp_path, isolated_native_cache, kokkos_root, record_property):
     del isolated_native_cache, kokkos_root
     _, steps, report = _run("host", residency_tool, tmp_path)
-    reads = LEAVES * probe.COUNT
     column_bytes = probe.COUNT * ELEMENT_BYTES
     for step in steps:
-        # One read per leaf of each element, then one publication per column.
-        assert step["array_data"] == {"count": reads + LEAVES, "bytes": 2 * column_bytes}, step
+        # One host copy per column of the Array that the map reads, then one publication per
+        # column, instead of one read per leaf of each element.
+        assert step["array_data"] == {"count": 2 * LEAVES, "bytes": 2 * column_bytes}, step
     assert report["pops_finite_host_map_count"] == probe.STEPS
     assert report["pops_finite_device_to_host_bytes"] == probe.STEPS * column_bytes
     assert report["pops_finite_host_to_device_bytes"] == probe.STEPS * column_bytes
-    assert report["pops_finite_host_transfer_count"] == probe.STEPS * (reads + LEAVES)
+    assert report["pops_finite_host_transfer_count"] == probe.STEPS * 2 * LEAVES
     assert sum(step["array_data"]["bytes"] for step in steps) == (
         report["pops_finite_device_to_host_bytes"] + report["pops_finite_host_to_device_bytes"])
     # The host map publishes its columns once into the target memory space.
     assert _allocations(steps) == {TARGET_SPACES[report["execution_space"]]: 3 * LEAVES * probe.STEPS}
+    record_property("residency_steps", json.dumps(steps, sort_keys=True))
+
+
+def test_host_fold_reads_its_carry_and_copies_what_it_does_not_redefine_once(
+        residency_tool, tmp_path, isolated_native_cache, kokkos_root, record_property):
+    del isolated_native_cache, kokkos_root
+    _, steps, report = _run("fold", residency_tool, tmp_path)
+    carry_reads = LEAVES * probe.FOLDS
+    copied = (probe.FOLDS + probe.COUNT) * ELEMENT_BYTES
+    for step in steps:
+        # One read per leaf of the carry element of each iteration, then one host copy per
+        # column of the Array that the fold reads without redefining it.
+        assert step["array_data"] == {"count": carry_reads + LEAVES, "bytes": copied}, step
+    assert report["pops_finite_host_map_count"] == 0
+    assert report["pops_finite_device_to_host_bytes"] == probe.STEPS * copied
+    assert report["pops_finite_host_to_device_bytes"] == 0
+    assert report["pops_finite_host_transfer_count"] == probe.STEPS * (carry_reads + LEAVES)
+    # Each iteration maps the carry on the device, after the two maps of the probe.
+    assert _allocations(steps) == {
+        TARGET_SPACES[report["execution_space"]]: (2 + probe.FOLDS) * LEAVES * probe.STEPS}
     record_property("residency_steps", json.dumps(steps, sort_keys=True))

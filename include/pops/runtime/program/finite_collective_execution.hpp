@@ -170,6 +170,23 @@ POPS_FINITE_HOST_NOINLINE void publish_host(finite_device::Array& target,
       lane);
 }
 
+// A host loop that reads a device Array it does not redefine copies the Array once:
+// one counted copy per column instead of one element read per iteration (PF2).
+template <class... T>
+POPS_FINITE_HOST_NOINLINE void to_host(const finite_device::Array& array,
+                                       finite_device::Residency* residency,
+                                       const ExecutionLane& lane,
+                                       finite_device::HostView<T>&... columns) {
+  allocation_phase(
+      [&] {
+        finite_device::require_columns(array, sizeof...(T));
+        std::size_t index = 0;
+        ((columns = finite_device::host_copy(finite_device::column<T>(array, index++), residency)),
+         ...);
+      },
+      lane);
+}
+
 template <class T>
 POPS_FINITE_HOST_NOINLINE T read(const finite_device::Array& array, std::size_t column,
                                  std::int64_t offset, finite_device::Residency* residency,

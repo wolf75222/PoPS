@@ -112,6 +112,17 @@ inline Array from_host(FiniteDomainRef domain, const std::vector<HostColumn>& ho
   return publish(std::move(domain), std::move(columns));
 }
 
+// One counted copy of a device column into a new host view.
+template <class T>
+HostView<T> host_copy(const finite_kokkos::View<const T>& values, Residency* residency) {
+  HostView<T> copy(
+      Kokkos::view_alloc(Kokkos::WithoutInitializing, relabel(values.label(), kHostLabel)),
+      values.extent(0));
+  Kokkos::deep_copy(copy, values);
+  record(residency, values.extent(0) * sizeof(T), true);
+  return copy;
+}
+
 inline std::vector<HostColumn> to_host(const Array& array, Residency* residency) {
   if (!array.domain || !array.columns)
     throw std::logic_error("finite device Array has no storage");
@@ -120,15 +131,9 @@ inline std::vector<HostColumn> to_host(const Array& array, Residency* residency)
   for (const auto& source : *array.columns)
     std::visit(
         [&](const auto& values) {
-          using Value = typename std::decay_t<decltype(values)>::non_const_value_type;
           if (values.extent(0) != static_cast<std::size_t>(array.domain->size))
             throw std::logic_error("finite device Array column differs from its domain");
-          HostView<Value> copy(
-              Kokkos::view_alloc(Kokkos::WithoutInitializing, relabel(values.label(), kHostLabel)),
-              values.extent(0));
-          Kokkos::deep_copy(copy, values);
-          record(residency, values.extent(0) * sizeof(Value), true);
-          host.emplace_back(std::move(copy));
+          host.emplace_back(host_copy(values, residency));
         },
         source);
   return host;

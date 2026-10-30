@@ -256,7 +256,7 @@ def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plan
     _check_region_effects(value.attrs.get("cond_block", ()))
     _check_region_effects(value.attrs["body_block"])
     if value.op == "structured_fold":
-        from .program_emit_finite_kokkos import emit_ordered, reads_arrays
+        from .program_emit_finite_kokkos import emit_ordered, host_snapshots, reads_arrays
         # An ordered fold over device Arrays runs as one serial device region (IR4).
         if reads_arrays(value) and emit_ordered(value, var, lines):
             return
@@ -274,8 +274,10 @@ def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plan
         _uniform_int(budget, lines, "fold capacity differs across execution lane")
         _reject_if("%s < 0 || %s < 0 || %s > %s" % (bound, budget, bound, budget),
                    lines, "fold count outside declared capacity")
+        snapshots = host_snapshots(value, var, lines)
         lines.append("for (; %s < %s; ++%s) {" % (count, bound, count))
         sub = dict(var)
+        sub.update(snapshots)
         sub[value.attrs["body_argument"].id] = current
         sub[value.attrs["body_index"].id] = count
         body = []

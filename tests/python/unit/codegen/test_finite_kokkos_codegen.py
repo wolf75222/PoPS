@@ -279,3 +279,88 @@ def test_host_array_access_reads_each_leaf_once_and_counts_it():
     assert len(reads) == 2
     assert all('&pops_finite_residency, ctx.prepared_execution_lane())' in line for line in reads)
     assert 'Array access requires the same live domain instance and an in-range Index' in cpp
+
+
+def _loop(cpp, header):
+    """The braces of the loop that starts at header, outside comments and string literals."""
+    start = cpp.index(header)
+    position, depth = cpp.index('{', start), 0
+    while True:
+        if cpp.startswith('//', position):
+            position = cpp.index('\n', position)
+        elif cpp[position] == '"':
+            position += 1
+            while cpp[position] != '"':
+                position += 2 if cpp[position] == '\\' else 1
+        elif cpp[position] in '{}':
+            depth += 1 if cpp[position] == '{' else -1
+            if depth == 0:
+                return start, cpp[start:position + 1]
+        position += 1
+
+
+def test_host_placed_map_copies_the_device_array_it_reads_once():
+    def build(p, q):
+        domain = p.range_set(4, capacity=4, ownership="replicated")
+        values = p.map(domain, lambda b,i:b.product(k=b.index_value(i), x=b.float64(b.index_value(i))))
+        shifted = p.map(domain, lambda b,i:values[i]['x'] + b.float64(
+            b.size(b.range_set(2, capacity=2, ownership='replicated'))))
+        return p.reduce(shifted, p.float64(0), lambda b,s,x:s+x, order='ascending')*q.n
+    cpp = _program("host_map_array_copy", build)
+    device, host = (row['ssa'] for row in sorted(_rows(cpp, 'pops-finite-map-placement@1'),
+                                                 key=lambda row: row['backend'] == 'host'))
+    columns = ['finite_%d_host_read_0_%d' % (host, j) for j in range(2)]
+    start, loop = _loop(cpp, 'for (std::int64_t finite_%d_index = 0; ' % host)
+    for declaration in ('HostView<std::int64_t> %s;' % columns[0], 'HostView<pops::Real> %s;' % columns[1],
+                        'bool finite_%d_host_read_0_ready = false;' % host):
+        assert -1 < cpp.index(declaration) < start
+    # The first read of the loop copies each column once, counted; no element read remains.
+    assert loop.count('if (!finite_%d_host_read_0_ready) {' % host) == 1
+    assert loop.count('finite_collective::to_host(finite_%d_array, &pops_finite_residency, '
+                      'ctx.prepared_execution_lane(), %s, %s);' % (device, *columns)) == 1
+    assert '%s(std::size_t((finite_%d_checked).offset))' % (columns[1], host) in loop
+    assert 'finite_collective::read<' not in cpp
+
+
+def test_host_fold_reads_its_carry_by_element_and_copies_the_other_array_once():
+    def build(p, q):
+        domain = p.range_set(3, capacity=3, ownership="replicated")
+        weights = p.map(domain, lambda b,i:b.float64(b.index_value(i)))
+        start = p.map(domain, lambda b,i:b.float64(1))
+        def step(b, old, k):
+            shift = old[b.index(b.domain(old), 0)] + weights[b.index(domain, k)]
+            return b.map(b.domain(old), lambda c,i:old[i] + shift)
+        return p.reduce(p.fold(start, 2, step), p.float64(0), lambda b,s,x:s+x,
+                        order='ascending')*q.n
+    cpp = _program("host_fold_array_copy", build)
+    (fold,) = [row['ssa'] for row in _rows(cpp, 'pops-finite-ordered-placement@1')
+               if row['backend'] == 'host']
+    weights = min(row['ssa'] for row in _rows(cpp, 'pops-finite-map-placement@1'))
+    start, loop = _loop(cpp, 'for (; iteration_%d < ' % fold)
+    assert -1 < cpp.index('HostView<pops::Real> finite_%d_host_read_0_0;' % fold) < start
+    # The carry changes every iteration: one counted element read. The other Array: one copy.
+    assert loop.count('finite_collective::read<pops::Real>(carry_%d_s0, ' % fold) == 1
+    assert loop.count('finite_collective::to_host(finite_%d_array, &pops_finite_residency, '
+                      'ctx.prepared_execution_lane(), finite_%d_host_read_0_0);' % (weights, fold)) == 1
+    assert cpp.count('finite_collective::read<') == 1
+    assert cpp.count('finite_collective::to_host(') == 1
+
+
+def test_mirror_copies_read_only_labelled_control_views():
+    # On Serial the mirror of a view in HostSpace is the view itself, with no Kokkos Tools copy
+    # event: array data copied this way would escape the DM8 test, so only control views may be.
+    def build(p, q):
+        domain = p.range_set(5, capacity=8, ownership="replicated")
+        values = p.map(domain, lambda b,i:b.float64(b.index_value(i)))
+        scanned = p.scan(domain, p.int64(0), lambda b,s,i:b.product(
+            state=s+b.index_value(i), value=values[i]), order="ascending")
+        total = p.reduce(scanned["values"], p.float64(0), lambda b,s,x:s+x, order='ascending')
+        return total*q.n
+    cpp = _program("control_mirror_copies", build)
+    copies = re.findall(r'finite_collective::mirror_copy\((\w+), (\w+), ', cpp)
+    assert len(copies) == 2
+    for host, source in copies:
+        assert host == source + '_host'
+        assert re.search(r'finite_collective::allocate_view\(%s, \w+, "pops_finite_control:%s", '
+                         % (source, source), cpp)
+    assert 'Kokkos::deep_copy' not in cpp and 'create_mirror' not in cpp

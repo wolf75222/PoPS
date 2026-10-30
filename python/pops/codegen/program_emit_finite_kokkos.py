@@ -789,3 +789,95 @@ def emit_ordered(value, var, lines):
     lines.append("}")
     var[value.id] = {"state": carried, "values": published} if scan else carried
     return True
+
+
+# Host loops (PF2, C34): a map or scan placed on the host and a fold sequenced on the host copy each
+# device Array that they read but do not redefine once per entry, at its first read, instead of
+# reading it one element per iteration. The loop's own carry changes every iteration: its elements
+# stay one-element reads.
+HOST_COLUMNS = "finite_host_columns"
+_ARGUMENTS = ("body_argument", "body_index", "cond_argument")
+_HOST_REGIONS = frozenset(("branch", "result_match", "capture_result", "structured_iterate"))
+
+
+def _host_reads(block):
+    """finite_at operations that the host executes in a block, through nested host regions."""
+    stack = [iter(block)]
+    while stack:
+        node = next(stack[-1], None)
+        if node is None:
+            stack.pop()
+            continue
+        if node.op == "finite_at":
+            yield node
+            continue
+        if node.op in _HOST_REGIONS:
+            keys = ("cond_block", "body_block", "true_block", "false_block")
+        elif node.op == "finite_map":
+            keys = ("body_block",) if admission(node)[0] is not None else ()
+        elif node.op == "finite_scan":
+            keys = ("body_block",) if ordered_admission(node)[0] is not None else ()
+        elif node.op == "structured_fold":
+            device = reads_arrays(node) and ordered_admission(node)[0] is None
+            keys = () if device else ("body_block",)
+        else:
+            keys = ()
+        stack.extend(iter(node.attrs[key]) for key in reversed(keys) if key in node.attrs)
+
+
+def _defined(region):
+    """Ids of the values that a region defines: its arguments and its nested operations."""
+    defined, stack = set(), [region]
+    while stack:
+        node = stack.pop()
+        defined.update(node.attrs[key].id for key in _ARGUMENTS if key in node.attrs)
+        for key, block in node.attrs.items():
+            if key.endswith("_block") and isinstance(block, (list, tuple)):
+                defined.update(item.id for item in block)
+                stack.extend(block)
+    return defined
+
+
+def _invariant(value, var, defined):
+    """The binding of a value that the region reads without redefining it, else None."""
+    path = []
+    while value.id in defined:
+        if value.op != "product_get":
+            return None
+        path.append(value.attrs["field"])
+        value = value.inputs[0]
+    binding = var.get(value.id)
+    for field in reversed(path):
+        if not isinstance(binding, dict):
+            return None
+        binding = binding.get(field)
+    return binding
+
+
+def host_snapshots(region, var, lines):
+    """Declare the host copies of the device Arrays that a host loop reads without redefining.
+
+    Returns their bindings for the loop body: finite_at fills the copy at the first read of each
+    entry into the loop, so an Array that no iteration reads is never copied.
+    """
+    defined = _defined(region)
+    snapshots = {}
+    for node in _host_reads(region.attrs["body_block"]):
+        signature = value_signature(node.inputs[0])
+        if not device_array(signature):
+            continue
+        token = _invariant(node.inputs[0], var, defined)
+        key = (HOST_COLUMNS, token)
+        if not isinstance(token, str) or key in var or key in snapshots:
+            continue
+        prefix = "finite_%d_host_read_%d" % (region.id, len(snapshots))
+        columns = []
+        for leaf, _ in _leaves(signature["element"], None):
+            columns.append("%s_%d" % (prefix, len(columns)))
+            lines.append(
+                "pops::runtime::program::finite_device::HostView<%s> %s;"
+                % (storage_type(leaf), columns[-1])
+            )
+        lines.append("bool %s_ready = false;" % prefix)
+        snapshots[key] = {"columns": tuple(columns), "ready": prefix + "_ready"}
+    return snapshots
