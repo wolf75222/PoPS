@@ -10,7 +10,9 @@ of silently never running.
 
 Seven byte-pinned tests were introduced without their dependencies before M0. Their
 closed catalogue records historical unavailability, not successful execution. Any
-change to a test or return of a dependency requires explicit reclassification.
+change to a test or return of a dependency requires explicit reclassification. The
+catalogue may only shrink: a record added or rewritten fails even when the catalogue
+pin is updated with it.
 
 The weekly manifest check of quality.yml (``docs/gen_test_counts.py --check-matrix``) applies the
 same disposition: it exempts these seven files while their bytes match the catalogue, and fails
@@ -34,17 +36,51 @@ UNAVAILABLE_CATALOG = pathlib.Path("tests/python/unavailable_verification_tests.
 # Pin the catalogue independently of its contents: editing a digest, dependency,
 # or path cannot silently broaden this historical disposition.
 UNAVAILABLE_CATALOG_SHA256 = "adc9a63419d00b23d5885cf5d60e696ebb0d15da9e2276aa54788f7c63928129"
+# The catalogue may only shrink. Its header and its seven records as first catalogued (1298dc52),
+# each as the SHA-256 of its canonical JSON: a record added or rewritten fails even when the pin
+# above is updated with it; a record may only be dropped, once its test is reclassified into a suite.
+ORIGINAL_UNAVAILABLE_HEADER_SHA256 = "7c50c1fbeef28ce4586d9667800a512a1138b55a4f5f4e27d8de6107d19b2126"
+ORIGINAL_UNAVAILABLE_RECORDS = {
+    "tests/python/verification/test_check_verification_manifest.py":
+        "936f16e506a88496647de3b9308230a4e36fa648dbd88332b9d8415d7c2785bf",
+    "tests/python/verification/test_reference_errors.py":
+        "5811aff8c7db5103540862660b8be929c7d3507a1ee529dbd4d81131e5bd84fd",
+    "tests/python/verification/test_run_verification.py":
+        "603024823cced758741b9725bc2c6e7716832889d91851be79857a00900ddf07",
+    "tests/python/verification/test_verification_manifest_schema.py":
+        "8b8a998396a4b9f110aa37d84efcb6e36e6309b0f00842b003b402abca66093e",
+    "tests/python/verification/test_verification_metrics_schema.py":
+        "4e8e0237de079bfb8e644803afb5bbb15ae0806e587df4e996ae0f57d37f6d78",
+    "tests/python/verification/test_verification_provenance_schema.py":
+        "0682d933a32c3ffd770cc261f3c5a8f8d02dc14d73434871d71addb579722d24",
+    "tests/python/verification/test_verification_report_schema.py":
+        "6da37074dcd1bf55083e0ba3b409ab634011fca7032f0e05b127efe4835b7679",
+}
 GEN_TEST_COUNTS = pathlib.Path("docs/gen_test_counts.py")
 
 
-def _historically_unavailable_paths(repo_root, suite_dirs):
+def _canonical_sha256(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _historically_unavailable_paths(repo_root, suite_dirs,
+                                    catalog_sha256=UNAVAILABLE_CATALOG_SHA256):
     catalog_bytes = (repo_root / UNAVAILABLE_CATALOG).read_bytes()
-    assert hashlib.sha256(catalog_bytes).hexdigest() == UNAVAILABLE_CATALOG_SHA256, (
+    assert hashlib.sha256(catalog_bytes).hexdigest() == catalog_sha256, (
         "historical unavailable catalogue changed; reclassify explicitly, never absorb new tests")
     catalog = json.loads(catalog_bytes)
+    header = {key: value for key, value in catalog.items() if key != "tests"}
+    assert _canonical_sha256(header) == ORIGINAL_UNAVAILABLE_HEADER_SHA256, (
+        "historical unavailable catalogue may only shrink: its header changed; "
+        "reclassify explicitly")
     historical = set()
     for record in catalog["tests"]:
         relative = record["path"]
+        assert (relative not in historical
+                and ORIGINAL_UNAVAILABLE_RECORDS.get(relative) == _canonical_sha256(record)), (
+            f"historical unavailable catalogue may only shrink: {relative} added or rewritten; "
+            "reclassify explicitly, never absorb new tests")
         test_file = repo_root / relative
         unchanged = (test_file.is_file()
                      and hashlib.sha256(test_file.read_bytes()).hexdigest() == record["sha256"])
@@ -61,9 +97,9 @@ def _historically_unavailable_paths(repo_root, suite_dirs):
     return historical
 
 
-def _uncovered_test_paths(repo_root, suite_paths):
+def _uncovered_test_paths(repo_root, suite_paths, catalog_sha256=UNAVAILABLE_CATALOG_SHA256):
     suite_dirs = [(repo_root / path).resolve() for path in suite_paths]
-    historical = _historically_unavailable_paths(repo_root, suite_dirs)
+    historical = _historically_unavailable_paths(repo_root, suite_dirs, catalog_sha256)
     return [str(test_file.relative_to(repo_root))
             for test_file in sorted((repo_root / "tests/python").rglob("test_*.py"))
             if str(test_file.relative_to(repo_root)) not in historical
@@ -155,6 +191,47 @@ def test_active_suite_still_covers_other_tests(historical_tree):
     directory.mkdir()
     (directory / "test_active.py").write_text("def test_active(): pass\n")
     assert _uncovered_test_paths(historical_tree, ["tests/python/active"]) == []
+
+
+def _rewrite_and_repin(historical_tree, catalog):
+    catalog_path = historical_tree / UNAVAILABLE_CATALOG
+    catalog_path.write_text(json.dumps(catalog, indent=2) + "\n")
+    return hashlib.sha256(catalog_path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("mutation", [
+    "record_added", "record_duplicated", "record_rehashed", "assets_dropped", "header_rewritten",
+])
+def test_historical_catalogue_never_grows_even_when_repinned(historical_tree, mutation):
+    catalog = json.loads((historical_tree / UNAVAILABLE_CATALOG).read_text())
+    record = catalog["tests"][0]
+    if mutation == "record_added":
+        new_test = historical_tree / "tests/python/verification/test_new.py"
+        new_test.write_text("def test_new(): pass\n")
+        catalog["tests"].append({**record, "path": str(new_test.relative_to(historical_tree)),
+                                 "sha256": hashlib.sha256(new_test.read_bytes()).hexdigest()})
+    elif mutation == "record_duplicated":
+        catalog["tests"].append(dict(record))
+    elif mutation == "record_rehashed":
+        test_file = historical_tree / record["path"]
+        test_file.write_text("# changed test\n")
+        record["sha256"] = hashlib.sha256(test_file.read_bytes()).hexdigest()
+    elif mutation == "assets_dropped":
+        record["missing_assets"] = record["missing_assets"][1:]
+    else:
+        catalog["reason"] = "Any test may wait here until its dependencies return."
+    pin = _rewrite_and_repin(historical_tree, catalog)
+    with pytest.raises(AssertionError, match="may only shrink"):
+        _uncovered_test_paths(historical_tree, [], catalog_sha256=pin)
+
+
+def test_historical_catalogue_may_shrink_when_repinned(historical_tree):
+    catalog = json.loads((historical_tree / UNAVAILABLE_CATALOG).read_text())
+    dropped = catalog["tests"].pop(0)["path"]
+    pin = _rewrite_and_repin(historical_tree, catalog)
+    assert len(_historically_unavailable_paths(historical_tree, [], catalog_sha256=pin)) == 6
+    # The dropped test is active again, so a suite must now claim it.
+    assert _uncovered_test_paths(historical_tree, [], catalog_sha256=pin) == [dropped]
 
 
 def _check_matrix(repo_root):
