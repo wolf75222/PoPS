@@ -113,7 +113,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
 
     def _acceptance_guard_value(
         self, name: str, value: ProgramValue, condition: ProgramValue, action: Any,
-        *, numerical_stability: bool = False,
+        *, numerical_stability: bool = False, assessment: Any = None,
     ) -> ProgramValue:
         from pops.time.solve_outcome import FailRun, RejectAttempt
         if not isinstance(action, (RejectAttempt, FailRun)):
@@ -121,6 +121,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         attrs = {"guard": name, "action": action}
         if numerical_stability:
             attrs["numerical_stability"] = "pops.authored-stability-admission@1"
+        if assessment is not None:
+            attrs["assessment"] = assessment
         return self._new(
             value.vtype, "acceptance_guard", (value, condition),
             attrs, value.name, value.block,
@@ -199,6 +201,30 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             raise TypeError(
                 "guard: action must be RejectAttempt(), FailRun(), or ProjectAndRecheck()")
         self._register_acceptance_guard(AcceptanceGuard(name, role, action))
+        return guarded
+
+    @atomic_authoring
+    def _assess_candidate(self, name: Any, candidate: Any, condition: Any) -> Any:
+        """Gate the candidate of an Advance by one of its assessments (spec 0.3 T28).
+
+        A false ``condition`` rejects the attempt in the assessment phase, which the compiled run
+        answers with the same proposal (``next=None``) until the attempt budget is spent.
+        """
+        from pops.time.solve_outcome import RejectAttempt
+        from pops.time._step.transaction import AcceptanceGuard, GuardRole
+        from .control import ADVANCE_ASSESSMENT_CONTRACT
+        if not isinstance(name, str) or not name:
+            raise ValueError("Advance assessment: name must be a non-empty string")
+        if not isinstance(candidate, ProgramValue) or candidate.vtype != "state":
+            raise TypeError("Advance assessment: the candidate is a State ProgramValue")
+        if not isinstance(condition, ProgramValue) or condition.vtype != "bool":
+            raise TypeError("Advance assessment: the condition is a scalar Bool ProgramValue")
+        validate_input_regions(
+            self, (candidate, condition), self._current_region(), "Advance assessment")
+        guarded = self._acceptance_guard_value(name, candidate, condition, RejectAttempt(),
+                                               assessment=ADVANCE_ASSESSMENT_CONTRACT)
+        self._register_acceptance_guard(AcceptanceGuard(name, GuardRole.INVARIANT,
+                                                        RejectAttempt()))
         return guarded
 
     # --- per-cell conditional select (spec op 17, ADC-418) ---
@@ -348,6 +374,22 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         if not (isinstance(state, ProgramValue) and state.is_field()):
             raise ValueError("norm_inf: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm_inf"}, None, state.block)
+
+    def norm_inf_all(self, state: Any) -> Any:
+        """The largest magnitude over every component, collectively, as a Scalar.
+
+        Contract ``pops.program.norm-inf-all@1``: raw values on the owned active domain, without
+        physical weights; a NaN counts as an infinite magnitude, so the norm is finite exactly
+        when every value is.
+        """
+        if not (isinstance(state, ProgramValue) and state.is_field()):
+            raise ValueError("norm_inf_all: a State/RHS value is required")
+        if state.block is None:
+            raise NotImplementedError(
+                "norm_inf_all requires a field with one explicit Program block owner")
+        return self._new("scalar", "reduce", (state,), {
+            "kind": "norm_inf_all", "component_contract": "pops.program.norm-inf-all@1"},
+            None, state.block)
 
     def norm1(self, state: Any) -> Any:
         """The 1-norm ``sum|u|`` (collective, component 0, Scalar): ``pops::reduce_abs_sum(u, 0)``."""

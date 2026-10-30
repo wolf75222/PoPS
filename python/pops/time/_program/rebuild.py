@@ -103,6 +103,7 @@ def rebuild_program(
     out._post_sync_recording = False
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
     out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
+    out._advance_control = getattr(self, "_advance_control", None)
     out._integral_states = dict(getattr(self, "_integral_states", {}))
     out._integral_units = dict(getattr(self, "_integral_units", {}))
     if project_states and (self._dt_bound is not None or out._acceptance_guards):

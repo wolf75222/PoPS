@@ -396,6 +396,7 @@ sdk-support pops/runtime/program/program_diagnostics_checkpoint.hpp
 sdk-support pops/runtime/program/program_owner_field_identity.hpp
 sdk-support pops/runtime/program/prepared_tensor_boundary_session.hpp
 sdk-support pops/runtime/program/same_level_cell_temporal_provider.hpp
+sdk-support pops/runtime/program/advance_run.hpp
 sdk-support pops/runtime/program/program_runtime_state.hpp
 sdk-support pops/runtime/program/residual_operator.hpp
 sdk-support pops/runtime/program/source_mask.hpp

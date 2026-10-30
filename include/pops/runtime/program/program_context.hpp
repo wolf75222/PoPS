@@ -1563,6 +1563,21 @@ class ProgramContext {
     converge_owner_reduction_(local_error, lane, "Program norm-inf reduction");
     return static_cast<Real>(all_reduce_max(local, lane));
   }
+  /// pops.program.norm-inf-all@1: max |v| over every component of the owned active domain, a NaN
+  /// counting as infinite, in one collective.
+  Real norm_inf_all(int program_block, const field_type& field) const {
+    const ExecutionLane& lane = prepared_execution_lane();
+    const field_type* const active = pointwise_active_mask(program_block, field);
+    std::exception_ptr local_error;
+    Real local = Real(0);
+    try {
+      local = pops::reduce_active_norm_inf_all_local(field, active);
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    converge_owner_reduction_(local_error, lane, "Program norm-inf-all reduction");
+    return static_cast<Real>(all_reduce_max(local, lane));
+  }
   Real dot(int program_block, const field_type& left, const field_type& right) const {
     const ExecutionLane& lane = prepared_execution_lane();
     const field_type* const active = pointwise_active_mask(program_block, left);

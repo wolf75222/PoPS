@@ -4,6 +4,7 @@
 #include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
 
 #include <pops/runtime/program/accepted_exchange.hpp>
+#include <pops/runtime/program/advance_run.hpp>
 #include <limits>
 
 #include <pops/core/state/variables.hpp>  // VariableSet (role-bearing descriptor carried by each block)
@@ -847,6 +848,14 @@ class System {
   /// @}
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
+  /// Compiled run of the installed Advance (spec 0.3 section 5.2, CC14): attempts of @p proposal
+  /// until the accepted time is @p until, landing there as master's fixed step does, after at
+  /// most @p max_steps accepted steps and Retry.max_attempts attempts per step. Collective; the
+  /// rules are those of runtime/program/advance_run.hpp.
+  runtime::program::AdvanceRunReport run_advance(double until, double proposal,
+                                                 std::int64_t max_steps);
+  /// Retry.max_attempts of the installed Advance; 0 when the installed Program has none.
+  int advance_max_attempts() const noexcept;
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
   POPS_EXPORT std::string advance_program_region(double dt);
   void begin_step_transaction();

@@ -6,12 +6,16 @@ parameters and ``Retry`` its budgets. ``elaborate`` traces the method once again
 the builder to the case: the builder is the elaborator, and the case never calls it.
 
 This lot elaborates the trial of a method whose candidate reaches ``B.time + p.dt``, with the
-default acceptance (``finite()``, written ``accept=None``) and one attempt. That acceptance
-proposes the same proposal again (T28), a fixed step, which the builder runs as ``FixedDt`` with
-the nearest binary64 value of ``Proposal.dt``; the trace never reads that value (T33). The
-finiteness check itself, ``Retry`` budgets, other assessments and the compiled step loop are
-lowered by the compiled control of N8. Every construct of section 5 outside this lot is refused
-with ``NotYetElaborated``, which names the lot that lowers it.
+default acceptance and a budget of attempts. The default acceptance ``finite()``, written
+``accept=None``, accepts a candidate whose every value is finite: the candidate passes, before its
+commit, an assessment whose condition is ``isfinite(norm_inf_all(candidate))``, the norm counting
+a NaN as infinite. A rejection proposes the same proposal again (T28, ``next=None``), a fixed
+step, which the builder runs as ``FixedDt`` with the nearest binary64 value of ``Proposal.dt``;
+the trace never reads that value (T33). ``Retry(max_attempts=n)`` bounds the attempts of a step
+(T38). The Program also records an ``AdvanceControl`` (``control.py``) that the compiled run of
+``System::run_advance`` executes and that the artifact manifest publishes. Every construct of
+section 5 outside this lot is refused with ``NotYetElaborated``, which names the lot that lowers
+it.
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ from fractions import Fraction
 from typing import Any
 
 from pops.time._program.api import Program as _Builder
+from pops.time._program.control import AdvanceControl
 from pops.time._program.traced_method import (
     MethodTrace, NotYetElaborated, SpecializedMethod, _fraction,
 )
@@ -64,8 +69,8 @@ class Retry:
         if isinstance(max_transforms, bool) or not isinstance(max_transforms, int) \
                 or max_transforms < 0:
             raise ValueError("Retry(max_transforms=n) needs an integer n >= 0")
-        self.max_attempts = max_attempts
-        self.max_transforms = max_transforms
+        self.max_attempts = int(max_attempts)
+        self.max_transforms = int(max_transforms)
 
 
 class Advance:
@@ -83,13 +88,13 @@ class Advance:
                             "written m(component=...), got %r" % (method,))
         if accept is not None:
             raise NotYetElaborated("Advance(accept=...): an assessment other than the default "
-                                   "finite() (T28) is lowered by the compiled control of N8")
+                                   "finite() (T28) is lowered with the assessments of N8 phase 1")
         if retry is not None and not isinstance(retry, Retry):
             raise TypeError("Advance(retry=...) takes a Retry")
-        if retry is not None and (retry.max_attempts, retry.max_transforms) != (1, 0):
-            raise NotYetElaborated("Advance(retry=Retry(%d, %d)): retry budgets (T38) are lowered "
-                                   "by the compiled control of N8"
-                                   % (retry.max_attempts, retry.max_transforms))
+        if retry is not None and retry.max_transforms != 0:
+            raise NotYetElaborated("Advance(retry=Retry(max_transforms=%d)): transforms (T28) are "
+                                   "lowered with the assessments of N8 phase 1"
+                                   % retry.max_transforms)
         if clock is not None or time_map is not None:
             raise NotYetElaborated("Advance(clock=..., time_map=...): clocks and time maps (T23, "
                                    "T36) are elaborated in Phase 2 of N8")
@@ -101,16 +106,18 @@ class Advance:
 
 
 class Elaboration:
-    """The result of ``elaborate``: the builder attached to the case and the method trace."""
+    """The result of ``elaborate``: the builder attached to the case, the method trace and the
+    compiled control of the Advance."""
 
-    __slots__ = ("advance", "proposal", "program", "trace")
+    __slots__ = ("advance", "proposal", "program", "trace", "control")
 
     def __init__(self, advance: Advance, proposal: Proposal, program: Any,
-                 trace: MethodTrace) -> None:
+                 trace: MethodTrace, control: AdvanceControl) -> None:
         self.advance = advance
         self.proposal = proposal
         self.program = program
         self.trace = trace
+        self.control = control
 
 
 def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
@@ -128,8 +135,16 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
     program = _Builder(advance.method.name if name is None else name)
     temporal = program.state(state)
     trace = advance.method.trace(program, temporal, proposal)
-    program.commit(temporal.next, trace.candidate)
+    # finite(): every value of the candidate is finite, the norm counting a NaN as infinite.
+    candidate = program._assess_candidate(
+        "finite", trace.candidate, program.isfinite(program.norm_inf_all(trace.candidate)))
+    program.commit(temporal.next, candidate)
     dt = proposal.dt
-    program.step_strategy(FixedDt(float(dt) if isinstance(dt, (Fraction, Decimal)) else dt))
+    strategy = FixedDt(float(dt) if isinstance(dt, (Fraction, Decimal)) else dt)
+    program.step_strategy(strategy)
+    control = AdvanceControl(assessments=(("finite", "default"),),
+                             max_attempts=advance.retry.max_attempts,
+                             max_transforms=advance.retry.max_transforms, first_dt=strategy.dt)
+    program._set_advance_control(control)
     case.program(program)
-    return Elaboration(advance, proposal, program, trace)
+    return Elaboration(advance, proposal, program, trace, control)

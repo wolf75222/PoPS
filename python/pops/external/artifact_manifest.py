@@ -62,7 +62,7 @@ class CompiledArtifactManifest:
         "supports_amr", "supports_mpi", "supports_gpu", "supports_stride",
         "supports_partial_imex_mask", "supports_named_fields", "native_entrypoints",
         "external_bricks", "dimension", "amr_refinement_ratio", "precision", "real_bytes",
-        "communicator", "supports_custom_communicator",
+        "communicator", "supports_custom_communicator", "control",
     )
 
     def __init__(self, *, model_name=None, abi_key=None, abi_version=None,
@@ -76,7 +76,7 @@ class CompiledArtifactManifest:
                  supports_named_fields=None, native_entrypoints=None, dimension=None,
                  amr_refinement_ratio=None, precision=None, real_bytes=None,
                  communicator=None, supports_custom_communicator=None,
-                 external_bricks=None):
+                 external_bricks=None, control=None):
         put = object.__setattr__
         put(self, "model_name", freeze_manifest_json(model_name, where="artifact.model_name"))
         put(self, "abi_key", freeze_manifest_json(abi_key, where="artifact.abi_key"))
@@ -216,6 +216,15 @@ class CompiledArtifactManifest:
         )
         put(self, "supports_custom_communicator", _strict_optional_bool(
             supports_custom_communicator, where="artifact.supports_custom_communicator"))
+        # The compiled control of the Advance that the Program elaborates (spec 0.3 section 5.2):
+        # its assessments with their origin, the default finite() included (SU9), its retry budget
+        # and its first proposal. Additive and present only for such a Program, so the wire form of
+        # every other artifact is unchanged.
+        if control is not None:
+            from pops.time._program.control import AdvanceControl
+            control = AdvanceControl.from_data(control).to_data()
+        put(self, "control", None if control is None else freeze_manifest_json(
+            control, where="artifact.control"))
 
     def supports(self):
         """The ``{flag: True/False/None}`` capability map (``None`` = honestly unknown)."""
@@ -263,6 +272,8 @@ class CompiledArtifactManifest:
                "native_entrypoints": thaw_manifest_json(self.native_entrypoints),
                "external_bricks": thaw_manifest_json(self.external_bricks),
                "capability_matrix": [row.to_dict() for row in self.capability_matrix().rows]}
+        if self.control is not None:
+            payload["control"] = thaw_manifest_json(self.control)
         payload.update(self.supports())
         return manifest_envelope(
             kind=_MANIFEST_KIND,
@@ -296,7 +307,8 @@ class CompiledArtifactManifest:
             schema_version=ARTIFACT_MANIFEST_SCHEMA_VERSION,
             where="compiled-artifact manifest",
         )
-        unknown = sorted(set(payload) - ctor_keys - derived)
+        optional = {"control"}
+        unknown = sorted(set(payload) - ctor_keys - derived - optional)
         if unknown:
             raise ValueError("compiled-artifact manifest has unknown field(s) %s; the strict schema does "
                              "not accept them" % (unknown,))
@@ -306,6 +318,7 @@ class CompiledArtifactManifest:
                 "compiled-artifact manifest is missing required field(s) %s" % missing
             )
         kwargs = {k: payload[k] for k in ctor_keys}
+        kwargs.update({k: payload[k] for k in optional if k in payload})
         result = cls(**kwargs)
         if result.to_dict() != data:
             raise ValueError(
@@ -351,6 +364,12 @@ class CompiledArtifactManifest:
             lines.append("    %-26s %s" % (name, _flag(getattr(self, name))))
         lines.append("  native_entrypoints: %s"
                      % (", ".join(self.native_entrypoints) or "(none)"))
+        if self.control is not None:
+            retry = self.control["retry"]
+            lines.append("  control      : accept=[%s] max_attempts=%d first dt=%s"
+                         % (", ".join("%s() (%s)" % (row["assess"], row["origin"])
+                                      for row in self.control["accept"]),
+                            retry["max_attempts"], self.control["proposal"]["dt"]))
         if self.external_bricks:
             lines.append("  external_bricks:")
             for brick in self.external_bricks:
@@ -439,6 +458,17 @@ def build_component_manifest(compiled):
     return _build_compiled_manifest(compiled, model, caps, component_rows=rows)
 
 
+def _advance_control_data(compiled):
+    """The control record of the Advance that the artifact's Program elaborates, or None."""
+    from pops.time._program.api import Program
+
+    program = getattr(compiled, "program", None)
+    if not isinstance(program, Program):
+        program = getattr(program, "program", None)
+    control = getattr(program, "_advance_control", None) if isinstance(program, Program) else None
+    return None if control is None else control.to_data()
+
+
 def _build_compiled_manifest(compiled, model, caps_flags, *, component_rows=None):
     abi_key = getattr(compiled, "abi_key", None)
     model_name = getattr(compiled, "program_name", None) or getattr(model, "name", None)
@@ -506,6 +536,7 @@ def _build_compiled_manifest(compiled, model, caps_flags, *, component_rows=None
         supports_named_fields=None,
         native_entrypoints=[],
         external_bricks=external_bricks,
+        control=_advance_control_data(compiled) if component_rows is None else None,
         dimension=None,
         amr_refinement_ratio=None,
         precision=None,

@@ -284,6 +284,11 @@ class _ProgramSerialization(_ProgramBase):
         transaction = self.transaction_plan()
         if transaction is not None:
             result["step_transaction"] = transaction.to_data()
+        advance_control = getattr(self, "_advance_control", None)
+        if advance_control is not None:
+            # Version 30: the compiled control of an elaborated Advance (spec 0.3 section 5.2).
+            result["advance_control"] = advance_control.to_data()
+            _raise_ir_version(result, 30)
         cadence = self.cadence_contract()
         if not cadence.is_default:
             result["cadence"] = cadence.to_data()
@@ -393,6 +398,10 @@ class _ProgramSerialization(_ProgramBase):
                 _raise_ir_version(result, 16)
             elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":
                 _raise_ir_version(result, 7)
+            elif node.op == "reduce" and node.attrs.get("kind") == "norm_inf_all":
+                _raise_ir_version(result, 30)
+            if node.op == "acceptance_guard" and "assessment" in node.attrs:
+                _raise_ir_version(result, 30)
             for key in ("cond_block", "body_block", "true_block", "false_block",
                         "apply_block", "residual_block"):
                 block = node.attrs.get(key)

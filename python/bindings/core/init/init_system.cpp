@@ -1215,6 +1215,32 @@ void bind_system_stepping(py::class_<System>& cls) {
           },
           py::arg("provider_slot"))
       .def("step", &System::step, py::arg("dt"))
+      // One compiled run of the installed Advance; the interpreter only receives its counters.
+      .def(
+          "_run_advance",
+          [](System& system, double until, double proposal, std::int64_t max_steps) {
+            const auto report = system.run_advance(until, proposal, max_steps);
+            py::dict result;
+            result["steps"] = report.steps;
+            result["rejections"] = report.rejections;
+            result["stop"] = static_cast<int>(report.stop);
+            result["attempts"] = report.attempts;
+            result["rejection"] = report.rejection;
+            result["segment_origin"] = report.segment.origin;
+            result["segment_steps"] = report.segment.steps;
+            return result;
+          },
+          py::arg("until"), py::arg("proposal"), py::arg("max_steps"))
+      .def("_advance_max_attempts", &System::advance_max_attempts)
+      .def_static(
+          "_advance_attempt_duration",
+          [](double time, double proposal, double frontier, double origin, std::int64_t steps) {
+            const auto duration = pops::runtime::program::advance_attempt_duration(
+                time, proposal, frontier, origin, steps);
+            return py::make_tuple(duration.dt, duration.lands, duration.continuous);
+          },
+          py::arg("time"), py::arg("proposal"), py::arg("frontier"), py::arg("origin"),
+          py::arg("steps"))
       .def("_advance_program_region", &System::advance_program_region, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)

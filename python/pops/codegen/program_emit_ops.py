@@ -1684,6 +1684,15 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         elif kind == "norm_inf":
             (u,) = v.inputs
             reduction = "ctx.norm_inf(%d, %s)" % (owner, var[u.id])
+        elif kind == "norm_inf_all":
+            if v.attrs.get("component_contract") != "pops.program.norm-inf-all@1":
+                raise ValueError("norm_inf_all lost its all-component contract")
+            if target == "amr_system":
+                raise NotImplementedError(
+                    "norm_inf_all, the finite() assessment of an elaborated Advance, runs on the "
+                    "Uniform route; the AMR route of the compiled control is a later lot of N8")
+            (u,) = v.inputs
+            reduction = "ctx.norm_inf_all(%d, %s)" % (owner, var[u.id])
         elif kind in ("sum", "max", "min", "abs_sum"):
             (u,) = v.inputs
             comp = int(v.attrs.get("comp", 0))
@@ -1793,14 +1802,22 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         action = v.attrs["action"]
         from pops.time.solve_outcome import FailRun, RejectAttempt
         message = "acceptance guard %r failed" % v.attrs["guard"]
+        phase = "guard"
+        if "assessment" in v.attrs:
+            # An assessment of an Advance rejects in the phase that its compiled run repeats.
+            from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT
+            if v.attrs["assessment"] != ADVANCE_ASSESSMENT_CONTRACT or type(action) is not RejectAttempt:
+                raise ValueError("Advance assessment lost its rejection contract")
+            phase = "assessment"
+            message = "Advance assessment %r rejected the candidate" % v.attrs["guard"]
         from pops.codegen.program_emit_structured_control import _uniform_int
         _uniform_int(var[condition.id], lines, "acceptance guard differs across execution lane")
         lines.append("if (!(%s)) {" % var[condition.id])
         if type(action) is RejectAttempt:
             lines.append(
                 "  throw pops::runtime::program::StepAttemptRejected("
-                "pops::SolveStatus::kInvalidEvaluation, \"guard\", %s);"
-                % json.dumps(message))
+                "pops::SolveStatus::kInvalidEvaluation, %s, %s);"
+                % (json.dumps(phase), json.dumps(message)))
         elif type(action) is FailRun:
             lines.append("  throw std::runtime_error(%s);" % json.dumps(message))
         else:  # guarded by Program.guard; defense in depth for a forged IR

@@ -6582,13 +6582,40 @@
         },
         "tests/python/unit/time/test_traced_methods_n8.py": {
           "cases": 69,
-          "phase_seconds": 167.78,
-          "session_seconds": 169.22
+          "phase_seconds": 271.62,
+          "session_seconds": 273.16
         }
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_traced_methods_n8_native.py": "60fc4ee4a4f7592ab788b0a2877a736cc1c6c121435ea0af04c31faa58f0d6ab",
-        "tests/python/unit/time/test_traced_methods_n8.py": "b788040f1791cc44cdb5632fb16d28898358d51727dc8f6e2358eb96b18af184"
+        "tests/python/unit/time/test_traced_methods_n8.py": "79baf38571ccdfc63ea2ef55a9829f12ac6054e6244cae0ce81ce7ac2c9d0fe6"
+      }
+    },
+    "ci_20261030_n8_compiled_control": {
+      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 2 compiled-control modules (ROM-89), on the api_v02_20261013 tiers: 30 s for the source-only module, which elaborates M01 a few times and generates its C++ without compiling, as the analogue test_authored_stability_admission.py; 600 s for the Dim2 native module, which compiles three M01 artifacts once per module (the traced route, the b6 reference and Retry(3)) and runs compiled and b6 runs of up to 80 steps, as the analogue test_traced_methods_n8_native.py. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session on an otherwise idle machine (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Lot 2 also changes the bytes of the lot 1 unit module, whose receipt in the lot 1 section comes from the same container: back to back there, that module takes 245 s at ba9c86d and 253 s with lot 2, so the container, not lot 2, accounts for most of its gap to the earlier lot 1 receipt, and its 300 s estimate stays. With these two rows the full 135-bin pack holds a multi-file shard of 2105 s, 5 s above the ordinary budget, so the Python shards go from 135 to 136 (2100 s at most, full and partial packs). Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_compiled_control_n8_native.py": "tests/python/integration/runtime/test_traced_methods_n8_native.py",
+        "tests/python/unit/time/test_compiled_control_n8.py": "tests/python/unit/time/test_authored_stability_admission.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_compiled_control_n8_native.py": 600,
+        "tests/python/unit/time/test_compiled_control_n8.py": 30
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_compiled_control_n8_native.py": {
+          "cases": 8,
+          "phase_seconds": 237.12,
+          "session_seconds": 238.47
+        },
+        "tests/python/unit/time/test_compiled_control_n8.py": {
+          "cases": 24,
+          "phase_seconds": 15.04,
+          "session_seconds": 16.52
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_compiled_control_n8_native.py": "7d4b802d4bf3d77b0873cd6a2e88ddde440d9855b02d4a521afd1f1f26ffb216",
+        "tests/python/unit/time/test_compiled_control_n8.py": "463329f2ed93ac72395c4326ae50abe37fc45da2f63d1b0214f7010a1fa77d83"
       }
     },
     "declared_hardware_profiles": {
@@ -6603,7 +6630,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1129,
+    "estimated_count": 1131,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6787,6 +6814,7 @@
       "tests/python/integration/runtime/test_collective_control_preparation_v10.py",
       "tests/python/integration/runtime/test_combined_diffusion_exchange_ledger.py",
       "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py",
+      "tests/python/integration/runtime/test_compiled_control_n8_native.py",
       "tests/python/integration/runtime/test_computed_program_frontier_runtime.py",
       "tests/python/integration/runtime/test_computed_scratch_ssa_native.py",
       "tests/python/integration/runtime/test_conditional_consumers_runtime.py",
@@ -7582,6 +7610,7 @@
       "tests/python/unit/time/test_checked_scalar_v02.py",
       "tests/python/unit/time/test_clock_propagation.py",
       "tests/python/unit/time/test_coarsening_moments_v14.py",
+      "tests/python/unit/time/test_compiled_control_n8.py",
       "tests/python/unit/time/test_compiled_program_detach.py",
       "tests/python/unit/time/test_computed_scratch_ssa.py",
       "tests/python/unit/time/test_computed_spatial_ports.py",
@@ -7935,7 +7964,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1194,
+    "total_files": 1196,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9175,5 +9204,7 @@
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
   "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
   "tests/python/integration/runtime/test_traced_methods_n8_native.py": 600,
-  "tests/python/unit/time/test_traced_methods_n8.py": 300
+  "tests/python/unit/time/test_traced_methods_n8.py": 300,
+  "tests/python/integration/runtime/test_compiled_control_n8_native.py": 600,
+  "tests/python/unit/time/test_compiled_control_n8.py": 30
 }

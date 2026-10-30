@@ -954,4 +954,4 @@ extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 // returns the lowered scalar bound (min'd into native CFL). With no bound it returns +inf (unreached).
 extern "C" bool pops_program_has_dt_bound() {{ return {has_dt_bound}; }}
 {dt_bound}
-"""
+{advance_control}"""

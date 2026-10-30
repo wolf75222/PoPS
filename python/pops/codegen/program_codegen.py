@@ -358,6 +358,7 @@ def _emit_cpp_program_impl(
         operator_authorities=_emit_operator_authorities(operator_authorities),
         has_dt_bound=has_dt_bound,
         dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
+        advance_control=_emit_advance_control(program),
         module_metadata=(_emit_module_metadata(program, authority)
                          + _emit_uniform_history_metadata(program, target)),
         program_params=_emit_program_params(program, authority),
@@ -491,6 +492,24 @@ def _emit_system_install(target: str, prelude: str, body: str, provider_plan_ins
         "  });\n"
         "}\n"
     )
+
+
+def _emit_advance_control(program: Any) -> str:
+    """The attempt budget of the Advance that the Program elaborates, read by its loader.
+
+    A Program authored on the builder has no Advance control and exports no entry, so its
+    translation unit is unchanged; ``System::run_advance`` refuses it.
+    """
+    control = getattr(program, "_advance_control", None)
+    if control is None:
+        return ""
+    from pops.time._program.control import AdvanceControl
+    if type(control) is not AdvanceControl:
+        raise TypeError("Program Advance control lost its exact record")
+    return ("// Compiled control of the elaborated Advance (spec 0.3 section 5.2): the attempts of\n"
+            "// one step (Retry.max_attempts, T38). System::run_advance repeats a rejected proposal.\n"
+            "extern \"C\" int pops_program_advance_max_attempts() { return %d; }\n"
+            % control.max_attempts)
 
 
 def _emit_dt_bound_entry(target: str, body: str, value_name: str | None = None) -> str:

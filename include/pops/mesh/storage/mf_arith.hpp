@@ -651,6 +651,18 @@ Real reduce_active_norm_inf_local(const MultiFab<Dim, MemorySpace>& field, int c
   return result;
 }
 
+/// pops.program.norm-inf-all@1: the largest magnitude over every component of the owned active
+/// cells. Both kernels map a NaN to an infinite magnitude, so the norm is finite exactly when every
+/// active value is finite.
+template <int Dim, class MemorySpace>
+Real reduce_active_norm_inf_all_local(const MultiFab<Dim, MemorySpace>& field,
+                                      const MultiFab<Dim, MemorySpace>* active_cells) {
+  Real result = 0;
+  for (int component = 0; component < field.ncomp(); ++component)
+    result = std::max(result, reduce_active_norm_inf_local(field, component, active_cells));
+  return result;
+}
+
 template <int Dim, class MemorySpace>
 Real dot_active_local(const MultiFab<Dim, MemorySpace>& left,
                       const MultiFab<Dim, MemorySpace>& right, int component,
