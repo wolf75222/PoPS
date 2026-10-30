@@ -809,7 +809,8 @@ def _emit_amr_install(
         transform_refresh_guard = "    _require_local_transform_level_contract();\n"
     has_maps = any(value.op in ("layout_map_export", "layout_map_import")
                    for value in program._values)
-    from pops.codegen.program_emit_hierarchy_regions import has_hierarchy_continuations
+    from pops.codegen.program_emit_hierarchy_regions import (
+        has_hierarchy_continuations, hierarchy_spatial_solves)
     has_hierarchy_regions = has_hierarchy_continuations(program)
     has_continuations = has_maps or has_hierarchy_regions
     if has_maps and hierarchy_bodies is not None:
@@ -836,7 +837,8 @@ def _emit_amr_install(
                 "    }, ctx_owner, [=]() {\n"
                 "      auto& ctx = *ctx_owner;\n"
                 + post_sync_driver +
-                "    });\n"
+                # A composite implicit stage keeps the engine's typed refusal of subcycling.
+                ("    }, true);\n" if hierarchy_spatial_solves(program) else "    });\n")
             )
         else:
             installed_driver = (
