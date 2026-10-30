@@ -6576,7 +6576,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1127,
+    "estimated_count": 1128,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6791,6 +6791,7 @@
       "tests/python/integration/runtime/test_final_condensed_uniform_runtime.py",
       "tests/python/integration/runtime/test_final_imex_original_reception.py",
       "tests/python/integration/runtime/test_final_strang_order_runtime.py",
+      "tests/python/integration/runtime/test_finite_array_residency_native.py",
       "tests/python/integration/runtime/test_finite_bdf2_v14_native.py",
       "tests/python/integration/runtime/test_finite_iteration_ad_v14_native.py",
       "tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py",
@@ -7906,7 +7907,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1192,
+    "total_files": 1193,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -7950,6 +7951,22 @@
         "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
         "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 960,
         "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 1320
+      }
+    },
+    "g13_20261030_finite_array_residency": {
+      "basis": "Unmeasured scheduling estimate including two cold generated C++ compilations (one probe subprocess per Program) and the build of the Kokkos Tools library; not a native receipt. Refresh from complete CI timing artifacts.",
+      "files": {
+        "tests/python/integration/runtime/test_finite_array_residency_native.py": {
+          "analogue": "tests/python/integration/runtime/test_api_v02_finite_kokkos_native.py",
+          "estimated_seconds": 600,
+          "native_compiler_markers": [
+            "pytest.mark.compiler",
+            "pytest.mark.kokkos",
+            "pytest.mark.native_loader"
+          ],
+          "reason": "DM8 residency of finite arrays (G13, ROM-31): two native Program runs under a Kokkos Tools library",
+          "source_sha256": "f7fc0a81eb49dd88a93ffbf7544b5d5d2c9c15768e8df13682d838cda7e50a5c"
+        }
       }
     }
   },
@@ -9144,5 +9161,6 @@
   "tests/python/integration/runtime/test_api_v02_computed_frontier_clipping_native.py": 1200,
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
-  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10
+  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
+  "tests/python/integration/runtime/test_finite_array_residency_native.py": 600
 }

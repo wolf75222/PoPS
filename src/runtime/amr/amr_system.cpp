@@ -3,6 +3,7 @@
 /// @brief Exact compile-time-ranked AMR facade over runtime::amr::AmrRuntime<Dim>.
 
 #include <pops/runtime/amr_system.hpp>
+#include <Kokkos_Profiling_ScopedRegion.hpp>
 #include "../system/auxiliary_consumer_preparation.hpp"
 #include <pops/runtime/amr/amr_layout_transfer_bridge.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
@@ -21421,6 +21422,9 @@ void AmrSystem<Dim>::step(double dt) {
   p_->require_no_native_package_callback("step");
   p_->program.require_step_installed("AmrSystem::step");
   runtime::program::ProfileScope scope(p_->program.profiler_, "step");
+  // Kokkos Tools sees each step as the region "pops::step": a tool attributes the
+  // deep copies of array data to the step that makes them (DM8).
+  const Kokkos::Profiling::ScopedRegion kokkos_step_region("pops::step");
   p_->program.profiler_.count("steps");
   if (p_->bootstrap_transaction)
     throw std::logic_error("AmrSystem cannot step during an active bootstrap transaction");
@@ -21519,6 +21523,9 @@ std::string AmrSystem<Dim>::advance_program_region(double dt) {
       lane, 8, static_cast<long>(step_transaction_depth()),
       p_->external_step_transaction && !p_->external_step_committed,
       "AmrSystem::advance_program_region");
+  // A Program region of a step that the caller opens and commits: Kokkos Tools sees it
+  // as the region "pops::program_region" (DM8).
+  const Kokkos::Profiling::ScopedRegion kokkos_program_region("pops::program_region");
   std::string port;
   try {
     runtime::program::collective_step_rejection_phase(

@@ -36,6 +36,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the schedule cache restores numbers without their Field description.
 - Capture the recovery admissibility provider of a model with bound runtime parameters:
   `ModelRecoveryAdmissibilityProvider` declares its model as its only device-capture member.
+- Keep replicated finite Arrays of scalar and Product elements on the device (spec 0.3 DM7,
+  DM8): each leaf is one labelled Kokkos column, maps and ordered fold, scan and reduce regions
+  read and write the columns in place, replication is checked by a device fingerprint with O(1)
+  collectives, and only control scalars reach the host inside a step. Host-placed regions,
+  element reads and continuation images are counted per Program
+  (`pops_finite_device_to_host_bytes`, `pops_finite_host_to_device_bytes`,
+  `pops_finite_host_transfer_count`), and System and AmrSystem steps open the Kokkos Tools
+  regions `pops::step` and `pops::program_region`. Structural, Variant and distributed Arrays
+  keep their host storage.
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
   complete continuations and child advances, spatial composition, distributed
   operators, and graph/implicit derivatives lower from Python into native Program C++.
