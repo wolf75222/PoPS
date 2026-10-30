@@ -74,6 +74,24 @@ def _kernel_data(kernel: Any, *, where: str) -> dict[str, Any]:
     return data
 
 
+def _route_options(kernel: Any, *, dimension: int) -> dict[str, Any]:
+    """The native route of a state kernel and, when the kernel takes one-sided slopes at physical
+    faces, the axes where it does: a mask that the library sets and the native transfer reads on
+    the non-periodic axes. A kernel without one keeps its exact route options."""
+    options: dict[str, Any] = {"native_route": kernel.native_route}
+    mask = getattr(kernel, "one_sided_axes", None)
+    if mask is None:
+        return options
+    axes = _ranked_axis_values(
+        mask, dimension=dimension, where="AMR transfer kernel one_sided_axes", minimum=0
+    )
+    if any(axis > 1 for axis in axes):
+        raise ValueError("AMR transfer kernel one_sided_axes must hold 0 or 1 per axis")
+    if any(axes):
+        options["one_sided_axes"] = list(axes)
+    return options
+
+
 def _kernel_candidates(kernel: Any, *, where: str) -> tuple[Any, ...]:
     """Return one authenticated capability family without inspecting concrete classes."""
     protocol = getattr(kernel, "amr_transfer_kernel_candidates", None)
@@ -526,7 +544,7 @@ class AMRTransfer:
                         TransferProviderRoute(
                             key,
                             self._capabilities(kernel),
-                            CanonicalOptions({"native_route": kernel.native_route}),
+                            CanonicalOptions(_route_options(kernel, dimension=dimension)),
                         )
                         for kernel in kernels
                     ),

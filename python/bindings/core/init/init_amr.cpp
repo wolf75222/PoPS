@@ -1042,18 +1042,36 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
              const std::string& space, const std::string& centering,
              const std::string& representation, const std::string& storage,
              const std::string& operation, const std::string& kernel, int order,
-             const py::handle& ghost_depth, const py::handle& refinement_ratio) {
+             const py::handle& ghost_depth, const py::handle& refinement_ratio,
+             const std::vector<int>& one_sided_axes) {
+            // The axes whose physical faces take one-sided slopes: none when empty, otherwise one
+            // 0/1 entry per native axis.
+            std::array<bool, pops::kNativeDimension> one_sided{};
+            if (!one_sided_axes.empty()) {
+              if (one_sided_axes.size() != static_cast<std::size_t>(pops::kNativeDimension))
+                throw std::invalid_argument(
+                    "AmrSystem bootstrap transfer one_sided_axes must hold one entry per axis");
+              for (int axis = 0; axis < pops::kNativeDimension; ++axis) {
+                const int value = one_sided_axes[static_cast<std::size_t>(axis)];
+                if (value != 0 && value != 1)
+                  throw std::invalid_argument(
+                      "AmrSystem bootstrap transfer one_sided_axes entries must be 0 or 1");
+                one_sided[static_cast<std::size_t>(axis)] = value == 1;
+              }
+            }
             system.register_bootstrap_transfer_route(
                 identity, subjects, provider_identity, space, centering, representation, storage,
                 operation, kernel, order,
                 ranked_extent_from_python<pops::kNativeDimension>(
                     ghost_depth, "AmrSystem bootstrap transfer ghost_depth", true),
                 ranked_extent_from_python<pops::kNativeDimension>(
-                    refinement_ratio, "AmrSystem bootstrap transfer refinement_ratio", false));
+                    refinement_ratio, "AmrSystem bootstrap transfer refinement_ratio", false),
+                one_sided);
           },
           py::arg("identity"), py::arg("subjects"), py::arg("provider_identity"), py::arg("space"),
           py::arg("centering"), py::arg("representation"), py::arg("storage"), py::arg("operation"),
-          py::arg("kernel"), py::arg("order"), py::arg("ghost_depth"), py::arg("refinement_ratio"))
+          py::arg("kernel"), py::arg("order"), py::arg("ghost_depth"), py::arg("refinement_ratio"),
+          py::arg("one_sided_axes") = std::vector<int>{})
       .def("_register_bootstrap_oriented_face_subjects",
            &AmrSystem::register_bootstrap_oriented_face_subjects, py::arg("oriented_subjects"));
 }

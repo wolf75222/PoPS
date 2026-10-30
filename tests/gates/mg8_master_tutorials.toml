@@ -8,9 +8,9 @@ gate = "mg8-master-tutorials"
 # always fail the job (CF14). The ledger only shrinks (MG6): scripts/run_mg8_tutorials.py check
 # --check-base fails when it records more than the contract of the base revision. An entry names a
 # check, not its value, which depends on the runner's CPU: it explains every later value of that
-# check, so MG8 guards a recorded result only once its cause is fixed and its entry removed. The
-# fixes that empty this ledger (ROM-101 to ROM-104) land before any slice that changes a route
-# that a tutorial uses (landing plan of N5, section 6.2).
+# check, so MG8 guards a recorded result only once its cause is fixed and its entry removed.
+# ROM-101 to ROM-104 emptied this ledger before any slice that changes a route that a tutorial
+# uses (landing plan of N5, section 6.2): every result of master's tutorials is guarded.
 master = "bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7"
 directory = "docs/tutorials/scalar_advection"
 # The ConsoleMonitor template of the tutorials: these lines are their outputs at output times.
@@ -141,31 +141,13 @@ script = "16_openmp_cartesian3d_ssprk2.py"
 lane = "serial-dim3"
 outputs = [{ pattern = "results/16_openmp_cartesian3d_ssprk2.npz", kind = "npz" }]
 
-# Causes of the divergences of this tree from master: each names the commits that introduced it
-# (check --verify-commits proves that each is in the history and changes code that the tutorials
-# execute), the issue that owns it and the evidence that attributes it. The attribution build is
-# b6 with master's semantics for the four causes that MG8-1 found
-# (variant_b6_with_master_semantics.patch, replicas and traces in
-# /mnt/project-files/landing/mg8): each divergence names the run of that build that reproduces
-# master bit for bit, printed and console lines included.
-
-[[cause]]
-id = "regrid-boundary-prolongation"
-commits = ["72d3d077"]
-issue = "ROM-104"
-text = '''
-At a regrid, b6 fills a new fine cell whose parent touches a non-periodic face of the domain
-with the one-sided interior difference of the parent, unlimited
-(prepare_physical_boundary_prolongation in prepare_regridded_state_transfer); master, like
-linear_prolongation of section 2.6.9, takes the MC slope over both neighbours, the boundary
-ghost cell included. Only fine patches that reach the domain boundary see it.
-'''
-evidence = '''
-Tutorial 09 on b6 built with the three other semantics of master: same hierarchy at every step
-and same bits up to the regrid of step 2, whose 84 new fine cells next to y_min differ (at most
-2.5e-6); each rule, replayed in NumPy in the order of the kernel, gives the 84 values of its
-version bit for bit. The attribution build reproduces master bit for bit (see above).
-'''
+# Causes of the divergences of this tree from master, one [[cause]] each: the commits that
+# introduced it (check --verify-commits proves that each is in the history and changes code
+# that the tutorials execute), the issue that owns it and the evidence that attributes it.
+# None is left: MG8-1 found four (ROM-101 to ROM-104, evidence in
+# /mnt/project-files/landing/mg8), and each was removed by restoring master's semantics on
+# master's routes; a construct of API 0.2 that its tests assert is chosen by its own name
+# (spec 0.3, adjudication section 19).
 
 # One divergence per tutorial: the exact checks that differ, their causes and their attribution,
 # "reproduced" with the verdict of the run of the attribution build that gives master's bits
@@ -173,32 +155,3 @@ version bit for bit. The attribution build reproduces master bit for bit (see ab
 # compare fails on a difference without an entry and on a check that no longer differs, and check
 # --check-base on an entry that the base does not have, so this list only shrinks (MG6); a failure
 # is never a divergence (CF14).
-
-[[divergence]]
-tutorial = "09"
-causes = ["regrid-boundary-prolongation"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:run0-tracer-level0:sha256",
-  "run0:rank0:run0-tracer-level1:sha256",
-]
-
-[[divergence]]
-tutorial = "14"
-causes = ["regrid-boundary-prolongation"]
-attribution = "reproduced"
-reproduction = "landing/mg8/attribution/verdict-variant-09-14.json (sha256 ea5e7204); review/pr701/runs/mpi-dim2/verdict-variant-14.json (sha256 5b9d1c0b)"
-checks = [
-  "run0:rank0:macro_step",
-  "run0:rank0:report",
-  "run0:rank0:run0-tracer-level0:sha256",
-  "printed:rank0:line3",
-  "printed:rank0:line10",
-  "monitor:rank0",
-  "run0:rank1:macro_step",
-  "run0:rank1:report",
-  "run0:rank1:run0-tracer-level0:sha256",
-  "output:results/14_mpi_amr_outputs/*:series",
-  "output:results/14_mpi_amr_outputs/*:recipes",
-]

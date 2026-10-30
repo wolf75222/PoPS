@@ -34,7 +34,7 @@ from pops.fields.bcs import Dirichlet, Neumann, Periodic
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
-from pops.lib.amr import BergerRigoutsos, SpaceFillingCurve, StateTransfer
+from pops.lib.amr import BergerRigoutsos, ConservativeLinear, SpaceFillingCurve, StateTransfer
 from pops.lib.initial import Analytic
 from pops.linalg import LinearProblem
 from pops.math import ValueExpr, Var, ddt, div
@@ -266,7 +266,7 @@ tagging = AMRTagging(rules=(Tag(indicator > case.value(refine_threshold)),
     Coarsen(indicator < case.value(coarsen_threshold)), Buffer(cells=2, selection="refine-requests")),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS)
 transfer = AMRTransfer()
-transfer.state(plasma_U, StateTransfer())
+transfer.state(plasma_U, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
 layout = AMR(grid=grid,
     patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=COARSE_MAX_GRID),
     clustering=BergerRigoutsos(minimum_efficiency=0.7, minimum_box_size=4,

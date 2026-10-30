@@ -82,13 +82,13 @@ def _case(kind):
                               AMRTagging, AMRTransfer, Buffer, ConflictPolicy,
                               EqualityPolicy, Hysteresis, Tag)
         from pops.layouts import AMR
-        from pops.lib.amr import StateTransfer
+        from pops.lib.amr import ConservativeLinear, StateTransfer
         from pops.math import ValueExpr
         from pops.params import RuntimeParam
         from pops.time import every
 
         transfer = AMRTransfer()
-        transfer.state(block[state], StateTransfer())
+        transfer.state(block[state], StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
         threshold = case.param(RuntimeParam(
             "refinement_threshold", default=1.1 if kind == "amr2" else 1000.))
         layout = AMR(grid=grid,

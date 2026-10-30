@@ -104,13 +104,13 @@ def build(width, *, adaptive=False, failure=None, amr_periodic=False):
     if adaptive:
         from pops.layouts import AMR
         from pops.amr import AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer, Tag, Hysteresis, EqualityPolicy, ConflictPolicy, Buffer
-        from pops.lib.amr import BergerRigoutsos, StateTransfer
+        from pops.lib.amr import BergerRigoutsos, ConservativeLinear, StateTransfer
         from pops.math import ValueExpr
         from pops.params import RuntimeParam
         from pops.time import every
         threshold = case.param(RuntimeParam("refine", default=1.08))
         transfer = AMRTransfer()
-        transfer.state(block[rho], StateTransfer())
+        transfer.state(block[rho], StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
         layout = AMR(grid=grid, embedded_boundary=embedded,
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=AMRTagging(rules=(Tag(ValueExpr(block[rho])[labels[0]] > case.value(threshold)), Buffer(cells=0, selection="refine-requests")),

@@ -680,7 +680,7 @@ def _public_amr_hierarchy_case(
     from pops.frames import Cartesian2D
     from pops.initial import InitialCondition
     from pops.layouts import AMR
-    from pops.lib.amr import StateTransfer
+    from pops.lib.amr import ConservativeLinear, StateTransfer
     from pops.analytic import coordinates, cos, sin
     from pops.lib.initial import Analytic, BindArray, Constant, Gaussian
     from pops.math import ValueExpr, ddt, div
@@ -936,8 +936,8 @@ def _public_amr_hierarchy_case(
     )
     threshold = case.param(RuntimeParam("nested-refine-threshold", default=0.5))
     transfer = AMRTransfer()
-    transfer.state(state_instance, StateTransfer())
-    transfer.state(marker_instance, StateTransfer())
+    transfer.state(state_instance, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
+    transfer.state(marker_instance, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     layout = AMR(
         grid=CartesianGrid(
             frame=frame,

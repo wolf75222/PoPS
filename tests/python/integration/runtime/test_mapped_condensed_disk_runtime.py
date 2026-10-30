@@ -17,7 +17,7 @@ from pops.fields.bcs import Dirichlet, Neumann, Periodic
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import ConservativeLinear, StateTransfer
 from pops.lib.initial import Analytic
 from pops.linalg import LinearProblem
 from pops.math import ValueExpr, Var, ddt, div
@@ -103,7 +103,7 @@ def _case(n, levels, *, warm_start=True, regrid_every=100, grow_by_momentum=Fals
         projection=ConservativeCellAverage()))
     threshold = case.param(RuntimeParam("refine_marker", default=.75))
     transfer = AMRTransfer()
-    transfer.state(block[state], StateTransfer())
+    transfer.state(block[state], StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     tags = (Tag(ValueExpr(block[state])["marker"] > case.value(threshold)),)
     if grow_by_momentum:
         momentum_threshold = case.param(RuntimeParam("refine_momentum", default=1.))

@@ -38,7 +38,7 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import ConservativeLinear, StateTransfer
 from pops.lib.initial import Analytic
 from pops.lib.time import ForwardEuler
 from pops.math import ValueExpr, ddt, div
@@ -139,7 +139,7 @@ def _author(n, dt, *, physical=False, cxx=None):
     )
     threshold = case.param(RuntimeParam("refine-threshold", default=threshold_value))
     transfer = AMRTransfer()
-    transfer.state(block_state, StateTransfer())
+    transfer.state(block_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     layout = AMR(
         grid=CartesianGrid(
             frame=frame, cells=(n, n), periodic=None if physical else PeriodicAxes(frame.axes)

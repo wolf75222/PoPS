@@ -33,6 +33,10 @@ Le runtime transmet la périodicité réelle de la configuration aux transferts 
 
 La fixture native ajoute un contrôle de l'état initial réellement lié sur toutes les cellules fines valides, après sauvegarde du checkpoint initial. Cela localise immédiatement une régression de projection avant le calcul du bilan. Deux tests C++ supplémentaires couvrent reproduction affine et moyennes parentes en 1D/2D/3D, origines décalées, rapports anisotropes et deux composantes, puis refus des stencils périodiques/intérieurs absents et du parent physique unique. Ces tests C++ sont préparés pour l'intégrateur, sans claim d'exécution ici.
 
+## Construction nommée (MG8, ROM-104)
+
+Cette pente d'un seul côté est une construction à part. `StateTransfer()` et `ConservativeLinear()` reprennent la prolongation de master, au bootstrap comme au regrid : pente monotonized-central sur les deux voisins, maille fantôme du bord comprise (spec 0.3, §2.6.9). Les tutoriels de master ne gardent leurs bits qu'avec elle (MG8 ; arbitrage, section 19). La pente d'un seul côté se choisit par son nom, `ConservativeLinear(physical_faces="one-sided")`, qui garde le noyau natif et porte un masque d'axes `one_sided_axes`, que le transfert natif applique sur les axes non périodiques ; `integral_diffusion_case.py` la nomme, comme les autres fichiers d'API 0.2 dont la couche AMR a une face physique, et ces tests gardent leurs assertions. Le noyau `prepare_physical_boundary_prolongation` et ses tests C++ sont inchangés. L'écriture est provisoire et va à N15 (ROM-98).
+
 ## Réception effectuée et limites
 
 - Audit des vrais états/ledger sauvegardés : succès, nombres ci-dessus ; ce succès qualifie le diagnostic de l'ancien échec, pas la nouvelle correction native.

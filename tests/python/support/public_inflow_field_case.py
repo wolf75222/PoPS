@@ -15,7 +15,7 @@ from pops.fields.bcs import AllPhysicalBoundaries,BoundaryCondition,Neumann
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
-from pops.lib.amr import EllipticRecompute,StateTransfer
+from pops.lib.amr import EllipticRecompute,ConservativeLinear,StateTransfer
 from pops.lib.initial import Analytic
 from pops.lib.time import ForwardEuler
 from pops.math import ValueExpr,ddt,div,laplacian,unknown
@@ -55,7 +55,7 @@ def build(*,ghost=False):
     program=ForwardEuler(block[state],rate=rate,fields=field,solve_action=FailRun())
     program.step_strategy(FixedDt(DT));case.program(program)
     case.initials.add(InitialCondition(state=block[state],value=Analytic(frame=frame,components=(cos(2*math.pi*x(frame)),2+0*x(frame))),projection=ConservativeCellAverage()))
-    transfer=AMRTransfer();transfer.state(block[state],StateTransfer());transfer.field(field,EllipticRecompute())
+    transfer=AMRTransfer();transfer.state(block[state],StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")));transfer.field(field,EllipticRecompute())
     layout=AMR(grid=CartesianGrid(frame=frame,cells=(8,8)),hierarchy=AMRHierarchy(max_levels=2,ratios=(2,)),
         tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])['c']>model.value(threshold)),Buffer(cells=0, selection="refine-requests")),hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(1000,clock=program.clock)),transfer=transfer,

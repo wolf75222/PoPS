@@ -287,6 +287,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   is chosen by name, `Buffer(cells=n, selection="refine-requests")` (provisional spelling for
   N15); the tests, examples and tutorials that API 0.2 added or changed name it, so their
   results are unchanged (MG8, ROM-103).
+- `ConservativeLinear()` prolongs new fine cells as master does again, at a regrid and at a
+  bootstrap: a parent on a physical face takes the monotonized-central slope over both
+  neighbours, the boundary ghost included (spec 0.3, section 2.6.9). The one-sided interior
+  slope of API 0.2 is chosen by name, `ConservativeLinear(physical_faces="one-sided")`
+  (provisional spelling for N15), as the AMR diffusion receipts and the other files of API 0.2
+  with a physical face now do: its route keeps the native kernel and carries a mask of one-sided
+  axes, `one_sided_axes`, that the native transfer applies on the non-periodic axes. Master's
+  17 tutorials reproduce master bit for bit, and the MG8 ledger is empty (MG8, ROM-104).
 
 ## [1.0.0] - 2026-07-16
 

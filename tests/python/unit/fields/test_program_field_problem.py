@@ -307,7 +307,7 @@ def test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_ph
     from pops.mesh import CartesianGrid, PeriodicAxes
     from pops.time import FixedDt, every
     from pops.amr import AMRClockRelation, AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer, Buffer, ConflictPolicy, EqualityPolicy, Hysteresis, Tag
-    from pops.lib.amr import StateTransfer
+    from pops.lib.amr import ConservativeLinear, StateTransfer
     relation = _many_field_problem(3, cross=True, reaction=((4,-2,0),(-2,1,0),(0,0,3)), gauge=((1,2,0),))
     case, field, problem, program, values, point = field_case(problem_override=relation,
         publication_fields=True, publication_source=True, solver=CompositeFieldGMRES(max_iter=200, restart=25))
@@ -355,9 +355,9 @@ def test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_ph
     marker_time = program.state(marker_handle)
     program.commit(marker_time.next, program.value("unchanged_marker", 1 * marker_time.n, at=marker_time.next.point))
     transfer = AMRTransfer()
-    transfer.state(marker_handle, StateTransfer())
+    transfer.state(marker_handle, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     for state in values:
-        transfer.state(state, StateTransfer())
+        transfer.state(state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     from pops.initial import InitialCondition
     from pops.lib.initial import Constant
     from pops.projection import ConservativeCellAverage

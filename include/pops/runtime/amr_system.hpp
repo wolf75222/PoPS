@@ -921,7 +921,7 @@ class AmrSystem {
       const std::string& provider_identity, const std::string& space, const std::string& centering,
       const std::string& representation, const std::string& storage, const std::string& operation,
       const std::string& kernel, int order, const Extent<Dim>& ghost_depth,
-      const Extent<Dim>& refinement_ratio);
+      const Extent<Dim>& refinement_ratio, const std::array<bool, Dim>& one_sided_axes = {});
   void register_bootstrap_oriented_face_subjects(const std::vector<std::string>& oriented_subjects);
 
   /// Register immutable owner-qualified auxiliary producers and native consumer views.  The graph

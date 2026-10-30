@@ -26,7 +26,7 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR, Uniform
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import ConservativeLinear, StateTransfer
 from pops.lib.initial import Analytic, Gaussian
 from pops.math import ValueExpr, CoeffGradient, ddt, div, sqrt
 from pops.mesh import CartesianGrid, PeriodicAxes
@@ -217,7 +217,7 @@ def build(
         )
     )
     transfer = AMRTransfer()
-    transfer.state(block[state], StateTransfer())
+    transfer.state(block[state], StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     execution = (
         AMRExecution.subcycled((AMRClockRelation(0, 1, 2),))
         if subcycled

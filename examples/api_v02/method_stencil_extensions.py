@@ -19,7 +19,7 @@ from pops.fields import (CellMidpoint, FieldBoundary, FieldDiscretization,
                          FieldProblem, bcs)
 from pops.fields.methods import CellCenteredSecondOrder
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import ConservativeLinear, StateTransfer
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.model import FieldSpace, PhysicalDimension, PhysicalSupport
 from pops.numerics import DiscretizationPlan, ProgramRealization, StateStorage
@@ -161,7 +161,7 @@ def build_stencil_extensions(*, cells=(24, 16), sample="cell", amr=True,
         subjects["marker"] = marker_block[marker]
         transfer = AMRTransfer()
         for subject in subjects.values():
-            transfer.state(subject, StateTransfer())
+            transfer.state(subject, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
         threshold = case.param(RuntimeParam("static_refinement", default=.5))
         grid = CartesianGrid(frame=frame, cells=cells,
             periodic=PeriodicAxes(frame.axes if periodic else (frame.axes[1],)))

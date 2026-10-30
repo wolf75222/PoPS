@@ -16,7 +16,7 @@ from pops.amr import (AMRClockRelation, AMRExecution, AMRHierarchy, AMRRegrid,
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import ConservativeLinear, StateTransfer
 from pops.mesh import CartesianGrid
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
@@ -95,7 +95,7 @@ def build_t10_multiblock(numerical_flux, *, cells=(32, 16), temporal_ratio=2,
         p.step_strategy(FixedDt(h))
     case.program(p)
     transfer = AMRTransfer()
-    for subject in subjects: transfer.state(subject, StateTransfer())
+    for subject in subjects: transfer.state(subject, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     from pops.params import RuntimeParam
     threshold = case.param(RuntimeParam("refine_threshold", default=.5))
     tags = tuple(Tag(pm.ValueExpr(subject)["q"] > case.value(threshold)) for subject in subjects)
