@@ -357,6 +357,10 @@ TEST(test_interface_flux_fragment_ledger, exact_weight_multiword_division_and_gc
       ExactWeight(1, 9);
   EXPECT_EQ(third.text(), "1606938044258990275541962092341162602522202993782792835313721/3");
   EXPECT_EQ(third.value(), 5.356460147529967e+59);
+  // Power-of-two divisors on a limb boundary (2^64, 2^96): value() rounds with their remainder.
+  EXPECT_EQ(ExactWeight::from_double(0x1.999999999999ap-13).value(), 0x1.999999999999ap-13);
+  EXPECT_EQ(ExactWeight::from_double(0x1.0000000000001p-12).value(), 0x1.0000000000001p-12);
+  EXPECT_EQ(ExactWeight::from_double(0x1.0000000000001p-44).value(), 0x1.0000000000001p-44);
   // Canonical limbs do not depend on the division path that normalized them.
   std::uint64_t state = 0x9e3779b97f4a7c15ULL;
   const auto next_hex = [&state](int words) {

@@ -220,6 +220,8 @@ class Natural {
 
  private:
   // Limb checks of shifting `b` onto the leading bit of `a` and of the quotient storage.
+  // ExactWeight never reaches these refusals: its budgets bound every operand of divide and gcd
+  // to bytes / 4 limbs. They keep a direct Natural division within the same budget.
   static void require_division_budget_(const Natural& a, const Natural& b, std::size_t bytes) {
     const auto steps = a.bits() - b.bits();
     const auto whole = steps / 32;

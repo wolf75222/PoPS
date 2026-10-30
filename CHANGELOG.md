@@ -289,8 +289,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
   and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step
-  validates its face-flux fragments with these weights; the scalar advection final example
-  now runs about three times as many steps per minute.
+  validates its face-flux fragments with these weights; over the first 35 accepted steps of the
+  scalar advection final example (to t = 0.03), run side by side on one 4-core container, the
+  step rate rises from 4.75 to 9.04 per minute.
 
 ## [1.0.0] - 2026-07-16
 
