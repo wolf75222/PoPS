@@ -31,6 +31,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   Preserve scientific typing, inventory provenance, transactional publication and
   explicit backend limits; document the 28-model/12-method CPU reception separately
   from GitHub CI and full scientific-family qualification.
+- Write the Rusanov, upwind and HLL face fluxes in Python in `pops.lib.numerics`
+  (`rusanov(F, Uh, smax)`, `upwind(F, Uh, speed)`, `hll(F, Uh, speeds)`): each returns a
+  finite-volume realization whose `riemann.User` face body becomes the generated C++ face policy.
+  The M01 and M03 examples use `rusanov` by default and keep the native routes as `native_rusanov`
+  and `native_hll`, with bitwise equal final states; `benchmarks/n3a/` times both routes.
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.

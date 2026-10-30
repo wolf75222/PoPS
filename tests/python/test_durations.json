@@ -5703,6 +5703,11 @@
           "estimated_seconds": 10,
           "kind": "source_contract",
           "registration": "snapshot_protocols_20261016"
+        },
+        "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
+          "estimated_seconds": 900,
+          "kind": "native_profile",
+          "native_dimension": 2
         }
       },
       "mpi_routing_20261014": {
@@ -6603,7 +6608,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1129,
+    "estimated_count": 1131,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6754,6 +6759,7 @@
       "tests/python/integration/runtime/test_api_v02_original_field_typed_recovery_native.py",
       "tests/python/integration/runtime/test_api_v02_output_history_remap_native.py",
       "tests/python/integration/runtime/test_api_v02_path_hierarchy_native.py",
+      "tests/python/integration/runtime/test_api_v02_python_faces_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_choices_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_loops_native.py",
       "tests/python/integration/runtime/test_api_v02_regions_native.py",
@@ -7356,6 +7362,7 @@
       "tests/python/unit/numerics/test_flux_correction_v02.py",
       "tests/python/unit/numerics/test_hall_independent_oracle.py",
       "tests/python/unit/numerics/test_indicator_stencils.py",
+      "tests/python/unit/numerics/test_lib_numerics_faces.py",
       "tests/python/unit/numerics/test_m05_shear_independent_review.py",
       "tests/python/unit/numerics/test_m07_hydrostatic_public_gap.py",
       "tests/python/unit/numerics/test_m08_independent_receipt.py",
@@ -7935,7 +7942,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1194,
+    "total_files": 1196,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -7979,6 +7986,20 @@
         "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
         "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 960,
         "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 1320
+      }
+    },
+    "n3a_20261029": {
+      "basis": "Scheduling estimates for the N3a pilot (ROM-82), not CI receipts. The source unit file builds the M03 and M16 models without compiling (24 s locally on 4 cores, so 30 s). The native file compiles four case pairs, eight artifacts (769 s locally on 4 cores with Kokkos OpenMP), each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts), plus margin. Refresh from complete CI timing artifacts.",
+      "files": {
+        "tests/python/unit/numerics/test_lib_numerics_faces.py": {
+          "estimated_seconds": 30,
+          "kind": "source_unit"
+        },
+        "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
+          "estimated_seconds": 900,
+          "kind": "native_profile",
+          "analogue": "tests/python/integration/runtime/test_api_v02_models_M01_M14.py"
+        }
       }
     }
   },
@@ -9175,5 +9196,7 @@
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
   "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
   "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": 60,
-  "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300
+  "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300,
+  "tests/python/unit/numerics/test_lib_numerics_faces.py": 30,
+  "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 900
 }
