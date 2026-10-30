@@ -3966,6 +3966,70 @@ TEST(ProgramContextContract, NoFluxHistoryFieldCheckpointMigratesWithoutChanging
   EXPECT_THROW(read_uniform_history_exchanges(original, wrong), std::invalid_argument);
 }
 
+TEST(ProgramContextContract, HistoryFieldWorkspaceBoundsTheEnvelopeNotTheNestedExchangeImage) {
+  using namespace runtime::program;
+  HistoryManager<kTestDimension> manager;
+  manager.field_metadata_budget = {65536, 262144};
+  manager.histories["raw"].resize(2);
+  manager.slot_dt["raw"] = {.1, .1};
+  const HistorySampleIdentity sample{0, std::bit_cast<std::uint64_t>(.1), 1,
+                                     HistorySampleKind::Publication};
+  manager.slot_sample["raw"] = {sample, sample};
+  const auto support = std::make_shared<const ContinuationFieldSupport>(
+      ContinuationFieldSupport{"program", "exact-past-point", 0, 0, 0, 0, {}});
+  manager.slot_fields["raw"] = {{support, {}}, {support, {}}};
+  const auto bare =
+      checkpoint_uniform_history_exchanges(AcceptedExchangeLedger{}.checkpoint(true), manager);
+  const auto envelope = bare.size() - nested_history_exchange_image(bare).size();
+  // Records are staged in key order, the order a repartitioned mailbox has.
+  std::vector<std::string> quadratures;
+  for (int cell = 0; cell < 512; ++cell)
+    quadratures.push_back("cell:" + std::to_string(cell) + "/axis:0/side:0");
+  std::sort(quadratures.begin(), quadratures.end());
+  AcceptedExchangeLedger mailbox;
+  for (const auto& quadrature : quadratures)
+    mailbox.stage(
+        ExchangeRecord{"flux", "incidence", "source", quadrature, 1, 1., 1., .1, 1, 0, 0, 0});
+  const auto exchanges = mailbox.checkpoint(true);
+  manager.field_metadata_budget.workspace_bytes = 16 * envelope;
+  ASSERT_GT(exchanges.size(), 4 * manager.field_metadata_budget.workspace_bytes);
+  const auto original = checkpoint_uniform_history_exchanges(exchanges, manager);
+  const auto nested = nested_history_exchange_image(original);
+  EXPECT_EQ(std::vector(nested.begin(), nested.end()), exchanges);
+  EXPECT_EQ(original.size() - nested.size(), envelope);
+  const auto decoded = read_uniform_history_exchanges(original, manager, true);
+  EXPECT_EQ(std::vector(decoded.exchanges.begin(), decoded.exchanges.end()), exchanges);
+  EXPECT_EQ(*decoded.fields.at("raw")[0].support, *support);
+  std::vector<std::vector<std::uint8_t>> shards{original};
+  for (int target_size : {2, 3, 1}) {
+    std::vector<std::span<const std::uint8_t>> views(shards.begin(), shards.end());
+    std::vector<std::vector<std::uint8_t>> next;
+    std::size_t records = 0;
+    for (int rank = 0; rank < target_size; ++rank) {
+      next.push_back(rematerialize_uniform_history_exchanges<kTestDimension>(
+          views, manager, [](int, const FieldExchangeExpressions::Cell&) { return true; }, rank,
+          target_size));
+      const auto image = read_uniform_history_exchanges(next.back(), manager, true);
+      records += AcceptedExchangeLedger::from_checkpoint(image.exchanges).records().size();
+    }
+    EXPECT_EQ(records, quadratures.size());
+    shards.swap(next);
+  }
+  EXPECT_EQ(shards.front(), original);
+  // The envelope itself stays bounded, whatever the size of the nested image.
+  auto small = manager;
+  small.field_metadata_budget.workspace_bytes = envelope - 1;
+  EXPECT_THROW(
+      checkpoint_uniform_history_exchanges(AcceptedExchangeLedger{}.checkpoint(true), small),
+      std::length_error);
+  EXPECT_THROW(read_uniform_history_exchanges(original, small), std::length_error);
+  const std::array<std::span<const std::uint8_t>, 1> source{original};
+  EXPECT_THROW(
+      rematerialize_uniform_history_exchanges<kTestDimension>(
+          source, small, [](int, const FieldExchangeExpressions::Cell&) { return true; }, 0, 1),
+      std::length_error);
+}
+
 TEST(ProgramContextContract, HistoryInterpolationPreservesEndpointsAndRejectsRawMixing) {
   using namespace runtime::program;
   const HistoryFieldMetadataBudget budget{65536, 65536};
