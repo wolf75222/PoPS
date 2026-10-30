@@ -6564,6 +6564,33 @@
         }
       ]
     },
+    "ci_20261029_n7a_faceflux_pilot": {
+      "basis": "Unmeasured CI scheduling estimates for the two N7a FaceFlux pilot modules (ROM-83), on the api_v02_20261013 tiers: 60 s for source-only resolution and C++ generation of the M05 and M10 programs without compilation, as the analogue test_typed_product_seed_history.py; 300 s for two Dim2 native profile cases with one cold C++ compilation each, as the analogue test_stencil_flux_v02_native.py (three cases, 300 s). The local receipts come from scripts/ci_pytest_timings.py on a 4-core container (unit from the source checkout, native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, shard count, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": "tests/python/integration/runtime/test_stencil_flux_v02_native.py",
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "tests/python/unit/codegen/test_typed_product_seed_history.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300,
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": 60
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": {
+          "cases": 2,
+          "phase_seconds": 103.65,
+          "session_seconds": 104.42
+        },
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": {
+          "cases": 19,
+          "phase_seconds": 24.99,
+          "session_seconds": 25.67
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": "fdf1566dcfb724e13377796c5340ad688cc54331d799503334d3b41804c005ae",
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "c1260647ccd3fcfa02a32f913bfda80573fc6168edb1603fda6d367f7a353a73"
+      }
+    },
     "declared_hardware_profiles": {
       "gpu": {
         "basis": "Existing 120-second CPU scheduling estimate retained as provenance only; authentic CUDA/HIP device/managed Field storage is mandatory. No GPU execution or timing received. CPU plans exclude this exact manifest-declared profile; scripts/ci_python_hardware.py --hardware gpu --execute fails closed on CPU.",
@@ -6576,7 +6603,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1127,
+    "estimated_count": 1129,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6784,6 +6811,7 @@
       "tests/python/integration/runtime/test_exact_analytic_initial.py",
       "tests/python/integration/runtime/test_extension_closure_v14_native.py",
       "tests/python/integration/runtime/test_external_grid_frontier_runtime.py",
+      "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py",
       "tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py",
       "tests/python/integration/runtime/test_fan_li15_full_eight_storage_runtime.py",
       "tests/python/integration/runtime/test_fan_li15_public_composition_runtime.py",
@@ -7320,6 +7348,7 @@
       "tests/python/unit/numerics/test_discretization_plan.py",
       "tests/python/unit/numerics/test_drift_wetdry_oracles_v02.py",
       "tests/python/unit/numerics/test_external_reconstruction_contract.py",
+      "tests/python/unit/numerics/test_faceflux_pilot_n7a.py",
       "tests/python/unit/numerics/test_fan_li15_path_contract.py",
       "tests/python/unit/numerics/test_finite_linear_maps.py",
       "tests/python/unit/numerics/test_finite_linear_native_shapes.py",
@@ -7906,7 +7935,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1192,
+    "total_files": 1194,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9144,5 +9173,7 @@
   "tests/python/integration/runtime/test_api_v02_computed_frontier_clipping_native.py": 1200,
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
-  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10
+  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
+  "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": 60,
+  "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300
 }

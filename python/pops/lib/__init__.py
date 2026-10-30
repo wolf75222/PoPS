@@ -6,7 +6,9 @@ packages and keeps ``pops.lib`` for things that are ready to use (criterion 7: p
 * :mod:`pops.lib.time` -- provided time-stepping Programs;
 * :mod:`pops.lib.models` -- provided physical models (HyQMOM15 / Gaussian);
 * :mod:`pops.lib.initial` -- native initial profiles;
-* :mod:`pops.lib.amr` -- native transfer implementations.
+* :mod:`pops.lib.amr` -- native transfer implementations;
+* :mod:`pops.lib.numerics` -- builders of the discrete algebra (spec 0.3 IR25), from the
+  FaceFlux pilot of N7a.
 
 The relocated central catalogs now live in:
 
@@ -26,5 +28,6 @@ from . import time
 from . import models
 from . import amr
 from . import initial
+from . import numerics
 
-__all__ = ["amr", "initial", "models", "time"]
+__all__ = ["amr", "initial", "models", "numerics", "time"]
