@@ -516,17 +516,25 @@ def selects_catalogue_routes(model: Any) -> bool:
 
 
 def _native_route_cpp(route: Any) -> str:
-    """C++ route set of one package: every catalogue route, or the single resolved one."""
+    """C++ route set of one package: every catalogue route, or the single resolved one.
+
+    The resolved route is named by the native types that the route catalogue records for its
+    limiter and Riemann tokens, and by the reconstructed-variable set of its variables token; the
+    engine instantiates the route that the package names and holds no table of routes.
+    """
     route = normalize_native_route(route)
     if route is None:
         return ""
+    from pops.runtime.routes import RECON_CONSERVATIVE, RECON_PRIMITIVE, resolve
+
     variables, limiter, riemann = route
-    return (
-        "pops::GeneratedResolvedRoute<\n"
-        "    pops::generated_route_id<pops::ReconRouteId>(pops::kReconRoutes, %s),\n"
-        "    pops::generated_route_id<pops::LimiterRouteId>(pops::kLimiterRoutes, %s),\n"
-        "    pops::generated_route_id<pops::RiemannRouteId>(pops::kRiemannRoutes, %s)>"
-        % (cpp_string_literal(variables), cpp_string_literal(limiter), cpp_string_literal(riemann))
+    reconstructed = {RECON_CONSERVATIVE: "Conservative", RECON_PRIMITIVE: "Primitive"}
+    if variables not in reconstructed:
+        raise ValueError("native route %r has no reconstructed-variable set" % variables)
+    return "pops::GeneratedResolvedRoute<pops::nd::ReconstructionVariables::%s, %s, %s>" % (
+        reconstructed[variables],
+        resolve("limiter", limiter).native_entry,
+        resolve("riemann", riemann).native_entry,
     )
 
 

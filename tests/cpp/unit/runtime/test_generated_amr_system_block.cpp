@@ -936,17 +936,16 @@ TEST(GeneratedAmrSystemBlock, PreparesOneExactNativePackageImage) {
 TEST(GeneratedAmrSystemBlock, ResolvedRoutePackageInstantiatesOnlyItsRoute) {
   constexpr int Dim = pops::kNativeDimension;
   using Model = AdvectionModel<Dim>;
-  using Routes = pops::GeneratedResolvedRoute<
-      pops::generated_route_id<pops::ReconRouteId>(pops::kReconRoutes, "conservative"),
-      pops::generated_route_id<pops::LimiterRouteId>(pops::kLimiterRoutes, "minmod"),
-      pops::generated_route_id<pops::RiemannRouteId>(pops::kRiemannRoutes, "rusanov")>;
-  static_assert(Routes::admits(pops::ReconRouteId::kConservative));
-  static_assert(Routes::admits(pops::LimiterRouteId::kMinmod));
-  static_assert(Routes::admits(pops::RiemannRouteId::kRusanov));
-  static_assert(!Routes::admits(pops::ReconRouteId::kPrimitive));
-  static_assert(!Routes::admits(pops::LimiterRouteId::kWeno5));
-  static_assert(!Routes::admits(pops::RiemannRouteId::kHll));
-  static_assert(pops::GeneratedCatalogueRoutes::admits(pops::LimiterRouteId::kWeno5));
+  constexpr auto conservative = pops::nd::ReconstructionVariables::Conservative;
+  constexpr auto primitive = pops::nd::ReconstructionVariables::Primitive;
+  // The conservative/minmod/rusanov route, named by its catalogue native types.
+  using Routes = pops::GeneratedResolvedRoute<conservative, pops::Minmod, pops::RusanovFlux>;
+  static_assert(Routes::instantiates<conservative, pops::Minmod, pops::RusanovFlux>());
+  static_assert(!Routes::instantiates<primitive, pops::Minmod, pops::RusanovFlux>());
+  static_assert(!Routes::instantiates<conservative, pops::Weno5, pops::RusanovFlux>());
+  static_assert(!Routes::instantiates<conservative, pops::Minmod, pops::HLLFlux>());
+  static_assert(
+      pops::GeneratedCatalogueRoutes::instantiates<primitive, pops::Weno5, pops::HLLFlux>());
 
   pops::Extent<Dim> shape{};
   pops::RealVector<Dim> lower{}, upper{};
@@ -996,16 +995,19 @@ TEST(GeneratedAmrSystemBlock, ResolvedRoutePackageInstantiatesOnlyItsRoute) {
   for (const auto& [limiter, riemann, variables] :
        {std::tuple{"weno5", "rusanov", "conservative"}, std::tuple{"minmod", "hll", "conservative"},
         std::tuple{"minmod", "rusanov", "primitive"}}) {
+    // The refusal names the requested variables/limiter/Riemann route.
+    const std::string requested =
+        std::string("route than ") + variables + "/" + limiter + "/" + riemann;
     EXPECT_NE(refusal([&] {
                 return uniform(limiter, riemann, variables);
-              }).find("package was compiled for another"),
+              }).find("System package was compiled for another catalogue numerical " + requested),
               std::string::npos)
-        << limiter << "/" << riemann << "/" << variables;
+        << requested;
     EXPECT_NE(refusal([&] {
                 return adaptive(limiter, riemann, variables);
-              }).find("package was compiled for another"),
+              }).find("AMR package was compiled for another catalogue numerical " + requested),
               std::string::npos)
-        << limiter << "/" << riemann << "/" << variables;
+        << requested;
   }
 }
 

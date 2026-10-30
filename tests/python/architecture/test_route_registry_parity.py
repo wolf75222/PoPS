@@ -213,3 +213,68 @@ def test_native_behavior_contains_no_hand_written_generated_route_lists():
         "native route refusals must enumerate generated tables at runtime:\n"
         + "\n".join("  %s: %r" % item for item in offenders)
     )
+
+
+def _selector_body(source: str, signature: str) -> str:
+    start = re.search(signature, source)
+    assert start is not None, signature
+    return source[start.end():source.index("\n}\n", start.end())]
+
+
+def _selected_types(body: str, enum: str, pattern: str) -> dict[str, str]:
+    selected = {}
+    for case in body.split("case %s::" % enum)[1:]:
+        cpp_id = re.match(r"\w+", case).group(0)
+        match = re.search(pattern, case)
+        assert match is not None, (enum, cpp_id)
+        selected[cpp_id] = next(group for group in match.groups() if group)
+    return selected
+
+
+def test_resolved_route_names_the_types_that_the_block_selectors_instantiate():
+    # A package compiled for one resolved route instantiates the route whose native types its
+    # generated loader names; a selector that instantiated another type for the same token would
+    # make the package refuse its own route, and one that skipped the route set would compile
+    # every route again.
+    from pops.codegen._compile_emit import _native_route_cpp
+
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    rows = {family["name"]: family["routes"] for family in catalog["route_families"]}
+    flux = (ROOT / "include" / "pops" / "numerics" / "fv" / "numerical_flux.hpp").read_text(
+        encoding="utf-8")
+    aliases = dict(re.findall(r"using (\w+) =\s*([^;]+);", flux))
+
+    def qualified(spelling: str) -> str:
+        spelling = aliases.get(spelling, spelling)
+        return re.sub(r"\s+", "", re.sub(r"\b[A-Za-z_]\w*\b", r"pops::\g<0>", spelling))
+
+    emitted = re.compile(
+        r"pops::GeneratedResolvedRoute<pops::nd::ReconstructionVariables::(\w+), ([^,]+), (.+)>")
+    for header in ("generated_system_block.hpp", "generated_amr_system_block.hpp"):
+        source = (ROOT / "include" / "pops" / "runtime" / "builders" / "compiled" /
+                  header).read_text(encoding="utf-8")
+        variables = _selected_types(
+            _selector_body(source, r"prepare_generated_(?:amr_)?system_block\(Request request\)"),
+            "ReconRouteId", r"ReconstructionVariables::(\w+),\s*Routes>")
+        limiters = _selected_types(
+            _selector_body(source, r"select_reconstruction\(Request request\) \{"),
+            "LimiterRouteId",
+            r"select_riemann<Dim,\s*Variables,\s*Routes>\(std::move\(request\),\s*"
+            r"(?:configured_reconstruction<(\w+)>|(\w+)\{\})")
+        riemanns = _selected_types(
+            _selector_body(source, r"select_riemann\(Request request, Reconstruction \w+\) \{"),
+            "RiemannRouteId",
+            r"materialize_(?:block|system)<Dim,\s*Model,\s*Reconstruction,\s*(\w+),\s*"
+            r"Variables>\(\s*Routes\{\},")
+        assert set(variables) == {row["cpp_id"] for row in rows["recon"]}, header
+        assert set(limiters) == {row["cpp_id"] for row in rows["limiter"]}, header
+        assert set(riemanns) == {row["cpp_id"] for row in rows["riemann"]}, header
+        for recon in rows["recon"]:
+            for limiter in rows["limiter"]:
+                for riemann in rows["riemann"]:
+                    route = (recon["token"], limiter["token"], riemann["token"])
+                    match = emitted.fullmatch(_native_route_cpp(route))
+                    assert match is not None, route
+                    assert match.groups() == (
+                        variables[recon["cpp_id"]], qualified(limiters[limiter["cpp_id"]]),
+                        qualified(riemanns[riemann["cpp_id"]])), (header, route)

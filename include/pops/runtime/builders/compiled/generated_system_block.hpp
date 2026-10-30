@@ -35,47 +35,35 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace pops {
 
-/// Catalogue routes that one generated package instantiates. A package that any catalogue route
-/// may install keeps every route; a package compiled for one resolved block instantiates only that
-/// block's route and refuses every other while preparing (a guarded static specialization).
+/// The catalogue routes that one generated package instantiates. A package that any catalogue
+/// route may install instantiates them all. The generated loader of a package compiled for one
+/// resolved block names that block's reconstructed variables, reconstruction and face flux with
+/// the native types of the route catalogue (GeneratedResolvedRoute); the package then instantiates
+/// that route alone and refuses every other while preparing (a guarded static specialization).
 struct GeneratedCatalogueRoutes {
-  static constexpr bool admits(ReconRouteId) noexcept { return true; }
-  static constexpr bool admits(LimiterRouteId) noexcept { return true; }
-  static constexpr bool admits(RiemannRouteId) noexcept { return true; }
+  template <nd::ReconstructionVariables, class, class>
+  static constexpr bool instantiates() noexcept {
+    return true;
+  }
 };
 
-template <ReconRouteId Reconstruction, LimiterRouteId Limiter, RiemannRouteId Riemann>
+template <nd::ReconstructionVariables Variables, class Reconstruction, class Numerical>
 struct GeneratedResolvedRoute {
-  static constexpr bool admits(ReconRouteId route) noexcept { return route == Reconstruction; }
-  static constexpr bool admits(LimiterRouteId route) noexcept { return route == Limiter; }
-  static constexpr bool admits(RiemannRouteId route) noexcept { return route == Riemann; }
+  template <nd::ReconstructionVariables RouteVariables, class RouteReconstruction,
+            class RouteNumerical>
+  static constexpr bool instantiates() noexcept {
+    return RouteVariables == Variables && std::is_same_v<RouteReconstruction, Reconstruction> &&
+           std::is_same_v<RouteNumerical, Numerical>;
+  }
 };
-
-/// Catalogue wire token -> route id, evaluated while compiling a generated package; a token absent
-/// from this header's catalogue does not compile.
-template <class Id, std::size_t N>
-consteval Id generated_route_id(const RouteInfo (&table)[N], std::string_view token) {
-  for (const RouteInfo& route : table)
-    if (token == route.token)
-      return static_cast<Id>(route.index);
-  throw std::invalid_argument("generated package names a route outside the native catalogue");
-}
 
 namespace generated_system_detail {
-
-template <class Routes, class Route>
-void require_compiled_route(Route route, const char* axis, const char* where) {
-  if (!Routes::admits(route))
-    throw std::invalid_argument(std::string(where) + " package was compiled for another " + axis +
-                                " route");
-}
 
 /// Convert one primitive cell without exposing a rejected or partially materialized candidate.
 ///
@@ -1468,115 +1456,100 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   return result;
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Routes, class Request,
-          class Reconstruction>
+/// Materialize one catalogue route of a generated package, or refuse a route that the package
+/// does not instantiate. The first argument names the route set of the package
+/// (GeneratedCatalogueRoutes).
+template <int Dim, class Model, class Reconstruction, class Numerical,
+          nd::ReconstructionVariables Variables, class Routes, class Request>
+PreparedSystemBlock<Dim> materialize_block(Routes, Request request,
+                                           [[maybe_unused]] Reconstruction reconstruction,
+                                           [[maybe_unused]] Numerical numerical) {
+  if constexpr (Routes::template instantiates<Variables, Reconstruction, Numerical>())
+    return materialize_block<Dim, Model, Reconstruction, Numerical, Variables>(
+        std::move(request), reconstruction, numerical);
+  else
+    throw std::invalid_argument(
+        "generated System package was compiled for another catalogue numerical route than " +
+        request.routes.reconstruction + "/" + request.routes.limiter + "/" +
+        request.routes.riemann);
+}
+
+template <int Dim, nd::ReconstructionVariables Variables, class Routes = GeneratedCatalogueRoutes,
+          class Request, class Reconstruction>
 PreparedSystemBlock<Dim> select_riemann(Request request, Reconstruction reconstruction) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
-  const auto route = parse_riemann_route(request.routes.riemann, "generated System block");
-  require_compiled_route<Routes>(route, "Riemann", "generated System");
-  switch (route) {
+  switch (parse_riemann_route(request.routes.riemann, "generated System block")) {
     case RiemannRouteId::kRusanov:
-      if constexpr (Routes::admits(RiemannRouteId::kRusanov))
-        return materialize_block<Dim, Model, Reconstruction, RusanovFlux, Variables>(
-            std::move(request), reconstruction, RusanovFlux{});
-      break;
+      return materialize_block<Dim, Model, Reconstruction, RusanovFlux, Variables>(
+          Routes{}, std::move(request), reconstruction, RusanovFlux{});
     case RiemannRouteId::kHll:
-      if constexpr (Routes::admits(RiemannRouteId::kHll) && detail::wave_speeds_all_axes<Model>())
+      if constexpr (detail::wave_speeds_all_axes<Model>())
         return materialize_block<Dim, Model, Reconstruction, HLLFlux, Variables>(
-            std::move(request), reconstruction, HLLFlux{});
+            Routes{}, std::move(request), reconstruction, HLLFlux{});
       break;
     case RiemannRouteId::kHllc:
-      if constexpr (Routes::admits(RiemannRouteId::kHllc) && HasHLLCStructure<Model>)
+      if constexpr (HasHLLCStructure<Model>)
         return materialize_block<Dim, Model, Reconstruction, HLLCFlux, Variables>(
-            std::move(request), reconstruction, HLLCFlux{});
+            Routes{}, std::move(request), reconstruction, HLLCFlux{});
       break;
     case RiemannRouteId::kRoe:
-      if constexpr (Routes::admits(RiemannRouteId::kRoe) && HasRoeDissipation<Model>)
+      if constexpr (HasRoeDissipation<Model>)
         return materialize_block<Dim, Model, Reconstruction, RoeFlux, Variables>(
-            std::move(request), reconstruction, RoeFlux{});
+            Routes{}, std::move(request), reconstruction, RoeFlux{});
       break;
     case RiemannRouteId::kRoeHllRusanovRecovery:
-      if constexpr (Routes::admits(RiemannRouteId::kRoeHllRusanovRecovery) &&
-                    HasRoeDissipation<Model> && detail::wave_speeds_all_axes<Model>())
+      if constexpr (HasRoeDissipation<Model> && detail::wave_speeds_all_axes<Model>())
         return materialize_block<Dim, Model, Reconstruction, RoeHllRusanovRecoveryPolicy,
-                                 Variables>(std::move(request), reconstruction,
+                                 Variables>(Routes{}, std::move(request), reconstruction,
                                             RoeHllRusanovRecoveryPolicy{});
       break;
   }
   throw std::invalid_argument("generated model does not satisfy the requested Riemann capability");
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Routes, class Request>
+template <int Dim, nd::ReconstructionVariables Variables, class Routes = GeneratedCatalogueRoutes,
+          class Request>
 PreparedSystemBlock<Dim> select_reconstruction(Request request) {
-  const auto route = parse_limiter_route(request.routes.limiter, "generated System block");
-  require_compiled_route<Routes>(route, "limiter", "generated System");
-  switch (route) {
+  switch (parse_limiter_route(request.routes.limiter, "generated System block")) {
     case LimiterRouteId::kNone:
-      if constexpr (Routes::admits(LimiterRouteId::kNone))
-        return select_riemann<Dim, Variables, Routes>(std::move(request), NoSlope{});
-      break;
+      return select_riemann<Dim, Variables, Routes>(std::move(request), NoSlope{});
     case LimiterRouteId::kMinmod:
-      if constexpr (Routes::admits(LimiterRouteId::kMinmod))
-        return select_riemann<Dim, Variables, Routes>(std::move(request), Minmod{});
-      break;
+      return select_riemann<Dim, Variables, Routes>(std::move(request), Minmod{});
     case LimiterRouteId::kVanLeer:
-      if constexpr (Routes::admits(LimiterRouteId::kVanLeer))
-        return select_riemann<Dim, Variables, Routes>(std::move(request), VanLeer{});
-      break;
+      return select_riemann<Dim, Variables, Routes>(std::move(request), VanLeer{});
     case LimiterRouteId::kWeno5:
-      if constexpr (Routes::admits(LimiterRouteId::kWeno5))
-        return select_riemann<Dim, Variables, Routes>(std::move(request),
-                                                      configured_reconstruction<Weno5>());
-      break;
+      return select_riemann<Dim, Variables, Routes>(std::move(request),
+                                                    configured_reconstruction<Weno5>());
     case LimiterRouteId::kMc:
-      if constexpr (Routes::admits(LimiterRouteId::kMc))
-        return select_riemann<Dim, Variables, Routes>(std::move(request), MC{});
-      break;
+      return select_riemann<Dim, Variables, Routes>(std::move(request), MC{});
     case LimiterRouteId::kSuperbee:
-      if constexpr (Routes::admits(LimiterRouteId::kSuperbee))
-        return select_riemann<Dim, Variables, Routes>(std::move(request), Superbee{});
-      break;
+      return select_riemann<Dim, Variables, Routes>(std::move(request), Superbee{});
   }
   throw std::logic_error("generated limiter route escaped its exhaustive selector");
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Routes, class Request,
-          class Numerical>
+template <int Dim, nd::ReconstructionVariables Variables, class Request, class Numerical>
 PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numerical numerical) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
-  const auto route = parse_limiter_route(request.routes.limiter, "generated System face block");
-  require_compiled_route<Routes>(route, "limiter", "generated System face");
-  switch (route) {
+  switch (parse_limiter_route(request.routes.limiter, "generated System face block")) {
     case LimiterRouteId::kNone:
-      if constexpr (Routes::admits(LimiterRouteId::kNone))
-        return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(std::move(request),
-                                                                            NoSlope{}, numerical);
-      break;
+      return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(std::move(request),
+                                                                          NoSlope{}, numerical);
     case LimiterRouteId::kMinmod:
-      if constexpr (Routes::admits(LimiterRouteId::kMinmod))
-        return materialize_block<Dim, Model, Minmod, Numerical, Variables>(std::move(request),
-                                                                           Minmod{}, numerical);
-      break;
+      return materialize_block<Dim, Model, Minmod, Numerical, Variables>(std::move(request),
+                                                                         Minmod{}, numerical);
     case LimiterRouteId::kVanLeer:
-      if constexpr (Routes::admits(LimiterRouteId::kVanLeer))
-        return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(std::move(request),
-                                                                            VanLeer{}, numerical);
-      break;
+      return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(std::move(request),
+                                                                          VanLeer{}, numerical);
     case LimiterRouteId::kWeno5:
-      if constexpr (Routes::admits(LimiterRouteId::kWeno5))
-        return materialize_block<Dim, Model, Weno5, Numerical, Variables>(
-            std::move(request), configured_reconstruction<Weno5>(), numerical);
-      break;
+      return materialize_block<Dim, Model, Weno5, Numerical, Variables>(
+          std::move(request), configured_reconstruction<Weno5>(), numerical);
     case LimiterRouteId::kMc:
-      if constexpr (Routes::admits(LimiterRouteId::kMc))
-        return materialize_block<Dim, Model, MC, Numerical, Variables>(std::move(request), MC{},
-                                                                       numerical);
-      break;
+      return materialize_block<Dim, Model, MC, Numerical, Variables>(std::move(request), MC{},
+                                                                     numerical);
     case LimiterRouteId::kSuperbee:
-      if constexpr (Routes::admits(LimiterRouteId::kSuperbee))
-        return materialize_block<Dim, Model, Superbee, Numerical, Variables>(std::move(request),
-                                                                             Superbee{}, numerical);
-      break;
+      return materialize_block<Dim, Model, Superbee, Numerical, Variables>(std::move(request),
+                                                                           Superbee{}, numerical);
   }
   throw std::logic_error("generated face limiter route escaped its exhaustive selector");
 }
@@ -1714,8 +1687,7 @@ PoissonRhsV2Callable<Model> make_poisson_rhs_v2(Model model) {
 }
 
 /// Build the single exact numerical specialization requested by a generated package. `Routes`
-/// names the catalogue routes this package instantiates; a request for any other route is refused
-/// before a block is materialized.
+/// names the catalogue routes that the package instantiates (GeneratedCatalogueRoutes).
 template <class Routes = GeneratedCatalogueRoutes, class Request>
 auto prepare_generated_system_block(Request request) -> PreparedSystemBlock<Request::dimension> {
   constexpr int Dim = Request::dimension;
@@ -1730,20 +1702,13 @@ auto prepare_generated_system_block(Request request) -> PreparedSystemBlock<Requ
   if constexpr (storage_only || path_conservative_model<Model>) {
     return generated_system_detail::materialize_state_block<Dim>(std::move(request));
   } else {
-    const auto route = parse_recon_route(request.routes.reconstruction, "generated System block");
-    generated_system_detail::require_compiled_route<Routes>(route, "reconstruction",
-                                                            "generated System");
-    switch (route) {
+    switch (parse_recon_route(request.routes.reconstruction, "generated System block")) {
       case ReconRouteId::kConservative:
-        if constexpr (Routes::admits(ReconRouteId::kConservative))
-          return generated_system_detail::select_reconstruction<
-              Dim, nd::ReconstructionVariables::Conservative, Routes>(std::move(request));
-        break;
+        return generated_system_detail::select_reconstruction<
+            Dim, nd::ReconstructionVariables::Conservative, Routes>(std::move(request));
       case ReconRouteId::kPrimitive:
-        if constexpr (Routes::admits(ReconRouteId::kPrimitive))
-          return generated_system_detail::select_reconstruction<
-              Dim, nd::ReconstructionVariables::Primitive, Routes>(std::move(request));
-        break;
+        return generated_system_detail::select_reconstruction<
+            Dim, nd::ReconstructionVariables::Primitive, Routes>(std::move(request));
     }
     throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
   }
@@ -1752,7 +1717,7 @@ auto prepare_generated_system_block(Request request) -> PreparedSystemBlock<Requ
 /// A source-authored policy is a type in this exact compiled package. Its wire
 /// spelling authenticates that type's body identity; no catalogue token may
 /// select an unrelated reconstruction implementation.
-template <class Routes = GeneratedCatalogueRoutes, class Request, class Reconstruction>
+template <class Request, class Reconstruction>
   requires ReconstructionPolicy<Reconstruction>
 auto prepare_generated_system_block(Request request, Reconstruction reconstruction)
     -> PreparedSystemBlock<Request::dimension> {
@@ -1767,22 +1732,14 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
   if constexpr (path_conservative_model<Model>) {
     throw std::invalid_argument("source reconstruction needs a composed path face policy");
   } else {
-    const auto route = parse_recon_route(request.routes.reconstruction, "generated System block");
-    generated_system_detail::require_compiled_route<Routes>(route, "reconstruction",
-                                                            "generated System");
-    switch (route) {
+    switch (parse_recon_route(request.routes.reconstruction, "generated System block")) {
       case ReconRouteId::kConservative:
-        if constexpr (Routes::admits(ReconRouteId::kConservative))
-          return generated_system_detail::select_riemann<
-              Dim, nd::ReconstructionVariables::Conservative, Routes>(std::move(request),
-                                                                      reconstruction);
-        break;
+        return generated_system_detail::select_riemann<Dim,
+                                                       nd::ReconstructionVariables::Conservative>(
+            std::move(request), reconstruction);
       case ReconRouteId::kPrimitive:
-        if constexpr (Routes::admits(ReconRouteId::kPrimitive))
-          return generated_system_detail::select_riemann<
-              Dim, nd::ReconstructionVariables::Primitive, Routes>(std::move(request),
-                                                                   reconstruction);
-        break;
+        return generated_system_detail::select_riemann<Dim, nd::ReconstructionVariables::Primitive>(
+            std::move(request), reconstruction);
     }
     throw std::logic_error("generated reconstruction route escaped its exhaustive selector");
   }
@@ -1790,7 +1747,7 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
 
 /// A source-authored face body is instantiated only by its owning package and
 /// still flows through the ordinary shared conservative face operator.
-template <class Routes = GeneratedCatalogueRoutes, class Request, class Numerical>
+template <class Request, class Numerical>
   requires requires { Numerical::source_identity; } && (!ReconstructionPolicy<Numerical>)
 auto prepare_generated_system_block(Request request, Numerical numerical)
     -> PreparedSystemBlock<Request::dimension> {
@@ -1801,29 +1758,19 @@ auto prepare_generated_system_block(Request request, Numerical numerical)
   if constexpr (path_conservative_model<Model>) {
     throw std::invalid_argument("source face needs a composed path face policy");
   } else {
-    const auto route =
-        parse_recon_route(request.routes.reconstruction, "generated System face block");
-    generated_system_detail::require_compiled_route<Routes>(route, "reconstruction",
-                                                            "generated System face");
-    switch (route) {
+    switch (parse_recon_route(request.routes.reconstruction, "generated System face block")) {
       case ReconRouteId::kConservative:
-        if constexpr (Routes::admits(ReconRouteId::kConservative))
-          return generated_system_detail::select_reconstruction_with_face<
-              Dim, nd::ReconstructionVariables::Conservative, Routes>(std::move(request),
-                                                                      numerical);
-        break;
+        return generated_system_detail::select_reconstruction_with_face<
+            Dim, nd::ReconstructionVariables::Conservative>(std::move(request), numerical);
       case ReconRouteId::kPrimitive:
-        if constexpr (Routes::admits(ReconRouteId::kPrimitive))
-          return generated_system_detail::select_reconstruction_with_face<
-              Dim, nd::ReconstructionVariables::Primitive, Routes>(std::move(request), numerical);
-        break;
+        return generated_system_detail::select_reconstruction_with_face<
+            Dim, nd::ReconstructionVariables::Primitive>(std::move(request), numerical);
     }
     throw std::logic_error("generated face reconstruction route escaped its exhaustive selector");
   }
 }
 
-template <class Routes = GeneratedCatalogueRoutes, class Request, class Reconstruction,
-          class Numerical>
+template <class Request, class Reconstruction, class Numerical>
   requires ReconstructionPolicy<Reconstruction> && requires { Numerical::source_identity; }
 auto prepare_generated_system_block(Request request, Reconstruction reconstruction,
                                     Numerical numerical)
@@ -1838,23 +1785,15 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
   if constexpr (path_conservative_model<Model>) {
     throw std::invalid_argument("source face/reconstruction need a composed path face policy");
   } else {
-    const auto route =
-        parse_recon_route(request.routes.reconstruction, "generated System source block");
-    generated_system_detail::require_compiled_route<Routes>(route, "reconstruction",
-                                                            "generated System source");
-    switch (route) {
+    switch (parse_recon_route(request.routes.reconstruction, "generated System source block")) {
       case ReconRouteId::kConservative:
-        if constexpr (Routes::admits(ReconRouteId::kConservative))
-          return generated_system_detail::materialize_block<
-              Dim, Model, Reconstruction, Numerical, nd::ReconstructionVariables::Conservative>(
-              std::move(request), reconstruction, numerical);
-        break;
+        return generated_system_detail::materialize_block<
+            Dim, Model, Reconstruction, Numerical, nd::ReconstructionVariables::Conservative>(
+            std::move(request), reconstruction, numerical);
       case ReconRouteId::kPrimitive:
-        if constexpr (Routes::admits(ReconRouteId::kPrimitive))
-          return generated_system_detail::materialize_block<Dim, Model, Reconstruction, Numerical,
-                                                            nd::ReconstructionVariables::Primitive>(
-              std::move(request), reconstruction, numerical);
-        break;
+        return generated_system_detail::materialize_block<Dim, Model, Reconstruction, Numerical,
+                                                          nd::ReconstructionVariables::Primitive>(
+            std::move(request), reconstruction, numerical);
     }
     throw std::logic_error("generated source reconstruction route escaped its exhaustive selector");
   }

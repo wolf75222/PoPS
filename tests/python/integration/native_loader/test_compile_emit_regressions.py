@@ -322,11 +322,10 @@ def test_resolved_route_loader_instantiates_only_that_catalogue_route(target: st
     catalogue = model._m.emit_cpp_native_loader(name="RoutedLoader", target=target)
     resolved = model._m.emit_cpp_native_loader(
         name="RoutedLoader", target=target, native_route=("primitive", "vanleer", "hll"))
+    # The route catalogue names the native types of the vanleer limiter and the hll flux.
     routes = (
-        "pops::GeneratedResolvedRoute<\n"
-        '    pops::generated_route_id<pops::ReconRouteId>(pops::kReconRoutes, "primitive"),\n'
-        '    pops::generated_route_id<pops::LimiterRouteId>(pops::kLimiterRoutes, "vanleer"),\n'
-        '    pops::generated_route_id<pops::RiemannRouteId>(pops::kRiemannRoutes, "hll")>'
+        "pops::GeneratedResolvedRoute<pops::nd::ReconstructionVariables::Primitive, "
+        "pops::VanLeer, pops::HLLFlux>"
     )
     if target == "system":
         assert "return pops::prepare_generated_system_block(std::move(request));" in catalogue

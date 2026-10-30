@@ -285,7 +285,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   real-spectrum witness propagates the same failure into native pointwise transforms before commit.
 - Compile each block package of a Case for the one catalogue numerical route its block resolves
   (variables, limiter, Riemann solver) instead of every catalogue route: a generated Euler
-  package compiles in about 22 s instead of about 150 s. The route enters the package identity,
+  package compiles in about 22 s instead of about 150 s. The generated loader names that route
+  by the native types that the route catalogue records for it; the block selectors instantiate
+  only those types and add no route name to the engine. The route enters the package identity,
   and the package refuses, in Python and in C++, to be installed with another route; compile the
   Case with the numerics it installs. A package without a catalogue route (state storage,
   source-authored or coordinated faces, external Riemann bricks) and a direct `model.compile()`
