@@ -294,6 +294,13 @@ def _write_authority(tmp_path, native_cxx, *, history_slot_dt=(0.01, 0.01)):
             initialized=bool(payload["history_init_" + history_name]),
             slot_dt=history_slot_dt,
         )
+        # The POPSEX06 exchange envelope repeats this ledger, as the real producer writes it.
+        exchanges = np.asarray(payload["program_exchange_state"]).tobytes()
+        ledger = np.asarray(payload[sample_key]).tobytes()
+        assert exchanges.count(ledger) == 1
+        payload["program_exchange_state"] = np.frombuffer(
+            exchanges.replace(ledger, bytes(sample_identity)), dtype=np.uint8
+        ).copy()
         payload[sample_key] = np.frombuffer(sample_identity, dtype=np.uint8).copy()
         restart = seal_checkpoint_payload(runtime, payload, runtime_kind="uniform")
         np.savez_compressed(path, **payload)
@@ -463,14 +470,25 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, na
     authority_payload = decode_checkpoint_bytes(authority_bytes, owner._checkpoint_resource_budget)
     assert str(migrated["program_hash"]) == str(authority_payload["program_hash"])
     from pops.runtime._checkpoint_exchanges import CONTINUATION_CHECKPOINT_KEYS
-    from pops.runtime._history_sample_identity import identity_key
+    from pops.runtime._history_sample_identity import identity_key, unknown_identity_bytes
     assert UNIFORM_V2_AUTHORITY_TRANSFERS[-2:] == (
         "accepted_exchange_mailbox",
         "continuation_transition_plan",
     )
     assert "history_sample_identity_unknown_provenance" in UNIFORM_V2_AUTHORITY_TRANSFERS
-    for key in CONTINUATION_CHECKPOINT_KEYS:
+    for key in CONTINUATION_CHECKPOINT_KEYS - {"program_exchange_state"}:
         assert np.array_equal(migrated[key], authority_payload[key])
+    # The plan default History Field metadata budget wraps the empty mailbox in POPSEX06 with
+    # the ring's exact sample ledger: migration keeps the mailbox and the empty metadata table
+    # and writes that ledger as unknown provenance, like the history sample identity below.
+    authority_image = authority_payload["program_exchange_state"].tobytes()
+    migrated_image = migrated["program_exchange_state"].tobytes()
+    (history,) = tuple(str(name) for name in migrated["history_names"])
+    ledger = authority_payload[identity_key(history, None)].tobytes()
+    unknown = unknown_identity_bytes(history, None, int(migrated["history_depth_" + history]))
+    assert authority_image.startswith(b"POPSEX06") and authority_image.count(ledger) == 1
+    assert ledger != unknown
+    assert migrated_image == authority_image.replace(ledger, unknown)
     for history in tuple(str(name) for name in migrated["history_names"]):
         assert identity_key(history, None) in authority_payload
         assert identity_key(history, None) not in migrated
@@ -490,6 +508,8 @@ def test_true_frozen_v2_migrates_and_strict_uniform_restart_accepts(tmp_path, na
 
     accepted = owner.restart(destination, state_storage="valid_only_legacy8")
     assert accepted.token == report.destination_restart_identity
+    # The native writer reproduces the migrated envelope exactly from the restored History.
+    assert owner._executor._checkpoint_program_exchanges() == migrated_image
 
 
 @pytest.mark.parametrize(
@@ -676,6 +696,67 @@ def test_resealed_nonempty_auxiliary_authority_is_refused_without_publication(
     )
 
     with pytest.raises((RuntimeError, ValueError), match="auxiliary"):
+        migrate_uniform_v2_checkpoint(
+            source,
+            destination,
+            current_authority=authority,
+            mapping=mapping,
+        )
+    assert not destination.exists()
+    assert source.read_bytes() == source_bytes
+    assert authority.read_bytes() == authority_bytes
+
+
+@pytest.mark.parametrize(
+    "part, match",
+    [
+        ("mailbox", "non-empty accepted exchange mailbox"),
+        ("metadata", "retains Field metadata absent from v2"),
+        ("ledger", "sample ledger differs"),
+    ],
+)
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_resealed_history_field_envelope_authority_is_refused_without_publication(
+    tmp_path, native_cxx, part, match
+):
+    from pops.runtime._history_sample_identity import identity_key
+
+    source, source_payload = _write_source(tmp_path)
+    authority, owner, authority_restart, _ = _write_authority(tmp_path, native_cxx)
+    mapping = _mapping(source_payload, owner, authority_restart, authority)
+    with np.load(authority, allow_pickle=False) as stored:
+        payload = {
+            name: np.asarray(stored[name]).copy()
+            for name in stored.files
+            if name not in {MANIFEST_KEY, IDENTITY_KEY}
+        }
+    state = np.asarray(payload["program_exchange_state"]).copy()
+    assert state.tobytes().startswith(b"POPSEX06")
+    if part == "mailbox":
+        # The envelope magic and nested length precede the wrapped POPSEX01 record count.
+        assert state[16:24].tobytes() == b"POPSEX01"
+        state[24] = 1
+    elif part == "metadata":
+        # The image ends with the table, whose last word pair indexes the last slot's support.
+        state[-16] = 1
+    else:
+        (history,) = tuple(str(name) for name in payload["history_names"])
+        ledger = payload[identity_key(history, None)].tobytes()
+        state[state.tobytes().index(ledger) + len(ledger) - 1] ^= 1
+    payload["program_exchange_state"] = state
+    restart = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
+    np.savez_compressed(authority, **payload)
+    source_bytes = source.read_bytes()
+    authority_bytes = authority.read_bytes()
+    destination = tmp_path / "must-not-exist.npz"
+    mapping = replace(
+        mapping,
+        authority_content_sha256=hashlib.sha256(authority_bytes).hexdigest(),
+        authority_restart_identity=restart.token,
+    )
+
+    with pytest.raises(ValueError, match=match):
         migrate_uniform_v2_checkpoint(
             source,
             destination,
