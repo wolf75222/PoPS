@@ -144,9 +144,10 @@ outputs = [{ pattern = "results/16_openmp_cartesian3d_ssprk2.npz", kind = "npz" 
 # Causes of the divergences of this tree from master: each names the commits that introduced it
 # (check --verify-commits proves that each is in the history and changes code that the tutorials
 # execute), the issue that owns it and the evidence that attributes it. The attribution build is
-# b6 with master's semantics for the four causes below (variant_b6_with_master_semantics.patch,
-# replicas and traces in /mnt/project-files/landing/mg8): each divergence names the run of that
-# build that reproduces master bit for bit, printed and console lines included.
+# b6 with master's semantics for the four causes that MG8-1 found
+# (variant_b6_with_master_semantics.patch, replicas and traces in
+# /mnt/project-files/landing/mg8): each divergence names the run of that build that reproduces
+# master bit for bit, printed and console lines included.
 
 [[cause]]
 id = "inflow-face-trace"
@@ -162,21 +163,6 @@ evidence = '''
 A NumPy replica of the uniform tutorials with each trace reproduces the final states of master
 and of b6 within 5e-14 and their difference (up to 2.5e-5) within 1.1e-15 (01, 11, 15, 16). The
 attribution build reproduces master bit for bit (see above).
-'''
-
-[[cause]]
-id = "limiter-forms"
-commits = ["75aa789a"]
-issue = "ROM-102"
-text = '''
-b6 evaluates van Leer as s*(2/(1+s/l)), with s and l the smaller and larger magnitudes, and the
-centred slope of MC as s+(l-s)/2: overflow-safe forms of master's 2ab/(a+b) and a/2+b/2 that
-round differently. Every tutorial uses MUSCL(limiters.VanLeer()).
-'''
-evidence = '''
-On the x-differences of master's final state of tutorial 01 the two van Leer forms differ in the
-last bit for 1314 of 3332 same-sign pairs (at most 3.4e-16 relative). The attribution build
-reproduces master bit for bit (see above).
 '''
 
 [[cause]]
@@ -223,7 +209,7 @@ version bit for bit. The attribution build reproduces master bit for bit (see ab
 
 [[divergence]]
 tutorial = "01"
-causes = ["inflow-face-trace", "limiter-forms"]
+causes = ["inflow-face-trace"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -234,7 +220,7 @@ checks = [
 
 [[divergence]]
 tutorial = "02"
-causes = ["inflow-face-trace", "limiter-forms"]
+causes = ["inflow-face-trace"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -244,7 +230,7 @@ checks = [
 
 [[divergence]]
 tutorial = "03"
-causes = ["inflow-face-trace", "limiter-forms"]
+causes = ["inflow-face-trace"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
@@ -255,7 +241,7 @@ checks = [
 
 [[divergence]]
 tutorial = "04"
-causes = ["inflow-face-trace", "limiter-forms"]
+causes = ["inflow-face-trace"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
@@ -265,7 +251,7 @@ checks = [
 
 [[divergence]]
 tutorial = "05"
-causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+causes = ["inflow-face-trace", "amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -277,7 +263,7 @@ checks = [
 
 [[divergence]]
 tutorial = "06"
-causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+causes = ["inflow-face-trace", "amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -288,7 +274,7 @@ checks = [
 
 [[divergence]]
 tutorial = "07"
-causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+causes = ["inflow-face-trace", "amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
@@ -303,7 +289,7 @@ checks = [
 
 [[divergence]]
 tutorial = "08"
-causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+causes = ["inflow-face-trace", "amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
@@ -317,7 +303,7 @@ checks = [
 
 [[divergence]]
 tutorial = "09"
-causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection", "regrid-boundary-prolongation"]
+causes = ["inflow-face-trace", "amr-tag-selection", "regrid-boundary-prolongation"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -328,7 +314,7 @@ checks = [
 
 [[divergence]]
 tutorial = "10"
-causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+causes = ["inflow-face-trace", "amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -339,7 +325,7 @@ checks = [
 
 [[divergence]]
 tutorial = "11"
-causes = ["inflow-face-trace", "limiter-forms"]
+causes = ["inflow-face-trace"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -349,7 +335,7 @@ checks = [
 
 [[divergence]]
 tutorial = "12"
-causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+causes = ["inflow-face-trace", "amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -362,7 +348,7 @@ checks = [
 
 [[divergence]]
 tutorial = "13"
-causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+causes = ["inflow-face-trace", "amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -379,7 +365,7 @@ checks = [
 
 [[divergence]]
 tutorial = "14"
-causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection", "regrid-boundary-prolongation"]
+causes = ["inflow-face-trace", "amr-tag-selection", "regrid-boundary-prolongation"]
 attribution = "reproduced"
 reproduction = "landing/mg8/attribution/verdict-variant-09-14.json (sha256 ea5e7204); review/pr701/runs/mpi-dim2/verdict-variant-14.json (sha256 5b9d1c0b)"
 checks = [
@@ -398,7 +384,7 @@ checks = [
 
 [[divergence]]
 tutorial = "15"
-causes = ["inflow-face-trace", "limiter-forms"]
+causes = ["inflow-face-trace"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -417,7 +403,7 @@ checks = [
 
 [[divergence]]
 tutorial = "16"
-causes = ["inflow-face-trace", "limiter-forms"]
+causes = ["inflow-face-trace"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim3/summary-variant.md (sha256 088571c1)"
 checks = [

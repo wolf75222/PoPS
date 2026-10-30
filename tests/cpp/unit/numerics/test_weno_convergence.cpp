@@ -339,6 +339,47 @@ TEST(test_muscl_limiters, minmod_and_vanleer_handle_extreme_finite_differences) 
     EXPECT_FALSE(std::isfinite(slope));
 }
 
+TEST(test_muscl_limiters, vanleer_and_mc_keep_masters_expressions_on_ordinary_differences) {
+  // MG8: master's tutorials keep their bits only if van Leer is 2ab/(a+b) and the centred slope of
+  // MC is |a|/2 + |b|/2, evaluated as master wrote them, wherever these stay normal and finite.
+  const auto master_vanleer = [](Real a, Real b) {
+    const Real ab = a * b;
+    return ab <= Real(0) ? Real(0) : Real(2) * ab / (a + b);
+  };
+  const auto master_mc = [](Real backward, Real forward) {
+    const bool positive = backward > Real(0) && forward > Real(0);
+    const bool negative = backward < Real(0) && forward < Real(0);
+    if (!positive && !negative)
+      return Real(0);
+    const Real a = positive ? backward : -backward;
+    const Real b = positive ? forward : -forward;
+    const Real centred = Real(0.5) * a + Real(0.5) * b;
+    const Real smaller = a < b ? a : b;
+    const Real magnitude = Real(0.5) * centred <= smaller ? centred : Real(2) * smaller;
+    return positive ? magnitude : -magnitude;
+  };
+  const auto bounded_vanleer = [](Real a, Real b) {
+    const Real smaller = std::min(std::abs(a), std::abs(b));
+    const Real larger = std::max(std::abs(a), std::abs(b));
+    return std::copysign(smaller * (Real(2) / (Real(1) + smaller / larger)), a);
+  };
+  std::mt19937_64 generator(0x4d4738);
+  std::uniform_real_distribution<Real> mantissa(Real(-1), Real(1));
+  std::uniform_int_distribution<int> exponent(-60, 60);
+  int rounded_apart = 0;
+  for (int sample = 0; sample < 20000; ++sample) {
+    const Real a = std::ldexp(mantissa(generator), exponent(generator));
+    const Real b = std::ldexp(mantissa(generator), exponent(generator));
+    EXPECT_EQ(VanLeer{}.limited_slope(a, b), master_vanleer(a, b)) << a << " " << b;
+    EXPECT_EQ(MC{}.limited_slope(a, b), master_mc(a, b)) << a << " " << b;
+    if (a * b > Real(0) && master_vanleer(a, b) != bounded_vanleer(a, b))
+      ++rounded_apart;
+  }
+  // The bounded form alone rounds differently on a sizeable share of ordinary pairs: the change
+  // that master's tutorials showed.
+  EXPECT_GT(rounded_apart, 1000);
+}
+
 TEST(test_muscl_limiters, mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes) {
   const MC mc{};
   const Superbee superbee{};

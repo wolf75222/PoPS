@@ -273,6 +273,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   always fails the job, and `run_mg8_tutorials.py check --check-base` fails on every event when
   the ledger grows. Tutorial 11 binds its runtime parameters as master writes them again: the
   block-qualified spelling raised DoubleOwnershipError.
+- Evaluate van Leer and MC's centred slope with master's expressions wherever they stay normal
+  and finite, keeping the overflow-safe forms beyond that range, so master's tutorials keep
+  their bits (MG8, ROM-102).
 
 ## [1.0.0] - 2026-07-16
 
