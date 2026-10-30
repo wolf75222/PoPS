@@ -181,15 +181,50 @@ def _plain_json_data(value, *, nonempty_keys=False, finite_floats=False):
     return True
 
 
+# One streamed C-codec chunk: bounded in height (stdlib recursion) and in characters.
+_JSON_CHUNK_HEIGHT = 64
+_JSON_CHUNK_CHARACTERS = 65536
+
+
+def _plain_json_scalar_length(node):
+    """Compact JSON length of one inert builtin scalar."""
+    import math
+    kind = type(node)
+    if kind is str:
+        return len(json.encoder.encode_basestring_ascii(node))
+    if node is None or node is True:
+        return 4
+    if node is False:
+        return 5
+    if kind is int:
+        return len(int.__repr__(node))
+    if math.isfinite(node):
+        return len(float.__repr__(node))
+    return 3 if math.isnan(node) else 8 if node > 0 else 9
+
+
 def _plain_json_depths(value):
-    """Measure inert builtin containers without running any extension protocol."""
-    depths, active, pending = {}, set(), [(False, value)]
+    """Measure inert builtin containers without running any extension protocol.
+
+    Each container maps to its height and compact JSON length. A length counts every
+    occurrence of a shared substructure; it saturates just above one chunk, since occurrences
+    may expand far beyond the memory that holds them.
+    """
+    encode_string = json.encoder.encode_basestring_ascii
+    extents, active, pending = {}, set(), [(False, value)]
     while pending:
         leaving, node = pending.pop()
         kind = type(node)
         if leaving:
-            children = node.values() if kind is dict else node
-            depths[id(node)] = 1 + max((depths.get(id(child), 0) for child in children), default=0)
+            height, length = 0, 1 + max(len(node), 1)
+            for key, child in (node.items() if kind is dict else ((None, child) for child in node)):
+                extent = extents.get(id(child))
+                child_height, child_length = (0, _plain_json_scalar_length(child)) if extent is None else extent
+                if key is not None:
+                    child_length += len(encode_string(key)) + 1
+                height = max(height, child_height)
+                length = min(length + child_length, _JSON_CHUNK_CHARACTERS + 1)
+            extents[id(node)] = (height + 1, length)
             active.remove(id(node))
             continue
         if node is None or kind is str or kind is int or kind is bool or kind is float:
@@ -199,33 +234,60 @@ def _plain_json_depths(value):
         marker = id(node)
         if marker in active:
             return None
-        if marker in depths:
+        if marker in extents:
             continue
         if kind is dict and any(type(key) is not str for key in node):
             return None
         active.add(marker)
         pending.append((True, node))
         pending.extend((False, child) for child in (node.values() if kind is dict else node))
-    return depths
+    return extents
 
 
 def canonical_json_chunks(value, *, allow_nan=True, sort_keys=True):
-    """Stream exact JSON using bounded C-codec chunks for inert builtin trees.
+    """Stream exact JSON in C-codec chunks of bounded height and length for inert builtin trees.
 
-    Chunk height controls only the optimization. Arbitrary finite depth and
-    extension protocols retain the complete iterative encoder below.
+    A chunk encodes a whole subtree, or a run of consecutive members of one container, whose
+    compact JSON fits one chunk; only a scalar longer than a chunk stands alone. Arbitrary
+    finite depth, shared occurrences and extension protocols keep the iterative encoder below.
     """
-    depths = _plain_json_depths(value)
-    if depths is None:
+    extents = _plain_json_depths(value)
+    if extents is None:
         yield from _canonical_json_protocol_chunks(value, allow_nan=allow_nan, sort_keys=sort_keys)
         return
-    pending = [(False, value)]
+    encode_string = json.encoder.encode_basestring_ascii
+
+    def extent(node):
+        found = extents.get(id(node))
+        return (0, _plain_json_scalar_length(node)) if found is None else found
+
+    # Operations: 0 encodes or opens a node, 1 yields a literal, 2 and 3 encode a run of
+    # consecutive list members or (key, value) items as the inside of their container.
+    pending = [(0, value)]
     while pending:
-        literal, node = pending.pop()
-        if literal:
+        operation, node = pending.pop()
+        if operation == 1:
             yield node
             continue
-        if depths.get(id(node), 0) <= 64:
+        if operation:
+            run = node if operation == 2 else dict(node)
+            try:
+                encoded = json.dumps(run, allow_nan=allow_nan, sort_keys=sort_keys,
+                                     separators=(",", ":"))[1:-1]
+            except (RecursionError, ValueError):
+                for i, member in enumerate(node):
+                    if i:
+                        yield ","
+                    if operation == 3:
+                        yield encode_string(member[0]) + ":"
+                        member = member[1]
+                    yield from _canonical_json_protocol_chunks(
+                        member, allow_nan=allow_nan, sort_keys=sort_keys)
+            else:
+                yield encoded
+            continue
+        height, length = extent(node)
+        if height == 0 or (height <= _JSON_CHUNK_HEIGHT and length <= _JSON_CHUNK_CHARACTERS):
             try:
                 encoded = json.dumps(node, allow_nan=allow_nan, sort_keys=sort_keys,
                                      separators=(",", ":"))
@@ -235,23 +297,36 @@ def canonical_json_chunks(value, *, allow_nan=True, sort_keys=True):
             else:
                 yield encoded
             continue
-        if type(node) is dict:
-            entries = sorted(node.items()) if sort_keys else list(node.items())
-            yield "{"
-            pending.append((True, "}"))
-            for i in range(len(entries)-1, -1, -1):
-                key, item = entries[i]
-                pending.append((False, item))
-                pending.append((True, json.encoder.encode_basestring_ascii(key) + ":"))
-                if i:
-                    pending.append((True, ","))
-        else:
-            yield "["
-            pending.append((True, "]"))
-            for i in range(len(node)-1, -1, -1):
-                pending.append((False, node[i]))
-                if i:
-                    pending.append((True, ","))
+        mapping = type(node) is dict
+        members = (sorted(node.items()) if sort_keys else list(node.items())) if mapping else node
+        run_operation = 3 if mapping else 2
+        # Each item is the operations of one comma-separated piece: a run, or one member that
+        # is too high or too long to share a chunk and is encoded or opened by itself.
+        items, run, run_length = [], [], 0
+        for member in members:
+            child_height, child_length = extent(member[1] if mapping else member)
+            if mapping:
+                child_length += len(encode_string(member[0])) + 1
+            if child_height >= _JSON_CHUNK_HEIGHT or child_length > _JSON_CHUNK_CHARACTERS:
+                if run:
+                    items.append([(run_operation, tuple(run))])
+                    run, run_length = [], 0
+                items.append([(1, encode_string(member[0]) + ":"), (0, member[1])] if mapping
+                             else [(0, member)])
+                continue
+            if run and run_length + 1 + child_length > _JSON_CHUNK_CHARACTERS:
+                items.append([(run_operation, tuple(run))])
+                run, run_length = [], 0
+            run_length += child_length + (1 if run else 0)
+            run.append(member)
+        if run:
+            items.append([(run_operation, tuple(run))])
+        yield "{" if mapping else "["
+        pending.append((1, "}" if mapping else "]"))
+        for i in range(len(items) - 1, -1, -1):
+            pending.extend(reversed(items[i]))
+            if i:
+                pending.append((1, ","))
 
 
 def _canonical_json_protocol_chunks(value, *, allow_nan=True, sort_keys=True):

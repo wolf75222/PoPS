@@ -229,11 +229,15 @@ def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: 
     is on or off. A ``*/`` in a serialized field is defanged to ``* /`` so the block comment cannot be
     closed early by the content.
     """
+    from pops._structural_data import canonical_json
+
     ir = "(no Program IR: this handle carries no serializable time Program)"
     lowering = "[]"
     if program is not None and hasattr(program, "_serialize"):
-        ir = json.dumps(program._serialize(), indent=2, sort_keys=True)
-        lowering = json.dumps(lowering_provenance_data(program), indent=2, sort_keys=True)
+        # Compact canonical JSON, without recursion: a Program of any finite structural depth has
+        # a banner linear in its IR (B4, B6). Indentation would grow with depth times lines.
+        ir = canonical_json(program._serialize())
+        lowering = canonical_json(lowering_provenance_data(program))
     model_name = getattr(model, "name", None) or getattr(program, "name", None) or "problem"
     lines = [
         "pops.compile provenance banner (ADC-536) -- INERT, sidecar-only, not compiled",
