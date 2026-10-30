@@ -9,8 +9,9 @@ removes the site, or the issues joined by ``+`` when the spec names several (``G
 analytic-expression VM, section 18.3). Blank lines and lines starting with ``#`` are comments.
 
 A guard compares the sites that its scan finds with the list. Within each ``(path, term)``, sites
-and entries pair by excerpt, so the identity of a site is its path, its term and its excerpt (for
-CF2 the spelling of the term on its line, ``scan.cf2_sites_in_text``):
+and entries pair by excerpt, so the identity of a site is its path, its term and its excerpt (the
+spelling of the term on its line: ``scan.cf2_sites_in_text`` for CF2, ``pysource.site_excerpt``
+for CF0b, CF7 and CF8):
 
 * a site that no entry of its ``(path, term)`` matches is a new occurrence, and fails, even when
   a site of the same term left the same file in the same PR;

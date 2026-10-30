@@ -12,8 +12,9 @@ a slice): an entry with the same term and excerpt must disappear from one file, 
 printed with the issues of both files. ``--bootstrap`` writes the list from scratch; it was used at
 b6e64c1d, again for the terms of the early audit of N2 (29/10), and again for the error-text fix
 and the solve algorithms of the independent review of N2 (30/10). A PR that uses it again must say
-why (the CF0b, CF7 and CF8 lists were written with it at b6e64c1d in lot 2 of Linear N2, and once
-more, before they merged, with the sites that the audit of lot 2 found).
+why (the CF0b, CF7 and CF8 lists were written with it at b6e64c1d in lot 2 of Linear N2, once
+more, before they merged, with the sites that the audit of lot 2 found, and again when their
+excerpts became the spellings that the ratchet pairs by, for the independent review of lot 2).
 
 ``--check-base REV`` writes nothing: it scans the tree of REV (a temporary worktree) and the
 current tree with the current scanner of every list, and fails on any site of the current tree that

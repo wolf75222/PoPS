@@ -19,10 +19,16 @@ another.
 The scan reads source only. Imports inside ``pops.lib`` itself are the library's own business (a
 private module of the library is one site, at its path), so ``from ._factory import x`` adds no site
 beyond ``lib/time/_factory.py``.
+
+A site is one term on one line. Its excerpt is its spelling, what holds the term there: the
+dotted name of an import or a reference (the module when the module alone is a site), the
+attribute (``._frame``) or the string literal. The ratchet pairs sites with list entries by it, so
+an edit elsewhere on a listed line keeps the site, and a new spelling is a new site.
 """
 from __future__ import annotations
 
 import ast
+import collections
 import dataclasses
 import pathlib
 
@@ -86,58 +92,68 @@ def _in_library(module: str, library_module: str) -> bool:
     return module == library_module or module.startswith(library_module + ".")
 
 
+def _target_term(target: str, library_module: str) -> str | None:
+    """The term of an imported dotted name, or None."""
+    parts = target.split(".")
+    if parts[0] != "pops":
+        return None
+    # A C++ entry route is refused wherever it is spelled, pops.lib.load_cpp_library included.
+    if parts[-1] in ROUTE_NAMES:
+        return parts[-1]
+    if parts[-1] == EXTERNAL:
+        return "external"
+    if target in ROUTE_MODULES:
+        return "native-route-module"
+    if _in_library(target, library_module):
+        return None  # the library's own modules: a private one is a site at its path
+    if target == BINDINGS or target.startswith(BINDINGS + "."):
+        return "bindings-import"
+    if parts[:2] == ["pops", "codegen"]:
+        return "codegen-import"
+    if parts[:2] == ["pops", "runtime"]:
+        return "runtime-import"
+    if any(pysource.is_private_part(part) for part in parts):
+        return "private-import"
+    return None
+
+
 def _import_terms(record: pysource.Import, library_module: str, native_top: str):
+    """(term, spelling) of each site of one import. The spelling is the dotted name that holds the
+    term: the module when the module alone is a site, the module and the name otherwise."""
     module, names = record.module, record.names
     if module.split(".")[0] == native_top:
-        yield "native-tree-import"
+        yield "native-tree-import", module
         return
-    targets = [module] if not names else ["%s.%s" % (module, name) for name in names]
-    for target in targets:
-        target_parts = target.split(".")
-        if target_parts[0] != "pops":
-            continue
-        # A C++ entry route is refused wherever it is spelled, pops.lib.load_cpp_library included.
-        if target_parts[-1] in ROUTE_NAMES:
-            yield target_parts[-1]
-        elif target_parts[-1] == EXTERNAL:
-            yield "external"
-        elif target in ROUTE_MODULES:
-            yield "native-route-module"
-        elif _in_library(target, library_module):
-            continue  # the library's own modules: a private one is a site at its path
-        elif target == BINDINGS or target.startswith(BINDINGS + "."):
-            yield "bindings-import"
-        elif target_parts[:2] == ["pops", "codegen"]:
-            yield "codegen-import"
-        elif target_parts[:2] == ["pops", "runtime"]:
-            yield "runtime-import"
-        elif any(pysource.is_private_part(part) for part in target_parts):
-            yield "private-import"
+    module_term = _target_term(module, library_module) if names else None
+    for target in [module] if not names else ["%s.%s" % (module, name) for name in names]:
+        term = _target_term(target, library_module)
+        if term:
+            yield term, module if term == module_term else target
 
 
 def route_terms(node: ast.AST, names: pysource.Names, library_module: str):
-    """Terms of one reference (a ``Name`` or ``Attribute`` load) to a C++ entry route or to a
-    private attribute of a core module."""
+    """(term, spelling) of one reference (a ``Name`` or ``Attribute`` load) to a C++ entry route or
+    to a private attribute of a core module. The spelling is the dotted name of the reference."""
     dotted = names.dotted(node)
     if dotted is None:
         return
     parts = dotted.split(".")
     if isinstance(node, ast.Name):
         if parts[-1] in ROUTE_NAMES and (len(parts) == 1 or parts[0] == "pops"):
-            yield parts[-1]  # bound to the route, or a bare name distinctive enough alone
+            yield parts[-1], dotted  # bound to the route, or a bare name distinctive enough alone
         elif parts[0] == "pops" and parts[-1] == EXTERNAL:
-            yield "external"
+            yield "external", dotted
         return
     if parts[0] != "pops":
         return
     if parts[-1] in ROUTE_NAMES:
-        yield parts[-1]
+        yield parts[-1], dotted
     elif parts[-1] == EXTERNAL:
-        yield "external"
+        yield "external", dotted
     elif dotted in ROUTE_MODULES:
-        yield "native-route-module"
+        yield "native-route-module", dotted
     elif pysource.is_private_part(parts[-1]) and not _in_library(dotted, library_module):
-        yield "private-access"
+        yield "private-access", dotted
 
 
 def module_attributes(tree: ast.AST) -> frozenset[str]:
@@ -189,23 +205,28 @@ def _object_term(base: ast.AST, attribute: str, names: pysource.Names, local: se
 
 def private_attribute_terms(tree: ast.AST, names: pysource.Names, defined: frozenset[str],
                             library_module: str):
-    """(line, term) of every read or write of a private attribute of a core object."""
+    """(line, term, spelling) of every read or write of a private attribute of a core object. The
+    spelling is the attribute (``._frame``, whether read as ``model._frame`` or through
+    ``getattr``), or the dotted attribute of a core module."""
     local = {node.name for node in ast.walk(tree)
              if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))}
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and _private_name(node.attr):
-            term = _object_term(node.value, node.attr, names, local, defined, library_module,
+            base, attribute = node.value, node.attr
+            term = _object_term(base, attribute, names, local, defined, library_module,
                                 module_access=not isinstance(node.ctx, ast.Load))
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
                 and node.func.id in _ATTRIBUTE_CALLS and len(node.args) >= 2 \
                 and isinstance(node.args[1], ast.Constant) \
                 and isinstance(node.args[1].value, str) and _private_name(node.args[1].value):
-            term = _object_term(node.args[0], node.args[1].value, names, local, defined,
-                                library_module, module_access=True)
+            base, attribute = node.args[0], node.args[1].value
+            term = _object_term(base, attribute, names, local, defined, library_module,
+                                module_access=True)
         else:
             continue
         if term:
-            yield node.lineno, term
+            owner = names.dotted(base) if term == "private-access" else ""
+            yield node.lineno, term, "%s.%s" % (owner, attribute)
 
 
 def brick_id_call(node: ast.Call, names: pysource.Names) -> bool:
@@ -219,7 +240,8 @@ def brick_id_call(node: ast.Call, names: pysource.Names) -> bool:
 
 def python_sites(rel: str, text: str, *, library_module: str, native_tree: str,
                  private_attributes: bool = False):
-    """(line, term) of every CF0b-kind site of one Python file (CF8 reuses it for case files).
+    """(line, term, spelling) of every CF0b-kind site of one Python file (CF8 reuses it for case
+    files). The spelling is what holds the term: a dotted name, an attribute or a string literal.
 
     With @p private_attributes, the reads and writes of private attributes of core objects are
     sites too, except for the names that this module defines itself.
@@ -230,51 +252,47 @@ def python_sites(rel: str, text: str, *, library_module: str, native_tree: str,
     if private_attributes:
         yield from private_attribute_terms(tree, names, module_attributes(tree), library_module)
     for record in pysource.imports(tree, rel):
-        for term in _import_terms(record, library_module, native_top):
-            yield record.line, term
+        for term, spelling in _import_terms(record, library_module, native_top):
+            yield record.line, term, spelling
     for node in ast.walk(tree):
         if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
-            for term in route_terms(node, names, library_module):
-                yield getattr(node, "end_lineno", None) or node.lineno, term
+            for term, spelling in route_terms(node, names, library_module):
+                yield getattr(node, "end_lineno", None) or node.lineno, term, spelling
         if isinstance(node, ast.Call) and brick_id_call(node, names):
-            yield node.lineno, "brick-id"
+            yield node.lineno, "brick-id", 'User("%s")' % node.args[0].value
     for line, value in pysource.code_strings(tree):
         if pysource.looks_like_cpp(value):
-            yield line, "cpp-source"
+            yield line, "cpp-source", pysource.string_spelling(value)
         elif pysource.names_cpp_file(value):
-            yield line, "cpp-file-reference"
+            yield line, "cpp-file-reference", pysource.string_spelling(value)
         elif value.startswith(native_tree) or ("/" + native_tree) in value:
-            yield line, "native-tree-path"
-
-
-def _excerpt(lines, line):
-    if line == 0:
-        return "(path)"
-    return " ".join(lines[line - 1].split())[:110] if 1 <= line <= len(lines) else ""
+            yield line, "native-tree-path", pysource.string_spelling(value)
 
 
 def scan_library(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine | None = None):
-    """Every CF0b site of the checkout."""
+    """Every CF0b site of the checkout: one per (path, line, term), its excerpt the spellings of
+    the term on that line."""
     engine = engine or scan.load_cf0()
     library = library_root(engine)
     library_module = pysource.module_name(library.rstrip("/"))
     files = [rel for rel in scan.tracked_files(root) if rel.startswith(library)]
     texts = {rel: (root / rel).read_text(encoding="utf-8") for rel in files if rel.endswith(".py")}
-    sites: set[Site] = set()
+    spellings = collections.defaultdict(set)  # (path, line, term) -> spellings
     for rel in files:
         inner = pathlib.PurePosixPath(rel[len(library):])
         if pysource.is_cpp_file(rel):
-            sites.add(Site(rel, 0, "cpp-file", "(path)"))
+            spellings[(rel, 0, "cpp-file")].add("(path)")
         if any(pysource.is_private_part(part) for part in inner.with_suffix("").parts) \
                 and rel.endswith(".py"):
-            sites.add(Site(rel, 0, "private-module", "(path)"))
+            spellings[(rel, 0, "private-module")].add("(path)")
         if rel not in texts:
             continue
-        lines = texts[rel].splitlines()
-        for line, term in python_sites(rel, texts[rel], library_module=library_module,
-                                       native_tree=engine.native_tree, private_attributes=True):
-            sites.add(Site(rel, line, term, _excerpt(lines, line)))
-    return sorted(sites)
+        for line, term, spelling in python_sites(rel, texts[rel], library_module=library_module,
+                                                 native_tree=engine.native_tree,
+                                                 private_attributes=True):
+            spellings[(rel, line, term)].add(spelling)
+    return sorted(Site(rel, line, term, pysource.site_excerpt(spelled))
+                  for (rel, line, term), spelled in spellings.items())
 
 
 # (issue, library sub-paths or None, reason): the first matching rule names the issue that removes a

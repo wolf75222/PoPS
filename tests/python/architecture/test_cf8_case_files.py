@@ -118,7 +118,24 @@ def test_case_paths_cover_the_b6_corpus_and_exist():
 # Controls: the scanner refuses what CF8 refuses, and only that.
 # ---------------------------------------------------------------------------------------------
 def _sites(source):
-    return sorted(name for _, name in cf8.infrastructure_sites(ast.parse(source)))
+    return sorted(name for _, name, _ in cf8.infrastructure_sites(ast.parse(source)))
+
+
+def _spellings(source):
+    return sorted(spelling for _, _, spelling in cf8.infrastructure_sites(ast.parse(source)))
+
+
+def test_a_size_is_spelled_where_it_is_written_without_its_value():
+    # The ratchet pairs a site with its entry by this spelling: a case may edit a listed line, and
+    # its value, until the owner of the site removes it; the size written in another call is new.
+    listed = _spellings("flux = pops.StencilFlux(body, components=1, radius=1)\n")
+    assert listed == ["StencilFlux(components=)", "StencilFlux(radius=)"]
+    assert _spellings("flux = pops.StencilFlux(new_body, components=1, radius=2)\n") == listed
+    assert _spellings("flux = pops.TraceFlux(body, components=1, radius=1)\n") != listed
+    assert _spellings("def build(ghost_depth=2):\n    config.capacity = 4096\n") == [
+        ".capacity =", "def build(ghost_depth=)"]
+    assert _spellings("s = pops.Storage(**{\"byte_capacity\": 8})\n") == [
+        'Storage(**{"byte_capacity"})']
 
 
 @pytest.mark.parametrize("source, expected", [

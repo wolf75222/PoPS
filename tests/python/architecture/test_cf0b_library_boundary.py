@@ -136,9 +136,13 @@ def test_library_is_the_path_that_cf0_excludes():
 # ---------------------------------------------------------------------------------------------
 # Controls: the scanner refuses what CF0b refuses, and only that.
 # ---------------------------------------------------------------------------------------------
-def _terms(source, rel="python/pops/lib/time/probe.py"):
-    return sorted({term for _, term in cf0b.python_sites(
+def _spellings(source, rel="python/pops/lib/time/probe.py"):
+    return sorted({(term, spelling) for _, term, spelling in cf0b.python_sites(
         rel, source, library_module="pops.lib", native_tree="native/", private_attributes=True)})
+
+
+def _terms(source):
+    return sorted({term for term, _ in _spellings(source)})
 
 
 @pytest.mark.parametrize("source, expected", [
@@ -206,6 +210,24 @@ def test_scanner_refuses_what_cf0b_refuses(source, expected):
 ])
 def test_scanner_accepts_the_public_surface(source):
     assert _terms(source) == []
+
+
+def test_a_site_is_its_spelling_on_its_line():
+    # The ratchet pairs a site with its entry by this spelling: an edit elsewhere on a listed line
+    # keeps the site, and a new private module, name or attribute is a new site.
+    tableau = [("private-import", "pops.time._methods.tableau")]
+    assert _spellings("from pops.time._methods.tableau import RungeKuttaTableau\n") == tableau
+    assert _spellings("from pops.time._methods.tableau import (ButcherTableau,\n"
+                      "                                      RungeKuttaTableau)\n") == tableau
+    assert _spellings("from pops.time._program import RungeKuttaTableau\n") != tableau
+    assert _spellings("from pops.time import _evaluation_point\n") == [
+        ("private-import", "pops.time._evaluation_point")]
+    frame = [("private-attribute", "._frame")]
+    assert _spellings("def f(model):\n    return getattr(model, '_frame', None)\n") == frame
+    assert _spellings("def f(model):\n    return model._frame\n") == frame
+    assert _spellings("def f(model):\n    return model._state\n") != frame
+    assert _spellings("import pops.time\npops.time._registry = {}\n") == [
+        ("private-access", "pops.time._registry")]
 
 
 def test_scanner_reports_private_modules_and_cpp_files(tmp_path, monkeypatch):

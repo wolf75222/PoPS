@@ -209,6 +209,23 @@ def test_scanner_ignores_what_is_not_an_analysis_cap_in_cpp(source):
     assert list(cf7.cpp_limits(source)) == []
 
 
+def test_a_cap_is_spelled_by_its_name_and_value(tmp_path, monkeypatch):
+    # The ratchet pairs a site with its entry by this spelling: an edit elsewhere on the line keeps
+    # the site, while a raised cap is a new site, so a listed cap leaves the list only by removal.
+    rel = "include/pops/runtime/probe.hpp"
+
+    def spelled(source):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(source)
+        monkeypatch.setattr(scan, "frozen_engine_files", lambda engine, root: [rel])
+        return [(site.term, site.excerpt) for site in cf7.scan_engine(tmp_path)[0]]
+
+    listed = spelled("inline constexpr int kMaxProgramNodes = 64;\n")
+    assert listed == [("kMaxProgramNodes", "kMaxProgramNodes = 64")]
+    assert spelled("inline constexpr std::size_t kMaxProgramNodes = 64;  // nodes\n") == listed
+    assert spelled("inline constexpr int kMaxProgramNodes = 128;\n") != listed
+
+
 def test_json_caps_are_read():
     text = '{"tagging": {"maximum_stencil_terms": 16, "version": 4, "maximum_rank": 3}}'
     assert [name for _, name, _ in cf7.json_limits(text)] == ["maximum_stencil_terms"]

@@ -4,7 +4,8 @@ Both scans read source only: they never import ``pops``, ``_pops`` or a case. Th
 a name in a module refers to (``riemann.User`` after ``from pops.numerics import riemann`` is
 ``pops.numerics.riemann.User``), which imports a module makes (top level or inside a function,
 relative or absolute, through ``importlib.import_module``), which string literals are code rather
-than docstrings or error text, and whether a string holds C++ source.
+than docstrings or error text, and whether a string holds C++ source. ``site_excerpt`` writes the
+excerpt of a site of CF0b, CF7 or CF8 from its spellings.
 """
 from __future__ import annotations
 
@@ -126,6 +127,17 @@ def call_name(func: ast.AST) -> str:
     if isinstance(func, ast.Attribute):
         return func.attr
     return ""
+
+
+def site_excerpt(spellings) -> str:
+    """The excerpt of a site of an exception list: the distinct spellings of its term on its line,
+    sorted, as CF2 writes them (``scan.cf2_sites_in_text``). The ratchet pairs a site with an entry
+    by it, so an edit elsewhere on the line keeps the site, and a new spelling is a new site."""
+    return " ".join(sorted(set(spellings)))[:scan.EXCERPT_WIDTH].rstrip()
+
+
+def string_spelling(value: str) -> str:
+    return '"%s"' % " ".join(value.split())
 
 
 def code_strings(tree: ast.AST):

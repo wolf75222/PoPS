@@ -18,15 +18,21 @@ B7 gap, with the issue that closes it); ``ANCHORED_SITES`` names the b6 caps tha
 does not catch. The exception list of b6 (``cf7_exceptions.txt``) only shrinks (MG6); at the exit
 of Phase 1 it holds only the caps of the two interpreters of C44 (section 18.3), and at the exit of
 Phase 2 it is empty.
+
+A site is one limit on one line. Its excerpt is its spelling, the name and the value of the limit
+(``kAnalyticMaxNodes = 64``; the source line of an anchored site). The ratchet pairs sites with
+list entries by it, so an edit elsewhere on the line keeps the site, while a cap whose value
+changes is a new site: a listed cap leaves the list only by being removed.
 """
 from __future__ import annotations
 
 import ast
+import collections
 import dataclasses
 import pathlib
 import re
 
-from . import ratchet, scan
+from . import pysource, ratchet, scan
 
 EXCEPTIONS = scan.HERE / "cf7_exceptions.txt"
 
@@ -282,8 +288,9 @@ def _method_budget(rel: str, name: str):
 
 def scan_engine(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine | None = None):
     """(CF7 sites of the frozen engine, METHOD_BUDGETS and RUNTIME_BACKSTOPS entries used,
-    ANCHORED_SITES entries used)."""
-    sites: set[Site] = set()
+    ANCHORED_SITES entries used). A site is one per (path, line, term), its excerpt the spellings
+    of the limit on that line."""
+    spellings = collections.defaultdict(set)  # (path, line, term) -> spellings
     budgets_used, anchors_used = set(), set()
     anchored = {}
     for entry in ANCHORED_SITES:
@@ -296,19 +303,21 @@ def scan_engine(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine |
         text = (root / rel).read_text(encoding="utf-8")
         lines = text.splitlines()
         found = readers[kind](text)
-        for line, name, _ in found:
+        for line, name, value in found:
             budget = _method_budget(rel, name)
             if budget is not None:
                 budgets_used.add(budget)
                 continue
-            sites.add(Site(rel, line, name, " ".join(lines[line - 1].split())[:110]))
+            spellings[(rel, line, name)].add("%s = %d" % (name, value))
         for entry in anchored.get(rel, ()):
             _, term, pattern, _ = entry
             for number, source in enumerate(lines, start=1):
                 if re.fullmatch(pattern, source):
                     anchors_used.add(entry)
-                    sites.add(Site(rel, number, term, " ".join(source.split())[:110]))
-    return sorted(sites), budgets_used, anchors_used
+                    spellings[(rel, number, term)].add(" ".join(source.split()))
+    sites = sorted(Site(rel, line, term, pysource.site_excerpt(spelled))
+                   for (rel, line, term), spelled in spellings.items())
+    return sites, budgets_used, anchors_used
 
 
 _TAGGING_CAPS = frozenset({"maximum_stencil_terms", "maximum_instruction_count",

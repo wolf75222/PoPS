@@ -20,10 +20,17 @@ its support (``def build(dimension=2)``). A size is reported where the author wr
 it: a keyword argument, a parameter default, an attribute assignment or a key of a ``**{...}``
 argument. Library objects reach no C++ entry route either (CF0b), so a case cannot reach one through
 ``pops.lib``. The exception list of b6 (``cf8_exceptions.txt``) only shrinks (MG6).
+
+A site is one term on one line. Its excerpt is its spelling: where the size is written, without
+its value (``StencilFlux(radius=)``, ``def build(ghost_depth=)``, ``.capacity =``), or the spelling
+of CF0b for native code. The ratchet pairs sites with list entries by it, so a case may edit a
+listed line, and change a listed value, until the issue that owns the site removes it; the same
+size written in another call is a new site.
 """
 from __future__ import annotations
 
 import ast
+import collections
 import dataclasses
 import pathlib
 import tomllib
@@ -116,21 +123,22 @@ class Site:
 
 
 def infrastructure_sites(tree: ast.AST):
-    """(line, keyword name) of every infrastructure size or resource written in a module."""
+    """(line, name, spelling) of every infrastructure size or resource written in a module. The
+    spelling is where the size is written, without its value."""
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             callee = pysource.call_name(node.func)
             for keyword in node.keywords:
                 if keyword.arg is not None:
                     if infrastructure_kind(keyword.arg, keyword.value, callee):
-                        yield keyword.value.lineno, keyword.arg
+                        yield keyword.value.lineno, keyword.arg, "%s(%s=)" % (callee, keyword.arg)
                     continue
                 for sub in ast.walk(keyword.value):  # **{"byte_capacity": c}
                     if isinstance(sub, ast.Dict):
                         for key, value in zip(sub.keys, sub.values, strict=True):
                             if isinstance(key, ast.Constant) and isinstance(key.value, str) \
                                     and infrastructure_kind(key.value, value, callee):
-                                yield key.lineno, key.value
+                                yield key.lineno, key.value, '%s(**{"%s"})' % (callee, key.value)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             arguments = node.args
             positional = arguments.posonlyargs + arguments.args
@@ -138,15 +146,17 @@ def infrastructure_sites(tree: ast.AST):
                 + list(arguments.defaults)
             pairs = list(zip(positional, defaults, strict=True)) \
                 + list(zip(arguments.kwonlyargs, arguments.kw_defaults, strict=True))
+            function = "def %s" % node.name if not isinstance(node, ast.Lambda) else "lambda"
             for arg, default in pairs:
                 if infrastructure_kind(arg.arg, default, ""):
-                    yield arg.lineno, arg.arg
+                    yield arg.lineno, arg.arg, "%s(%s%s)" % (function, arg.arg,
+                                                             "" if default is None else "=")
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
                 if isinstance(target, ast.Attribute) \
                         and infrastructure_kind(target.attr, node.value, ""):
-                    yield target.lineno, target.attr
+                    yield target.lineno, target.attr, ".%s =" % target.attr
 
 
 def case_files(root: pathlib.Path = scan.REPO_ROOT, paths=None) -> list[str]:
@@ -154,33 +164,27 @@ def case_files(root: pathlib.Path = scan.REPO_ROOT, paths=None) -> list[str]:
     return [rel for rel in scan.tracked_files(root) if scan.covered(rel, paths)]
 
 
-def _excerpt(lines, line):
-    if line == 0:
-        return "(path)"
-    return " ".join(lines[line - 1].split())[:110] if 1 <= line <= len(lines) else ""
-
-
 def scan_cases(root: pathlib.Path = scan.REPO_ROOT, engine: scan.FrozenEngine | None = None,
                paths=None):
-    """Every CF8 site of the case files of the checkout."""
+    """Every CF8 site of the case files of the checkout: one per (path, line, term), its excerpt
+    the spellings of the term on that line."""
     engine = engine or scan.load_cf0()
     library_module = pysource.module_name(cf0b.library_root(engine).rstrip("/"))
-    sites: set[Site] = set()
+    spellings = collections.defaultdict(set)  # (path, line, term) -> spellings
     for rel in case_files(root, paths):
         if pysource.is_cpp_file(rel):
-            sites.add(Site(rel, 0, "cpp-file", "(path)"))
+            spellings[(rel, 0, "cpp-file")].add("(path)")
         if not rel.endswith(".py"):
             continue
         text = (root / rel).read_text(encoding="utf-8")
-        lines = text.splitlines()
-        tree = ast.parse(text)
-        for line, name in infrastructure_sites(tree):
-            sites.add(Site(rel, line, name, _excerpt(lines, line)))
-        for line, term in cf0b.python_sites(rel, text, library_module=library_module,
-                                            native_tree=engine.native_tree):
+        for line, name, spelling in infrastructure_sites(ast.parse(text)):
+            spellings[(rel, line, name)].add(spelling)
+        for line, term, spelling in cf0b.python_sites(rel, text, library_module=library_module,
+                                                      native_tree=engine.native_tree):
             if term in NATIVE_TERMS:
-                sites.add(Site(rel, line, term, _excerpt(lines, line)))
-    return sorted(sites)
+                spellings[(rel, line, term)].add(spelling)
+    return sorted(Site(rel, line, term, pysource.site_excerpt(spelled))
+                  for (rel, line, term), spelled in spellings.items())
 
 
 def kind_of(term: str) -> str:
