@@ -44,6 +44,10 @@ def compile(plan: Any) -> Any:
     if type(plan) is not ResolvedSimulationPlan:
         raise TypeError("pops.compile requires the ResolvedSimulationPlan returned by pops.resolve")
     plan.verify()
+    from pops.codegen.region_facts import check_expected_classes
+
+    # Classes are derived facts of the plan: ClassNotReached comes before any native work (IR21).
+    check_expected_classes(plan)
     from pops._native_selector import select_native_dimension
 
     select_native_dimension(getattr(plan, "resolved_dimension", None))

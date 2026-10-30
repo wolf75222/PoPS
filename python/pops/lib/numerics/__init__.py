@@ -4,10 +4,9 @@ Only the phase 0 pilot of N7a lives here so far: the ``FaceFlux`` builder of a
 scheme over a state, realized by the b6 ``StencilFlux`` native (IR24). The
 spelling is provisional: in spec 0.3 a case imports ``FaceFlux`` from
 ``pops.discrete``, which re-exports the builders of ``pops.lib`` (sec. 2.6.4,
-sec. 4.3, IR25) and does not exist at b6; N15 settles the surface.
+sec. 4.3, IR25) and does not exist at b6; N15 settles the surface. The typed
+maps it reads through are those of ``pops.regions``, their one home.
 """
-from .face_flux import (
-    Compose, FaceFlux, Incidence, RealizedFaceFlux, Shift, realize_face_flux,
-)
+from .face_flux import FaceFlux, RealizedFaceFlux, realize_face_flux
 
-__all__ = ["Compose", "FaceFlux", "Incidence", "RealizedFaceFlux", "Shift", "realize_face_flux"]
+__all__ = ["FaceFlux", "RealizedFaceFlux", "realize_face_flux"]

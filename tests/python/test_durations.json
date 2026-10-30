@@ -6591,6 +6591,36 @@
         "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "c1260647ccd3fcfa02a32f913bfda80573fc6168edb1603fda6d367f7a353a73"
       }
     },
+    "ci_20261030_n7_typed_index_maps": {
+      "basis": "Unmeasured CI scheduling estimates for the two N7 lot 1 modules (ROM-88, typed index maps and their analyses), on the api_v02_20261013 tiers: 30 s for the source-only property tests of the normal forms and of the analyses, which build no program, as the analogue test_finite_linear_maps.py rounded up for its seeded random samples; 60 s for the resolution of the M01, M03, M05 and M10 programs without compilation, as the analogue test_faceflux_pilot_n7a.py. The local receipts are pytest sessions on a 4-core container (Python 3.12, source checkout, no native module); they are not GitHub CI file wall times. test_faceflux_pilot_n7a.py now spells its typed maps with pops.regions: its receipt under ci_20261029_n7a_faceflux_pilot is for its previous source, and its re-measured receipt is below. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/numerics/test_region_facts_n7.py": "tests/python/unit/numerics/test_faceflux_pilot_n7a.py",
+        "tests/python/unit/numerics/test_typed_index_maps_n7.py": "tests/python/unit/numerics/test_finite_linear_maps.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/numerics/test_region_facts_n7.py": 60,
+        "tests/python/unit/numerics/test_typed_index_maps_n7.py": 30
+      },
+      "local_receipts": {
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": {
+          "cases": 19,
+          "session_seconds": 24.73
+        },
+        "tests/python/unit/numerics/test_region_facts_n7.py": {
+          "cases": 18,
+          "session_seconds": 6.93
+        },
+        "tests/python/unit/numerics/test_typed_index_maps_n7.py": {
+          "cases": 22,
+          "session_seconds": 17.88
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "341d13806773df6be786e639034c9c9d0cc6223f893f2748d39ad67c009caafe",
+        "tests/python/unit/numerics/test_region_facts_n7.py": "f468e379c9f23ec3bdbad42a6272baf79a63f474b5a47eac2763611b2bf7e74f",
+        "tests/python/unit/numerics/test_typed_index_maps_n7.py": "d4189403764a73dff606fc9081e8019b6b0b102f9ad499ed0e83e2a7bf6832c8"
+      }
+    },
     "declared_hardware_profiles": {
       "gpu": {
         "basis": "Existing 120-second CPU scheduling estimate retained as provenance only; authentic CUDA/HIP device/managed Field storage is mandatory. No GPU execution or timing received. CPU plans exclude this exact manifest-declared profile; scripts/ci_python_hardware.py --hardware gpu --execute fails closed on CPU.",
@@ -6603,7 +6633,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1129,
+    "estimated_count": 1131,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7370,6 +7400,7 @@
       "tests/python/unit/numerics/test_principal_grouping_c11.py",
       "tests/python/unit/numerics/test_principal_grouping_contract.py",
       "tests/python/unit/numerics/test_principal_storage_route.py",
+      "tests/python/unit/numerics/test_region_facts_n7.py",
       "tests/python/unit/numerics/test_retained_stencil_v02.py",
       "tests/python/unit/numerics/test_scoped_stencil_v02.py",
       "tests/python/unit/numerics/test_state_storage.py",
@@ -7385,6 +7416,7 @@
       "tests/python/unit/numerics/test_symbolic_path_param_routing.py",
       "tests/python/unit/numerics/test_symbolic_policy_layering.py",
       "tests/python/unit/numerics/test_trace_flux.py",
+      "tests/python/unit/numerics/test_typed_index_maps_n7.py",
       "tests/python/unit/numerics/test_user_face_authoring.py",
       "tests/python/unit/numerics/test_user_face_independent_review.py",
       "tests/python/unit/numerics/test_user_joint_reconstruction_independent.py",
@@ -7935,7 +7967,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1194,
+    "total_files": 1196,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9175,5 +9207,7 @@
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
   "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
   "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": 60,
-  "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300
+  "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300,
+  "tests/python/unit/numerics/test_typed_index_maps_n7.py": 30,
+  "tests/python/unit/numerics/test_region_facts_n7.py": 60
 }

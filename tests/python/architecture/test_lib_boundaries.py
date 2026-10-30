@@ -62,6 +62,7 @@ _ALLOWED_POPS_IMPORT_ROOTS = (
     "pops.linalg",
     "pops.descriptors",
     "pops.params",
+    "pops.regions",  # the typed index maps of IR9 (spec 0.3 SU15), their one public home
     "pops.lib",  # intra-lib composition
 )
 

@@ -193,6 +193,41 @@ class FiniteVolume(Descriptor):
             raise ValueError("reconstruction does not declare a valid ghost_depth")
         return value
 
+    def regions(self, name: str, rank: int) -> Any:
+        """The face region of each axis of a rank-``rank`` frame (IR14, IR17, IR20, IR21).
+
+        The left trace of a face is reconstructed in its left cell from the offsets o of the
+        reconstruction, and the right trace in its right cell from -o: the sampler mirrors the
+        stencil for the negative face (include/pops/numerics/fv/reconstruction.hpp@b6). So the
+        reads are ``Compose(Shift(o e_a), Incidence(face(a), cell, side="left"))`` and
+        ``Compose(Shift(-o e_a), Incidence(face(a), cell, side="right"))``, of the target state
+        and of each state that the reconstruction samples with it. The face value goes to the
+        left cell with weight -1 and to the right cell with weight +1 (D6), and the native face
+        loop expects the class face incidence.
+
+        A ``reconstruction.User`` carries the offsets that its body reads, and its reads are
+        derived. Another reconstruction states only its ghost depth n, and its reads are the
+        envelope [1 - n, n - 1] that the native sampler admits, which is the stencil of every
+        catalogue entry: a declared basis (IR24) until the reference region of N3 is written.
+        """
+        from pops.model.face_regions import face_regions
+
+        offsets = self.reconstruction.options.get("sample_offsets")
+        basis = "derived"
+        if offsets is None:
+            offsets, basis = tuple(range(1 - self.ghost_depth, self.ghost_depth)), "declared"
+        state = self.variables.options.get("state")
+        arrays = tuple(("state", getattr(item, "qualified_id", None))
+                       for item in (state, *self.sampling))
+
+        def along(axis: int, step: int) -> tuple:
+            return tuple(step if d == axis else 0 for d in range(rank))
+
+        return face_regions(name, rank, tuple(
+            tuple((array, along(axis, sign*o), side) for array in arrays
+                  for side, sign in (("left", 1), ("right", -1)) for o in offsets)
+            for axis in range(rank)), basis=basis)
+
     def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
 

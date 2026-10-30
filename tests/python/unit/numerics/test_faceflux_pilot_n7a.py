@@ -20,8 +20,9 @@ import pytest
 import pops
 import examples.api_v02.models_M01_M14 as cases
 from examples.api_v02.faceflux_pilot import navier_stokes_scheme, scharfetter_gummel_scheme
-from pops.lib.numerics import FaceFlux, Incidence, realize_face_flux
+from pops.lib.numerics import FaceFlux, realize_face_flux
 from pops.model.hash_data import canonical_hash_data
+from pops.regions import Incidence, cell, face
 
 
 REPO = pathlib.Path(__file__).resolve().parents[4]
@@ -154,7 +155,8 @@ def test_face_identities_match_a_transcription_of_the_native_assembly(realized):
         assert identity["normal"] == e
         assert identity["left_offset"] == tuple(-x for x in e)
         assert identity["right_offset"] == (0, 0)
-        assert identity["targets"] == ((Incidence(axis, "left"), -1), (Incidence(axis, "right"), +1))
+        assert identity["targets"] == ((Incidence(face(axis), cell, "left"), -1),
+                                       (Incidence(face(axis), cell, "right"), +1))
         assert identity["conservation"] is True
         J = np.random.default_rng(axis).standard_normal((7, 5))
         np.testing.assert_array_equal(_derived_assembly(identity, J), _native_assembly(J, axis))
@@ -194,7 +196,7 @@ def test_identities_and_lowering_survive_a_permutation_of_the_components():
 def test_reached_class_is_face_incidence(realized):
     report = realized.lowering_class()
     assert report["expected"] == report["reached"] == "face_incidence"
-    assert report["reached_by"] == "construction of the face vocabulary"
+    assert report["reached_by"] == "classification of the normal forms of the reads (IR20)"
     assert "StencilFlux" in report["substitution"]
 
 
