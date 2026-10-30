@@ -122,8 +122,16 @@ def compile_euler_artifact(
     *,
     cells: int = 16,
     cxx: str | None = None,
+    face_reconstruction: Any = None,
+    riemann_solver: Any = None,
+    primitive_variables: bool = False,
 ) -> Any:
-    """Compile ``model`` through the final lifecycle and return the simulation artifact."""
+    """Compile ``model`` through the final lifecycle and return the simulation artifact.
+
+    The default numerics are MUSCL(Minmod), Rusanov and conservative variables.  The compiled
+    package serves only the route its Case resolves, so a test installing another route compiles
+    the artifact that resolves it.
+    """
     state = model.states["U"]
     flux = model.fluxes["transport"]
     rate = model.operators["transport"]
@@ -135,9 +143,11 @@ def compile_euler_artifact(
         rate,
         FiniteVolume(
             flux=flux,
-            variables=variables.Conservative(state),
-            reconstruction=reconstruction.MUSCL(limiters.Minmod()),
-            riemann=riemann.Rusanov(),
+            variables=(variables.Primitive(state) if primitive_variables
+                       else variables.Conservative(state)),
+            reconstruction=(reconstruction.MUSCL(limiters.Minmod())
+                            if face_reconstruction is None else face_reconstruction),
+            riemann=riemann.Rusanov() if riemann_solver is None else riemann_solver,
         ),
     )
     case.numerics(numerics, block=block)

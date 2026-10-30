@@ -1,6 +1,7 @@
 """Local States need real storage packages, without an invented transport law."""
 import pops
 import pytest
+from pops.codegen._compile_emit import selects_catalogue_routes
 from pops.codegen.module_lowering import lower_and_validate
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian
@@ -24,6 +25,11 @@ def test_flux_free_state_emits_complete_native_loader(dimension, target):
     assert not emitted._m._flux and not model._dsl._m._flux
     assert canonical.module_hash() == model.module.module_hash() == before
     assert state.space.frame == frame.canonical_id
+    # A storage package selects no face route, so no resolved catalogue route specializes it.
+    assert not selects_catalogue_routes(emitted)
+    with pytest.raises(ValueError,match="cannot specialize a state-storage"):
+        emitted._m.emit_cpp_native_loader(name="LocalUnknown",target=target,
+                                          native_route=("conservative","none","rusanov"))
 
 
 @pytest.mark.parametrize("reverse", (False,True))

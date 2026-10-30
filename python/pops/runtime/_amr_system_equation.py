@@ -182,6 +182,9 @@ class _AmrSystemEquation(_AmrSystem):
                 "AmrSystem.add_equation",
                 flux=spatial.flux,
             )
+        from pops.runtime._bricks_scheme import require_compiled_native_route
+
+        require_compiled_native_route(compiled, spatial, where="AmrSystem.add_equation")
 
         nstride = positive_int(
             getattr(time, "stride", 1), where="AmrSystem.add_equation.stride"

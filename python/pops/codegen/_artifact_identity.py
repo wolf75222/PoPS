@@ -10,8 +10,13 @@ def model_artifact_spec(
     abi_key: str, hoist_reciprocals: bool, consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
     toolchain_capture: Any = None,
+    native_route: Any = None,
 ) -> tuple[Any, Any]:
-    """Return semantic and artifact-spec identities for one formula model."""
+    """Return semantic and artifact-spec identities for one formula model.
+
+    A package compiled for one catalogue route records it; a package keeping every route adds no
+    component, so its identity is unchanged.
+    """
     from pops.codegen.cache import (
         _dsl_optflags, _platform_cache_key, _precision_cache_key, _registry_cache_key,
     )
@@ -61,6 +66,7 @@ def model_artifact_spec(
                 None if wave_speeds.get("im_tol") is None
                 else float(wave_speeds["im_tol"]).hex()
             ),
+            **({"native_route": "/".join(native_route)} if native_route is not None else {}),
         },
         flags=[_platform_cache_key(), *_dsl_optflags(),
                *deterministic_component_link_flags(()),

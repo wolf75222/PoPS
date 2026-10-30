@@ -130,7 +130,8 @@ def _build_uniform_artifact(artifact, n, *, block_name="s"):
     sim.add_equation(
         block_name,
         artifact.blocks[0].model,
-        spatial=engine.Spatial(limiter=Minmod()),
+        # The package instantiates only the route its Case resolves.
+        spatial=artifact.blocks[0].spatial.runtime_spatial(),
         time=engine.Explicit(),
     )
     if sim._pending_native_packages:

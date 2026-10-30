@@ -185,3 +185,28 @@ def test_detach_and_freeze_preserve_spatial_identity_and_seal_all_controls():
     assert detached == authored
     with pytest.raises(RuntimeError, match="frozen by AuthoringSnapshot"):
         detached.weno_epsilon = Decimal("2e-24")
+
+
+def test_catalogue_route_specializes_only_catalogue_selections():
+    from types import SimpleNamespace
+
+    from pops.runtime._bricks_scheme import native_catalogue_route, require_compiled_native_route
+    from pops.runtime._state_storage import StateStorageSpatial
+
+    minmod = engine.Spatial(limiter=Minmod(), flux=Rusanov())
+    assert native_catalogue_route(minmod) == ("conservative", "minmod", "rusanov")
+    assert native_catalogue_route(detached_frozen(minmod)) == ("conservative", "minmod", "rusanov")
+    assert native_catalogue_route(engine.Spatial(limiter=WENO5(), flux=Roe(), recon=Primitive())) \
+        == ("primitive", "weno5", "roe")
+    assert native_catalogue_route(StateStorageSpatial()) is None
+    assert native_catalogue_route(None) is None
+
+    catalogue = SimpleNamespace()
+    require_compiled_native_route(catalogue, engine.Spatial(limiter=WENO5()), where="test")
+    resolved = SimpleNamespace(_native_route=("conservative", "minmod", "rusanov"))
+    require_compiled_native_route(resolved, minmod, where="test")
+    with pytest.raises(ValueError, match="only the conservative/minmod/rusanov .* not "
+                                         "conservative/weno5/rusanov"):
+        require_compiled_native_route(resolved, engine.Spatial(limiter=WENO5()), where="test")
+    with pytest.raises(ValueError, match="not a non-catalogue route"):
+        require_compiled_native_route(resolved, StateStorageSpatial(), where="test")

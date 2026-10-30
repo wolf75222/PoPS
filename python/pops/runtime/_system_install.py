@@ -230,6 +230,9 @@ class _SystemInstall(_System):
                 "add_equation",
                 flux=spatial.flux,
             )
+        from pops.runtime._bricks_scheme import require_compiled_native_route
+
+        require_compiled_native_route(compiled, spatial, where="add_equation")
 
         if backend != "production":
             raise ValueError(

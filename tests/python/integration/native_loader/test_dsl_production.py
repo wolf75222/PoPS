@@ -2,10 +2,11 @@
 
 One final board model is compiled through ``Case -> validate -> resolve -> compile``.  Its detached
 component is materialized only through the authenticated lane/state-route boundary.  The runtime
-matches the public bind path bit-for-bit for the artifact's authored Rusanov/MUSCL plan, while an
-alternate HLLC/primitive installation preserves a stationary Euler contact that Rusanov
-necessarily diffuses.  A deliberately recompiled package with a mismatched header signature must
-be rejected at the native boundary.
+matches the public bind path bit-for-bit for the artifact's authored Rusanov/MUSCL plan.  A
+package instantiates only the numerical route its Case resolves, so the first-order primitive
+HLLC and Rusanov routes come from artifacts resolving them: HLLC preserves a stationary Euler
+contact that Rusanov necessarily diffuses.  A deliberately recompiled package with a mismatched
+header signature must be rejected at the native boundary.
 """
 import os
 import shutil
@@ -121,6 +122,15 @@ def main():
         artifact = compile_euler_artifact(model, cells=n, cxx=cxx)
         compiled = artifact.blocks[0].model
         assert compiled.backend == "production"
+        from pops.numerics.reconstruction import FirstOrder
+        from pops.numerics.riemann import HLLC, Rusanov
+
+        contact_artifacts = {
+            name: compile_euler_artifact(
+                model, cells=n, cxx=cxx, face_reconstruction=FirstOrder(),
+                riemann_solver=solver, primitive_variables=True)
+            for name, solver in (("hllc", HLLC()), ("rusanov", Rusanov()))
+        }
 
         def spatial(limiter, riemann, recon):
             from pops.numerics.riemann import Rusanov, HLL, HLLC, Roe
@@ -133,18 +143,18 @@ def main():
                 recon={"conservative": Conservative(), "primitive": Primitive()}[recon],
             )
 
-        def build_native(limiter, riemann, recon, *, initial=U):
-            context = artifact_execution_context(artifact)
+        def build_native(limiter, riemann, recon, *, initial=U, route_artifact=artifact):
+            context = artifact_execution_context(route_artifact)
             sys = System(_system_config_2d(n, length=L))
             sys._s._prepare_boundary_execution_lane(
                 context.communicator.handle,
                 context.identity.token,
             )
-            (state_identity,) = artifact.plan.blocks[0].state_identities
+            (state_identity,) = route_artifact.plan.blocks[0].state_identities
             sys._s._install_block_state_route("gas", state_identity)
             sys.add_equation(
-                "gas", model=compiled, spatial=spatial(limiter, riemann, recon),
-                time=engine.Explicit(),
+                "gas", model=route_artifact.blocks[0].model,
+                spatial=spatial(limiter, riemann, recon), time=engine.Explicit(),
             )
             if sys._pending_native_packages:
                 sys._s._finalize_native_packages()
@@ -153,7 +163,7 @@ def main():
             # Exercise the exact compiled Program carried by the public artifact.  The generic
             # low-level Forward-Euler bridge uses a different (though mathematically equivalent)
             # lincomb kernel sequence, so it cannot support a bitwise public-package parity claim.
-            sys.install_program(artifact.program.so_path)
+            sys.install_program(route_artifact.program.so_path)
             return sys
 
         def compare(limiter, riemann, recon):
@@ -176,11 +186,19 @@ def main():
         # fails if the HLLC selection deterministically falls back to Rusanov.
         contact = _stationary_contact(n)
         hllc_contact = build_native(
-            "none", "hllc", "primitive", initial=contact
+            "none", "hllc", "primitive", initial=contact,
+            route_artifact=contact_artifacts["hllc"],
         )
         rusanov_contact = build_native(
-            "none", "rusanov", "primitive", initial=contact
+            "none", "rusanov", "primitive", initial=contact,
+            route_artifact=contact_artifacts["rusanov"],
         )
+        try:
+            build_native("none", "hllc", "primitive", initial=contact)
+        except ValueError as error:
+            assert "instantiates only the conservative/minmod/rusanov" in str(error), error
+        else:
+            raise AssertionError("une autre route a ete installee sur le package Rusanov/MUSCL")
         hllc_rhs = np.array(hllc_contact.eval_rhs("gas")).reshape(4, n, n)
         rusanov_rhs = np.array(rusanov_contact.eval_rhs("gas")).reshape(4, n, n)
         assert float(np.max(np.abs(hllc_rhs))) <= 1e-12

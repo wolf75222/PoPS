@@ -561,6 +561,46 @@ class Spatial:
             self.source_reconstruction or self.limiter, available=available, block=block)
 
 
+def native_catalogue_route(spatial: Any) -> tuple[str, str, str] | None:
+    """Return the catalogue ``(variables, limiter, Riemann)`` route one block installs.
+
+    A generated package compiled for this route instantiates no other catalogue route.  ``None``
+    means the block installs no catalogue route (Program state storage, a source-authored
+    reconstruction or face, a coordinated face, an external Riemann brick): its package keeps the
+    routes it was authored with.
+    """
+    if not isinstance(spatial, Spatial):
+        runtime_spatial = getattr(spatial, "runtime_spatial", None)
+        if not callable(runtime_spatial):
+            return None
+        spatial = runtime_spatial()
+        if type(spatial) is not Spatial:
+            return None
+    if spatial.external_flux_id is not None:
+        return None
+    from pops.runtime._generated_component_routes import ROUTE_TABLES
+
+    route = (str(spatial.recon), str(spatial.limiter), str(spatial.flux))
+    for token, family in zip(route, ("recon", "limiter", "riemann"), strict=True):
+        if token not in {row[0] for row in ROUTE_TABLES[family]}:
+            return None
+    return route
+
+
+def require_compiled_native_route(compiled: Any, spatial: Any, *, where: str) -> None:
+    """Refuse to install a package compiled for one catalogue route with another route."""
+    compiled_route = getattr(compiled, "_native_route", None)
+    if compiled_route is None:
+        return
+    requested = native_catalogue_route(spatial)
+    if requested != tuple(compiled_route):
+        raise ValueError(
+            "%s: this package instantiates only the %s variables/limiter/Riemann route, not %s; "
+            "compile the Case with the numerics it installs"
+            % (where, "/".join(compiled_route),
+               "a non-catalogue route" if requested is None else "/".join(requested)))
+
+
 class Explicit:
     """Explicit time treatment.
 
