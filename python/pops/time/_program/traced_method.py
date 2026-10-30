@@ -11,9 +11,10 @@ T33. The body reads only ``B``, ``p``, its components and immutable captures. A 
 Program, a builder coefficient (the ambient step size among them), a clock or a time point inside
 a traced expression is refused as ``ClosedBodyViolation``. So is a component that reads the step
 size of its Program or a value it was not given, that evaluates a value at another time than the
-state it is given, that returns a rate this evaluation did not compute, or that changes a
-publication, a history, an integral, an acceptance guard or the step control of the Program:
-those tables are compared, contents included, around each evaluation and around the body. A Python truth test, ``float``, ``int`` or ``numpy.asarray`` of a
+state it is given (the bodies of its ``range``, ``while_`` and ``subcycle`` included), that returns
+a rate this evaluation did not compute, or that changes a publication, a history, an integral, an
+acceptance guard or the step control of the Program: those tables are compared, contents
+included, around each evaluation and around the body. A Python truth test, ``float``, ``int`` or ``numpy.asarray`` of a
 traced value raises ``SymbolicTruthValueError`` (E1). Comparisons build predicates (SU4) and come
 with a later lot, and Python's ``max`` and ``min`` with them.
 
@@ -655,7 +656,7 @@ class _Component:
         point = program.stage("%s_stage%d" % (trace.name, ordinal), c=time.c)
         value, materialized = self._value_at(state, point, ordinal, time.c)
         trace.stages.append((ordinal, time.c, materialized))
-        before, created = _guarded_tables(program), len(program._values)
+        before, first = _guarded_tables(program), program._next_id
         rate = self._evaluate(value)
         changed = _changed_tables(before, _guarded_tables(program))
         if changed:
@@ -663,7 +664,7 @@ class _Component:
                 "the component %r changed the %s of its Program: a component evaluates a rate, "
                 "and publishes no state, history or step control outside the Candidate (T33)"
                 % (self._name, ", ".join(changed)))
-        _require_rate(program, rate, self._name, program._values[created:], value)
+        _require_rate(program, rate, self._name, _issued_since(program, first), value)
         trace.evaluations.append((evaluation, self._name, ordinal))
         atom = _Atom("%s#%d" % (self._name, evaluation), evaluation)
         return TracedField(trace, rate, ((atom, _ONE),))
@@ -689,6 +690,32 @@ def _require_state(value: Any, where: str) -> None:
                         % where)
 
 
+def _issued_since(program: Any, first: int) -> list:
+    """The values that ``program`` issued from the SSA id ``first`` on, under their current records.
+
+    The bodies of ``range``, ``while_`` and ``subcycle``, which b6 records outside
+    ``Program._values``, are included, as b6 checks the body of a ``Realize``.
+    """
+    return list({value.id: program._canonical_value(value)
+                 for value in program._issued_values.values() if value.id >= first}.values())
+
+
+def _held_values(node: Any) -> Any:
+    """The Program values that IR metadata holds, as b6 follows them for a ``Realize`` body."""
+    from pops.representations import ScientificValue
+
+    if isinstance(node, ProgramValue):
+        yield node
+    elif type(node) is ScientificValue:
+        yield node.value
+    elif isinstance(node, Mapping):
+        for item in node.values():
+            yield from _held_values(item)
+    elif isinstance(node, (list, tuple)):
+        for item in node:
+            yield from _held_values(item)
+
+
 def _require_rate(program: Any, rate: Any, component: str, created: list, given: Any) -> None:
     """What a component returns: rates of its Program that this evaluation computed from the
     state ``given`` and at its point, without reading the step size (T33, T4)."""
@@ -712,15 +739,16 @@ def _require_rate(program: Any, rate: Any, component: str, created: list, given:
         raise IncrementTypeMismatch(
             "the component %r returned a value of type %s, not a rate: a component evaluates the "
             "rate of the state it is given (SU10)" % (component, " and ".join(others)))
-    computed = {id(value) for value in created}
-    if any(id(value) not in computed for value, _ in terms):
+    computed = {value.id for value in created}
+    if any(value.id not in computed for value, _ in terms):
         raise ClosedBodyViolation(
             "the component %r returned a rate that this evaluation did not compute, such as a "
             "rate kept from an earlier evaluation: a component evaluates a rate at the state and "
             "time it is given (T33, T4)" % component)
-    computed.add(id(given))
-    outside = sorted({read.name for value in created for read in value.inputs
-                      if id(read) not in computed})
+    computed.add(given.id)
+    outside = sorted({read.name for value in created
+                      for read in (*value.inputs, *_held_values(value.attrs))
+                      if read.id not in computed})
     if outside:
         raise ClosedBodyViolation(
             "the component %r read %s, which it was not given and did not compute: a component "

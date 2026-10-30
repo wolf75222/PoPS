@@ -362,6 +362,36 @@ def test_a_component_evaluates_only_the_state_it_is_given(m01, reuse, match):
         _elaborate(m01, heun(keeping))
 
 
+@pytest.mark.parametrize("body, match", [
+    (lambda rate: (lambda P, x: P.value("y", x + P.dt*rate(x), at=x.point)),
+     "reads the step size of its Program"),
+    (lambda rate: (lambda P, x: P.value("later", x, at=TimePoint(P.clock, 1))),
+     "evaluated later at another time"),
+], ids=["step-size", "end-of-the-step"])
+def test_a_control_flow_body_of_a_component_is_checked_as_the_component(m01, body, match):
+    # b6 records the values of a range, while_ or subcycle body outside Program._values.
+    with pytest.raises(ClosedBodyViolation, match=match):
+        _elaborate(m01, forward(lambda u: m01["flow"](u.prog.range(u, 1, body(m01["flow"])))))
+
+
+def test_a_control_flow_body_reads_only_the_state_given_to_its_component(m01):
+    first = []  # the state of the first evaluation
+
+    def keeping(u):
+        if not first:
+            first.append(u)
+            return m01["flow"](u)
+        return m01["flow"](u.prog.range(
+            u, 1, lambda P, x: P.value("mixed", .5*x + .5*first[0], at=x.point)))
+    heun = _stage_formula(lambda B, p, k0, U1, k1: B.state + p.dt/2*k0 + p.dt/2*k1)
+    with pytest.raises(ClosedBodyViolation, match="read fluid, which it was not given"):
+        _elaborate(m01, heun(keeping))
+    # A body that stays at the state it is given is a rate of that state.
+    honest = forward(lambda u: m01["flow"](u.prog.range(
+        u, 2, lambda P, x: P.value("same", x, at=x.point))))
+    assert _elaborate(m01, honest).trace.increment == ((0, {1: Fraction(1)}),)
+
+
 def test_the_guarded_tables_are_tables_of_the_builder(m01):
     """The guarded tables are named by strings: a table that b6 renames would leave the guard."""
     program = _elaborate(m01, forward(m01["flow"])).program
