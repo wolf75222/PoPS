@@ -218,12 +218,22 @@ listed check that no longer differs. On every event, the `changes` job runs `run
 check --check-base <base> --verify-commits`: it fails when the ledger records a check, a cause or a
 pair of tutorial and cause that the base does not, when a cause changes its issue, when an output
 stops being compared, when identity lines grow or when anything outside the ledger changes, and
-when a cited commit is not in the history or changes tests only (the full history is checked out
-there; a shallow clone's boundary commit is refused, its changes are unknown). The commits of a
-cause may be corrected, since they admit no difference: each one is checked the same way. A slice
-that changes a result of a tutorial restores master's result or does not land; it never records it.
-A slice that changes a route that a tutorial uses keeps the old spelling until the route is removed
-(MG1).
+when a cited commit is not in the history or changes no code that the tutorials execute
+(`include/`, `src/`, `python/`, `cmake/`, `CMakeLists.txt`; the full history is checked out there;
+a shallow clone's boundary commit is refused, its changes are unknown). The commits of a cause may
+be corrected, since they admit no difference: each one is checked the same way. A slice that
+changes a result that the ledger does not record restores master's result or does not land; it
+never records it. A slice that changes a route that a tutorial uses keeps the old spelling until
+the route is removed (MG1).
+
+A recorded check is a limit of MG8, not a guard. An entry names a check, not its value: the value
+depends on the runner's CPU, the reason the reference is rebuilt on each runner, so it cannot be
+pinned in the contract. A recorded check therefore explains every later value of that check: while
+the ledger records a state, a slice that changes that state again passes MG8 unseen, unless it also
+changes something that is not recorded (the number of steps, the hierarchy, a printed or monitor
+line). MG8 guards a result only once its cause is fixed and its entry removed. The fixes of ROM-101
+to ROM-104, which empty the ledger, therefore land before any slice that changes a route that a
+tutorial uses (landing plan of N5, section 6.2).
 
 Each run step has a budget and each tutorial a watchdog under it (`--watchdog`), and the run report
 is written after every tutorial. Tutorial 14 runs to t = 8 on two ranks and this tree takes about

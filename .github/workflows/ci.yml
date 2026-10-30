@@ -110,8 +110,8 @@ jobs:
             --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" \
             --output-file ci-input/changed-files.txt
       # MG6: the ledger of master's tutorials (MG8) records no more than the base does, and each
-      # of its causes cites commits of the history that change more than tests. Every event runs
-      # it, so a PR cannot grow the ledger even when its plan skips the tutorials.
+      # of its causes cites commits of the history that change code the tutorials execute. Every
+      # event runs it, so a PR cannot grow the ledger even when its plan skips the tutorials.
       - name: Check the MG8 ledger against the base
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}

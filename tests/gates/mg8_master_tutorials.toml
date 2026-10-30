@@ -6,7 +6,11 @@ gate = "mg8-master-tutorials"
 # difference of a result is recorded at the end of this file with its causes, by its exact name;
 # a failure, a missing run or observation and a missing or unlisted output are never recorded and
 # always fail the job (CF14). The ledger only shrinks (MG6): scripts/run_mg8_tutorials.py check
-# --check-base fails when it records more than the contract of the base revision.
+# --check-base fails when it records more than the contract of the base revision. An entry names a
+# check, not its value, which depends on the runner's CPU: it explains every later value of that
+# check, so MG8 guards a recorded result only once its cause is fixed and its entry removed. The
+# fixes that empty this ledger (ROM-101 to ROM-104) land before any slice that changes a route
+# that a tutorial uses (landing plan of N5, section 6.2).
 master = "bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7"
 directory = "docs/tutorials/scalar_advection"
 # The ConsoleMonitor template of the tutorials: these lines are their outputs at output times.
@@ -138,11 +142,11 @@ lane = "serial-dim3"
 outputs = [{ pattern = "results/16_openmp_cartesian3d_ssprk2.npz", kind = "npz" }]
 
 # Causes of the divergences of this tree from master: each names the commits that introduced it
-# (check --verify-commits proves that each is in the history and changes more than tests), the
-# issue that owns it and the evidence that attributes it. The attribution build is b6 with
-# master's semantics for the four causes below (variant_b6_with_master_semantics.patch, replicas
-# and traces in /mnt/project-files/landing/mg8): each divergence names the run of that build that
-# reproduces master bit for bit, printed and console lines included.
+# (check --verify-commits proves that each is in the history and changes code that the tutorials
+# execute), the issue that owns it and the evidence that attributes it. The attribution build is
+# b6 with master's semantics for the four causes below (variant_b6_with_master_semantics.patch,
+# replicas and traces in /mnt/project-files/landing/mg8): each divergence names the run of that
+# build that reproduces master bit for bit, printed and console lines included.
 
 [[cause]]
 id = "inflow-face-trace"

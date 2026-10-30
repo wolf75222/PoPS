@@ -274,6 +274,22 @@ def test_a_recorded_check_explains_that_check_only(tmp_path):
     assert [row["check"] for row in verdict["unexplained"]] == ["monitor:rank0"]
 
 
+def test_a_recorded_check_explains_every_later_value_of_that_check(tmp_path):
+    # T8 of the review of #701 (probe P5), a limit and not a guard: an entry names a check, not
+    # its value, which depends on the runner's CPU. A recorded state that changes again passes, so
+    # MG8 guards it only once its cause is fixed and its entry removed (change_aware_ci.md).
+    entry = CAUSE + _divergence('["run0:rank0:run0-tracer:sha256"]')
+    state = np.linspace(0.0, 1.0, 16).reshape(1, 4, 4)
+    reference = _write_run(tmp_path / "reference", state=state)
+    for later in (1, 2):
+        changed = state.copy()
+        changed[0, 1, 2] += later * 1.0e-3
+        verdict = _compare(tmp_path / str(later), reference,
+                           _write_run(tmp_path / str(later) / "candidate", state=changed), entry)
+        assert verdict["passed"] and not verdict["unexplained"]
+        assert [row["check"] for row in verdict["explained"]] == ["run0:rank0:run0-tracer:sha256"]
+
+
 def test_an_observation_that_failed_or_a_missing_run_is_a_failure(tmp_path):
     # P2 and P3 of the review of #701: nothing was compared, so nothing can be recorded.
     failed = [{"index": 0, "error": "AttributeError: no state_global"}]
@@ -497,29 +513,39 @@ def test_check_base_refuses_a_ledger_that_grows_and_admits_its_first_introductio
         mg8.main(arguments + ["0" * 40])
 
 
-def test_the_commits_of_a_cause_are_in_the_history_and_change_more_than_tests(tmp_path):
+def test_the_commits_of_a_cause_are_in_the_history_and_change_executed_code(tmp_path):
     root = _repository(tmp_path)
-    (root / "src").mkdir()
-    (root / "src/route.cpp").write_text("int route;\n", encoding="utf-8")
-    _git(root, "add", ".")
-    _git(root, "commit", "-q", "-m", "route")
-    source = _git(root, "rev-parse", "HEAD")
-    (root / "tests").mkdir()
-    (root / "tests/test_route.py").write_text("def test_route(): pass\n", encoding="utf-8")
-    _git(root, "add", ".")
-    _git(root, "commit", "-q", "-m", "test")
-    test_only = _git(root, "rev-parse", "HEAD")
+
+    def commit(path: str, text: str) -> str:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text, encoding="utf-8")
+        _git(root, "add", ".")
+        _git(root, "commit", "-q", "-m", path)
+        return _git(root, "rev-parse", "HEAD")
+
+    source = commit("src/route.cpp", "int route;\n")
+    test_only = commit("tests/test_route.py", "def test_route(): pass\n")
+    # O7 of the review of #701: documentation, a changelog and tests execute nothing.
+    documentation = commit("docs/review/note.md", "note\n")
+    changelog = commit("CHANGELOG.md", "- entry\n")
 
     def problems(commit: str, where: Path = root) -> list[str]:
         return mg8.verify_commits({"cause": [{"id": "synthetic", "commits": [commit]}]}, where)
 
     assert problems(source[:8]) == []
-    assert "changes tests only" in problems(test_only[:8])[0]
+    for other in (test_only, documentation, changelog):
+        assert "changes no path that the tutorials execute" in problems(other[:8])[0]
+    assert all(mg8.executed(path) for path in (
+        "include/pops/a.hpp", "src/a.cpp", "python/pops/a.py", "python/bindings/a.cpp",
+        "cmake/a.cmake", "CMakeLists.txt"))
+    assert not any(mg8.executed(path) for path in (
+        "tests/CMakeLists.txt", "docs/a.md", "CHANGELOG.md", "examples/a.py", "scripts/a.py"))
     assert "not in this clone" in problems("0123abcd")[0]
     shallow = tmp_path / "shallow"
     subprocess.run(["git", "clone", "-q", "--depth", "1", root.as_uri(), str(shallow)],
                    check=True, capture_output=True)
-    assert "boundary of a shallow clone" in problems(test_only[:8], shallow)[0]
+    # A clone of depth one holds HEAD only: its boundary, whose changes are unknown.
+    assert "boundary of a shallow clone" in problems(changelog[:8], shallow)[0]
 
 
 def test_ci_runs_every_lane_against_master_on_python_plans_and_checks_the_ledger_always():

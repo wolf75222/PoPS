@@ -312,8 +312,16 @@ def contract_at(source: Path, revision: str, contract: Path) -> dict[str, Any] |
     return tomllib.loads(shown.stdout) if shown.returncode == 0 else None
 
 
+# The paths whose code the tutorials execute: the package, its native module and their build.
+EXECUTED_PATHS = ("include/", "src/", "python/", "cmake/")
+
+
+def executed(path: str) -> bool:
+    return path == "CMakeLists.txt" or path.startswith(EXECUTED_PATHS)
+
+
 def verify_commits(contract: Mapping[str, Any], source: Path) -> list[str]:
-    """Each cited commit is in the history of HEAD and changes something besides tests."""
+    """Each cited commit is in the history of HEAD and changes code that the tutorials execute."""
     shallow_file = Path(_git(source, "rev-parse", "--git-common-dir").stdout.strip())
     if not shallow_file.is_absolute():
         shallow_file = source / shallow_file
@@ -338,9 +346,10 @@ def verify_commits(contract: Mapping[str, Any], source: Path) -> list[str]:
                 continue
             paths = _git(source, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r",
                          "-m", "--first-parent", full_id).stdout.split()
-            if not any(not path.startswith("tests/") for path in paths):
-                problems.append("cause %s cites %s, which changes tests only" % (cause["id"],
-                                                                                 commit))
+            if not any(executed(path) for path in paths):
+                problems.append("cause %s cites %s, which changes no path that the tutorials "
+                                "execute (%s, CMakeLists.txt)"
+                                % (cause["id"], commit, ", ".join(EXECUTED_PATHS)))
     return problems
 
 
@@ -1225,7 +1234,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                        help="fail if the ledger records more than the contract of REVISION")
     check.add_argument("--verify-commits", action="store_true",
                        help="fail unless every commit of a cause is in the history of HEAD "
-                            "and changes more than tests")
+                            "and changes code that the tutorials execute")
     args = parser.parse_args(argv)
     if args.command == "probe":
         return probe(args)
