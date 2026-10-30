@@ -85,8 +85,11 @@ def _install_state_routes(sim, names):
         sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
 
 
-def _scalar_charge(name, q, *, background=0.0):
-    """Explicit nonzero advection plus an independent scalar contribution to shared Poisson."""
+def _scalar_charge(name, q, *, limiter="none", background=0.0):
+    """Explicit nonzero advection plus an independent scalar contribution to shared Poisson.
+
+    The package instantiates only the conservative/<limiter>/Rusanov route its block installs.
+    """
     model = Model("%s-scalar-advection" % name)
     (rho,) = model.conservative_vars("n", roles=(Density(),))
     model.flux(x=[0.3 * rho], y=[0.2 * rho])
@@ -97,6 +100,7 @@ def _scalar_charge(name, q, *, background=0.0):
     return model.compile(
         backend="production", target="amr_system", name=name,
         consumer_owner_qid="tests.amr-multiblock.%s" % name,
+        _native_route=("conservative", limiter, "rusanov"),
     )
 
 
@@ -125,7 +129,7 @@ def _build(n=32, regrid_every=0, *, tagging=()):
     sim.set_poisson(bc=Periodic())
     sim.add_equation("ions", _scalar_charge("ions", +1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-    sim.add_equation("electrons", _scalar_charge("electrons", -1.0),
+    sim.add_equation("electrons", _scalar_charge("electrons", -1.0, limiter="minmod"),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()))  # SCHEMA DIFFERENT
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", np.roll(_bump(n, 0.20), (3, 5), axis=(0, 1)))
