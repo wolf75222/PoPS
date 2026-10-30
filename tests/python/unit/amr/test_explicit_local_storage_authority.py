@@ -45,7 +45,7 @@ def _case(*, name="explicit_local", levels=1, depth=1):
                                     periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,) * (levels - 1)),
         tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["u"] > case.value(threshold)),
-                                 Buffer(cells=0)),
+                                 Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid.frozen(), transfer=transfer, execution=AMRExecution.synchronous())

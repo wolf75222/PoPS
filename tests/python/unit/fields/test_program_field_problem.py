@@ -368,7 +368,7 @@ def test_three_field_amr_uses_field_owned_composite_provider_and_synchronized_ph
     threshold = case.param(RuntimeParam("field-refine", default=0.0))
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(16,16), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(marker_handle) > case.value(threshold)), Buffer(cells=1)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(marker_handle) > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(10, clock=program.clock)), transfer=transfer,
         execution=AMRExecution.synchronous() if synchronous else AMRExecution.subcycled((AMRClockRelation(0,1,2),)))

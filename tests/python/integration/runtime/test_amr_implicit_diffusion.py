@@ -231,7 +231,7 @@ def build(
                 Tag((ValueExpr(block[state]) if components == 1 else ValueExpr(block[state])["energy"]) > case.value(threshold)),
                 # The tag buffer itself supplies the physical padding of 3/16.
                 # State transfer does not contribute an additional tagged cell.
-                Buffer(cells=3 * n // 16 if periodic_witness else 1),
+                Buffer(cells=3 * n // 16 if periodic_witness else 1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,

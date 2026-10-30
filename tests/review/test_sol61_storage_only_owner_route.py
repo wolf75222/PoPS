@@ -80,7 +80,7 @@ def completed_case(*, adaptive, storage="unread"):
             transfer.state(block[state], StateTransfer())
         threshold = case.param(RuntimeParam("physical-refinement-threshold", default=.5))
         layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-            tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[0][states[0]])[0] > case.value(threshold)), Buffer(cells=0)),
+            tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[0][states[0]])[0] > case.value(threshold)), Buffer(cells=0, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,
             execution=AMRExecution.synchronous())

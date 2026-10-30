@@ -146,7 +146,7 @@ def _author(n, dt, *, physical=False, cxx=None):
         ),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=(Tag(ValueExpr(block_state) > case.value(threshold)), Buffer(cells=1)),
+            rules=(Tag(ValueExpr(block_state) > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),

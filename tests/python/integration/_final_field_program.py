@@ -346,7 +346,7 @@ def resolve_periodic_field_program(
         tagging_rules = [Tag(ValueExpr(state_instance) > case.value(threshold))]
         if coarsen_below_threshold:
             tagging_rules.append(Coarsen(ValueExpr(state_instance) < case.value(threshold)))
-        tagging_rules.append(Buffer(cells=1))
+        tagging_rules.append(Buffer(cells=1, selection="refine-requests"))
         tagging = AMRTagging(
             rules=tuple(tagging_rules),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

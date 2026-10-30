@@ -79,7 +79,7 @@ def route(tmp_path, *, adaptive=False):
         for handle in (state, out):
             transfer = AMRTransfer(); transfer.state(handle, StateTransfer()); transfers.append(transfer)
         descriptors = tuple(AMR(grid=descriptor.mesh, hierarchy=AMRHierarchy(max_levels=2,
-            ratios=((2, 1) if index == 0 else (2, 2),)), tagging=AMRTagging(rules=(Tag(__import__("pops.math", fromlist=["ValueExpr"]).ValueExpr((state,out)[index])[("a","s")[index]] > validated.value(threshold)), Buffer(cells=0)),
+            ratios=((2, 1) if index == 0 else (2, 2),)), tagging=AMRTagging(rules=(Tag(__import__("pops.math", fromlist=["ValueExpr"]).ValueExpr((state,out)[index])[("a","s")[index]] > validated.value(threshold)), Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid.frozen(), transfer=transfers[index], execution=AMRExecution.synchronous())
             for index, descriptor in enumerate(descriptors))

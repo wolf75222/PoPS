@@ -188,8 +188,12 @@ struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
   std::vector<Extent<Dim>> transition_ratios{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_buffers{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_lookaheads{runtime_config_detail::filled_extent<Dim>(2)};
-  /// pops.amr.tag-selection@1: only this authored ranked buffer dilates candidates.
-  /// Transition buffers/lookaheads are separate parent-coverage requirements.
+  /// Tag selection contract (MG8, ROM-103).
+  /// 1, pops.amr.tag-selection@1 (API 0.2): only accepted Refine requests seed the dilation, by
+  ///    tag_selection_buffer alone; transition buffers plus lookaheads nest the parents.
+  /// 2, master's transition reach: every cell of the target coverage, cells kept by hysteresis
+  ///    included, seeds the dilation, by the transition buffer plus the lookahead; the transition
+  ///    buffer alone nests the parents, and tag_selection_buffer stays zero.
   std::uint32_t tag_selection_contract_version = 1;
   Extent<Dim> tag_selection_buffer{};
   /// Explicit optional AcceptedHaloPreparation@1, never inferred from allocated ghosts.

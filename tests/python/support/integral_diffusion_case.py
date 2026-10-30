@@ -83,7 +83,7 @@ def build_diffusion_integral_case(kind="uniform", *, proposed_dt=DT, selected_ax
         threshold = case.param(RuntimeParam("refine_threshold", default=1.5))
         layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])[state.components[0]]
-                                        > case.value(threshold)), Buffer(cells=1)),
+                                        > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid(schedule=every(100, clock=program.clock)), transfer=transfer,

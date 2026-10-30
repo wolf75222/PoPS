@@ -57,7 +57,7 @@ def build(*,ghost=False):
     case.initials.add(InitialCondition(state=block[state],value=Analytic(frame=frame,components=(cos(2*math.pi*x(frame)),2+0*x(frame))),projection=ConservativeCellAverage()))
     transfer=AMRTransfer();transfer.state(block[state],StateTransfer());transfer.field(field,EllipticRecompute())
     layout=AMR(grid=CartesianGrid(frame=frame,cells=(8,8)),hierarchy=AMRHierarchy(max_levels=2,ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])['c']>model.value(threshold)),Buffer(cells=0)),hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])['c']>model.value(threshold)),Buffer(cells=0, selection="refine-requests")),hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(1000,clock=program.clock)),transfer=transfer,
         execution=AMRExecution.synchronous(accepted_halo=AcceptedHaloPreparation(cells=(1,1))))
     return case,layout

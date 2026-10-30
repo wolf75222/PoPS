@@ -99,7 +99,7 @@ def make_case(*, nonconservative=True, amr=False, fixed_dt=None, scale_parameter
         from pops.params import RuntimeParam
         threshold=case.param(RuntimeParam('unused_threshold',default=1000.))
         layout=AMR(grid=layout.mesh,hierarchy=AMRHierarchy(max_levels=1,ratios=()),
-            tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])[NAMES[1]]>case.value(threshold)),Buffer(cells=0)),
+            tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])[NAMES[1]]>case.value(threshold)),Buffer(cells=0, selection="refine-requests")),
                 hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid(schedule=every(100,clock=program.clock)),transfer=transfer,
             execution=AMRExecution.synchronous())

@@ -113,7 +113,7 @@ def build(width, *, adaptive=False, failure=None, amr_periodic=False):
         transfer.state(block[rho], StateTransfer())
         layout = AMR(grid=grid, embedded_boundary=embedded,
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-            tagging=AMRTagging(rules=(Tag(ValueExpr(block[rho])[labels[0]] > case.value(threshold)), Buffer(cells=0)),
+            tagging=AMRTagging(rules=(Tag(ValueExpr(block[rho])[labels[0]] > case.value(threshold)), Buffer(cells=0, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,
             execution=AMRExecution.synchronous(), clustering=BergerRigoutsos(maximum_box_size=8))

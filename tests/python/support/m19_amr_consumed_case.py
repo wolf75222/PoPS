@@ -239,7 +239,7 @@ def build(directory, *, reverse=False, provider_factory=None):
                 grid=grid.mesh,
                 hierarchy=AMRHierarchy(max_levels=2, ratios=((2, 2) if index == 0 else (1, 2),)),
                 tagging=AMRTagging(
-                    rules=(Tag(condition), Buffer(cells=0)),
+                    rules=(Tag(condition), Buffer(cells=0, selection="refine-requests")),
                     hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                     conflict_policy=ConflictPolicy.REFINE_WINS,
                 ),

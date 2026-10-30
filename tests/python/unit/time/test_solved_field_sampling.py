@@ -55,7 +55,7 @@ def field_sample_case(*, adaptive=False):
         from pops.lib.amr import StateTransfer
         threshold = case.param(RuntimeParam("refine density", default=.5))
         tagging = AMRTagging(rules=(Tag(ValueExpr(case.resolve(block[state]))["q"] >
-            ValueExpr(case.resolve(threshold))), Buffer(cells=2)),
+            ValueExpr(case.resolve(threshold))), Buffer(cells=2, selection="refine-requests")),
             hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS)
         transfer = AMRTransfer()
         transfer.state(case.resolve(block[state]), StateTransfer())

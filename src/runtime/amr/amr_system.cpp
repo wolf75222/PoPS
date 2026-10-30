@@ -276,8 +276,9 @@ void validate_amr_config(const AmrSystemConfig<Dim>& config) {
   if (config.regrid_every < 0)
     throw std::invalid_argument("AmrSystem regrid_every must be non-negative");
 
-  if (config.tag_selection_contract_version != 1)
-    throw std::invalid_argument("AmrSystem requires pops.amr.tag-selection@1");
+  if (config.tag_selection_contract_version != 1 && config.tag_selection_contract_version != 2)
+    throw std::invalid_argument(
+        "AmrSystem requires tag selection 1 (pops.amr.tag-selection@1) or 2 (transition reach)");
   if (config.accepted_halo_contract_version != 0 && !config.explicit_bootstrap)
     throw std::invalid_argument(
         "accepted halo preparation requires authenticated explicit bootstrap");
@@ -295,6 +296,9 @@ void validate_amr_config(const AmrSystemConfig<Dim>& config) {
     const auto buffer = config.tag_selection_buffer[axis];
     if (buffer < 0 || buffer > std::numeric_limits<int>::max())
       throw std::overflow_error("AmrSystem tag selection buffer exceeds signed coordinates");
+    if (config.tag_selection_contract_version == 2 && buffer != 0)
+      throw std::invalid_argument(
+          "AmrSystem transition reach dilates by the transition tables, not a tag buffer");
     const auto width = std::uint64_t{2} * static_cast<std::uint64_t>(buffer) + 1;
     if (width > std::numeric_limits<std::size_t>::max() ||
         tag_neighborhood > std::numeric_limits<std::size_t>::max() / width)
@@ -10569,9 +10573,13 @@ struct AmrSystem<Dim>::Impl {
     const auto& parent = engine->hierarchy().layout(level);
     auto options = exact_cluster_options(cfg, parent);
     for (int axis = 0; axis < Dim; ++axis) {
-      // Both derived minima constrain coverage. Neither expands predicate tags.
-      const auto coverage = static_cast<std::uint64_t>(cfg.transition_buffers[level][axis]) +
-                            static_cast<std::uint64_t>(cfg.transition_lookaheads[level][axis]);
+      // pops.amr.tag-selection@1: both derived minima constrain coverage, and neither expands
+      // predicate tags. Master's transition reach nests by the transition buffer alone.
+      const auto coverage =
+          static_cast<std::uint64_t>(cfg.transition_buffers[level][axis]) +
+          (cfg.tag_selection_contract_version == 2
+               ? std::uint64_t{0}
+               : static_cast<std::uint64_t>(cfg.transition_lookaheads[level][axis]));
       if (coverage > std::numeric_limits<int>::max())
         throw std::overflow_error("AMR parent nesting coverage exceeds native coordinates");
       options.nesting_buffer[axis] = static_cast<int>(coverage);
@@ -10634,6 +10642,7 @@ struct AmrSystem<Dim>::Impl {
     const std::vector<char> current = child_coverage_on_parent(layout, child);
     std::vector<char> target = current;
     std::vector<char> buffer_seeds(target.size(), char{0});
+    const bool transition_reach = cfg.tag_selection_contract_version == 2;
     for (std::size_t ordinal = 0; ordinal < target.size(); ++ordinal) {
       bool requests_refine = refine[ordinal] != 0;
       bool requests_coarsen = coarsen[ordinal] != 0;
@@ -10662,17 +10671,25 @@ struct AmrSystem<Dim>::Impl {
                               tagging_spec->min_cycles);
         }
       }
-      // Retained coverage already includes previous buffers and clustering extras. Preserve that
-      // coverage for Keep/hysteresis without making it a new source of buffer dilation. Only an
-      // effective, accepted Refine request seeds the authored reach in this tagging cycle.
-      buffer_seeds[ordinal] = requests_refine && target[ordinal] != 0 ? char{1} : char{0};
+      // pops.amr.tag-selection@1: retained coverage already includes previous buffers and
+      // clustering extras. Preserve that coverage for Keep/hysteresis without making it a new
+      // source of buffer dilation. Only an effective, accepted Refine request seeds the authored
+      // reach in this tagging cycle. Master's transition reach seeds the whole target coverage.
+      buffer_seeds[ordinal] =
+          (requests_refine || transition_reach) && target[ordinal] != 0 ? char{1} : char{0};
     }
 
     std::array<std::size_t, Dim> reach{};
     std::array<std::size_t, Dim> width{};
     std::size_t neighborhood = 1;
+    const std::size_t transition = static_cast<std::size_t>(parent_level);
     for (int axis = 0; axis < Dim; ++axis) {
-      reach[axis] = static_cast<std::size_t>(cfg.tag_selection_buffer[axis]);
+      reach[axis] = transition_reach
+                        ? checked_size_sum(
+                              static_cast<std::size_t>(cfg.transition_buffers[transition][axis]),
+                              static_cast<std::size_t>(cfg.transition_lookaheads[transition][axis]),
+                              "AMR tagging transition reach exceeds size_t")
+                        : static_cast<std::size_t>(cfg.tag_selection_buffer[axis]);
       width[axis] =
           checked_size_sum(checked_size_product(std::size_t{2}, reach[axis],
                                                 "AMR tagging transition width exceeds size_t"),
@@ -26471,7 +26488,9 @@ AmrSystem<Dim>::prepared_program_temporal_relations() const {
 template <int Dim>
 std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_tag_selection_contract() const {
   std::vector<std::vector<std::string>> rows{
-      {"pops.amr.tag-selection@1", std::to_string(p_->cfg.tag_selection_contract_version)}};
+      {p_->cfg.tag_selection_contract_version == 2 ? "pops.amr.tag-selection.transition-reach"
+                                                   : "pops.amr.tag-selection@1",
+       std::to_string(p_->cfg.tag_selection_contract_version)}};
   // Read the retained immutable config, not a reconstructed tag mask.
   std::vector<std::string> selection{"tag-buffer"};
   for (int axis = 0; axis < Dim; ++axis)

@@ -281,6 +281,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   name, `Inflow(..., trace="prescribed")` (provisional spelling for N15), as M14 and the
   two-block receipt now do: its face keeps the fixed-state law and carries a per-face flag,
   `prescribed_trace`, that the engine reads (`with_prescribed_trace_faces`) (MG8, ROM-101).
+- `Buffer(cells=n)` dilates AMR tags as master does again: every cell of the target coverage,
+  cells kept by hysteresis included, grows by the transition buffer, max(n, derived), plus the
+  lookahead (native tag selection 2). The tag selection of API 0.2 (pops.amr.tag-selection@1)
+  is chosen by name, `Buffer(cells=n, selection="refine-requests")` (provisional spelling for
+  N15); the tests, examples and tutorials that API 0.2 added or changed name it, so their
+  results are unchanged (MG8, ROM-103).
 
 ## [1.0.0] - 2026-07-16
 

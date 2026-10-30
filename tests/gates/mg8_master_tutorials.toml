@@ -150,23 +150,6 @@ outputs = [{ pattern = "results/16_openmp_cartesian3d_ssprk2.npz", kind = "npz" 
 # master bit for bit, printed and console lines included.
 
 [[cause]]
-id = "amr-tag-selection"
-commits = ["8f972aa1", "a17fe0e9"]
-issue = "ROM-103"
-text = '''
-pops.amr.tag-selection@1: b6 dilates only the accepted Refine tags, by the authored Buffer
-alone; master dilated every cell of the target coverage, retained cells included, by the
-transition buffer max(Buffer, derived) plus the lookahead, and nested the clustering by the
-transition buffer. The fine patches differ from the bind on, and with them the console line at
-step 10 of 05, 07 and 12.
-'''
-evidence = '''
-At bind, before any step, tutorial 05 refines coarse cells [3..15]x[5..17] on master and
-[4..14]x[6..16] on b6: the cells above 0.30, [6..12]x[8..14], dilated by 3 and by 2. The
-attribution build reproduces master bit for bit (see above).
-'''
-
-[[cause]]
 id = "regrid-boundary-prolongation"
 commits = ["72d3d077"]
 issue = "ROM-104"
@@ -192,112 +175,18 @@ version bit for bit. The attribution build reproduces master bit for bit (see ab
 # is never a divergence (CF14).
 
 [[divergence]]
-tutorial = "05"
-causes = ["amr-tag-selection"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:patch_boxes",
-  "run0:rank0:run0-tracer-level0:sha256",
-  "run0:rank0:run0-tracer-level1:sha256",
-  "monitor:rank0",
-]
-
-[[divergence]]
-tutorial = "06"
-causes = ["amr-tag-selection"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:patch_boxes",
-  "run0:rank0:run0-tracer-level0:sha256",
-  "run0:rank0:run0-tracer-level1:sha256",
-]
-
-[[divergence]]
-tutorial = "07"
-causes = ["amr-tag-selection"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
-checks = [
-  "run0:rank0:patch_boxes",
-  "run0:rank0:run0-tracer-level0:sha256",
-  "run0:rank0:run0-tracer-level1:sha256",
-  "monitor:rank0",
-  "run0:rank1:patch_boxes",
-  "run0:rank1:run0-tracer-level0:sha256",
-  "run0:rank1:run0-tracer-level1:sha256",
-]
-
-[[divergence]]
-tutorial = "08"
-causes = ["amr-tag-selection"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
-checks = [
-  "run0:rank0:patch_boxes",
-  "run0:rank0:run0-tracer-level0:sha256",
-  "run0:rank0:run0-tracer-level1:sha256",
-  "run0:rank1:patch_boxes",
-  "run0:rank1:run0-tracer-level0:sha256",
-  "run0:rank1:run0-tracer-level1:sha256",
-]
-
-[[divergence]]
 tutorial = "09"
-causes = ["amr-tag-selection", "regrid-boundary-prolongation"]
+causes = ["regrid-boundary-prolongation"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
-  "run0:rank0:patch_boxes",
   "run0:rank0:run0-tracer-level0:sha256",
   "run0:rank0:run0-tracer-level1:sha256",
-]
-
-[[divergence]]
-tutorial = "10"
-causes = ["amr-tag-selection"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:patch_boxes",
-  "run0:rank0:run0-tracer-level0:sha256",
-  "run0:rank0:run0-tracer-level1:sha256",
-]
-
-[[divergence]]
-tutorial = "12"
-causes = ["amr-tag-selection"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:patch_boxes",
-  "run0:rank0:run0-tracer-level0:sha256",
-  "run0:rank0:run0-tracer-level1:sha256",
-  "monitor:rank0",
-  "output:results/12_openmp_amr_outputs/*:series",
-]
-
-[[divergence]]
-tutorial = "13"
-causes = ["amr-tag-selection"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:patch_boxes",
-  "run0:rank0:run0-tracer-level0:sha256",
-  "run0:rank0:run0-tracer-level1:sha256",
-  "run1:rank0:patch_boxes",
-  "run1:rank0:run1-tracer-level0:sha256",
-  "run1:rank0:run1-tracer-level1:sha256",
-  "run2:rank0:patch_boxes",
-  "run2:rank0:run2-tracer-level0:sha256",
-  "run2:rank0:run2-tracer-level1:sha256",
 ]
 
 [[divergence]]
 tutorial = "14"
-causes = ["amr-tag-selection", "regrid-boundary-prolongation"]
+causes = ["regrid-boundary-prolongation"]
 attribution = "reproduced"
 reproduction = "landing/mg8/attribution/verdict-variant-09-14.json (sha256 ea5e7204); review/pr701/runs/mpi-dim2/verdict-variant-14.json (sha256 5b9d1c0b)"
 checks = [

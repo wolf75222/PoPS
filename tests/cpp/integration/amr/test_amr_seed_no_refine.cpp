@@ -229,6 +229,19 @@ TEST(test_amr_seed_no_refine, TagSelectionRejectsLegacyAndRankedOverflowBeforeAl
   }
 }
 
+TEST(test_amr_seed_no_refine, TransitionReachSelectionTakesNoTagBuffer) {
+  // Master's tag selection (MG8, ROM-103) dilates by the transition tables alone.
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.tag_selection_contract_version = 2;
+  EXPECT_NO_THROW((void)pops::AmrSystem<Dim>(config));
+  config.tag_selection_buffer[0] = 1;
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::invalid_argument);
+  config.tag_selection_buffer[0] = 0;
+  config.tag_selection_contract_version = 3;
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::invalid_argument);
+}
+
 TEST(test_amr_seed_no_refine, AutomaticBootstrapRefusesFieldLeafBeforeMaterialization) {
   constexpr int Dim = pops::kNativeDimension;
   pops::AmrSystemConfig<Dim> config;

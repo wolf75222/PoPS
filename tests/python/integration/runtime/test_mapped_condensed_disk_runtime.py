@@ -110,7 +110,7 @@ def _case(n, levels, *, warm_start=True, regrid_every=100, grow_by_momentum=Fals
         tags += (Tag(ValueExpr(block[state])["mx"] > case.value(momentum_threshold)),)
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(n, 4*n), periodic=PeriodicAxes((angular,))),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,)*(levels-1)),
-        tagging=AMRTagging(rules=(*tags, Buffer(cells=1)),
+        tagging=AMRTagging(rules=(*tags, Buffer(cells=1, selection="refine-requests")),
                           hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(regrid_every, clock=program.clock)), transfer=transfer,
         execution=AMRExecution.synchronous())

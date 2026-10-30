@@ -76,7 +76,7 @@ def test_native_analytic_metric_and_periodic_faces_match_conservative_update(
         threshold = case.param(RuntimeParam("unused_refinement_threshold", default=1000.))
         layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=1, ratios=()),
             tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["q"] > case.value(threshold)),
-                                    Buffer(cells=1)),
+                                    Buffer(cells=1, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid(schedule=every(100, clock=program.clock)), transfer=transfer,

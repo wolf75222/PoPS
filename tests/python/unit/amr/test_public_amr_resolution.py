@@ -30,6 +30,7 @@ def _resolved_target(
     patch_layout=None,
     load_balance=None,
     tag_buffer=None,
+    tag_selection="refine-requests",
 ):
     from pops.amr._resolution import AMRResolutionContext
     from pops.mesh import normalize_layout_plan
@@ -59,7 +60,8 @@ def _resolved_target(
             from dataclasses import replace
             from pops.amr import Buffer
             tagging = replace(tagging, rules=tuple(
-                Buffer(tag_buffer) if type(rule) is Buffer else rule for rule in tagging.rules))
+                Buffer(tag_buffer, selection=tag_selection) if type(rule) is Buffer else rule
+                for rule in tagging.rules))
         authored_layout = type(authored_layout)(
             grid=authored_layout.grid,
             hierarchy=authored_layout.hierarchy,
@@ -933,6 +935,41 @@ def test_authored_tag_buffer_is_separate_from_multilevel_nesting(buffer):
         _install_native_tag_selection_config(cfg, changed.tagging, dimension=dimension)
         assert cfg.tag_selection_contract_version == 1
         assert cfg.tag_selection_buffer == (buffer,) * dimension
+
+
+@pytest.mark.parametrize("buffer", (0, 1, 7))
+def test_masters_buffer_joins_the_transition_buffer_unless_refine_requests_are_named(buffer):
+    # Master's Buffer (MG8, ROM-103): its cells join the transition buffer, which natively grows
+    # the whole target coverage with the lookahead (tag selection 2). API 0.2's selection keeps
+    # its own name and the derived transitions.
+    from pops.amr import Buffer
+    from pops.mesh._amr.hierarchy_native import lower_native_hierarchy
+    from pops.runtime._amr_bind_lowering import _install_native_tag_selection_config
+
+    class ConfigProjection:
+        tag_selection_contract_version = None
+        tag_selection_buffer = None
+
+    _, _, _, master = _resolved_target(tag_buffer=buffer, tag_selection=None)
+    _, _, _, named = _resolved_target(tag_buffer=buffer)
+    assert master.tagging.selection is None
+    assert named.tagging.selection == "refine-requests"
+    widest = max(buffer, 2)
+    assert lower_native_hierarchy(master.hierarchy).transition_buffers == ((widest,) * 2,) * 2
+    assert lower_native_hierarchy(named.hierarchy).transition_buffers == ((2, 2), (2, 2))
+    assert lower_native_hierarchy(master.hierarchy).transition_lookaheads == (1, 1)
+    assert "selection_contract" not in master.tagging.canonical_identity()
+    assert named.tagging.canonical_identity()["selection_contract"] == "pops.amr.tag-selection@1"
+    for dimension in (1, 2, 3):
+        cfg = ConfigProjection()
+        _install_native_tag_selection_config(cfg, master.tagging, dimension=dimension)
+        assert cfg.tag_selection_contract_version == 2
+        assert cfg.tag_selection_buffer == (0,) * dimension
+    assert Buffer(cells=buffer).inspect() == {"action": "buffer", "cells": buffer}
+    assert Buffer(cells=buffer, selection="refine-requests").inspect()["selection"] == (
+        "refine-requests")
+    with pytest.raises(ValueError, match="Buffer.selection must be None or 'refine-requests'"):
+        Buffer(cells=buffer, selection="target-coverage")
 
 
 def test_tag_selection_lowering_refuses_old_config_and_overflow():

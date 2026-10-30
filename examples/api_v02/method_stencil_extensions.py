@@ -166,7 +166,7 @@ def build_stencil_extensions(*, cells=(24, 16), sample="cell", amr=True,
         grid = CartesianGrid(frame=frame, cells=cells,
             periodic=PeriodicAxes(frame.axes if periodic else (frame.axes[1],)))
         layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-            tagging=AMRTagging(rules=(Tag(pm.ValueExpr(marker_block[marker]) > case.value(threshold)), Buffer(cells=1)),
+            tagging=AMRTagging(rules=(Tag(pm.ValueExpr(marker_block[marker]) > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid.frozen(), transfer=transfer,
             execution=AMRExecution.synchronous() if sample == "field" else

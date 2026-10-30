@@ -437,7 +437,7 @@ def _shared_interface_resolved(component):
         rules=(
             Tag(ValueExpr(core.tracer_state) > core.case.value(core.refine_threshold)),
             Tag(ValueExpr(right_state) > core.case.value(core.refine_threshold)),
-            Buffer(cells=1),
+            Buffer(cells=1, selection="refine-requests"),
         ),
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
         conflict_policy=ConflictPolicy.REFINE_WINS,

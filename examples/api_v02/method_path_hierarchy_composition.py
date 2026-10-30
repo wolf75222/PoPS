@@ -101,7 +101,7 @@ def build_path_hierarchy_composition(*, mode="branch", implicit=True, cells=8, d
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(cells, cells),
                                    periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,)*(levels-1)),
-        tagging=AMRTagging(rules=(Tag(pm.ValueExpr(instance)["v"] > case.value(threshold)), Buffer(cells=0)),
+        tagging=AMRTagging(rules=(Tag(pm.ValueExpr(instance)["v"] > case.value(threshold)), Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid.frozen(), transfer=transfer, execution=AMRExecution.synchronous())
     xx, yy = np.meshgrid((np.arange(cells)+.5)/cells, (np.arange(cells)+.5)/cells)

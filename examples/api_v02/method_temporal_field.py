@@ -249,7 +249,7 @@ def build_temporal_field(
         tagging=AMRTagging(
             rules=(
                 Tag(pm.ValueExpr(marker_block[marker]) > case.value(threshold)),
-                Buffer(cells=1),
+                Buffer(cells=1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
