@@ -861,11 +861,15 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
         "pops/numerics/spatial/nd/face_frequency.hpp":
             (80, "maximum_incident_face_frequency"),
         "pops/runtime/program/prepared_amr_field_residual.hpp":
-            (900, "class PreparedAmrFieldResidual"),
+            # The clang-format 19.1.7 sweep of N5 takes this file from 874 to 979
+            # lines (+105) with the same tokens; the margin stays 26 lines.
+            (900 + 105, "class PreparedAmrFieldResidual"),
         "pops/runtime/program/prepared_integral_capture.hpp":
-            (128, "class PreparedIntegralCapture"),
+            # Same sweep: 109 to 134 lines (+25), margin 19.
+            (128 + 25, "class PreparedIntegralCapture"),
         "pops/runtime/program/program_value_authority.hpp":
-            (480, "class ProgramValueAuthority"),
+            # Same sweep: 471 to 531 lines (+60), margin 9.
+            (480 + 60, "class ProgramValueAuthority"),
         "pops/runtime/program/prepared_program_field_stages.hpp":
             (240, "class PreparedProgramFieldStages"),
         "pops/runtime/program/prepared_hierarchy_barrier.hpp":
