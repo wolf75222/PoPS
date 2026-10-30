@@ -6564,6 +6564,33 @@
         }
       ]
     },
+    "ci_20261030_n8_traced_methods": {
+      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 1 traced-method modules (ROM-89), on the api_v02_20261013 tiers: 300 s for the source-only module, which resolves seven profiles twice (traced method and b6 builder) and generates the C++ of six of them twice without compiling, as the analogue test_program_source_kernel_reuse.py; 600 s for three Dim2 native profile cases with two cold C++ compilations each (the traced route and the b6 reference), in the 300/600/900/1200 s native profile tiers. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container (unit from the source checkout, native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, the 135 Python shards (the full and partial packs stay within the ordinary budget with these two rows), native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_traced_methods_n8_native.py": "tests/python/integration/runtime/test_api_v02_euler_correction_native.py",
+        "tests/python/unit/time/test_traced_methods_n8.py": "tests/python/unit/codegen/test_program_source_kernel_reuse.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_traced_methods_n8_native.py": 600,
+        "tests/python/unit/time/test_traced_methods_n8.py": 300
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_traced_methods_n8_native.py": {
+          "cases": 3,
+          "phase_seconds": 297.29,
+          "session_seconds": 298.2
+        },
+        "tests/python/unit/time/test_traced_methods_n8.py": {
+          "cases": 31,
+          "phase_seconds": 158.56,
+          "session_seconds": 159.55
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_traced_methods_n8_native.py": "6c1985fde81cbf5858d48e30dc36b1c910289c00f3a49c9319bae90b169335ab",
+        "tests/python/unit/time/test_traced_methods_n8.py": "1cbbad20d8f14e22c2b72fa6353b22780cf3b5e4da957d911d118aa577ab1e67"
+      }
+    },
     "declared_hardware_profiles": {
       "gpu": {
         "basis": "Existing 120-second CPU scheduling estimate retained as provenance only; authentic CUDA/HIP device/managed Field storage is mandatory. No GPU execution or timing received. CPU plans exclude this exact manifest-declared profile; scripts/ci_python_hardware.py --hardware gpu --execute fails closed on CPU.",
@@ -6576,7 +6603,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1127,
+    "estimated_count": 1129,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6900,6 +6927,7 @@
       "tests/python/integration/runtime/test_symbolic_path_uniform_protocol.py",
       "tests/python/integration/runtime/test_temporal_method_order_matrix.py",
       "tests/python/integration/runtime/test_tensor_transport_composition.py",
+      "tests/python/integration/runtime/test_traced_methods_n8_native.py",
       "tests/python/integration/runtime/test_uniform_accepted_storage_observation.py",
       "tests/python/integration/runtime/test_uniform_accepted_storage_observation_v2.py",
       "tests/python/integration/runtime/test_uniform_checkpoint_provisional_effect.py",
@@ -7699,6 +7727,7 @@
       "tests/python/unit/time/test_time_solve_fields_from_state.py",
       "tests/python/unit/time/test_time_std_rk.py",
       "tests/python/unit/time/test_time_where.py",
+      "tests/python/unit/time/test_traced_methods_n8.py",
       "tests/python/unit/time/test_typed_capture_outlining_v14.py",
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py",
@@ -7906,7 +7935,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1192,
+    "total_files": 1194,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9144,5 +9173,7 @@
   "tests/python/integration/runtime/test_api_v02_computed_frontier_clipping_native.py": 1200,
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
-  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10
+  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
+  "tests/python/integration/runtime/test_traced_methods_n8_native.py": 600,
+  "tests/python/unit/time/test_traced_methods_n8.py": 300
 }
