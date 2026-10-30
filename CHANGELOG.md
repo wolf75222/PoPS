@@ -336,6 +336,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   (`PublishedCoarseFaceIndex` for the published ones), so accumulation order, corrections and
   refusals are unchanged. On one 4-core container, the first segment of the same example (to
   t = 0.2, 226 accepted steps) runs in 11 minutes instead of 28.
+- `docs/gen_test_counts.py --check-matrix`, the blocking manifest step of `quality.yml`, applies the
+  disposition of `tests/python/unavailable_verification_tests.json`: the seven tests of
+  `tests/python/verification/` committed without their dependencies (`bcb73f4a`) are exempt while
+  their bytes match the catalogue, and a suite that claims one fails, as in the coverage fence of
+  `test_manifest_suite_coverage.py`. The step had failed on these seven files since 2026-08-17;
+  no test starts running.
 
 ## [1.0.0] - 2026-07-16
 
