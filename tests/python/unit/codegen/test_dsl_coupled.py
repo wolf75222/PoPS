@@ -117,7 +117,7 @@ def build_euler(name: str = "euler") -> Model:
     return model
 
 
-def compile_euler_artifact(
+def resolve_euler_case(
     model: Model,
     *,
     cells: int = 16,
@@ -126,11 +126,9 @@ def compile_euler_artifact(
     riemann_solver: Any = None,
     primitive_variables: bool = False,
 ) -> Any:
-    """Compile ``model`` through the final lifecycle and return the simulation artifact.
+    """Validate and resolve the Euler Case of ``model`` and return the resolved plan.
 
-    The default numerics are MUSCL(Minmod), Rusanov and conservative variables.  The compiled
-    package serves only the route its Case resolves, so a test installing another route compiles
-    the artifact that resolves it.
+    The default numerics are MUSCL(Minmod), Rusanov and conservative variables.
     """
     state = model.states["U"]
     flux = model.fluxes["transport"]
@@ -164,13 +162,22 @@ def compile_euler_artifact(
     options: dict[str, Any] = {"include": str(ROOT / "include")}
     if cxx is not None:
         options["cxx"] = cxx
-    resolved = pops.resolve(
+    return pops.resolve(
         pops.validate(case),
         layout=layout,
         backend=Production(),
         compile_options=options,
     )
-    artifact = pops.compile(resolved)
+
+
+def compile_euler_artifact(model: Model, **options: Any) -> Any:
+    """Compile ``model`` through the final lifecycle and return the simulation artifact.
+
+    ``options`` are the keywords of ``resolve_euler_case``.  The compiled package serves only
+    the route its Case resolves, so a test installing another route compiles the artifact that
+    resolves it.
+    """
+    artifact = pops.compile(resolve_euler_case(model, **options))
     artifact.verify()
     return artifact
 

@@ -17,7 +17,8 @@ import numpy as np
 import pops
 import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
-from test_dsl_coupled import build_euler, compile_euler_artifact, GAMMA, INCLUDE
+from test_dsl_coupled import (
+    build_euler, compile_euler_artifact, GAMMA, INCLUDE, resolve_euler_case)
 from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.requirements import (
@@ -199,6 +200,39 @@ def main():
             assert "instantiates only the conservative/minmod/rusanov" in str(error), error
         else:
             raise AssertionError("une autre route a ete installee sur le package Rusanov/MUSCL")
+        # The Rusanov/MUSCL package cannot serve the block of a Case resolving HLLC/primitive,
+        # neither as its precompiled binary nor paired with that resolved spatial descriptor.
+        from pops.codegen._compiled_artifact import CompiledBlockArtifact
+        from pops.codegen._orchestration_compile import (
+            _resolved_native_amr_field_roles, compile_install_model)
+        from pops.runtime._bricks_scheme import native_catalogue_route
+
+        hllc_plan = resolve_euler_case(
+            model, cells=n, cxx=cxx, face_reconstruction=FirstOrder(), riemann_solver=HLLC(),
+            primitive_variables=True)
+        (hllc_block,) = hllc_plan.blocks
+        try:
+            compile_install_model(
+                hllc_block.name, compiled, hllc_block.backend, hllc_plan.target, {},
+                state_spaces=hllc_block.state_spaces,
+                native_field_roles=_resolved_native_amr_field_roles(hllc_plan)[hllc_block.name],
+                consumer_owner_qid=hllc_block.instance_owner_qid,
+                declare_auxiliary_providers=hllc_block.declares_auxiliary_providers,
+                resolved_operations=hllc_block.resolved_operations,
+                numerics=hllc_block.numerics,
+                native_route=native_catalogue_route(hllc_block.spatial))
+        except ValueError as error:
+            assert "compiled for another numerical route" in str(error), error
+        else:
+            raise AssertionError("le package Rusanov/MUSCL a servi un bloc HLLC/primitive")
+        try:
+            CompiledBlockArtifact(name="gas", model=compiled,
+                                  spatial=contact_artifacts["hllc"].blocks[0].spatial,
+                                  state_spaces=("U",))
+        except ValueError as error:
+            assert "compiled for another numerical route" in str(error), error
+        else:
+            raise AssertionError("le package Rusanov/MUSCL a ete apparie a la route HLLC")
         hllc_rhs = np.array(hllc_contact.eval_rhs("gas")).reshape(4, n, n)
         rusanov_rhs = np.array(rusanov_contact.eval_rhs("gas")).reshape(4, n, n)
         assert float(np.max(np.abs(hllc_rhs))) <= 1e-12
