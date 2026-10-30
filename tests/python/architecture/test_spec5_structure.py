@@ -56,9 +56,12 @@ def test_moved_catalogs_are_gone_from_lib():
 
 
 def test_lib_keeps_only_preimplemented_public_contracts():
-    # Implementations are grouped by public contract family; there is no second bundle DSL.
-    # Spec 0.3 IR25 places the builders of the discrete algebra in pops.lib.numerics.
-    allowed = {"amr", "initial", "models", "numerics", "time", "__init__.py", "__pycache__"}
+    # Implementations are grouped by public contract family; there is no second bundle DSL. Spec 0.3
+    # section 2.6.9 adds the library modules math, numerics, output and solve (test_lib_boundaries.py
+    # gate 2a), each a package or a single file.
+    modules = {"math", "numerics", "output", "solve"}
+    allowed = {"amr", "initial", "models", "time", "__init__.py", "__pycache__"} | modules \
+        | {name + ".py" for name in modules}
     unexpected = []
     for child in (POPS / "lib").iterdir():
         if child.is_dir() and not (child / "__init__.py").exists():
@@ -66,8 +69,8 @@ def test_lib_keeps_only_preimplemented_public_contracts():
         if child.name not in allowed and not child.name.endswith(".pyc"):
             unexpected.append(child.name)
     assert not unexpected, (
-        "pops.lib should hold only ordinary model/time/initial/AMR implementations; "
-        "unexpected: %s" % unexpected)
+        "pops.lib should hold only ordinary model/time/initial/AMR implementations and the library "
+        "modules of spec 0.3 section 2.6.9; unexpected: %s" % unexpected)
 
 
 def test_lib_has_no_solvers_shim():

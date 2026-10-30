@@ -5,12 +5,13 @@ An exception list is a text file with one site per line::
     <path>:<line> <term> <issue> | <excerpt of the source line>
 
 ``<line>`` is 0 when the term is in the file path itself. ``<issue>`` is the Linear issue that
-removes the site (N3, N8, N9, N12, G04, G05, G06, G07, G10, G11, G12). Blank lines and lines
-starting with ``#`` are comments.
+removes the site, or the issues joined by ``+`` when the spec names several (``G04+G07`` for the
+analytic-expression VM, section 18.3). Blank lines and lines starting with ``#`` are comments.
 
 A guard compares the sites that its scan finds with the list. Within each ``(path, term)``, sites
 and entries pair by excerpt, with multiplicity, so the identity of a site is its path, its term and
-its excerpt (for CF2 the spelling of one token that holds the term, ``scan.cf2_sites_in_text``):
+its excerpt (the spelling of one occurrence: for CF2 the token that holds the term,
+``scan.cf2_sites_in_text``; for CF0b, CF7 and CF8 ``pysource.site_excerpt``):
 
 * a site that no entry of its ``(path, term)`` matches is a new occurrence, and fails, even when
   a site of the same term left the same file in the same PR;
@@ -34,9 +35,16 @@ import pathlib
 import re
 
 # The issues that take over a site of the b6 exception lists (spec 0.3, sections 18.3 and 18.4).
-KNOWN_ISSUES = frozenset({"N3", "N8", "N9", "N12", "G04", "G05", "G06", "G07", "G10", "G11", "G12"})
+KNOWN_ISSUES = frozenset({"N3", "N4", "N7", "N8", "N9", "N12", "G02", "G04", "G05", "G06", "G07",
+                          "G10", "G11", "G12", "G13"})
 
-_ENTRY = re.compile(r"^(?P<path>\S+):(?P<line>\d+) (?P<term>\S+) (?P<issue>[A-Z0-9]+) \| ?(?P<excerpt>.*)$")
+_ENTRY = re.compile(r"^(?P<path>\S+):(?P<line>\d+) (?P<term>\S+)"
+                    r" (?P<issue>[A-Z0-9]+(?:\+[A-Z0-9]+)*) \| ?(?P<excerpt>.*)$")
+
+
+def issue_known(issue: str) -> bool:
+    """Every issue of an entry's ``<issue>`` field (``G04+G07`` names two) is a known issue."""
+    return all(part in KNOWN_ISSUES for part in issue.split("+"))
 
 
 @dataclasses.dataclass(frozen=True, order=True)
