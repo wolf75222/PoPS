@@ -110,12 +110,15 @@ def test_named_face_inputs_reach_only_a_body_that_names_them():
     policy = emit_user_face_policy(SimpleNamespace(_user_face=normal))
     assert "face.normal[0]" in policy and "face.normal[1]" not in policy
     assert not reads_signed_wave_speeds(normal) and "signed_wave_speeds" not in policy
-    # The fifth parameter is the speed, whatever its name.
-    fifth = riemann.User(body=lambda l, r, fl, fr, n: tuple(n * f for f in fl), state=U,
-                         stability=stability)
-    assert fifth.options["source_identity"] == riemann.User(
-        body=lambda l, r, fl, fr, s: tuple(s * f for f in fl), state=U,
-        stability=stability).options["source_identity"]
+    # A name of a named input on one of the five face inputs is refused, in a body or a bound:
+    # there it would receive the speed s or a trace, not the input of that name.
+    with pytest.raises(TypeError, match="face input 5 is the speed s, not the input 'n'"):
+        riemann.User(body=lambda l, r, fl, fr, n: tuple(n * f for f in fl), state=U,
+                     stability=stability)
+    with pytest.raises(TypeError,
+                       match="face input 1 is the left trace uL, not the input 'speeds'"):
+        riemann.User(body=lambda l, r, fl, fr, s: fl, state=U,
+                     stability=lambda speeds, r, fl, fr, s: s)
     # An input named and not read changes neither the identity nor the policy.
     unread = riemann.User(body=lambda l, r, fl, fr, s, n, speeds: fl, state=U,
                           stability=stability)

@@ -20,7 +20,10 @@ _SCHEME = "source_face"
 _CAPABILITIES = ("physical_flux", "provider_pack", "stability_bound")
 # The model capability of a face that reads the signed wave speeds (R9).
 _WAVE_SPEEDS = "wave_speeds"
-_POSITIONAL_INPUTS = 5
+# The five positional face inputs, in order, then the names of the face inputs passed by name.
+_POSITIONAL_INPUTS = ("the left trace uL", "the right trace uR", "the left flux fL",
+                      "the right flux fR", "the speed s")
+_NAMED_INPUTS = ("n", "speeds")
 
 
 def _state_width(state: Any) -> int:
@@ -50,7 +53,11 @@ def _named_inputs() -> dict[str, VectorExpr]:
 
 
 def _requested_inputs(function: Any) -> tuple[str, ...]:
-    """The named face inputs that ``function`` takes as parameters after the five face inputs."""
+    """The named face inputs that ``function`` takes as parameters after the five face inputs.
+
+    One of the five positional face inputs named ``n`` or ``speeds`` is refused: it would receive
+    a trace, a flux or the speed ``s``, not the input of that name.
+    """
     try:
         parameters = tuple(inspect.signature(function).parameters.values())
     except (TypeError, ValueError):  # no inspectable signature: the five face inputs only
@@ -59,10 +66,15 @@ def _requested_inputs(function: Any) -> tuple[str, ...]:
     for parameter in parameters:
         if parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD):
             positional += 1
-            if positional <= _POSITIONAL_INPUTS:
+            if positional <= len(_POSITIONAL_INPUTS):
+                if parameter.name in _NAMED_INPUTS:
+                    raise TypeError(
+                        "riemann.User: face input %d is %s, not the input %r; take n and speeds "
+                        "as parameters after the five face inputs (uL, uR, fL, fR, s)"
+                        % (positional, _POSITIONAL_INPUTS[positional - 1], parameter.name))
                 continue
         if parameter.kind in (parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY) and \
-                parameter.name in ("n", "speeds"):
+                parameter.name in _NAMED_INPUTS:
             names.append(parameter.name)
     return tuple(names)
 

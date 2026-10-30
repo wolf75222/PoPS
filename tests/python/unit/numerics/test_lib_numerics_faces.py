@@ -161,9 +161,14 @@ def test_derived_hll_reads_the_signed_speeds_of_the_face():
     assert policy.count("physical.signed_wave_speeds(") == 2
     assert "physical.signed_wave_speeds(left, face," in policy
     assert "physical.signed_wave_speeds(right, face," in policy
-    # Evaluated after the physical fluxes, before the body reads them.
+    # Read first and refused when a trace's interval is not finite or not ordered, in the order
+    # of the native two-wave face: before the stability bound, the physical fluxes and the body.
+    speeds, refusal = policy.index("signed_wave_speeds("), policy.index(
+        "right_slowest <= right_fastest))\n      return pops::FluxEvaluation<State>::reject(\n"
+        "          pops::RiemannFailureCause::kUserNonFiniteFlux);")
     body = policy.index("State density{};")
-    assert policy.index("physical_pair_failed(") < policy.index("signed_wave_speeds(") < body
+    assert speeds < refusal < policy.index("max_normal_stability_bound(") < \
+        policy.index("physical_pair_failed(") < body
     assert policy.find("= wave_slowest;", body) > body < policy.find("= wave_fastest;", body)
     assert "face.normal[" not in policy
 

@@ -77,22 +77,22 @@ def user_face_source_identity(emitter: Any) -> str | None:
 
 
 # The signed interval (sL, sR) of a face: the union over the two traces of the interval that the
-# model declares along the canonical normal. A trace whose interval is not finite or not ordered
-# leaves both bounds NaN, so a face that reads them is refused as non-finite.
+# model declares along the canonical normal. It is read first, in the order of the native
+# two-wave face: a trace whose interval is not finite or not ordered refuses the face before the
+# stability bound, the physical fluxes or the body are evaluated, whatever the body does with it.
 _SIGNED_WAVE_SPEED_LINES = (
-    "    pops::Real wave_slowest = std::numeric_limits<pops::Real>::quiet_NaN();",
-    "    pops::Real wave_fastest = wave_slowest;",
-    "    {",
-    "      pops::Real left_slowest, left_fastest, right_slowest, right_fastest;",
-    "      physical.signed_wave_speeds(left, face, left_slowest, left_fastest);",
-    "      physical.signed_wave_speeds(right, face, right_slowest, right_fastest);",
-    "      if (std::isfinite(left_slowest) && std::isfinite(left_fastest) &&",
+    "    pops::Real left_slowest, left_fastest, right_slowest, right_fastest;",
+    "    physical.signed_wave_speeds(left, face, left_slowest, left_fastest);",
+    "    physical.signed_wave_speeds(right, face, right_slowest, right_fastest);",
+    "    if (!(std::isfinite(left_slowest) && std::isfinite(left_fastest) &&",
     "          left_slowest <= left_fastest && std::isfinite(right_slowest) &&",
-    "          std::isfinite(right_fastest) && right_slowest <= right_fastest) {",
-    "        wave_slowest = left_slowest < right_slowest ? left_slowest : right_slowest;",
-    "        wave_fastest = left_fastest > right_fastest ? left_fastest : right_fastest;",
-    "      }",
-    "    }",
+    "          std::isfinite(right_fastest) && right_slowest <= right_fastest))",
+    "      return pops::FluxEvaluation<State>::reject(",
+    "          pops::RiemannFailureCause::kUserNonFiniteFlux);",
+    "    const pops::Real wave_slowest =",
+    "        left_slowest < right_slowest ? left_slowest : right_slowest;",
+    "    const pops::Real wave_fastest =",
+    "        left_fastest > right_fastest ? left_fastest : right_fastest;",
 )
 
 
@@ -142,6 +142,7 @@ def emit_user_face_policy(emitter: Any) -> str:
         "    using State = typename Physical::State;",
         "    if (face.orientation == pops::FaceOrientation::kNegative)",
         "      return pops::detail::canonical_evaluation(*this, physical, left, right, face);",
+        *(_SIGNED_WAVE_SPEED_LINES if signed_speeds else ()),
         "    pops::StabilityBound bound{};",
         "    if (!pops::detail::max_normal_stability_bound(",
         "            physical.stability(left, face), physical.stability(right, face), bound))",
@@ -153,7 +154,6 @@ def emit_user_face_policy(emitter: Any) -> str:
         "    if (pops::detail::physical_pair_failed(",
         "            left_density, right_density, physical_failure))",
         "      return physical_failure;",
-        *(_SIGNED_WAVE_SPEED_LINES if signed_speeds else ()),
         "    State density{};",
         *expression_lines,
         *("    density[%d] = %s;" % (index, value)

@@ -7,8 +7,8 @@ the case's own invariants. The HLL rows run the derived ``hll(F, Uh)``: its face
 interval (sL, sR) that the model declares along the face normal (CF15, ROM-99). On M01 both waves
 of each axis are positive, so only the sL >= 0 branch runs; on M03 (v.n - c, v.n + c) and on M16
 (the eigenvalues of the B.1 flux Jacobian) sL < 0 < sR on every face, so the two-wave state runs.
-On the nonreal spectrum of M16's oblique profile the derived face refuses the step, as the native
-one does.
+The faces that read the normal, and the refusals of an invalid interval, are in
+test_api_v02_python_face_inputs_native.py.
 """
 from __future__ import annotations
 
@@ -19,9 +19,7 @@ import pytest
 from examples.api_v02.models_M01_M14 import build_m01, build_m03, native_hll, native_rusanov
 from examples.api_v02.models_M15_M18 import build_m16
 from pops.lib.numerics import hll, rusanov
-from tests.python.support.collective_checks import (
-    collective_attempt, collective_call, collective_check,
-)
+from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.public_native_profile import (
     compile_profile_plan_once, native_profile, profile_gather_value,
@@ -59,6 +57,20 @@ def _run(world, build, scheme, options, block, route):
     return report.accepted_steps, metrics, state
 
 
+def _assert_rounding_level(native_steps, native_state, python_state, record_property, label=""):
+    """Record the L1 and L-infinity differences of two final states; require a few ulps of the
+    state per step."""
+    native_state, python_state = np.asarray(native_state), np.asarray(python_state)
+    assert native_state.shape == python_state.shape
+    difference = python_state - native_state
+    l1, linf = float(np.mean(np.abs(difference))), float(np.max(np.abs(difference)))
+    record_property(label + "l1", l1)
+    record_property(label + "linf", linf)
+    record_property(label + "bitwise_equal", bool(np.array_equal(python_state, native_state)))
+    scale = max(1., float(np.max(np.abs(native_state))))
+    assert linf <= 16*np.finfo(float).eps*scale*native_steps, (label, l1, linf)
+
+
 @pytest.mark.compiler
 @pytest.mark.kokkos
 @pytest.mark.native_loader
@@ -78,44 +90,6 @@ def test_python_face_matches_the_native_route(pair, isolated_native_cache, nativ
         owners = [row for row in gathered if row.get("metrics_owner", True)]
         assert owners and all(row["passed"] for row in owners), owners
         if native_state is not None:
-            native_state, python_state = np.asarray(native_state), np.asarray(python_state)
-            assert native_state.shape == python_state.shape
-            difference = python_state - native_state
-            l1, linf = float(np.mean(np.abs(difference))), float(np.max(np.abs(difference)))
-            record_property("l1", l1)
-            record_property("linf", linf)
-            record_property("bitwise_equal", bool(np.array_equal(python_state, native_state)))
-            # Rounding level: a few ulps of the state per step. Both routes evaluate the same
-            # formula in the same order; only floating-point contraction may differ by compiler.
-            scale = max(1., float(np.max(np.abs(native_state))))
-            assert linf <= 16*np.finfo(float).eps*scale*native_steps, (l1, linf)
-
-
-@pytest.mark.compiler
-@pytest.mark.kokkos
-@pytest.mark.native_loader
-def test_derived_hll_refuses_the_nonreal_oblique_spectrum_of_m16(isolated_native_cache,
-                                                                  native_cxx, kokkos_root):
-    """The signed interval of a trace with a nonreal Jacobian spectrum is not finite.
-
-    The native HLL refuses such a face (test_api_v02_models_M15_M21.py, same profile); the
-    derived face reads (sL, sR) as non-finite and refuses it too, so the step is refused and the
-    state is not published (ROM-99).
-    """
-    del isolated_native_cache, native_cxx, kokkos_root
-    _native, world = native_profile(dimension=2, scope="ROM-99 M16 oblique Python HLL")
-    spec = collective_call(world, lambda: build_m16(cells=16, steps=4, oblique_refusal=True,
-                                                    scheme=hll))
-    runtime = _bind(world, spec, "ROM-99 M16 oblique Python HLL")
-    initial = collective_call(world, lambda: runtime.state_global("moments"))
-    _, failures = collective_attempt(world, lambda: pops.run(runtime, t_end=spec.dt, max_steps=1,
-                                                             console=False))
-    final = collective_call(world, lambda: runtime.state_global("moments"))
-    clock = collective_call(world, lambda: (float(runtime.time()), int(runtime.macro_step())))
-    with collective_check(world):
-        assert all(failure is not None and failure[2] and
-                   "hyperbolic face evaluation refused publication" in failure[1]
-                   for failure in failures), failures
-        assert clock == (0., 0), clock
-        if initial is not None:
-            np.testing.assert_array_equal(final, initial)
+            # Both routes evaluate the same formula in the same order; only floating-point
+            # contraction may differ by compiler.
+            _assert_rounding_level(native_steps, native_state, python_state, record_property)
