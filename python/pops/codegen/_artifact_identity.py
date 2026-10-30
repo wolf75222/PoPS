@@ -81,9 +81,13 @@ def program_artifact_spec(
     target: str, abi_key: str,
     compiler: str, standard: str, source: str, cflags: Any, lflags: Any, optflags: Any,
     libraries: Any, native_components: Any = (), native_dimension: int,
-    toolchain_capture: Any = None,
+    toolchain_capture: Any = None, precompiled_units: Any = (),
 ) -> tuple[Any, Any]:
-    """Return semantic and artifact-spec identities for one compiled Program."""
+    """Return semantic and artifact-spec identities for one compiled Program.
+
+    ``precompiled_units`` are the artifact-spec tokens of the cached units linked into the Program;
+    a Program without one keeps its identity.
+    """
     from pops.codegen.cache import _precision_cache_key, _registry_cache_key
     from pops.codegen.toolchain import _native_feature_key, native_compiler_command_contract
     from pops.identity import artifact_spec_identity
@@ -145,6 +149,7 @@ def program_artifact_spec(
             "program_graph_hash": program_graph.graph_hash,
             "prepared_native_components": list(native_components),
             "native_dimension": native_dimension,
+            **({"precompiled_units": list(precompiled_units)} if precompiled_units else {}),
         },
         flags=[*optflags, *cflags, *lflags],
         libraries=[manifest.content_hash for manifest in libraries],

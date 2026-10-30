@@ -11,6 +11,8 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from .amr_program_context_unit import amr_program_context_include
+
 
 def _face_ordinal(axis: int, side: str, dimension: int) -> int:
     if type(axis) is not int or axis < 0 or axis >= dimension or side not in ("lo", "hi"):
@@ -589,7 +591,7 @@ static void prepare_field_boundary_jvp_route_{ordinal}(
         else "pops_install_field_boundaries"
     )
     if target == "amr_system":
-        chunks.append("#include <pops/runtime/program/amr_program_context.hpp>")
+        chunks.append(amr_program_context_include().rstrip("\n"))
     chunks += [
         'extern "C" void %s(%s* sys) {' % (entry, facade_type),
         "  auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);",

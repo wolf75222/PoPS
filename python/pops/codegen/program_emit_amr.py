@@ -11,6 +11,8 @@ from fractions import Fraction
 import json
 from typing import Any
 
+from .amr_program_context_unit import amr_program_context_include
+
 
 def _flux_fraction(value: Any) -> Fraction:
     """Canonical exact coefficient used by the native reflux ledger."""
@@ -710,7 +712,7 @@ def _emit_amr_install(
                              channel="cell_local_provider_advance"):
             advance_lines.append("    ctx_owner->advance_same_level_cell_temporal(dt);")
         return (
-            flux_expression_budget + "\n#include <pops/runtime/program/amr_program_context.hpp>\n"
+            flux_expression_budget + "\n" + amr_program_context_include()
             + provider_register
             + 'extern "C" void pops_install_program_amr('
             "pops::AmrSystem<pops::kNativeDimension>* sys) {\n"
@@ -1005,8 +1007,8 @@ def _emit_amr_install(
     )
     return (
         flux_expression_budget + checkpoint_exports(program)
-        + "\n#include <pops/runtime/program/amr_program_context.hpp>  // registers the AmrSystem provider\n"
-        "// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target='amr_system' counterpart\n"
+        + "\n" + amr_program_context_include("  // registers the AmrSystem provider")
+        + "// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target='amr_system' counterpart\n"
         "// of pops_install_program. AmrSystem::install_program resolves + calls it after binding the\n"
         "// blocks by name and seeding the runtime params. The shared factory selects the provider and\n"
         "// the wrapper installs only the parent/child clock driver: the SAME\n"
