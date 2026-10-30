@@ -63,23 +63,25 @@ def validate_program_realizations(numerics, program):
                 raise ValueError("ProgramRealization found an undeclared owned Use for its balance")
             if key in counts:
                 counts[key].append(value)
-        from .realization_delivery import delivered_frontiers
-        for outputs in counts.values():
+        from pops._ir.refusals import CoverageNotExact
+        from .typed_delivery import require_single_delivery, term_label
+        for key, outputs in counts.items():
+            term = term_label(expected[key].to_data())
             if not outputs:
-                raise ValueError("ProgramRealization Use needs exactly one owned SSA delivery; found 0")
+                raise CoverageNotExact("ProgramRealization Use needs exactly one owned SSA delivery; found 0",
+                                       term=term, count=0)
             output_ids = {value.id for value in outputs}
             # A fresh face residual consumes state/field data; it does not
             # deliver the older residuals used to construct those data. In
             # particular an elliptic operator is a numerical dependency, not a
             # second accepted transport occurrence. A matched residual itself
             # remains a delivery before this dependency frontier is applied.
-            frontiers = delivered_frontiers(commit, lambda node, output_ids=output_ids: node.id in output_ids,
-                stop_at=lambda node: node.op == "stencil_flux_divergence")
-            if not frontiers or any(not frontier for frontier in frontiers):
-                raise ValueError("ProgramRealization owned output does not reach its exact state commit")
-            if any(len(frontier) != 1 for frontier in frontiers):
-                raise ValueError("ProgramRealization Use needs exactly one owned SSA delivery per candidate path")
-            retained = {reference.value_id for frontier in frontiers for reference in frontier}
+            delivered = require_single_delivery(
+                commit, lambda node, output_ids=output_ids: node.id in output_ids, term=term,
+                stop_at=lambda node: node.op == "stencil_flux_divergence",
+                missing="ProgramRealization owned output does not reach its exact state commit",
+                duplicate="ProgramRealization Use needs exactly one owned SSA delivery per candidate path")
+            retained = {reference.value_id for reference in delivered}
             for value in outputs:
                 if (value.id in retained and value.state_ref is not None
                         and not _same_reference(value.state_ref, target)):

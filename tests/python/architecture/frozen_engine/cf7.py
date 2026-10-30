@@ -325,8 +325,7 @@ _TAGGING_CAPS = frozenset({"maximum_stencil_terms", "maximum_instruction_count",
 # (issue, path entries or None, terms or None, reason): the first rule that matches both its paths
 # and its terms names the issue (section 18.3 for the exit of Phase 1).
 OWNER_RULES = (
-    ("N7", ("python/pops/codegen/realization_delivery.py",
-            "python/pops/codegen/program_stencil_budget.py"), None,
+    ("N7", ("python/pops/codegen/program_stencil_budget.py",), None,
      "C33: typed delivery and retained-expression analyses that scale with the IR, Phase 1"),
     ("N12", None, _TAGGING_CAPS,
      "C36: the program caps of the tag-graph VM (schema, Python and C++ ABI), removed with it, "

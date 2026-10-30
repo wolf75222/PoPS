@@ -126,7 +126,7 @@ def _leaves(signature,path=()):
 
 def validate_current_dependencies(candidate):
     """Recheck every declared target against the exact current record on each success path."""
-    from pops.codegen.realization_delivery import delivered_frontiers
+    from pops.codegen.typed_delivery import delivered_count, delivered_frontiers, require_identified
     from pops.ledger_provenance import OP, _TRANSPORT, _key, _compatible, validate_contract_operation
     if candidate.op!='continuation_freeze':raise TypeError('current dependencies require the actual candidate freeze')
     base,proposal,envelope=candidate.inputs
@@ -140,7 +140,7 @@ def validate_current_dependencies(candidate):
                                 with_choices=True,with_projection=True)
         # An unconditionally failing candidate has no successful publication.
         for choices,frontier in rows:
-            if len(frontier)!=1:raise ValueError('current dependency target lacks one exact application')
+            if delivered_count(frontier)!=1:raise ValueError('current dependency target lacks one exact application')
             reference=next(iter(frontier));value=values[reference.value_id]
             if reference.projection or value.op!=OP or value.attrs.get('contract_kind')!='current_dependency':
                 raise ValueError('current dependency target lost its mandatory application')
@@ -159,8 +159,8 @@ def validate_current_dependencies(candidate):
                         expand_match=lambda node,path: (argument,leaf) if node is value else None)
                     current=delivered_frontiers(envelope,terminal,path=('continuation',*path,*leaf),
                                                 with_choices=True,with_projection=True)
-                    actual=[(c,r) for c,r in actual if _compatible(choices,c)]
-                    current=[(c,r) for c,r in current if _compatible(choices,c)]
+                    actual=[(c,require_identified(r,'current dependency input')) for c,r in actual if _compatible(choices,c)]
+                    current=[(c,require_identified(r,'current dependency input')) for c,r in current if _compatible(choices,c)]
                     if bool(actual)!=bool(current):raise ValueError('current dependency input has a different current variant')
                     for ac,ar in actual:
                         compatible=[cr for cc,cr in current if _compatible(choices|ac,cc)]

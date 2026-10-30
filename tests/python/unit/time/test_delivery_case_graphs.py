@@ -1,7 +1,7 @@
 """Coverage at public Model/Case validate/resolve boundaries, not only checker calls."""
 import pytest
 import pops
-from pops.codegen.realization_delivery import delivered_frontiers
+from pops.codegen.typed_delivery import delivered_frontiers
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
 from examples.api_v02.realization_loop_checks import assemble_delivery_case

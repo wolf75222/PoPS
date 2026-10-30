@@ -46,7 +46,7 @@ def test_nonperiodic_midpoint_sampling_keeps_two_stage_extensions():
 
 
 def test_fresh_residual_cannot_borrow_delivery_from_its_predictor():
-    from pops.codegen.realization_delivery import delivered_frontiers
+    from pops.codegen.typed_delivery import delivered_frontiers
     spec = build_stencil_extensions(sample="state")
     resolved = pops.resolve(pops.validate(spec.case), layout=spec.layout)
     first, second = [v for v in resolved.time._values if v.op == "stencil_flux_divergence"]

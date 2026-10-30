@@ -199,7 +199,7 @@ def test_cycles_fail_closed_and_failed_query_does_not_poison_later_scan():
 
 def test_arbitrary_shared_metadata_reference_still_reaches_delivery_guard(monkeypatch):
     from pops.ledger_provenance import _validate_packet_delivery
-    import pops.codegen.realization_delivery as delivery
+    import pops.codegen.typed_delivery as delivery
     p, base, old, proposal = setup()
     packet = ledger(p, old['q'], old['time'], 1).pack(p)
     value = p.float64(0)

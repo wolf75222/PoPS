@@ -384,7 +384,7 @@ def require_continuation_coverage(publication, deliveries):
 
 def _validate_continuation_coverage(program, values):
     from pops.codegen.program_realization import _key
-    from pops.codegen.realization_delivery import delivered_frontiers
+    from pops.codegen.typed_delivery import require_single_delivery, term_label
     from pops.time._program.structured_control import value_signature
     publications = [value for value in values.values() if value.op == "continuation_publish"]
     for publication in publications:
@@ -412,19 +412,19 @@ def _validate_continuation_coverage(program, values):
                 key = _key(use)
                 if key in expected:
                     raise ValueError("continuation coverage duplicates an owned Use")
-                expected[key] = path
+                expected[key] = (path, term_label(use))
         outputs = {}
         for value in finite_outputs:
             key = _key(value.attrs["realization_use_v02"]["use"])
             outputs.setdefault(key, []).append(value)
         if set(outputs) != set(expected):
             raise ValueError("continuation coverage has missing or foreign finite Uses")
-        for key, path in expected.items():
+        for key, (path, term) in expected.items():
             output_ids = {value.id for value in outputs[key]}
-            frontiers = delivered_frontiers(publication, lambda value: value.id in output_ids,
-                                            path=("continuation",) + path)
-            if not frontiers or any(len(frontier) != 1 for frontier in frontiers):
-                raise ValueError("Use needs exactly one delivered SSA evaluation on every continuation path")
+            message = "Use needs exactly one delivered SSA evaluation on every continuation path"
+            require_single_delivery(publication, lambda value, output_ids=output_ids: value.id in output_ids,
+                                    term=term, path=("continuation",) + path,
+                                    missing=message, duplicate=message)
     return True
 
 
