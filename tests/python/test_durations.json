@@ -4008,7 +4008,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 1,
-          "estimated_seconds": 900,
+          "estimated_seconds": 1940,
           "ci_ranks": [
             1,
             2
@@ -4020,7 +4020,7 @@
           ],
           "entrypoint": "tests/python/integration/mpi/test_finite_structural_depth_native_mpi2.py",
           "execution_lane": "serial_and_mpi",
-          "basis": "Unmeasured scheduling estimate including cold generated C++ compilation; not a native receipt. Existing launch watchdog and scientific thresholds remain unchanged."
+          "basis": "Whole-file wall time measured once the depth-160 case runs to completion (B03 F4, PR #703); see _meta.b03_f4_depth160_observation. Existing launch watchdog and scientific thresholds remain unchanged."
         },
         "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": {
           "basis": "Provisional unmeasured whole-file cold compilation allowance; unchanged 1200 s MPI launch watchdog. Replace with complete native timing receipts; split exact cases if the measured budget is exceeded.",
@@ -7951,6 +7951,25 @@
         "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 960,
         "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 1320
       }
+    },
+    "b03_f4_depth160_observation": {
+      "pull_request": 703,
+      "source_sha": "f9d751ed9045aff40a667771b072d45360757702",
+      "review": "https://github.com/wolf75222/PoPS/pull/703#pullrequestreview-5710009090",
+      "ci_reference": {
+        "run": 38840872542,
+        "job": 116783025229,
+        "source_sha": "b6e64c1d23f5c0565c41674d262ca26b401e8339",
+        "seconds_to_banner_recursion_error": 1106.6
+      },
+      "basis": "Before #703 the file stopped at the debug-banner RecursionError, so its 900 s estimate never covered the whole case. The review's container ran the file to completion at f9d751e in 1936 s (one core, peak RSS 7.39 GB) and reached the same banner point at the base in 1242 s, against 1106.6 s on the b6 CI runner: that container is about 1.11 times slower, so the CI cost is about 1745 s. The weight takes the measured 1936 s, rounded up to 10 s, which also covers a runner up to 11 percent slower than the b6 one. It stays at or below the 2100 s ordinary budget, so selected_budget keeps 45 minutes. No deadline, watchdog, threshold or test selection changes; replace from a complete CI per-file timing artifact.",
+      "observed_seconds": {
+        "review_container_f9d751e": 1936,
+        "ci_estimate": 1745
+      },
+      "weights_seconds": {
+        "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 285,
@@ -8168,7 +8187,7 @@
   "tests/python/integration/runtime/test_finite_iteration_ad_v14_native.py": 1200,
   "tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py": 600,
   "tests/python/integration/runtime/test_finite_m09_runtime.py": 600,
-  "tests/python/integration/runtime/test_finite_structural_depth_native.py": 900,
+  "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940,
   "tests/python/integration/runtime/test_generic_physical_maps.py": 600.0,
   "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": 600,
   "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": 1200,
