@@ -25804,6 +25804,7 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
   std::optional<runtime::program::AmrProgramAcceptedState<Dim>> decoded;
   std::vector<std::uint8_t> candidate;
   std::exception_ptr local_error;
+  long tagging_omitted = 0;
   try {
     if (p_->program_accepted_revision == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("AmrSystem Program accepted-state revision overflow");
@@ -25825,6 +25826,7 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
         decoded->tagging_hysteresis_state != canonical_tagging)
       throw std::invalid_argument(
           "AMR Program accepted-state restore tagging hysteresis differs from live authority");
+    tagging_omitted = decoded->tagging_hysteresis_state.empty() ? 1L : 0L;
     decoded->tagging_hysteresis_state.swap(canonical_tagging);
     runtime::program::require_live_amr_program_checkpoint(*decoded, *p_->engine);
     p_->require_accepted_state_authority_contracts(*decoded);
@@ -25840,6 +25842,11 @@ void AmrSystem<Dim>::restore_program_accepted_state(const std::vector<std::uint8
       std::rethrow_exception(local_error);
     throw std::runtime_error("AMR Program accepted-state restore failed collectively");
   }
+  // The normalized images agree even when one rank omitted the tagging payload and another
+  // supplied it: a canonical omission is accepted only when every rank omits.
+  if (all_reduce_min(tagging_omitted, lane) != all_reduce_max(tagging_omitted, lane))
+    throw std::invalid_argument(
+        "AMR Program accepted-state restore tagging omission differs between ranks");
   runtime::program::require_collective_amr_program_checkpoint_consensus(*decoded, lane);
   p_->preflight_continuation_checkpoint(*decoded, candidate, false, lane);
   if (prepare_interface_capacity)
