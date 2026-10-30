@@ -9,7 +9,9 @@ def prepare_user_face_carrier(emitter: Any, numerics: Any) -> Any:
         return emitter
     from pops._ir.values import RuntimeParamRef
     from pops._ir.visitors import _children
-    from pops.numerics.riemann.user import authenticated_user_face
+    from pops.numerics.riemann.user import (
+        authenticated_user_face, require_declared_wave_speeds,
+    )
     from pops.numerics.spatial import FiniteVolume
 
     selected = []
@@ -30,6 +32,9 @@ def prepare_user_face_carrier(emitter: Any, numerics: Any) -> Any:
     impl = getattr(emitter, "_m", emitter)
     if any(item.options["width"] != len(impl.cons_names) for item in selected):
         raise ValueError("user face width differs from the compiled model state")
+    # The emitted policy reads the speeds through the model's signed-wave-speed interface, which
+    # exists only when the model declares them; refuse here rather than in the C++ compiler.
+    require_declared_wave_speeds(selected[0], impl, where="pops.compile")
     registry = getattr(emitter, "_param_registry", None)
     for descriptor in selected:
         pending, seen = list(descriptor.expression), set()
@@ -71,9 +76,29 @@ def user_face_source_identity(emitter: Any) -> str | None:
     return authenticated_user_face(descriptor).options["source_identity"]
 
 
+# The signed interval (sL, sR) of a face: the union over the two traces of the interval that the
+# model declares along the canonical normal. A trace whose interval is not finite or not ordered
+# leaves both bounds NaN, so a face that reads them is refused as non-finite.
+_SIGNED_WAVE_SPEED_LINES = (
+    "    pops::Real wave_slowest = std::numeric_limits<pops::Real>::quiet_NaN();",
+    "    pops::Real wave_fastest = wave_slowest;",
+    "    {",
+    "      pops::Real left_slowest, left_fastest, right_slowest, right_fastest;",
+    "      physical.signed_wave_speeds(left, face, left_slowest, left_fastest);",
+    "      physical.signed_wave_speeds(right, face, right_slowest, right_fastest);",
+    "      if (std::isfinite(left_slowest) && std::isfinite(left_fastest) &&",
+    "          left_slowest <= left_fastest && std::isfinite(right_slowest) &&",
+    "          std::isfinite(right_fastest) && right_slowest <= right_fastest) {",
+    "        wave_slowest = left_slowest < right_slowest ? left_slowest : right_slowest;",
+    "        wave_fastest = left_fastest > right_fastest ? left_fastest : right_fastest;",
+    "      }",
+    "    }",
+)
+
+
 def emit_user_face_policy(emitter: Any) -> str:
     from pops.codegen.cpp_writer import _cse_emit
-    from pops.numerics.riemann.user import authenticated_user_face
+    from pops.numerics.riemann.user import authenticated_user_face, reads_signed_wave_speeds
 
     impl = getattr(emitter, "_m", emitter)
     descriptor = getattr(impl, "_user_face", None)
@@ -92,6 +117,13 @@ def emit_user_face_policy(emitter: Any) -> str:
             "pops_face_flux_left_%d" % index: "left_density.value[%d]" % index,
             "pops_face_flux_right_%d" % index: "right_density.value[%d]" % index,
         })
+    # The named inputs: a binding is emitted only where an expression reads it.
+    bindings.update({"pops_face_normal_%d" % axis: "face.normal[%d]" % axis
+                     for axis in range(3)})
+    signed_speeds = reads_signed_wave_speeds(descriptor)
+    if signed_speeds:
+        bindings.update({"pops_face_slowest_speed": "wave_slowest",
+                         "pops_face_fastest_speed": "wave_fastest"})
     expression_lines, rendered, observed = _cse_emit(
         descriptor.expression, "pops::Real", "    ", materialize_all=True,
         return_names=True, scalar_bindings=bindings)
@@ -121,6 +153,7 @@ def emit_user_face_policy(emitter: Any) -> str:
         "    if (pops::detail::physical_pair_failed(",
         "            left_density, right_density, physical_failure))",
         "      return physical_failure;",
+        *(_SIGNED_WAVE_SPEED_LINES if signed_speeds else ()),
         "    State density{};",
         *expression_lines,
         *("    density[%d] = %s;" % (index, value)

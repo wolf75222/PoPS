@@ -1,0 +1,46 @@
+# Core ledger (spec 0.3: FC7, A6, CF15, IR26, CF16).
+#
+# Every generic mechanism added to the core for the corpus is listed here with the two
+# scientifically distinct structures that justify it (CF15): never one case, never the knowledge
+# of one paper (A6). CF16 counts the entries against its target. An entry made before the first
+# freeze has pre_freeze = true; the freeze (FC8) reruns the conformance suite over it.
+#
+# An entry names its issue, the rule that admits it, what it adds, the structures with the
+# measurement that shows each one needs it, and the core paths it changes (CF0).
+
+[[mechanism]]
+id = "named-face-inputs-normal-and-signed-speeds"
+issue = "ROM-99"
+rule = "IR26"
+pre_freeze = true
+what = """
+A riemann.User body or stability bound that names the parameter n or speeds after its five face
+inputs receives the canonical normal of the face, or the signed interval (sL, sR) of the wave
+speeds that the model declares along it, united over the two traces. The generated face policy
+binds the normal of the native face context and evaluates the interval through the model's
+signed-wave-speed interface, each only where an expression reads it: a face that reads neither
+keeps its identity and its C++. A face that reads (sL, sR) requires the model capability
+wave_speeds; a case whose model declares no signed pair is refused when it is validated, and a
+package lowered from such a model is refused before any C++ is generated. A trace whose interval
+is not finite or not ordered leaves (sL, sR) non-finite, so the face refuses the evaluation."""
+structures = [
+  { case = "M03", builder = "build_m03", structure = "2-D stiffened-gas Euler, four components, signed waves v.n - c and v.n + c" },
+  { case = "M16", builder = "build_m16", structure = "2-D HyQMOM15 B.1 fifteen moments, signed waves from the flux Jacobian, no closed form" },
+]
+measurement = """
+Before (b155d8b, N3a, tests/python/unit/numerics/test_lib_numerics_faces.py): riemann.User refused
+the CF15 graph, a body or a bound that reads n, and on M03 and M16, at each case's initial state,
+sL < 0 < sR on every cell, sL + sR is not zero and the pair differs between the two normals, so
+no function of the spectral radius s gives it. After: the graph builds, and the derived
+hll(F, Uh) of pops.lib.numerics, without speeds=, takes the same steps as riemann.HLL() with
+bitwise equal final states, L1 = Linf = 0, on M03 (16 x 8 cells, 2 steps) and on M16 (16 x 16
+cells, 4 steps); on M16's nonreal oblique spectrum it refuses the step and publishes nothing, as
+the native face does (tests/python/integration/runtime/test_api_v02_python_faces_native.py,
+gcc 13, Kokkos 4.4.1 Serial)."""
+refusal_set = "added: a face that reads (sL, sR) on a model that declares no signed pair, at validation; unchanged for every other face"
+paths = [
+  "python/pops/codegen/user_riemann_lowering.py",
+  "python/pops/numerics/plan.py",
+  "python/pops/numerics/riemann/user.py",
+  "python/pops/numerics/spatial.py",
+]

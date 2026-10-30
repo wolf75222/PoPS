@@ -5705,7 +5705,7 @@
           "registration": "snapshot_protocols_20261016"
         },
         "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
-          "estimated_seconds": 900,
+          "estimated_seconds": 1400,
           "kind": "native_profile",
           "native_dimension": 2
         }
@@ -7960,14 +7960,14 @@
       }
     },
     "n3a_20261029": {
-      "basis": "Scheduling estimates for the N3a pilot (ROM-82), not CI receipts. The source unit file builds the M03 and M16 models without compiling (24 s locally on 4 cores, so 30 s). The native file compiles four case pairs, eight artifacts (769 s locally on 4 cores with Kokkos OpenMP), each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts), plus margin. Refresh from complete CI timing artifacts.",
+      "basis": "Scheduling estimates for the N3a pilot (ROM-82) and its face inputs (ROM-99), not CI receipts. The source unit file builds the M03 and M16 models without compiling (25 s locally on 4 cores, so 30 s). The native file compiles five case pairs and the M16 refusal, eleven artifacts (1186 s locally on 4 cores with Kokkos Serial, of which 722 s for the four N3a pairs, 769 s with OpenMP), each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts), with the margin of N3a (900 s for 769 s); the Python shards go from 135 to 136 for it. Refresh from complete CI timing artifacts.",
       "files": {
         "tests/python/unit/numerics/test_lib_numerics_faces.py": {
           "estimated_seconds": 30,
           "kind": "source_unit"
         },
         "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
-          "estimated_seconds": 900,
+          "estimated_seconds": 1400,
           "kind": "native_profile",
           "analogue": "tests/python/integration/runtime/test_api_v02_models_M01_M14.py"
         }
@@ -9167,5 +9167,5 @@
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
   "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
   "tests/python/unit/numerics/test_lib_numerics_faces.py": 30,
-  "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 900
+  "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 1400
 }
