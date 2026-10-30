@@ -185,6 +185,46 @@ succeed, and an optional job may be skipped only as the result of that successfu
 The presence of a plan, an empty shard, a cache hit, or a local selector output never claims that
 tests ran or that GitHub CI is green.
 
+## Master's tutorials (MG8)
+
+`mg8-tutorials` runs on every complete plan and is required then. Its three lanes, `serial-dim2`,
+`mpi-dim2` (two ranks) and `serial-dim3`, each hold one installed PoPS: master's MPI module compiles
+`MPI_COMM_WORLD` artifacts only, and tutorial 16 needs Dim3. A lane builds master `bb9aea0c`
+(cached by commit) and this tree, then `scripts/run_mg8_tutorials.py run` executes each of the 17
+tutorials of `docs/tutorials/scalar_advection` from a copy of the directory, once with master's
+text against master and once with this tree's text against this tree, on the same runner. A probe in the tutorial process
+records, after every `pops.run` call, the clock, the hierarchy and every state level, through the
+public methods that the tutorials call. `compare` then checks the return codes, those states
+bitwise, the printed and console-monitor lines, and the outputs (NumPy archives, ParaView series,
+figures), under `tests/gates/mg8_master_tutorials.toml`. Only identity digests and the run
+directory are not compared. The reference is rebuilt on each runner because NumPy's and glibc's
+elementary functions dispatch on CPU features: arrays stored on another machine would compare two
+machines, not two trees.
+
+A difference is recorded in the contract. Each `[[cause]]` names one change of this tree, the
+commits that introduced it, the issue that owns it and the evidence that attributes it; each
+`[[divergence]]` lists, for one tutorial, the exact checks that differ and the causes they come
+from. A failure is never recorded: a tutorial that fails or a missing run always fails the job, and
+no tutorial is skipped (CF14). The list only shrinks (MG6): `compare` fails on a difference that no
+divergence lists and on a listed check that no longer differs. A slice that changes a route that a tutorial uses
+updates the tutorial in the same PR or keeps the old spelling until the route is removed (MG1).
+
+Run one lane locally with two packages built from the presets (copy each build tree's
+`python/pops` with `cp -rL`):
+
+```sh
+python3 scripts/run_mg8_tutorials.py run --phase reference --lane serial-dim2 \
+  --source <master checkout> --python "$(command -v python3)" --pythonpath <master package> \
+  --include <master checkout>/include --kokkos-root <Kokkos prefix> --output /tmp/mg8/reference
+python3 scripts/run_mg8_tutorials.py run --phase candidate --lane serial-dim2 \
+  --source . --python "$(command -v python3)" --pythonpath <package of this tree> \
+  --include include --kokkos-root <Kokkos prefix> --output /tmp/mg8/candidate
+python3 scripts/run_mg8_tutorials.py compare --lane serial-dim2 \
+  --reference /tmp/mg8/reference --candidate /tmp/mg8/candidate
+```
+
+The `mpi-dim2` lane also needs `--mpiexec "$(command -v mpiexec)"`.
+
 ## Reproduce a plan locally
 
 Run the planner from the repository root with temporary outputs outside the checkout. Replace

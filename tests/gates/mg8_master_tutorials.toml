@@ -1,0 +1,384 @@
+schema_version = 1
+gate = "mg8-master-tutorials"
+# MG8 (spec 0.3, section 18.2) and the landing plan of N5, section 6.2: every tutorial of master's
+# docs/tutorials/scalar_advection runs in CI, from this tree and from master on the same machine,
+# and its results are compared with master's before any route that it uses is removed (MG1). A
+# difference is recorded at the end of this file with its causes; a failure is never recorded and
+# always fails the job (CF14).
+master = "bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7"
+directory = "docs/tutorials/scalar_advection"
+# The ConsoleMonitor template of the tutorials: these lines are their outputs at output times.
+monitor = '^step=\d+ t=\S+ dt=\S+ dU_L2=\S+ mass=\S+$'
+
+# One installed PoPS per lane. Master's MPI-enabled module compiles MPI_COMM_WORLD artifacts
+# only, so the serial tutorials need a serial module; tutorial 16 needs a Dim3 module.
+[lanes.serial-dim2]
+dimension = 2
+ranks = 1
+mpi = false
+
+[lanes.mpi-dim2]
+dimension = 2
+ranks = 2
+mpi = true
+
+[lanes.serial-dim3]
+dimension = 3
+ranks = 1
+mpi = false
+
+# Compared for every tutorial: the return code; after each pops.run call, the clock, the hierarchy
+# and every state level bitwise, and the run report; the lines that the tutorial prints, with the
+# run directory written <tutorial>; the console-monitor lines. Outputs are compared by kind:
+# npz (every array bitwise), paraview (every series in step order: timesteps and every numeric
+# array of every dataset and piece, and the presentation of each recipe), bytes, or record (kept
+# with its SHA-256, not compared, with the reason). In an identity line, the digests only are
+# not compared: identities are versioned and differ between master and the integration head.
+
+[[tutorial]]
+id = "00"
+script = "00_domain_preview.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/00_domain_preview.svg", kind = "bytes" }]
+
+[[tutorial]]
+id = "01"
+script = "01_openmp_preset_ssprk2.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/01_openmp_preset_ssprk2.npz", kind = "npz" }]
+
+[[tutorial]]
+id = "02"
+script = "02_openmp_explicit_ssprk2.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/02_openmp_explicit_ssprk2.npz", kind = "npz" }]
+
+[[tutorial]]
+id = "03"
+script = "03_mpi_preset_ssprk2.py"
+lane = "mpi-dim2"
+
+[[tutorial]]
+id = "04"
+script = "04_mpi_explicit_ssprk2.py"
+lane = "mpi-dim2"
+
+[[tutorial]]
+id = "05"
+script = "05_openmp_amr_preset_ssprk2.py"
+lane = "serial-dim2"
+
+[[tutorial]]
+id = "06"
+script = "06_openmp_amr_explicit_ssprk2.py"
+lane = "serial-dim2"
+
+[[tutorial]]
+id = "07"
+script = "07_mpi_amr_preset_ssprk2.py"
+lane = "mpi-dim2"
+
+[[tutorial]]
+id = "08"
+script = "08_mpi_amr_explicit_ssprk2.py"
+lane = "mpi-dim2"
+
+[[tutorial]]
+id = "09"
+script = "09_openmp_amr_gradient_ssprk2.py"
+lane = "serial-dim2"
+
+[[tutorial]]
+id = "10"
+script = "10_openmp_amr_synchronous_ssprk2.py"
+lane = "serial-dim2"
+
+[[tutorial]]
+id = "11"
+script = "11_openmp_runtime_parameters.py"
+lane = "serial-dim2"
+identity_lines = ["artifact identity", "slow bind identity", "fast bind identity"]
+
+[[tutorial]]
+id = "12"
+script = "12_openmp_amr_outputs.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/12_openmp_amr_outputs/*", kind = "paraview" }]
+identity_lines = ["latest identity", "time series"]
+
+[[tutorial]]
+id = "13"
+script = "13_openmp_amr_restart.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/13_openmp_amr_restart/*", kind = "record", reason = "a checkpoint holds the identities and continuation schema of its version; the restored state is compared through the observations of the resumed run" }]
+identity_lines = ["restart identity"]
+
+[[tutorial]]
+id = "14"
+script = "14_mpi_amr_outputs.py"
+lane = "mpi-dim2"
+outputs = [{ pattern = "results/14_mpi_amr_outputs/*", kind = "paraview" }]
+identity_lines = ["latest identity", "time series"]
+
+[[tutorial]]
+id = "15"
+script = "15_openmp_convergence.py"
+lane = "serial-dim2"
+outputs = [
+  { pattern = "results/15_openmp_convergence.npz", kind = "npz" },
+  { pattern = "figures/scalar_advection_convergence.png", kind = "bytes" },
+]
+
+[[tutorial]]
+id = "16"
+script = "16_openmp_cartesian3d_ssprk2.py"
+lane = "serial-dim3"
+outputs = [{ pattern = "results/16_openmp_cartesian3d_ssprk2.npz", kind = "npz" }]
+
+# Causes of the divergences of this tree from master: each names the commits that introduced it,
+# the issue that owns it and the evidence that attributes it. The attribution build is b6 with
+# master's semantics for the four causes below (patch, replicas and traces in
+# /mnt/project-files/landing/mg8): it reproduces master bit for bit, printed and console lines
+# included, on 00 to 02, 05, 06, 09 to 13 and 15 (serial Dim2).
+
+[[cause]]
+id = "inflow-face-trace"
+commits = ["6603aec"]
+issue = "ROM-101"
+text = '''
+b6 imposes the value of Inflow(value=g) as the exterior Riemann trace of the boundary face
+(PrescribedFaceTrace, prepared_hyperbolic_boundary.hpp); master, like dirichlet_ghost of D9,
+reconstructs that trace by MUSCL from the mirrored ghost cells 2g-u, so the upwind flux of an
+inflow face differs wherever the interior is not affine next to it.
+'''
+evidence = '''
+A NumPy replica of the uniform tutorials with each trace reproduces the final states of master
+and of b6 within 5e-14 and their difference (up to 2.5e-5) within 1.1e-15 (01, 11, 15, 16). The
+attribution build reproduces master bit for bit (see above).
+'''
+
+[[cause]]
+id = "limiter-forms"
+commits = ["620ac6b"]
+issue = "ROM-102"
+text = '''
+b6 evaluates van Leer as s*(2/(1+s/l)), with s and l the smaller and larger magnitudes, and the
+centred slope of MC as s+(l-s)/2: overflow-safe forms of master's 2ab/(a+b) and a/2+b/2 that
+round differently. Every tutorial uses MUSCL(limiters.VanLeer()).
+'''
+evidence = '''
+On the x-differences of master's final state of tutorial 01 the two van Leer forms differ in the
+last bit for 1314 of 3332 same-sign pairs (at most 3.4e-16 relative). The attribution build
+reproduces master bit for bit (see above).
+'''
+
+[[cause]]
+id = "amr-tag-selection"
+commits = ["620ac6b", "a17fe0e"]
+issue = "ROM-103"
+text = '''
+pops.amr.tag-selection@1: b6 dilates only the accepted Refine tags, by the authored Buffer
+alone; master dilated every cell of the target coverage, retained cells included, by the
+transition buffer max(Buffer, derived) plus the lookahead, and nested the clustering by the
+transition buffer. The fine patches differ from the bind on, and with them the console line at
+step 10 of 05, 07 and 12.
+'''
+evidence = '''
+At bind, before any step, tutorial 05 refines coarse cells [3..15]x[5..17] on master and
+[4..14]x[6..16] on b6: the cells above 0.30, [6..12]x[8..14], dilated by 3 and by 2. The
+attribution build reproduces master bit for bit (see above).
+'''
+
+[[cause]]
+id = "regrid-boundary-prolongation"
+commits = ["620ac6b"]
+issue = "ROM-104"
+text = '''
+At a regrid, b6 fills a new fine cell whose parent touches a non-periodic face of the domain
+with the one-sided interior difference of the parent, unlimited
+(prepare_physical_boundary_prolongation in prepare_regridded_state_transfer); master, like
+linear_prolongation of section 2.6.9, takes the MC slope over both neighbours, the boundary
+ghost cell included. Only fine patches that reach the domain boundary see it.
+'''
+evidence = '''
+Tutorial 09 on b6 built with the three other semantics of master: same hierarchy at every step
+and same bits up to the regrid of step 2, whose 84 new fine cells next to y_min differ (at most
+2.5e-6); each rule, replayed in NumPy in the order of the kernel, gives the 84 values of its
+version bit for bit. The attribution build reproduces master bit for bit (see above).
+'''
+
+# One divergence per tutorial: the exact checks that differ and their causes. compare fails
+# on a difference without an entry and on a check that no longer differs, so this list only
+# shrinks (MG6); a failure is never a divergence (CF14).
+
+[[divergence]]
+tutorial = "01"
+causes = ["inflow-face-trace", "limiter-forms"]
+checks = [
+  "run0:rank0:run0-tracer:sha256",
+  "monitor:rank0",
+  "output:results/01_openmp_preset_ssprk2.npz:results/01_openmp_preset_ssprk2.npz",
+]
+
+[[divergence]]
+tutorial = "02"
+causes = ["inflow-face-trace", "limiter-forms"]
+checks = [
+  "run0:rank0:run0-tracer:sha256",
+  "output:results/02_openmp_explicit_ssprk2.npz:results/02_openmp_explicit_ssprk2.npz",
+]
+
+[[divergence]]
+tutorial = "03"
+causes = ["inflow-face-trace", "limiter-forms"]
+checks = [
+  "run0:rank0:run0-tracer:sha256",
+  "monitor:rank0",
+  "run0:rank1:run0-tracer:sha256",
+]
+
+[[divergence]]
+tutorial = "04"
+causes = ["inflow-face-trace", "limiter-forms"]
+checks = [
+  "run0:rank0:run0-tracer:sha256",
+  "run0:rank1:run0-tracer:sha256",
+]
+
+[[divergence]]
+tutorial = "05"
+causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+checks = [
+  "run0:rank0:patch_boxes",
+  "run0:rank0:run0-tracer-level0:sha256",
+  "run0:rank0:run0-tracer-level1:sha256",
+  "monitor:rank0",
+]
+
+[[divergence]]
+tutorial = "06"
+causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+checks = [
+  "run0:rank0:patch_boxes",
+  "run0:rank0:run0-tracer-level0:sha256",
+  "run0:rank0:run0-tracer-level1:sha256",
+]
+
+[[divergence]]
+tutorial = "07"
+causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+checks = [
+  "run0:rank0:patch_boxes",
+  "run0:rank0:run0-tracer-level0:sha256",
+  "run0:rank0:run0-tracer-level1:sha256",
+  "monitor:rank0",
+  "run0:rank1:patch_boxes",
+  "run0:rank1:run0-tracer-level0:sha256",
+  "run0:rank1:run0-tracer-level1:sha256",
+]
+
+[[divergence]]
+tutorial = "08"
+causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+checks = [
+  "run0:rank0:patch_boxes",
+  "run0:rank0:run0-tracer-level0:sha256",
+  "run0:rank0:run0-tracer-level1:sha256",
+  "run0:rank1:patch_boxes",
+  "run0:rank1:run0-tracer-level0:sha256",
+  "run0:rank1:run0-tracer-level1:sha256",
+]
+
+[[divergence]]
+tutorial = "09"
+causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection", "regrid-boundary-prolongation"]
+checks = [
+  "run0:rank0:patch_boxes",
+  "run0:rank0:run0-tracer-level0:sha256",
+  "run0:rank0:run0-tracer-level1:sha256",
+]
+
+[[divergence]]
+tutorial = "10"
+causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+checks = [
+  "run0:rank0:patch_boxes",
+  "run0:rank0:run0-tracer-level0:sha256",
+  "run0:rank0:run0-tracer-level1:sha256",
+]
+
+[[divergence]]
+tutorial = "11"
+causes = ["inflow-face-trace", "limiter-forms"]
+checks = [
+  "run0:rank0:run0-tracer:sha256",
+  "run1:rank0:run1-tracer:sha256",
+]
+
+[[divergence]]
+tutorial = "12"
+causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+checks = [
+  "run0:rank0:patch_boxes",
+  "run0:rank0:run0-tracer-level0:sha256",
+  "run0:rank0:run0-tracer-level1:sha256",
+  "monitor:rank0",
+  "output:results/12_openmp_amr_outputs/*:series",
+]
+
+[[divergence]]
+tutorial = "13"
+causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+checks = [
+  "run0:rank0:patch_boxes",
+  "run0:rank0:run0-tracer-level0:sha256",
+  "run0:rank0:run0-tracer-level1:sha256",
+  "run1:rank0:patch_boxes",
+  "run1:rank0:run1-tracer-level0:sha256",
+  "run1:rank0:run1-tracer-level1:sha256",
+  "run2:rank0:patch_boxes",
+  "run2:rank0:run2-tracer-level0:sha256",
+  "run2:rank0:run2-tracer-level1:sha256",
+]
+
+[[divergence]]
+tutorial = "14"
+causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection", "regrid-boundary-prolongation"]
+checks = [
+  "run0:rank0:macro_step",
+  "run0:rank0:report",
+  "run0:rank0:run0-tracer-level0:sha256",
+  "printed:rank0:line3",
+  "printed:rank0:line10",
+  "monitor:rank0",
+  "run0:rank1:macro_step",
+  "run0:rank1:report",
+  "run0:rank1:run0-tracer-level0:sha256",
+  "output:results/14_mpi_amr_outputs/*:series",
+  "output:results/14_mpi_amr_outputs/*:recipes",
+]
+
+[[divergence]]
+tutorial = "15"
+causes = ["inflow-face-trace", "limiter-forms"]
+checks = [
+  "run0:rank0:run0-tracer:sha256",
+  "run1:rank0:run1-tracer:sha256",
+  "run2:rank0:run2-tracer:sha256",
+  "run3:rank0:run3-tracer:sha256",
+  "printed:rank0:line4",
+  "printed:rank0:line5",
+  "printed:rank0:line6",
+  "printed:rank0:line7",
+  "printed:rank0:line11",
+  "output:results/15_openmp_convergence.npz:results/15_openmp_convergence.npz",
+  "output:figures/scalar_advection_convergence.png:figures/scalar_advection_convergence.png",
+]
+
+[[divergence]]
+tutorial = "16"
+causes = ["inflow-face-trace", "limiter-forms"]
+checks = [
+  "run0:rank0:run0-tracer:sha256",
+  "output:results/16_openmp_cartesian3d_ssprk2.npz:results/16_openmp_cartesian3d_ssprk2.npz",
+]

@@ -1613,7 +1613,7 @@ def test_native_module_cache_keys_use_post_install_include_identity():
     assert all("-headers${{ steps.kokkos.outputs.compiler-includes }}" in line for line in keys)
     openmp_key = next(line for line in workflow.splitlines() if "key: pops-module-openmp-" in line)
     assert "-headers${{ steps.openmp-compiler-includes.outputs.identity }}" in openmp_key
-    openmp = workflow.split("\n  kokkos-openmp:\n", 1)[1]
+    openmp = workflow.split("\n  kokkos-openmp:\n", 1)[1].split("\n  mg8-tutorials:\n", 1)[0]
     assert openmp.index("Install MPI SDK") < openmp.index("id: openmp-compiler-includes")
     assert openmp.index("id: openmp-compiler-includes") < openmp.index("key: pops-module-")
     action = (REPO_ROOT / ".github/actions/setup-kokkos/action.yml").read_text()
@@ -2365,7 +2365,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):
         assert linked_artifact not in openmp_prewarm_upload
 
-    openmp_block = workflow.split("\n  kokkos-openmp:\n", 1)[1]
+    openmp_block = workflow.split("\n  kokkos-openmp:\n", 1)[1].split("\n  mg8-tutorials:\n", 1)[0]
     assert "name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})" in openmp_block
     job_budget = re.search(
         r"timeout-minutes: \$\{\{ matrix.kind == 'python' && (\d+) \|\| (\d+) \}\}",

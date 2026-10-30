@@ -265,6 +265,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Generated dense spectral witnesses now distinguish a converged complex spectrum from an invalid
   eigensolve. Checked extrema return NaN on non-convergence/non-finite diagnostics, and the tri-state
   real-spectrum witness propagates the same failure into native pointwise transforms before commit.
+- Run master's 17 scalar-advection tutorials in CI (`mg8-tutorials`): each runs from master
+  bb9aea0c and from this tree on the same runner, and `scripts/run_mg8_tutorials.py` compares
+  every result bitwise. `tests/gates/mg8_master_tutorials.toml` records each divergence with
+  its causes and their issues; a failure always fails the job. Tutorial 11 binds its runtime
+  parameters as master writes them again: the block-qualified spelling raised
+  DoubleOwnershipError.
 
 ## [1.0.0] - 2026-07-16
 
