@@ -143,8 +143,8 @@ POPS_FINITE_HOST_NOINLINE void allocate_host(finite_device::HostView<T>& target,
                                              const char* label, const ExecutionLane& lane) {
   allocation_phase(
       [&] {
-        if (count < 0 || static_cast<std::uint64_t>(count) >
-                             std::numeric_limits<std::size_t>::max() / sizeof(T))
+        if (count < 0 ||
+            static_cast<std::uint64_t>(count) > std::numeric_limits<std::size_t>::max() / sizeof(T))
           throw std::length_error("finite host column exceeds addressable memory");
         target = finite_device::HostView<T>(
             Kokkos::view_alloc(Kokkos::WithoutInitializing,

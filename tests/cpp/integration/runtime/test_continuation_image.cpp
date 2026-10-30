@@ -1837,14 +1837,15 @@ TEST(ContinuationImage, FlatElementArraysUnpackToCountedDeviceColumnsAndPackBack
   auto nested = at;
   nested.children = {at};
   nested.children[0].children = {scalar(ContinuationKind::Int64)};
-  const auto outer = V::array(domain, {V::array(domain, {V::integer(1), V::integer(2), V::integer(3)}),
-                                       V::array(domain, {V::integer(4), V::integer(5), V::integer(6)}),
-                                       V::array(domain, {V::integer(7), V::integer(8), V::integer(9)})});
+  const auto outer =
+      V::array(domain, {V::array(domain, {V::integer(1), V::integer(2), V::integer(3)}),
+                        V::array(domain, {V::integer(4), V::integer(5), V::integer(6)}),
+                        V::array(domain, {V::integer(7), V::integer(8), V::integer(9)})});
   const auto cells = fs::unpack<D>(nested, outer, limits);
   const auto& array = std::any_cast<const fs::Array&>(cells);
-  EXPECT_EQ(fd::read<std::int64_t>(std::any_cast<const fd::Array&>((*array.values)[2]), 0, 1,
-                                   nullptr),
-            8);
+  EXPECT_EQ(
+      fd::read<std::int64_t>(std::any_cast<const fd::Array&>((*array.values)[2]), 0, 1, nullptr),
+      8);
   EXPECT_EQ(Codec(nested, "test/nested-device", capacity, none())
                 .encode(fs::pack<D>(nested, cells, limits), 5),
             Codec(nested, "test/nested-device", capacity, none()).encode(outer, 5));
@@ -1885,9 +1886,8 @@ TEST(ContinuationImage, DeviceArrayFingerprintSeesEverySingleElementChange) {
   // The sums are keyed by position and by column: permutations are seen too.
   const auto pair = [&](std::initializer_list<std::int64_t> a,
                         std::initializer_list<std::int64_t> b) {
-    return fd::fingerprint(
-        fd::from_host(domain, {host_column<std::int64_t>("a", a), host_column<std::int64_t>("b", b)},
-                      nullptr));
+    return fd::fingerprint(fd::from_host(
+        domain, {host_column<std::int64_t>("a", a), host_column<std::int64_t>("b", b)}, nullptr));
   };
   EXPECT_FALSE(same(pair({1, 2, 3, 4}, {5, 6, 7, 8}), pair({2, 1, 3, 4}, {5, 6, 7, 8})));
   EXPECT_FALSE(same(pair({1, 2, 3, 4}, {5, 6, 7, 8}), pair({5, 6, 7, 8}, {1, 2, 3, 4})));
@@ -1897,11 +1897,12 @@ TEST(ContinuationImage, DeviceArrayFingerprintSeesEverySingleElementChange) {
       fd::from_host(domain, {host_column<Real>("z", {-0.0, 1.0, 2.0, 3.0})}, nullptr));
   EXPECT_FALSE(same(zero, negative));
   const auto infinite = std::numeric_limits<Real>::infinity();
-  EXPECT_EQ(fd::fingerprint(fd::from_host(
-                                domain, {host_column<Real>("w", {std::nan(""), infinite, 1.0, -infinite})},
-                                nullptr))
-                .nonfinite,
-            3);
+  EXPECT_EQ(
+      fd::fingerprint(
+          fd::from_host(domain, {host_column<Real>("w", {std::nan(""), infinite, 1.0, -infinite})},
+                        nullptr))
+          .nonfinite,
+      3);
 }
 
 TEST(ContinuationImage, DeviceArrayHostCopiesAreExplicitAndCounted) {
@@ -1909,8 +1910,8 @@ TEST(ContinuationImage, DeviceArrayHostCopiesAreExplicitAndCounted) {
   FiniteDomainRegistry domains;
   const auto domain = domains.issue(3, 3, 939);
   fd::Residency residency;
-  const auto array =
-      fd::from_host(domain, {host_column<std::int64_t>("pops_finite_host:k", {4, 5, 6})}, &residency);
+  const auto array = fd::from_host(
+      domain, {host_column<std::int64_t>("pops_finite_host:k", {4, 5, 6})}, &residency);
   EXPECT_EQ(residency.host_to_device_bytes.load(), 24u);
   EXPECT_EQ(fd::column<std::int64_t>(array, 0).label(), "pops_finite_array:k");
   EXPECT_EQ(fd::read<std::int64_t>(array, 0, 2, &residency), 6);

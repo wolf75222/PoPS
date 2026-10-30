@@ -191,8 +191,8 @@ inline Array legacy_array(const finite_device::Array& source, const Continuation
   for (std::size_t i = 0; i < count; ++i) {
     std::vector<std::any> cells(kinds.size());
     for (std::size_t j = 0; j < kinds.size(); ++j)
-      cells[j] = std::visit([&](const auto& values) { return leaf_cell(kinds[j], values(i)); },
-                            host[j]);
+      cells[j] =
+          std::visit([&](const auto& values) { return leaf_cell(kinds[j], values(i)); }, host[j]);
     (*buffer)[i] = record ? std::any(Record{std::move(cells)}) : std::move(cells.at(0));
   }
   return Array{source.domain, std::move(buffer)};

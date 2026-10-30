@@ -41,11 +41,10 @@ inline void record(Residency* residency, std::uint64_t bytes, bool to_host) noex
 
 template <class T>
 using HostView = Kokkos::View<T*, Kokkos::HostSpace>;
-using Column = std::variant<finite_kokkos::View<const unsigned char>,
-                            finite_kokkos::View<const std::int64_t>,
-                            finite_kokkos::View<const Real>>;
-using HostColumn =
-    std::variant<HostView<unsigned char>, HostView<std::int64_t>, HostView<Real>>;
+using Column =
+    std::variant<finite_kokkos::View<const unsigned char>, finite_kokkos::View<const std::int64_t>,
+                 finite_kokkos::View<const Real>>;
+using HostColumn = std::variant<HostView<unsigned char>, HostView<std::int64_t>, HostView<Real>>;
 
 struct Array {
   FiniteDomainRef domain;
@@ -78,8 +77,7 @@ finite_kokkos::View<const T> column(const Array& array, std::size_t index) {
 }
 
 inline Array publish(FiniteDomainRef domain, std::vector<Column> columns) {
-  return Array{std::move(domain),
-               std::make_shared<const std::vector<Column>>(std::move(columns))};
+  return Array{std::move(domain), std::make_shared<const std::vector<Column>>(std::move(columns))};
 }
 
 template <class T>
@@ -226,8 +224,8 @@ inline Fingerprint fingerprint(const Array& array) {
           if (count > 0)
             Kokkos::parallel_reduce(
                 "pops_finite_fingerprint",
-                Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace,
-                                    Kokkos::IndexType<std::int64_t>>(0, count),
+                Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>(
+                    0, count),
                 ColumnFingerprint<Value>{values, mix_first(std::uint64_t(j) + 1)}, terms);
           if constexpr (std::is_same_v<Value, Real>) {
             out.real_first += terms.first;
