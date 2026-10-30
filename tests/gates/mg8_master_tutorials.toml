@@ -150,22 +150,6 @@ outputs = [{ pattern = "results/16_openmp_cartesian3d_ssprk2.npz", kind = "npz" 
 # master bit for bit, printed and console lines included.
 
 [[cause]]
-id = "inflow-face-trace"
-commits = ["6603aec4"]
-issue = "ROM-101"
-text = '''
-b6 imposes the value of Inflow(value=g) as the exterior Riemann trace of the boundary face
-(PrescribedFaceTrace, prepared_hyperbolic_boundary.hpp); master, like dirichlet_ghost of D9,
-reconstructs that trace by MUSCL from the mirrored ghost cells 2g-u, so the upwind flux of an
-inflow face differs wherever the interior is not affine next to it.
-'''
-evidence = '''
-A NumPy replica of the uniform tutorials with each trace reproduces the final states of master
-and of b6 within 5e-14 and their difference (up to 2.5e-5) within 1.1e-15 (01, 11, 15, 16). The
-attribution build reproduces master bit for bit (see above).
-'''
-
-[[cause]]
 id = "amr-tag-selection"
 commits = ["8f972aa1", "a17fe0e9"]
 issue = "ROM-103"
@@ -208,50 +192,8 @@ version bit for bit. The attribution build reproduces master bit for bit (see ab
 # is never a divergence (CF14).
 
 [[divergence]]
-tutorial = "01"
-causes = ["inflow-face-trace"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:run0-tracer:sha256",
-  "monitor:rank0",
-  "output:results/01_openmp_preset_ssprk2.npz:results/01_openmp_preset_ssprk2.npz",
-]
-
-[[divergence]]
-tutorial = "02"
-causes = ["inflow-face-trace"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:run0-tracer:sha256",
-  "output:results/02_openmp_explicit_ssprk2.npz:results/02_openmp_explicit_ssprk2.npz",
-]
-
-[[divergence]]
-tutorial = "03"
-causes = ["inflow-face-trace"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
-checks = [
-  "run0:rank0:run0-tracer:sha256",
-  "monitor:rank0",
-  "run0:rank1:run0-tracer:sha256",
-]
-
-[[divergence]]
-tutorial = "04"
-causes = ["inflow-face-trace"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
-checks = [
-  "run0:rank0:run0-tracer:sha256",
-  "run0:rank1:run0-tracer:sha256",
-]
-
-[[divergence]]
 tutorial = "05"
-causes = ["inflow-face-trace", "amr-tag-selection"]
+causes = ["amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -263,7 +205,7 @@ checks = [
 
 [[divergence]]
 tutorial = "06"
-causes = ["inflow-face-trace", "amr-tag-selection"]
+causes = ["amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -274,7 +216,7 @@ checks = [
 
 [[divergence]]
 tutorial = "07"
-causes = ["inflow-face-trace", "amr-tag-selection"]
+causes = ["amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
@@ -289,7 +231,7 @@ checks = [
 
 [[divergence]]
 tutorial = "08"
-causes = ["inflow-face-trace", "amr-tag-selection"]
+causes = ["amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
@@ -303,7 +245,7 @@ checks = [
 
 [[divergence]]
 tutorial = "09"
-causes = ["inflow-face-trace", "amr-tag-selection", "regrid-boundary-prolongation"]
+causes = ["amr-tag-selection", "regrid-boundary-prolongation"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -314,7 +256,7 @@ checks = [
 
 [[divergence]]
 tutorial = "10"
-causes = ["inflow-face-trace", "amr-tag-selection"]
+causes = ["amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -324,18 +266,8 @@ checks = [
 ]
 
 [[divergence]]
-tutorial = "11"
-causes = ["inflow-face-trace"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:run0-tracer:sha256",
-  "run1:rank0:run1-tracer:sha256",
-]
-
-[[divergence]]
 tutorial = "12"
-causes = ["inflow-face-trace", "amr-tag-selection"]
+causes = ["amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -348,7 +280,7 @@ checks = [
 
 [[divergence]]
 tutorial = "13"
-causes = ["inflow-face-trace", "amr-tag-selection"]
+causes = ["amr-tag-selection"]
 attribution = "reproduced"
 reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
@@ -365,7 +297,7 @@ checks = [
 
 [[divergence]]
 tutorial = "14"
-causes = ["inflow-face-trace", "amr-tag-selection", "regrid-boundary-prolongation"]
+causes = ["amr-tag-selection", "regrid-boundary-prolongation"]
 attribution = "reproduced"
 reproduction = "landing/mg8/attribution/verdict-variant-09-14.json (sha256 ea5e7204); review/pr701/runs/mpi-dim2/verdict-variant-14.json (sha256 5b9d1c0b)"
 checks = [
@@ -380,33 +312,4 @@ checks = [
   "run0:rank1:run0-tracer-level0:sha256",
   "output:results/14_mpi_amr_outputs/*:series",
   "output:results/14_mpi_amr_outputs/*:recipes",
-]
-
-[[divergence]]
-tutorial = "15"
-causes = ["inflow-face-trace"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
-checks = [
-  "run0:rank0:run0-tracer:sha256",
-  "run1:rank0:run1-tracer:sha256",
-  "run2:rank0:run2-tracer:sha256",
-  "run3:rank0:run3-tracer:sha256",
-  "printed:rank0:line4",
-  "printed:rank0:line5",
-  "printed:rank0:line6",
-  "printed:rank0:line7",
-  "printed:rank0:line11",
-  "output:results/15_openmp_convergence.npz:results/15_openmp_convergence.npz",
-  "output:figures/scalar_advection_convergence.png:figures/scalar_advection_convergence.png",
-]
-
-[[divergence]]
-tutorial = "16"
-causes = ["inflow-face-trace"]
-attribution = "reproduced"
-reproduction = "review/pr701/runs/serial-dim3/summary-variant.md (sha256 088571c1)"
-checks = [
-  "run0:rank0:run0-tracer:sha256",
-  "output:results/16_openmp_cartesian3d_ssprk2.npz:results/16_openmp_cartesian3d_ssprk2.npz",
 ]

@@ -276,6 +276,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Evaluate van Leer and MC's centred slope with master's expressions wherever they stay normal
   and finite, keeping the overflow-safe forms beyond that range, so master's tutorials keep
   their bits (MG8, ROM-102).
+- Realize `Inflow` as master does: the mirrored ghost 2g - u, whose reconstruction is also the
+  exterior trace of the numerical flux (D9). The prescribed exterior trace of API 0.2 is chosen by
+  name, `Inflow(..., trace="prescribed")` (provisional spelling for N15), as M14 and the
+  two-block receipt now do: its face keeps the fixed-state law and carries a per-face flag,
+  `prescribed_trace`, that the engine reads (`with_prescribed_trace_faces`) (MG8, ROM-101).
 
 ## [1.0.0] - 2026-07-16
 

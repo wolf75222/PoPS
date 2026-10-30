@@ -59,7 +59,7 @@ def build_t10_multiblock(numerical_flux, *, cells=(32, 16), temporal_ratio=2,
         plan = DiscretizationPlan()
         plan.rates.add(rate, finite_volume)
         plan.boundaries.add(TransportBoundarySet({
-            boundaries.x_min: Inflow(state=subject, value=(0.,)),
+            boundaries.x_min: Inflow(state=subject, value=(0.,), trace="prescribed"),
             boundaries.x_max: Outflow(state=subject),
             boundaries.y_min: Outflow(state=subject),
             boundaries.y_max: Outflow(state=subject),

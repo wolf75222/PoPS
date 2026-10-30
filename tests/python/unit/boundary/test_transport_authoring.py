@@ -147,6 +147,60 @@ def test_transport_set_resolves_exact_ports_values_and_derived_stencil_requireme
         }
 
 
+def test_inflow_prescribes_its_exterior_trace_only_when_named():
+    # D9 and master: Inflow is the mirrored ghost 2g - u, whose reconstruction is also the exterior
+    # trace. The prescribed trace of API 0.2 is another realization, chosen by name (MG8, ROM-101):
+    # its face keeps the fixed-state law and carries a per-face flag that the lowering sets.
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+
+    frame, _, inlet, inlet_value, numerics, case, block, state = _authoring()
+    numerics.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: Inflow(state=state, value=inlet_value, trace="prescribed"),
+        frame.boundaries.x_max: Outflow(state=state),
+        frame.boundaries.y_min: Inflow(state=state, value=inlet_value),
+        frame.boundaries.y_max: Outflow(state=state),
+    }))
+    case.numerics(numerics, block=block)
+    authority = case._resolved_numerics_for("tracer").boundaries[0]
+    params = {case.resolve(inlet, block=block): 0.25}
+    compiled = authority.compile_boundary_data()
+    detached = dict(compiled)
+    detached.update({
+        "ghost_plan_identity": authority.plan.canonical_id,
+        "producer_order": [],
+        "component_region_templates": [],
+    })
+    for faces in (
+        compiled["faces"],
+        authority.runtime_boundary_data(params)["faces"],
+        CompiledBoundaryPlan(detached).runtime_boundary_data(params)["faces"],
+    ):
+        assert [row["type"] for row in faces] == ["dirichlet", "foextrap", "dirichlet", "foextrap"]
+        assert [row.get("prescribed_trace", False) for row in faces] == [True, False, False, False]
+    assert sorted(row.prescribed_trace for row in authority.conditions) == [
+        False, False, False, True]
+    flags = [row.get("prescribed_trace") for row in authority.canonical_identity()["conditions"]]
+    assert sorted(flag is True for flag in flags) == [False, False, False, True]
+
+    assert "trace" not in Inflow(state=state, value=inlet_value).inspect()
+    assert Inflow(state=state, value=inlet_value, trace="prescribed").inspect()["trace"] == (
+        "prescribed")
+    with pytest.raises(ValueError, match="Inflow.trace must be None or 'prescribed'"):
+        Inflow(state=state, value=inlet_value, trace="mirrored")
+
+    # Only a fixed state can be the exterior trace: the resolved condition and the compiled plan
+    # refuse the flag elsewhere, and the engine refuses it on a face of another law.
+    outflow = next(row for row in authority.conditions if not row.values)
+    with pytest.raises(ValueError, match="prescribe its exterior trace"):
+        replace(outflow, prescribed_trace=True)
+    with pytest.raises(TypeError, match="prescribed_trace must be a bool"):
+        replace(outflow, prescribed_trace=1)
+    forged = dict(detached)
+    forged["faces"] = [dict(row, prescribed_trace=row["ordinal"] == 1) for row in compiled["faces"]]
+    with pytest.raises(ValueError, match="exterior trace without a fixed state"):
+        CompiledBoundaryPlan(forged).runtime_boundary_data(params)
+
+
 def test_no_flux_lowers_to_one_prepared_ghost_and_post_riemann_face_law():
     from pops.mesh.boundaries import BoundaryProviderKind, NumericalFlux
     from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan

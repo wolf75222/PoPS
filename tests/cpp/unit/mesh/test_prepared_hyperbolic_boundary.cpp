@@ -506,6 +506,38 @@ TEST(test_prepared_hyperbolic_boundary, fixed_state_conversion_retains_interface
   EXPECT_EQ(converted.omitted_interface_faces(), boundary.omitted_interface_faces());
 }
 
+TEST(test_prepared_hyperbolic_boundary, prescribed_trace_faces_require_unique_fixed_state_faces) {
+  const auto boundary =
+      prepare_hyperbolic_boundary<2>({"dirichlet", "foextrap", "dirichlet", "external"},
+                                     {1.0, 0.0, 2.0, 0.0}, identities<2>(), {"Scalar"});
+  EXPECT_THROW(boundary.with_prescribed_trace_faces({-1}), std::invalid_argument);
+  EXPECT_THROW(boundary.with_prescribed_trace_faces({4}), std::invalid_argument);
+  EXPECT_THROW(boundary.with_prescribed_trace_faces({0, 0}), std::invalid_argument);
+  EXPECT_THROW(boundary.with_prescribed_trace_faces({1}), std::invalid_argument);
+  EXPECT_THROW(boundary.with_prescribed_trace_faces({3}), std::invalid_argument);
+  const auto prescribed = boundary.with_prescribed_trace_faces({2, 0});
+  EXPECT_EQ(prescribed.prescribed_trace_faces(), (std::array<bool, 4>{true, false, true, false}));
+  EXPECT_EQ(boundary.prescribed_trace_faces(), (std::array<bool, 4>{}));
+  EXPECT_EQ(prescribed.face(0, -1).law, boundary.face(0, -1).law);
+  EXPECT_EQ(
+      prescribed
+          .with_prepared_geometry(Geometry<2>::from_bounds(
+              Box<2>::from_extents(Extent<2>{4, 4}), RealVector<2>{0, 0}, RealVector<2>{1, 1}))
+          .prescribed_trace_faces(),
+      prescribed.prescribed_trace_faces());
+}
+
+TEST(test_prepared_hyperbolic_boundary, fixed_state_conversion_retains_prescribed_trace_faces) {
+  const auto boundary = prepare_hyperbolic_boundary<1>(
+                            {"foextrap", "dirichlet"}, {0.0, 3.0}, identities<1>(), {"Scalar"},
+                            false, {"conservative", "primitive"}, {"", "convert@1"})
+                            .with_prescribed_trace_faces({1});
+  const auto converted = boundary.with_converted_fixed_states(
+      [](const double* input, double* output) { output[0] = 2 * input[0]; });
+  EXPECT_EQ(converted.face(0, 1).fixed_state.front(), Real(6));
+  EXPECT_EQ(converted.prescribed_trace_faces(), boundary.prescribed_trace_faces());
+}
+
 TEST(test_prepared_hyperbolic_boundary, boundary_flux_cannot_replace_a_reserved_interface_face) {
   const auto boundary = prepare_hyperbolic_boundary<1>({"external", "external"}, {0.0, 0.0},
                                                        identities<1>(), {"Scalar"})
