@@ -9,18 +9,21 @@ ABI, case identifiers, and so any route table or switch keyed on them (A5, FC4).
 vocabulary are in ``frozen_engine/scan.py``; the early audit of N2 (29/10) completed the vocabulary
 so that the counter-examples of FC2, FC3, FC4 and C43 are refused whatever their spelling.
 
-The test starts from the exception list of b6e64c1d (``frozen_engine/cf2_exceptions.txt``, each
-entry ``file:line`` with the issue that removes it and the spelling of the site) and fails both on
-a new occurrence and on an exception that has become useless, so the list can only shrink (MG6).
-Sites pair with entries by path, term and spelling, so a site that replaces another of the same term
-in the same file is new; CI also compares the scan with the scan of the base of each PR
-(``refresh_exceptions.py --check-base``), so an entry added by hand lets nothing in. G3 requires the
-list to be empty (section 1.5). The closed list of interfaces of FC6b is asserted by
+The test starts from the exception list of b6e64c1d (``frozen_engine/cf2_exceptions.txt``, one
+entry ``file:line`` per occurrence of a token that holds a term, with the issue that removes it and
+the spelling of the token) and fails both on a new occurrence and on an exception that has become
+useless, so the list can only shrink (MG6). Sites pair with entries by path, term and spelling, with
+multiplicity, so a site that replaces another of the same term in the same file is new, while a
+re-wrapped statement keeps its sites. CI also compares the scan with the scan of the base of each PR
+and the scanner with the scanner of the base (``refresh_exceptions.py --check-base``), so an entry
+added by hand lets nothing in and a change to the scanner cannot hide a site unannounced. G3
+requires the list to be empty (section 1.5). The closed list of interfaces of FC6b is asserted by
 ``test_native_interfaces_closed.py``.
 
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
 import collections
+import shutil
 import subprocess
 
 import pytest
@@ -33,46 +36,47 @@ from tests.python.architecture.frozen_engine import cf2, ratchet, refresh_except
 # remove the occurrence instead. The terms that the early audit of N2 added on 29/10 entered here
 # with their counts at that commit, in the PR that added them; a term added later does the same.
 # The independent review of N2 (30/10) corrected three counts of b6 that the error-text rule had hid
-# (rusanov 110 -> 113, minmod 56 -> 60, exb 19 -> 20) and added the solve algorithms. These totals
-# are upper bounds; the slack that a removed site leaves is closed by the CI check against the base
-# of each PR (refresh_exceptions.py --check-base), not by lowering them.
+# and added the solve algorithms; its follow-up review (30/10) made a site one occurrence of a
+# token, which counted every term again. These totals are upper bounds; the slack that a removed
+# site leaves is closed by the CI check against the base of each PR (refresh_exceptions.py
+# --check-base), not by lowering them.
 B6_TERM_TOTALS = {
-    '"E"': 4, '"density"': 39, '"energy"': 19, '"mc"': 9, '"outlet"': 1, '"p"': 17, '"rho"': 10,
+    '"E"': 4, '"density"': 46, '"energy"': 28, '"mc"': 9, '"outlet"': 1, '"p"': 17, '"rho"': 10,
     '"rho_E"': 2, '"rho_u"': 2, '"rho_v"': 2, '"rho_w"': 2, '"rhou"': 2, '"rhov"': 2, '"rhow"': 2,
-    '"vx"': 3, '"vy"': 3, '"vz"': 2, '"wall"': 4, '`B0`': 10, '`Density`': 35, '`Energy`': 19,
-    '`MC`': 9, '`cs2`': 35, '`kMc`': 8, '`n0`': 23, '`qom`': 41, '`rho0`': 20, 'acoustic': 17,
-    'adiabatic': 8, 'armijo': 51, 'arnoldi': 26, 'ars': 18, 'background-density': 13, 'bdf': 7,
-    'bgk': 5, 'bi-cg-stab': 15, 'bicgstab': 26, 'c-rho': 28, 'canonical-roles': 5, 'cfl': 117,
-    'cg': 150, 'charge-density': 63, 'chebyshev': 7, 'coarse-fine-ghost-interpolation': 27,
-    'component-role': 38, 'compressible': 32, 'conjugate-gradient': 1,
+    '"vx"': 3, '"vy"': 3, '"vz"': 2, '"wall"': 5, '`B0`': 11, '`Density`': 35, '`Energy`': 19,
+    '`MC`': 12, '`cs2`': 50, '`kMc`': 8, '`n0`': 32, '`qom`': 49, '`rho0`': 29, 'acoustic': 19,
+    'adiabatic': 8, 'armijo': 66, 'arnoldi': 31, 'ars': 20, 'background-density': 13, 'bdf': 7,
+    'bgk': 5, 'bi-cg-stab': 16, 'bicgstab': 27, 'c-rho': 28, 'canonical-roles': 5, 'cfl': 141,
+    'cg': 160, 'charge-density': 66, 'chebyshev': 7, 'coarse-fine-ghost-interpolation': 27,
+    'component-role': 39, 'compressible': 38, 'conjugate-gradient': 1,
     'conservative-coarse-fine': 3, 'conservative-injection': 9, 'conservative-linear': 5,
-    'conservative-polynomial': 3, 'constant-extrapolation': 11, 'constant-injection': 35,
-    'courant': 66, 'davis': 13, 'dense-output': 11, 'dirichlet': 140, 'dirk': 4,
-    'discrete-gradient-stencil': 17, 'divergence': 154, 'divergence-preserving': 29,
-    'drift-diffusion': 7, 'einfeldt': 13, 'electric': 25, 'electron': 11, 'electrostatic': 10,
-    'elliptic-route': 7, 'energy-role': 4, 'enthalpy': 9, 'eos': 2, 'equation-of-state': 8,
-    'euler': 152, 'ex-b': 14, 'exb': 20, 'fac': 563, 'fan-li': 75, 'fft': 409, 'fftw': 49,
-    'field-solver-route': 3, 'foextrap': 10, 'four-pi-g': 29, 'from-semantic': 2, 'gamma': 231,
-    'gauss-seidel': 52, 'gaussian': 142, 'geometric-mg': 173, 'gmres': 127, 'gradient': 454,
-    'gradient-above': 23, 'gradient-below': 20, 'gravitational': 5, 'gravity': 72, 'gummel': 11,
-    'harten': 24, 'hermite': 18, 'heun': 1, 'hll': 91, 'hllc': 166, 'hyqmom': 44, 'ideal-gas': 13,
-    'imex': 72, 'imexrk': 18, 'inflow': 177, 'ion': 10, 'ionization': 9, 'isothermal': 51,
-    'jacobi': 63, 'laplacian': 166, 'lie': 3, 'limiter-route': 37, 'linear-interpolation': 16,
+    'conservative-polynomial': 3, 'constant-extrapolation': 11, 'constant-injection': 36,
+    'courant': 86, 'davis': 17, 'dense-output': 12, 'dirichlet': 155, 'dirk': 4,
+    'discrete-gradient-stencil': 17, 'divergence': 167, 'divergence-preserving': 29,
+    'drift-diffusion': 7, 'einfeldt': 17, 'electric': 31, 'electron': 15, 'electrostatic': 10,
+    'elliptic-route': 7, 'energy-role': 4, 'enthalpy': 11, 'eos': 2, 'equation-of-state': 8,
+    'euler': 160, 'ex-b': 15, 'exb': 20, 'fac': 655, 'fan-li': 88, 'fft': 489, 'fftw': 56,
+    'field-solver-route': 3, 'foextrap': 10, 'four-pi-g': 46, 'from-semantic': 2, 'gamma': 323,
+    'gauss-seidel': 52, 'gaussian': 165, 'geometric-mg': 193, 'gmres': 133, 'gradient': 532,
+    'gradient-above': 23, 'gradient-below': 20, 'gravitational': 5, 'gravity': 86, 'gummel': 12,
+    'harten': 26, 'hermite': 18, 'heun': 1, 'hll': 103, 'hllc': 192, 'hyqmom': 46, 'ideal-gas': 13,
+    'imex': 79, 'imexrk': 19, 'inflow': 183, 'ion': 14, 'ionization': 9, 'isothermal': 60,
+    'jacobi': 68, 'laplacian': 168, 'lie': 3, 'limiter-route': 37, 'linear-interpolation': 16,
     'linear-prolongation': 18, 'linear-temporal-interpolation': 14, 'linear-time-interpolation': 9,
-    'lorentz': 48, 'lu': 90, 'mach': 12, 'magnetic': 118, 'maxwellian': 6, 'minmod': 60,
-    'momentum': 126, 'monotonized': 8, 'multispecies': 10, 'muscl': 35, 'name-axis-link': 4,
-    'neumann': 85, 'newton': 800, 'no-flux': 47, 'node-multilinear': 18, 'osher': 2, 'outflow': 25,
-    'parse-role': 17, 'parse-source-route': 1, 'physical-default': 140, 'poisson': 646,
-    'potential-force': 20, 'pressure': 203, 'q-over-m': 25, 'qmom': 12, 'recon-route': 29,
-    'reflective': 7, 'require-density': 4, 'richardson': 38, 'riemann-route': 18, 'robin': 12,
-    'roe': 420, 'role-canonical': 7, 'role-from-name': 5, 'role-index': 8, 'role-key': 12,
-    'role-name': 13, 'role-of': 4, 'role-token': 28, 'roles-csv': 6, 'roles-for': 32,
-    'runge-kutta': 31, 'rusanov': 113, 'scharfetter': 11, 'select-riemann': 18, 'slip': 27,
-    'sound-speed': 11, 'source-route-id': 9, 'source-route-tokens': 1, 'species': 133, 'ssprk': 39,
-    'strang': 3, 'superbee': 39, 'temperature': 33, 'thermal': 13, 'time-route': 9,
-    'transport-route': 7, 'upwind': 5, 'v-cycle': 7, 'vacuum-floor': 35, 'van-leer': 26,
-    'vanleer': 18, 'variable-role': 55, 'variable-roles': 13, 'variable-semantic': 51, 'vcycle': 8,
-    'velocity': 235, 'vlasov': 4, 'weno': 171, 'zero-flux': 29, 'zhang': 4,
+    'lorentz': 51, 'lu': 127, 'mach': 15, 'magnetic': 144, 'maxwellian': 6, 'minmod': 69,
+    'momentum': 172, 'monotonized': 8, 'multispecies': 10, 'muscl': 40, 'name-axis-link': 4,
+    'neumann': 93, 'newton': 1088, 'no-flux': 52, 'node-multilinear': 18, 'osher': 2, 'outflow': 28,
+    'parse-role': 17, 'parse-source-route': 1, 'physical-default': 141, 'poisson': 746,
+    'potential-force': 21, 'pressure': 247, 'q-over-m': 31, 'qmom': 12, 'recon-route': 29,
+    'reflective': 7, 'require-density': 4, 'richardson': 40, 'riemann-route': 18, 'robin': 12,
+    'roe': 476, 'role-canonical': 8, 'role-from-name': 5, 'role-index': 8, 'role-key': 12,
+    'role-name': 13, 'role-of': 4, 'role-token': 28, 'roles-csv': 7, 'roles-for': 32,
+    'runge-kutta': 35, 'rusanov': 125, 'scharfetter': 12, 'select-riemann': 18, 'slip': 29,
+    'sound-speed': 15, 'source-route-id': 9, 'source-route-tokens': 1, 'species': 140, 'ssprk': 46,
+    'strang': 3, 'superbee': 44, 'temperature': 45, 'thermal': 13, 'time-route': 9,
+    'transport-route': 7, 'upwind': 7, 'v-cycle': 7, 'vacuum-floor': 58, 'van-leer': 30,
+    'vanleer': 21, 'variable-role': 60, 'variable-roles': 13, 'variable-semantic': 64, 'vcycle': 8,
+    'velocity': 300, 'vlasov': 4, 'weno': 220, 'zero-flux': 29, 'zhang': 4,
 }
 
 
@@ -127,7 +131,9 @@ def test_every_generic_sense_still_covers_a_site(scanned):
 
 def test_exception_list_is_sorted_and_well_formed(listed):
     assert listed == sorted(listed), "cf2_exceptions.txt must stay sorted (refresh_exceptions.py)"
-    assert len(set(listed)) == len(listed), "cf2_exceptions.txt has duplicate entries"
+    # an entry repeats when its token occurs more than once on its line; it never has an empty
+    # spelling
+    assert all(entry.excerpt and entry.excerpt == entry.excerpt.strip() for entry in listed)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -214,6 +220,10 @@ def _terms(text, kind, path="include/pops/x.hpp"):
     ("struct DenseLU {}; NewtonOptions newton;", ["lu", "newton"]),
     ('const char* d = "exact-ranked constant-coefficient conjugate gradient";',
      ["conjugate-gradient"]),
+    # Adjacent string literals are one literal, as the compiler joins them (follow-up review, R5).
+    ('const char* d = "exact-ranked constant-coefficient conjugate "\n                "gradient";',
+     ["conjugate-gradient"]),
+    ('auto s = "rusa" /* split */ "nov";', ["rusanov"]),
 ])
 def test_scanner_refuses_named_knowledge_in_cpp(source, expected):
     assert _terms(source, "cpp") == expected
@@ -275,6 +285,7 @@ def test_scanner_reads_the_file_path():
     'fail_<ContractError>(lane, "HLLC needs a contact speed");',
     'const auto& lane = p_->require_prepared_engine_lane("prepared AMR block Poisson RHS");',
     'message_error = "Rusanov failed";',
+    'auto s = flag ? "rusa" : "nov";',  # two literals, not adjacent: nothing joins them
 ])
 def test_scanner_ignores_comments_error_text_and_generic_senses_in_cpp(source):
     assert _terms(source, "cpp") == []
@@ -374,14 +385,62 @@ def test_ratchet_pairs_sites_by_spelling_so_a_swap_in_one_file_fails():
     assert [entry.excerpt for entry in useless] == ["kRusanovInvalidStability"]
 
 
-def test_scanner_spelling_ignores_the_rest_of_the_line():
+def test_scanner_reports_one_site_per_token_occurrence():
+    """A site is one token that holds the term (follow-up review, R5): the rest of its line does not
+    enter its spelling, a statement re-wrapped over two lines keeps its sites, and a token repeated
+    on one line is two sites."""
     def spelling(source):
-        return [(occurrence.term, occurrence.excerpt)
-                for occurrence, _ in scan.cf2_sites_in_text("include/pops/x.hpp", source, "cpp")]
+        return sorted((occurrence.term, occurrence.excerpt) for occurrence, _
+                      in scan.cf2_sites_in_text("include/pops/x.hpp", source, "cpp"))
 
-    expected = [("rusanov", '"rusanov" RusanovFlux')]
+    expected = [("rusanov", '"rusanov"'), ("rusanov", "RusanovFlux")]
     assert spelling('auto f = RusanovFlux{}; route = "rusanov";') == expected
     assert spelling('const auto g = RusanovFlux{}; next = "rusanov";') == expected
+    assert spelling('const auto g = RusanovFlux{};\nnext = "rusanov";') == expected
+    repeated = spelling('if (name == "rusanov" || alias == "rusanov") {}')
+    assert repeated == [("rusanov", '"rusanov"')] * 2
+
+
+def test_a_rewrap_or_a_partial_removal_passes_and_a_repeated_token_fails(tmp_path):
+    """The probes of the follow-up review (R5), through the ratchet and the base check: clang-format
+    re-wraps a statement or breaks a string literal; a slice removes one token of a line, whose
+    entry becomes useless (refresh drops it); a token is added beside the same token."""
+    base_text = ('static_assert(CompressibleFlux::n_vars == transport_n_vars_ct("compressible"),\n'
+                 '              "the compressible flux carries its transport variables");\n'
+                 'if (name == "rusanov") { return 1; }\n'
+                 'const char* kind = "exact-ranked constant-coefficient conjugate gradient";\n')
+    heads = {
+        "rewrapped": base_text.replace("== transport", "==\n              transport"),
+        "broken literal": base_text.replace('constant-coefficient conjugate gradient"',
+                                            'constant-coefficient "\n                   '
+                                            '"conjugate gradient"'),
+        "partial": base_text.replace("CompressibleFlux::n_vars", "5"),
+        "repeated": base_text.replace('(name == "rusanov")',
+                                      '(name == "rusanov" || alias == "rusanov")'),
+    }
+
+    def sites(root):
+        return [occurrence for occurrence, sense in scan.cf2_sites("x.hpp", root) if sense is None]
+
+    def spelled(groups):
+        return sorted(site.excerpt for found, _ in groups.values() for site in found)
+
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "x.hpp").write_text(base_text)
+    results = {}
+    for name, text in heads.items():
+        head = tmp_path / name
+        head.mkdir()
+        (head / "x.hpp").write_text(text)
+        comparison = ratchet.compare(sites(head), sites(base))
+        _, added = ratchet.new_sites(sites(base), sites(head), base, head)
+        results[name] = (spelled(comparison.new), spelled(comparison.useless),
+                         sorted(site.excerpt for site in added))
+    assert results["rewrapped"] == ([], [], [])
+    assert results["broken literal"] == ([], [], [])
+    assert results["partial"] == ([], ["CompressibleFlux"], [])
+    assert results["repeated"] == (['"rusanov"'], [], ['"rusanov"'])
 
 
 def test_base_check_refuses_a_site_moved_by_hand_and_accepts_a_moved_line(tmp_path):
@@ -437,6 +496,55 @@ def test_check_base_scans_the_base_revision_in_a_worktree(tmp_path, monkeypatch)
     worktrees = subprocess.run(["git", "-C", str(tmp_path), "worktree", "list"], check=True,
                                stdout=subprocess.PIPE, text=True).stdout.splitlines()
     assert len(worktrees) == 1
+
+
+def test_narrowings_are_the_sites_that_a_scanner_change_hides():
+    def entry(path, term, excerpt):
+        return ratchet.Entry(path, 1, term, "N3", excerpt)
+
+    before = [entry("a.hpp", "cg", '"cartesian_cg"'), entry("a.hpp", "rusanov", "RusanovFlux"),
+              entry("b.hpp", "fft", "FFT")]
+    after = [entry("a.hpp", "rusanov", "RusanovFlux"), entry("b.hpp", "fft", "FFT"),
+             entry("b.hpp", "gmres", "GMRES")]
+    assert refresh_exceptions.narrowings(before, after) == {("a.hpp", "cg"): (1, 0)}
+
+
+def test_check_base_refuses_a_narrowing_that_the_pr_does_not_declare(tmp_path, monkeypatch):
+    """O4 of the follow-up review: the base check also scans the tree with the scanner of the base,
+    so a change to the scanner that hides a site (here a wider generic sense) fails unless the PR
+    declares it in accepted_narrowings.txt, and so does a declared narrowing that the PR does not
+    make."""
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                        *args], check=True, stdout=subprocess.DEVNULL)
+
+    for rel in ("tests/__init__.py", "tests/python/__init__.py",
+                "tests/python/architecture/__init__.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(scan.REPO_ROOT / rel, tmp_path / rel)
+    shutil.copytree(scan.HERE, tmp_path / refresh_exceptions.NARROWINGS.parent,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.txt"))
+    (tmp_path / "include").mkdir()
+    (tmp_path / "include" / "x.hpp").write_text(
+        'return RusanovFlux{};\nauto route = "cartesian_cg";\n')
+    git("init", "-q")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+
+    def widened(root):  # the scanner of the PR, with a generic sense that hides "cartesian_cg"
+        return [entry for entry in cf2.current_entries(root)[0]
+                if entry.excerpt != '"cartesian_cg"']
+
+    monkeypatch.setattr(scan, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(refresh_exceptions, "LISTS",
+                        {"cf2": (tmp_path / "cf2_exceptions.txt", widened)})
+    assert refresh_exceptions.check_base("HEAD", ["cf2"]) == 1
+    declared = tmp_path / refresh_exceptions.NARROWINGS
+    declared.write_text("cf2 include/x.hpp cg 1 | the name of a generic routine\n")
+    assert refresh_exceptions.check_base("HEAD", ["cf2"]) == 0
+    with declared.open("a") as stream:
+        stream.write("cf2 include/x.hpp rusanov 1 | a narrowing that the PR does not make\n")
+    assert refresh_exceptions.check_base("HEAD", ["cf2"]) == 1
 
 
 def test_every_exception_list_is_checked_against_the_base():
