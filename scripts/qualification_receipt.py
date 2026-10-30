@@ -25,9 +25,12 @@ The level is the highest consecutive rung of ``E < G < C < R < S``; ``R`` needs 
 process starts from a committed file of the source or from ``python -m pytest``, and the code that
 drives the receipt descends from that entry; that code and every module the process imported from
 the source must be committed unchanged, and the interpreter may drive it only through its standard
-library and pytest's own packages.  Code compiled from a string or read from standard input, and
-code from anywhere but the source, the SDK and the interpreter's standard library and site
-directories, is an overlay.
+library and pytest's own packages.  Every file the interpreter runs from a site directory (and, in
+a conda environment, from its standard library) must be one the environment's manifests record
+with its bytes: a ``RECORD`` of an installed distribution or ``conda-meta``.  Code compiled from a
+string or read from standard input, code from anywhere but the source, the SDK and the
+interpreter's standard library and site directories, and an interpreter file that no manifest
+records or whose bytes changed, is an overlay.
 A receipt is *admitted* to a cohort only when it names the cohort's clean source and installed SDK,
 held the installation lease, saw no overlay, and reached the required level (``admit``).
 
@@ -39,10 +42,13 @@ Commands::
 from __future__ import annotations
 
 import argparse
+import base64
 from collections.abc import Callable, Iterable, Mapping, Sequence
 import contextlib
+import csv
 import functools
 import hashlib
+import importlib.metadata
 import inspect
 import json
 import os
@@ -64,7 +70,7 @@ import sdk_cohort  # noqa: E402
 from sdk_cohort import CohortError, digest, sha256_file, utc_now  # noqa: E402
 
 
-RECEIPT_SCHEMA = "pops.receipt@4"
+RECEIPT_SCHEMA = "pops.receipt@5"
 KINDS = ("pops-runtime", "standalone-cpp")
 LADDER = ("E", "G", "C", "R", "S")
 STAGES = ("E", "G", "C", "loaded", "advanced", "S")
@@ -324,6 +330,38 @@ def code_origin(filename: str, source_root: Path, package: Path,
     return max(matches)[1] if matches else "foreign"
 
 
+def _root_forms(roots: Sequence[Path]) -> list[tuple[Path, tuple[tuple[str, int], ...]]]:
+    """Each root with its lexical and its resolved spelling, each with its depth."""
+    return [(root, tuple((spelling, len(Path(spelling).parts))
+                         for spelling in (os.path.abspath(root), os.path.realpath(root))))
+            for root in roots]
+
+
+def _interpreter_location(filename: str, roots: Sequence[Path], forms: Sequence[Any] | None = None
+                          ) -> tuple[Path, str] | None:
+    """The most specific of ``roots`` that holds ``filename``, and the file's top-level name.
+
+    The file is compared with each root lexically, then once both are resolved.  The top-level
+    name is the directory under the root, or the module a file directly under it defines
+    (``six.py`` and ``_cffi_backend.cpython-313-x86_64-linux-gnu.so`` alike).  ``forms`` is
+    ``_root_forms(roots)``, computed once for many files.
+    """
+    best: tuple[int, Path, str] | None = None
+    candidates = (os.path.abspath(filename), os.path.realpath(filename))
+    for root, spellings in (_root_forms(roots) if forms is None else forms):
+        for candidate, (base, depth) in zip(candidates, spellings):
+            inside = base.rstrip(os.sep) + os.sep
+            if candidate.startswith(inside):
+                if best is None or depth > best[0]:
+                    best = (depth, root, candidate[len(inside):])
+                break
+    if best is None:
+        return None
+    _, root, relative = best
+    parts = relative.split(os.sep)
+    return root, parts[0] if len(parts) > 1 else parts[0].split(".", 1)[0]
+
+
 def interpreter_part(filename: str, roots: Sequence[Path], standard: Sequence[Path]
                      ) -> dict[str, Any]:
     """Which part of the interpreter one of its files is: its library and its top-level package.
@@ -333,39 +371,229 @@ def interpreter_part(filename: str, roots: Sequence[Path], standard: Sequence[Pa
     ships (``sys.stdlib_module_names``), ``site`` for a file of a site directory, and None for a
     file placed beside the standard library under a name the interpreter does not ship.
     """
-    best: tuple[int, Path, Path] | None = None
-    for root in roots:
-        for candidate, base in ((Path(os.path.abspath(filename)), Path(os.path.abspath(root))),
-                                (Path(filename).resolve(), Path(root).resolve())):
-            if candidate != base and candidate.is_relative_to(base):
-                if best is None or len(base.parts) > best[0]:
-                    best = (len(base.parts), root, candidate.relative_to(base))
-                break
-    if best is None:
+    located = _interpreter_location(filename, roots)
+    if located is None:
         return {"library": None, "package": None}
-    _, root, relative = best
-    top = relative.parts[0]
-    name = top if len(relative.parts) > 1 else top.split(".", 1)[0]
+    root, name = located
     if root not in standard:
         return {"library": "site", "package": name}
     return {"library": "stdlib" if name in sys.stdlib_module_names else None, "package": name}
 
 
+def _conda_rows(prefix: Path) -> tuple[list[tuple[str, Path, tuple[str, str] | None]], list[str]]:
+    """The code files the ``conda-meta`` of a conda prefix lists, with the sha256 each must have.
+
+    A file conda rewrote when it linked the package (``prefix_placeholder``) is compared with
+    ``sha256_in_prefix``; a conda that does not record that digest lists the file without one.
+    Links, directories and bytecode are no code file of their own.
+    """
+    rows: list[tuple[str, Path, tuple[str, str] | None]] = []
+    unreadable = []
+    for record in sorted((prefix / "conda-meta").glob("*.json")):
+        try:
+            data = json.loads(record.read_text(encoding="utf-8"))
+            name = "%s %s (conda)" % (data["name"], data["version"])
+            paths = (data.get("paths_data") or {}).get("paths")
+            if paths is None:  # a record from before paths_data: its file list only
+                rows.extend((name, prefix / item, None) for item in data["files"])
+                continue
+            for row in paths:
+                if row.get("path_type") in ("softlink", "directory", "pyc_file"):
+                    continue
+                expected = row.get("sha256_in_prefix") or (
+                    None if row.get("prefix_placeholder") else row.get("sha256"))
+                rows.append((name, prefix / row["_path"],
+                             ("sha256", expected) if expected else None))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            unreadable.append(str(record))
+    return rows, unreadable
+
+
+def _record_rows(text: str, base: str) -> list[tuple[str, tuple[str, str] | None]]:
+    """The files a ``RECORD`` lists, from ``base``, with the digest each row records."""
+    rows = []
+    for row in csv.reader(text.splitlines()):
+        if not row or not row[0]:
+            continue
+        algorithm, _, encoded = (row[1] if len(row) > 1 else "").partition("=")
+        recorded = (algorithm, base64.urlsafe_b64decode(
+            encoded + "=" * (-len(encoded) % 4)).hex()) if encoded else None
+        rows.append((os.path.join(base, row[0]), recorded))
+    return rows
+
+
+def _distribution_name(distribution: Any) -> str:
+    try:
+        metadata = distribution.metadata
+        return "%s %s" % (metadata.get("Name"), metadata.get("Version"))
+    except Exception:  # noqa: BLE001 - metadata that cannot be read: name its directory
+        return str(getattr(distribution, "_path", distribution))
+
+
+def interpreter_manifest(roots: Sequence[Path], standard: Sequence[Path],
+                         prefixes: Sequence[Path]) -> dict[str, Any]:
+    """What the environment records of the interpreter's files (the final review's O9).
+
+    ``files`` maps each file a manifest lists (resolved) to the packages that list it and the
+    digests they record: the ``conda-meta`` of each conda prefix among ``prefixes``, and the
+    ``RECORD`` of each distribution installed in a site directory, or the ``installed-files.txt``
+    of a legacy egg (without digests).  ``unmanaged`` maps a site directory and a top-level name to
+    a distribution of that directory that lists no installed file (a system package; its
+    ``SOURCES.txt``, if any, names the files of a source tree), for the names its ``top_level.txt``
+    declares.  A manifest that cannot be read lists nothing and is named in ``unreadable``.  A
+    distribution is named only where a verdict needs it (``_distribution_name``).
+    """
+    files: dict[str, dict[str, Any]] = {}
+    directories: dict[str, str] = {}
+
+    def resolved(path: str) -> str:
+        """``os.path.realpath`` with the directory resolved once for all its files."""
+        path = os.path.abspath(path)
+        if os.path.islink(path):
+            return os.path.realpath(path)
+        head, tail = os.path.split(path)
+        if head not in directories:
+            directories[head] = os.path.realpath(head)
+        return os.path.join(directories[head], tail)
+
+    def add(owner: Any, path: str, recorded: tuple[str, str] | None) -> None:
+        entry = files.setdefault(resolved(path), {"by": [], "digests": set(), "unhashed": False})
+        if not any(item is owner for item in entry["by"]):
+            entry["by"].append(owner)
+        if recorded is None or recorded[0] not in hashlib.algorithms_guaranteed:
+            entry["unhashed"] = True
+        else:
+            entry["digests"].add(recorded)
+
+    conda, unreadable = [], []
+    for prefix in dict.fromkeys(Path(item) for item in prefixes):
+        if (prefix / "conda-meta").is_dir():
+            conda.append(str(prefix))
+            rows, bad = _conda_rows(prefix)
+            unreadable.extend(bad)
+            for name, file, recorded in rows:
+                add(name, str(file), recorded)
+    unmanaged: dict[tuple[str, str], Any] = {}
+    distributions = 0
+    for root in roots:
+        if root in standard or not Path(root).is_dir():
+            continue
+        for distribution in importlib.metadata.distributions(path=[str(root)]):
+            try:
+                record = distribution.read_text("RECORD")
+                installed = distribution.read_text("installed-files.txt")
+                info = getattr(distribution, "_path", None)  # the egg-info those files are under
+                if record is not None:
+                    rows = _record_rows(record, str(distribution.locate_file("")))
+                elif installed is not None and info is not None:
+                    rows = [(os.path.join(str(info), line), None)
+                            for line in installed.splitlines() if line.strip()]
+                else:
+                    for top in (distribution.read_text("top_level.txt") or "").split():
+                        unmanaged.setdefault((str(root), top), distribution)
+                    continue
+            except Exception:  # noqa: BLE001 - a manifest that cannot be read lists nothing
+                unreadable.append(distribution)
+                continue
+            distributions += 1
+            for file, recorded in rows:
+                add(distribution, file, recorded)
+    return {"files": files, "unmanaged": unmanaged, "conda": conda,
+            "distributions": distributions, "unreadable": unreadable}
+
+
+def _named(owner: Any) -> str:
+    return owner if isinstance(owner, str) else _distribution_name(owner)
+
+
+#: How a file the interpreter runs stands against the environment's manifests (O9): ``recorded``
+#: when its bytes have a digest a manifest records, ``listed`` when a manifest lists it without a
+#: comparable digest, ``unmanaged`` when a distribution that lists no file declares its top-level
+#: name, ``believed`` when it lies in or beside a standard library outside a conda prefix.  An
+#: ``altered`` or ``unrecorded`` file is an overlay.
+INTERPRETER_VERDICTS = ("recorded", "listed", "unmanaged", "believed", "altered", "unrecorded")
+
+
+def _digest_of(path: str, algorithm: str) -> str | None:
+    try:
+        return hashlib.new(algorithm, Path(path).read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        return None
+
+
+def judge_interpreter_files(files: Mapping[str, Mapping[str, Any]], manifest: Mapping[str, Any],
+                            roots: Sequence[Path], standard: Sequence[Path]) -> dict[str, Any]:
+    """Judge each file the interpreter runs against the environment's manifests (O9).
+
+    ``files`` maps each resolved file to the path it was run from and the module it defines (None
+    for a frame of the driver only).  A file of a site directory must be recorded with its bytes,
+    or belong to a distribution that lists no file.  A standard library inside a conda prefix is
+    judged, file by file, against what its ``conda-meta`` records (a record that cannot be read
+    records nothing); elsewhere the interpreter's own library is believed, with any file beside it.
+    """
+    listed = manifest["files"]
+    conda = [os.path.realpath(prefix).rstrip(os.sep) + os.sep for prefix in manifest["conda"]]
+    standard_judged = any((os.path.realpath(root) + os.sep).startswith(prefix)
+                          for root in standard for prefix in conda)
+    forms = _root_forms(roots)
+    counts = dict.fromkeys(INTERPRETER_VERDICTS, 0)
+    unverified, refused = [], []
+    for real, item in sorted(files.items()):
+        located = _interpreter_location(item["path"], roots, forms)
+        in_site = located is not None and located[0] not in standard
+        row = {"module": item.get("module"), "path": item["path"],
+               "library": "site" if in_site else "stdlib"}
+        entry = listed.get(real)
+        if entry is not None:
+            if any(_digest_of(real, algorithm) == value for algorithm, value in entry["digests"]):
+                verdict = "recorded"
+            else:
+                verdict = "listed" if entry["unhashed"] else "altered"
+                row["by"] = ", ".join(_named(owner) for owner in entry["by"])
+        elif in_site:
+            owner = manifest["unmanaged"].get((str(located[0]), located[1]))
+            verdict = "unrecorded" if owner is None else "unmanaged"
+            if owner is not None:
+                row["by"] = _named(owner)
+        else:
+            verdict = "unrecorded" if standard_judged else "believed"
+        counts[verdict] += 1
+        if verdict in ("listed", "unmanaged"):
+            unverified.append({**row, "verdict": verdict})
+        elif verdict in ("altered", "unrecorded"):
+            refused.append({**row, "verdict": verdict})
+    return {
+        "manifests": {"conda": manifest["conda"], "distributions": manifest["distributions"],
+                      "unmanaged": sorted({_named(owner)
+                                           for owner in manifest["unmanaged"].values()}),
+                      "unreadable": [_named(owner) for owner in manifest["unreadable"]]},
+        "standard_library": "judged" if standard_judged else "believed",
+        "counts": counts,
+        "unverified": unverified,
+        "refused": refused,
+    }
+
+
 def code_observation(source: Mapping[str, Any], package: Path, driver: Sequence[str], *,
                      interpreter: Sequence[Path] | None = None,
-                     standard: Sequence[Path] | None = None) -> dict[str, Any]:
+                     standard: Sequence[Path] | None = None,
+                     prefixes: Sequence[Path] | None = None) -> dict[str, Any]:
     """Judge the code of this process: its entry, the frames that drive the receipt, every module.
 
     The entry is the file the interpreter started (``__main__``): a process started by
     ``python -c``, standard input or an interactive prompt has none, and the code it ran first is
     never judged.  Code from the source must be committed unchanged; the SDK is judged by its own
     file table and the interpreter's standard library and site directories are the interpreter;
-    each frame of the interpreter records its library and package (``interpreter_part``).
-    ``driver`` lists the frames that created the receipt, outermost first.
+    each frame of the interpreter records its library and package (``interpreter_part``), and
+    each file of the interpreter that a module or a frame comes from is judged against the
+    manifests of the environment (``judge_interpreter_files``; ``prefixes`` are the prefixes
+    whose ``conda-meta`` counts, this interpreter's by default).  ``driver`` lists the frames that
+    created the receipt, outermost first.
     """
     root = Path(source["root"])
     roots = _interpreter_roots() if interpreter is None else tuple(interpreter)
     library = _standard_library() if standard is None else tuple(standard)
+    prefixes = (Path(sys.prefix), Path(sys.base_prefix)) if prefixes is None else tuple(prefixes)
     frames = [{"file": name, "origin": code_origin(name, root, package, roots)} for name in driver]
     for frame in frames:
         if frame["origin"] == "interpreter":
@@ -378,6 +606,7 @@ def code_observation(source: Mapping[str, Any], package: Path, driver: Sequence[
              "origin": "internal" if started is None else code_origin(started, root, package,
                                                                       roots)}
     modules, foreign, interpreter_modules = [], [], 0
+    interpreter_files: dict[str, dict[str, Any]] = {}
     for name, module in sorted(list(sys.modules.items()), key=lambda item: item[0]):
         origin = getattr(module, "__file__", None)
         if not isinstance(origin, str) or not origin:
@@ -389,6 +618,17 @@ def code_observation(source: Mapping[str, Any], package: Path, driver: Sequence[
             foreign.append({"module": name, "path": origin})
         elif kind == "interpreter":
             interpreter_modules += 1
+            interpreter_files.setdefault(os.path.realpath(origin),
+                                         {"module": name, "path": origin})
+    for frame in frames:
+        if frame["origin"] == "interpreter":
+            interpreter_files.setdefault(os.path.realpath(frame["file"]),
+                                         {"module": None, "path": frame["file"]})
+    try:
+        interpreter_judgment = judge_interpreter_files(
+            interpreter_files, interpreter_manifest(roots, library, prefixes), roots, library)
+    except Exception as exc:  # noqa: BLE001 - recorded: files that were not judged are an overlay
+        interpreter_judgment = {"error": "%s: %s" % (type(exc).__name__, exc)}
     paths = sorted({path for _, path in modules} | {
         Path(frame["file"]).resolve() for frame in frames if frame["origin"] == "source"})
     judged = {Path(root / item["path"]).resolve(): item for item in committed_files(
@@ -406,6 +646,7 @@ def code_observation(source: Mapping[str, Any], package: Path, driver: Sequence[
         "foreign_modules": foreign,
         "interpreter_modules": interpreter_modules,
         "interpreter_roots": [str(item) for item in roots],
+        "interpreter_files": interpreter_judgment,
     }
 
 
@@ -1157,6 +1398,23 @@ def _code_findings(code: Mapping[str, Any] | None) -> list[str]:
     for item in code.get("foreign_modules", ()):
         findings.append("module %s loaded from %s, outside the source, the SDK and the "
                         "interpreter" % (item["module"], item["path"]))
+    # A module of a site directory can drive the receiver without a frame of its own (a
+    # functools.partial bound as a pytest hook): the interpreter's files themselves are judged.
+    judged = code.get("interpreter_files")
+    if judged is None or "error" in judged:
+        findings.append("the interpreter's files were not judged against the environment's "
+                        "manifests%s" % ("" if judged is None else " (%s)" % judged["error"]))
+    for item in (judged or {}).get("refused", ()):
+        what = "module %s" % item["module"] if item.get("module") else "a frame of the driver"
+        if item["verdict"] == "altered":
+            findings.append("interpreter file %s (%s) does not have the bytes %s records: an "
+                            "installed file was changed" % (item["path"], what, item["by"]))
+        else:
+            findings.append("interpreter file %s (%s) is recorded by no manifest of the "
+                            "environment (no RECORD, no conda-meta): code placed %s"
+                            % (item["path"], what, "in a site directory"
+                               if item.get("library") == "site" else
+                               "in or beside the standard library"))
     return findings
 
 

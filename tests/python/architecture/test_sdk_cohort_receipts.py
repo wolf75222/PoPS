@@ -12,6 +12,7 @@ import base64
 import copy
 import hashlib
 import importlib.machinery
+import importlib.metadata
 import importlib.util
 import inspect
 import json
@@ -1009,9 +1010,11 @@ def test_the_interpreter_drives_a_receipt_only_through_its_standard_library_and_
 
     def findings(*driver):
         code = receipts.code_observation(source, site / "pops", [case, *map(str, driver), case],
-                                         interpreter=roots, standard=standard)
-        # This process's own modules lie outside the fake interpreter: only frames are judged.
-        return [item for item in receipts._code_findings(code) if not item.startswith("module ")]
+                                         interpreter=roots, standard=standard, prefixes=())
+        # This process's own modules lie outside the fake interpreter, whose files no manifest
+        # records: only the frames are judged here.
+        return [item for item in receipts._code_findings(code)
+                if not item.startswith(("module ", "interpreter file "))]
     assert findings(library / "runpy.py", packages / "pytest" / "__main__.py",
                     packages / "_pytest" / "python.py", packages / "pluggy" / "_callers.py") == []
     planted = ("the receipt is driven by code of the interpreter that is neither its standard "
@@ -1020,6 +1023,13 @@ def test_the_interpreter_drives_a_receipt_only_through_its_standard_library_and_
     assert findings(packages / "_pytest" / "main.py", packages / "adhoc_plugin.py") == [
         planted % (packages / "adhoc_plugin.py")]
     assert findings(library / "adhoc.py") == [planted % (library / "adhoc.py")]
+    # A frame's file is judged against the manifests even when no module holds it.
+    code = receipts.code_observation(source, site / "pops", [case, str(packages / "pluggy.py"),
+                                                             case],
+                                     interpreter=roots, standard=standard, prefixes=())
+    assert [(row["path"], row["module"], row["verdict"])
+            for row in code["interpreter_files"]["refused"]] == [
+        (str(packages / "pluggy.py"), None, "unrecorded")]
 
 
 def test_a_receipt_is_created_under_the_entry_of_its_process():
@@ -1031,7 +1041,8 @@ def test_a_receipt_is_created_under_the_entry_of_its_process():
         return {"file": path, "origin": "interpreter", "library": library, "package": package}
 
     def findings(*frames):
-        return receipts._code_findings({"entry": entry, "driver": list(frames)})
+        return receipts._code_findings({"entry": entry, "driver": list(frames),
+                                        "interpreter_files": {"refused": []}})
     runpy = {"file": "<frozen runpy>", "origin": "internal"}
     main = frame(entry["file"], package="pytest")
     receiver = {"file": "/checkout/tests/test_receiver.py", "origin": "source", "committed": True}
@@ -1045,6 +1056,177 @@ def test_a_receipt_is_created_under_the_entry_of_its_process():
     assert findings(receiver) == [elsewhere % (entry["file"], receiver["file"])]  # from atexit
     thread = frame("/env/lib/threading.py", "stdlib", "threading")
     assert findings(thread, thread, receiver) == [elsewhere % (entry["file"], thread["file"])]
+
+
+def _distribution(site, name, rows=None, *, top_level=(), installed=None, sources=None):
+    """A distribution installed in ``site``: a dist-info whose RECORD has ``rows`` (bytes are
+    written as they are), or, without rows, a legacy egg-info with the ``installed-files.txt``
+    and ``SOURCES.txt`` lines given, if any."""
+    if rows is None:
+        info = site / f"{name}-1.0.egg-info"
+        info.mkdir(parents=True)
+        (info / "PKG-INFO").write_text(f"Metadata-Version: 1.1\nName: {name}\nVersion: 1.0\n")
+        (info / "top_level.txt").write_text("".join(f"{top}\n" for top in top_level))
+        for listing, lines in (("installed-files.txt", installed), ("SOURCES.txt", sources)):
+            if lines is not None:
+                (info / listing).write_text("".join(f"{line}\n" for line in lines))
+        return info
+    info = site / f"{name}-1.0.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n")
+    record = rows if isinstance(rows, bytes) else "".join(
+        f"{path},{digest},\n" for path, digest in [*rows, (f"{info.name}/RECORD", "")]).encode()
+    (info / "RECORD").write_bytes(record)
+    return info
+
+
+def test_the_files_of_the_interpreter_are_judged_against_the_manifests_of_the_environment(
+        tmp_path):
+    """The O9 review: a module of a site directory can drive a receiver without a frame of its own
+    (a ``functools.partial`` bound as a pytest hook), so the file itself is judged.  Every file the
+    interpreter runs from a site directory is one that a RECORD or conda-meta records with its
+    bytes (a legacy egg's installed-files.txt lists files without digests), or one of a
+    distribution that lists no installed file; in a conda environment the standard library is
+    judged too, even when conda's record of it cannot be read."""
+    env = tmp_path / "env"
+    library = env / "lib" / "python3"
+    packages = library / "site-packages"  # inside the standard library, as in a conda environment
+    system = tmp_path / "usr" / "dist-packages"
+    roots, standard = (library, packages, system), (library,)
+
+    def write(path, text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def sha256(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    stdlib = {name: write(library / relative, f"# {relative}\n") for name, relative in (
+        ("os", "os.py"), ("json", "json/__init__.py"), ("_sysconfigdata", "_sysconfigdata.py"),
+        ("adhoc", "adhoc.py"))}
+    good = write(packages / "good" / "__init__.py", "GOOD = 1\n")
+    dropped = write(packages / "good" / "dropped.py", "pass\n")  # inside an installed package
+    bad = write(packages / "bad.py", "BAD = 2\n")
+    plain = write(packages / "plain.py", "PLAIN = 1\n")
+    plugin = write(packages / "adhoc_plugin.py", "pytest_configure = print\n")
+    broken = write(packages / "broken.py", "BROKEN = 1\n")
+    frame = write(packages / "frame_only.py", "pass\n")
+    legacy = write(system / "legacy" / "__init__.py", "LEGACY = 1\n")
+    egg = write(system / "egg" / "__init__.py", "EGG = 1\n")
+    sourced = write(system / "sourced" / "__init__.py", "SOURCED = 1\n")
+    orphan = write(system / "orphan.py", "ORPHAN = 1\n")
+    namesake = write(packages / "legacy" / "__init__.py", "LEGACY = 2\n")  # the egg's name
+    _distribution(packages, "good", [("good/__init__.py", _record_hash(good))])
+    bad.write_text("BAD = 1\n")
+    _distribution(packages, "bad", [("bad.py", _record_hash(bad))])
+    bad.write_text("BAD = 2\n")  # changed after it was installed
+    _distribution(packages, "plain", [("plain.py", "")])
+    _distribution(packages, "broken", b"broken.py,\xff\xfe,\n")  # no RECORD can be read
+    _distribution(system, "legacy", top_level=("legacy",))
+    # A legacy egg lists its installed files from its egg-info, a script outside the site among
+    # them; SOURCES.txt names the files of a source tree (src/ layout here), not installed ones.
+    _distribution(system, "egg", top_level=("egg",),
+                  installed=["../egg/__init__.py", "../../bin/egg-script"])
+    _distribution(system, "sourced", top_level=("sourced",),
+                  sources=["setup.py", "src/sourced/__init__.py"])
+    modules = {**stdlib, "good": good, "good.dropped": dropped, "bad": bad, "plain": plain,
+               "adhoc_plugin": plugin, "broken": broken, "legacy": legacy, "egg": egg,
+               "sourced": sourced, "orphan": orphan, "shadow_legacy": namesake}
+    files = {os.path.realpath(path): {"module": name, "path": str(path)}
+             for name, path in modules.items()}
+    files[os.path.realpath(frame)] = {"module": None, "path": str(frame)}
+
+    def judge(*prefixes):
+        return receipts.judge_interpreter_files(
+            files, receipts.interpreter_manifest(roots, standard, prefixes), roots, standard)
+
+    def rows(judged, key):
+        return {(row["path"], row["verdict"], row["library"], row.get("by"))
+                for row in judged[key]}
+    unrecorded = {(str(path), "unrecorded", "site", None)
+                  for path in (dropped, plugin, broken, frame, orphan, namesake)}
+    unverified = {(str(plain), "listed", "site", "plain 1.0"),
+                  (str(egg), "listed", "site", "egg 1.0"),
+                  (str(legacy), "unmanaged", "site", "legacy 1.0"),
+                  (str(sourced), "unmanaged", "site", "sourced 1.0")}
+    judged = judge()
+    assert judged["counts"] == {"recorded": 1, "listed": 2, "unmanaged": 2, "believed": 4,
+                                "altered": 1, "unrecorded": 6}
+    assert judged["standard_library"] == "believed"
+    assert judged["manifests"] == {"conda": [], "distributions": 4,
+                                   "unmanaged": ["legacy 1.0", "sourced 1.0"],
+                                   "unreadable": ["broken 1.0"]}
+    assert rows(judged, "unverified") == unverified
+    assert rows(judged, "refused") == unrecorded | {(str(bad), "altered", "site", "bad 1.0")}
+    code = {"entry": {"file": "/checkout/case.py", "module": None, "origin": "source"},
+            "driver": [{"file": "/checkout/case.py", "origin": "source", "committed": True}],
+            "interpreter_files": judged}
+    placed = ("interpreter file %s (%s) is recorded by no manifest of the environment (no "
+              "RECORD, no conda-meta): code placed %s")
+    assert sorted(receipts._code_findings(code)) == sorted([
+        placed % (dropped, "module good.dropped", "in a site directory"),
+        placed % (plugin, "module adhoc_plugin", "in a site directory"),
+        placed % (broken, "module broken", "in a site directory"),
+        placed % (frame, "a frame of the driver", "in a site directory"),
+        placed % (orphan, "module orphan", "in a site directory"),
+        placed % (namesake, "module shadow_legacy", "in a site directory"),
+        "interpreter file %s (module bad) does not have the bytes bad 1.0 records: an installed "
+        "file was changed" % bad])
+    assert receipts._code_findings({**code, "interpreter_files": None}) == [
+        "the interpreter's files were not judged against the environment's manifests"]
+    assert receipts._code_findings({**code, "interpreter_files": {"error": "OSError: denied"}}) \
+        == ["the interpreter's files were not judged against the environment's manifests "
+            "(OSError: denied)"]
+
+    # A conda environment's conda-meta records its standard library and what conda installed.
+    placeholder = "/opt/anaconda1anaconda2anaconda3"
+    write(env / "conda-meta" / "python-3.12.0-h0_0.json", json.dumps({
+        "name": "python", "version": "3.12.0", "build": "h0_0", "paths_data": {
+            "paths_version": 1, "paths": [
+                {"_path": "lib/python3/os.py", "path_type": "hardlink",
+                 "sha256": sha256(stdlib["os"])},
+                {"_path": "lib/python3/json/__init__.py", "path_type": "hardlink",
+                 "sha256": "0" * 64, "prefix_placeholder": placeholder, "file_mode": "text",
+                 "sha256_in_prefix": sha256(stdlib["json"])},
+                {"_path": "lib/python3/_sysconfigdata.py", "path_type": "hardlink",
+                 "sha256": "0" * 64, "prefix_placeholder": placeholder, "file_mode": "text"},
+                {"_path": "lib/python3/__pycache__/os.cpython-312.pyc", "path_type": "pyc_file"},
+                {"_path": "lib/python3/site-packages/bad.py", "path_type": "hardlink",
+                 "sha256": sha256(bad)}]}}))
+    write(env / "conda-meta" / "unreadable-1.0-0.json", "{")
+    judged = judge(env)
+    assert judged["counts"] == {"recorded": 4, "listed": 3, "unmanaged": 2, "believed": 0,
+                                "altered": 0, "unrecorded": 7}
+    assert judged["standard_library"] == "judged"
+    assert judged["manifests"]["conda"] == [str(env)]
+    assert judged["manifests"]["unreadable"] == [
+        str(env / "conda-meta" / "unreadable-1.0-0.json"), "broken 1.0"]
+    assert rows(judged, "unverified") == unverified | {
+        (str(stdlib["_sysconfigdata"]), "listed", "stdlib", "python 3.12.0 (conda)")}
+    # bad.py has the bytes conda recorded; adhoc.py lies beside a standard library conda lists.
+    assert rows(judged, "refused") == unrecorded | {
+        (str(stdlib["adhoc"]), "unrecorded", "stdlib", None)}
+    assert placed % (stdlib["adhoc"], "module adhoc", "in or beside the standard library") in \
+        receipts._code_findings({**code, "interpreter_files": judged})
+
+    # Without conda's record of python, the standard library of the conda prefix records nothing.
+    (env / "conda-meta" / "python-3.12.0-h0_0.json").unlink()
+    judged = judge(env)
+    assert judged["standard_library"] == "judged"
+    assert judged["counts"] == {"recorded": 1, "listed": 2, "unmanaged": 2, "believed": 0,
+                                "altered": 1, "unrecorded": 10}
+    assert rows(judged, "refused") == unrecorded | {(str(bad), "altered", "site", "bad 1.0")} | {
+        (str(path), "unrecorded", "stdlib", None) for path in stdlib.values()}
+
+
+def test_files_whose_manifests_cannot_be_read_are_recorded_as_not_judged(repo, site, monkeypatch):
+    def unreadable(*arguments):
+        raise RuntimeError("no manifest")
+    monkeypatch.setattr(receipts, "interpreter_manifest", unreadable)
+    code = receipts.code_observation(cohort.source_identity(repo), site / "pops", [])
+    assert code["interpreter_files"] == {"error": "RuntimeError: no manifest"}
+    assert "the interpreter's files were not judged against the environment's manifests " \
+        "(RuntimeError: no manifest)" in receipts._code_findings(code)
 
 
 #: A receiver committed in the fake checkout: it writes one receipt (stage E) under a false label.
@@ -1077,14 +1259,36 @@ import receiver
 def pytest_configure(config):
     {call}
 """
+#: The same driver handed to pytest as a hook that opens no frame of its own (the O9 review): a
+#: bound ``functools.partial`` of the receiver, which pluggy calls from its own frame.
+FRAMELESS_PLUGIN = """import functools
+import sys
+import types
+sys.path[:0] = [{scripts!r}, {examples!r}]
+import receiver
+
+pytest_configure = types.MethodType(functools.partial(receiver.qualify, package={package!r},
+                                                      directory={directory!r}), {repo!r})
+"""
+#: A committed test that runs the receiver, as a lot's receiver runs under ``python -m pytest``.
+RECEIVER_TEST = """import sys
+sys.path[:0] = [{scripts!r}, {examples!r}]
+import receiver
 
 
-def _venv_with_these_site_packages(prefix):
+def test_receiver():
+    {call}
+"""
+
+
+def _venv_with_these_site_packages(prefix, *, copied=("_pytest",)):
     """A fresh venv whose site directory links this interpreter's packages (pytest among them).
 
     ``--system-site-packages`` would expose the base interpreter's packages, not those of the venv
-    this test may run in.
+    this test may run in.  The packages named in ``copied`` are copies, which a probe may change
+    without changing this interpreter's own; their RECORD, linked, still records them.
     """
+    import shutil
     import site as interpreter_site
 
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(prefix)], check=True)
@@ -1096,21 +1300,29 @@ def _venv_with_these_site_packages(prefix):
         for item in Path(directory).iterdir():
             if item.suffix != ".pth" and item.name != "__pycache__" \
                     and not (packages / item.name).exists():
-                (packages / item.name).symlink_to(item)
+                if item.name in copied:
+                    shutil.copytree(item, packages / item.name,
+                                    ignore=shutil.ignore_patterns("__pycache__"))
+                else:
+                    (packages / item.name).symlink_to(item)
     return python, packages
 
 
 @pytest.mark.parametrize("entry", ("committed file", "python -c", "standard input",
                                    "script in a prefix", "python -m cProfile",
                                    "python -c through atexit", "pytest plugin in a site directory",
-                                   "pytest plugin through atexit"))
+                                   "pytest plugin through atexit", "pytest plugin without a frame",
+                                   "pytest plugin inside pytest's package",
+                                   "committed test under python -m pytest",
+                                   "python -m pytest with a changed pytest file"))
 def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo, site, tmp_path,
                                                                             entry):
     """The reviews' probes: a committed receiver writes an admitted receipt only for its own driver.
 
     Only a committed file or python -m pytest starts a receiver, and no ad hoc code drives it:
-    not from a string, standard input or a prefix, nor from a plugin placed in a site directory,
-    directly or through atexit.
+    not from a string, standard input or a prefix, nor from a plugin placed in a site directory
+    or inside an installed package, directly, through atexit or through a hook that opens no frame
+    of its own.  An installed file whose bytes changed is refused too.
     """
     scripts = repo / "scripts"
     scripts.mkdir()
@@ -1126,24 +1338,37 @@ def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo
     driver = DRIVER.format(scripts=str(scripts), examples=str(repo / "examples"), call=call)
     committed = repo / "examples" / "drive.py"
     committed.write_text(driver)
+    (repo / "examples" / "test_receiver.py").write_text(RECEIVER_TEST.format(
+        scripts=str(scripts), examples=str(repo / "examples"), call=call))
     _commit(repo, "a committed receiver and its driver")
     _attest(repo, site)
     record = cohort.publish_cohort(repo, site / "pops")
     python = sys.executable
-    plugin = None
+    plugin = packages = None
     if entry == "script in a prefix":
         prefix = tmp_path / "prefix"
         subprocess.run([sys.executable, "-m", "venv", "--without-pip", "--system-site-packages",
                         str(prefix)], check=True)
         python = str(prefix / "bin" / "python")
         (prefix / "driver.py").write_text(driver)
-    elif entry.startswith("pytest plugin"):
+    elif "pytest" in entry:
         python, packages = _venv_with_these_site_packages(tmp_path / "prefix")
-        plugin = packages / "rom17_adhoc_plugin.py"
-        plugin.write_text(PLUGIN.format(scripts=str(scripts), examples=str(repo / "examples"),
-                                        call=call))
-    pytest_run = [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p",
-                  "rom17_adhoc_plugin", str(repo / "examples" / "test_probe.py")]
+        plugin = packages / ("_pytest" if entry.endswith("package") else ".") / \
+            "rom17_adhoc_plugin.py"
+        template = FRAMELESS_PLUGIN if entry.endswith("without a frame") else PLUGIN
+        if entry.startswith("pytest plugin"):
+            plugin.write_text(template.format(
+                scripts=str(scripts), examples=str(repo / "examples"), call=call,
+                repo=str(repo), package=str(site / "pops"), directory=str(out)))
+        if entry.endswith("changed pytest file"):
+            with open(packages / "_pytest" / "__init__.py", "a") as stream:
+                stream.write("# changed after it was installed\n")
+    plugin_name = "_pytest.rom17_adhoc_plugin" if entry.endswith("package") else \
+        "rom17_adhoc_plugin"
+    pytest_run = [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", plugin_name,
+                  str(repo / "examples" / "test_probe.py")]
+    receiver_test = [python, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                     str(repo / "examples" / "test_receiver.py")]
     command = {
         "committed file": [python, str(committed)],
         "python -c": [python, "-c", driver],
@@ -1153,6 +1378,10 @@ def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo
         "python -m cProfile": [python, "-m", "cProfile", str(committed)],
         "pytest plugin in a site directory": pytest_run,
         "pytest plugin through atexit": pytest_run,
+        "pytest plugin without a frame": pytest_run,
+        "pytest plugin inside pytest's package": pytest_run,
+        "committed test under python -m pytest": receiver_test,
+        "python -m pytest with a changed pytest file": receiver_test,
     }[entry]
     environment = {key: value for key, value in os.environ.items()
                    if key not in ("PYTHONPATH", "PYTEST_ADDOPTS", "PYTEST_PLUGINS")
@@ -1166,6 +1395,12 @@ def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo
     data = receipts.read_receipt(path)
     findings = data["overlay"]["findings"]
     started = data["process"]["code"]["entry"]
+    placed = ("interpreter file %s (module %s) is recorded by no manifest of the environment (no "
+              "RECORD, no conda-meta): code placed in a site directory" % (plugin, plugin_name))
+    changed = packages and (
+        "interpreter file %s (module _pytest) does not have the bytes pytest %s records: an "
+        "installed file was changed" % (packages / "_pytest" / "__init__.py",
+                                        importlib.metadata.version("pytest")))
     expected = {
         "committed file": [],
         "python -c": [
@@ -1190,18 +1425,25 @@ def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo
         "pytest plugin in a site directory": [
             "the receipt is driven by code of the interpreter that is neither its standard "
             "library nor pytest (a file placed in a site directory or beside the standard "
-            "library): %s" % plugin],
+            "library): %s" % plugin, placed],
         "pytest plugin through atexit": [
             "the receipt is not created under the process entry %s: its outermost frame is %s "
             "(a receiver called from atexit, a thread or another callback of the interpreter)"
-            % (started["file"], repo / "examples" / "receiver.py")],
+            % (started["file"], repo / "examples" / "receiver.py"), placed],
+        # pluggy calls the bound partial: no frame of the plugin, only its file is refused.
+        "pytest plugin without a frame": [placed],
+        # A frame of _pytest drives the receipt; the file is no part of pytest's RECORD.
+        "pytest plugin inside pytest's package": [placed],
+        "committed test under python -m pytest": [],
+        "python -m pytest with a changed pytest file": [changed],
     }[entry]
     assert findings == expected, findings
-    if entry.startswith("pytest plugin"):
+    if "pytest" in entry:
         assert started["module"] == "pytest.__main__" and started["origin"] == "interpreter"
     assert data["process"]["code"]["driver"][-1]["file"] == str(repo / "examples" / "receiver.py")
     assert data["level"] == "E"
-    assert receipts.admit(data, record, require="E")["admitted"] is (entry == "committed file")
+    assert receipts.admit(data, record, require="E")["admitted"] is (
+        entry in ("committed file", "committed test under python -m pytest"))
 
 
 def test_the_cohort_says_whether_each_leaf_was_built_in_an_official_environment(
