@@ -12,7 +12,7 @@ Run a read-only plan first, then execute only after the candidate snapshot exist
 
 ```bash
 env -u PYTHONPATH /absolute/path/to/python -I \
-  /absolute/path/to/PoPS-numerical-bodies/docs/development/api_040/joint_reconstruction_benchmark.py \
+  /absolute/path/to/PoPS-numerical-bodies/benchmarks/joint_reconstruction/joint_reconstruction_benchmark.py \
   --baseline-root /absolute/path/to/outputs/artifacts/3d06cab \
   --candidate-root /absolute/path/to/outputs/artifacts/T2-SHA \
   --expected-candidate-commit FULL_T2_COMMIT_SHA \

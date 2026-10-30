@@ -22,9 +22,11 @@ spec 0.3, rule MG5). This page says where it is and how to check that nothing wa
 - Outside the repository: `pops-review-artifacts-b6e64c1d.tar.xz` (3747660 bytes, SHA-256
   `6b09f43c0ab1ed2d550d66327fbf70331f29b618ee03b7817b017ce6fd2e8969`) holds the five
   directories byte for byte, written by `git archive` from `b6e64c1d`. Its `MANIFEST.tsv`
-  gives, for each file, the path, git blob id, size, SHA-256 and where the file went;
-  `FILES.sha256` repeats the hashes in `sha256sum` format. The archive and both lists are
-  attached to Linear ROM-84 and kept in the PoPS project files under `landing/archive/`.
+  gives, for each file, the path, git blob id, size, SHA-256 and where the file went, taken
+  from the moves declared below; `FILES.sha256` repeats the hashes in `sha256sum` format.
+  Download the archive and both lists from Linear
+  [ROM-84](https://linear.app/romain7522/issue/ROM-84); a second copy is kept in the PoPS
+  project files under `landing/archive/`.
 
 Check an extracted copy with:
 
@@ -46,7 +48,7 @@ unless the last column says otherwise; the archive keeps their original copies t
 | `tests/review/sol61_tag_selection_oracle.py` | `tests/python/support/` | none |
 | `tests/review/sol61_m19_freestreaming_oracle.py` | `tests/python/support/` | none |
 | `tests/review/sol61_m19_amr_consumed_offline.py` | `tests/python/support/` | its import of the carrier decoder |
-| `tests/review/test_sol61_mapped_field_route.py` | `tests/python/support/sol61_mapped_field_route.py` | renamed so pytest does not collect it; repository root found one level higher |
+| `tests/review/test_sol61_mapped_field_route.py` | `tests/python/support/sol61_mapped_field_route.py` | renamed so pytest does not collect it; repository root found one level higher; keeps only the `route` helper, and its two review tests stay in the archive |
 | `tests/review/sol61_t5_public_native_capture.inc` | `tests/cpp/integration/runtime/` | none |
 | `docs/development/api_040/sol61_global_authority_parent_parity.json` | `tests/python/support/fixtures/` | none |
 | `docs/development/api_040/check_finite_amr_converged.py`, `check_m23_m05_converged.py` | `tests/python/support/fixtures/receipt_bundles/` | none |
@@ -57,3 +59,18 @@ unless the last column says otherwise; the archive keeps their original copies t
 
 The tests that import or read them now name the new paths. Four documents that cited an
 archived file by path now say that it is in the archive.
+
+## Review material still in the tree
+
+- The two receipt bundles above (327 files) and their two checkers, 7.2 MB in all, are the
+  one declared exception to "review artifacts do not reach `master`":
+  `test_finite_amr_converged_checker.py` and `test_m23_m05_converged_checker.py` verify them
+  in CI, so they stay as test fixtures and land with the tests that read them (spec 0.3,
+  CF14).
+- `docs/developer/` (19 files, 451211 bytes, absent from `master`) stays: it documents API 0.2
+  behaviour as well as receptions, with two reception files and three evidence JSON files.
+  Sorting it belongs to the receipt protocol (B02) and the developer guide (Q08).
+- `examples/api_v02/coverage.py` keeps its provenance string `SOURCE_TITLE_SOURCE`, which
+  names `docs/development/api_040/corpus.json`: `examples/api_v02/profile_implementations.json`
+  pins that module by SHA-256, so it is not edited. The archive holds `corpus.json`, and
+  `git show b6e64c1d:docs/development/api_040/corpus.json` reads it.

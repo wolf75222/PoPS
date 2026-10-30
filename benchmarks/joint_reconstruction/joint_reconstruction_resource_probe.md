@@ -59,7 +59,7 @@ first timing campaign finish:
 
 ```bash
 env -u PYTHONPATH /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python -I \
-  /absolute/path/to/PoPS-numerical-bodies/docs/development/api_040/joint_reconstruction_resource_probe.py \
+  /absolute/path/to/PoPS-numerical-bodies/benchmarks/joint_reconstruction/joint_reconstruction_resource_probe.py \
   --baseline-root /absolute/path/to/outputs/artifacts/3d06cab \
   --candidate-root /absolute/path/to/outputs/artifacts/cf6dace \
   --python /Users/romaindespoulain/miniforge3/envs/pops-api040/bin/python \
