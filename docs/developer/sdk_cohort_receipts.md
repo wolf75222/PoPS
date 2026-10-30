@@ -131,15 +131,16 @@ interpreter that a module or a frame of the driver comes from is judged against 
 of the environment (`process.code.interpreter_files`): the `RECORD` of each distribution
 installed in a site directory (or a legacy egg's `installed-files.txt`, which records no digest)
 and, in a conda environment, the `conda-meta` of its prefix, which lists the standard library
-too. A file is recorded when its bytes have a digest one of them records; a file conda rewrote
-when it linked its package is compared with `sha256_in_prefix`. Refused, wherever they come
-from:
+too. For a venv, such as a qualification prefix, that is the `conda-meta` of the environment it
+is made from. A file is recorded when its bytes have a digest one of them records; a file conda
+rewrote when it linked its package is compared with `sha256_in_prefix`. Refused, wherever they
+come from:
 
 - a file of a site directory that no manifest lists: a plugin placed there, or a module dropped
   inside an installed package;
 - a file whose bytes match none of the digests its manifests record;
 - in a conda environment, a file in or beside its standard library that `conda-meta` does not
-  list (a record that cannot be read lists nothing).
+  list (a record that cannot be read in full lists nothing).
 
 A distribution that lists no installed file (a system package manager's install, such as a
 Debian package, which carries no `RECORD`; a `SOURCES.txt` names the files of a source tree) is
@@ -205,11 +206,15 @@ the cohort lives in a fresh qualification prefix made from the retained wheel.
    `prefix` makes a venv of the build environment's interpreter (`--system-site-packages`, so a
    conda environment's NumPy and pytest stay visible), installs the wheel alone, proves the
    installation byte-identical to the wheel and verifies its native leaf.
-5. Run the receivers of the lot with that interpreter and `env -u PYTHONPATH`, writing their
+5. Judge the files of that interpreter: `"$PY" -I scripts/qualification_receipt.py
+   judge-interpreter` judges every code file of its standard library and site directories as a
+   receipt would if a receiver loaded it, lists each one a receipt would refuse and exits 1 when
+   there is one. It takes seconds, where a refused receipt shows only once its receiver has run.
+6. Run the receivers of the lot with that interpreter and `env -u PYTHONPATH`, writing their
    receipts; for the reference receivers:
    `env -u PYTHONPATH PYTHONNOUSERSITE=1 POPS_NATIVE_DIM=2 POPS_CI_PYTEST_TIMINGS_DIR="$OUT" "$PY"
    -m pytest tests/python/integration/runtime/test_qualification_receipt_native.py`.
-6. Admit each receipt: `"$PY" -I scripts/qualification_receipt.py check RECEIPT --cohort
+7. Admit each receipt: `"$PY" -I scripts/qualification_receipt.py check RECEIPT --cohort
    "$SITE/.pops-sdk/cohort.json" --require R --rehash`. Archive the cohort record, the receipts
    and the exact commands with the lot's handoff.
 
@@ -241,6 +246,15 @@ the cohort lives in a fresh qualification prefix made from the retained wheel.
   placed beside it, and a manifest rewritten to match changed files. Like a receipt written by
   hand, these forge a receipt rather than drive it. A qualification prefix made by `prefix` holds
   the retained wheel and nothing else beside the interpreter's own packages.
+- An environment can be refused although nothing was placed in it. A system package that lists
+  no installed file and declares no top-level name (a package built without setuptools writes no
+  `top_level.txt`: Debian's `packaging`, `pyparsing` and `wheel` declare none) is refused as soon
+  as a receiver loads one of its modules. virtualenv and `uv venv` put a `_virtualenv.py` that no
+  manifest records in the site directory they make, and it runs at startup. A receiver therefore
+  runs where pip or conda installed what it loads, in a venv made by `python -m venv`, as
+  `prefix` makes it; `judge-interpreter` shows such files before a receiver runs.
 - The MPI and hardware lanes of CI still start their processes with `python -c`; a receiver run
   there is refused at E until they start from a committed file, as `ci_python_dimensions.py`
-  does.
+  does. The MPI lane also installs its Python stack with apt (`python3-packaging`,
+  `python3-pytest`...): a receiver there will need pip's packages, or a reading of dpkg's records
+  (`/var/lib/dpkg/info/*.md5sums`) like the one of `conda-meta`.

@@ -1229,6 +1229,152 @@ def test_files_whose_manifests_cannot_be_read_are_recorded_as_not_judged(repo, s
         "(RuntimeError: no manifest)" in receipts._code_findings(code)
 
 
+def test_a_conda_record_lists_its_files_only_when_it_is_read_whole(tmp_path):
+    """The review of 110e8e9 (T2): a conda record with one row that cannot be read lists none of
+    its rows, as a RECORD that cannot be read lists nothing.  A record from before
+    ``paths_data`` lists its ``files`` without digests."""
+    prefix = tmp_path / "env"
+    library = prefix / "lib"
+    library.mkdir(parents=True)
+    code = {}
+    for name in ("whole", "legacy", "partial", "partial_legacy"):
+        code[name] = library / f"{name}.py"
+        code[name].write_text(f"{name.upper()} = 1\n")
+
+    def sha256(name):
+        return hashlib.sha256(code[name].read_bytes()).hexdigest()
+    records = {
+        "whole": {"paths_data": {"paths_version": 1, "paths": [
+            {"_path": "lib/whole.py", "path_type": "hardlink", "sha256": sha256("whole")}]}},
+        "legacy": {"files": ["lib/legacy.py"]},
+        # A complete first row, then one without _path.
+        "partial": {"paths_data": {"paths_version": 1, "paths": [
+            {"_path": "lib/partial.py", "path_type": "hardlink", "sha256": sha256("partial")},
+            {"path_type": "hardlink", "sha256": "0" * 64}]}},
+        # A file list whose second entry is no path.
+        "partial_legacy": {"files": ["lib/partial_legacy.py", 7]},
+    }
+    (prefix / "conda-meta").mkdir()
+    for name, record in records.items():
+        (prefix / "conda-meta" / f"{name}-1.0-0.json").write_text(
+            json.dumps({"name": name, "version": "1.0", **record}))
+    rows, unreadable = receipts._conda_rows(prefix)
+    assert rows == [("legacy 1.0 (conda)", library / "legacy.py", None),
+                    ("whole 1.0 (conda)", library / "whole.py", ("sha256", sha256("whole")))]
+    assert unreadable == [str(prefix / "conda-meta" / f"{name}-1.0-0.json")
+                          for name in ("partial", "partial_legacy")]
+    roots = standard = (library,)
+    files = {os.path.realpath(path): {"module": name, "path": str(path)}
+             for name, path in code.items()}
+    judged = receipts.judge_interpreter_files(
+        files, receipts.interpreter_manifest(roots, standard, (prefix,)), roots, standard)
+    assert judged["standard_library"] == "judged"
+    assert judged["counts"] == {"recorded": 1, "listed": 1, "unmanaged": 0, "believed": 0,
+                                "altered": 0, "unrecorded": 2}
+    assert [(row["module"], row["verdict"]) for row in judged["refused"]] == [
+        ("partial", "unrecorded"), ("partial_legacy", "unrecorded")]
+
+
+def _venv_over_conda(tmp_path, monkeypatch):
+    """The official qualification prefix in miniature: a ``--system-site-packages`` venv
+    (``sdk_cohort.py prefix``) of a conda environment, whose standard library and ``conda-meta``
+    are those of ``sys.base_prefix``; ``sys`` is patched to run from the venv.  Conda records one
+    file of its standard library, and another is placed beside it.  Returns the conda prefix, the
+    interpreter's roots (the venv's site directory, the standard library, conda's site directory)
+    and those two files."""
+    base, venv = tmp_path / "conda-env", tmp_path / "qualify"
+    for name, value in (("prefix", venv), ("exec_prefix", venv), ("base_prefix", base),
+                        ("base_exec_prefix", base)):
+        monkeypatch.setattr(sys, name, str(value))
+    standard = receipts._standard_library()  # the base interpreter's, as in any venv
+    assert standard and all(path.is_relative_to(base) for path in standard)
+    version = "python%d.%d" % sys.version_info[:2]
+    roots = (venv / "lib" / version / "site-packages", *standard, standard[0] / "site-packages")
+    for root in roots:
+        root.mkdir(parents=True, exist_ok=True)
+    (venv / "pyvenv.cfg").write_text(
+        f"home = {base / 'bin'}\ninclude-system-site-packages = true\n")
+    recorded = standard[0] / "rom17_recorded.py"
+    recorded.write_text("RECORDED = 1\n")
+    beside = standard[0] / "rom17_beside.py"
+    beside.write_text("BESIDE = 1\n")
+    (base / "conda-meta").mkdir()
+    (base / "conda-meta" / "python-3.12.0-h0_0.json").write_text(json.dumps({
+        "name": "python", "version": "3.12.0", "paths_data": {"paths_version": 1, "paths": [
+            {"_path": recorded.relative_to(base).as_posix(), "path_type": "hardlink",
+             "sha256": hashlib.sha256(recorded.read_bytes()).hexdigest()}]}}))
+    return base, roots, recorded, beside
+
+
+def test_a_venv_of_a_conda_environment_reads_the_conda_meta_it_is_made_from_by_default(
+        repo, site, tmp_path, monkeypatch):
+    """The review of 110e8e9 (T1): the official qualification prefix is a venv of the conda
+    environment ``setup_env.sh`` makes, so its ``conda-meta`` lies only in ``sys.base_prefix``.
+    ``code_observation`` reads it by default; without it, the standard library would be believed
+    instead of judged."""
+    base, roots, recorded, beside = _venv_over_conda(tmp_path, monkeypatch)
+    for name, path in (("rom17_recorded", recorded), ("rom17_beside", beside)):
+        module = ModuleType(name)
+        module.__file__ = str(path)
+        monkeypatch.setitem(sys.modules, name, module)
+    source, package = cohort.source_identity(repo), site / "pops"
+
+    def judged():
+        return receipts.code_observation(source, package, [], interpreter=roots)[
+            "interpreter_files"]
+    in_venv = judged()
+    assert in_venv["manifests"]["conda"] == [str(base)]
+    assert in_venv["standard_library"] == "judged"
+    assert in_venv["counts"] == {"recorded": 1, "listed": 0, "unmanaged": 0, "believed": 0,
+                                 "altered": 0, "unrecorded": 1}
+    assert in_venv["refused"] == [{"module": "rom17_beside", "path": str(beside),
+                                   "library": "stdlib", "verdict": "unrecorded"}]
+    # Run from the conda environment itself, its conda-meta is read once.
+    monkeypatch.setattr(sys, "prefix", str(base))
+    monkeypatch.setattr(sys, "exec_prefix", str(base))
+    assert judged() == in_venv
+
+
+def test_judge_interpreter_judges_every_file_of_the_interpreter_before_a_receiver_runs(
+        tmp_path, monkeypatch, capsys):
+    """The review of 110e8e9 (O3): ``judge-interpreter`` judges each code file under the
+    interpreter's roots as a receipt would if a receiver loaded it, with the receipt's defaults,
+    and exits 1 while one would be refused."""
+    base, roots, recorded, beside = _venv_over_conda(tmp_path, monkeypatch)
+    monkeypatch.setattr(receipts, "_interpreter_roots", lambda: roots)
+    venv_site, conda_site = roots[0], roots[-1]
+    placed = [venv_site / "rom17_dropped.py", venv_site / f"rom17_native{SUFFIX}",
+              venv_site / "rom17_sourceless.pyc"]
+    for path in placed:
+        path.write_bytes(b"placed\n")
+    (venv_site / "notes.txt").write_text("no code\n")
+    cache = recorded.parent / "__pycache__" / "rom17_recorded.cpython-312.pyc"
+    cache.parent.mkdir()
+    cache.write_bytes(b"cached\n")  # bytecode caches are left out, as a receipt leaves them
+    _distribution(conda_site, "system", top_level=("system",))
+    (conda_site / "system").mkdir()
+    (conda_site / "system" / "__init__.py").write_text("SYSTEM = 1\n")
+
+    def judge():
+        code = receipts.main(["judge-interpreter"])
+        return code, json.loads(capsys.readouterr().out)
+    code, report = judge()
+    assert code == 1
+    assert report["files_judged"] == 6
+    assert report["manifests"]["conda"] == [str(base)]
+    assert report["standard_library"] == "judged"
+    assert report["counts"] == {"recorded": 1, "listed": 0, "unmanaged": 1, "believed": 0,
+                                "altered": 0, "unrecorded": 4}
+    assert report["unverified"] == {"unmanaged": {"system 1.0": 1}}
+    assert report["refused"] == [
+        {"path": str(path), "verdict": "unrecorded", "library": library}
+        for path, library in [(beside, "stdlib"), *((path, "site") for path in placed)]]
+    for path in (beside, *placed):
+        path.unlink()
+    code, report = judge()
+    assert (code, report["refused"], report["counts"]["recorded"]) == (0, [], 1)
+
+
 #: A receiver committed in the fake checkout: it writes one receipt (stage E) under a false label.
 RECEIVER = """from pathlib import Path
 

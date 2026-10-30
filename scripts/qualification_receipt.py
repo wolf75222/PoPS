@@ -38,6 +38,7 @@ Commands::
 
   check RECEIPT [--cohort FILE] [--require LEVEL] [--rehash]
   record-standalone --requirement TEXT --source ROOT --binary PATH --directory DIR -- CMD...
+  judge-interpreter
 """
 from __future__ import annotations
 
@@ -48,6 +49,7 @@ import contextlib
 import csv
 import functools
 import hashlib
+import importlib.machinery
 import importlib.metadata
 import inspect
 import json
@@ -349,7 +351,7 @@ def _interpreter_location(filename: str, roots: Sequence[Path], forms: Sequence[
     best: tuple[int, Path, str] | None = None
     candidates = (os.path.abspath(filename), os.path.realpath(filename))
     for root, spellings in (_root_forms(roots) if forms is None else forms):
-        for candidate, (base, depth) in zip(candidates, spellings):
+        for candidate, (base, depth) in zip(candidates, spellings, strict=True):
             inside = base.rstrip(os.sep) + os.sep
             if candidate.startswith(inside):
                 if best is None or depth > best[0]:
@@ -385,7 +387,8 @@ def _conda_rows(prefix: Path) -> tuple[list[tuple[str, Path, tuple[str, str] | N
 
     A file conda rewrote when it linked the package (``prefix_placeholder``) is compared with
     ``sha256_in_prefix``; a conda that does not record that digest lists the file without one.
-    Links, directories and bytecode are no code file of their own.
+    Links, directories and bytecode are no code file of their own.  A record is read whole or
+    lists nothing: one row that cannot be read makes the whole record unreadable.
     """
     rows: list[tuple[str, Path, tuple[str, str] | None]] = []
     unreadable = []
@@ -395,17 +398,20 @@ def _conda_rows(prefix: Path) -> tuple[list[tuple[str, Path, tuple[str, str] | N
             name = "%s %s (conda)" % (data["name"], data["version"])
             paths = (data.get("paths_data") or {}).get("paths")
             if paths is None:  # a record from before paths_data: its file list only
-                rows.extend((name, prefix / item, None) for item in data["files"])
-                continue
-            for row in paths:
-                if row.get("path_type") in ("softlink", "directory", "pyc_file"):
-                    continue
-                expected = row.get("sha256_in_prefix") or (
-                    None if row.get("prefix_placeholder") else row.get("sha256"))
-                rows.append((name, prefix / row["_path"],
-                             ("sha256", expected) if expected else None))
+                listed = [(name, prefix / item, None) for item in data["files"]]
+            else:
+                listed = []
+                for row in paths:
+                    if row.get("path_type") in ("softlink", "directory", "pyc_file"):
+                        continue
+                    expected = row.get("sha256_in_prefix") or (
+                        None if row.get("prefix_placeholder") else row.get("sha256"))
+                    listed.append((name, prefix / row["_path"],
+                                   ("sha256", expected) if expected else None))
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             unreadable.append(str(record))
+            continue
+        rows.extend(listed)
     return rows, unreadable
 
 
@@ -574,6 +580,55 @@ def judge_interpreter_files(files: Mapping[str, Mapping[str, Any]], manifest: Ma
     }
 
 
+def _manifest_prefixes() -> tuple[Path, ...]:
+    """The prefixes whose ``conda-meta`` counts for this interpreter: its own and the one it is
+    made from (the conda environment of a venv, such as a qualification prefix)."""
+    return (Path(sys.prefix), Path(sys.base_prefix))
+
+
+def judge_interpreter(*, interpreter: Sequence[Path] | None = None,
+                      standard: Sequence[Path] | None = None,
+                      prefixes: Sequence[Path] | None = None) -> dict[str, Any]:
+    """Judge every code file of this interpreter as a receipt judges the files a receiver loads.
+
+    Each source, sourceless bytecode and extension module under the interpreter's standard
+    library and site directories is judged as if it were loaded (``judge_interpreter_files``), so
+    a file a receipt would refuse shows before a receiver runs; a receiver that never loads it is
+    not refused for it.  Bytecode caches (``__pycache__``) are left out, as a receipt leaves them.
+    The defaults are those of ``code_observation``.
+    """
+    roots = _interpreter_roots() if interpreter is None else tuple(interpreter)
+    library = _standard_library() if standard is None else tuple(standard)
+    prefixes = _manifest_prefixes() if prefixes is None else tuple(prefixes)
+    suffixes = tuple(importlib.machinery.all_suffixes())
+    files: dict[str, dict[str, Any]] = {}
+    for root in roots:
+        for directory, subdirectories, names in os.walk(root):
+            subdirectories[:] = [item for item in subdirectories if item != "__pycache__"]
+            for name in names:
+                if name.endswith(suffixes):
+                    path = os.path.join(directory, name)
+                    files.setdefault(os.path.realpath(path), {"module": None, "path": path})
+    judged = judge_interpreter_files(files, interpreter_manifest(roots, library, prefixes),
+                                     roots, library)
+    unverified: dict[str, dict[str, int]] = {}
+    for row in judged["unverified"]:
+        owners = unverified.setdefault(row["verdict"], {})
+        owners[row["by"]] = owners.get(row["by"], 0) + 1
+    return {
+        "python": sys.executable, "prefix": sys.prefix, "base_prefix": sys.base_prefix,
+        "interpreter_roots": [str(item) for item in roots],
+        "standard_library_roots": [str(item) for item in library],
+        "files_judged": len(files),
+        "manifests": judged["manifests"],
+        "standard_library": judged["standard_library"],
+        "counts": judged["counts"],
+        "unverified": unverified,
+        "refused": [{key: row[key] for key in ("path", "verdict", "library", "by") if key in row}
+                    for row in judged["refused"]],
+    }
+
+
 def code_observation(source: Mapping[str, Any], package: Path, driver: Sequence[str], *,
                      interpreter: Sequence[Path] | None = None,
                      standard: Sequence[Path] | None = None,
@@ -587,13 +642,13 @@ def code_observation(source: Mapping[str, Any], package: Path, driver: Sequence[
     each frame of the interpreter records its library and package (``interpreter_part``), and
     each file of the interpreter that a module or a frame comes from is judged against the
     manifests of the environment (``judge_interpreter_files``; ``prefixes`` are the prefixes
-    whose ``conda-meta`` counts, this interpreter's by default).  ``driver`` lists the frames that
-    created the receipt, outermost first.
+    whose ``conda-meta`` counts, ``_manifest_prefixes`` by default).  ``driver`` lists the frames
+    that created the receipt, outermost first.
     """
     root = Path(source["root"])
     roots = _interpreter_roots() if interpreter is None else tuple(interpreter)
     library = _standard_library() if standard is None else tuple(standard)
-    prefixes = (Path(sys.prefix), Path(sys.base_prefix)) if prefixes is None else tuple(prefixes)
+    prefixes = _manifest_prefixes() if prefixes is None else tuple(prefixes)
     frames = [{"file": name, "origin": code_origin(name, root, package, roots)} for name in driver]
     for frame in frames:
         if frame["origin"] == "interpreter":
@@ -1673,8 +1728,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     standalone.add_argument("--binary", type=Path, required=True)
     standalone.add_argument("--directory", type=Path)
     standalone.add_argument("argv", nargs=argparse.REMAINDER)
+    commands.add_parser("judge-interpreter")
     arguments = parser.parse_args(None if argv is None else list(argv))
     try:
+        if arguments.command == "judge-interpreter":
+            report = judge_interpreter()
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 1 if report["refused"] else 0
         if arguments.command == "check":
             data = read_receipt(arguments.receipt)
             verdict = admit(data, _load_cohort(arguments.cohort), require=arguments.require)
