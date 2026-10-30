@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from pops.time._program.structured_control import value_signature
 
@@ -9,6 +10,19 @@ from pops.time._program.structured_control import value_signature
 FINITE_OPS = frozenset(("finite_real", "finite_range_set", "finite_size", "finite_domain", "finite_same_domain",
                         "finite_index", "finite_index_value", "finite_index_argument", "finite_at",
                         "finite_map", "finite_scan"))
+
+# What only finite_cpp_helpers() declares: its counters, its aliases and the namespaces of the
+# finite headers it includes.
+_HELPER_NAME = re.compile(r"\b(?:pops_finite_\w|pops_algebra_finite::|finite_(?:kokkos|collective|structural|device)::)")
+
+
+def uses_finite_helpers(source):
+    """Whether generated code names a declaration of finite_cpp_helpers().
+
+    Other emitters than the finite operations reach finite storage: a typed terminal failure packs
+    its payload with finite_structural in any Program.
+    """
+    return _HELPER_NAME.search(source) is not None
 
 
 def finite_cpp_helpers():

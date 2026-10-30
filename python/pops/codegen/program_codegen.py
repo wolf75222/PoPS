@@ -331,7 +331,7 @@ def _emit_cpp_program_impl(
             has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
             provider_plans=provider_plans)
         if target == "amr_system" else None)
-    from .program_emit_finite_arrays import FINITE_OPS, finite_cpp_helpers
+    from .program_emit_finite_arrays import FINITE_OPS, finite_cpp_helpers, uses_finite_helpers
     from .program_emit_versioned import VERSIONED_OPS
     from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
     value_ops = FINITE_OPS | VERSIONED_OPS | FIELD_REPRESENTATION_OPS
@@ -346,10 +346,9 @@ def _emit_cpp_program_impl(
     distributed_ops = DISTRIBUTED_OPS | FIELD_REPRESENTATION_OPS
     uses_distributed = any(value.op in distributed_ops or any(
         child.op in distributed_ops for child in program._subblock_value_refs(value)) for value in finite_roots)
-    finite_helpers = finite_cpp_helpers() if uses_finite_arrays or uses_distributed else ""
-    if uses_distributed:
-        finite_helpers += "\n#include <pops/runtime/program/distributed_array.hpp>\n"
-    return _PROGRAM_CPP_TEMPLATE.format(
+    # Rendered in this order: uniform_definitions() closes the registrations that the parts
+    # after it must not extend.
+    parts = dict(
         name=cpp_string_literal(program.name),
         hash=emission_program_hash(program),
         prelude=prelude,
@@ -362,7 +361,7 @@ def _emit_cpp_program_impl(
                          + _emit_uniform_history_metadata(program, target)),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
-        model_helpers=(finite_helpers + uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
+        model_helpers=(uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
                        + _emit_program_model_helpers(program, authority)
                        + provider_plans.source_kernel_helpers.cpp()),
         block_names=(_emit_block_names(program, value_authority.block_names)
@@ -382,6 +381,14 @@ def _emit_cpp_program_impl(
             post_synchronization,
         ),
     )
+    # The finite helpers follow the code that names them, not only the finite operations.
+    if uses_finite_arrays or uses_distributed or any(
+            uses_finite_helpers(part) for part in parts.values() if isinstance(part, str)):
+        finite_helpers = finite_cpp_helpers()
+        if uses_distributed:
+            finite_helpers += "\n#include <pops/runtime/program/distributed_array.hpp>\n"
+        parts["model_helpers"] = finite_helpers + parts["model_helpers"]
+    return _PROGRAM_CPP_TEMPLATE.format(**parts)
 
 
 def _emit_uniform_clock_manifest(program: Any) -> str:

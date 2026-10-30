@@ -45,6 +45,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `pops_finite_host_transfer_count`), and System and AmrSystem steps open the Kokkos Tools
   regions `pops::step` and `pops::program_region`. Structural, Variant and distributed Arrays
   keep their host storage.
+- Compile a typed terminal failure in a Program without finite operations: its payload packs
+  through finite structural storage, so Program emission now adds the finite helpers whenever
+  the generated code names one of their declarations, not only for finite, versioned or
+  distributed operations.
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
   complete continuations and child advances, spatial composition, distributed
   operators, and graph/implicit derivatives lower from Python into native Program C++.
