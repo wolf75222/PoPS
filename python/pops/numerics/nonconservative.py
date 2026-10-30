@@ -76,6 +76,21 @@ class PathConservativeFiniteVolume(FiniteVolume):
     def options(self) -> dict[str, Any]:
         return {**super().options(), "path": self.path, "zero_measure_faces": self.zero_measure_faces}
 
+    def regions(self, name: str, rank: int) -> Any:
+        """The face regions of ``FiniteVolume.regions``, with the side terms (IR25, D6, §8.1).
+
+        The native face kernel gives a shared conservative flux and one nonconservative term per
+        side, ``conservative_flux``, ``left_ncp`` and ``right_ncp``
+        (include/pops/numerics/fv/path_flux.hpp@b6). ``MaterializePathResidual``
+        (include/pops/numerics/spatial/operators/cartesian_operator.hpp@b6) delivers the flux to
+        the left cell with weight -1 and to the right cell with weight +1, the left term to the
+        left cell and the right term to the right cell, each with weight +1. The side terms are
+        two single-target productions, never an exchange: conservation reads the shared flux
+        only (IR17). They read the cells that the flux reads, so the halo and the class are
+        those of the flux.
+        """
+        return self._face_regions(name, rank, (("left", 1), ("right", 1)))
+
     def validate_rate_contract(self, contract: Any) -> bool:
         if (contract.get("flux") != self.flux
                 or contract.get("state") != self.variables.options.get("state")

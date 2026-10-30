@@ -10,8 +10,13 @@ fixes how its facts are derived:
 
 The closed list of IR9 is ``Shift(o)``, ``Incidence(src, dst, side)``, ``Project``, ``Embed(v)``,
 ``Parent(r)``, ``Child(r, o)``, ``Trace(piece, depth)``, ``Compose(m2, m1)`` and ``Inverse(m)``.
-A map keeps the form it was written in, for diagnostics, and compares by its normal form: two
-maps are equal when their normal forms are equal, syntactically, after composition (IR9).
+A map keeps the form it was written in, for diagnostics, and carries its type, the entity kinds
+it reads and gives ("From -> to" of IR9): ``Incidence(face(a), cell, side)`` goes from
+``face(a)`` to ``cell``, ``Parent`` and ``Child`` from ``cell`` to ``cell``, and ``Shift``,
+``Project`` and ``Embed`` act on the kind of what they are composed with, so their type is
+``(None, None)`` until a composition fixes it. ``Compose`` checks that the inner map gives what
+the outer one reads, and ``Inverse`` swaps the two kinds. Two maps are equal when their types are
+equal and their normal forms are equal, syntactically, after composition (IR9).
 
 The face of index i normal to axis a lies between the cells i - e_a (its left cell) and i (its
 right cell), as the face box of b6 grows the high bound of the normal axis by one
@@ -22,8 +27,8 @@ offset of a face read counts from the right cell, as the b6 face samples do.
 Normal form. A map normalizes to a tuple of atoms, outermost first:
 
 * ``Translate(source, target, offset)``: i -> i + offset. A translation that keeps the kind of
-  the entities carries no kind (``Shift`` acts on what it is composed with); ``Incidence`` and
-  ``Trace`` change the kind, from faces to cells;
+  the entities carries no kind in the atoms, whose rules then hold on every kind; the map keeps
+  its type beside them. ``Incidence`` and ``Trace`` change the kind, from faces to cells;
 * ``Coarsen(r)`` and ``Refine(r, o)``, the atoms of ``Parent`` and ``Child`` on cells, and
   ``Unrefine(r, o)``, the inverse of ``Child`` on its image;
 * ``Drop(base_rank)`` and ``Pin(fibre, base_rank)``, the atoms of ``Project`` and ``Embed`` on a
@@ -48,21 +53,30 @@ bounded by the size of the map and never by an extent (B4):
   base part, w being its fibre part; ``Project∘Embed(v)`` is the identity;
 * an atom composed with its own inverse is the identity.
 
-The rules are sound: equal normal forms are equal maps. They are complete, so that equal maps
-have equal normal forms, on the translations of one lattice, on ``Parent`` and ``Child`` whose
-ratios divide one another, and on ``Project`` and ``Embed`` with translations; a chain of levels
-whose ratios are coprime can keep two spellings of one map apart, and is then compared as two
-maps. The unit tests check both properties against the definitions of the constructors.
+The rules are sound: two maps of one type with equal normal forms are equal maps. They are
+complete, so that equal maps have equal normal forms, on the translations of one lattice, on
+``Parent`` and ``Child`` whose ratios divide one another, and on ``Project`` and ``Embed`` with
+translations; a chain of levels whose ratios are coprime can keep two spellings of one map
+apart, and is then compared as two maps. The unit tests check both properties against the
+definitions of the constructors.
 
 Inversion follows the list: a translation inverts to the opposite translation, ``Child`` and
 ``Embed`` invert to partial maps on their images. ``Parent`` and ``Project`` are not injective, so
-the inverse of a map that holds them is an ``Adjacency`` whose fan-out comes from the descriptor
-(r^rank, or |V|).
+the inverse of a map that holds them is an ``Adjacency``. Its fan-out is the product of one
+factor per such atom: r^rank for ``Parent(r)``, and the cardinality |V| of the fibre for
+``Project``, which only the descriptor of the product set gives (IR2): the factor names it and
+has no value until then.
+
+The provenance of a map (IR8) is that of its normal form: the weakest of its atoms, computed,
+then data, then arithmetic, then typed. A typed map composed with a data map is a data map, whose
+facts come from its inspector (IR11).
 
 Scope at this commit. The entities are the cells and the faces of a lattice, and the faces of a
-boundary piece; ``Parent`` and ``Child`` act on cells. Edges and nodes (``Incidence(edge(a),
-face(b), ±)``), offsets that are bound parameters and the region builder of IR4 come with the
-issues that need them. Nothing here caps a rank (B6).
+boundary piece; ``Parent`` and ``Child`` act on cells. A type names entity kinds, not index sets:
+the levels of a hierarchy and the base and the product of a product set share their kinds until
+the index sets of IR2 exist. Edges and nodes (``Incidence(edge(a), face(b), ±)``), offsets that
+are bound parameters and the region builder of IR4 come with the issues that need them. Nothing
+here caps a rank (B6).
 """
 from __future__ import annotations
 
@@ -308,6 +322,32 @@ def _check_chain(atoms):
         kind = _kind_after(atom, kind)
 
 
+def _acts_on(map_, kind):
+    """Check that ``map_``, whose type is ``(None, None)``, can act on ``kind`` entities."""
+    if kind is None:
+        return
+    for atom in reversed(map_.normal_form()):
+        if type(atom) is Translate and atom.source is None:
+            _stays_on_piece(atom, kind)
+        kind = _kind_after(atom, kind)
+
+
+def _compose_kinds(outer, inner):
+    """The type of ``outer`` after ``inner``; a map of type (None, None) takes its neighbour's."""
+    outer_source, outer_target = outer.kinds()
+    inner_source, inner_target = inner.kinds()
+    if outer_source is None:
+        _acts_on(outer, inner_target)
+        return inner_source, inner_target
+    if inner_target is None:
+        _acts_on(inner, outer_source)
+        return outer_source, outer_target
+    if outer_source != inner_target:
+        raise TypeError("cannot compose: %r reads %r entities, but %r gives %r"
+                        % (outer, outer_source, inner, inner_target))
+    return inner_source, outer_target
+
+
 def _translate(source, target, offset):
     # A translation that keeps the kind of unrestricted entities acts on any kind: it carries
     # none, so Shift(q)∘Parent(r) and Parent(r)∘Shift(r q) reach the same atoms. Faces of a
@@ -434,14 +474,36 @@ def normalize(atoms):
 # ---------------------------------------------------------------------------------------------
 # The constructors of the closed list.
 # ---------------------------------------------------------------------------------------------
-class IndexMap:
-    """A typed map of IR9, or a map of another provenance (IR8); compared by its normal form."""
+_PROVENANCES = ("computed", "data", "arithmetic", "typed")   # weakest first
 
-    __slots__ = ("_normal",)
-    provenance = "typed"
+
+def _provenance(atoms):
+    provenances = {atom.provenance for atom in atoms if type(atom) is Opaque}
+    return next((p for p in _PROVENANCES if p in provenances), "typed")
+
+
+class IndexMap:
+    """A typed map of IR9, or a map of another provenance (IR8).
+
+    Compared by its type and its normal form.
+    """
+
+    __slots__ = ("_normal", "_kinds_cache")
 
     def _atoms(self):
         raise NotImplementedError
+
+    def _kinds(self):
+        raise NotImplementedError
+
+    def kinds(self):
+        """``(source, target)``: the entity kinds the map reads and gives; (None, None) for a map
+        that acts on the kind of what it is composed with."""
+        try:
+            return self._kinds_cache
+        except AttributeError:
+            object.__setattr__(self, "_kinds_cache", self._kinds())
+            return self._kinds_cache
 
     def normal_form(self):
         """The tuple of atoms, outermost first, that every equal map normalizes to."""
@@ -453,19 +515,18 @@ class IndexMap:
 
     @property
     def source(self):
-        """The entity kind the map reads, or None when its normal form does not fix one."""
-        for atom in reversed(self.normal_form()):
-            if atom.source is not None:
-                return atom.source
-        return None
+        """The entity kind the map reads, or None when it acts on any kind."""
+        return self.kinds()[0]
 
     @property
     def target(self):
-        """The entity kind the map gives, or None when its normal form does not fix one."""
-        for atom in self.normal_form():
-            if atom.target is not None:
-                return atom.target
-        return None
+        """The entity kind the map gives, or None when it acts on any kind."""
+        return self.kinds()[1]
+
+    @property
+    def provenance(self):
+        """The provenance of the normal form (IR8): the weakest of its atoms."""
+        return _provenance(self.normal_form())
 
     def translation(self):
         """The sparse offset of a map whose normal form is one translation, or None."""
@@ -497,10 +558,10 @@ class IndexMap:
     def __eq__(self, other):
         if not isinstance(other, IndexMap):
             return NotImplemented
-        return self.normal_form() == other.normal_form()
+        return self.kinds() == other.kinds() and self.normal_form() == other.normal_form()
 
     def __hash__(self):
-        return hash(self.normal_form())
+        return hash((self.kinds(), self.normal_form()))
 
     def __setattr__(self, name, value):
         raise AttributeError("%s is immutable" % type(self).__name__)
@@ -509,6 +570,7 @@ class IndexMap:
 def _init(map_, **fields):
     for name, value in fields.items():
         object.__setattr__(map_, name, value)
+    map_.kinds()
     map_.normal_form()
 
 
@@ -523,6 +585,9 @@ class Shift(IndexMap):
 
     def _atoms(self):
         return (Translate(None, None, _sparse(self.vector)),)
+
+    def _kinds(self):
+        return None, None
 
     def __repr__(self):
         return "Shift(%r)" % (self.vector,)
@@ -547,6 +612,9 @@ class Incidence(IndexMap):
     def _atoms(self):
         offset = ((self.src.axis, -1),) if self.side == "left" else ()
         return (Translate(self.src, self.dst, offset),)
+
+    def _kinds(self):
+        return self.src, self.dst
 
     def __repr__(self):
         return "Incidence(%r, %r, side=%r)" % (self.src, self.dst, self.side)
@@ -579,6 +647,9 @@ class Trace(IndexMap):
         steps = self.depth if self.piece.piece == "low" else -(1 + self.depth)
         return (Translate(self.piece, cell, ((self.piece.axis, steps),) if steps else ()),)
 
+    def _kinds(self):
+        return self.piece, cell
+
     def __repr__(self):
         return "Trace(%r, depth=%d)" % (self.piece, self.depth)
 
@@ -600,6 +671,9 @@ class Parent(IndexMap):
     def _atoms(self):
         return (Coarsen(self.ratio),)
 
+    def _kinds(self):
+        return cell, cell
+
     def __repr__(self):
         return "Parent(ratio=%d)" % self.ratio
 
@@ -619,6 +693,9 @@ class Child(IndexMap):
 
     def _atoms(self):
         return (Refine(self.ratio, _sparse(self.child_offset)),)
+
+    def _kinds(self):
+        return cell, cell
 
     def __repr__(self):
         return "Child(ratio=%d, offset=%r)" % (self.ratio, self.child_offset)
@@ -642,6 +719,9 @@ class Project(IndexMap):
     def _atoms(self):
         return (Drop(self.base_rank),)
 
+    def _kinds(self):
+        return None, None
+
     def __repr__(self):
         return "Project(base_rank=%d)" % self.base_rank
 
@@ -658,6 +738,9 @@ class Embed(IndexMap):
 
     def _atoms(self):
         return (Pin(self.fibre, self.base_rank),)
+
+    def _kinds(self):
+        return None, None
 
     def __repr__(self):
         return "Embed(%r, base_rank=%d)" % (self.fibre, self.base_rank)
@@ -676,6 +759,9 @@ class Compose(IndexMap):
 
     def _atoms(self):
         return self.outer.normal_form() + self.inner.normal_form()
+
+    def _kinds(self):
+        return _compose_kinds(self.outer, self.inner)
 
     def __repr__(self):
         return "Compose(%r, %r)" % (self.outer, self.inner)
@@ -697,25 +783,40 @@ def _inverse_atom(atom):
     return None
 
 
-def _fan_out(atom):
+def _fan_out_factor(atom):
     if type(atom) is Coarsen:
         return ("ratio^rank", atom.ratio)
-    return ("fibre cardinality", atom.base_rank)
+    # Drop, the atom of Project: |V| is a fact of the descriptor of the product set (IR2), which
+    # Project does not hold.
+    return ("fibre cardinality", None)
 
 
 class Adjacency:
     """The inverse of a map that is not injective (IR9): each entity goes to several entities.
 
-    ``fan_out`` names where the count comes from: ``("ratio^rank", r)`` for ``Parent(r)``, and the
-    fibre cardinality |V| of the descriptor for ``Project``.
+    ``fan_out`` is the product of its factors, one per atom that blocks the inversion, in the
+    order of the normal form: ``("ratio^rank", r)`` for ``Parent(r)``, r to the rank of the
+    lattice it coarsens, and ``("fibre cardinality", None)`` for ``Project``, whose |V| only the
+    descriptor of the product set gives (IR2).
     """
 
     __slots__ = ("inverse_of", "fan_out")
-    provenance = "typed"
 
     def __init__(self, inverse_of, fan_out):
         object.__setattr__(self, "inverse_of", inverse_of)
         object.__setattr__(self, "fan_out", fan_out)
+
+    @property
+    def source(self):
+        return self.inverse_of.target
+
+    @property
+    def target(self):
+        return self.inverse_of.source
+
+    @property
+    def provenance(self):
+        return self.inverse_of.provenance
 
     def __eq__(self, other):
         return type(other) is Adjacency and other.inverse_of == self.inverse_of
@@ -743,7 +844,7 @@ class Inverse(IndexMap):
             raise TypeError("Inverse takes an index map, got %r" % (of,))
         blocking = [atom for atom in of.normal_form() if _inverse_atom(atom) is None]
         if blocking:
-            return Adjacency(of, _fan_out(blocking[0]))
+            return Adjacency(of, tuple(_fan_out_factor(atom) for atom in blocking))
         return super().__new__(cls)
 
     def __init__(self, of):
@@ -752,23 +853,31 @@ class Inverse(IndexMap):
     def _atoms(self):
         return tuple(_inverse_atom(atom) for atom in reversed(self.of.normal_form()))
 
+    def _kinds(self):
+        source, target = self.of.kinds()
+        return target, source
+
     def __repr__(self):
         return "Inverse(%r)" % (self.of,)
 
 
 class _OpaqueMap(IndexMap):
     __slots__ = ("key", "src", "dst")
+    _origin = ""    # the provenance of IR8, named by each subclass
 
     def __init__(self, key, *, source, target):
         for kind in (source, target):
             if type(kind) is not Entity:
                 raise TypeError("a %s map names the entity kinds it reads and gives"
-                                % self.provenance)
+                                % self._origin)
         hash(key)
         _init(self, key=key, src=source, dst=target)
 
     def _atoms(self):
-        return (Opaque(self.provenance, self.key, self.src, self.dst),)
+        return (Opaque(self._origin, self.key, self.src, self.dst),)
+
+    def _kinds(self):
+        return self.src, self.dst
 
     def __repr__(self):
         return "%s(%r, source=%r, target=%r)" % (type(self).__name__, self.key, self.src, self.dst)
@@ -777,19 +886,19 @@ class _OpaqueMap(IndexMap):
 class ArithmeticMap(_OpaqueMap):
     """An ``imap`` body over coordinates (IR8 item 2); IR10 MAY raise it to a normal form."""
     __slots__ = ()
-    provenance = "arithmetic"
+    _origin = "arithmetic"
 
 
 class DataMap(_OpaqueMap):
     """Bound index arrays (IR8 item 3), inspected per topology instance (IR11)."""
     __slots__ = ()
-    provenance = "data"
+    _origin = "data"
 
 
 class ComputedMap(_OpaqueMap):
     """A map built from the state during the run (IR8 item 4, IR12)."""
     __slots__ = ()
-    provenance = "computed"
+    _origin = "computed"
 
 
 def exact_weight(weight):

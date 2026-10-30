@@ -1,4 +1,5 @@
-"""Typed refusals of the region analyses (spec 0.3 IR13, IR19, IR21, D5, the refusal table of §14.1).
+"""Typed refusals of the region analyses (spec 0.3 IR13, IR17, IR19, IR21, D5, the refusal table of
+§14.1).
 
 Each refusal names the phase that raises it and what it refuses: a region refusal names the
 region and the first map, coefficient or construct that blocks it, a coverage refusal the term.
@@ -21,7 +22,7 @@ class RegionRefusal(ValueError):
 
 
 class PropertyNotDerived(RegionRefusal):
-    """A selection or a required claim needs a property that the analysis answers Unknown."""
+    """A selection or a required claim needs a property that the analysis does not prove."""
 
     rule = "IR13"
     phase = "resolve"
@@ -29,6 +30,13 @@ class PropertyNotDerived(RegionRefusal):
     def __init__(self, message, *, region, property, blocking=None):
         self.property = property
         super().__init__(message, region=region, blocking=blocking)
+
+
+class ConservationNotStructural(PropertyNotDerived):
+    """A conservation claim without a proved identity Sum_k w_k = 0 (IR17)."""
+
+    rule = "IR17"
+    phase = "resolve"
 
 
 class ClassNotReached(RegionRefusal):
@@ -72,5 +80,5 @@ class CoverageNotExact(ValueError):
                          % (type(self).__name__, self.rule, self.phase, message, term, times))
 
 
-__all__ = ["ClassNotReached", "CoverageNotExact", "DeliveryNotStructural", "PropertyNotDerived",
-           "RegionRefusal"]
+__all__ = ["ClassNotReached", "ConservationNotStructural", "CoverageNotExact",
+           "DeliveryNotStructural", "PropertyNotDerived", "RegionRefusal"]
