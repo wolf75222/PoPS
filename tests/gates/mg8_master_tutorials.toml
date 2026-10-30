@@ -3,8 +3,10 @@ gate = "mg8-master-tutorials"
 # MG8 (spec 0.3, section 18.2) and the landing plan of N5, section 6.2: every tutorial of master's
 # docs/tutorials/scalar_advection runs in CI, from this tree and from master on the same machine,
 # and its results are compared with master's before any route that it uses is removed (MG1). A
-# difference is recorded at the end of this file with its causes; a failure is never recorded and
-# always fails the job (CF14).
+# difference of a result is recorded at the end of this file with its causes, by its exact name;
+# a failure, a missing run or observation and a missing or unlisted output are never recorded and
+# always fail the job (CF14). The ledger only shrinks (MG6): scripts/run_mg8_tutorials.py check
+# --check-base fails when it records more than the contract of the base revision.
 master = "bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7"
 directory = "docs/tutorials/scalar_advection"
 # The ConsoleMonitor template of the tutorials: these lines are their outputs at output times.
@@ -135,15 +137,16 @@ script = "16_openmp_cartesian3d_ssprk2.py"
 lane = "serial-dim3"
 outputs = [{ pattern = "results/16_openmp_cartesian3d_ssprk2.npz", kind = "npz" }]
 
-# Causes of the divergences of this tree from master: each names the commits that introduced it,
-# the issue that owns it and the evidence that attributes it. The attribution build is b6 with
-# master's semantics for the four causes below (patch, replicas and traces in
-# /mnt/project-files/landing/mg8): it reproduces master bit for bit, printed and console lines
-# included, on 00 to 02, 05, 06, 09 to 13 and 15 (serial Dim2).
+# Causes of the divergences of this tree from master: each names the commits that introduced it
+# (check --verify-commits proves that each is in the history and changes more than tests), the
+# issue that owns it and the evidence that attributes it. The attribution build is b6 with
+# master's semantics for the four causes below (variant_b6_with_master_semantics.patch, replicas
+# and traces in /mnt/project-files/landing/mg8): each divergence names the run of that build that
+# reproduces master bit for bit, printed and console lines included.
 
 [[cause]]
 id = "inflow-face-trace"
-commits = ["6603aec"]
+commits = ["6603aec4"]
 issue = "ROM-101"
 text = '''
 b6 imposes the value of Inflow(value=g) as the exterior Riemann trace of the boundary face
@@ -159,7 +162,7 @@ attribution build reproduces master bit for bit (see above).
 
 [[cause]]
 id = "limiter-forms"
-commits = ["620ac6b"]
+commits = ["75aa789a"]
 issue = "ROM-102"
 text = '''
 b6 evaluates van Leer as s*(2/(1+s/l)), with s and l the smaller and larger magnitudes, and the
@@ -174,7 +177,7 @@ reproduces master bit for bit (see above).
 
 [[cause]]
 id = "amr-tag-selection"
-commits = ["620ac6b", "a17fe0e"]
+commits = ["8f972aa1", "a17fe0e9"]
 issue = "ROM-103"
 text = '''
 pops.amr.tag-selection@1: b6 dilates only the accepted Refine tags, by the authored Buffer
@@ -191,7 +194,7 @@ attribution build reproduces master bit for bit (see above).
 
 [[cause]]
 id = "regrid-boundary-prolongation"
-commits = ["620ac6b"]
+commits = ["72d3d077"]
 issue = "ROM-104"
 text = '''
 At a regrid, b6 fills a new fine cell whose parent touches a non-periodic face of the domain
@@ -207,13 +210,18 @@ and same bits up to the regrid of step 2, whose 84 new fine cells next to y_min 
 version bit for bit. The attribution build reproduces master bit for bit (see above).
 '''
 
-# One divergence per tutorial: the exact checks that differ and their causes. compare fails
-# on a difference without an entry and on a check that no longer differs, so this list only
-# shrinks (MG6); a failure is never a divergence (CF14).
+# One divergence per tutorial: the exact checks that differ, their causes and their attribution,
+# "reproduced" with the verdict of the run of the attribution build that gives master's bits
+# (under /mnt/project-files), or "inferred".
+# compare fails on a difference without an entry and on a check that no longer differs, and check
+# --check-base on an entry that the base does not have, so this list only shrinks (MG6); a failure
+# is never a divergence (CF14).
 
 [[divergence]]
 tutorial = "01"
 causes = ["inflow-face-trace", "limiter-forms"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:run0-tracer:sha256",
   "monitor:rank0",
@@ -223,6 +231,8 @@ checks = [
 [[divergence]]
 tutorial = "02"
 causes = ["inflow-face-trace", "limiter-forms"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:run0-tracer:sha256",
   "output:results/02_openmp_explicit_ssprk2.npz:results/02_openmp_explicit_ssprk2.npz",
@@ -231,6 +241,8 @@ checks = [
 [[divergence]]
 tutorial = "03"
 causes = ["inflow-face-trace", "limiter-forms"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
   "run0:rank0:run0-tracer:sha256",
   "monitor:rank0",
@@ -240,6 +252,8 @@ checks = [
 [[divergence]]
 tutorial = "04"
 causes = ["inflow-face-trace", "limiter-forms"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
   "run0:rank0:run0-tracer:sha256",
   "run0:rank1:run0-tracer:sha256",
@@ -248,6 +262,8 @@ checks = [
 [[divergence]]
 tutorial = "05"
 causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:patch_boxes",
   "run0:rank0:run0-tracer-level0:sha256",
@@ -258,6 +274,8 @@ checks = [
 [[divergence]]
 tutorial = "06"
 causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:patch_boxes",
   "run0:rank0:run0-tracer-level0:sha256",
@@ -267,6 +285,8 @@ checks = [
 [[divergence]]
 tutorial = "07"
 causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
   "run0:rank0:patch_boxes",
   "run0:rank0:run0-tracer-level0:sha256",
@@ -280,6 +300,8 @@ checks = [
 [[divergence]]
 tutorial = "08"
 causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/mpi-dim2/verdict-variant-0308.json (sha256 4ec3bbba)"
 checks = [
   "run0:rank0:patch_boxes",
   "run0:rank0:run0-tracer-level0:sha256",
@@ -292,6 +314,8 @@ checks = [
 [[divergence]]
 tutorial = "09"
 causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection", "regrid-boundary-prolongation"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:patch_boxes",
   "run0:rank0:run0-tracer-level0:sha256",
@@ -301,6 +325,8 @@ checks = [
 [[divergence]]
 tutorial = "10"
 causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:patch_boxes",
   "run0:rank0:run0-tracer-level0:sha256",
@@ -310,6 +336,8 @@ checks = [
 [[divergence]]
 tutorial = "11"
 causes = ["inflow-face-trace", "limiter-forms"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:run0-tracer:sha256",
   "run1:rank0:run1-tracer:sha256",
@@ -318,6 +346,8 @@ checks = [
 [[divergence]]
 tutorial = "12"
 causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:patch_boxes",
   "run0:rank0:run0-tracer-level0:sha256",
@@ -329,6 +359,8 @@ checks = [
 [[divergence]]
 tutorial = "13"
 causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:patch_boxes",
   "run0:rank0:run0-tracer-level0:sha256",
@@ -344,6 +376,8 @@ checks = [
 [[divergence]]
 tutorial = "14"
 causes = ["inflow-face-trace", "limiter-forms", "amr-tag-selection", "regrid-boundary-prolongation"]
+attribution = "reproduced"
+reproduction = "landing/mg8/attribution/verdict-variant-09-14.json (sha256 ea5e7204); review/pr701/runs/mpi-dim2/verdict-variant-14.json (sha256 5b9d1c0b)"
 checks = [
   "run0:rank0:macro_step",
   "run0:rank0:report",
@@ -361,6 +395,8 @@ checks = [
 [[divergence]]
 tutorial = "15"
 causes = ["inflow-face-trace", "limiter-forms"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim2/verdict-variant-vs-master.json (sha256 ab877d48)"
 checks = [
   "run0:rank0:run0-tracer:sha256",
   "run1:rank0:run1-tracer:sha256",
@@ -378,6 +414,8 @@ checks = [
 [[divergence]]
 tutorial = "16"
 causes = ["inflow-face-trace", "limiter-forms"]
+attribution = "reproduced"
+reproduction = "review/pr701/runs/serial-dim3/summary-variant.md (sha256 088571c1)"
 checks = [
   "run0:rank0:run0-tracer:sha256",
   "output:results/16_openmp_cartesian3d_ssprk2.npz:results/16_openmp_cartesian3d_ssprk2.npz",

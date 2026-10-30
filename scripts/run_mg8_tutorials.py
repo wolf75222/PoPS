@@ -15,11 +15,16 @@ outputs of each tutorial by kind (NumPy archives, ParaView series, bytes).  The 
 ``tests/gates/mg8_master_tutorials.toml`` names what is not compared (identities, the run
 directory) and records the divergences of the candidate: per tutorial, the exact checks that
 differ and their causes, each cause declared once with its commits, its issue and its evidence.
-A tutorial that fails is a failure with its log, never a skip and never a recorded divergence
-(CF14), and the recorded checks only shrink (MG6).
+Only a result can be recorded, by its exact name: a tutorial that fails, a run that is missing,
+an observation that could not be made, a missing or unlisted output and a different number of
+``pops.run`` calls or printed lines always fail (CF14).  The recorded checks only shrink (MG6):
+``compare`` fails on a recorded check that no longer differs, and ``check --check-base`` fails
+on a ledger that grows against the contract of a base revision.
 
 ``archive`` packs a run deterministically (the reference of master is kept outside the code
-tree, MG8-0), and ``check`` validates the contract against a source tree without running anything.
+tree, MG8-0), and ``check`` validates the contract against a source tree without running anything:
+the tutorials on disk, the ledger against a base revision (``--check-base``) and the commits that
+the causes cite (``--verify-commits``, which needs the history).
 """
 
 from __future__ import annotations
@@ -53,8 +58,25 @@ DEFAULT_CONTRACT = ROOT / "tests/gates/mg8_master_tutorials.toml"
 SCHEMA = "pops.mg8.master-tutorials.v1"
 CONTRACT_SCHEMA_VERSION = 1
 OUTPUT_KINDS = {"bytes", "npz", "paraview", "record"}
-# A failure or a missing run is never a recorded divergence: these checks are always failures.
-UNEXPLAINABLE = ("returncode:", "reference", "candidate")
+# The results that a divergence may record, by exact name (MG8): what compare finds different
+# after a run that completed and was observed. Every other check (a return code, a missing run,
+# an observation that failed, a different number of pops.run calls or printed lines, a missing,
+# different or unlisted set of output files) is a failure and is never recorded (CF14).
+OBSERVED_FIELDS = ("controls", "time", "macro_step", "n_levels", "configured_n_levels", "blocks",
+                   "patch_boxes", "report", "states")
+RECORDABLE = (
+    re.compile(r"run\d+:rank\d+:(%s)" % "|".join(OBSERVED_FIELDS)),
+    re.compile(r"run\d+:rank\d+:run\d+-[A-Za-z0-9_.-]+:(dtype|shape|sha256)"),
+    re.compile(r"printed:rank\d+:line\d+"),
+    re.compile(r"monitor:rank\d+"),
+)
+PARAVIEW_CHECKS = ("series", "recipes", "kinds")
+# A divergence says whether a build of this tree with master's semantics for its causes was
+# run and gave master's results ("reproduced", with that run) or not ("inferred").
+ATTRIBUTIONS = ("reproduced", "inferred")
+# String arrays of ParaView outputs are compared, except the output manifest: JSON that carries
+# versioned identities, which differ between master and this tree like the identity lines.
+IDENTITY_ARRAYS = frozenset({"pops_output_manifest"})
 COMPARED_REPORT_FIELDS = (
     "accepted_steps", "rejected_steps", "final_time", "final_macro_step", "stop_reason",
 )
@@ -83,6 +105,21 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def recordable(check: str, row: Mapping[str, Any]) -> bool:
+    """Whether ``check`` names a result that compare can find different for tutorial ``row``."""
+    if any(pattern.fullmatch(check) for pattern in RECORDABLE):
+        return True
+    for output in row.get("outputs", ()):
+        prefix = "output:%s:" % output["pattern"]
+        if check.startswith(prefix):
+            rest = check[len(prefix):]
+            if output["kind"] == "paraview":
+                return rest in PARAVIEW_CHECKS
+            if output["kind"] in ("bytes", "npz"):
+                return fnmatch.fnmatchcase(rest, output["pattern"])
+    return False
+
+
 def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -97,7 +134,10 @@ def read_json(path: Path) -> Any:
 
 def load_contract(path: Path) -> dict[str, Any]:
     with path.open("rb") as stream:
-        contract = tomllib.load(stream)
+        return parse_contract(tomllib.load(stream))
+
+
+def parse_contract(contract: dict[str, Any]) -> dict[str, Any]:
     if contract.get("schema_version") != CONTRACT_SCHEMA_VERSION:
         raise ContractError("unsupported MG8 contract schema_version")
     if contract.get("gate") != "mg8-master-tutorials":
@@ -153,12 +193,21 @@ def load_contract(path: Path) -> dict[str, Any]:
         causes[row["id"]] = row
     cited: set[str] = set()
     recorded: set[str] = set()
+    rows = {row["id"]: row for row in tutorials}
     for row in contract.get("divergence", ()):
-        if set(row) != {"tutorial", "causes", "checks"} or row["tutorial"] not in seen \
-                or row["tutorial"] in recorded:
+        keys = {"tutorial", "causes", "checks", "attribution"}
+        if row.get("attribution") == "reproduced":
+            keys.add("reproduction")
+        if set(row) != keys or row["tutorial"] not in seen or row["tutorial"] in recorded:
             raise ContractError("each tutorial has at most one divergence, which names its "
-                                "causes and checks")
+                                "causes, checks and attribution (and its reproduction when "
+                                "reproduced)")
         recorded.add(row["tutorial"])
+        if row["attribution"] not in ATTRIBUTIONS or (
+                row["attribution"] == "reproduced"
+                and not (isinstance(row["reproduction"], str) and row["reproduction"].strip())):
+            raise ContractError("the divergence of tutorial %s must say whether its attribution "
+                                "is reproduced, by which run, or inferred" % row["tutorial"])
         if not isinstance(row["causes"], list) or not row["causes"] \
                 or len(set(row["causes"])) != len(row["causes"]) \
                 or not set(row["causes"]) <= set(causes):
@@ -166,10 +215,15 @@ def load_contract(path: Path) -> dict[str, Any]:
                                 % row["tutorial"])
         if not isinstance(row["checks"], list) or not row["checks"] \
                 or len(set(row["checks"])) != len(row["checks"]) \
-                or not all(isinstance(check, str) and check for check in row["checks"]) \
-                or any(check.startswith(UNEXPLAINABLE) for check in row["checks"]):
+                or not all(isinstance(check, str) and check for check in row["checks"]):
             raise ContractError("the divergence of tutorial %s needs distinct result checks"
                                 % row["tutorial"])
+        failures = [check for check in row["checks"]
+                    if not recordable(check, rows[row["tutorial"]])]
+        if failures:
+            raise ContractError("the divergence of tutorial %s records %s: not results that "
+                                "compare can find different, failures are never recorded (CF14)"
+                                % (row["tutorial"], failures))
         cited.update(row["causes"])
     if set(causes) - cited:
         raise ContractError("causes cited by no divergence: %s" % sorted(set(causes) - cited))
@@ -187,14 +241,117 @@ def check_contract(contract: Mapping[str, Any], source: Path) -> list[str]:
     return problems
 
 
-def tutorial_rows(contract: Mapping[str, Any], selected: Sequence[str]) -> list[dict[str, Any]]:
+def ledger_growth(base: Mapping[str, Any], head: Mapping[str, Any]) -> list[str]:
+    """Return how the contract ``head`` records more than ``base`` (MG6: the ledger only shrinks).
+
+    Everything but the ledger stays as it is, except an output that becomes compared; a cause
+    keeps its issue; a divergence may lose checks and causes and turn from inferred to
+    reproduced. Texts, evidence and the commits of a cause may be corrected: the commits admit
+    nothing, and ``verify_commits`` checks each of them.
+    """
+    problems = []
+    for key in ("schema_version", "gate", "master", "directory", "monitor", "lanes"):
+        if base.get(key) != head.get(key):
+            problems.append("%s changed" % key)
+    old_rows = {row.get("id"): row for row in base.get("tutorial", ())}
+    new_rows = {row.get("id"): row for row in head.get("tutorial", ())}
+    if sorted(old_rows) != sorted(new_rows):
+        problems.append("the tutorials changed: %s, then %s" % (sorted(old_rows), sorted(new_rows)))
+    for tutorial in sorted(set(old_rows) & set(new_rows)):
+        old, new = old_rows[tutorial], new_rows[tutorial]
+        for key in ("script", "lane"):
+            if old.get(key) != new.get(key):
+                problems.append("tutorial %s: %s changed" % (tutorial, key))
+        if not set(new.get("identity_lines", ())) <= set(old.get("identity_lines", ())):
+            problems.append("tutorial %s: identity_lines grew" % tutorial)
+        old_outputs = {output.get("pattern"): output for output in old.get("outputs", ())}
+        new_outputs = {output.get("pattern"): output for output in new.get("outputs", ())}
+        if sorted(old_outputs) != sorted(new_outputs):
+            problems.append("tutorial %s: its outputs changed" % tutorial)
+        for pattern in sorted(set(old_outputs) & set(new_outputs)):
+            kinds = old_outputs[pattern].get("kind"), new_outputs[pattern].get("kind")
+            if kinds[0] != kinds[1] and not (kinds[0] == "record" and kinds[1] != "record"):
+                problems.append("tutorial %s: output %s went from %s to %s"
+                                % (tutorial, pattern, kinds[0], kinds[1]))
+    old_causes = {row.get("id"): row for row in base.get("cause", ())}
+    for cause in head.get("cause", ()):
+        old = old_causes.get(cause.get("id"))
+        if old is None:
+            problems.append("new cause %s" % cause.get("id"))
+            continue
+        if cause.get("issue") != old.get("issue"):
+            problems.append("cause %s changed its issue" % cause["id"])
+    old_divergences = {row.get("tutorial"): row for row in base.get("divergence", ())}
+    for row in head.get("divergence", ()):
+        old = old_divergences.get(row.get("tutorial"))
+        if old is None:
+            problems.append("new divergence of tutorial %s" % row.get("tutorial"))
+            continue
+        for key in ("checks", "causes"):
+            added = sorted(set(row.get(key, ())) - set(old.get(key, ())))
+            if added:
+                problems.append("tutorial %s records new %s %s" % (row["tutorial"], key, added))
+        if old.get("attribution") == "reproduced" and row.get("attribution") != "reproduced":
+            problems.append("tutorial %s: a reproduced attribution became %s"
+                            % (row["tutorial"], row.get("attribution")))
+    return problems
+
+
+def _git(source: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", "-C", str(source), *arguments], capture_output=True, text=True,
+                          check=False)
+
+
+def contract_at(source: Path, revision: str, contract: Path) -> dict[str, Any] | None:
+    """Return the contract of ``revision`` as TOML data, or None when it has none yet."""
+    if _git(source, "cat-file", "-e", revision + "^{commit}").returncode != 0:
+        raise ContractError("the base %s is not in this clone: fetch it" % revision)
+    top = Path(_git(source, "rev-parse", "--show-toplevel").stdout.strip())
+    shown = _git(source, "show", "%s:%s" % (
+        revision, contract.resolve().relative_to(top.resolve()).as_posix()))
+    return tomllib.loads(shown.stdout) if shown.returncode == 0 else None
+
+
+def verify_commits(contract: Mapping[str, Any], source: Path) -> list[str]:
+    """Each cited commit is in the history of HEAD and changes something besides tests."""
+    shallow_file = Path(_git(source, "rev-parse", "--git-common-dir").stdout.strip())
+    if not shallow_file.is_absolute():
+        shallow_file = source / shallow_file
+    shallow_file = shallow_file / "shallow"
+    shallow = set(shallow_file.read_text().split()) if shallow_file.is_file() else set()
+    problems = []
+    for cause in contract.get("cause", ()):
+        for commit in cause["commits"]:
+            full = _git(source, "rev-parse", "--verify", "--quiet", commit + "^{commit}")
+            if full.returncode != 0:
+                problems.append("cause %s cites %s, which is not in this clone: fetch the "
+                                "history" % (cause["id"], commit))
+                continue
+            full_id = full.stdout.strip()
+            if full_id in shallow:
+                problems.append("cause %s cites %s, the boundary of a shallow clone, whose "
+                                "changes are unknown: fetch the history" % (cause["id"], commit))
+                continue
+            if _git(source, "merge-base", "--is-ancestor", full_id, "HEAD").returncode != 0:
+                problems.append("cause %s cites %s, which is not in the history of HEAD"
+                                % (cause["id"], commit))
+                continue
+            paths = _git(source, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r",
+                         "-m", "--first-parent", full_id).stdout.split()
+            if not any(not path.startswith("tests/") for path in paths):
+                problems.append("cause %s cites %s, which changes tests only" % (cause["id"],
+                                                                                 commit))
+    return problems
+
+
+def tutorial_rows(contract: Mapping[str, Any], selected: Sequence[str],
+                  excluded: Sequence[str] = ()) -> list[dict[str, Any]]:
     rows = [dict(row) for row in contract["tutorial"]]
-    if not selected:
-        return rows
-    unknown = set(selected) - {row["id"] for row in rows}
+    unknown = (set(selected) | set(excluded)) - {row["id"] for row in rows}
     if unknown:
         raise ContractError("unknown tutorials %s" % sorted(unknown))
-    return [row for row in rows if row["id"] in selected]
+    return [row for row in rows if (not selected or row["id"] in selected)
+            and row["id"] not in excluded]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -243,19 +400,24 @@ def _tutorial_environment(args: argparse.Namespace, lane: Mapping[str, Any],
 
 
 def _native_identity(python: str, environment: Mapping[str, str], cwd: Path) -> dict[str, Any]:
+    # NumPy's runtime (its SIMD extensions) and the versions of the tutorials' libraries name
+    # what the elementary functions of the reference dispatch on, next to the CPU (O1).
     code = (
-        "import hashlib, json, os, pops; "
+        "import hashlib, json, os, matplotlib, numpy, pops; "
         "from pops._native_selector import select_native_dimension; "
         "native = select_native_dimension(int(os.environ['POPS_NATIVE_DIM'])); "
+        "numpy.show_runtime(); "
         "print(json.dumps({'package': pops.__file__, 'native': native.__file__, "
         "'version': pops.__version__, 'native_sha256': hashlib.sha256("
-        "open(native.__file__, 'rb').read()).hexdigest()}))"
+        "open(native.__file__, 'rb').read()).hexdigest(), 'numpy': numpy.__version__, "
+        "'matplotlib': matplotlib.__version__}))"
     )
     completed = subprocess.run([python, "-c", code], env=dict(environment), cwd=cwd,
                                capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         return {"error": completed.stderr.strip()[-4000:]}
-    return json.loads(completed.stdout.strip().splitlines()[-1])
+    lines = completed.stdout.strip().splitlines()
+    return {**json.loads(lines[-1]), "numpy_runtime": "\n".join(lines[:-1])}
 
 
 def run_tutorials(args: argparse.Namespace) -> int:
@@ -265,9 +427,13 @@ def run_tutorials(args: argparse.Namespace) -> int:
     if problems:
         raise ContractError("; ".join(problems))
     lane = contract["lanes"][args.lane]
-    rows = [row for row in tutorial_rows(contract, args.tutorial) if row["lane"] == args.lane]
+    rows = [row for row in tutorial_rows(contract, args.tutorial, args.exclude)
+            if row["lane"] == args.lane]
     if not rows:
         raise ContractError("no selected tutorial runs on lane %s" % args.lane)
+    # A run of a selection writes its own report: two steps of one lane may share an output.
+    selection = "" if not (args.tutorial or args.exclude) else "-" + "-".join(
+        row["id"] for row in rows)
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     python = str(Path(args.python).absolute())
@@ -276,13 +442,16 @@ def run_tutorials(args: argparse.Namespace) -> int:
     status = subprocess.run(["git", "-C", str(source), "status", "--porcelain", "--",
                              contract["directory"]], capture_output=True, text=True,
                             check=False).stdout
+    tree = subprocess.run(["git", "-C", str(source), "status", "--porcelain",
+                           "--untracked-files=no"], capture_output=True, text=True, check=False)
     tutorial_root = source / contract["directory"]
-    report_path = output / ("report-%s.json" % args.lane)
+    report_path = output / ("report-%s%s.json" % (args.lane, selection))
     report: dict[str, Any] = {
         "schema": SCHEMA, "phase": args.phase, "lane": args.lane, "lane_contract": lane,
         "runner_sha256": sha256_file(Path(__file__)),
         "contract_sha256": sha256_file(Path(args.contract)),
         "source": str(source), "revision": revision, "tutorials_dirty": bool(status.strip()),
+        "tree_dirty": tree.returncode != 0 or bool(tree.stdout.strip()),
         "platform": platform.platform(), "machine": platform.machine(),
         "processor": _processor(), "python": python, "tutorials": [],
     }
@@ -532,7 +701,11 @@ def _vtk_payload(text: str, header: str, compressed: bool) -> bytes:
 
 
 def vtk_arrays(path: Path) -> dict[str, dict[str, Any]]:
-    """Return every numeric DataArray of a VTK XML file by its element path and name."""
+    """Return every DataArray of a VTK XML file by its element path and name.
+
+    Numeric arrays are decoded; other arrays are compared by their decoded bytes, except the
+    identity-bearing ones (IDENTITY_ARRAYS) and the declarations of a parallel file.
+    """
     import numpy as np
 
     root = ET.parse(path).getroot()
@@ -547,8 +720,13 @@ def vtk_arrays(path: Path) -> dict[str, dict[str, Any]]:
             if child.tag in ("DataArray", "PDataArray"):
                 kind = child.get("type", "")
                 key = "/".join(here)
-                if kind not in VTK_TYPES or child.tag == "PDataArray":
+                if child.tag == "PDataArray" or name in IDENTITY_ARRAYS:
                     rows[key] = {"type": kind, "declared": True}
+                    continue
+                if kind not in VTK_TYPES:
+                    payload = (child.text or "").encode() if child.get("format") == "ascii" \
+                        else _vtk_payload(child.text or "", header, compressed)
+                    rows[key] = {"type": kind, "sha256": sha256_bytes(payload)}
                     continue
                 components = int(child.get("NumberOfComponents", "1"))
                 if child.get("format") == "ascii":
@@ -725,11 +903,10 @@ def _compare_outputs(result: Comparison, row: Mapping[str, Any], reference_root:
         claimed_reference.update(expected)
         claimed_candidate.update(actual)
         where = "output:" + pattern
-        if not expected:
-            result.differ(tutorial, where, "master wrote no file matching it")
-            continue
-        if not actual:
-            result.differ(tutorial, where, "no file matching it was written")
+        if not expected or not actual:
+            result.differ(tutorial, "output-missing:" + pattern,
+                          "master wrote no file matching it" if not expected
+                          else "no file matching it was written")
             continue
         ref_dir = reference_root / reference["work"] / "tutorial"
         cand_dir = candidate_root / candidate["work"] / "tutorial"
@@ -744,7 +921,8 @@ def _compare_outputs(result: Comparison, row: Mapping[str, Any], reference_root:
                         left[key], right[key]))
             continue
         if expected != actual:
-            result.differ(tutorial, where, "master wrote %s, here %s" % (expected, actual))
+            result.differ(tutorial, "output-files:" + pattern, "master wrote %s, here %s"
+                          % (expected, actual))
             continue
         for relative in expected:
             if kind == "bytes":
@@ -760,7 +938,7 @@ def _compare_outputs(result: Comparison, row: Mapping[str, Any], reference_root:
                                    ("here", candidate["written"], claimed_candidate)):
         unclaimed = sorted(set(written) - claimed)
         if unclaimed:
-            result.differ(tutorial, "output:unlisted",
+            result.differ(tutorial, "output-unlisted",
                           "%s wrote files that the contract does not list: %s"
                           % (side, unclaimed[:5]))
 
@@ -792,12 +970,14 @@ def compare_runs(args: argparse.Namespace) -> int:
     candidate_root = Path(args.candidate).resolve()
 
     def entries(root: Path) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
-        rows = {}
+        rows: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         for path in sorted(root.glob("report-*.json")):
             report = read_json(path)
             if report.get("schema") != SCHEMA:
                 raise ContractError("%s is not an MG8 run report" % path)
             for entry in report["tutorials"]:
+                if entry["id"] in rows:
+                    raise ContractError("tutorial %s ran twice in %s" % (entry["id"], root))
                 rows[entry["id"]] = (report, entry)
         return rows
 
@@ -821,6 +1001,9 @@ def compare_runs(args: argparse.Namespace) -> int:
         if ref_report.get("revision") != contract["master"]:
             result.differ(tutorial, "reference", "the reference ran %s, not master %s"
                           % (ref_report.get("revision"), contract["master"]))
+        elif ref_report.get("tree_dirty", True):
+            result.differ(tutorial, "reference", "master's checkout had local changes, or its "
+                          "report does not say")
         for side, entry in (("master", reference), ("here", candidate)):
             if entry["returncode"] != 0:
                 result.differ(tutorial, "returncode:" + side, "exit %d%s; %s" % (
@@ -849,18 +1032,20 @@ def compare_runs(args: argparse.Namespace) -> int:
     ids = {row["id"] for row in selected}
     ledger = {row["tutorial"]: row for row in contract.get("divergence", ())
               if row["tutorial"] in ids}
+    rows_by_id = {row["id"]: row for row in selected}
     explained, unexplained = [], []
     for difference in result.rows:
         entry = ledger.get(difference["tutorial"])
-        matched = entry is not None and not difference["check"].startswith(UNEXPLAINABLE) \
-            and any(fnmatch.fnmatchcase(difference["check"], check) for check in entry["checks"])
+        # Exact names only: a recorded check explains that check, never a family of checks.
+        matched = entry is not None and difference["check"] in entry["checks"] \
+            and recordable(difference["check"], rows_by_id[difference["tutorial"]])
         (explained if matched else unexplained).append(
             {**difference, "causes": list(entry["causes"])} if matched else difference)
     # Shrink only (MG6): a recorded check that no longer differs must be removed.
+    found = {(row["tutorial"], row["check"]) for row in result.rows}
     stale = [{"tutorial": tutorial, "check": check, "causes": list(entry["causes"])}
              for tutorial, entry in sorted(ledger.items()) for check in entry["checks"]
-             if not any(row["tutorial"] == tutorial and fnmatch.fnmatchcase(row["check"], check)
-                        for row in result.rows)]
+             if (tutorial, check) not in found]
     verdict = {
         "schema": SCHEMA + ".verdict", "master": contract["master"],
         "reference": str(reference_root), "candidate": str(candidate_root),
@@ -1007,6 +1192,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--output", required=True)
     run.add_argument("--phase", choices=("reference", "candidate"), required=True)
     run.add_argument("--tutorial", action="append", default=[], help="two-digit id")
+    run.add_argument("--exclude", action="append", default=[],
+                     help="two-digit id that another run of the lane runs (compare fails on a "
+                          "tutorial that no run ran)")
     run.add_argument("--mpiexec")
     run.add_argument("--mpiexec-arg", action="append", default=[])
     run.add_argument("--pythonpath", action="append", default=[],
@@ -1033,6 +1221,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     check = commands.add_parser("check", help="validate the contract against a tree")
     check.add_argument("--source", default=str(ROOT))
     check.add_argument("--contract", default=str(DEFAULT_CONTRACT))
+    check.add_argument("--check-base", metavar="REVISION",
+                       help="fail if the ledger records more than the contract of REVISION")
+    check.add_argument("--verify-commits", action="store_true",
+                       help="fail unless every commit of a cause is in the history of HEAD "
+                            "and changes more than tests")
     args = parser.parse_args(argv)
     if args.command == "probe":
         return probe(args)
@@ -1042,7 +1235,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return compare_runs(args)
     if args.command == "archive":
         return archive_run(args)
-    problems = check_contract(load_contract(Path(args.contract)), Path(args.source))
+    source = Path(args.source)
+    contract = load_contract(Path(args.contract))
+    problems = check_contract(contract, source)
+    if args.check_base:
+        base = contract_at(source, args.check_base, Path(args.contract))
+        if base is None:
+            print("the base %s has no MG8 contract: first introduction" % args.check_base)
+        else:
+            problems += ["against %s: %s" % (args.check_base, problem)
+                         for problem in ledger_growth(base, contract)]
+    if args.verify_commits:
+        problems += verify_commits(contract, source)
     for problem in problems:
         print(problem, file=sys.stderr)
     return 1 if problems else 0

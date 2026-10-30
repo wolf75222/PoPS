@@ -187,7 +187,8 @@ tests ran or that GitHub CI is green.
 
 ## Master's tutorials (MG8)
 
-`mg8-tutorials` runs on every complete plan and is required then. Its three lanes, `serial-dim2`,
+`mg8-tutorials` runs on every plan that needs the Python lane, complete plans included, and is
+required then: a change of a route that a tutorial uses runs it (MG8-1). Its three lanes, `serial-dim2`,
 `mpi-dim2` (two ranks) and `serial-dim3`, each hold one installed PoPS: master's MPI module compiles
 `MPI_COMM_WORLD` artifacts only, and tutorial 16 needs Dim3. A lane builds master `bb9aea0c`
 (cached by commit) and this tree, then `scripts/run_mg8_tutorials.py run` executes each of the 17
@@ -201,13 +202,47 @@ directory are not compared. The reference is rebuilt on each runner because NumP
 elementary functions dispatch on CPU features: arrays stored on another machine would compare two
 machines, not two trees.
 
-A difference is recorded in the contract. Each `[[cause]]` names one change of this tree, the
-commits that introduced it, the issue that owns it and the evidence that attributes it; each
-`[[divergence]]` lists, for one tutorial, the exact checks that differ and the causes they come
-from. A failure is never recorded: a tutorial that fails or a missing run always fails the job, and
-no tutorial is skipped (CF14). The list only shrinks (MG6): `compare` fails on a difference that no
-divergence lists and on a listed check that no longer differs. A slice that changes a route that a tutorial uses
-updates the tutorial in the same PR or keeps the old spelling until the route is removed (MG1).
+A difference of a result is recorded in the contract, by its exact name. Each `[[cause]]` names
+one change of this tree, the commits that introduced it, the issue that owns it and the evidence
+that attributes it; each `[[divergence]]` lists, for one tutorial, the exact checks that differ,
+the causes they come from and its attribution: `reproduced`, with the verdict of a build of this
+tree with master's semantics for those causes that gives master's bits, or `inferred`. Only results
+can be recorded: a state, the clock, the hierarchy or the report after a `pops.run` call, a printed
+or monitor line, an output file or series. A failure never is: a tutorial that fails, a missing
+run, an observation that the probe could not make, a different number of `pops.run` calls or
+printed lines, and a missing, different or unlisted set of output files always fail the job, and no
+tutorial is skipped (CF14).
+
+The list only shrinks (MG6). `compare` fails on a difference that no divergence lists and on a
+listed check that no longer differs. On every event, the `changes` job runs `run_mg8_tutorials.py
+check --check-base <base> --verify-commits`: it fails when the ledger records a check, a cause or a
+pair of tutorial and cause that the base does not, when a cause changes its issue, when an output
+stops being compared, when identity lines grow or when anything outside the ledger changes, and
+when a cited commit is not in the history or changes tests only (the full history is checked out
+there; a shallow clone's boundary commit is refused, its changes are unknown). The commits of a
+cause may be corrected, since they admit no difference: each one is checked the same way. A slice
+that changes a result of a tutorial restores master's result or does not land; it never records it.
+A slice that changes a route that a tutorial uses keeps the old spelling until the route is removed
+(MG1).
+
+Each run step has a budget and each tutorial a watchdog under it (`--watchdog`), and the run report
+is written after every tutorial. Tutorial 14 runs to t = 8 on two ranks and this tree takes about
+four times master's time on it (ROM-105), so it runs in a step of its own (`--exclude 14`, then
+`--tutorial 14`). The comparison runs after a step that failed or timed out, so its summary names
+any tutorial that did not finish, and the job's limit covers the sum of its steps.
+
+String arrays of ParaView outputs are compared, except `pops_output_manifest`, a JSON manifest of
+versioned identities. The JIT flags differ between master (`-O3 -DNDEBUG`) and this tree
+(`-fno-fast-math -ffp-contract=off` in addition); neither the JIT nor the native modules pass
+`-march`, so GCC targets the x86-64 baseline, which has no FMA: `-ffp-contract=off` has nothing to
+contract, and a build of this tree with master's semantics gives master's bits (CC7). Each run
+report records the CPU model and features, NumPy's runtime (SIMD extensions) and the versions of
+NumPy and Matplotlib, so that a change of runner shows in the summary.
+
+The reference of MG8-0 (master's runs in a container, three lanes) is archived outside the code
+tree: `/mnt/project-files/landing/mg8/mg8-master-bb9aea0c.tar.xz` (SHA-256 `8528f7d842a1bbb9...`),
+with the manifest of every state and output. CI never reads it: it rebuilds the reference on each
+runner.
 
 Run one lane locally with two packages built from the presets (copy each build tree's
 `python/pops` with `cp -rL`):
@@ -223,7 +258,9 @@ python3 scripts/run_mg8_tutorials.py compare --lane serial-dim2 \
   --reference /tmp/mg8/reference --candidate /tmp/mg8/candidate
 ```
 
-The `mpi-dim2` lane also needs `--mpiexec "$(command -v mpiexec)"`.
+The `mpi-dim2` lane also needs `--mpiexec "$(command -v mpiexec)"`. Before pushing a change of the
+contract, `python3 scripts/run_mg8_tutorials.py check --check-base <base> --verify-commits` runs the
+check of the `changes` job (it needs the history back to the cited commits).
 
 ## Reproduce a plan locally
 

@@ -267,10 +267,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   real-spectrum witness propagates the same failure into native pointwise transforms before commit.
 - Run master's 17 scalar-advection tutorials in CI (`mg8-tutorials`): each runs from master
   bb9aea0c and from this tree on the same runner, and `scripts/run_mg8_tutorials.py` compares
-  every result bitwise. `tests/gates/mg8_master_tutorials.toml` records each divergence with
-  its causes and their issues; a failure always fails the job. Tutorial 11 binds its runtime
-  parameters as master writes them again: the block-qualified spelling raised
-  DoubleOwnershipError.
+  every result bitwise, on every plan that needs the Python lane.
+  `tests/gates/mg8_master_tutorials.toml` records each divergence by its exact checks, with its
+  causes, their issues and commits and its attribution; only results can be recorded, a failure
+  always fails the job, and `run_mg8_tutorials.py check --check-base` fails on every event when
+  the ledger grows. Tutorial 11 binds its runtime parameters as master writes them again: the
+  block-qualified spelling raised DoubleOwnershipError.
 
 ## [1.0.0] - 2026-07-16
 
