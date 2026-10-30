@@ -109,6 +109,18 @@ jobs:
             --event-name "$EVENT_NAME" \
             --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" \
             --output-file ci-input/changed-files.txt
+      # MG6: the ledger of master's tutorials (MG8) records no more than the base does, and each
+      # of its causes cites commits of the history that change code the tutorials execute. Every
+      # event runs it, so a PR cannot grow the ledger even when its plan skips the tutorials.
+      - name: Check the MG8 ledger against the base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base=()
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            base=(--check-base "$BASE_SHA")
+          fi
+          python3 scripts/run_mg8_tutorials.py check --source . --verify-commits "${base[@]}"
       - name: Upload shared changed files
         uses: actions/upload-artifact@v7
         with:
@@ -1505,7 +1517,7 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, mpi-dim1, mpi-python, kokkos-openmp]
+    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, mpi-dim1, mpi-python, kokkos-openmp, mg8-tutorials]
     if: always()
     steps:
       - uses: actions/checkout@v7
@@ -1513,7 +1525,7 @@ jobs:
           fetch-depth: 1
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} mpi-python=${{ needs.mpi-python.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }}"
+          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} mpi-python=${{ needs.mpi-python.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }} mg8-tutorials=${{ needs.mg8-tutorials.result }}"
           python3 scripts/ci_route_mode.py check \
             --gate changes "${{ needs.changes.result }}" true \
             --gate set-mode "${{ needs.set-mode.result }}" true \
@@ -1535,7 +1547,9 @@ jobs:
             --gate mpi-python "${{ needs.mpi-python.result }}" \
               "${{ needs.set-mode.outputs.mpi_required }}" \
             --gate kokkos-openmp "${{ needs.kokkos-openmp.result }}" \
-              "${{ needs.set-mode.outputs.openmp_required }}"
+              "${{ needs.set-mode.outputs.openmp_required }}" \
+            --gate mg8-tutorials "${{ needs.mg8-tutorials.result }}" \
+              "${{ needs.set-mode.outputs.full == 'true' || needs.set-mode.outputs.python_required == 'true' }}"
 
   mpi:
     name: ubuntu-24.04 / MPI + Kokkos Serial + collective HDF5
@@ -2562,3 +2576,234 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
+
+  # MG8 (spec 0.3, section 18.2; N5 landing plan, section 6.2): the 17 tutorials of
+  # docs/tutorials/scalar_advection run once from master bb9aea0c and once from this tree, on the
+  # same runner, and scripts/run_mg8_tutorials.py compares every result bitwise under
+  # tests/gates/mg8_master_tutorials.toml. The reference is rebuilt on each runner: NumPy's and
+  # glibc's elementary functions dispatch on CPU features, so arrays stored from another machine
+  # would compare two machines, not two trees. Master's packages are fixed by its commit and
+  # cached; this tree's packages are built with the ccache of the Python and MPI lanes. A difference
+  # is recorded in the contract with its causes; a failure always fails the job (CF14). It runs on
+  # every plan that needs the Python lane, so a change of a route that a tutorial uses runs it
+  # (MG8-1). Each run step has a budget and each tutorial a watchdog under it; reports are written
+  # after every tutorial and the comparison runs after a step that fails or times out, so its
+  # summary names the tutorial that did not finish. The job's limit is the sum of the bounded
+  # steps (45 + 45 + 45 + 45 + 60 + 15 = 255 min) and of the setup.
+  mg8-tutorials:
+    name: ubuntu-24.04 / MG8 master tutorials (${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 285
+    needs: [set-mode]
+    if: needs.set-mode.outputs.full == 'true' || needs.set-mode.outputs.python_required == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [serial-dim2, mpi-dim2, serial-dim3]
+
+    env:
+      MG8_MASTER: bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-mg8
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      CCACHE_CACHE_KEY: mg8-${{ matrix.lane }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+      OMPI_MCA_rmaps_base_oversubscribe: "true"
+      PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
+      OMPI_ALLOW_RUN_AS_ROOT: "1"
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+      OMPI_MCA_io: "^ompio"
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Check out master's tutorials and sources
+        uses: actions/checkout@v7
+        with:
+          ref: bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7
+          path: .mg8/master
+          fetch-depth: 1
+
+      - id: kokkos
+        uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: mold libopenmpi-dev openmpi-bin libhdf5-openmpi-dev
+
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install the tutorials' Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy matplotlib 'pybind11==2.13.6'
+          python -c "import numpy, matplotlib; print('numpy', numpy.__version__, 'matplotlib', matplotlib.__version__)"
+
+      - name: Resolve the lane
+        id: lane
+        run: |
+          case "${{ matrix.lane }}" in
+            serial-dim2) echo "dimension=2" >> "$GITHUB_OUTPUT"; echo "mpi=false" >> "$GITHUB_OUTPUT" ;;
+            mpi-dim2) echo "dimension=2" >> "$GITHUB_OUTPUT"; echo "mpi=true" >> "$GITHUB_OUTPUT" ;;
+            serial-dim3) echo "dimension=3" >> "$GITHUB_OUTPUT"; echo "mpi=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::unknown MG8 lane ${{ matrix.lane }}"; exit 2 ;;
+          esac
+
+      # Master never changes: its package is keyed by the commit, the toolchain and the Python,
+      # and saved right after its build, even when a later step fails.
+      - name: Restore master's package (${{ matrix.lane }})
+        id: master-package
+        uses: actions/cache/restore@v6
+        with:
+          path: .mg8/master-package
+          key: mg8-master-package-${{ matrix.lane }}-${{ env.MG8_MASTER }}-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-headers${{ steps.kokkos.outputs.compiler-includes }}-py${{ steps.python.outputs.python-version }}-kokkos4.4.01-15dc143e
+
+      - name: Restore ccache (MG8 ${{ matrix.lane }})
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
+          restore-keys: |
+            ccache-${{ runner.os }}-mg8-${{ matrix.lane }}-${{ github.ref }}-
+            ccache-${{ runner.os }}-mg8-${{ matrix.lane }}-refs/heads/master-
+            ccache-${{ runner.os }}-${{ steps.lane.outputs.mpi == 'true' && 'mpi' || format('python-build-dim{0}', steps.lane.outputs.dimension) }}-${{ github.ref }}-
+            ccache-${{ runner.os }}-${{ steps.lane.outputs.mpi == 'true' && 'mpi' || format('python-build-dim{0}', steps.lane.outputs.dimension) }}-refs/heads/master-
+
+      - name: Build master's package (${{ matrix.lane }})
+        if: steps.master-package.outputs.cache-hit != 'true'
+        timeout-minutes: 45
+        run: |
+          source scripts/ci_heartbeat.sh
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          mpi_args=()
+          if [ "${{ steps.lane.outputs.mpi }}" = "true" ]; then
+            mpi_args+=(-DPOPS_USE_MPI=ON -DPOPS_USE_HDF5=ON)
+          fi
+          cmake -S .mg8/master -B .mg8/master-build --preset ci-python \
+            -DPOPS_NATIVE_DIM="${{ steps.lane.outputs.dimension }}" \
+            -DKokkos_ROOT="$KOKKOS_PREFIX" \
+            -DPOPS_HEAVY_MODULE_TU_POOL=4 \
+            -DPython_EXECUTABLE="$(command -v python)" \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            "${mpi_args[@]}"
+          run_with_heartbeat "master package ${{ matrix.lane }}" 40m \
+            cmake --build .mg8/master-build --parallel 4
+          rm -rf .mg8/master-package
+          mkdir -p .mg8/master-package
+          cp -rL .mg8/master-build/python/pops .mg8/master-package/pops
+          rm -rf .mg8/master-build
+
+      - name: Save master's package (${{ matrix.lane }})
+        if: steps.master-package.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .mg8/master-package
+          key: ${{ steps.master-package.outputs.cache-primary-key }}
+
+      - name: Build this tree's package (${{ matrix.lane }})
+        timeout-minutes: 45
+        run: |
+          source scripts/ci_heartbeat.sh
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          ccache --zero-stats
+          if [ "${{ steps.lane.outputs.mpi }}" = "true" ]; then
+            # The same configuration as the MPI lane, so that its ccache serves this build.
+            cmake --preset ci-mpi \
+              -DPOPS_NATIVE_DIM="${{ steps.lane.outputs.dimension }}" \
+              -DPOPS_BUILD_PYTHON=ON \
+              -DPOPS_USE_HDF5=ON \
+              -DPython_EXECUTABLE="$(command -v python)"
+            run_with_heartbeat "MG8 package ${{ matrix.lane }}" 40m \
+              cmake --build --preset ci-mpi --parallel 2 --target _pops
+            build_dir=build-mpi
+          else
+            # The same configuration as gate-python-build, so that its ccache serves this build.
+            cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
+              -DPOPS_NATIVE_DIM="${{ steps.lane.outputs.dimension }}" \
+              -DPOPS_HEAVY_MODULE_TU_POOL=4 \
+              -DPython_EXECUTABLE="$(command -v python)" \
+              -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+            run_with_heartbeat "MG8 package ${{ matrix.lane }}" 40m \
+              cmake --build --preset ci-kokkos-python
+            build_dir=build-kokkos-py
+          fi
+          mkdir -p .mg8/head-package
+          cp -rL "$build_dir/python/pops" .mg8/head-package/pops
+          ccache -s
+
+      - name: Save ccache (MG8 ${{ matrix.lane }})
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
+
+      - name: Run master's tutorials from master (${{ matrix.lane }})
+        timeout-minutes: 45
+        run: |
+          set +e
+          python3 scripts/run_mg8_tutorials.py run --phase reference \
+            --source .mg8/master --lane "${{ matrix.lane }}" --python "$(command -v python)" \
+            --pythonpath .mg8/master-package --include .mg8/master/include \
+            --kokkos-root "$KOKKOS_PREFIX" --mpiexec "$(command -v mpiexec)" \
+            --watchdog 2400 --output "$RUNNER_TEMP/mg8/reference"
+          echo "reference exit $?"
+
+      # Tutorial 14 runs to t = 8 on two ranks: this tree takes about four times master's time on
+      # it (ROM-105), so it has a step and a budget of its own and cannot starve 03 to 08.
+      - name: Run master's tutorials from this tree (${{ matrix.lane }})
+        timeout-minutes: 45
+        run: |
+          set +e
+          separate=()
+          if [ "${{ matrix.lane }}" = "mpi-dim2" ]; then
+            separate=(--exclude 14)
+          fi
+          python3 scripts/run_mg8_tutorials.py run --phase candidate \
+            --source . --lane "${{ matrix.lane }}" --python "$(command -v python)" \
+            --pythonpath .mg8/head-package --include include \
+            --kokkos-root "$KOKKOS_PREFIX" --mpiexec "$(command -v mpiexec)" \
+            --watchdog 2400 "${separate[@]}" --output "$RUNNER_TEMP/mg8/candidate"
+          echo "candidate exit $?"
+
+      - name: Run master's tutorial 14 from this tree (${{ matrix.lane }})
+        if: matrix.lane == 'mpi-dim2'
+        timeout-minutes: 60
+        run: |
+          set +e
+          python3 scripts/run_mg8_tutorials.py run --phase candidate \
+            --source . --lane "${{ matrix.lane }}" --python "$(command -v python)" \
+            --pythonpath .mg8/head-package --include include \
+            --kokkos-root "$KOKKOS_PREFIX" --mpiexec "$(command -v mpiexec)" \
+            --watchdog 3300 --tutorial 14 --output "$RUNNER_TEMP/mg8/candidate"
+          echo "candidate exit $?"
+
+      - name: Compare with master (${{ matrix.lane }})
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          set +e
+          python3 scripts/run_mg8_tutorials.py compare --lane "${{ matrix.lane }}" \
+            --reference "$RUNNER_TEMP/mg8/reference" --candidate "$RUNNER_TEMP/mg8/candidate" \
+            --verdict "$RUNNER_TEMP/mg8/verdict.json" --summary "$RUNNER_TEMP/mg8/summary.md"
+          status=$?
+          set -e
+          if [ -f "$RUNNER_TEMP/mg8/summary.md" ]; then
+            cat "$RUNNER_TEMP/mg8/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $status
+
+      - name: Publish the MG8 runs (${{ matrix.lane }})
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mg8-tutorials-${{ matrix.lane }}
+          path: ${{ runner.temp }}/mg8/
+          if-no-files-found: warn
+          retention-days: 14
