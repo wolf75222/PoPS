@@ -32,7 +32,10 @@ measurement = """
 benchmarks/n3a/face_routes.py at b6e64c1d (N3a, ROM-82): the riemann.User route reached 0.16 to
 0.53 of native throughput on both structures, at 1 and 4 threads, with face kernels within 0.97 to
 1.18 of native; the cost was a boundary session allocated and zero-filled per evaluation, an
-unread copy of the faces and a two-pass frequency. After this mechanism: see ROM-100."""
+unread copy of the faces and a two-pass frequency. After this mechanism, same script and machine
+(ABBA, medians of six samples; 0.23 to 0.49 at the base 9b9bf65): 0.946 to 0.998 of native on M01
+2048^2 and 4096^2 and on M03 1024^2 and 2048^2, at 1 and 4 threads, final states bitwise equal;
+when the cells quadruple, the time per step grows x4.19 to x4.47 (native x4.23 to x4.41)."""
 refusal_set = "unchanged: kUserNonFiniteFlux refuses the same faces with the same cause"
 paths = [
   "include/pops/numerics/spatial/nd/face_frequency.hpp",
