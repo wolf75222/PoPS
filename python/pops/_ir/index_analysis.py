@@ -1,15 +1,18 @@
 """Three-valued analyses over typed index maps (spec 0.3 IR13, IR14, IR17, IR20, IR21).
 
 A ``Region`` is what the analyses read of one kernel: the entities it maps over (its domain), its
-reads (an array read through an index map), the signed targets through which its value leaves
-when it is a scatter, and the class its builder expects. Every analysis answers Proved, Disproved
-or Unknown (IR13) and reads only normal forms and coefficient lists, so its cost depends on the
-number of reads and maps, never on an extent or a trip count (B4). Unknown enables nothing:
-``require`` refuses it with ``PropertyNotDerived``, naming the region and the first blocking map.
+reads (an array read through an index map), the signed targets through which its shared value
+leaves when it is a scatter, its productions, and the class its builder expects. Every analysis
+answers Proved, Disproved or Unknown (IR13) and reads only normal forms, types and coefficient
+lists, so its cost depends on the number of reads and maps, never on an extent or a trip count
+(B4). Only Proved enables a property: ``require`` refuses the others with ``PropertyNotDerived``,
+or ``ConservationNotStructural`` for conservation, naming the region and the first blocking map.
 
 The halo is exact box arithmetic, symbolic in the extents (IR14): a rank owns the cells [0, n) of
-each axis, a face region computes the faces of its owned cells, [0, n] along the normal axis, and a
-translation by c reads the cells [c, n - 1 + c], one more along the normal of a face. The widths
+each axis, and the faces normal to a of its cells, [0, n] along a. A translation by c from the
+domain reads the entities [c, m - 1 + c] of its target, m being the number of domain entities
+along the axis, so it needs c + m - m' beyond the m' owned target entities: one more along the
+normal of a face domain read in cells, and none when the target has the domain's kind. The widths
 beyond the owned box do not depend on n. b6 stores one width per axis, the larger side of its own
 formulas (``ghost_extent``, ``ghost_depth``); the builders report that value beside the exact one,
 for IR-T1.
@@ -18,6 +21,12 @@ Classification (IR20) reaches pointwise, box stencil and face incidence when eve
 region is a translation from its domain, and otherwise names the class its atoms give (level
 transfer, axis reduction or broadcast, CSR for a data map, generic) with the first map that is not
 a translation. The loop-nest generators of each class are phase 2 of N7.
+
+Scope at this commit (MG7). The footprint and the import set of IR14 are derived for translations
+only, and a halo through another map (``Parent``, ``Child``, ``Project``, a trace of a boundary
+piece) is Unknown; their box rules, symmetry (IR16), D.C = 0 and the transfer identities of IR17,
+and the scope of an implicit relation (IR18) come with later lots of N7, the inspector of data maps
+(IR11) and the request protocol of computed maps (IR12) with the runtime side of N7.
 """
 from __future__ import annotations
 
@@ -26,7 +35,7 @@ from dataclasses import dataclass
 
 from .index_maps import (
     Coarsen, Drop, Entity, IndexMap, Opaque, Pin, Refine, Unpin, Unrefine, dense, exact_weight)
-from .refusals import ClassNotReached, PropertyNotDerived
+from .refusals import ClassNotReached, ConservationNotStructural, PropertyNotDerived
 
 CLASSES = ("pointwise", "box_stencil", "face_incidence", "axis_reduction", "line_scan",
            "level_transfer", "csr", "generic")
@@ -63,11 +72,14 @@ class Read:
 class Region:
     """What the analyses read of one kernel.
 
-    ``targets`` holds the ``(map, weight)`` pairs of a ``scatter_reduce`` (IR17); an empty tuple
-    writes element by element over the domain. ``expected`` is the class the builder records
-    (IR21). ``basis`` says where the reads come from: ``"derived"`` when they are collected from a
-    body, ``"declared"`` when a native catalogue states them (a substitution of IR24 whose
-    reference region is not written yet).
+    ``targets`` holds the ``(map, weight)`` pairs of the ``scatter_reduce`` of its shared value
+    (IR17); an empty tuple writes element by element over the domain. ``productions`` holds the
+    ``(map, weight)`` pair of each single-target ``scatter_reduce`` of a per-side value, a
+    ``Production`` of §8.1 and never an exchange (IR25, D6): conservation reads the targets only.
+    Every map starts from the domain. ``expected`` is the class the builder records (IR21).
+    ``basis`` says where the reads come from: ``"derived"`` when they are collected from a body,
+    ``"declared"`` when a native catalogue states them (a substitution of IR24 whose reference
+    region is not written yet).
     """
     name: str
     domain: Entity
@@ -76,6 +88,7 @@ class Region:
     targets: tuple = ()
     expected: str | None = None
     basis: str = "derived"
+    productions: tuple = ()
 
     def __post_init__(self):
         if type(self.domain) is not Entity:
@@ -86,9 +99,13 @@ class Region:
             raise ValueError("%r is not an entity of a rank-%d lattice" % (self.domain, self.rank))
         if any(type(read) is not Read for read in self.reads):
             raise TypeError("a region's reads are Read records")
-        for pair in self.targets:
+        for pair in self.targets + self.productions:
             if type(pair) is not tuple or len(pair) != 2 or not isinstance(pair[0], IndexMap):
                 raise TypeError("a scatter target is a (map, weight) pair, got %r" % (pair,))
+        for map_ in _maps(self):
+            if map_.source not in (None, self.domain):
+                raise TypeError("region %r maps over %r entities, but %r reads %r entities"
+                                % (self.name, self.domain, map_, map_.source))
         if self.expected is not None and self.expected not in CLASSES:
             raise ValueError("unknown lowering class %r; the classes are %s"
                              % (self.expected, ", ".join(CLASSES)))
@@ -113,15 +130,20 @@ def _translation_from(map_, domain):
 
 
 def _maps(region):
-    return tuple(read.map for read in region.reads) + tuple(m for m, _ in region.targets)
+    return (tuple(read.map for read in region.reads)
+            + tuple(m for m, _ in region.targets + region.productions))
+
+
+def _normal_to(kind, axis):
+    return int(kind.kind == "face" and kind.axis == axis)
 
 
 def halo(region, where=None):
-    """Exact widths ``(low, high)`` per axis of the cells read beyond the owned box (IR14).
+    """Exact widths ``(low, high)`` per axis of the entities read beyond the owned box (IR14).
 
-    ``where``, a predicate on the array labels, restricts the reads. Unknown when a read is not a
-    translation from the domain, or when the domain is a boundary piece, whose widths depend on
-    the extents.
+    ``where``, a predicate on the array labels, restricts the reads. A read of type (None, None)
+    reads entities of the domain's kind. Unknown when a read is not a translation from the domain,
+    or when the domain or a read target is a boundary piece, whose widths depend on the extents.
     """
     if region.domain.piece is not None:
         return Fact("halo", Truth.UNKNOWN, blocking=region.domain,
@@ -133,19 +155,23 @@ def halo(region, where=None):
         if not _translation_from(read.map, region.domain):
             return Fact("halo", Truth.UNKNOWN, blocking=read.map,
                         detail="%r is not a translation from %r" % (read.map, region.domain))
+        target = region.domain if read.map.target is None else read.map.target
+        if target.piece is not None:
+            return Fact("halo", Truth.UNKNOWN, blocking=read.map,
+                        detail="%r reads the faces of a boundary piece" % (read.map,))
         offset = dense(read.map.translation(), region.rank)
         for axis, step in enumerate(offset):
-            grow = int(region.domain.kind == "face" and region.domain.axis == axis)
+            grow = _normal_to(region.domain, axis) - _normal_to(target, axis)
             low[axis] = max(low[axis], -step)
             high[axis] = max(high[axis], step + grow)
     return Fact("halo", Truth.PROVED, value=(tuple(low), tuple(high)))
 
 
 def conservation(region):
-    """Sum_k w_k = 0 over the targets of the region's scatter (IR17).
+    """Sum_k w_k = 0 over the targets of the scatter of the region's shared value (IR17).
 
-    Unknown when the region writes element by element (no identity to check) or when a weight is
-    not an exact number.
+    Productions carry no identity: IR17 checks the shared value only. Unknown when the region
+    writes element by element (no identity to check) or when a weight is not an exact number.
     """
     if not region.targets:
         return Fact("conservation", Truth.UNKNOWN,
@@ -178,21 +204,30 @@ def injective(map_):
                         detail="Project: its fan-out is the fibre cardinality |V|")
         if type(atom) is Coarsen:
             if len(atoms) == 1:
-                return Fact("injective", Truth.DISPROVED, value=("ratio^rank", atom.ratio))
+                return Fact("injective", Truth.DISPROVED, value=(("ratio^rank", atom.ratio),))
             return Fact("injective", Truth.UNKNOWN, blocking=map_,
                         detail="a composition that holds Parent")
     return Fact("injective", Truth.PROVED)
 
 
+def _identity_on(map_, domain):
+    return map_.translation() == () and map_.target in (None, domain)
+
+
 def classify(region):
-    """``(class, blocking map)`` from the normal forms of the region's maps (IR20)."""
+    """``(class, blocking map)`` from the normal forms of the region's maps (IR20).
+
+    A region whose every read and delivery is the identity of its domain is pointwise, a scatter
+    to its own entities included; then a region over faces is face incidence, and a region over
+    cells a box stencil.
+    """
     maps = _maps(region)
     blocking = next((m for m in maps if not _translation_from(m, region.domain)), None)
     if blocking is None:
+        if all(_identity_on(m, region.domain) for m in maps):
+            return "pointwise", None
         if region.domain.kind == "face":
             return "face_incidence", None
-        if not region.targets and all(not m.translation() for m in maps):
-            return "pointwise", None
         return "box_stencil", None
     atoms = [atom for m in maps for atom in m.normal_form()]
     if any(type(atom) is Opaque and atom.provenance == "data" for atom in atoms):
@@ -221,14 +256,22 @@ def check_expected_class(region):
 
 
 def require(fact, region):
-    """``fact.value`` when the fact is not Unknown; otherwise ``PropertyNotDerived`` (IR13)."""
-    if fact.truth is Truth.UNKNOWN:
-        raise PropertyNotDerived(
-            "region %r needs the property %s, which the analysis answers Unknown: %s; the first "
-            "blocking map or coefficient is %r" % (region.name, fact.property, fact.detail,
-                                                   fact.blocking),
-            region=region.name, property=fact.property, blocking=fact.blocking)
-    return fact.value
+    """``fact.value`` when the analysis proves the property; otherwise a typed refusal.
+
+    Unknown and Disproved enable nothing (IR13): a conservation that is not proved is refused with
+    ``ConservationNotStructural`` (IR17), any other property with ``PropertyNotDerived``.
+    """
+    if fact.truth is Truth.PROVED:
+        return fact.value
+    refusal = ConservationNotStructural if fact.property == "conservation" else PropertyNotDerived
+    reason = (fact.detail if fact.truth is Truth.UNKNOWN
+              else "the analysis disproves it (value %s)" % (fact.value,))
+    blocking = ("" if fact.blocking is None
+                else "; the first blocking map or coefficient is %r" % (fact.blocking,))
+    raise refusal(
+        "region %r needs the property %s, which the analysis answers %s: %s%s"
+        % (region.name, fact.property, fact.truth.value, reason, blocking),
+        region=region.name, property=fact.property, blocking=fact.blocking)
 
 
 __all__ = ["CLASSES", "Fact", "Read", "Region", "Truth", "check_expected_class", "classify",

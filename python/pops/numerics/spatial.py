@@ -210,6 +210,9 @@ class FiniteVolume(Descriptor):
         envelope [1 - n, n - 1] that the native sampler admits, which is the stencil of every
         catalogue entry: a declared basis (IR24) until the reference region of N3 is written.
         """
+        return self._face_regions(name, rank)
+
+    def _face_regions(self, name: str, rank: int, productions: tuple = ()) -> Any:
         from pops.model.face_regions import face_regions
 
         offsets = self.reconstruction.options.get("sample_offsets")
@@ -226,7 +229,7 @@ class FiniteVolume(Descriptor):
         return face_regions(name, rank, tuple(
             tuple((array, along(axis, sign*o), side) for array in arrays
                   for side, sign in (("left", 1), ("right", -1)) for o in offsets)
-            for axis in range(rank)), basis=basis)
+            for axis in range(rank)), basis=basis, productions=productions)
 
     def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet

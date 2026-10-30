@@ -1,28 +1,31 @@
-"""N7 lot 1 (spec 0.3 IR14, IR17, IR20, IR21, IR-T1 first part): region facts of M01, M03, M05, M10.
+"""N7 lot 1 (spec 0.3 IR14, IR17, IR20, IR21, IR25, IR-T1 first part): region facts of the plans.
 
 The face kernels of the resolved plans are regions over typed maps: the finite-volume methods of
 M01 and M03, whose native catalogue declares its stencil (IR24), and the stored face expressions
-of M05 and M10, whose reads are derived from the rows of each axis. Every region reaches the class
-its builder expects, face incidence, and ``pops.compile`` refuses one that does not with
-``ClassNotReached`` before any native work. The exact halos come from box arithmetic; the b6
-widths, which IR-T1 compares, are the stored ``ghost_depth`` and ``ghost_extent``. Level E of K6:
-resolution only, no compilation.
+of M05 and M10, whose reads are derived from the rows of each axis, at the top level of the
+program or in a nested block. Every region reaches the class its builder expects, face incidence,
+and ``pops.compile`` refuses one that does not with ``ClassNotReached`` before any native work.
+The path-conservative method of M24 and the coordinated method of M07 deliver their side terms
+as single-target productions beside the shared flux. The exact halos come from box arithmetic;
+the b6 widths, which IR-T1 compares, are the stored ``ghost_depth`` and ``ghost_extent``. Level
+E of K6: resolution only, no compilation.
 """
-import itertools
-
 import pytest
 
 import pops
 import examples.api_v02.models_M01_M14 as cases
 from examples.api_v02.faceflux_pilot import navier_stokes_scheme
+from examples.api_v02.models_M22_M25_M28 import build_m24
 from pops._ir.index_analysis import Read, Region, Truth
 from pops._ir.index_maps import DataMap
 from pops._ir.refusals import ClassNotReached
 from pops.codegen import region_facts
 from pops.lib.numerics import realize_face_flux
-from pops.numerics import reconstruction, riemann, variables
+from pops.numerics import DiscretizationPlan, StateStorage, reconstruction, riemann, variables
+from pops.numerics.nonconservative import CoordinatedFiniteVolume, PathConservativeFiniteVolume
 from pops.numerics.spatial import FiniteVolume
 from pops.regions import Incidence, cell, face
+from pops.time import FixedDt
 
 
 def _plan(build):
@@ -32,7 +35,7 @@ def _plan(build):
 
 PLANS = {name: _plan(build) for name, build in (
     ("M01", cases.build_m01), ("M03", cases.build_m03), ("M05", cases.build_m05),
-    ("M10", cases.build_m10))}
+    ("M10", cases.build_m10), ("M07", cases.build_m07), ("M24", build_m24))}
 
 
 def _over_axes(regions, where=None):
@@ -46,19 +49,21 @@ def _over_axes(regions, where=None):
     return tuple(low), tuple(high)
 
 
-@pytest.mark.parametrize("name,basis", (("M01", "declared"), ("M03", "declared"),
-                                        ("M05", "derived"), ("M10", "derived")))
-def test_every_face_kernel_reaches_its_expected_class(name, basis):
+@pytest.mark.parametrize("name,basis,kernels", (
+    ("M01", "declared", ("rate conservation",)), ("M03", "declared", ("rate Euler_balance",)),
+    ("M05", "derived", ("program NS_stage0", "program NS_stage1")),
+    ("M10", "derived", ("program stage0_fitted_face", "program stage1_fitted_face"))))
+def test_every_face_kernel_reaches_its_expected_class(name, basis, kernels):
     rows = region_facts.check_expected_classes(PLANS[name])
     # One region per axis and per kernel: the rate of M01 and M03, the two SSPRK2 stages of the
     # stored face expression of M05 and M10.
-    assert len(rows) == (2 if basis == "declared" else 4)
+    assert [row[0] for row in rows] == ["block fluid/%s/axis %d" % (kernel, axis)
+                                        for kernel in kernels for axis in range(2)]
     assert {(expected, reached, kind) for _, expected, reached, kind in rows} == {
         ("face_incidence", "face_incidence", basis)}
-    assert all(row[0].startswith("block fluid/") for row in rows)
 
 
-@pytest.mark.parametrize("name", ("M01", "M03", "M05", "M10"))
+@pytest.mark.parametrize("name", ("M01", "M03", "M05", "M10", "M07", "M24"))
 def test_face_deliveries_are_conservative(name):
     for region in region_facts.plan_regions(PLANS[name]):
         assert region.conservation().truth is Truth.PROVED
@@ -66,6 +71,29 @@ def test_face_deliveries_are_conservative(name):
         axis = region.domain.axis
         assert (left, wl, right, wr) == (Incidence(face(axis), cell, "left"), -1,
                                          Incidence(face(axis), cell, "right"), 1)
+
+
+@pytest.mark.parametrize("name,block,method", (
+    ("M24", "mixture", PathConservativeFiniteVolume), ("M07", "fluid", CoordinatedFiniteVolume)))
+def test_path_conservative_side_terms_are_single_target_productions(name, block, method):
+    plan = PLANS[name]
+    (rate,) = [row for row in plan.blocks[0].numerics.rates if type(row.method) is method]
+    regions = region_facts.plan_regions(plan)
+    assert [region.name for region in regions] == [
+        "block %s/rate %s/axis %d" % (block, rate.rate.local_id, axis) for axis in range(2)]
+    for axis, region in enumerate(regions):
+        # The left term goes to the left cell and the right term to the right cell, each with
+        # weight +1 beside the shared flux (path_flux.hpp, MaterializePathResidual): conservation
+        # stays proved on the flux alone, and the class and the halo are those of the flux.
+        assert region.productions == ((Incidence(face(axis), cell, "left"), 1),
+                                      (Incidence(face(axis), cell, "right"), 1))
+        assert region.conservation().value == 0
+        assert region.check_expected_class() == "face_incidence"
+        assert region.halo().value == tuple(tuple(int(d == axis) for d in range(2))
+                                            for _ in range(2))
+    # A conservative finite volume has no side term.
+    assert {region.productions for name in ("M01", "M03")
+            for region in region_facts.plan_regions(PLANS[name])} == {()}
 
 
 @pytest.mark.parametrize("name", ("M01", "M03"))
@@ -132,8 +160,9 @@ def test_a_source_reconstruction_has_derived_reads(body, offsets):
     model = pops.Model("user_reconstruction", frame=frame)
     U = model.state("amount", components=("u",))
     flux = model.flux("transport", state=U, frame=frame,
-                      components={axis: (a*U[0],) for axis, a in zip(frame.axes, (.7, .3))},
-                      waves={axis: (a,) for axis, a in zip(frame.axes, (.7, .3))})
+                      components={axis: (a*U[0],)
+                                  for axis, a in zip(frame.axes, (.7, .3), strict=True)},
+                      waves={axis: (a,) for axis, a in zip(frame.axes, (.7, .3), strict=True)})
     method = FiniteVolume(flux=flux, variables=variables.Conservative(U),
                           reconstruction=reconstruction.User(body, formal_order=1),
                           riemann=riemann.Rusanov())
@@ -164,9 +193,40 @@ def test_compile_refuses_a_class_not_reached_before_native_work(monkeypatch):
     assert (refusal.value.reached, refusal.value.blocking) == ("csr", graph)
 
 
-def test_region_walk_reads_each_value_once():
-    # The walk is a single pass over the values and their nested blocks (B4).
-    values = list(region_facts._program_values(PLANS["M05"].time))
-    assert len(values) == len({id(value) for value in values})
-    assert sum(1 for value in values if "stencil_flux" in value.attrs) == 2
-    assert list(itertools.islice(region_facts._program_values(PLANS["M01"].time), 1))
+def _nested_plan(loop):
+    # A stored face expression evaluated only inside the body of a loop of the program.
+    frame, layout = cases._domain("M05_nested_%s" % loop, (16, 8))
+    model = pops.Model("M05_nested_%s" % loop, frame=frame)
+    U = model.state("conservative", components=("rho", "mx", "my", "E"))
+    case = pops.Case("M05_nested_%s_case" % loop)
+    block = case.block("fluid", model)
+    flux = cases.navier_stokes_face()
+    numerics = DiscretizationPlan()
+    numerics.states.add(U, StateStorage(ghost_depth=max(flux.ghost_extent)))
+    case.numerics(numerics, block=block)
+    program = pops.Program("nested_%s" % loop,
+                           history_field_metadata_budget=(8*1024*1024, 16*1024*1024))
+    temporal = program.state(block[U])
+
+    def body(p, x):
+        k = p.stencil_flux_divergence("NS_in_loop", x, flux=flux)
+        return p.value("loop_update", x + p.dt*k, at=temporal.next.point)
+    if loop == "range":
+        after = program.range(temporal.n, 2, body)
+    else:
+        after = program.while_(temporal.n, lambda p, x: p.norm2(x) > 1e30, body)
+    program.commit(temporal.next,
+                   program.value("accepted_after_loop", 1.0*after, at=temporal.next.point))
+    program.step_strategy(FixedDt(1e-4))
+    case.program(program)
+    return pops.resolve(pops.validate(case), layout=layout)
+
+
+@pytest.mark.parametrize("loop", ("range", "while"))
+def test_a_face_kernel_in_a_nested_block_is_classified(loop):
+    plan = _nested_plan(loop)
+    assert not any("stencil_flux" in value.attrs for value in plan.time._values)
+    rows = region_facts.check_expected_classes(plan)
+    assert [row[0] for row in rows] == ["block fluid/program NS_in_loop/axis %d" % axis
+                                        for axis in range(2)]
+    assert {row[1:] for row in rows} == {("face_incidence", "face_incidence", "derived")}

@@ -6592,7 +6592,7 @@
       }
     },
     "ci_20261030_n7_typed_index_maps": {
-      "basis": "Unmeasured CI scheduling estimates for the two N7 lot 1 modules (ROM-88, typed index maps and their analyses), on the api_v02_20261013 tiers: 30 s for the source-only property tests of the normal forms and of the analyses, which build no program, as the analogue test_finite_linear_maps.py rounded up for its seeded random samples; 60 s for the resolution of the M01, M03, M05 and M10 programs without compilation, as the analogue test_faceflux_pilot_n7a.py. The local receipts are pytest sessions on a 4-core container (Python 3.12, source checkout, no native module); they are not GitHub CI file wall times. test_faceflux_pilot_n7a.py now spells its typed maps with pops.regions: its receipt under ci_20261029_n7a_faceflux_pilot is for its previous source, and its re-measured receipt is below. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the two N7 lot 1 modules (ROM-88, typed index maps and their analyses), on the api_v02_20261013 tiers: 30 s for the source-only property tests of the normal forms and of the analyses, which build no program, as the analogue test_finite_linear_maps.py rounded up for its seeded random samples; 60 s for the resolution of the M01, M03, M05, M07, M10 and M24 programs, and of two programs that evaluate a face expression in a nested block, without compilation, as the analogue test_faceflux_pilot_n7a.py. The local receipts are pytest sessions on a 4-core container (Python 3.12, source checkout, no native module); they are not GitHub CI file wall times. test_faceflux_pilot_n7a.py now spells its typed maps with pops.regions: its receipt under ci_20261029_n7a_faceflux_pilot is for its previous source, and its re-measured receipt is below. The receipts of test_typed_index_maps_n7.py and test_region_facts_n7.py are re-measured for the sources of the review round of f3b9a8c. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/numerics/test_region_facts_n7.py": "tests/python/unit/numerics/test_faceflux_pilot_n7a.py",
         "tests/python/unit/numerics/test_typed_index_maps_n7.py": "tests/python/unit/numerics/test_finite_linear_maps.py"
@@ -6607,18 +6607,18 @@
           "session_seconds": 24.73
         },
         "tests/python/unit/numerics/test_region_facts_n7.py": {
-          "cases": 18,
-          "session_seconds": 6.93
+          "cases": 23,
+          "session_seconds": 19.5
         },
         "tests/python/unit/numerics/test_typed_index_maps_n7.py": {
-          "cases": 22,
-          "session_seconds": 17.88
+          "cases": 26,
+          "session_seconds": 22.7
         }
       },
       "source_sha256": {
         "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "341d13806773df6be786e639034c9c9d0cc6223f893f2748d39ad67c009caafe",
-        "tests/python/unit/numerics/test_region_facts_n7.py": "f468e379c9f23ec3bdbad42a6272baf79a63f474b5a47eac2763611b2bf7e74f",
-        "tests/python/unit/numerics/test_typed_index_maps_n7.py": "d4189403764a73dff606fc9081e8019b6b0b102f9ad499ed0e83e2a7bf6832c8"
+        "tests/python/unit/numerics/test_region_facts_n7.py": "3f4b86457fa835c8d653ad274d769cbc6316829d93d32e4f0097c9d9c4c11900",
+        "tests/python/unit/numerics/test_typed_index_maps_n7.py": "c7c9f9f42e92f47f92f54c49fe459fe4c013d94a707789446d83bdad64fc72a4"
       }
     },
     "declared_hardware_profiles": {

@@ -3,9 +3,11 @@
 The closed list of IR9 lives in ``pops._ir.index_maps`` and is public through ``pops.regions``.
 These tests check the normal forms against the definitions of the constructors: sound (equal
 normal forms are equal maps) everywhere, and canonical (equal maps have equal normal forms) on the
-fragments where the module states it. The analyses answer three values and refuse Unknown with a
-typed refusal that names the region and the first blocking map. Level E of K6: source, no
-compilation.
+fragments where the module states it. Each map carries its type, the entity kinds it reads and
+gives, whatever its spelling, and compositions are checked on it. The analyses answer three
+values, the halo is exact on every kind of entity read, and only a proved fact enables a
+property: the others are refused with a typed refusal that names the region and the first
+blocking map. Level E of K6: source, no compilation.
 """
 import itertools
 import random
@@ -18,7 +20,7 @@ import pops.regions as regions
 from pops._ir.index_analysis import (
     Read, Region, Truth, check_expected_class, classify, conservation, halo, injective, require)
 from pops._ir.index_maps import Adjacency, ArithmeticMap, ComputedMap, DataMap, IndexMap, Translate
-from pops._ir.refusals import ClassNotReached, PropertyNotDerived
+from pops._ir.refusals import ClassNotReached, ConservationNotStructural, PropertyNotDerived
 from pops.regions import (
     Child, Compose, Embed, Incidence, Inverse, Parent, Project, Shift, Trace, boundary, cell, face)
 
@@ -47,6 +49,10 @@ def reference(map_, index):
         return index + map_.fibre
     if kind == "Compose":
         return reference(map_.outer, reference(map_.inner, index))
+    if kind == "Inverse" and type(map_.of).__name__ == "Incidence":
+        # The face whose ``side`` incident cell is the given cell.
+        return tuple(i + (axis == map_.of.src.axis and map_.of.side == "left")
+                     for axis, i in enumerate(index))
     raise TypeError(kind)
 
 
@@ -131,6 +137,45 @@ def test_face_maps_compare_by_normal_form():
         Compose(Parent(2), Shift((1, 0))).offset(2)
 
 
+def test_maps_carry_their_type():
+    left0, right0 = Incidence(face(0), cell, "left"), Incidence(face(0), cell, "right")
+    left1 = Incidence(face(1), cell, "left")
+    # The next face along x goes from the faces normal to x to themselves; a shift acts on any
+    # kind, so the two maps share a normal form and differ.
+    next_face = Compose(Inverse(left0), right0)
+    assert (next_face.source, next_face.target) == (face(0), face(0))
+    assert next_face((3, 2)) == reference(next_face, (3, 2)) == (4, 2)
+    assert next_face.normal_form() == Shift((1, 0)).normal_form() and next_face != Shift((1, 0))
+    # The zero round trip is the identity of the faces normal to y, not of every kind.
+    round_trip = Compose(Inverse(left1), left1)
+    assert round_trip.normal_form() == () and (round_trip.source, round_trip.target) == (
+        face(1), face(1))
+    assert round_trip != Shift((0, 0))
+    # Compositions are checked on the types, written with or without the round trip.
+    for outer, inner in ((left1, next_face), (Parent(2), next_face), (left0, round_trip),
+                         (left1, right0), (Parent(2), Inverse(right0))):
+        with pytest.raises(TypeError, match="cannot compose"):
+            Compose(outer, inner)
+    # A map of type (None, None) takes the type of its neighbour.
+    shifted = Compose(Shift((0, 1)), next_face)
+    assert (shifted.source, shifted.target) == (face(0), face(0))
+    assert Compose(right0, Compose(Shift((1, 0)), next_face)) == Compose(Shift((2, 0)), right0)
+    assert (Inverse(next_face).source, Inverse(next_face).target) == (face(0), face(0))
+    # A shift composed with a typed identity of a boundary piece keeps to the piece.
+    low = boundary(0, "low")
+    on_piece = Compose(Inverse(Trace(low, 0)), Trace(low, 0))
+    assert on_piece.normal_form() == () and (on_piece.source, on_piece.target) == (low, low)
+    assert (Compose(Shift((0, 1)), on_piece).source, Compose(Shift((0, 1)), on_piece).target) == (
+        low, low)
+    with pytest.raises(TypeError, match="off their boundary piece"):
+        Compose(Shift((1, 0)), on_piece)
+    # The same holds inward: the type of the outer map fixes what the inner one acts on.
+    with pytest.raises(TypeError, match="off their boundary piece"):
+        Compose(on_piece, Shift((1, 0)))
+    with pytest.raises(TypeError, match="not an axis of its base"):
+        Compose(round_trip, Project(1))
+
+
 def test_the_two_product_rules_of_ir9():
     # Project composed with the rank-(r+s) Incidence is the rank-r Incidence composed with Project.
     assert (Compose(Project(1), Incidence(face(0), cell, "left"))
@@ -187,10 +232,18 @@ def test_inverses():
     assert Inverse(child)((5, 4)) == (2, 2) and Inverse(child)((4, 4)) is None
     assert Compose(Inverse(child), child).normal_form() == ()
     assert Inverse(Embed((3,), 1))((7, 3)) == (7,) and Inverse(Embed((3,), 1))((7, 2)) is None
-    # Parent and Project are not injective: their inverse is an adjacency with its fan-out.
+    # Parent and Project are not injective: their inverse is an adjacency, whose fan-out is the
+    # product of one factor per blocking atom. |V| comes from the descriptor of the product set
+    # (IR2): the factor names it without a value, whatever the rank of the base.
     adjacency = Inverse(Parent(2))
-    assert type(adjacency) is Adjacency and adjacency.fan_out == ("ratio^rank", 2)
-    assert type(Inverse(Project(1))) is Adjacency
+    assert type(adjacency) is Adjacency and adjacency.fan_out == (("ratio^rank", 2),)
+    assert (adjacency.source, adjacency.target, adjacency.provenance) == (cell, cell, "typed")
+    assert Inverse(Project(1)).fan_out == Inverse(Project(3)).fan_out == (
+        ("fibre cardinality", None),)
+    assert Inverse(Compose(Project(1), Parent(2))).fan_out == (
+        ("fibre cardinality", None), ("ratio^rank", 2))
+    coarse_face = Inverse(Compose(Parent(2), Incidence(face(0), cell, "left")))
+    assert (coarse_face.source, coarse_face.target) == (cell, face(0))
     assert type(Inverse(Compose(Parent(2), Child(2, (0, 0))))) is not Adjacency
 
 
@@ -215,6 +268,13 @@ def test_maps_of_other_provenances_are_compared_by_key_and_never_rewritten():
     assert Compose(Shift((1, 0)), data).normal_form()[0] == Translate(None, None, ((0, 1),))
     assert injective(data).truth is Truth.UNKNOWN
     assert Inverse(data) != data and Inverse(Inverse(data)) == data
+    # The provenance of a map is that of its normal form, the weakest of its atoms (IR8).
+    computed = ComputedMap("departure", source=cell, target=cell)
+    assert Compose(Shift((1, 0)), data).provenance == Inverse(data).provenance == "data"
+    assert Compose(ArithmeticMap("j", source=cell, target=cell), data).provenance == "data"
+    assert Compose(computed, data).provenance == "computed"
+    assert Inverse(Compose(Parent(2), data)).provenance == "data"
+    assert Compose(Shift((1, 0)), Incidence(face(0), cell, "left")).provenance == "typed"
 
 
 def test_the_public_home_of_the_typed_maps():
@@ -262,6 +322,57 @@ def test_halo_is_exact_box_arithmetic():
     assert halo(_face_region(m05)).value == ((1, 1), (1, 1))
 
 
+def _owned(kind, extents):
+    # A rank owns the cells [0, n) of each axis and the faces normal to a of its cells.
+    return [range(n + 1) if kind.kind == "face" and kind.axis == d else range(n)
+            for d, n in enumerate(extents)]
+
+
+def _typed_read(rng, source, target):
+    # A translation from ``source`` to ``target`` entities, written through the cells.
+    offset = (rng.randint(-2, 2), rng.randint(-2, 2))
+    inward = (Shift(offset) if source == cell
+              else Compose(Shift(offset), Incidence(source, cell, rng.choice(("left", "right")))))
+    if target == cell:
+        return inward
+    return Compose(Inverse(Incidence(target, cell, rng.choice(("left", "right")))), inward)
+
+
+def _brute_force_typed_halo(region, extents):
+    low, high = [0]*len(extents), [0]*len(extents)
+    for index in itertools.product(*_owned(region.domain, extents)):
+        for read in region.reads:
+            target = region.domain if read.map.target is None else read.map.target
+            entity = reference(read.map, index)
+            assert read.map(index) == entity
+            for d, (position, owned) in enumerate(zip(entity, _owned(target, extents),
+                                                      strict=True)):
+                low[d] = max(low[d], -position)
+                high[d] = max(high[d], position - (len(owned) - 1))
+    return tuple(low), tuple(high)
+
+
+def test_halo_is_exact_on_every_kind_of_entity_read():
+    rng = random.Random(30)
+    kinds = (cell, face(0), face(1))
+    for _ in range(120):
+        domain = rng.choice(kinds)
+        region = Region("probe", domain, 2, tuple(
+            Read("u", _typed_read(rng, domain, rng.choice(kinds)))
+            for _ in range(rng.randint(1, 4))))
+        fact = halo(region)
+        assert fact.truth is Truth.PROVED
+        for extents in ((6, 7), (8, 5)):
+            assert fact.value == _brute_force_typed_halo(region, extents)
+    # A face read in faces of its own kind is one face beyond the owned [0, n], not two.
+    left0, right0 = Incidence(face(0), cell, "left"), Incidence(face(0), cell, "right")
+    next_face = Compose(Inverse(left0), right0)
+    assert halo(Region("faces", face(0), 2, (Read("J", next_face),))).value == ((0, 0), (1, 0))
+    assert halo(Region("faces", face(0), 2, (Read("J", Shift((1, 0))),))).value == (
+        (0, 0), (1, 0))
+    assert halo(Region("cells", cell, 2, (Read("J", Inverse(left0)),))).value == ((0, 0), (0, 0))
+
+
 def test_halo_of_a_cell_region_and_a_filtered_read():
     reads = (Read("u", Shift((1, 0))), Read("u", Shift((-2, 0))), Read("v", Shift((0, 3))))
     region = Region("stencil", cell, 2, reads)
@@ -281,6 +392,9 @@ def test_unknown_halo_names_the_blocking_map_and_require_refuses_it():
         "probe", "halo", graph)
     assert refusal.value.phase == "resolve" and refusal.value.rule == "IR13"
     assert halo(Region("edge", boundary(0, "low"), 2, ())).truth is Truth.UNKNOWN
+    behind = Inverse(Trace(boundary(0, "low"), 0))
+    fact = halo(Region("trace", cell, 2, (Read("g", behind),)))
+    assert fact.truth is Truth.UNKNOWN and fact.blocking == behind
 
 
 def test_conservation_is_three_valued():
@@ -311,6 +425,17 @@ def test_classification_reads_only_normal_forms():
     assert classify(_face_region([(0, 0), (-1, 0)])) == ("face_incidence", None)
     assert classify(Region("s", cell, 2, (Read("u", Shift((1, 0))),))) == ("box_stencil", None)
     assert classify(Region("p", cell, 2, (Read("u", Shift((0, 0))),))) == ("pointwise", None)
+    # Pointwise: every read and every delivery is the identity of the domain, a scatter to its
+    # own entities included; a delivery elsewhere makes a stencil.
+    assert classify(Region("p", cell, 2, (Read("u", Shift((0, 0))),),
+                           ((Shift((0, 0)), 1),))) == ("pointwise", None)
+    assert classify(Region("q", cell, 2, (Read("u", Shift((0, 0))),),
+                           ((Shift((1, 0)), 1),))) == ("box_stencil", None)
+    left1 = Incidence(face(1), cell, "left")
+    assert classify(Region("f", face(1), 2, (Read("J", Compose(Inverse(left1), left1)),))) == (
+        "pointwise", None)
+    next_face = Compose(Inverse(Incidence(face(0), cell, "left")), right)
+    assert classify(Region("n", face(0), 2, (Read("J", next_face),))) == ("face_incidence", None)
     graph = DataMap("graph", source=face(0), target=cell)
     region = Region("g", face(0), 2, (Read("u", right), Read("u", graph)))
     assert classify(region) == ("csr", graph)
@@ -335,3 +460,47 @@ def test_class_not_reached_names_the_region_and_the_first_blocking_map():
     assert check_expected_class(_face_region([(0, 0)])) == "face_incidence"
     with pytest.raises(ValueError, match="unknown lowering class"):
         Region("x", cell, 2, (), expected="stencil")
+
+
+def test_productions_deliver_side_values_without_an_identity():
+    left, right = Incidence(face(0), cell, "left"), Incidence(face(0), cell, "right")
+    region = Region("path", face(0), 2, (Read("u", left), Read("u", right)),
+                    ((left, -1), (right, 1)), expected="face_incidence",
+                    productions=((left, 1), (right, 1)))
+    # Conservation reads the shared value only (IR17); a production is never an exchange (IR25).
+    assert (conservation(region).truth, conservation(region).value) == (Truth.PROVED, 0)
+    assert classify(region) == ("face_incidence", None)
+    assert halo(region).value == ((1, 0), (1, 0))
+    graph = DataMap("graph", source=face(0), target=cell)
+    blocked = Region("path", face(0), 2, (Read("u", left),), ((left, -1), (right, 1)),
+                     productions=((graph, 1),))
+    assert classify(blocked) == ("csr", graph)
+    # Every map of a region starts from its domain.
+    with pytest.raises(TypeError, match="maps over"):
+        Region("bad", face(1), 2, (), productions=((left, 1),))
+    with pytest.raises(TypeError, match="maps over"):
+        Region("bad", face(1), 2, (Read("u", left),))
+    with pytest.raises(TypeError, match="pair"):
+        Region("bad", face(0), 2, (), productions=(left,))
+
+
+def test_require_enables_only_proved_facts():
+    left, right = Incidence(face(0), cell, "left"), Incidence(face(0), cell, "right")
+    balanced = _face_region([(0, 0)])
+    assert require(conservation(balanced), balanced) == 0
+    unbalanced = _face_region([(0, 0)], targets=((left, -1), (right, 2)))
+    with pytest.raises(ConservationNotStructural, match="disproved: the analysis disproves") as \
+            refusal:
+        require(conservation(unbalanced), unbalanced)
+    assert (refusal.value.rule, refusal.value.phase, refusal.value.property) == (
+        "IR17", "resolve", "conservation")
+    assert isinstance(refusal.value, PropertyNotDerived)
+    symbolic = _face_region([(0, 0)], targets=((left, "w"), (right, 1)))
+    with pytest.raises(ConservationNotStructural, match="unknown") as refusal:
+        require(conservation(symbolic), symbolic)
+    assert refusal.value.blocking == "w"
+    # Another property keeps the refusal of IR13, Disproved as Unknown.
+    with pytest.raises(PropertyNotDerived, match="disproves") as refusal:
+        require(injective(Parent(2)), balanced)
+    assert type(refusal.value) is PropertyNotDerived and refusal.value.rule == "IR13"
+    assert require(injective(left), balanced) is None

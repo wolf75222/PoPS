@@ -1,35 +1,23 @@
 """Region facts of a resolved plan (spec 0.3 IR14, IR17, IR20, IR21).
 
 The face kernels of a plan are regions, one per axis: the finite-volume method of each rate of a
-block, and each stored face expression that the program evaluates. Their builders give the reads,
-derived from a body or declared by a native catalogue (``Region.basis``), and the class they
-expect. ``check_expected_classes`` classifies every region from the normal forms of its maps and
-raises ``ClassNotReached`` when a region does not reach the class its builder expects (IR21),
-before any native work of ``compile``; nothing falls back silently (I15).
+block, and each stored face expression that the program evaluates, at the top level or in a
+nested block. Their builders give the reads, derived from a body or declared by a native
+catalogue (``Region.basis``), and the class they expect. ``check_expected_classes`` classifies
+every region from the normal forms of its maps and raises ``ClassNotReached`` when a region does
+not reach the class its builder expects (IR21), before any native work of ``compile``; nothing
+falls back silently (I15).
 
-The walk reads the program values and their nested blocks once, and each region once: its cost
-follows the size of the plan, never an extent or a trip count (B4).
+The rates are the only source of the finite-volume methods: the spatial method of a block is
+``primary_spatial()`` of its numerics, the method of one of its rates or a state storage, so it
+adds no kernel. Every region has the rank of the plan, ``resolved_dimension``: the native layouts
+of one plan never mix dimensions. The program values are walked as the codegen walks them
+(``walk_program_nodes``), so the check sees every value that is emitted. Each value and each
+region is read once: the cost follows the size of the plan, never an extent or a trip count (B4).
 """
 from __future__ import annotations
 
-
-def _program_values(program):
-    pending = [tuple(program._values)]
-    while pending:
-        for value in pending.pop():
-            yield value
-            for attribute in value.attrs.values():
-                if (isinstance(attribute, tuple) and attribute
-                        and all(hasattr(item, "op") and hasattr(item, "attrs")
-                                for item in attribute)):
-                    pending.append(attribute)
-
-
-def _rank(block, plan):
-    frame = getattr(block.model, "frame", None)
-    coordinates = getattr(frame, "coordinates", None)
-    dimension = getattr(coordinates, "dimension", None)
-    return dimension if type(dimension) is int else plan.resolved_dimension
+from pops.time._graph.value_traversal import walk_program_nodes
 
 
 def plan_regions(plan):
@@ -39,18 +27,12 @@ def plan_regions(plan):
 
     regions = []
     for block in plan.blocks:
-        methods = []
         for rate in getattr(block.numerics, "rates", ()):
             if isinstance(rate.method, FiniteVolume):
-                methods.append(("block %s/rate %s" % (block.name, rate.rate.local_id),
-                                rate.method))
-        # The spatial method of a block is the method of its rate, resolved once more.
-        if isinstance(block.spatial, FiniteVolume) and all(
-                block.spatial.to_data() != method.to_data() for _, method in methods):
-            methods.append(("block %s/spatial" % block.name, block.spatial))
-        for name, method in methods:
-            regions.extend(method.regions(name, _rank(block, plan)))
-    for value in _program_values(plan.time):
+                regions.extend(rate.method.regions(
+                    "block %s/rate %s" % (block.name, rate.rate.local_id),
+                    plan.resolved_dimension))
+    for value in walk_program_nodes(plan.time._values):
         declaration = value.attrs.get("stencil_flux")
         if isinstance(declaration, StencilFlux):
             block = getattr(value.block, "local_id", value.block)
