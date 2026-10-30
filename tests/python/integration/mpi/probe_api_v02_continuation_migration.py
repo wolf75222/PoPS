@@ -19,6 +19,18 @@ from tests.python.support.collective_checks import collective_attempt, collectiv
 from tests.python.support.public_native_profile import profile_gather_value  # noqa: E402
 
 
+def reserve_source_diagnostics(world, runtime, source, ranks):
+    # A restart onto fewer ranks must admit the whole source diagnostic archive in preflight. As in
+    # the two-to-one restart probe, choose its exact encoded extent through the public resource API.
+    with np.load(source, allow_pickle=False) as payload:
+        offsets = np.asarray(payload["program_diagnostics_offsets"])
+        aggregate = int(offsets[-1]) + max(0, int(offsets.nbytes) - 8*(ranks+1))
+        capacity = max(int(np.max(np.diff(offsets))), -(-aggregate // ranks))
+    if len(offsets) > ranks+1:
+        collective_call(world, lambda: runtime.configure_checkpoint_diagnostics(
+            capacity_per_rank=capacity))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
@@ -41,6 +53,7 @@ def main():
     source = None
     if phase:
         source = directory / ("checkpoint-%d.npz" % (phase-1))
+        reserve_source_diagnostics(world, runtime, source, ranks)
         initial = accepted()
         _, failures = collective_attempt(world, lambda: runtime.restart(source, workspace_byte_capacity=1))
         after_rejection = accepted()
