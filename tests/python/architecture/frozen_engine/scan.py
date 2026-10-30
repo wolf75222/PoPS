@@ -296,14 +296,24 @@ def cpp_tokens(text: str):
     it and ends at a ``;``, ``{`` or ``}`` at the parenthesis depth of that name, or at the ``)``
     that closes the parentheses it appeared in; braces and semicolons nested inside its parentheses
     (a requires-expression, a lambda) do not end it. The message of an assertion starts at the
-    first ``,`` of its argument list and ends with that list.
+    first ``,`` of its argument list and ends with that list. Adjacent string literals are one
+    literal, as the compiler joins them (a literal that clang-format breaks keeps its spelling, and
+    ``"rusa" "nov"`` is ``"rusanov"``).
     """
     line_of = _Lines(text)
     depth = 0  # parenthesis depth
     error_depth = None  # the depth of the name that opened the current error text, if any
     condition_depth = None  # the depth inside the parentheses of an assertion, before its message
+    pending = None  # (line, text, end offset) of the string literals joined so far
     for match in _CPP_TOKEN.finditer(text):
         kind = match.lastgroup
+        if pending is not None:
+            if not text[pending[2]:match.start()].strip() and kind in ("comment", "string"):
+                body = match.group("string") or '""'
+                pending = (pending[0], pending[1] + body[body.index('"') + 1:-1], match.end())
+                continue
+            yield pending[0], pending[1], "string"
+            pending = None
         if kind in ("comment", "char", "number"):
             continue
         line = line_of(match.start())
@@ -336,11 +346,13 @@ def cpp_tokens(text: str):
             yield line, ident, "ident"
         elif kind == "string" and error_depth is None:
             literal = match.group("string")
-            yield line, literal[literal.index('"') + 1:-1], "string"
+            pending = (line, literal[literal.index('"') + 1:-1], match.end())
         elif kind == "raw" and error_depth is None:
             for offset, piece in enumerate(match.group("rawbody").split("\n")):
                 if piece.strip():
                     yield line + offset, piece, "string"
+    if pending is not None:
+        yield pending[0], pending[1], "string"
 
 
 _HASH_TOKEN = re.compile(r'(?P<comment>#[^\n]*)|(?P<string>"(?:\\.|[^"\\\n])*")'
@@ -660,7 +672,7 @@ class Occurrence:
     path: str
     line: int  # 0 when the term is in the file path itself
     term: str
-    excerpt: str  # the spelling of the site: the tokens of its line that hold the term
+    excerpt: str  # the spelling of the site: the token that holds the term
 
     @property
     def key(self) -> tuple[str, str]:
@@ -681,23 +693,23 @@ def _spelling(token: str, kind: str) -> str:
 def cf2_sites_in_text(rel: str, text: str, kind: str):
     """(Occurrence, generic-sense entry or None) for every CF2 site of one file.
 
-    A site is a (line, term). Its excerpt is its spelling: the distinct tokens of the line that
-    hold the term, sorted, string literals quoted, a link as its expression, ``(path)`` for the
-    file path. The ratchet pairs sites with list entries by this spelling (ratchet.py), so an edit
-    elsewhere on the line keeps the site, and a new spelling of the term is a new site.
+    A site is one occurrence of a token that holds a term: an identifier, a string literal (each
+    line of a multi-line one), a link, or the file path. Its excerpt is the spelling of that token,
+    string literals quoted, a link as its expression, ``(path)`` for the file path; its line only
+    locates it. The ratchet pairs sites with list entries by spelling, with multiplicity
+    (ratchet.py): a statement that is re-wrapped or edited around its tokens keeps its sites, a
+    token removed from a line removes one site, and a token added anywhere, even beside the same
+    token, is a new site.
     """
     lines = text.splitlines()
-    spellings: dict[tuple[int, str], set[str]] = {}
-    for term in terms_in(rel, "path"):
-        spellings[(0, term)] = {"(path)"}
+    found = [Occurrence(rel, 0, term, "(path)") for term in terms_in(rel, "path")]
     for line, token, token_kind in LEXERS[kind](text):
-        for term in terms_in(token, token_kind):
-            spellings.setdefault((line, term), set()).add(_spelling(token, token_kind))
-    for (line, term), spelled in sorted(spellings.items()):
-        excerpt = " ".join(sorted(spelled))[:EXCERPT_WIDTH].rstrip()
-        occurrence = Occurrence(rel, line, term, excerpt)
+        spelling = _spelling(token, token_kind)[:EXCERPT_WIDTH].rstrip()
+        found.extend(Occurrence(rel, line, term, spelling) for term in terms_in(token, token_kind))
+    for occurrence in sorted(found):
+        line = occurrence.line
         source_line = lines[line - 1] if 0 < line <= len(lines) else ""
-        yield occurrence, generic_sense(rel, term, source_line)
+        yield occurrence, generic_sense(rel, occurrence.term, source_line)
 
 
 def cf2_sites(rel: str, root: pathlib.Path = REPO_ROOT):

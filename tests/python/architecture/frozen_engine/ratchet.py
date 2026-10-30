@@ -9,8 +9,8 @@ removes the site (N3, N8, N9, N12, G04, G05, G06, G07, G10, G11, G12). Blank lin
 starting with ``#`` are comments.
 
 A guard compares the sites that its scan finds with the list. Within each ``(path, term)``, sites
-and entries pair by excerpt, so the identity of a site is its path, its term and its excerpt (for
-CF2 the spelling of the term on its line, ``scan.cf2_sites_in_text``):
+and entries pair by excerpt, with multiplicity, so the identity of a site is its path, its term and
+its excerpt (for CF2 the spelling of one token that holds the term, ``scan.cf2_sites_in_text``):
 
 * a site that no entry of its ``(path, term)`` matches is a new occurrence, and fails, even when
   a site of the same term left the same file in the same PR;
@@ -18,11 +18,12 @@ CF2 the spelling of the term on its line, ``scan.cf2_sites_in_text``):
   is removed in the same PR (MG6).
 
 The line numbers locate each site for a reader and for the refresh tool; the comparison does not key
-on them, so an edit elsewhere in a file that shifts its lines does not fail the guard of an
-unrelated PR. ``refresh_exceptions.py`` rewrites the line numbers and refuses a site the list does
-not hold. Since a list is a file that a PR can edit by hand, CI also scans the base of the PR with
-the same scanner and fails on any site of the head that the base does not hold (``new_sites``,
-``refresh_exceptions.py --check-base``); a vocabulary change adds the same sites to both scans.
+on them, so an edit elsewhere in a file that shifts its lines, or a statement re-wrapped over other
+lines, does not fail the guard. ``refresh_exceptions.py`` rewrites the line numbers and refuses a
+site the list does not hold. Since a list is a file that a PR can edit by hand, CI also scans the
+base of the PR with the same scanner and fails on any site of the head that the base does not hold
+(``new_sites``, ``refresh_exceptions.py --check-base``); a vocabulary change adds the same sites to
+both scans.
 """
 from __future__ import annotations
 
@@ -139,8 +140,9 @@ def compare(found, listed, found_hint=_line, listed_hint=_line) -> Comparison:
 
     Within each (path, term), a site and an entry pair when their excerpts are equal; a site left
     over is new, an entry left over is useless. A swap (one site of a term removed, another added
-    in the same file) therefore fails, while a site whose line only shifted does not. The hints
-    choose which of several sites of one spelling is reported as new.
+    in the same file) therefore fails, and so does a second site of one spelling, while a site whose
+    line only shifted does not. The hints choose which of several sites of one spelling is reported
+    as new.
     """
     found_by_key, listed_by_key = _by_key(found), _by_key(listed)
     new, useless = {}, {}
