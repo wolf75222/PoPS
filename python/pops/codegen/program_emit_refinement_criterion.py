@@ -8,9 +8,12 @@ emitter with every operation materialized, so the kernel observes each value tha
 non-finite one marks the cell, and the tagging plan then rejects the level as it does for the
 bytecode of the tag graph.
 
-The regions of one action are evaluated in full and joined after, as the bytecode joins its rules,
-so a non-finite value read by any rule marks the cell. Inside one region, ``&``, ``|`` and
-``where`` evaluate their right operand only when the left one does not decide.
+Each rule is lowered to the cells where its region is certainly true (``certainly``): strict
+comparisons joined by ``&`` and ``|``, with no negation left, so that a comparison at exact equality
+decides nothing, as a leaf of the bytecode does under ``EqualityPolicy.HOLD``. Every comparison of
+every rule is evaluated before ``&`` and ``|`` join them, as the bytecode evaluates every leaf and
+IR4 the operands of an operation, so a non-finite value that any comparison reads marks the cell.
+Only a ``where`` inside an operand evaluates one branch.
 """
 from __future__ import annotations
 
@@ -73,10 +76,34 @@ def _inputs(criterion: Any) -> tuple[dict[int, Any], dict[tuple[str, str], str],
     return replacements, bindings, shifted
 
 
+def _comparisons(roots: tuple[Any, ...]) -> list[Any]:
+    """The comparisons that ``&`` and ``|`` join in the decided rules, each once, in visit order."""
+    from pops._ir.expr import BooleanAnd, BooleanOr
+    from pops._ir.visitors import _key
+
+    found: list[Any] = []
+    seen: set[Any] = set()
+
+    def visit(node: Any) -> None:
+        if isinstance(node, (BooleanAnd, BooleanOr)):
+            visit(node.a)
+            visit(node.b)
+            return
+        key = _key(node)
+        if key not in seen:
+            seen.add(key)
+            found.append(node)
+
+    for root in roots:
+        visit(root)
+    return found
+
+
 def emit_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
     """The kernel, the identity and the patch entry of one resolved refinement criterion."""
     from pops._ir.application import substitute_quantities
     from pops.mesh._amr import ResolvedRefinementCriterion
+    from pops.mesh._amr.refinement_criterion import certainly
 
     from .cpp_writer import _cse_emit
 
@@ -88,10 +115,13 @@ def emit_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
             % (criterion.dimension, native_dimension))
     replacements, bindings, shifted = _inputs(criterion)
     roots = substitute_quantities(
-        criterion.refine + criterion.coarsen, {}, expression_bindings=replacements)
+        tuple(certainly(root) for root in criterion.refine + criterion.coarsen), {},
+        expression_bindings=replacements)
+    comparisons = _comparisons(roots)
     lines, rendered, observed = _cse_emit(
-        list(roots), "pops::Real", "    ", materialize_all=True, return_names=True,
+        comparisons + list(roots), "pops::Real", "    ", materialize_all=True, return_names=True,
         scalar_bindings=bindings)
+    rendered = rendered[len(comparisons):]
     count = len(criterion.refine)
 
     def any_of(values: list[str]) -> str:

@@ -180,6 +180,99 @@ def test_region_reads_the_level_only_through_cell() -> None:
         _resolved(direct)
 
 
+def test_a_region_compares_strictly_as_a_leaf_of_the_tag_graph() -> None:
+    _, _, names = advection_case(_value_rules)
+    threshold = names.value("refine")
+
+    for region in (lambda cell: cell.value(names.state) >= threshold,
+                   lambda cell: cell.value(names.state) <= threshold,
+                   lambda cell: cell.value(names.state) == threshold,
+                   lambda cell: ~(cell.value(names.state) >= threshold)):
+        with pytest.raises(TypeError, match="at exact equality decides nothing"):
+            Tag(region)
+
+
+def test_a_region_acts_where_it_is_certainly_true() -> None:
+    from pops.mesh._amr.refinement_criterion import certainly
+
+    _, _, names = advection_case(_value_rules)
+    x, _ = names.frame.axes
+    cell = CriterionCell()
+    v, w = cell.value(names.state), cell.shift(x, 1).value(names.state)
+    low, high = names.value("refine"), names.value("coarsen")
+
+    # Kleene's logic with a comparison undecided at equality, as the VM evaluates a rule: a negated
+    # comparison is certainly true only where the opposite strict comparison holds.
+    assert _key(certainly(~(v < low))) == _key(v > low)
+    assert _key(certainly(~(v < low), False)) == _key(v < low)
+    assert _key(certainly((v > low) & ~(v > high))) == _key((v > low) & (v < high))
+    assert _key(certainly(~((v > low) | (w < high)))) == _key((v < low) & (w > high))
+    assert _key(certainly(~((v > low) & (w < high)))) == _key((v < low) | (w > high))
+    assert _key(certainly(~~(v > low))) == _key(v > low)
+    composite = (v > low) & ((w < high) | (v < high))
+    assert _key(certainly(composite)) == _key(composite)
+
+
+def test_every_comparison_is_evaluated_before_the_rules_join_them() -> None:
+    from pops.codegen.program_emit_refinement_criterion import emit_refinement_criterion
+
+    def band(names):
+        x, _ = names.frame.axes
+        return (
+            Tag(lambda cell: (cell.value(names.state) > names.value("refine"))
+                & ~(cell.shift(x, 2).value(names.state) > names.value("coarsen"))),
+            Coarsen(lambda cell: ~(cell.value(names.state) < names.value("coarsen"))),
+        )
+
+    source = emit_refinement_criterion(_resolved(band).bootstrap_plan.tagging,
+                                       native_dimension=2)
+    body = source[source.index("operator()"):source.index("const bool finite")]
+    # No negation is left, so a comparison at equality decides nothing under either rule.
+    assert "!" not in body
+    value = re.search(r"const pops::Real (cse\d+_) = fields\[0\]\(index, 0\);", body).group(1)
+    shifted = re.search(r"const pops::Real (cse\d+_) = fields\[0\]\(at0_, 0\);", body).group(1)
+    below = re.search(r"const pops::Real (cse\d+_) = \(%s < cse\d+_\);" % shifted, body).group(1)
+    above = re.search(r"const pops::Real (cse\d+_) = \(%s > cse\d+_\);" % value, body)
+    assert above
+    # The right operand of && was read and compared before the join, which only returns it, so a
+    # non-finite read there marks the cell even where the left operand is false.
+    assert re.search(r"\(cse\d+_ && \(\[&\]\(\) \{\s+return %s; \}\(\)\)\)" % below, body)
+    assert "Kokkos::isfinite(%s)" % shifted in source
+    assert "Kokkos::isfinite(%s)" % below in source
+
+
+def test_gradient_norm_is_the_region_written_by_hand() -> None:
+    # CF4: the library object and the same region written in a case have one identity.
+    from pops.math import sqrt
+
+    def by_hand(cell, names):
+        total = None
+        for axis, row in zip(names.frame.axes, names.gradient.axes, strict=True):
+            derivative = None
+            for offset, coefficient in zip(row.offsets, row.coefficients, strict=True):
+                term = coefficient * cell.shift(axis, offset).value(names.state)
+                derivative = term if derivative is None else derivative + term
+            derivative = derivative / cell.width(axis)
+            square = derivative * derivative
+            total = square if total is None else total + square
+        return sqrt(total)
+
+    def library(cell, names):
+        return gradient_norm(cell, names.state, axes=names.frame.axes, stencil=names.gradient)
+
+    def rules_of(magnitude):
+        def rules(names):
+            return (Tag(lambda cell: magnitude(cell, names) > names.value("refine")),
+                    Coarsen(lambda cell: magnitude(cell, names) < names.value("coarsen")))
+        return rules
+
+    _, _, names = advection_case(_value_rules)
+    cell = CriterionCell()
+    assert _key(library(cell, names)) == _key(by_hand(cell, names))
+    assert (_resolved(rules_of(library)).bootstrap_plan.tagging.qualified_id
+            == _resolved(rules_of(by_hand)).bootstrap_plan.tagging.qualified_id)
+
+
 def test_emitted_kernel_keeps_the_arithmetic_order_of_the_vm_gradient() -> None:
     from pops.codegen.program_emit_refinement_criterion import (
         CRITERION_ENTRY_SYMBOL,

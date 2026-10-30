@@ -6,6 +6,12 @@ reads a block state at the cell, ``cell.shift(axis, k)`` is the cell ``k`` steps
 read like ``cell``, and ``cell.width(axis)`` is the width of the cells of the level along an axis.
 A runtime parameter enters as ``case.value(param)`` and is bound at ``bind``.
 
+A region decides as a rule of the tag graph does. It compares with a strict ``<`` or ``>``, and a
+comparison at exact equality decides nothing (``EqualityPolicy.HOLD``); ``~``, ``&`` and ``|``
+follow Kleene's three-valued logic, and a rule acts on the cells where its region is certainly
+true (:func:`certainly`). Every comparison of every rule is evaluated, so a non-finite value that
+any of them reads rejects the level, as it does for the bytecode.
+
 The resolved criterion decides ``where(refine, refine, where(coarsen, coarsen, keep))`` on each
 cell of a level, ``refine`` being the union of the refine regions and ``coarsen`` the union of the
 coarsen regions. The compiled Program carries it as generated C++; the native tagging plan hands it
@@ -21,7 +27,7 @@ import json
 import math
 from typing import Any
 
-from pops._ir.expr import Const, Expr, Var
+from pops._ir.expr import BooleanAnd, BooleanNot, BooleanOr, Compare, Const, Expr, Var
 from pops._ir.handle_expr import ValueExpr
 from pops._ir.quantity import QuantityRef
 from pops._ir.visitors import _children, _key
@@ -148,6 +154,32 @@ def _boolean(value: Any) -> bool:
     return isinstance(value, Expr) and callable(getattr(value, "resolve_for_amr_predicate", None))
 
 
+_STRICT = {"lt": "gt", "gt": "lt"}
+_DECISION = ("a refinement region compares with a strict < or > and joins comparisons with &, | "
+             "and ~: as for a leaf of the tag graph, a comparison at exact equality decides "
+             "nothing (EqualityPolicy.HOLD)")
+
+
+def certainly(expression: Expr, truth: bool = True) -> Expr:
+    """The two-valued expression of the cells where a region is certainly ``truth``.
+
+    As a leaf of the tag graph, a strict comparison at exact equality decides nothing: ``a < b`` is
+    certainly true where a < b and certainly false where a > b. ``~``, ``&`` and ``|`` follow
+    Kleene's three-valued logic, so the result joins strict comparisons of the same operands with
+    ``&`` and ``|`` and holds no negation: ``~(a < b)`` is certainly true where a > b only.
+    """
+    if isinstance(expression, BooleanNot):
+        return certainly(expression.a, not truth)
+    if isinstance(expression, (BooleanAnd, BooleanOr)):
+        join = BooleanAnd if isinstance(expression, BooleanAnd) == truth else BooleanOr
+        return join(certainly(expression.a, truth), certainly(expression.b, truth))
+    if isinstance(expression, Compare) and expression.comparison in _STRICT:
+        if truth:
+            return expression
+        return Compare(_STRICT[expression.comparison], expression.a, expression.b)
+    raise TypeError(_DECISION)
+
+
 @dataclass(frozen=True, slots=True)
 class RefinementRegion:
     """A refine or coarsen predicate written as a function of ``cell``, traced once."""
@@ -160,6 +192,8 @@ class RefinementRegion:
             raise TypeError(
                 "a refinement region must return a Boolean expression, such as a comparison of "
                 "cell values with a threshold")
+        # Refused at the author's line: a comparison that no leaf of the tag graph decides.
+        certainly(self.expression)
 
     @classmethod
     def trace(cls, function: Callable[[CriterionCell], Any]) -> RefinementRegion:
@@ -410,6 +444,7 @@ __all__ = [
     "RefinementCriterionField",
     "RefinementRegion",
     "ResolvedRefinementCriterion",
+    "certainly",
     "criterion_inputs",
     "resolve_refinement_criterion",
 ]

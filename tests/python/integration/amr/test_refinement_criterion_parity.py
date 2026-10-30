@@ -8,12 +8,13 @@ and the patch boxes and the coarse state must be the same: the generated criteri
 VM does, cell for cell, through regrids.
 
 ``value`` is the criterion of tutorials 05 and 06, ``gradient`` that of tutorial 09, and
-``composite`` joins value and gradient leaves of both comparisons with ``any_of`` and ``all_of``,
-the logical opcodes of the VM but ``not`` (a region is two-valued, while the VM keeps a sample equal
-to its threshold unknown through a negation), under a hysteresis of one cycle. The magnitude leaf
-has no public authoring route.
+``composite`` joins value and gradient leaves of both comparisons with ``any_of`` and ``all_of``
+under a hysteresis of one cycle. ``negation`` writes ``not``, the last logical opcode of the VM, in
+a band ``(v > a) & ~(v > b)`` and in a negated coarsen ``~(v < b)``, with ``b`` the background value
+that many cells hold exactly: there the VM keeps the negated comparison unknown, and the region
+must decide nothing either. The magnitude leaf has no public authoring route.
 
-Every case declares the thresholds of all three criteria and has the same name, so the cases of a
+Every case declares the thresholds of all four criteria and has the same name, so the cases of a
 route differ only in their criterion: the module shares one native cache, and the model and the
 tag-graph Programs are compiled once.
 """
@@ -35,6 +36,7 @@ THRESHOLDS = {
     "value_refine": 0.30, "value_coarsen": 0.20,
     "composite_refine": 0.60, "composite_coarsen": 0.20, "composite_gradient": 2.0,
     "composite_level": 0.15, "composite_flat": 0.50,
+    "negation_refine": 0.30, "band_lower": 0.04, "band_upper": 0.05,
 }
 HYSTERESIS = {"composite": Hysteresis(1, EqualityPolicy.HOLD)}
 
@@ -49,6 +51,10 @@ def _graph_rules(kind):
         if kind == "gradient":
             return (Tag(magnitude > names.value("refine")),
                     Coarsen(magnitude < names.value("coarsen")))
+        if kind == "negation":
+            return (Tag(value > names.value("negation_refine")),
+                    Tag((value > names.value("band_lower")) & ~(value > names.value("band_upper"))),
+                    Coarsen(~(value < names.value("band_upper"))))
         return (
             Tag(value > names.value("composite_refine")),
             Tag((magnitude > names.value("composite_gradient"))
@@ -75,6 +81,11 @@ def _region_rules(kind):
         if kind == "gradient":
             return (Tag(lambda cell: magnitude(cell) > names.value("refine")),
                     Coarsen(lambda cell: magnitude(cell) < names.value("coarsen")))
+        if kind == "negation":
+            return (Tag(lambda cell: value(cell) > names.value("negation_refine")),
+                    Tag(lambda cell: (value(cell) > names.value("band_lower"))
+                        & ~(value(cell) > names.value("band_upper"))),
+                    Coarsen(lambda cell: ~(value(cell) < names.value("band_upper"))))
         return (
             Tag(lambda cell: value(cell) > names.value("composite_refine")),
             Tag(lambda cell: (magnitude(cell) > names.value("composite_gradient"))
@@ -119,7 +130,7 @@ def _trajectory(rules, kind):
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-@pytest.mark.parametrize("kind", ("value", "gradient", "composite"))
+@pytest.mark.parametrize("kind", ("value", "gradient", "composite", "negation"))
 def test_region_criterion_decides_as_the_tag_graph(kind, criterion_native_cache) -> None:
     del criterion_native_cache
     graph = _trajectory(_graph_rules(kind), kind)
@@ -138,3 +149,7 @@ def test_region_criterion_decides_as_the_tag_graph(kind, criterion_native_cache)
     assert requests.count(1) > 0 and requests.count(2) > 0
     assert regions[-1]["regrids"] > regions[0]["regrids"]
     assert len({row["boxes"] for row in regions}) > 1
+    if kind == "negation":
+        # Cells sit exactly on the threshold of both negations, so the parity covers equality.
+        coarse = np.frombuffer(regions[0]["coarse"], dtype=np.float64)
+        assert np.count_nonzero(coarse == THRESHOLDS["band_upper"]) > 0

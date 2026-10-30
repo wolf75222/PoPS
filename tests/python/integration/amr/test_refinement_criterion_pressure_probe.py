@@ -7,8 +7,8 @@ it is generated into the compiled Program like any region: no C++ of the engine 
 
 The state is advected at constant velocity on a periodic square, so p stays a smooth bump that moves.
 At bootstrap and after each accepted step, the level-0 requests of the native tagging plan must equal a
-NumPy evaluation of the same arithmetic on the coarse state, on every cell whose stencil stays inside
-the domain.
+NumPy evaluation of the same arithmetic on the coarse state, on every cell of the level: the reads of a
+cell on the boundary cross the periodic identification, which the ghosts of the level hold.
 """
 from __future__ import annotations
 
@@ -122,12 +122,12 @@ def _case():
 
 
 def _expected_requests(coarse):
-    """The arithmetic of the generated criterion, in the same order, on interior cells."""
+    """The arithmetic of the generated criterion, in the same order, on every periodic cell."""
     rho, mx, my, energy = coarse
     p = (GAMMA - 1.0) * (energy - 0.5 * (mx * mx + my * my) / rho)
     h = 1.0 / N
-    dx = (-0.5 * p[1:-1, :-2] + 0.5 * p[1:-1, 2:]) / h
-    dy = (-0.5 * p[:-2, 1:-1] + 0.5 * p[2:, 1:-1]) / h
+    dx = (-0.5 * np.roll(p, 1, axis=1) + 0.5 * np.roll(p, -1, axis=1)) / h
+    dy = (-0.5 * np.roll(p, 1, axis=0) + 0.5 * np.roll(p, -1, axis=0)) / h
     steep = np.sqrt(dx * dx + dy * dy)
     return np.where(steep > REFINE, 1, np.where(steep < COARSEN, 2, 0)).astype(np.uint8)
 
@@ -148,7 +148,7 @@ def test_pressure_gradient_criterion_runs_without_an_engine_change(isolated_nati
         coarse = coarse.reshape(4, N, N)
         requests = np.frombuffer(
             runtime._executor._tagging_requests(0), dtype=np.uint8).reshape(N, N)
-        np.testing.assert_array_equal(requests[1:-1, 1:-1], _expected_requests(coarse),
+        np.testing.assert_array_equal(requests, _expected_requests(coarse),
                                       err_msg="step %d" % step)
         seen.update(np.unique(requests).tolist())
         assert int(runtime.n_levels()) == 2

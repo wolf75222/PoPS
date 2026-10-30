@@ -6576,7 +6576,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1130,
+    "estimated_count": 1131,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6609,6 +6609,7 @@
       "tests/python/integration/amr/test_public_initial_field_ghost.py",
       "tests/python/integration/amr/test_public_initial_field_ghost_failure.py",
       "tests/python/integration/amr/test_public_tag_selection_native.py",
+      "tests/python/integration/amr/test_refinement_criterion_nonfinite.py",
       "tests/python/integration/amr/test_refinement_criterion_parity.py",
       "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py",
       "tests/python/integration/amr/test_symbolic_path_amr_runtime.py",
@@ -7909,7 +7910,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1195,
+    "total_files": 1196,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -7960,24 +7961,31 @@
       "files": {
         "tests/python/unit/amr/test_refinement_criterion_regions.py": {
           "analogue": "tests/python/unit/amr/test_public_amr_resolution.py",
-          "estimated_seconds": 60,
-          "local_receipt": "13 passed in 33.0 s (30/10, gcc 13, Kokkos Serial, Dim2)",
-          "reason": "source-only: traces, resolves and emits the criterion of the tutorial-09 case about twenty times; no compile",
-          "source_sha256": "3d091892da73e89ca8b7a396aed8690187bbba499b38b2a1d6ea8801e6d64c76"
+          "estimated_seconds": 90,
+          "local_receipt": "17 passed in 50.0 s (30/10, gcc 13, Kokkos Serial, Dim2)",
+          "reason": "source-only: traces, resolves and emits the criterion of the tutorial-09 case about twenty-five times; no compile",
+          "source_sha256": "7522c7032f99c267554ef390a1d55f435f187a1a9862271a9c72128ebeb396e9"
         },
         "tests/python/integration/amr/test_refinement_criterion_parity.py": {
           "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
-          "estimated_seconds": 1200,
-          "local_receipt": "3 passed in 951.5 s: value 321 s, gradient 346 s, composite 284 s (30/10, gcc 13, Kokkos Serial, Dim2, cold module cache)",
-          "reason": "three cases; each compiles a tag-graph and a region Program cold (two model artifacts and six Programs in the module cache) and runs 16 adaptive steps per route",
-          "source_sha256": "8be2f329210d15e06abac0561a0daa3b7c5a844c1c4900231949dcf7172bd915"
+          "estimated_seconds": 1800,
+          "local_receipt": "4 passed in 1502.6 s: value 429 s, gradient 365 s, composite 363 s, negation 346 s (30/10, gcc 13, Kokkos Serial, Dim2, cold module cache, two other native runs on the same 4 cores)",
+          "reason": "four cases; each compiles a tag-graph and a region Program cold (two model artifacts and eight Programs in the module cache) and runs 16 adaptive steps per route",
+          "source_sha256": "6e473a6f968dcea7f10081fe13f9008a3a52b17c1c7a90110eb70aeda6a1c796"
         },
         "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py": {
           "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
           "estimated_seconds": 300,
-          "local_receipt": "1 passed in 201.2 s (30/10, gcc 13, Kokkos Serial, Dim2, cold isolated cache)",
+          "local_receipt": "1 passed in 258.3 s, every cell of the level compared (30/10, gcc 13, Kokkos Serial, Dim2, cold isolated cache, one other native run on the same 4 cores)",
           "reason": "one four-component adaptive Program compiled cold and run for six fixed steps",
-          "source_sha256": "43d18babd7a435572001d2668f9280e2e7083ba296a5a8db70d5334bc3b93ed2"
+          "source_sha256": "cb9e380493d35094a2821d1fd183270b827324d692dcf145e76efe96e3a6cac1"
+        },
+        "tests/python/integration/amr/test_refinement_criterion_nonfinite.py": {
+          "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
+          "estimated_seconds": 600,
+          "local_receipt": "2 passed in 515.9 s: graph 255 s, region 261 s (30/10, gcc 13, Kokkos Serial, Dim2, cold isolated cache)",
+          "reason": "two two-component adaptive Programs (tag graph and regions) compiled cold, each bound twice and refused at bind",
+          "source_sha256": "ad9e74a032654707d4f29bb75db3098fc90c128c21efd1a15330f56026030356"
         }
       }
     }
@@ -9174,7 +9182,8 @@
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
   "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
-  "tests/python/unit/amr/test_refinement_criterion_regions.py": 60,
-  "tests/python/integration/amr/test_refinement_criterion_parity.py": 1200,
-  "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py": 300
+  "tests/python/unit/amr/test_refinement_criterion_regions.py": 90,
+  "tests/python/integration/amr/test_refinement_criterion_parity.py": 1800,
+  "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py": 300,
+  "tests/python/integration/amr/test_refinement_criterion_nonfinite.py": 600
 }

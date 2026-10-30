@@ -92,11 +92,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cell` (`cell.value(q)`, `cell.shift(axis, k)`, `cell.width(axis)`, runtime parameters), traced
   once and generated into the compiled Program. The native tagging plan calls it on each patch in
   place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` and
-  clustering. A criterion requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, under
-  which it decides as the tag graph does; `pops.lib.amr.gradient_norm` keeps the arithmetic of the
-  gradient leaves under the stencil the method declares (`amr_indicator_stencil`). Tag-graph
-  expressions are unchanged and are not mixed with functions of `cell` in one `AMRTagging`;
-  external Tagger components and multi-layout plans refuse a criterion.
+  clustering. A criterion requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD` and
+  decides as the tag graph does: it compares with a strict `<` or `>`, a comparison at exact
+  equality decides nothing, `~`, `&` and `|` follow Kleene's three-valued logic, and every
+  comparison is evaluated, so a non-finite sample rejects the level on both routes.
+  `pops.lib.amr.gradient_norm` keeps the arithmetic of the gradient leaves under the stencil the
+  method declares (`amr_indicator_stencil`). Tag-graph expressions are unchanged and are not mixed
+  with functions of `cell` in one `AMRTagging`; external Tagger components and multi-layout plans
+  refuse a criterion.
 
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.

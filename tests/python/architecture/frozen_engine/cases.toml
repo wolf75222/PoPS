@@ -13,6 +13,7 @@
 # take its files out of CF8.
 include = [
     "examples/api_v02/",
+    "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py",
 ]
 
 # CF1, tried on M01 (Linear N2). Each case names the files that make it up: its builder, the case
@@ -29,4 +30,14 @@ files = [
     "examples/api_v02/profile_contracts.py",
     "examples/api_v02/profile_dispatch.py",
     "tests/python/integration/runtime/test_api_v02_models_M01_M14.py",
+]
+
+# CF5b probe of N12 (ROM-95, criterion 4): a refinement criterion on the pressure gradient of a
+# four-component state, written as functions of cell, with no engine path that names it.
+[[case]]
+id = "N12-pressure-probe"
+issue = "ROM-95"
+what = "pressure-gradient refinement criterion written as regions of cell (DM13b, CF5b)"
+files = [
+    "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py",
 ]
