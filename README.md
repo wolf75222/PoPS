@@ -31,6 +31,11 @@ Kokkos is required. MPI and parallel HDF5 are enabled together by
 run `bash scripts/kokkos_openmp_conda.sh` before rebuilding. Backend availability is a
 property of the installed artifact.
 
+A build holds its environment exclusively, so it never replaces the SDK under a running
+qualification. `--wheel-dir DIR` retains the built wheel and attests, beside it, which source
+and environment built it; [cohorts and qualification receipts](docs/developer/sdk_cohort_receipts.md)
+explains how such a wheel qualifies a source.
+
 ## Run a tutorial
 
 With the environment active, run this periodic scalar-advection problem from the repository root:

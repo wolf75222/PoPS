@@ -6608,7 +6608,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1131,
+    "estimated_count": 1132,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6919,6 +6919,7 @@
       "tests/python/integration/runtime/test_public_spatial_interaction.py",
       "tests/python/integration/runtime/test_public_tensor_diffusion.py",
       "tests/python/integration/runtime/test_public_three_stage_screened_fields.py",
+      "tests/python/integration/runtime/test_qualification_receipt_native.py",
       "tests/python/integration/runtime/test_rank_one_owned_amr_invalid.py",
       "tests/python/integration/runtime/test_relations_v09_native.py",
       "tests/python/integration/runtime/test_scientific_spatial_gmres_v14_native.py",
@@ -7942,7 +7943,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1196,
+    "total_files": 1197,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8001,6 +8002,14 @@
           "analogue": "tests/python/integration/runtime/test_api_v02_models_M01_M14.py"
         }
       }
+    },
+    "rom17_20261029_qualification_receipt": {
+      "basis": "Conservative 600-second scheduling estimate (native tier) for two native receivers: M01 in System (one program DSO and one model DSO, two SSPRK2 steps) and the finite AMR case in AmrSystem (two levels, temporal ratio 2, three steps), each compiled into an isolated cache, bound, run, recorded in one qualification receipt and admitted against the cohort of the installation, re-proved against its retained wheel. The complete local file run in a CI-identical installed Dim=2 Kokkos Serial prefix took 285.2 seconds (two tests) on a 4-core container; this is not a GitHub CI per-file timing. Existing weights, shards and watchdogs are unchanged; replace from a complete CI per-file receipt.",
+      "estimated_seconds": 600,
+      "files": [
+        "tests/python/integration/runtime/test_qualification_receipt_native.py"
+      ],
+      "source_sha256": "5972a3f0f749cc623130b8a48deb9525d7497e1f09d41b62cebbcd0f89ac36e6"
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 285,
@@ -9198,5 +9207,6 @@
   "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": 60,
   "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300,
   "tests/python/unit/numerics/test_lib_numerics_faces.py": 30,
-  "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 900
+  "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 900,
+  "tests/python/integration/runtime/test_qualification_receipt_native.py": 600
 }
