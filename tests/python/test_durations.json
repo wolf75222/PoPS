@@ -6576,7 +6576,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1127,
+    "estimated_count": 1130,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6609,6 +6609,8 @@
       "tests/python/integration/amr/test_public_initial_field_ghost.py",
       "tests/python/integration/amr/test_public_initial_field_ghost_failure.py",
       "tests/python/integration/amr/test_public_tag_selection_native.py",
+      "tests/python/integration/amr/test_refinement_criterion_parity.py",
+      "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py",
       "tests/python/integration/amr/test_symbolic_path_amr_runtime.py",
       "tests/python/integration/bindings/test_amr_rectangular_array_orientation.py",
       "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
@@ -6918,6 +6920,7 @@
       "tests/python/unit/amr/test_local_state_storage_adversarial.py",
       "tests/python/unit/amr/test_local_state_storage_amr.py",
       "tests/python/unit/amr/test_public_amr_resolution.py",
+      "tests/python/unit/amr/test_refinement_criterion_regions.py",
       "tests/python/unit/amr/test_tagging_graph_identity_lowering.py",
       "tests/python/unit/amr/test_value_expr_tagging_protocol.py",
       "tests/python/unit/amr/test_vector_component_tagging.py",
@@ -7906,7 +7909,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1192,
+    "total_files": 1195,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -7950,6 +7953,32 @@
         "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
         "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 960,
         "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 1320
+      }
+    },
+    "n12_20261030_refinement_criterion": {
+      "basis": "Scheduling estimates for the region refinement criterion of Linear N12 (ROM-95, lot 1): the source-only unit file resolves the tutorial-09 case several times; the native files compile and run complete AMR Programs (each parity case compiles the tag-graph and the region route). Local receipts are one cloud container, Kokkos Serial/OpenMP Dim2, cold isolated caches; they are not GitHub wall times. Replace from complete CI timing receipts.",
+      "files": {
+        "tests/python/unit/amr/test_refinement_criterion_regions.py": {
+          "analogue": "tests/python/unit/amr/test_public_amr_resolution.py",
+          "estimated_seconds": 60,
+          "local_receipt": "13 passed in 33.0 s (30/10, gcc 13, Kokkos Serial, Dim2)",
+          "reason": "source-only: traces, resolves and emits the criterion of the tutorial-09 case about twenty times; no compile",
+          "source_sha256": "3d091892da73e89ca8b7a396aed8690187bbba499b38b2a1d6ea8801e6d64c76"
+        },
+        "tests/python/integration/amr/test_refinement_criterion_parity.py": {
+          "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
+          "estimated_seconds": 1200,
+          "local_receipt": "3 passed in 951.5 s: value 321 s, gradient 346 s, composite 284 s (30/10, gcc 13, Kokkos Serial, Dim2, cold module cache)",
+          "reason": "three cases; each compiles a tag-graph and a region Program cold (two model artifacts and six Programs in the module cache) and runs 16 adaptive steps per route",
+          "source_sha256": "8be2f329210d15e06abac0561a0daa3b7c5a844c1c4900231949dcf7172bd915"
+        },
+        "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py": {
+          "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
+          "estimated_seconds": 300,
+          "local_receipt": "1 passed in 201.2 s (30/10, gcc 13, Kokkos Serial, Dim2, cold isolated cache)",
+          "reason": "one four-component adaptive Program compiled cold and run for six fixed steps",
+          "source_sha256": "43d18babd7a435572001d2668f9280e2e7083ba296a5a8db70d5334bc3b93ed2"
+        }
       }
     }
   },
@@ -9144,5 +9173,8 @@
   "tests/python/integration/runtime/test_api_v02_computed_frontier_clipping_native.py": 1200,
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
-  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10
+  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
+  "tests/python/unit/amr/test_refinement_criterion_regions.py": 60,
+  "tests/python/integration/amr/test_refinement_criterion_parity.py": 1200,
+  "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py": 300
 }
