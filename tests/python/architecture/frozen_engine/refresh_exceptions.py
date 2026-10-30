@@ -2,6 +2,7 @@
 
     python -m tests.python.architecture.frozen_engine.refresh_exceptions cf2
     python -m tests.python.architecture.frozen_engine.refresh_exceptions cf2 --allow-moves
+    python -m tests.python.architecture.frozen_engine.refresh_exceptions cf0b   # also cf7, cf8
     python -m tests.python.architecture.frozen_engine.refresh_exceptions --check-base HEAD^1
 
 The default refuses any site that the list does not hold (same path, term and excerpt, ratchet.py):
@@ -11,7 +12,10 @@ a slice): an entry with the same term and excerpt must disappear from one file, 
 printed with the issues of both files. ``--bootstrap`` writes the list from scratch; it was used at
 b6e64c1d, again for the terms of the early audit of N2 (29/10), again for the error-text fix and
 the solve algorithms of the independent review of N2 (30/10), and again for one site per token
-occurrence (its follow-up review, 30/10). A PR that uses it again must say why.
+occurrence (its follow-up review, 30/10). A PR that uses it again must say why (the CF0b, CF7 and
+CF8 lists were written with it at b6e64c1d in lot 2 of Linear N2, once more, before they merged,
+with the sites that the audit of lot 2 found, and again for the independent review of lot 2, when
+their excerpts became spellings and their sites occurrences).
 
 ``--check-base REV`` writes nothing. It scans the tree of REV (a temporary worktree) and the
 current tree with the current scanner of every list, and fails on any site of the current tree that
@@ -36,11 +40,14 @@ import subprocess
 import sys
 import tempfile
 
-from . import cf2, ratchet, scan
+from . import cf0b, cf2, cf7, cf8, ratchet, scan
 
 # name -> (list file, scanner of a tree: root -> entries)
 LISTS = {
+    "cf0b": (cf0b.EXCEPTIONS, lambda root: cf0b.current_entries(root)),
     "cf2": (cf2.EXCEPTIONS, lambda root: cf2.current_entries(root)[0]),
+    "cf7": (cf7.EXCEPTIONS, lambda root: cf7.current_entries(root)[0]),
+    "cf8": (cf8.EXCEPTIONS, lambda root: cf8.current_entries(root)),
 }
 
 # The narrowings that PRs declare, relative to the root of a tree.
