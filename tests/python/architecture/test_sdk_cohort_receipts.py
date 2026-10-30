@@ -717,6 +717,32 @@ def test_a_standalone_cpp_reception_is_finite_and_never_admitted(published, repo
     assert receipts.read_receipt(written)["kind"] == "standalone-cpp"
 
 
+def test_ranks_agree_on_the_overlay_and_the_level_not_only_on_the_identities(repo, site,
+                                                                              tmp_path):
+    peer = {}
+    receipt = receipts.Receipt("two ranks", source_root=repo, package=site / "pops",
+                               directory=tmp_path, domain="source-only",
+                               gather=lambda local: [local, peer.get("identity", local)])
+    with receipt:
+        receipt.equations(repo / "examples/case.py")
+    receipt.data["backend"] = {"native_loaded": True, "runtime_environment": {
+        "mpi_ranks": 2, "mpi_rank": 0, "communicator": "world"}}
+    agreed = receipt._ranks()
+    assert agreed["size"] == 2 and agreed["consensus"] is True
+    seen = copy.deepcopy(receipt.data)
+    # Rank 1 saw the same source, SDK and DSOs, but an overlay ...
+    receipt.data["overlay"] = {"clean": False,
+                               "findings": ["LD_PRELOAD injects code into the process: x"]}
+    peer["identity"] = receipt._ranks()["local_identity"]
+    receipt.data["overlay"] = seen["overlay"]
+    assert receipt._ranks()["consensus"] is False
+    # ... or reached another level.
+    receipt.data["stages"] = []
+    peer["identity"] = receipt._ranks()["local_identity"]
+    receipt.data["stages"] = seen["stages"]
+    assert receipt._ranks()["consensus"] is False
+
+
 class _Identity(SimpleNamespace):
     pass
 
@@ -884,6 +910,24 @@ def test_receipt_fails_fast_while_another_source_qualifies(repo, site):
             receipts.Receipt("blocked", source_root=repo, package=site / "pops").open()
 
 
+def test_a_receipt_takes_its_lease_before_it_identifies_the_sdk(repo, site, tmp_path,
+                                                                 monkeypatch):
+    held = []
+    identify = cohort.sdk_identity
+
+    def identify_under_the_lease(package_dir, *arguments, **options):
+        with pytest.raises(cohort.InstallationBusy):
+            cohort.acquire_mutation_lease(site, purpose="a build racing the receipt")
+        held.append(str(package_dir))
+        return identify(package_dir, *arguments, **options)
+    monkeypatch.setattr(cohort, "sdk_identity", identify_under_the_lease)
+    receipt = receipts.Receipt("lease first", source_root=repo, package=site / "pops",
+                               directory=tmp_path, domain="source-only")
+    with receipt:
+        receipt.equations(repo / "examples/case.py")
+    assert held and receipt.data["lease"]["held"]
+
+
 def test_receipt_on_a_checkout_package_takes_no_lease_and_writes_nothing_there(repo, tmp_path):
     receipt = receipts.Receipt("editable probe", source_root=repo,
                                package=repo / "python" / "pops", directory=tmp_path)
@@ -943,6 +987,25 @@ def test_overlay_findings_name_environment_overrides(repo, site, monkeypatch, tm
     assert any(item.startswith("POPS_INCLUDE=") for item in findings)
     assert any(item.startswith("LD_PRELOAD injects code") for item in findings)
     receipt.close()
+
+
+def test_every_mapped_sdk_file_must_have_the_bytes_of_the_sdk_the_receipt_names(repo, site):
+    package = site / "pops"
+    sdk = cohort.sdk_identity(package)
+    row = sdk["native"][0]
+    leaf = package / "_native" / row["path"]
+    data = {"source": cohort.source_identity(repo), "sdk": sdk, "coherence": {"coherent": True},
+            "lease": {"held": True}, "process": None, "dsos": [
+                {"path": str(leaf), "role": "sdk", "deleted": False, "sha256": row["sha256"]},
+                {"path": str(leaf), "role": "sdk", "deleted": False, "sha256": "f" * 64},
+                {"path": str(package / "model.py"), "role": "sdk", "deleted": True}]}
+    findings = [item for item in receipts.overlay_findings(data, cohort.sdk_file_table(package))[
+        "findings"] if item.startswith(("mapped SDK file", "SDK file"))]
+    assert findings == [
+        "mapped SDK file %s does not have the bytes of the SDK this receipt names"
+        % leaf.relative_to(package).as_posix(),
+        "SDK file %s is mapped but was deleted or replaced after it was loaded"
+        % (package / "model.py")]
 
 
 def test_a_source_changed_during_the_qualification_is_an_overlay(repo, site, tmp_path):
