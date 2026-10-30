@@ -56,7 +56,8 @@ def main():
                 with np.load(directory / ("fields-%d.npz" % (phase-1)), allow_pickle=False) as saved:
                     assert len(saved.files) == len(restored)
                     for level, current in enumerate(restored):
-                        np.testing.assert_array_equal(current.view(np.uint64), saved[str(level)].view(np.uint64))
+                        np.testing.assert_array_equal(np.asarray(current).view(np.uint64),
+                                                      saved[str(level)].view(np.uint64))
             receipt = runtime._executor._last_restart_migration_receipt
             assert receipt["complete_rank_table"] and receipt["target_ranks"] == ranks
     report = collective_call(world, lambda: pops.step(runtime, t_bound=spec.t_end, console=False))
