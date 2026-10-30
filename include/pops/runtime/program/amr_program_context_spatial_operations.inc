@@ -175,9 +175,9 @@ void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLa
                                const char* operation) const {
   if (all_reduce_max(local_error ? 1L : 0L, lane) == 0)
     return;
-  if (lane.size() == 1 && local_error)
-    std::rethrow_exception(local_error);
-  throw std::runtime_error(std::string(operation) + " failed collectively");
+  // Every rank reports the lowest failing rank's reason, not only the operation.
+  collectively_rethrow_exception(local_error, lane,
+                                 std::string(operation) + " failed collectively");
 }
 
 // Replicated level storage is one physical copy, counted on lane rank 0 only. Every copy is

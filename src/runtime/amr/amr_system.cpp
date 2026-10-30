@@ -10176,13 +10176,8 @@ struct AmrSystem<Dim>::Impl {
     } catch (...) {
       local_error = std::current_exception();
     }
-    const long preparation_failures = all_reduce_sum(local_error ? 1L : 0L, communicator);
-    if (preparation_failures != 0) {
-      if (communicator.size() == 1 && local_error)
-        std::rethrow_exception(local_error);
-      throw std::runtime_error("AMR Program history regrid preparation failed collectively on " +
-                               std::to_string(preparation_failures) + " rank(s)");
-    }
+    collectively_rethrow_exception(local_error, communicator,
+                                   "AMR Program history regrid preparation failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{std::string_view("amr-program-history-regrid"), std::string_view(transfer_contract)}},
             communicator))
