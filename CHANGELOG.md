@@ -29,10 +29,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the interpreter drives it only through its standard library and pytest, from files that the
   environment's manifests (`RECORD`, `conda-meta`) record with their bytes, so CI starts pytest
   from the committed `scripts/ci_pytest_bootstrap.py` instead of `python -c`, and
-  `qualification_receipt.py judge-interpreter` judges every file of an interpreter that way
-  before a receiver runs. Only `build_python.sh` attests a leaf, with its build environment, here
-  and beside the retained wheel; the cohort says whether that environment is official, and
-  `sdk_cohort.py prefix` installs the wheel into a fresh qualification prefix.
+  `qualification_receipt.py judge-interpreter` judges that way, before a receiver runs, every
+  file of an interpreter that an import reaches. Only `build_python.sh` attests a leaf, with its
+  build environment, here and beside the retained wheel; the cohort says whether that
+  environment is official, and `sdk_cohort.py prefix` installs the wheel into a fresh
+  qualification prefix.
 
 ### Changed
 

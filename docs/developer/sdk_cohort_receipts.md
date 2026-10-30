@@ -207,9 +207,13 @@ the cohort lives in a fresh qualification prefix made from the retained wheel.
    conda environment's NumPy and pytest stay visible), installs the wheel alone, proves the
    installation byte-identical to the wheel and verifies its native leaf.
 5. Judge the files of that interpreter: `"$PY" -I scripts/qualification_receipt.py
-   judge-interpreter` judges every code file of its standard library and site directories as a
-   receipt would if a receiver loaded it, lists each one a receipt would refuse and exits 1 when
-   there is one. It takes seconds, where a refused receipt shows only once its receiver has run.
+   judge-interpreter` judges every code file of its standard library and site directories that
+   an import reaches, as a receipt would if a receiver loaded it, lists each one a receipt would
+   refuse and exits 1 when there is one. It leaves out, and lists, the SDK, which `verify` judges,
+   every copy that the import of its name does not reach, such as the build environment's `pops`
+   and the sibling leaves restored there after pip, behind the prefix's own, and every file that
+   no import names, such as a module built for another Python. It takes seconds, where a refused
+   receipt shows only once its receiver has run.
 6. Run the receivers of the lot with that interpreter and `env -u PYTHONPATH`, writing their
    receipts; for the reference receivers:
    `env -u PYTHONPATH PYTHONNOUSERSITE=1 POPS_NATIVE_DIM=2 POPS_CI_PYTEST_TIMINGS_DIR="$OUT" "$PY"

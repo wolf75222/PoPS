@@ -586,29 +586,86 @@ def _manifest_prefixes() -> tuple[Path, ...]:
     return (Path(sys.prefix), Path(sys.base_prefix))
 
 
+def _import_path(roots: Sequence[Path]) -> tuple[Path, ...]:
+    """The entries of ``sys.path`` in the interpreter's roots, in import order: where a top-level
+    import of the interpreter's code looks (its standard library, ``lib-dynload``, its site
+    directories)."""
+    return tuple(dict.fromkeys(Path(entry) for entry in sys.path if entry and any(
+        _depth_within(Path(entry), root) is not None for root in roots)))
+
+
 def judge_interpreter(*, interpreter: Sequence[Path] | None = None,
                       standard: Sequence[Path] | None = None,
-                      prefixes: Sequence[Path] | None = None) -> dict[str, Any]:
-    """Judge every code file of this interpreter as a receipt judges the files a receiver loads.
+                      prefixes: Sequence[Path] | None = None,
+                      path: Sequence[Path] | None = None) -> dict[str, Any]:
+    """Judge every code file of this interpreter that a receiver can import, as a receipt judges
+    the files a receiver loads.
 
     Each source, sourceless bytecode and extension module under the interpreter's standard
-    library and site directories is judged as if it were loaded (``judge_interpreter_files``), so
-    a file a receipt would refuse shows before a receiver runs; a receiver that never loads it is
-    not refused for it.  Bytecode caches (``__pycache__``) are left out, as a receipt leaves them.
-    The defaults are those of ``code_observation``.
+    library and site directories is judged as if it were loaded (``judge_interpreter_files``) when
+    a top-level import through ``path`` reaches it, so a file a receipt would refuse shows before a
+    receiver runs; a receiver that never loads it is not refused for it.  Left out, and listed:
+    the SDK (``pops``) wherever it lies, which a receipt judges by its own file table and
+    ``sdk_cohort.py verify`` by its installation; a copy that the import of its name does not
+    reach, since it resolves elsewhere (to an earlier entry of ``path``: the build environment's
+    ``pops`` and the sibling leaves restored there, behind the qualification prefix's, say); a
+    file under no entry or that no module name reaches (``foo.bar.py``, a directory such as
+    ``numpy.libs``, or a module built for another Python).  A name that is no identifier is still
+    a name: sysconfig imports its ``_sysconfigdata_*`` module by name.  The bytecode caches
+    (``__pycache__``) are not walked, as a receipt leaves them.  ``path`` is ``_import_path`` by
+    default; the other defaults are those of ``code_observation``.
     """
     roots = _interpreter_roots() if interpreter is None else tuple(interpreter)
     library = _standard_library() if standard is None else tuple(standard)
     prefixes = _manifest_prefixes() if prefixes is None else tuple(prefixes)
+    entries = _import_path(roots) if path is None else tuple(Path(item) for item in path)
+    forms = _root_forms(entries)
     suffixes = tuple(importlib.machinery.all_suffixes())
+    reached: dict[str, tuple[bool, list[str]] | None] = {}
+
+    def resolve(top: str) -> tuple[bool, list[str]] | None:
+        """Where an import of ``top`` through ``entries`` goes: its package directories (all the
+        portions of a namespace package) or its module file."""
+        if top not in reached:
+            spec = importlib.machinery.PathFinder.find_spec(top, [str(item) for item in entries])
+            locations = None if spec is None else spec.submodule_search_locations
+            reached[top] = None if spec is None or (locations is None and not spec.origin) else (
+                (True, [os.path.realpath(item) for item in locations]) if locations is not None
+                else (False, [os.path.realpath(spec.origin)]))
+        return reached[top]
+
     files: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
+    sdk: set[str] = set()
+    masked: dict[str, str] = {}
+    not_importable: list[str] = []
     for root in roots:
         for directory, subdirectories, names in os.walk(root):
             subdirectories[:] = [item for item in subdirectories if item != "__pycache__"]
             for name in names:
-                if name.endswith(suffixes):
-                    path = os.path.join(directory, name)
-                    files.setdefault(os.path.realpath(path), {"module": None, "path": path})
+                file = os.path.join(directory, name)
+                real = os.path.realpath(file)
+                if not name.endswith(suffixes) or real in seen:
+                    continue
+                seen.add(real)
+                located = _interpreter_location(file, entries, forms)
+                if located is not None and located[1] == "pops":  # the SDK, by its own table
+                    sdk.add(os.path.join(str(located[0]), "pops"))
+                    continue
+                entry, top = located if located is not None else (None, "")
+                # A module directly in an entry is named by its file: foo.bar.py names no module.
+                # A name need not be an identifier (sysconfig imports _sysconfigdata_* by name),
+                # but a dot makes it a submodule's, so numpy.libs names no top-level module.
+                direct = entry is not None and os.path.realpath(os.path.join(entry, name)) == real
+                found = resolve(top) if top and "." not in top and not (
+                    direct and name[len(top):] not in suffixes) else None
+                if found is None:
+                    not_importable.append(file)
+                elif any(real == item or (found[0] and real.startswith(item + os.sep))
+                         for item in found[1]):
+                    files[real] = {"module": None, "path": file}
+                else:  # the import of the name resolves elsewhere: none reaches this copy
+                    masked[file if direct else os.path.join(str(entry), top)] = found[1][0]
     judged = judge_interpreter_files(files, interpreter_manifest(roots, library, prefixes),
                                      roots, library)
     unverified: dict[str, dict[str, int]] = {}
@@ -619,7 +676,10 @@ def judge_interpreter(*, interpreter: Sequence[Path] | None = None,
         "python": sys.executable, "prefix": sys.prefix, "base_prefix": sys.base_prefix,
         "interpreter_roots": [str(item) for item in roots],
         "standard_library_roots": [str(item) for item in library],
+        "import_path": [str(item) for item in entries],
         "files_judged": len(files),
+        "left_out": {"sdk": sorted(sdk), "masked": dict(sorted(masked.items())),
+                     "not_importable": sorted(not_importable)},
         "manifests": judged["manifests"],
         "standard_library": judged["standard_library"],
         "counts": judged["counts"],

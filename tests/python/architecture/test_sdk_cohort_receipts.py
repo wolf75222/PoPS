@@ -1341,8 +1341,10 @@ def test_judge_interpreter_judges_every_file_of_the_interpreter_before_a_receive
     interpreter's roots as a receipt would if a receiver loaded it, with the receipt's defaults,
     and exits 1 while one would be refused."""
     base, roots, recorded, beside = _venv_over_conda(tmp_path, monkeypatch)
+    venv_site, standard, conda_site = roots
     monkeypatch.setattr(receipts, "_interpreter_roots", lambda: roots)
-    venv_site, conda_site = roots[0], roots[-1]
+    monkeypatch.setattr(receipts, "_import_path",  # in a venv, sys.path's order
+                        lambda interpreter: (standard, venv_site, conda_site))
     placed = [venv_site / "rom17_dropped.py", venv_site / f"rom17_native{SUFFIX}",
               venv_site / "rom17_sourceless.pyc"]
     for path in placed:
@@ -1361,6 +1363,7 @@ def test_judge_interpreter_judges_every_file_of_the_interpreter_before_a_receive
     code, report = judge()
     assert code == 1
     assert report["files_judged"] == 6
+    assert report["left_out"] == {"sdk": [], "masked": {}, "not_importable": []}
     assert report["manifests"]["conda"] == [str(base)]
     assert report["standard_library"] == "judged"
     assert report["counts"] == {"recorded": 1, "listed": 0, "unmanaged": 1, "believed": 0,
@@ -1373,6 +1376,89 @@ def test_judge_interpreter_judges_every_file_of_the_interpreter_before_a_receive
         path.unlink()
     code, report = judge()
     assert (code, report["refused"], report["counts"]["recorded"]) == (0, [], 1)
+
+
+def test_judge_interpreter_leaves_out_the_sdk_and_what_no_import_reaches(tmp_path, monkeypatch,
+                                                                          capsys):
+    """The review of 386b7c8 (T3): the qualification prefix sees the build environment's site
+    directory, whose ``pops`` holds the sibling leaves ``preserve_native_variants.py restore``
+    copied after pip, outside its RECORD, and under Darwin a re-signed leaf.  No receipt judges
+    that copy, which the prefix's own ``pops`` masks, nor the SDK, which a receipt judges by its own
+    file table.  ``judge-interpreter`` leaves both out, with any copy that an earlier entry of the
+    import path masks and any file that no import names, and lists them; every portion of a
+    namespace package, ``lib-dynload`` and a module whose name is no identifier are reached."""
+    base, roots, recorded, beside = _venv_over_conda(tmp_path, monkeypatch)
+    beside.unlink()
+    venv_site, standard, conda_site = roots
+    path = (standard, standard / "lib-dynload", venv_site, conda_site)  # sys.path's order
+    monkeypatch.setattr(receipts, "_interpreter_roots", lambda: roots)
+    monkeypatch.setattr(receipts, "_import_path", lambda interpreter: path)
+
+    def write(file, data=b"code\n"):
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(data)
+        return file
+    leaf = f"_pops{SUFFIX}"
+    # The SDK installed alone in the prefix, and the build environment's copy: pip's RECORD
+    # lists its Dim=2 leaf, since re-signed, and not the Dim=1 leaf restored after pip.
+    for site_dir in (venv_site, conda_site):
+        _distribution(site_dir, "pops", [
+            (f"pops/{relative}", _record_hash(write(site_dir / "pops" / relative)))
+            for relative in ("__init__.py", f"_native/dim2/{leaf}")])
+    write(conda_site / "pops" / "_native" / "dim1" / leaf)
+    write(conda_site / "pops" / "_native" / "dim2" / leaf, b"re-signed\n")
+    # A module the prefix's pip installed, and the base's copy that no manifest lists.
+    shared = write(venv_site / "shared.py")
+    _distribution(venv_site, "shared", [("shared.py", _record_hash(shared))])
+    write(conda_site / "shared.py", b"unlisted copy\n")
+    # A namespace package with a portion in each site directory, each recorded.
+    for site_dir, part in ((venv_site, "a"), (conda_site, "b")):
+        portion = write(site_dir / "nsp" / f"{part}.py")
+        _distribution(site_dir, f"nsp_{part}", [(f"nsp/{part}.py", _record_hash(portion))])
+    # An extension module of lib-dynload, and a module beside the standard library whose name is
+    # no identifier (sysconfig imports its _sysconfigdata_* by name), both recorded by conda.
+    extension = write(standard / "lib-dynload" / f"_rom17_ext{SUFFIX}")
+    data = write(standard / "_sysconfigdata__rom17_x86_64-linux-gnu.py")
+    (base / "conda-meta" / "rom17-ext-1.0-0.json").write_text(json.dumps({
+        "name": "rom17-ext", "version": "1.0", "paths_data": {"paths_version": 1, "paths": [
+            {"_path": item.relative_to(base).as_posix(), "path_type": "hardlink",
+             "sha256": hashlib.sha256(item.read_bytes()).hexdigest()}
+            for item in (extension, data)]}}))
+    # Files that no import names: under a directory whose name has a dot (PathFinder, asked for
+    # it, would look up its last part, the module shared), and a backup copy.
+    write(conda_site / "vendored.shared" / "helper.py")
+    write(conda_site / "shared.orig.py")
+
+    def judge():
+        code = receipts.main(["judge-interpreter"])
+        return code, json.loads(capsys.readouterr().out)
+    code, report = judge()
+    assert code == 0, report["refused"]
+    assert report["import_path"] == [str(item) for item in path]
+    assert report["left_out"] == {
+        "sdk": sorted([str(venv_site / "pops"), str(conda_site / "pops")]),
+        "masked": {str(conda_site / "shared.py"): os.path.realpath(shared)},
+        "not_importable": [str(conda_site / "shared.orig.py"),
+                           str(conda_site / "vendored.shared" / "helper.py")]}
+    assert report["files_judged"] == 6
+    assert report["counts"] == {"recorded": 6, "listed": 0, "unmanaged": 0, "believed": 0,
+                                "altered": 0, "unrecorded": 0}
+    # Without the prefix's own module, the import reaches the base's copy, which is refused.
+    shared.unlink()
+    code, report = judge()
+    assert code == 1
+    assert report["refused"] == [
+        {"path": str(conda_site / "shared.py"), "verdict": "unrecorded", "library": "site"}]
+
+
+def test_the_import_path_is_sys_path_within_the_interpreter_in_its_order(tmp_path, monkeypatch):
+    standard, site_dir = tmp_path / "lib" / "python3", tmp_path / "site"
+    with monkeypatch.context() as patch:  # sys.path itself only for the call
+        patch.setattr(sys, "path", ["", str(tmp_path / "checkout"), str(standard),
+                                    str(standard / "lib-dynload"), str(site_dir),
+                                    str(standard), str(tmp_path / "lib" / "python3.zip")])
+        found = receipts._import_path((site_dir, standard))
+    assert found == (standard, standard / "lib-dynload", site_dir)
 
 
 #: A receiver committed in the fake checkout: it writes one receipt (stage E) under a false label.
