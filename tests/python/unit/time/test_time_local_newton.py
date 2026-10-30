@@ -265,7 +265,8 @@ def section_a(t):
         assert source_module is model.module
         return emit_cpp_program(program, model=emit_model)
 
-    src = emit_with_model_authority(reaction_program(t, "react_cg", model=m), model=m)
+    program = reaction_program(t, "react_cg", model=m)
+    src = emit_with_model_authority(program, model=m)
     for frag in (
         "auto residual_eval = [&]",
         "pops::prepare_local_nonlinear_problem<1>",
@@ -286,7 +287,13 @@ def section_a(t):
     commit = src.index("ctx.commit_many(")
     chk(guard < commit, "a failed Newton report is consumed before the state commit")
     # The residual is the affine r = U - U0 - dt*S(U); S(U) = -k U^2 reads the iterate stack.
-    chk("Gval[0] = u" in src, "the frozen guess is read into a stack vector")
+    # The unit-coefficient guess is read through its identity alias, which selects its own
+    # scratch unless a pending Field representation is retained.
+    (guess,) = (v for v in program._values if v.name == "implicit_guess")
+    observed = "identity_observed_%d" % guess.id
+    chk("auto& %s = identity_owner_%d ? *identity_owner_%d : u%d;"
+        % (observed, guess.id, guess.id, guess.id) in src, "the frozen guess binds its identity alias")
+    chk("Gval[0] = %sA(index, 0);" % observed in src, "the frozen guess is read into a stack vector")
     chk("solve_prepared_local_nonlinear(prepared_, Gval)" in src,
         "the prepared solve is seeded from the frozen guess")
     chk("rout[0] =" in src and "Ueval[0]" in src, "the residual is re-evaluated at the iterate")
