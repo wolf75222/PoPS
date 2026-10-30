@@ -1,0 +1,13 @@
+# Narrowings of the engine guards that a PR declares (spec 0.3, MG6; Linear N2).
+#
+# refresh_exceptions.py --check-base REV also scans the tree of a PR with the scanner of REV, the
+# base of the PR. Where the scanner of the PR sees fewer sites of a (path, term) than the scanner of
+# the base sees in the same tree, the PR has narrowed a guard: a wider generic sense, a term taken out
+# of the vocabulary, a lexer that hides more text, a path taken out of CF0. CI fails unless the PR
+# adds one line per narrowed (path, term) here, with the number of sites it hides and the reason:
+#
+#     <list> <path> <term> <count> | <reason>
+#
+# Only the lines that a PR adds are checked; the lines already here record the narrowings of earlier
+# PRs. A narrowing that hides knowledge of section 15.3 is a pattern widened to hide an occurrence,
+# a shortcut that Linear N2 forbids: remove the occurrence instead.

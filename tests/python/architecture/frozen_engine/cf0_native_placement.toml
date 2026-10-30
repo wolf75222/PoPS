@@ -1,0 +1,183 @@
+# CF0 placement list (spec 0.3: CF0, FC6, FC6b, IR24, MG6; Linear N2), built from b6e64c1d.
+#
+# The natives of b6 that IR24 turns into qualified substitutions still sit in core paths. Each
+# entry names one of them: its files, the issue and the phase that move it to the native component
+# tree (cf0_paths.toml [native_tree]), and the interface of the closed list of FC6b
+# (cf2_interfaces.toml) through which it will be bound. "lines" are the sites that IR24 cites (a line or
+# a "first-last" range, in the first file); an entry without lines covers whole files.
+#
+# The list only shrinks (MG6): test_cf0_frozen_engine_paths.py fails on an entry that b6 did not
+# have, and on an entry whose files are no longer in core paths (moved or deleted), which must then
+# be removed.
+# It holds only Phase 2 entries at the exit of Phase 1 and is empty at the freeze (G01, FC8).
+
+[[native]]
+id = "face-loop-stencil-flux"
+what = "face and stencil kernels, as loops over a generated body"
+files = ["include/pops/numerics/fv/stencil_flux.hpp"]
+lines = [112, 132, 156]
+issue = "N3"
+phase = 1
+interface = "loop_over_generated_body"
+
+[[native]]
+id = "face-loop-generated-system-block"
+what = "face kernel of the generated System block, a loop over a generated body"
+files = ["include/pops/runtime/builders/compiled/generated_system_block.hpp"]
+lines = [1704]
+issue = "N3"
+phase = 1
+interface = "loop_over_generated_body"
+
+[[native]]
+id = "face-loop-generated-amr-system-block"
+what = "face kernel of the generated AMR System block, a loop over a generated body"
+files = ["include/pops/runtime/builders/compiled/generated_amr_system_block.hpp"]
+lines = [2265]
+issue = "N3"
+phase = 1
+interface = "loop_over_generated_body"
+
+[[native]]
+id = "solver-krylov"
+what = "native Krylov drivers over the vector-space interface, with their SV13 qualification"
+files = [
+    "include/pops/numerics/elliptic/linear/generic_krylov.hpp",
+    "include/pops/numerics/elliptic/linear/krylov_method_provider.hpp",
+    "include/pops/numerics/elliptic/linear/krylov_workspace.hpp",
+    "include/pops/runtime/amr/tensor_coarse_gmres.hpp",
+]
+issue = "N9"
+phase = 2
+interface = "krylov_driver"
+
+[[native]]
+id = "solver-newton-krylov"
+what = "native Newton-Krylov field solvers (reference: pops.lib.solve)"
+files = [
+    "include/pops/numerics/elliptic/interface/field_newton_krylov.hpp",
+    "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp",
+]
+issue = "N9"
+phase = 2
+interface = "krylov_driver"
+
+[[native]]
+id = "solver-multigrid"
+what = "native multigrid and FAC cycles, to run over generated level operators"
+files = [
+    "include/pops/numerics/elliptic/mg/geometric_mg.hpp",
+    "include/pops/numerics/elliptic/mg/composite_fac_nlevel.hpp",
+    "include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp",
+    "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp",
+]
+issue = "N9"
+phase = 2
+interface = "multigrid_cycle"
+
+[[native]]
+id = "solver-preconditioner"
+what = "native diagonal preconditioner of the tensor operators"
+files = ["include/pops/numerics/elliptic/mg/tensor_diagonal_preconditioner.hpp"]
+issue = "N9"
+phase = 2
+interface = "preconditioner_apply"
+
+[[native]]
+id = "solver-fft"
+what = "native FFT Poisson solvers, to take a derived symbol (IR15)"
+files = [
+    "include/pops/numerics/elliptic/poisson/poisson_fft.hpp",
+    "include/pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp",
+    "include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp",
+    "include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp",
+    "include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp",
+]
+issue = "N9"
+phase = 2
+interface = "fft"
+
+[[native]]
+id = "solver-polar-poisson"
+what = "native polar Poisson solver and its prepared inverse"
+files = [
+    "include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp",
+    "include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp",
+]
+issue = "N9"
+phase = 2
+interface = "dense_banded_factorization"
+
+[[native]]
+id = "solver-cartesian-poisson"
+what = "native Cartesian Poisson operator and solver"
+files = [
+    "include/pops/numerics/elliptic/nd/cartesian_poisson.hpp",
+    "include/pops/numerics/elliptic/poisson/poisson_operator.hpp",
+]
+issue = "N9"
+phase = 2
+interface = "linear_action"
+
+[[native]]
+id = "solver-dense-residual-basis"
+what = "native dense LU of the full residual basis"
+files = ["include/pops/numerics/elliptic/interface/full_residual_basis_lu.hpp"]
+issue = "N9"
+phase = 2
+interface = "dense_banded_factorization"
+
+[[native]]
+id = "solver-amr-tensor"
+what = "native AMR tensor solvers"
+files = [
+    "include/pops/runtime/amr/amr_tensor_elliptic.hpp",
+    "include/pops/runtime/amr/hierarchy_tensor_solver_provider.hpp",
+    "include/pops/runtime/amr/tensor_composite_fac.hpp",
+]
+issue = "N9"
+phase = 2
+interface = "multigrid_cycle"
+
+[[native]]
+id = "direct-sum-spatial-interaction"
+what = "direct sum of spatial_interaction, a loop over a generated kernel body (M12, M18, M26)"
+files = ["include/pops/runtime/program/spatial_direct_interaction.hpp"]
+lines = ["423-437"]
+issue = "G05"
+phase = 2
+interface = "loop_over_generated_body"
+
+[[native]]
+id = "path-conservative-rusanov"
+what = "path-conservative Rusanov flux of R5 (M17, M24, M25); G06 replaces it by generated per-side bodies (IR25)"
+files = ["include/pops/numerics/fv/path_flux.hpp"]
+lines = ["82-95"]
+issue = "G06"
+phase = 2
+# A named flux is never a substitution (FC6, which holds over IR24: adjudication section 17, 29/10):
+# no interface of the closed list binds it, it never enters the native tree, and G06 removes it once
+# the flux generated from the per-side bodies of IR25 meets the PF10 bound on its profiles (PF14).
+interface = "none"
+
+[[native]]
+id = "level-transfer-reflux-ledger"
+what = "native reflux ledger, in the level-transfer class (DM12)"
+files = [
+    "include/pops/amr/reflux/face_flux_ledger.hpp",
+    "include/pops/amr/reflux/metric_reflux.hpp",
+    "include/pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp",
+    "include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp",
+]
+issue = "G06"
+phase = 2
+interface = "level_transfer"
+
+[[native]]
+id = "level-transfer-restriction"
+what = "native conservative restriction (TransferKind::ConservativeRestriction), in the level-transfer class; the prolongations of the same file are CF2 exceptions of G11 (C43)"
+files = ["include/pops/amr/transfer/transfer_provider.hpp"]
+lines = [25]
+issue = "G06"
+phase = 2
+interface = "level_transfer"
