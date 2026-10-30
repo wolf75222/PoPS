@@ -93,9 +93,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   once and generated into the compiled Program. The native tagging plan calls it on each patch in
   place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` and
   clustering. A criterion requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD` and
-  decides as the tag graph does: it compares with a strict `<` or `>`, a comparison at exact
-  equality decides nothing, `~`, `&` and `|` follow Kleene's three-valued logic, and every
-  comparison is evaluated, so a non-finite sample rejects the level on both routes.
+  decides as the tag graph does: it compares with a strict `<` or `>` (`<=`, `>=` and `==` are
+  refused at the line of the rule); `~`, `&` and `|` follow Kleene's three-valued logic, so a
+  comparison at exact equality decides nothing and neither does its negation under `~`; and every
+  comparison is evaluated, so a non-finite sample rejects the level on both routes, even where the
+  left operand of `&` or `|` already decides the rule.
   `pops.lib.amr.gradient_norm` keeps the arithmetic of the gradient leaves under the stencil the
   method declares (`amr_indicator_stencil`). Tag-graph expressions are unchanged and are not mixed
   with functions of `cell` in one `AMRTagging`; external Tagger components and multi-layout plans

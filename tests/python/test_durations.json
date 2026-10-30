@@ -7969,9 +7969,9 @@
         "tests/python/integration/amr/test_refinement_criterion_parity.py": {
           "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
           "estimated_seconds": 1800,
-          "local_receipt": "4 passed in 1502.6 s: value 429 s, gradient 365 s, composite 363 s, negation 346 s (30/10, gcc 13, Kokkos Serial, Dim2, cold module cache, two other native runs on the same 4 cores)",
+          "local_receipt": "4 passed in 1502.6 s: value 429 s, gradient 365 s, composite 363 s, negation 346 s (30/10, gcc 13, Kokkos Serial, Dim2, cold module cache, two other native runs on the same 4 cores); negation alone with the on-threshold pin: 1 passed in 383.4 s (30/10)",
           "reason": "four cases; each compiles a tag-graph and a region Program cold (two model artifacts and eight Programs in the module cache) and runs 16 adaptive steps per route",
-          "source_sha256": "6e473a6f968dcea7f10081fe13f9008a3a52b17c1c7a90110eb70aeda6a1c796"
+          "source_sha256": "25fd2a239f9d9c62a7bd378fb858b359cea146a90689acf7a7ff0f4f0bdc95e5"
         },
         "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py": {
           "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",

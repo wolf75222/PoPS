@@ -150,6 +150,14 @@ def test_region_criterion_decides_as_the_tag_graph(kind, criterion_native_cache)
     assert regions[-1]["regrids"] > regions[0]["regrids"]
     assert len({row["boxes"] for row in regions}) > 1
     if kind == "negation":
-        # Cells sit exactly on the threshold of both negations, so the parity covers equality.
+        # Cells sit exactly on the threshold of both negations. Under Kleene's logic a comparison
+        # there decides nothing, so both routes keep them. A two-valued reading of ~, the one the
+        # surface of §2.6.2 would take without an equality policy (DM13b, open with N15), would
+        # have both rules act there, and refinement would win.
         coarse = np.frombuffer(regions[0]["coarse"], dtype=np.float64)
-        assert np.count_nonzero(coarse == THRESHOLDS["band_upper"]) > 0
+        on_threshold = coarse == THRESHOLDS["band_upper"]
+        assert np.count_nonzero(on_threshold) > 0
+        for route in (graph, regions):
+            requests = np.frombuffer(route[0]["requests"], dtype=np.uint8)
+            assert requests.shape == coarse.shape
+            assert not requests[on_threshold].any()
