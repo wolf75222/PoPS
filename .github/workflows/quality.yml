@@ -84,15 +84,20 @@ jobs:
           echo "$(clang-format --version)"
           # Track all native source directories, including src/runtime and benchmarks.
           # Git excludes generated build trees; NUL delimiters preserve paths with spaces.
+          # Les fichiers de .clang-format-ignore (donnees figees octet pour octet) sont sautes.
           mapfile -d '' -t files < <(git ls-files -z -- \
             '*.hpp' '*.h' '*.cpp' '*.cc' '*.cxx' '*.c')
           bad=0
           : > format-diff.patch
           for f in "${files[@]}"; do
-            if ! diff -u "$f" <(clang-format --style=file "$f") >> format-diff.patch; then
-              echo "::warning file=$f::clang-format : non conforme au style (.clang-format)"
-              bad=$((bad+1))
+            # --dry-run --Werror honore .clang-format-ignore ; sur les autres fichiers il classe
+            # comme le diff ci-dessous, qui ne sert plus qu'a remplir format-diff.patch.
+            if clang-format --dry-run --Werror --style=file "$f" 2>/dev/null; then
+              continue
             fi
+            diff -u "$f" <(clang-format --style=file "$f") >> format-diff.patch || true
+            echo "::warning file=$f::clang-format : non conforme au style (.clang-format)"
+            bad=$((bad+1))
           done
           {
             echo "### clang-format"
