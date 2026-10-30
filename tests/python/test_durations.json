@@ -5705,7 +5705,12 @@
           "registration": "snapshot_protocols_20261016"
         },
         "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
-          "estimated_seconds": 900,
+          "estimated_seconds": 1400,
+          "kind": "native_profile",
+          "native_dimension": 2
+        },
+        "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py": {
+          "estimated_seconds": 850,
           "kind": "native_profile",
           "native_dimension": 2
         }
@@ -6581,7 +6586,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1129,
+    "estimated_count": 1130,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6732,6 +6737,7 @@
       "tests/python/integration/runtime/test_api_v02_original_field_typed_recovery_native.py",
       "tests/python/integration/runtime/test_api_v02_output_history_remap_native.py",
       "tests/python/integration/runtime/test_api_v02_path_hierarchy_native.py",
+      "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py",
       "tests/python/integration/runtime/test_api_v02_python_faces_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_choices_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_loops_native.py",
@@ -7913,7 +7919,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1194,
+    "total_files": 1195,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -7960,16 +7966,21 @@
       }
     },
     "n3a_20261029": {
-      "basis": "Scheduling estimates for the N3a pilot (ROM-82), not CI receipts. The source unit file builds the M03 and M16 models without compiling (24 s locally on 4 cores, so 30 s). The native file compiles four case pairs, eight artifacts (769 s locally on 4 cores with Kokkos OpenMP), each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts), plus margin. Refresh from complete CI timing artifacts.",
+      "basis": "Scheduling estimates for the N3a pilot (ROM-82) and its face inputs (ROM-99), not CI receipts. The source unit file builds the M03 and M16 models without compiling (25 s locally on 4 cores, so 30 s). The parity file compiles five case pairs, ten artifacts, each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts): 1244 s locally on 4 cores with Kokkos Serial beside three other compiles, 1038 s beside one. It keeps the 1400 s set when it also held the M16 refusal, from 1186 s with the margin of N3a (900 s for 769 s), for which the Python shards went from 135 to 136. The face-input file compiles six artifacts, M01's native Rusanov and two faces that read the normal, the native and the derived HLL of M01 with an inverted signed pair, and the derived HLL on M16's oblique profile: 695 s locally beside three other compiles, so 850 s with the same margin. Refresh from complete CI timing artifacts.",
       "files": {
         "tests/python/unit/numerics/test_lib_numerics_faces.py": {
           "estimated_seconds": 30,
           "kind": "source_unit"
         },
         "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
-          "estimated_seconds": 900,
+          "estimated_seconds": 1400,
           "kind": "native_profile",
           "analogue": "tests/python/integration/runtime/test_api_v02_models_M01_M14.py"
+        },
+        "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py": {
+          "estimated_seconds": 850,
+          "kind": "native_profile",
+          "analogue": "tests/python/integration/runtime/test_api_v02_python_faces_native.py"
         }
       }
     }
@@ -9167,5 +9178,6 @@
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
   "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
   "tests/python/unit/numerics/test_lib_numerics_faces.py": 30,
-  "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 900
+  "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 1400,
+  "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py": 850
 }

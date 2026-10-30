@@ -29,6 +29,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   finite-volume realization whose `riemann.User` face body becomes the generated C++ face policy.
   The M01 and M03 examples use `rusanov` by default and keep the native routes as `native_rusanov`
   and `native_hll`, with bitwise equal final states; `benchmarks/n3a/` times both routes.
+- Pass a `riemann.User` face body two more inputs by name: the face normal `n` and the signed
+  wave-speed interval `speeds` = (sL, sR) that the model declares along it, united over the two
+  traces; the generated policy evaluates each only where the body reads it, and a face that reads
+  `speeds` on a model that declares no signed pair is refused when the case is validated. Like
+  the native HLL, the face reads (sL, sR) first and refuses a trace whose interval is not finite
+  or not ordered; a body that names `n` or `speeds` among its five face inputs is refused. The
+  derived `hll(F, Uh)` reads them and matches `riemann.HLL()` on M03 and M16; `rusanov` takes
+  `smax(uL, uR, n)` and `upwind` takes `speed(face)`, both matching `riemann.Rusanov()` on M01
+  when they read the normal (spec 0.3 section 4.4, ROM-99).
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.
