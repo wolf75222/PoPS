@@ -52,16 +52,15 @@ def test_action_is_generated_differential_not_user_supplied_linearity_claim():
 
 @pytest.mark.parametrize('count',(0,1,2))
 def test_map_internal_use_is_delivered_element_by_element(count):
-    # IR19: a map delivers its body once per element, as one element-wise
-    # evaluation; an empty domain evaluates nothing, so it delivers nothing.
+    # IR19: a map delivers its body element by element, as one element-wise
+    # evaluation whatever its extent; an empty extent covers its empty term (D5).
     from pops.codegen.typed_delivery import EACH
     p=pops.Program('owned_map'); d=p.range_set(count,capacity=8,ownership='replicated'); owned=[]
     def body(g,i):
         value=g.float64(g.index_value(i)); owned.append(value); return value
     out=p.map(d,body)
     frontiers=delivered_frontiers(out,lambda node:node is owned[0])
-    assert len(frontiers)==1 and len(frontiers[0])==min(count,1)
-    assert all(ref.invocation==((out.id,EACH,'map'),) for ref in frontiers[0])
+    assert [[ref.invocation for ref in frontier] for frontier in frontiers]==[[((out.id,EACH,'map'),)]]
 
 
 def test_domain_diagnostic_cannot_consume_array_inventory():

@@ -4,7 +4,7 @@ import pytest
 
 import pops
 from pops import math as pm
-from pops._ir.refusals import CoverageNotExact
+from pops._ir.refusals import CoverageNotExact, DeliveryNotStructural
 from pops.codegen import typed_delivery
 
 
@@ -48,8 +48,14 @@ def loop_case(count, *, accumulate=False):
     return case, layout
 
 
-def map_case(count):
-    """A zero-block Continuation whose owned Use is realized element by element in a map."""
+def map_case(count, *, consumer='pointwise', literal=False):
+    """A zero-block Continuation whose owned Use is realized element by element in a map.
+
+    ``consumer`` updates each element with its own increment ('pointwise'), with the increment
+    of element 0 ('element0_everywhere'), or with both ('twice_i_and_0'). With ``literal`` the
+    maps range over the literal set of ``count`` entries, not over the set read back from the
+    Continuation (whose capacity is ``count``).
+    """
     from pops.continuations import ContinuationSchema
     from pops.frames import Cartesian1D
     from pops.graph_functions import graph
@@ -71,10 +77,13 @@ def map_case(count):
     def element(b, i):
         return Realize('decay', owns=(use,), bindings={'old': b.at(current['q'], i), 'h': h},
                        body=lambda r, old, h: -h*old, outputs={use: ()}).evaluate(b)[use]
-    increment = p.map(current['domain'], element)
-    updated = p.map(current['domain'], lambda b, i: b.at(current['q'], i)+b.at(increment, i))
-    continued = p.product(domain=current['domain'], q=updated, time=current['time']+h,
-                          step=current['step']+p.int64(1))
+    over = domain if literal else current['domain']
+    increment = p.map(over, element)
+    read = {'pointwise': lambda b, i: b.at(increment, i),
+            'element0_everywhere': lambda b, i: b.at(increment, b.index(over, 0)),
+            'twice_i_and_0': lambda b, i: b.at(increment, i)+b.at(increment, b.index(over, 0))}[consumer]
+    updated = p.map(over, lambda b, i: b.at(current['q'], i)+read(b, i))
+    continued = p.product(domain=over, q=updated, time=current['time']+h, step=current['step']+p.int64(1))
     envelope = p.product(continuation=continued, increment=p.product(), observations=p.product(),
                          checks=p.product())
     proposal = p.product(h=h)
@@ -123,19 +132,30 @@ def test_resolve_refuses_an_accumulated_loop_delivery_naming_its_term():
         pops.resolve(pops.validate(case), layout=layout)
 
 
-def test_resolve_concludes_on_a_delivery_inside_a_map_over_a_hundred_thousand_entries(visits):
+def emitted(count, **options):
+    """The C++ of map_case; Program.validate, which the emitter runs, checks its coverage."""
     from examples.api_v02.models_M01_M14 import _domain
     from pops.codegen.program_codegen import emit_cpp_program
     _, layout = _domain('cf7_map_context', (4, 4))
-    def resolved(count):
-        # Continuation coverage is checked by Program.validate, which the emitter runs.
-        return emit_cpp_program(pops.resolve(pops.validate(map_case(count)[0]), layout=layout).time)
-    resolved(10**5)
+    return emit_cpp_program(pops.resolve(pops.validate(map_case(count, **options)[0]), layout=layout).time)
+
+
+@pytest.mark.parametrize('literal', [False, True])
+def test_resolve_concludes_on_a_delivery_inside_a_map_over_a_hundred_thousand_entries(visits, literal):
+    emitted(10**5, literal=literal)
     large = len(visits)
     visits.clear()
-    resolved(10)
-    # One visit of the map body stands for every element (IR19).
+    emitted(10, literal=literal)
+    # One visit of the map body stands for every element (IR19), on a literal set of 10**5
+    # entries as on the set read back from the Continuation.
     assert large == len(visits) > 0
+
+
+@pytest.mark.parametrize('consumer', ['element0_everywhere', 'twice_i_and_0'])
+def test_resolve_refuses_a_map_element_read_at_another_element_naming_its_term(consumer):
+    with pytest.raises(DeliveryNotStructural, match=r'\(a gather\).*; term balance\[0\] source decay '
+                                                    r'\(cells, interval_increment, point_value, whole\)$'):
+        emitted(10**5, consumer=consumer)
 
 
 def test_a_map_element_that_delivers_twice_is_refused_naming_its_term():

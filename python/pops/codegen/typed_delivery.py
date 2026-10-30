@@ -3,8 +3,8 @@
 A ``Use`` owned by a realization leaves a region element by element from a ``map``, through
 the final state of a ``fold`` or an ``iterate``, through exactly one arm of a branch or a
 match, through the target of a ``scatter_reduce``, or through the plain data operations that
-carry it; any other path is refused with ``DeliveryNotStructural``. The analysis never enumerates iterations, map entries or
-alternatives, and it has no budget:
+carry it; any other path is refused with ``DeliveryNotStructural``. The analysis has no budget,
+and the check of a term never enumerates iterations, map entries or alternatives:
 
 * Alternatives form a decision diagram over the named conditions of the Program, each
   keyed by its SSA identifier and native invocation, as the success paths of the b6
@@ -14,9 +14,13 @@ alternatives, and it has no budget:
   anonymous alternatives of a path (loop counts, iterations), each a set of delivered
   evaluations.
 * A ``map`` delivers its body element by element: one visit of its body, whose evaluations
-  carry the ordinal ``each``. A literal empty domain evaluates nothing, so it delivers
-  nothing; any other domain, a carried one included, delivers element by element, and an
-  empty extent of it covers its empty term.
+  carry the ordinal ``each``, whatever the extent of its domain (an empty extent covers its
+  empty term). Such an evaluation keeps its element: it leaves the array as the whole array,
+  or by ``at(array, i)`` where ``i`` is the argument of a map over the very set of the array
+  (not only a set of its family), whose element it becomes. Reading other elements (a
+  gather, an import included) or carrying the array whole into the elements of another map
+  (a broadcast) is refused. Within its element, an evaluation counts once however often it
+  is read, as in b6.
 * A loop body is visited once, with its argument bound to placeholders for the carried
   paths. The carried state is then a fixpoint over the finite set of those paths: the
   ages of evaluations relative to the current iteration are exact up to the number of
@@ -29,11 +33,16 @@ alternatives, and it has no budget:
 * A ``scatter_reduce`` delivers each source element once, to its target. Its combine is
   visited once, as every combination, with its accumulator and its element as placeholders;
   on every path it must combine the same parts, keep both and deliver nothing of its own.
+  Its result is an array over the targets, read as the result of a map; its initial value,
+  which starts every target, cannot carry an element-wise delivery of an array.
 
 ``require_single_delivery`` checks one term (D5): every success path delivers exactly one
 evaluation, otherwise ``CoverageNotExact`` names the term. It counts evaluations up to two,
-so it reads only the distinct leaves of the diagram. ``delivered_frontiers`` lists the exact
-rows (choices and delivered evaluations) for the provenance validators.
+so it reads only the distinct leaves of the diagram. ``delivered_frontiers`` lists exact rows,
+one per success path and alternative, for the provenance validators (current dependencies,
+ledger provenance), which compare rows across queries: k independent choices give 2**k rows.
+Moving those validators onto the diagram is N7 lot 3 (ROM-88, MG7); until then their cost
+follows the success paths of the Program, as with b6, without its budget (B4, CF7).
 """
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -127,6 +136,37 @@ def _refs(value):
     elif isinstance(value, (tuple, list)):
         for item in value:
             yield from _refs(item)
+
+
+def _region(value):
+    """A region named by its operation and SSA id, with the author's line when it was captured."""
+    name = '%s#%d' % (value.op, value.id)
+    location = getattr(value, 'source_location', None)
+    return name if not location else '%s at %s' % (name, location)
+
+
+def _pending(step):
+    """A map ordinal whose evaluation is still the element of the array that carries it."""
+    return step[1] == EACH and step[2:] == ('map',)
+
+
+def _aligned(step):
+    """A map ordinal read by ``at`` at the element of the map whose id it carries last."""
+    return step[1] == EACH and len(step) == 4 and step[2] == 'map'
+
+
+_READS = frozenset(('finite_at', 'distributed_local_at'))
+_IMPORTS = frozenset(('distributed_import', 'distributed_import_csr'))
+_MAPS = frozenset(('finite_map', 'distributed_map'))
+_SETS = frozenset(('finite_range_set', 'distributed_domain', 'distributed_balanced_domain'))
+# The set of these values is the set of their first input: a map, an index or an index
+# argument ranges over its domain, and the domain of a value is the set of that value.
+_OVER = _MAPS | {'finite_domain', 'distributed_value_domain', 'finite_index', 'distributed_index',
+                 'finite_index_argument', 'distributed_index_argument'}
+# Operations whose value is their first input, renamed or wrapped.
+_SAME = frozenset(('variant_require_success', 'variant_payload', 'variant_construct', 'result_ok',
+                   'result_success', 'result_payload', 'iteration_success', 'provenance_bind',
+                   'acceptance_guard'))
 
 
 def _region_nodes(nodes):
@@ -426,6 +466,7 @@ class _Analysis:
         self.contexts, self.region_sets, self.invocations = {}, {}, {}
         self.memo, self.affect, self.deliver = {}, {}, {}
         self.loop_states, self.sequences, self.formals = {}, {}, {}
+        self.maps, self.index_owners = {}, {}
 
     # -- contexts ---------------------------------------------------------------------------
     def nodes_of(self, owner, *blocks):
@@ -456,6 +497,10 @@ class _Analysis:
                 current = current.parent
             found = self.invocations[key] = tuple(reversed(steps))
         return found
+
+    def outside(self, step, node):
+        """A pending map ordinal of an array level: its map does not hold ``node``."""
+        return _pending(step) and node.id not in self.nodes_of(self.maps[step[0]], 'body_block')
 
     @staticmethod
     def binding(node_id, context):
@@ -551,7 +596,7 @@ class _Analysis:
         if left is not right:
             raise DeliveryNotStructural('per-cell selection has different delivery frontiers; '
                                         'realize the final selected value explicitly',
-                                        region='%s#%d' % (value.op, value.id), construct=value.op)
+                                        region=_region(value), construct=value.op)
         return left
 
     # -- visit ------------------------------------------------------------------------------
@@ -621,6 +666,10 @@ class _Analysis:
             return self.mapped(value, path, context)
         if op == 'distributed_scatter_reduce':
             return self.scattered(value, path, context)
+        if op in _READS:
+            return self.element(value, path, context)
+        if op in _IMPORTS:
+            return self.imported(value, path, context)
         if op in {'finite_domain', 'finite_size', 'finite_same_domain',
                   'finite_index_value', 'finite_index', 'finite_index_argument',
                   'distributed_value_domain', 'distributed_size',
@@ -665,14 +714,14 @@ class _Analysis:
             if path and path[0] == 'err':
                 raise DeliveryNotStructural('delivery from captured failure payload requires an '
                                             'explicit failure frontier',
-                                            region='capture_result#%d' % value.id, construct=op)
+                                            region=_region(value), construct=op)
             body_path = path
             if value.vtype == 'variant' and path and path[0] == 'ok':
                 body_path = path if value.attrs.get('body_is_variant_result') else path[1:]
             return self.visit(value.attrs['body'], body_path, context)
         if any(name.endswith('_block') and attribute for name, attribute in value.attrs.items()):
             raise DeliveryNotStructural('no delivery rule for native region ' + op,
-                                        region='%s#%d' % (op, value.id), construct=op)
+                                        region=_region(value), construct=op)
         result = dd.empty
         support_only = value.attrs.get('support_only_inputs', ())
         for index, dependency in enumerate(value.inputs):
@@ -711,7 +760,7 @@ class _Analysis:
                     children = (node[1],)
                 else:
                     raise DeliveryNotStructural('no delivery rule for scalar expression ' + str(op),
-                                                region='%s#%d' % (value.op, value.id), construct=str(op))
+                                                region=_region(value), construct=str(op))
                 found = dd.empty
                 for child in children:
                     found = dd.seq(found, expression(child))
@@ -728,18 +777,174 @@ class _Analysis:
 
         A map that owns no Use transports the nearest Array-valued contribution through its
         element expression, in its caller's invocation; it cannot borrow an unused capture or
-        its domain/cardinality as evidence of a numerical delivery.
+        its domain/cardinality as evidence of a numerical delivery. Its extent does not matter:
+        an empty one covers the empty term (B4).
+
+        An element-wise evaluation of another array reaches an element of this map only if
+        ``at(array, i)`` read it at this map's own element ``i`` (``element``), or at the
+        element of a map around this one, whose element the whole body belongs to. Carried in
+        whole, it would reach every element of this map: a broadcast, refused.
         """
-        nodes = self.nodes_of(value, 'body_block')
+        self.maps[value.id] = value
+        self.index_owners[value.attrs['body_index'].id] = value
         if not any(self.matches(node) for node in _region_nodes(value.attrs['body_block'])):
-            return self.visit(value.attrs['body'], path, context)
-        element = self.visit(value.attrs['body'], path,
-                             self.context(context, (value.id, EACH, 'map'), nodes))
-        domain = value.inputs[0]
-        if domain.op == 'finite_range_set' and _count(domain.inputs[0]) == 0:
-            # A literal empty domain evaluates no element, so it delivers nothing.
-            return self.dd.empty
-        return element
+            element = self.visit(value.attrs['body'], path, context)
+        else:
+            element = self.visit(value.attrs['body'], path, self.context(
+                context, (value.id, EACH, 'map'), self.nodes_of(value, 'body_block')))
+        inside = self.nodes_of(value, 'body_block')
+        def own(step):
+            # This map's element, an element of an array built inside its body, or the
+            # element of a map around it that the whole body belongs to.
+            return (step[0] == value.id or step[0] in inside or
+                    value.id in self.nodes_of(self.maps[step[0]], 'body_block'))
+        def kept(reference):
+            # The array levels inside an element read at this map's own element belong to it.
+            steps, inner = [], False
+            for step in reference.invocation:
+                if _aligned(step):
+                    if step[3] == value.id:
+                        step, inner = step[:3], True
+                    elif value.id not in self.nodes_of(self.maps[step[3]], 'body_block'):
+                        return None
+                elif _pending(step) and not inner and not own(step):
+                    return None
+                steps.append(step)
+            return DeliveryReference(reference.value_id, tuple(steps), reference.projection)
+        def broadcast():
+            raise DeliveryNotStructural(
+                'an element-wise delivery of another array reaches every element of this map '
+                '(a broadcast); read it with at(array, i) at the element of this map',
+                region=_region(value), construct=value.op)
+        return self.rewrite(element, kept, broadcast)
+
+    def rewrite(self, diagram, kept, refuse):
+        """Rewrite the evaluations of the leaves that carry an element-wise step."""
+        dd = self.dd
+        if not any(step[1] == EACH for found in dd.distinct_leaves(diagram) for bag in found.alternatives
+                   if bag.refs is not _SATURATED for r in bag.refs for step in r.invocation):
+            return diagram
+        def leaf(found):
+            alternatives = set()
+            for bag in found.alternatives:
+                refs = bag.refs
+                if refs is not _SATURATED:
+                    refs = set()
+                    for reference in bag.refs:
+                        rewritten = kept(reference)
+                        if rewritten is None:
+                            refuse()
+                        refs.add(rewritten)
+                    refs = frozenset(refs)
+                alternatives.add(_Bag(refs, bag.prev))
+            return dd.leaf(frozenset(alternatives))
+        return dd.rebuild(diagram, lambda name: name, leaf)
+
+    def element(self, value, path, context):
+        """``at(array, i)`` reads one element of an array (IR19).
+
+        An element-wise evaluation carried by the array leaves it only at the element that a
+        map evaluates: ``i`` is the argument of a map whose body holds the read, and that map
+        ranges over the very set of the array (``instance``), not only a set of its family.
+        The evaluation is then aligned with that map, whose element it becomes (``mapped``).
+        Any other index, or a map over another set, reads other elements: a gather, refused.
+        The step read is the outermost one of an array level, that is of a map that does not
+        hold the read.
+        """
+        array, index = value.inputs
+        found = self.visit(array, path, context)
+        owner, same = self.index_owners.get(index.id), []
+        def over():
+            if not same:
+                same.append(owner is not None and self.instance(owner.inputs[0]) == self.instance(array))
+            return same[0]
+        def kept(reference):
+            steps, read = [], False
+            for step in reference.invocation:
+                if not read and self.outside(step, value):
+                    if owner is None or not over():
+                        return None
+                    step, read = step + (owner.id,), True
+                steps.append(step)
+            return DeliveryReference(reference.value_id, tuple(steps), reference.projection)
+        def gather():
+            raise DeliveryNotStructural(
+                'an element-wise delivery is read at another element than the one a map '
+                'evaluates (a gather); read at(array, i) with i the argument of a map over the '
+                'set of the array', region=_region(value), construct=value.op)
+        return self.rewrite(found, kept, gather)
+
+    def imported(self, value, path, context):
+        """An import reads at each requesting element the source elements that it names.
+
+        An element-wise delivery of the source would reach every element that requests it, as
+        many times as it is requested: a gather, refused. The requests are an input like any
+        other: they address source elements and deliver nothing of the source.
+        """
+        def gather():
+            raise DeliveryNotStructural(
+                'an element-wise delivery is imported to the elements that request it (a gather); '
+                'read it at(array, i) in a map over its own set', region=_region(value),
+                construct=value.op)
+        source = self.rewrite(
+            self.visit(value.inputs[0], path, context),
+            lambda reference: None if any(self.outside(step, value) for step in reference.invocation)
+            else reference, gather)
+        return self.dd.seq(source, self.visit(value.inputs[1], path, context))
+
+    # -- set instances ----------------------------------------------------------------------
+    @staticmethod
+    def carrier(value):
+        """The value read, through renamings and products, as a root and a path into it."""
+        while True:
+            if value.op in _SAME:
+                value = value.inputs[0]
+            elif value.op == 'product_get' and value.inputs[0].op == 'product':
+                product = value.inputs[0]
+                value = product.inputs[tuple(product.attrs['fields']).index(value.attrs['field'])]
+            else:
+                break
+        path = []
+        while value.op == 'product_get':
+            path.append(value.attrs['field'])
+            value = value.inputs[0]
+        return value, tuple(reversed(path))
+
+    def index_key(self, index):
+        index, path = self.carrier(index)
+        if not path and index.op in {'finite_index_argument', 'distributed_index_argument'}:
+            return ('argument', index.id)
+        return ('index', index.id, path)
+
+    def instance(self, value, within=()):
+        """A key of the set instance that an index set, an index or an array ranges over.
+
+        Two keys are equal only for one live instance. A set that ``range_set`` or a
+        distributed domain issues is its own instance, one per element of each map whose body
+        issues it (``within`` names the elements being read). A map, a scatter_reduce and the
+        domain of a value range over the set of their domain, target or value; the element of
+        an array of arrays built by a map ranges over the set of the inner array at that
+        element. Any other array (a loop state, a continuation read) keeps a key of its own,
+        which only ``domain`` of the same value shares. A family witness gives a set of the
+        same type, never the same instance.
+        """
+        value, path = self.carrier(value)
+        if not path:
+            if value.op in _OVER:
+                return self.instance(value.inputs[0], within)
+            if value.op == 'distributed_scatter_reduce':
+                return self.instance(value.inputs[2], within)
+            if value.op in _SETS:
+                return ('set', value.id, tuple((built.id, key) for built, key in within
+                                               if value.id in self.nodes_of(built, 'body_block')))
+            if value.op in _READS:
+                array, index = value.inputs
+                built, inner = self.carrier(array)
+                key = self.index_key(index)
+                if not inner and built.op in _MAPS:
+                    return self.instance(built.attrs['body'], within + ((built, key),))
+                return ('element', built.id, inner, key)
+        return ('value', value.id, path)
 
     # -- scatters ---------------------------------------------------------------------------
     def combine_formals(self, value, context):
@@ -762,12 +967,14 @@ class _Analysis:
         Its combine is visited once, as every combination, with its accumulator and its
         element bound to placeholders. On every path it must combine the same parts: the
         accumulator at the path of the result (the initial value and the elements already
-        combined) and the element, and deliver nothing of its own. Then each source element
+        combined) and the element, and deliver nothing else. Then each source element
         reaches its one target exactly once, and the result delivers what the initial value
-        and the source values deliver. The indices and the target domain are addresses, never
-        deliveries.
+        and the source values deliver, element by element over the targets: it is read as the
+        result of a map over the target set (``element``, ``instance``). The initial value
+        starts every target, so it cannot carry an element-wise delivery of an array (a
+        broadcast). The indices and the target domain are addresses, never deliveries.
         """
-        dd, region = self.dd, '%s#%d' % (value.op, value.id)
+        dd, region = self.dd, _region(value)
         values, initial = value.inputs[0], value.inputs[3]
         accumulator, element, body = self.combine_formals(value, context)
         bags = {bag for found in dd.distinct_leaves(self.visit(value.attrs['body'], path, body))
@@ -775,23 +982,30 @@ class _Analysis:
         if not bags:
             return dd.fail
         def refuse(message):
-            raise DeliveryNotStructural('the combine of a scatter_reduce ' + message,
-                                        region=region, construct=value.op)
+            raise DeliveryNotStructural(message, region=region, construct=value.op)
         if len(bags) > 1:
-            refuse('must combine the same parts on every path')
+            refuse('the combine of a scatter_reduce must combine the same parts on every path')
         bag = bags.pop()
         if bag.refs:
-            refuse('delivers a Use of its own once per combination')
+            refuse('the combine of a scatter_reduce delivers a Use once per combination, its own '
+                   'or a captured one')
         kept = _Prev(accumulator.key, path)
         if any(item.loop != element.key and item != kept for item in bag.prev):
-            refuse('may combine only its accumulator, at the path of its result, and its element')
+            refuse('the combine of a scatter_reduce may combine only its accumulator, at the path '
+                   'of its result, and its element')
         if kept not in bag.prev and (self.reaches(initial, context, terminal=False) or
                                      self.reaches(values, context, terminal=False)):
-            refuse('must keep its accumulator: the initial value and the elements already combined')
+            refuse('the combine of a scatter_reduce must keep its accumulator: the initial value '
+                   'and the elements already combined')
         delivered = sorted((item.path for item in bag.prev if item.loop == element.key), key=repr)
         if not delivered and self.reaches(values, context, terminal=False):
-            refuse('must deliver its element to the target')
-        result = self.visit(initial, path, context)
+            refuse('the combine of a scatter_reduce must deliver its element to the target')
+        result = self.rewrite(
+            self.visit(initial, path, context),
+            lambda reference: None if any(self.outside(step, value) for step in reference.invocation)
+            else reference,
+            lambda: refuse('a scatter_reduce starts every target with its initial value, which '
+                           'carries an element-wise delivery of an array (a broadcast)'))
         for element_path in delivered:
             result = dd.seq(result, self.visit(values, element_path, context))
         return result
@@ -809,7 +1023,7 @@ class _Analysis:
                 return dd.empty
             if not path or path[0] != 'state':
                 raise DeliveryNotStructural('delivery through iterate requires its exact successful '
-                                            'state projection', region='%s#%d' % (value.op, value.id),
+                                            'state projection', region=_region(value),
                                             construct=value.op)
             path = path[1:]
         literal = _count(value.inputs[1]) if is_fold else None
@@ -898,7 +1112,7 @@ class _Analysis:
                 state_path = ()
             else:
                 raise DeliveryNotStructural('delivery through iterate requires its exact successful '
-                                            'state projection', region='%s#%d' % (value.op, value.id),
+                                            'state projection', region=_region(value),
                                             construct=value.op)
         else:
             state_path = path
@@ -1064,6 +1278,11 @@ def delivered_frontiers(root, matches, *, path=(), with_choices=False, with_proj
     data, rather than deliveries of this caller's queried occurrence. Matches are
     inspected first; the optional frontier cannot hide the matched value itself.
     A path to a leaf with several alternatives gives one row per alternative.
+
+    The rows enumerate the success paths of the diagram: 2**k rows for k independent
+    choices. They serve the provenance validators until N7 lot 3 (ROM-88) moves them onto
+    the diagram (MG7); a coverage check is ``require_single_delivery``, which does not
+    enumerate.
     """
     analysis, diagram = _analysis(root, matches, path, saturate=False, with_projection=with_projection,
                                   expand_match=expand_match, stop_at=stop_at)

@@ -8015,7 +8015,7 @@
       }
     },
     "ci_20261030_n7_typed_delivery": {
-      "basis": "Unmeasured CI scheduling estimate for the CF7 regression module of N7 lot 2 (ROM-88, typed delivery IR19), on the api_v02_20261013 tiers: 15 s, as the analogue test_delivery_case_graphs.py, which resolves the same ProgramRealization delivery cases without native compilation; this module resolves two literal folds (10 and 10**4 iterations, each twice), one refused accumulation and two zero-block Continuations through emit_cpp_program, with no native module. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimate for the CF7 regression module of N7 lot 2 (ROM-88, typed delivery IR19), on the api_v02_20261013 tiers: 15 s, as the analogue test_delivery_case_graphs.py, which resolves the same ProgramRealization delivery cases without native compilation; this module resolves literal folds of 10**4 and 10 iterations and one refused accumulated fold of 10**4, emits six zero-block Continuations through emit_cpp_program (maps over the set read back and over a literal set, at 10**5 and 10 entries each, and two refused gathers at 10**5 entries), and analyses one literal map of 10**5 entries directly, with no native module. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/time/test_typed_delivery_cf7.py": "tests/python/unit/time/test_delivery_case_graphs.py"
       },
@@ -8024,12 +8024,12 @@
       },
       "local_receipts": {
         "tests/python/unit/time/test_typed_delivery_cf7.py": {
-          "cases": 4,
-          "session_seconds": 6.8
+          "cases": 7,
+          "session_seconds": 11.2
         }
       },
       "source_sha256": {
-        "tests/python/unit/time/test_typed_delivery_cf7.py": "f82af3f2a474705696590e4d662a5b5b7b7cabcebc8c0a2bb7f39421f76b497f"
+        "tests/python/unit/time/test_typed_delivery_cf7.py": "de4646554623af66dc8c7b2a1d975c827ad039a28567926f7007d6a34f781927"
       }
     }
   },
