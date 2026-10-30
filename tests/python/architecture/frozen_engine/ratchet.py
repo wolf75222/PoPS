@@ -8,21 +8,27 @@ An exception list is a text file with one site per line::
 removes the site, or the issues joined by ``+`` when the spec names several (``G04+G07`` for the
 analytic-expression VM, section 18.3). Blank lines and lines starting with ``#`` are comments.
 
-A guard compares the sites that its scan finds with the list, counted per ``(path, term)``:
+A guard compares the sites that its scan finds with the list. Within each ``(path, term)``, sites
+and entries pair by excerpt, so the identity of a site is its path, its term and its excerpt (for
+CF2 the spelling of the term on its line, ``scan.cf2_sites_in_text``):
 
-* more sites than listed is a new occurrence, and fails;
-* fewer sites than listed is an exception that has become useless, and fails until its line is
-  removed in the same PR (MG6).
+* a site that no entry of its ``(path, term)`` matches is a new occurrence, and fails, even when
+  a site of the same term left the same file in the same PR;
+* an entry that no site matches is an exception that has become useless, and fails until its line
+  is removed in the same PR (MG6).
 
 The line numbers locate each site for a reader and for the refresh tool; the comparison does not key
 on them, so an edit elsewhere in a file that shifts its lines does not fail the guard of an
-unrelated PR. ``refresh_exceptions.py`` rewrites the line numbers and excerpts and refuses to raise
-any count.
+unrelated PR. ``refresh_exceptions.py`` rewrites the line numbers and refuses a site the list does
+not hold. Since a list is a file that a PR can edit by hand, CI also scans the base of the PR with
+the same scanner and fails on any site of the head that the base does not hold (``new_sites``,
+``refresh_exceptions.py --check-base``); a vocabulary change adds the same sites to both scans.
 """
 from __future__ import annotations
 
 import collections
 import dataclasses
+import functools
 import pathlib
 import re
 
@@ -88,83 +94,138 @@ def counts(items) -> collections.Counter:
 
 @dataclasses.dataclass
 class Comparison:
-    new: dict  # (path, term) -> (found sites, listed count)
-    useless: dict  # (path, term) -> (listed entries, found count)
+    new: dict  # (path, term) -> (found sites that no entry matches, listed count)
+    useless: dict  # (path, term) -> (listed entries that no site matches, found count)
 
     @property
     def clean(self) -> bool:
         return not self.new and not self.useless
 
 
-def compare(found, listed) -> Comparison:
-    """Compare the sites a scan found (objects with .key) with the entries of a list."""
-    found_by_key = collections.defaultdict(list)
-    for site in found:
-        found_by_key[site.key].append(site)
-    listed_by_key = collections.defaultdict(list)
-    for entry in listed:
-        listed_by_key[entry.key].append(entry)
+def _by_key(items) -> dict:
+    grouped = collections.defaultdict(list)
+    for item in items:
+        grouped[item.key].append(item)
+    return grouped
+
+
+def _line(item) -> int:
+    return item.line
+
+
+def _pair(items, others, item_hint, other_hint):
+    """(items left over, others left over) once each item is paired with an other of the same
+    excerpt, first with one whose hint is equal too (its line, or its source line), so that the
+    item left over is the one that is new rather than one that shifted."""
+    waiting = collections.defaultdict(list)
+    for other in others:
+        waiting[(other.excerpt, other_hint(other))].append(other)
+    unpaired = []
+    for item in items:
+        bucket = waiting.get((item.excerpt, item_hint(item)))
+        if bucket:
+            bucket.pop(0)
+        else:
+            unpaired.append(item)
+    by_excerpt = collections.defaultdict(list)
+    for bucket in waiting.values():
+        for other in bucket:
+            by_excerpt[other.excerpt].append(other)
+    items_left = []
+    for item in unpaired:
+        bucket = by_excerpt.get(item.excerpt)
+        if bucket:
+            bucket.pop(0)
+        else:
+            items_left.append(item)
+    return sorted(items_left), sorted(other for bucket in by_excerpt.values() for other in bucket)
+
+
+def compare(found, listed, found_hint=_line, listed_hint=_line) -> Comparison:
+    """Compare the sites a scan found with the entries of a list (objects with .key, .excerpt).
+
+    Within each (path, term), a site and an entry pair when their excerpts are equal; a site left
+    over is new, an entry left over is useless. A swap (one site of a term removed, another added
+    in the same file) therefore fails, while a site whose line only shifted does not. The hints
+    choose which of several sites of one spelling is reported as new.
+    """
+    found_by_key, listed_by_key = _by_key(found), _by_key(listed)
     new, useless = {}, {}
     for key in sorted(set(found_by_key) | set(listed_by_key)):
         found_sites, listed_entries = found_by_key.get(key, []), listed_by_key.get(key, [])
-        if len(found_sites) > len(listed_entries):
-            new[key] = (found_sites, len(listed_entries))
-        elif len(found_sites) < len(listed_entries):
-            useless[key] = (listed_entries, len(found_sites))
+        unlisted, unfound = _pair(found_sites, listed_entries, found_hint, listed_hint)
+        if unlisted:
+            new[key] = (unlisted, len(listed_entries))
+        if unfound:
+            useless[key] = (unfound, len(found_sites))
     return Comparison(new, useless)
 
 
 def moves(found, listed):
-    """(moves, unexplained): whether a scan that grew some (path, term) counts is only a move.
+    """(moves, unexplained): whether the sites that the list does not hold have only moved.
 
-    A site counts as moved when a listed site of the same term disappears from one file and a site
-    with the same excerpt appears in another: a file renamed or split by a slice. ``moves`` pairs
-    each such listed entry with the site that replaces it, never more sites from a (path, term)
-    than it lost. ``unexplained`` holds, for each (path, term) count that grew beyond what the moves
-    cover, its sites whose excerpt is not listed there; the new occurrences are among them.
+    A site left over by ``compare`` counts as moved when an entry left over in another file has its
+    term and its excerpt: a file renamed or split by a slice. ``moves`` pairs each such entry with
+    one site; ``unexplained`` holds the sites left over that no entry explains, among them the new
+    occurrences. The refresh tool accepts the moves; CI checks them against the source lines of the
+    base (``new_sites``).
     """
-    found_by_key = collections.defaultdict(list)
-    for site in found:
-        found_by_key[site.key].append(site)
-    listed_by_key = collections.defaultdict(list)
-    for entry in listed:
-        listed_by_key[entry.key].append(entry)
-
-    def unmatched(sites, others):
-        left = collections.Counter(other.excerpt for other in others)
-        out = []
-        for site in sites:
-            if left[site.excerpt]:
-                left[site.excerpt] -= 1
-            else:
-                out.append(site)
-        return out
-
-    lost = {key: len(entries) - len(found_by_key.get(key, ()))
-            for key, entries in listed_by_key.items()}
-    gone = collections.defaultdict(list)  # (term, excerpt) -> listed entries that may have moved
-    for key, entries in listed_by_key.items():
-        if lost[key] > 0:
-            for entry in unmatched(entries, found_by_key.get(key, ())):
-                gone[(entry.term, entry.excerpt)].append(entry)
+    comparison = compare(found, listed)
+    pool = collections.defaultdict(list)  # (term, excerpt) -> entries that may have moved
+    for entries, _ in comparison.useless.values():
+        for entry in entries:
+            pool[(entry.term, entry.excerpt)].append(entry)
     pairs, unexplained = [], []
-    for key, sites in sorted(found_by_key.items()):
-        surplus = len(sites) - len(listed_by_key.get(key, ()))
-        if surplus <= 0:
-            continue
-        candidates = unmatched(sites, listed_by_key.get(key, ()))
-        for site in candidates:
-            pool = gone.get((site.term, site.excerpt), [])
-            source = next((entry for entry in pool if lost[entry.key] > 0), None)
-            if surplus and source is not None:
-                pool.remove(source)
-                lost[source.key] -= 1
+    for sites, _ in comparison.new.values():
+        for site in sites:
+            candidates = pool.get((site.term, site.excerpt), [])
+            source = next((entry for entry in candidates if entry.path != site.path), None)
+            if source is None:
+                unexplained.append(site)
+            else:
+                candidates.remove(source)
                 pairs.append((source, site))
-                surplus -= 1
-        if surplus:
-            paired = {id(new) for _, new in pairs}
-            unexplained.extend(site for site in candidates if id(site) not in paired)
     return pairs, unexplained
+
+
+def new_sites(base, head, base_root: pathlib.Path, head_root: pathlib.Path):
+    """(moves, new): the sites of the head tree that the base tree does not hold.
+
+    @p base and @p head are the sites (or entries) that one scanner finds under @p base_root and
+    @p head_root. They pair within each (path, term) by excerpt, as in ``compare``. A head site left
+    over has moved when a base site left over in another file has its term, its excerpt and its
+    source line: a file renamed or split keeps its lines. Every other head site left over is new.
+    """
+    @functools.lru_cache(maxsize=None)
+    def lines_of(root: pathlib.Path, path: str) -> tuple[str, ...]:
+        try:
+            return tuple((root / path).read_text(encoding="utf-8").splitlines())
+        except (OSError, UnicodeDecodeError):
+            return ()
+
+    def source_line(root: pathlib.Path, site) -> str:
+        if site.line == 0:
+            return "(path)"
+        lines = lines_of(root, site.path)
+        return " ".join(lines[site.line - 1].split()) if site.line <= len(lines) else ""
+
+    comparison = compare(head, base, lambda site: source_line(head_root, site),
+                         lambda site: source_line(base_root, site))
+    pool = collections.defaultdict(list)  # (term, excerpt, source line) -> base sites that went
+    for sites, _ in comparison.useless.values():
+        for site in sites:
+            pool[(site.term, site.excerpt, source_line(base_root, site))].append(site)
+    moved, added = [], []
+    for sites, _ in comparison.new.values():
+        for site in sites:
+            candidates = pool.get((site.term, site.excerpt, source_line(head_root, site)), [])
+            origin = next((other for other in candidates if other.path != site.path), None)
+            if origin is None:
+                added.append(site)
+            else:
+                candidates.remove(origin)
+                moved.append((origin, site))
+    return moved, added
 
 
 def describe(comparison: Comparison, list_name: str, rule: str) -> str:
@@ -172,17 +233,19 @@ def describe(comparison: Comparison, list_name: str, rule: str) -> str:
     if comparison.new:
         lines.append("%s: %d new occurrence(s) of knowledge that %s refuses (MG6: the %s list can "
                      "only shrink; remove the occurrence, do not list it):"
-                     % (rule, sum(len(sites) - count for sites, count in comparison.new.values()),
-                        rule, list_name))
+                     % (rule, sum(len(sites) for sites, _ in comparison.new.values()), rule,
+                        list_name))
         for (path, term), (sites, count) in comparison.new.items():
-            lines.append("  %s %s: %d site(s), %d listed" % (path, term, len(sites), count))
+            lines.append("  %s %s: %d site(s) not in the list (%d listed for this file and term)"
+                         % (path, term, len(sites), count))
             for site in sites:
                 lines.append("    %s" % site.render())
     if comparison.useless:
         lines.append("%s: exception(s) that have become useless (MG6: remove them from %s in the "
                      "same PR, or run refresh_exceptions.py):" % (rule, list_name))
         for (path, term), (entries, count) in comparison.useless.items():
-            lines.append("  %s %s: %d listed, %d site(s) left" % (path, term, len(entries), count))
+            lines.append("  %s %s: %d listed entry(ies) match no site (%d site(s) found)"
+                         % (path, term, len(entries), count))
             for entry in entries:
                 lines.append("    %s" % entry.render())
     return "\n".join(lines)

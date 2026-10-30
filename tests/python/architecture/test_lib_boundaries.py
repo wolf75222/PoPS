@@ -24,6 +24,7 @@ installed-package proof, which fails when the promised ``pops`` installation is 
 acceptance gate must never turn that defect into a skip. ASCII only.
 """
 import ast
+import collections
 import pathlib
 import re
 
@@ -75,13 +76,15 @@ _CANONICAL_NAMES = {
 _LIB_INIT_LINE_CAP = 40
 
 # Categories of the CF2 vocabulary (frozen_engine/scan.py) that name a numerical method: methods and
-# field operators, interpolations, approximations of histories, controllers, refinement predicates.
-_METHOD_CATEGORIES = ("method", "interpolation", "approximation", "controller", "tagging")
+# field operators, interpolations, approximations of histories, controllers, refinement predicates
+# and solve algorithms.
+_METHOD_CATEGORIES = ("method", "interpolation", "approximation", "controller", "tagging", "solver")
 
 # The number of core definitions named after a numerical method at b6e64c1d (gate 2e), counted with
-# the vocabulary that the early audit of N2 completed on 29/10. It may only go down (MG6); never
-# raise it.
-_B6_METHOD_HOMES_IN_CORE = 178
+# the vocabulary that the early audit of N2 completed on 29/10 and the solve algorithms that its
+# independent review added on 30/10 (GeometricMG, FFT, CG, GMRES, Newton, ...). It may only go down
+# (MG6); never raise it.
+_B6_METHOD_HOMES_IN_CORE = 296
 
 
 def _rel(path):
@@ -275,19 +278,20 @@ _CPP_DEFINITION = re.compile(r"\b(?:struct|class|using|enum\s+class|enum)\s+([A-
 _CPP_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
-def _method_terms(name):
-    return scan.terms_in(name, "ident") & _METHOD_TERMS
-
-
 def method_homes_in_core():
     """(path, line, term, name) of every core definition named after a numerical method: a Python
-    class, function or module-level binding, a C++ struct, class, enum or type alias."""
+    class, function or module-level binding, a C++ struct, class, enum or type alias. In the native
+    tree, a qualified substitution may be named after its generic algorithm (scan.CORE_ONLY, FC6);
+    a name with a generic sense (scan.GENERIC_SENSES) is no method."""
+    engine = scan.load_cf0()
     homes = []
-    for rel in scan.frozen_engine_files():
+    for rel in scan.frozen_engine_files(engine):
         kind = scan.scanned_kind(rel)
         if kind not in ("python", "cpp"):
             continue
+        refused = _METHOD_TERMS - scan.CORE_ONLY if engine.is_native(rel) else _METHOD_TERMS
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        lines = text.splitlines()
         if kind == "python":
             tree = ast.parse(text)
             named = [(node.lineno, node.name) for node in ast.walk(tree)
@@ -298,14 +302,19 @@ def method_homes_in_core():
             blanked = _CPP_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
             named = [(blanked.count("\n", 0, match.start()) + 1, match.group(1))
                      for match in _CPP_DEFINITION.finditer(blanked)]
-        homes.extend((rel, line, term, name) for line, name in named for term in _method_terms(name))
+        homes.extend((rel, line, term, name) for line, name in named
+                     for term in scan.terms_in(name, "ident") & refused
+                     if scan.generic_sense(rel, term, lines[line - 1]) is None)
     return homes
 
 
 def test_no_numerical_method_has_a_home_in_the_core():
     homes = method_homes_in_core()
-    listed = {entry.key for entry in ratchet.read_list(cf2.EXCEPTIONS)[1]}
-    unlisted = ["%s:%d %s (%s)" % home for home in homes if (home[0], home[2]) not in listed]
+    spelled = collections.defaultdict(set)  # (path, term) -> the names that its entries spell
+    for entry in ratchet.read_list(cf2.EXCEPTIONS)[1]:
+        spelled[entry.key].update(entry.excerpt.split())
+    unlisted = ["%s:%d %s (%s)" % home for home in homes
+                if home[3] not in spelled.get((home[0], home[2]), ())]
     assert not unlisted, (
         "spec 0.3 (15.3, FC2, FC4): a numerical method is a pops.lib word, never a core definition; "
         "these core definitions are not b6 exceptions of CF2:\n  " + "\n  ".join(unlisted))
@@ -316,10 +325,14 @@ def test_no_numerical_method_has_a_home_in_the_core():
 
 
 def test_method_homes_scan_sees_the_b6_natives():
-    """Control: the scan finds the hand-written fluxes that spec 0.3 section 1.6 cites."""
+    """Control: the scan finds the hand-written fluxes that spec 0.3 section 1.6 cites, and the
+    solvers that the b6 version of this test pinned in the core (GeometricMG, FFT)."""
     names = {(path, name) for path, _, _, name in method_homes_in_core()}
     assert ("include/pops/numerics/fv/numerical_flux.hpp", "RusanovFlux") in names
     assert ("include/pops/numerics/fv/numerical_flux.hpp", "HLLFlux") in names
+    assert ("python/pops/solvers/elliptic/_descriptor.py", "GeometricMG") in names
+    assert ("python/pops/solvers/elliptic/_descriptor.py", "FFT") in names
+    assert ("python/pops/solvers/krylov/__init__.py", "BiCGStab") in names
 
 
 if __name__ == "__main__":
