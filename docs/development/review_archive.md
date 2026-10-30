@@ -68,7 +68,9 @@ archived file by path now say that it is in the archive.
   in CI, so they stay as test fixtures and land with the tests that read them (spec 0.3,
   CF14).
 - `docs/developer/` (19 files, 451211 bytes, absent from `master`) stays: it documents API 0.2
-  behaviour as well as receptions, with two reception files and three evidence JSON files.
+  behaviour as well as receptions. Four of its files are reception reports and records
+  (`api_v02_reception.md`, `api_v02_reception.json`, `api_v02_reception_v15d2.json`,
+  `api_v02_methods_reception.md`) and three are evidence JSON files under `evidence/api_v02/`.
   Sorting it belongs to the receipt protocol (B02) and the developer guide (Q08).
 - `examples/api_v02/coverage.py` keeps its provenance string `SOURCE_TITLE_SOURCE`, which
   names `docs/development/api_040/corpus.json`: `examples/api_v02/profile_implementations.json`
