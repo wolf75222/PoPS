@@ -1889,7 +1889,8 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
   return result;
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request, class Reconstruction>
+template <int Dim, nd::ReconstructionVariables Variables, class Routes, class Request,
+          class Reconstruction>
 PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction reconstruction) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   if constexpr (path_conservative_model<Model>) {
@@ -1898,12 +1899,16 @@ PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction recon
     if constexpr (std::is_same_v<Reconstruction, NoSlope> &&
                   Variables == nd::ReconstructionVariables::Conservative) {
       const bool matching = [&] {
-        if constexpr (coordinated_face_model<Model>)
+        if constexpr (coordinated_face_model<Model>) {
           return request.routes.riemann ==
                  std::string("coordinated_face:v1:") + std::string(Model::path_operator_identity());
-        else
-          return parse_riemann_route(request.routes.riemann, "generated AMR path block") ==
-                 RiemannRouteId::kRusanov;
+        } else {
+          const auto route =
+              parse_riemann_route(request.routes.riemann, "generated AMR path block");
+          generated_system_detail::require_compiled_route<Routes>(route, "Riemann",
+                                                                  "generated AMR path");
+          return route == RiemannRouteId::kRusanov;
+        }
       }();
       if (matching)
         return materialize_system<Dim, Model, Reconstruction, ModelPathFlux<Model>, Variables>(
@@ -1912,27 +1917,32 @@ PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction recon
     throw std::invalid_argument(
         "Path transport requires exact first-order conservative face authority");
   } else {
-    switch (parse_riemann_route(request.routes.riemann, "generated AMR block")) {
+    const auto route = parse_riemann_route(request.routes.riemann, "generated AMR block");
+    generated_system_detail::require_compiled_route<Routes>(route, "Riemann", "generated AMR");
+    switch (route) {
       case RiemannRouteId::kRusanov:
-        return materialize_system<Dim, Model, Reconstruction, RusanovFlux, Variables>(
-            std::move(request), reconstruction, RusanovFlux{});
+        if constexpr (Routes::admits(RiemannRouteId::kRusanov))
+          return materialize_system<Dim, Model, Reconstruction, RusanovFlux, Variables>(
+              std::move(request), reconstruction, RusanovFlux{});
+        break;
       case RiemannRouteId::kHll:
-        if constexpr (detail::wave_speeds_all_axes<Model>())
+        if constexpr (Routes::admits(RiemannRouteId::kHll) && detail::wave_speeds_all_axes<Model>())
           return materialize_system<Dim, Model, Reconstruction, HLLFlux, Variables>(
               std::move(request), reconstruction, HLLFlux{});
         break;
       case RiemannRouteId::kHllc:
-        if constexpr (HasHLLCStructure<Model>)
+        if constexpr (Routes::admits(RiemannRouteId::kHllc) && HasHLLCStructure<Model>)
           return materialize_system<Dim, Model, Reconstruction, HLLCFlux, Variables>(
               std::move(request), reconstruction, HLLCFlux{});
         break;
       case RiemannRouteId::kRoe:
-        if constexpr (HasRoeDissipation<Model>)
+        if constexpr (Routes::admits(RiemannRouteId::kRoe) && HasRoeDissipation<Model>)
           return materialize_system<Dim, Model, Reconstruction, RoeFlux, Variables>(
               std::move(request), reconstruction, RoeFlux{});
         break;
       case RiemannRouteId::kRoeHllRusanovRecovery:
-        if constexpr (HasRoeDissipation<Model> && detail::wave_speeds_all_axes<Model>())
+        if constexpr (Routes::admits(RiemannRouteId::kRoeHllRusanovRecovery) &&
+                      HasRoeDissipation<Model> && detail::wave_speeds_all_axes<Model>())
           return materialize_system<Dim, Model, Reconstruction, RoeHllRusanovRecoveryPolicy,
                                     Variables>(std::move(request), reconstruction,
                                                RoeHllRusanovRecoveryPolicy{});
@@ -1943,52 +1953,81 @@ PreparedAmrSystemBlock<Dim> select_riemann(Request request, Reconstruction recon
   }
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request>
+template <int Dim, nd::ReconstructionVariables Variables, class Routes, class Request>
 PreparedAmrSystemBlock<Dim> select_reconstruction(Request request) {
-  switch (parse_limiter_route(request.routes.limiter, "generated AMR block")) {
+  const auto route = parse_limiter_route(request.routes.limiter, "generated AMR block");
+  generated_system_detail::require_compiled_route<Routes>(route, "limiter", "generated AMR");
+  switch (route) {
     case LimiterRouteId::kNone:
-      return select_riemann<Dim, Variables>(std::move(request), NoSlope{});
+      if constexpr (Routes::admits(LimiterRouteId::kNone))
+        return select_riemann<Dim, Variables, Routes>(std::move(request), NoSlope{});
+      break;
     case LimiterRouteId::kMinmod:
-      return select_riemann<Dim, Variables>(std::move(request), Minmod{});
+      if constexpr (Routes::admits(LimiterRouteId::kMinmod))
+        return select_riemann<Dim, Variables, Routes>(std::move(request), Minmod{});
+      break;
     case LimiterRouteId::kVanLeer:
-      return select_riemann<Dim, Variables>(std::move(request), VanLeer{});
-    case LimiterRouteId::kWeno5: {
-      const Real epsilon = request.routes.weno_epsilon;
-      return select_riemann<Dim, Variables>(std::move(request),
-                                            configured_reconstruction<Weno5>(epsilon));
-    }
+      if constexpr (Routes::admits(LimiterRouteId::kVanLeer))
+        return select_riemann<Dim, Variables, Routes>(std::move(request), VanLeer{});
+      break;
+    case LimiterRouteId::kWeno5:
+      if constexpr (Routes::admits(LimiterRouteId::kWeno5)) {
+        const Real epsilon = request.routes.weno_epsilon;
+        return select_riemann<Dim, Variables, Routes>(std::move(request),
+                                                      configured_reconstruction<Weno5>(epsilon));
+      }
+      break;
     case LimiterRouteId::kMc:
-      return select_riemann<Dim, Variables>(std::move(request), MC{});
+      if constexpr (Routes::admits(LimiterRouteId::kMc))
+        return select_riemann<Dim, Variables, Routes>(std::move(request), MC{});
+      break;
     case LimiterRouteId::kSuperbee:
-      return select_riemann<Dim, Variables>(std::move(request), Superbee{});
+      if constexpr (Routes::admits(LimiterRouteId::kSuperbee))
+        return select_riemann<Dim, Variables, Routes>(std::move(request), Superbee{});
+      break;
   }
   throw std::logic_error("generated AMR limiter route escaped its exhaustive selector");
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request, class Numerical>
+template <int Dim, nd::ReconstructionVariables Variables, class Routes, class Request,
+          class Numerical>
 PreparedAmrSystemBlock<Dim> select_reconstruction_with_face(Request request, Numerical numerical) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
-  switch (parse_limiter_route(request.routes.limiter, "generated AMR face block")) {
+  const auto route = parse_limiter_route(request.routes.limiter, "generated AMR face block");
+  generated_system_detail::require_compiled_route<Routes>(route, "limiter", "generated AMR face");
+  switch (route) {
     case LimiterRouteId::kNone:
-      return materialize_system<Dim, Model, NoSlope, Numerical, Variables>(std::move(request),
-                                                                           NoSlope{}, numerical);
+      if constexpr (Routes::admits(LimiterRouteId::kNone))
+        return materialize_system<Dim, Model, NoSlope, Numerical, Variables>(std::move(request),
+                                                                             NoSlope{}, numerical);
+      break;
     case LimiterRouteId::kMinmod:
-      return materialize_system<Dim, Model, Minmod, Numerical, Variables>(std::move(request),
-                                                                          Minmod{}, numerical);
+      if constexpr (Routes::admits(LimiterRouteId::kMinmod))
+        return materialize_system<Dim, Model, Minmod, Numerical, Variables>(std::move(request),
+                                                                            Minmod{}, numerical);
+      break;
     case LimiterRouteId::kVanLeer:
-      return materialize_system<Dim, Model, VanLeer, Numerical, Variables>(std::move(request),
-                                                                           VanLeer{}, numerical);
-    case LimiterRouteId::kWeno5: {
-      const Real epsilon = request.routes.weno_epsilon;
-      return materialize_system<Dim, Model, Weno5, Numerical, Variables>(
-          std::move(request), configured_reconstruction<Weno5>(epsilon), numerical);
-    }
+      if constexpr (Routes::admits(LimiterRouteId::kVanLeer))
+        return materialize_system<Dim, Model, VanLeer, Numerical, Variables>(std::move(request),
+                                                                             VanLeer{}, numerical);
+      break;
+    case LimiterRouteId::kWeno5:
+      if constexpr (Routes::admits(LimiterRouteId::kWeno5)) {
+        const Real epsilon = request.routes.weno_epsilon;
+        return materialize_system<Dim, Model, Weno5, Numerical, Variables>(
+            std::move(request), configured_reconstruction<Weno5>(epsilon), numerical);
+      }
+      break;
     case LimiterRouteId::kMc:
-      return materialize_system<Dim, Model, MC, Numerical, Variables>(std::move(request), MC{},
-                                                                      numerical);
+      if constexpr (Routes::admits(LimiterRouteId::kMc))
+        return materialize_system<Dim, Model, MC, Numerical, Variables>(std::move(request), MC{},
+                                                                        numerical);
+      break;
     case LimiterRouteId::kSuperbee:
-      return materialize_system<Dim, Model, Superbee, Numerical, Variables>(std::move(request),
-                                                                            Superbee{}, numerical);
+      if constexpr (Routes::admits(LimiterRouteId::kSuperbee))
+        return materialize_system<Dim, Model, Superbee, Numerical, Variables>(
+            std::move(request), Superbee{}, numerical);
+      break;
   }
   throw std::logic_error("generated AMR face limiter route escaped its exhaustive selector");
 }
@@ -2204,8 +2243,9 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
 
 }  // namespace generated_amr_detail
 
-/// Prepare one package-owned exact AMR block image without touching a runtime facade.
-template <class Request>
+/// Prepare one package-owned exact AMR block image without touching a runtime facade. `Routes`
+/// names the catalogue routes this package instantiates; any other route is refused.
+template <class Routes = GeneratedCatalogueRoutes, class Request>
 auto prepare_generated_amr_system_block(Request request)
     -> PreparedAmrSystemBlock<Request::dimension> {
   constexpr int Dim = Request::dimension;
@@ -2220,20 +2260,26 @@ auto prepare_generated_amr_system_block(Request request)
   if constexpr (storage_only) {
     return generated_amr_detail::materialize_state_block<Dim>(std::move(request));
   } else {
-    switch (parse_recon_route(request.routes.reconstruction, "generated AMR block")) {
+    const auto route = parse_recon_route(request.routes.reconstruction, "generated AMR block");
+    generated_system_detail::require_compiled_route<Routes>(route, "reconstruction",
+                                                            "generated AMR");
+    switch (route) {
       case ReconRouteId::kConservative:
-        return generated_amr_detail::select_reconstruction<
-            Dim, nd::ReconstructionVariables::Conservative>(std::move(request));
+        if constexpr (Routes::admits(ReconRouteId::kConservative))
+          return generated_amr_detail::select_reconstruction<
+              Dim, nd::ReconstructionVariables::Conservative, Routes>(std::move(request));
+        break;
       case ReconRouteId::kPrimitive:
-        return generated_amr_detail::select_reconstruction<Dim,
-                                                           nd::ReconstructionVariables::Primitive>(
-            std::move(request));
+        if constexpr (Routes::admits(ReconRouteId::kPrimitive))
+          return generated_amr_detail::select_reconstruction<
+              Dim, nd::ReconstructionVariables::Primitive, Routes>(std::move(request));
+        break;
     }
     throw std::logic_error("generated AMR reconstruction route escaped its exhaustive selector");
   }
 }
 
-template <class Request, class Reconstruction>
+template <class Routes = GeneratedCatalogueRoutes, class Request, class Reconstruction>
   requires ReconstructionPolicy<Reconstruction>
 auto prepare_generated_amr_system_block(Request request, Reconstruction reconstruction)
     -> PreparedAmrSystemBlock<Request::dimension> {
@@ -2245,18 +2291,24 @@ auto prepare_generated_amr_system_block(Request request, Reconstruction reconstr
   if (request.routes.limiter != std::string("source_stencil:") + Reconstruction::source_identity)
     throw std::invalid_argument(
         "generated AMR reconstruction source identity differs from package");
-  switch (parse_recon_route(request.routes.reconstruction, "generated AMR block")) {
+  const auto route = parse_recon_route(request.routes.reconstruction, "generated AMR block");
+  generated_system_detail::require_compiled_route<Routes>(route, "reconstruction", "generated AMR");
+  switch (route) {
     case ReconRouteId::kConservative:
-      return generated_amr_detail::select_riemann<Dim, nd::ReconstructionVariables::Conservative>(
-          std::move(request), reconstruction);
+      if constexpr (Routes::admits(ReconRouteId::kConservative))
+        return generated_amr_detail::select_riemann<Dim, nd::ReconstructionVariables::Conservative,
+                                                    Routes>(std::move(request), reconstruction);
+      break;
     case ReconRouteId::kPrimitive:
-      return generated_amr_detail::select_riemann<Dim, nd::ReconstructionVariables::Primitive>(
-          std::move(request), reconstruction);
+      if constexpr (Routes::admits(ReconRouteId::kPrimitive))
+        return generated_amr_detail::select_riemann<Dim, nd::ReconstructionVariables::Primitive,
+                                                    Routes>(std::move(request), reconstruction);
+      break;
   }
   throw std::logic_error("generated AMR reconstruction route escaped its exhaustive selector");
 }
 
-template <class Request, class Numerical>
+template <class Routes = GeneratedCatalogueRoutes, class Request, class Numerical>
   requires requires { Numerical::source_identity; } && (!ReconstructionPolicy<Numerical>)
 auto prepare_generated_amr_system_block(Request request, Numerical numerical)
     -> PreparedAmrSystemBlock<Request::dimension> {
@@ -2267,19 +2319,28 @@ auto prepare_generated_amr_system_block(Request request, Numerical numerical)
   if constexpr (path_conservative_model<Model>) {
     throw std::invalid_argument("source face needs a composed AMR path face policy");
   } else {
-    switch (parse_recon_route(request.routes.reconstruction, "generated AMR face block")) {
+    const auto route = parse_recon_route(request.routes.reconstruction, "generated AMR face block");
+    generated_system_detail::require_compiled_route<Routes>(route, "reconstruction",
+                                                            "generated AMR face");
+    switch (route) {
       case ReconRouteId::kConservative:
-        return generated_amr_detail::select_reconstruction_with_face<
-            Dim, nd::ReconstructionVariables::Conservative>(std::move(request), numerical);
+        if constexpr (Routes::admits(ReconRouteId::kConservative))
+          return generated_amr_detail::select_reconstruction_with_face<
+              Dim, nd::ReconstructionVariables::Conservative, Routes>(std::move(request),
+                                                                      numerical);
+        break;
       case ReconRouteId::kPrimitive:
-        return generated_amr_detail::select_reconstruction_with_face<
-            Dim, nd::ReconstructionVariables::Primitive>(std::move(request), numerical);
+        if constexpr (Routes::admits(ReconRouteId::kPrimitive))
+          return generated_amr_detail::select_reconstruction_with_face<
+              Dim, nd::ReconstructionVariables::Primitive, Routes>(std::move(request), numerical);
+        break;
     }
     throw std::logic_error("generated AMR face reconstruction route escaped selector");
   }
 }
 
-template <class Request, class Reconstruction, class Numerical>
+template <class Routes = GeneratedCatalogueRoutes, class Request, class Reconstruction,
+          class Numerical>
   requires ReconstructionPolicy<Reconstruction> && requires { Numerical::source_identity; }
 auto prepare_generated_amr_system_block(Request request, Reconstruction reconstruction,
                                         Numerical numerical)
@@ -2294,15 +2355,23 @@ auto prepare_generated_amr_system_block(Request request, Reconstruction reconstr
   if constexpr (path_conservative_model<Model>) {
     throw std::invalid_argument("source face/reconstruction need a composed AMR path face policy");
   } else {
-    switch (parse_recon_route(request.routes.reconstruction, "generated AMR source block")) {
+    const auto route =
+        parse_recon_route(request.routes.reconstruction, "generated AMR source block");
+    generated_system_detail::require_compiled_route<Routes>(route, "reconstruction",
+                                                            "generated AMR source");
+    switch (route) {
       case ReconRouteId::kConservative:
-        return generated_amr_detail::materialize_system<Dim, Model, Reconstruction, Numerical,
-                                                        nd::ReconstructionVariables::Conservative>(
-            std::move(request), reconstruction, numerical);
+        if constexpr (Routes::admits(ReconRouteId::kConservative))
+          return generated_amr_detail::materialize_system<
+              Dim, Model, Reconstruction, Numerical, nd::ReconstructionVariables::Conservative>(
+              std::move(request), reconstruction, numerical);
+        break;
       case ReconRouteId::kPrimitive:
-        return generated_amr_detail::materialize_system<Dim, Model, Reconstruction, Numerical,
-                                                        nd::ReconstructionVariables::Primitive>(
-            std::move(request), reconstruction, numerical);
+        if constexpr (Routes::admits(ReconRouteId::kPrimitive))
+          return generated_amr_detail::materialize_system<Dim, Model, Reconstruction, Numerical,
+                                                          nd::ReconstructionVariables::Primitive>(
+              std::move(request), reconstruction, numerical);
+        break;
     }
     throw std::logic_error("generated AMR source reconstruction route escaped selector");
   }
@@ -2427,8 +2496,9 @@ inline void validate_compiled_amr_system_block_route_syntax(
                                             source_identity(routes.riemann, "source_face:"));
 }
 
-/// Prepare a complete generated AMR block image without mutating the facade.
-template <int Dim, class Model>
+/// Prepare a complete generated AMR block image without mutating the facade. `Routes` names the
+/// catalogue routes the generated package instantiates (every route unless it was compiled for one).
+template <int Dim, class Routes = GeneratedCatalogueRoutes, class Model>
 PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
     const std::string& reconstruction, const std::string& time, double gamma, int substeps,
@@ -2471,12 +2541,12 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     validate_compiled_amr_system_block_routes(routes, {}, {}, Model::path_operator_identity());
   else
     validate_compiled_amr_system_block_routes(routes);
-  return prepare_generated_amr_system_block(CompiledAmrSystemBlockPreparation<Dim, Model>{
+  return prepare_generated_amr_system_block<Routes>(CompiledAmrSystemBlockPreparation<Dim, Model>{
       name, provider_consumer_qid, std::move(model), std::move(routes), gamma, substeps, stride,
       newton, newton_diagnostics});
 }
 
-template <int Dim, class Model, class Reconstruction>
+template <int Dim, class Routes = GeneratedCatalogueRoutes, class Model, class Reconstruction>
   requires ReconstructionPolicy<Reconstruction>
 PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
@@ -2504,14 +2574,14 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
                                       static_cast<Real>(weno_epsilon),
                                       wave_speed_cache};
   validate_compiled_amr_system_block_routes(routes, Reconstruction::source_identity);
-  return prepare_generated_amr_system_block(
+  return prepare_generated_amr_system_block<Routes>(
       CompiledAmrSystemBlockPreparation<Dim, Model>{name, provider_consumer_qid, std::move(model),
                                                     std::move(routes), gamma, substeps, stride,
                                                     newton, newton_diagnostics},
       policy);
 }
 
-template <int Dim, class Model, class Numerical>
+template <int Dim, class Routes = GeneratedCatalogueRoutes, class Model, class Numerical>
   requires requires { Numerical::source_identity; } && (!ReconstructionPolicy<Numerical>)
 PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
@@ -2536,14 +2606,15 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
                                       static_cast<Real>(weno_epsilon),
                                       wave_speed_cache};
   validate_compiled_amr_system_block_routes(routes, {}, Numerical::source_identity);
-  return prepare_generated_amr_system_block(
+  return prepare_generated_amr_system_block<Routes>(
       CompiledAmrSystemBlockPreparation<Dim, Model>{name, provider_consumer_qid, std::move(model),
                                                     std::move(routes), gamma, substeps, stride,
                                                     newton, newton_diagnostics},
       numerical);
 }
 
-template <int Dim, class Model, class Reconstruction, class Numerical>
+template <int Dim, class Routes = GeneratedCatalogueRoutes, class Model, class Reconstruction,
+          class Numerical>
   requires ReconstructionPolicy<Reconstruction> && requires { Numerical::source_identity; }
 PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
     const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
@@ -2571,7 +2642,7 @@ PreparedAmrSystemBlock<Dim> prepare_compiled_amr_system_block(
                                       wave_speed_cache};
   validate_compiled_amr_system_block_routes(routes, Reconstruction::source_identity,
                                             Numerical::source_identity);
-  return prepare_generated_amr_system_block(
+  return prepare_generated_amr_system_block<Routes>(
       CompiledAmrSystemBlockPreparation<Dim, Model>{name, provider_consumer_qid, std::move(model),
                                                     std::move(routes), gamma, substeps, stride,
                                                     newton, newton_diagnostics},
