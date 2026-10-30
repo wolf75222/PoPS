@@ -55,6 +55,13 @@ Report actual GitHub status separately from local validation.
 
 - Use `.clang-format` (clang-format 19) and `.clang-tidy` for C++; Ruff settings are in
   `pyproject.toml`. Avoid unrelated formatting sweeps.
+- C++ follows `.clang-format` under clang-format 19.1.7. The `format` job of `ci.yml` checks the
+  lines that each pull request changes (`scripts/check_clang_format.sh --changed-since HEAD^1`),
+  and the weekly `format` job of `quality.yml` the whole tree. Install that version
+  (`pipx install clang-format==19.1.7`) and format what you change before pushing:
+  `git clang-format --binary "$(command -v clang-format)" <base>` formats the lines that differ
+  from `<base>`. Files listed in `.clang-format-ignore` are byte-pinned data and are never
+  formatted.
 - Keep public headers self-contained, use `#pragma once`, and preserve existing naming within
   a subsystem. Use explicit ownership and typed handles instead of name-based runtime dispatch.
 - Check authored input at host boundaries. Exceptions must not escape device kernels; carry
