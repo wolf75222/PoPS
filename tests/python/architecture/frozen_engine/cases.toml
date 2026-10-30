@@ -1,0 +1,32 @@
+# The case side of the engine guards of spec 0.3 (sections 16.2 and 16.3; Linear N2).
+#
+# CF8 scans every tracked file under [case_paths]: the conformance cases, the litmus cases, the
+# probes and the final witness. CF1 adds the files of each [[case]] on top of the integration head
+# and checks that the tree hashes of the core paths and of the native component tree
+# (cf0_paths.toml) stay unchanged. A directory entry ends with "/", a file entry does not.
+
+[case_paths]
+# At b6e64c1d the conformance corpus (CF5c) is examples/api_v02/: the builders of the 28 models and
+# 12 methods that profile_contracts.py selects, their helpers and their reception code. The litmus
+# cases L1-L12 and the probes (CF5, CF5b; N6) and the sealed witness (CF6; Q05) add their
+# directories here when they are written. An entry stays while it holds a case: removing it would
+# take its files out of CF8.
+include = [
+    "examples/api_v02/",
+]
+
+# CF1, tried on M01 (Linear N2). Each case names the files that make it up: its builder, the case
+# helpers that the builder imports, the registry rows that select it and its receiver test. Every
+# file lies outside the frozen engine; the CF1 test removes them from the integration head, adds
+# them back, and compares the tree hashes of both trees of the frozen engine.
+[[case]]
+id = "M01"
+issue = "ROM-32"
+what = "periodic scalar advection, profile M01 (examples/api_v02/models_M01_M14.py:build_m01)"
+files = [
+    "examples/api_v02/models_M01_M14.py",
+    "examples/api_v02/common.py",
+    "examples/api_v02/profile_contracts.py",
+    "examples/api_v02/profile_dispatch.py",
+    "tests/python/integration/runtime/test_api_v02_models_M01_M14.py",
+]
