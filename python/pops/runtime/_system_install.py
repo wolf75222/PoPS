@@ -180,6 +180,7 @@ class _SystemInstall(_System):
         )
 
         if isinstance(model, ModelSpec):
+            from pops.runtime._bricks_scheme import native_catalogue_route
             from pops.runtime._modelspec_compile import compile_modelspec_package
 
             if names is not None:
@@ -187,7 +188,9 @@ class _SystemInstall(_System):
                     "add_equation: names= is not supported for ModelSpec compilation; names and "
                     "roles are immutable artifact metadata"
                 )
-            compiled = compile_modelspec_package(model, name=name, target="system")
+            # The package instantiates only the catalogue route that this block installs.
+            compiled = compile_modelspec_package(
+                model, name=name, target="system", native_route=native_catalogue_route(spatial))
             records = dict(getattr(self, "_authored_block_options", {}))
             records[name] = _authored_modelspec_block_options(
                 name, model, spatial, time, evolve=evolve

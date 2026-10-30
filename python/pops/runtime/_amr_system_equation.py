@@ -136,9 +136,13 @@ class _AmrSystemEquation(_AmrSystem):
         # Forward the complete authoring request to the native contract. Unsupported masks and
         # Newton controls are rejected there rather than retained by the spatial runtime.
         if isinstance(model, ModelSpec):
+            from pops.runtime._bricks_scheme import native_catalogue_route
             from pops.runtime._modelspec_compile import compile_modelspec_package
 
-            compiled = compile_modelspec_package(model, name=name, target="amr_system")
+            # The package instantiates only the catalogue route that this block installs.
+            compiled = compile_modelspec_package(
+                model, name=name, target="amr_system",
+                native_route=native_catalogue_route(spatial))
             elliptic = str(getattr(model, "elliptic", "") or "")
             if elliptic in ("charge", "background", "gravity"):
                 slots = list(self._s.field_provider_slots())

@@ -58,3 +58,43 @@ def test_missing_modelspec_field_authority_refuses_before_authoring_or_native_mu
     with pytest.raises(ValueError, match=message):
         add_equation(host, "rejected", request, spatial=engine.Spatial())
     assert vars(host) == before
+
+
+class _CompileRequested(Exception):
+    """Stops ``add_equation`` once it asks for the ModelSpec package."""
+
+
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+def test_modelspec_package_is_compiled_for_the_route_its_block_installs(monkeypatch, target):
+    from pops.numerics.reconstruction import WENO5
+    from pops.numerics.riemann import Roe
+    from pops.runtime import _modelspec_compile
+
+    requests = []
+
+    def record(spec, *, name, target, native_route=None):
+        requests.append((name, target, native_route))
+        raise _CompileRequested
+
+    monkeypatch.setattr(_modelspec_compile, "compile_modelspec_package", record)
+
+    class NativeMutationSentinel:
+        def __getattr__(self, name):
+            raise AssertionError("ModelSpec install reached native access %s" % name)
+
+    host = SimpleNamespace(
+        _lifecycle="assembling", _s=NativeMutationSentinel(),
+        _lower_spatial=lambda spatial: spatial,
+    )
+    add_equation = (
+        _SystemInstall.add_equation if target == "system" else _AmrSystemEquation.add_equation)
+    request = engine.Model(
+        engine.FluidState("compressible", gamma=1.4), engine.CompressibleFlux(),
+        engine.NoSource(), engine.BackgroundDensity(alpha=0.0, n0=0.0))
+    for spatial, route in (
+        (engine.Spatial(limiter=WENO5(), flux=Roe()), ("conservative", "weno5", "roe")),
+        (engine.Spatial(), ("conservative", "minmod", "rusanov")),
+    ):
+        with pytest.raises(_CompileRequested):
+            add_equation(host, "gas", request, spatial=spatial)
+        assert requests.pop() == ("gas", target, route)
