@@ -57,6 +57,40 @@ def decode_exchange_image(image):
     return {"records": records, "quantities": quantities, "consumed": consumed}
 
 
+def split_history_field_envelope(image):
+    """Bounded framing reader of POPSEX06: the exchange image, one sample ledger per ring, the table."""
+    data = memoryview(image)
+    assert bytes(data[:8]) == b"POPSEX06", "History Field envelope requires POPSEX06"
+    position = 8
+
+    def word():
+        nonlocal position
+        assert position + 8 <= len(data), "truncated History Field envelope"
+        value, = struct.unpack_from("<Q", data, position)
+        position += 8
+        return value
+
+    def blob():
+        nonlocal position
+        length = word()
+        assert length <= len(data) - position, "truncated History Field envelope"
+        value = bytes(data[position:position + length])
+        position += length
+        return value
+
+    exchanges = blob()
+    rings = word()
+    assert rings <= (len(data) - position) // 16, "History ring count exceeds the envelope"
+    samples = {}
+    for _ in range(rings):
+        name = blob()
+        assert name not in samples, "duplicate History ring in the envelope"
+        samples[name] = blob()
+    table = blob()
+    assert position == len(data), "reader did not consume the exact History Field envelope"
+    return exchanges, samples, table
+
+
 def checkpoint_exchange_images(path):
     with np.load(Path(path), allow_pickle=False) as archive:
         raw = archive["program_exchange_state"].tobytes()
@@ -64,7 +98,11 @@ def checkpoint_exchange_images(path):
         assert offsets[0] == 0 and offsets[-1] == len(raw)
         assert np.all(np.diff(offsets) > 0)
         images = tuple(raw[int(a):int(b)] for a, b in zip(offsets[:-1], offsets[1:], strict=True))
-    return images, tuple(decode_exchange_image(image) for image in images)
+    # A Program with History retains Field metadata (plan default), so each rank image is the
+    # POPSEX06 envelope whose first blob is the exchange image. The images stay whole.
+    return images, tuple(decode_exchange_image(split_history_field_envelope(image)[0]
+                                               if image.startswith(b"POPSEX06") else image)
+                         for image in images)
 
 
 def selected_external_records(ledger, *, axis=0, side=1, component=0):
