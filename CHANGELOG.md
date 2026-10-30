@@ -289,9 +289,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   by the native types that the route catalogue records for it; the block selectors instantiate
   only those types and add no route name to the engine. The route enters the package identity,
   and the package refuses, in Python and in C++, to be installed with another route; compile the
-  Case with the numerics it installs. A package without a catalogue route (state storage,
-  source-authored or coordinated faces, external Riemann bricks) and a direct `model.compile()`
-  keep their current route set.
+  Case with the numerics it installs. The private ModelSpec package that `add_equation` compiles
+  is compiled for the route of the block it installs. A package without a catalogue route (state
+  storage, source-authored or coordinated faces, external Riemann bricks) and a direct
+  `model.compile()` keep their current route set.
 
 ### Fixed
 
