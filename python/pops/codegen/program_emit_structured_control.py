@@ -255,6 +255,11 @@ def _emit_region(program, block, sub, model, lines, prelude, block_idx, field_pl
 def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plans, target):
     _check_region_effects(value.attrs.get("cond_block", ()))
     _check_region_effects(value.attrs["body_block"])
+    if value.op == "structured_fold":
+        from .program_emit_finite_kokkos import emit_ordered, reads_arrays
+        # An ordered fold over device Arrays runs as one serial device region (IR4).
+        if reads_arrays(value) and emit_ordered(value, var, lines):
+            return
     initial = value.inputs[0]
     signature = value_signature(initial)
     current = _slots(signature, var[initial.id], value.id, "carry", lines)

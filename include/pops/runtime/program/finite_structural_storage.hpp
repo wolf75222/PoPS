@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <utility>
 #include <pops/runtime/program/distributed_array.hpp>
+#include <pops/runtime/program/finite_device_array.hpp>
 
 namespace pops::runtime::program::finite_structural {
 
@@ -133,6 +134,8 @@ struct Limits {
   std::uint64_t source_bytes;
   std::uint64_t destination_bytes;
   std::uint64_t workspace_bytes;
+  // Counts the host copies of device Array columns that a conversion makes.
+  finite_device::Residency* residency = nullptr;
 };
 
 template <int Dim>
@@ -151,6 +154,95 @@ const ContinuationValueRef<Dim>& project(const ContinuationValueRef<Dim>& root,
     throw std::invalid_argument("finite structural projection has a missing value");
   return *current;
 }
+
+namespace detail {
+inline const finite_device::Array* device_held(const std::any& cell) {
+  if (const auto* borrowed =
+          std::any_cast<std::reference_wrapper<const finite_device::Array>>(&cell))
+    return &borrowed->get();
+  return std::any_cast<finite_device::Array>(&cell);
+}
+
+template <class Value>
+std::any leaf_cell(ContinuationKind kind, Value value) {
+  if constexpr (std::is_same_v<Value, unsigned char>) {
+    if (kind == ContinuationKind::Boolean)
+      return std::any(value != 0);
+  } else if constexpr (std::is_same_v<Value, std::int64_t>) {
+    if (kind == ContinuationKind::Int64)
+      return std::any(value);
+  } else {
+    if (kind == ContinuationKind::Float64)
+      return std::any(Real(value));
+  }
+  throw std::logic_error("finite device Array column differs from its element type");
+}
+
+// The continuation image still boxes Array elements (G07). Its codec reads and
+// writes device Arrays through these host images, and the copies are counted.
+inline Array legacy_array(const finite_device::Array& source, const ContinuationType& element,
+                          finite_device::Residency* residency) {
+  const auto kinds = finite_device::leaf_kinds(element);
+  finite_device::require_columns(source, kinds.size());
+  const auto host = finite_device::to_host(source, residency);
+  const auto count = static_cast<std::size_t>(source.domain->size);
+  const bool record = element.kind == ContinuationKind::Product;
+  auto buffer = make_values(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    std::vector<std::any> cells(kinds.size());
+    for (std::size_t j = 0; j < kinds.size(); ++j)
+      cells[j] = std::visit([&](const auto& values) { return leaf_cell(kinds[j], values(i)); },
+                            host[j]);
+    (*buffer)[i] = record ? std::any(Record{std::move(cells)}) : std::move(cells.at(0));
+  }
+  return Array{source.domain, std::move(buffer)};
+}
+
+inline finite_device::Array device_array(const Array& source, const ContinuationType& element,
+                                         finite_device::Residency* residency) {
+  if (!source.domain || !source.values ||
+      source.values->size() != static_cast<std::size_t>(source.domain->size))
+    throw std::invalid_argument("finite structural Array differs from its domain cardinality");
+  const auto kinds = finite_device::leaf_kinds(element);
+  const auto count = source.values->size();
+  std::vector<finite_device::HostColumn> host;
+  host.reserve(kinds.size());
+  const auto label = [](std::size_t j) {
+    return std::string(finite_device::kHostLabel) + "continuation_" + std::to_string(j);
+  };
+  for (std::size_t j = 0; j < kinds.size(); ++j) {
+    const auto alloc = Kokkos::view_alloc(Kokkos::WithoutInitializing, label(j));
+    if (kinds[j] == ContinuationKind::Boolean)
+      host.emplace_back(finite_device::HostView<unsigned char>(alloc, count));
+    else if (kinds[j] == ContinuationKind::Int64)
+      host.emplace_back(finite_device::HostView<std::int64_t>(alloc, count));
+    else
+      host.emplace_back(finite_device::HostView<Real>(alloc, count));
+  }
+  const bool record = element.kind == ContinuationKind::Product;
+  for (std::size_t i = 0; i < count; ++i) {
+    const auto& cell = (*source.values)[i];
+    const Record* values = record ? &held<Record>(cell) : nullptr;
+    if (values && values->values.size() != kinds.size())
+      throw std::invalid_argument("finite structural Record has the wrong slot count");
+    for (std::size_t j = 0; j < kinds.size(); ++j) {
+      const std::any& leaf = values ? values->values[j] : cell;
+      std::visit(
+          [&](auto& column) {
+            using Value = typename std::decay_t<decltype(column)>::non_const_value_type;
+            if constexpr (std::is_same_v<Value, unsigned char>)
+              column(i) = std::any_cast<bool>(leaf) ? 1 : 0;
+            else if constexpr (std::is_same_v<Value, std::int64_t>)
+              column(i) = std::any_cast<std::int64_t>(leaf);
+            else
+              column(i) = std::any_cast<Real>(leaf);
+          },
+          host[j]);
+    }
+  }
+  return finite_device::from_host(source.domain, host, residency);
+}
+}  // namespace detail
 
 namespace detail {
 class Budget {
@@ -325,6 +417,8 @@ ContinuationValueRef<Dim> pack_prepared(const std::vector<Layout>& nodes, Budget
     Ref leaf;
   };
   std::vector<Frame> stack;
+  // Host images of device Arrays live until the packed value is complete.
+  std::vector<std::unique_ptr<const Array>> images;
   auto push = [&](std::size_t index, const std::any* cell, const Record* record,
                   std::size_t offset) {
     // Cumulative accounting also bounds total work, including repeated aliases.
@@ -353,7 +447,12 @@ ContinuationValueRef<Dim> pack_prepared(const std::vector<Layout>& nodes, Budget
       if (record)
         frame.source = &record->values.at(offset);
       if (schema.kind == ContinuationKind::Array) {
-        frame.array = &held<Array>(*frame.source);
+        if (const auto* device = device_held(*frame.source)) {
+          images.push_back(std::make_unique<const Array>(
+              legacy_array(*device, schema.children.at(0), limits.residency)));
+          frame.array = images.back().get();
+        } else
+          frame.array = &held<Array>(*frame.source);
         detail::domain(frame.array->domain, schema);
         if (!frame.array->values ||
             frame.array->values->size() != std::size_t(frame.array->domain->size))
@@ -479,6 +578,8 @@ std::any unpack(const ContinuationType& type, const ContinuationValueRef<Dim>& s
   };
   std::any result;
   std::vector<Task> tasks;
+  // Arrays with a flat element are rebuilt as device columns once their cells are set.
+  std::vector<std::pair<std::any*, const ContinuationType*>> device_arrays;
   auto push = [&](Task task) {
     work.charge(1, sizeof(Task));
     tasks.push_back(task);
@@ -586,6 +687,8 @@ std::any unpack(const ContinuationType& type, const ContinuationValueRef<Dim>& s
         output.charge(count, sizeof(std::any));
         auto buffer = make_values(count);
         destination = Array{value->domain_ref(), buffer};
+        if (finite_device::flat_element(schema.children.at(0)))
+          device_arrays.emplace_back(&destination, &schema.children.at(0));
         for (std::size_t n = count; n != 0; --n)
           push({node.children[0], 0, &value->members()[n - 1], &(*buffer)[n - 1], nullptr});
         break;
@@ -594,6 +697,9 @@ std::any unpack(const ContinuationType& type, const ContinuationValueRef<Dim>& s
         throw std::invalid_argument("finite structural projection has an invalid type");
     }
   }
+  for (const auto& [destination, element] : device_arrays)
+    *destination =
+        detail::device_array(std::any_cast<const Array&>(*destination), *element, limits.residency);
   return result;
 }
 

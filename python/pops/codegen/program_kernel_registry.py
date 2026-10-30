@@ -1,7 +1,7 @@
 """Intern typed device regions while preserving each authored invocation.
 
 Canonical names are assigned as the closed IR is lowered. No emitted scientific
-C++ is rewritten, and the host staging/publication protocol is left in place.
+C++ is rewritten; captured device Arrays are passed as their own columns.
 """
 
 from __future__ import annotations
@@ -96,8 +96,8 @@ class DeviceKernel:
 
 
 def device_environment(kernel, captures, environment, signature):
-    """Map already staged host bindings to explicitly typed device members."""
-    from .program_emit_finite_kokkos import _tree, _path, _flat, _TYPES, _NS
+    """Map host bindings and device columns to explicitly typed device members."""
+    from .program_emit_finite_kokkos import _tree, _path, _flat, _TYPES, _NS, device_array
 
     def domain(value):
         return {key: kernel.capture("std::int64_t", token) for key, token in value.items()}
@@ -121,6 +121,8 @@ def device_environment(kernel, captures, environment, signature):
                 "offset": kernel.capture("std::int64_t", source["offset"]),
             }
         else:
+            # Published device Arrays are immutable: kernels read them through const views.
+            constant = "const " if device_array(sig) else ""
             result[value.id] = {
                 "domain": domain(source["domain"]),
                 "columns": _tree(
@@ -128,6 +130,7 @@ def device_environment(kernel, captures, environment, signature):
                     lambda leaf, path, source=source: kernel.capture(
                         _NS
                         + "View<"
+                        + constant
                         + ("unsigned char" if leaf["vtype"] == "bool" else _TYPES[leaf["vtype"]])
                         + ">",
                         _path(source["columns"], path),

@@ -4,6 +4,10 @@
 #include <pops/runtime/program/amr_finite_value_lifetime.hpp>
 #include <pops/runtime/program/finite_structural_storage.hpp>
 #include <pops/runtime/program/prepared_resource_cache.hpp>
+#include <pops/core/foundation/kokkos_env.hpp>
+
+#include <cmath>
+#include <limits>
 
 using namespace pops;
 using namespace pops::runtime::program;
@@ -1768,4 +1772,163 @@ TEST(ContinuationImage, LegacyDomainFreeRestartKeepsAbsentAllocatorAndExactNextI
     EXPECT_FALSE(store->domain_realm());
   }
   EXPECT_EQ(replay.checkpoint(none()), original.checkpoint(none()));
+}
+
+namespace {
+namespace fd = finite_device;
+
+template <class T>
+fd::HostView<T> host_column(const char* label, std::initializer_list<T> values) {
+  fd::HostView<T> column(std::string(label), values.size());
+  std::size_t i = 0;
+  for (const auto value : values)
+    column(i++) = value;
+  return column;
+}
+
+bool same(const fd::Fingerprint& a, const fd::Fingerprint& b) {
+  return a.real_first == b.real_first && a.real_second == b.real_second &&
+         a.integer_first == b.integer_first && a.integer_second == b.integer_second &&
+         a.nonfinite == b.nonfinite;
+}
+}  // namespace
+
+TEST(ContinuationImage, FlatElementArraysUnpackToCountedDeviceColumnsAndPackBack) {
+  namespace fs = finite_structural;
+  pops::detail::ensure_kokkos_initialized();
+  constexpr std::uint64_t capacity = 4096;
+  FiniteDomainRegistry domains;
+  const auto domain = domains.issue(3, 4, 937);
+  auto at = scalar(ContinuationKind::Array);
+  at.family = domain->family;
+  at.capacity = domain->capacity;
+  at.children = {product({"k", "x", "flag"},
+                         {scalar(ContinuationKind::Int64), scalar(ContinuationKind::Float64),
+                          scalar(ContinuationKind::Boolean)})};
+  const auto nan = std::bit_cast<double>(UINT64_C(0x7ff8000000000005));
+  const auto original = V::array(
+      domain, {V::product({V::integer(INT64_C(9007199254740997)), V::real(-0.0), V::boolean(true)}),
+               V::product({V::integer(-3), V::real(nan), V::boolean(false)}),
+               V::product({V::integer(0), V::real(0.25), V::boolean(true)})});
+  Codec codec(at, "test/device-columns", capacity, none());
+  const auto expected = codec.encode(original, 31);
+  fd::Residency residency;
+  const fs::Limits limits{capacity, capacity, capacity, &residency};
+  // A flat element is stored as one device column per leaf, in preorder (DM7).
+  const auto flat = fs::unpack<D>(at, original, limits);
+  const auto& device = std::any_cast<const fd::Array&>(flat);
+  ASSERT_EQ(device.columns->size(), 3u);
+  EXPECT_EQ(device.domain, domain);
+  EXPECT_EQ(residency.host_to_device_bytes.load(), 3u * (8 + 8 + 1));
+  EXPECT_EQ(residency.transfers.load(), 3u);
+  EXPECT_EQ(fd::read<std::int64_t>(device, 0, 0, nullptr), INT64_C(9007199254740997));
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(fd::read<Real>(device, 1, 0, nullptr)),
+            UINT64_C(0x8000000000000000));
+  EXPECT_EQ(std::bit_cast<std::uint64_t>(fd::read<Real>(device, 1, 1, nullptr)),
+            UINT64_C(0x7ff8000000000005));
+  EXPECT_EQ(fd::read<unsigned char>(device, 2, 1, nullptr), 0);
+  EXPECT_THROW(fd::column<Real>(device, 0), std::logic_error);
+  // The codec still boxes elements (G07): packing copies the columns to the host, counted.
+  const auto restored = fs::pack<D>(at, flat, limits);
+  EXPECT_EQ(codec.encode(restored, 31), expected);
+  EXPECT_EQ(residency.device_to_host_bytes.load(), 3u * (8 + 8 + 1));
+  EXPECT_EQ(residency.transfers.load(), 6u);
+  // An Array whose element is not flat keeps its structural cells.
+  auto nested = at;
+  nested.children = {at};
+  nested.children[0].children = {scalar(ContinuationKind::Int64)};
+  const auto outer = V::array(domain, {V::array(domain, {V::integer(1), V::integer(2), V::integer(3)}),
+                                       V::array(domain, {V::integer(4), V::integer(5), V::integer(6)}),
+                                       V::array(domain, {V::integer(7), V::integer(8), V::integer(9)})});
+  const auto cells = fs::unpack<D>(nested, outer, limits);
+  const auto& array = std::any_cast<const fs::Array&>(cells);
+  EXPECT_EQ(fd::read<std::int64_t>(std::any_cast<const fd::Array&>((*array.values)[2]), 0, 1,
+                                   nullptr),
+            8);
+  EXPECT_EQ(Codec(nested, "test/nested-device", capacity, none())
+                .encode(fs::pack<D>(nested, cells, limits), 5),
+            Codec(nested, "test/nested-device", capacity, none()).encode(outer, 5));
+}
+
+TEST(ContinuationImage, DeviceArrayFingerprintSeesEverySingleElementChange) {
+  pops::detail::ensure_kokkos_initialized();
+  FiniteDomainRegistry domains;
+  const auto domain = domains.issue(4, 4, 938);
+  const auto build = [&](int column, std::size_t row) {
+    auto k = host_column<std::int64_t>("k", {1, 2, 3, INT64_C(-9007199254740997)});
+    auto x = host_column<Real>("x", {0.0, 0.5, -1.0, 3.25});
+    auto flag = host_column<unsigned char>("flag", {1, 0, 1, 0});
+    if (column == 0)
+      k(row) ^= INT64_C(1) << 40;
+    else if (column == 1)
+      x(row) = std::bit_cast<Real>(std::bit_cast<std::uint64_t>(x(row)) ^ UINT64_C(1));
+    else if (column == 2)
+      flag(row) = static_cast<unsigned char>(1 - flag(row));
+    return fd::from_host(domain, {k, x, flag}, nullptr);
+  };
+  const auto base = fd::fingerprint(build(-1, 0));
+  EXPECT_TRUE(same(base, fd::fingerprint(build(-1, 0))));
+  EXPECT_EQ(base.nonfinite, 0);
+  for (int column = 0; column < 3; ++column)
+    for (std::size_t row = 0; row < 4; ++row) {
+      const auto changed = fd::fingerprint(build(column, row));
+      if (column == 1) {
+        EXPECT_NE(changed.real_first, base.real_first) << row;
+        EXPECT_NE(changed.real_second, base.real_second) << row;
+        EXPECT_EQ(changed.integer_first, base.integer_first) << row;
+      } else {
+        EXPECT_NE(changed.integer_first, base.integer_first) << column << " " << row;
+        EXPECT_NE(changed.integer_second, base.integer_second) << column << " " << row;
+        EXPECT_EQ(changed.real_first, base.real_first) << column << " " << row;
+      }
+    }
+  // The sums are keyed by position and by column: permutations are seen too.
+  const auto pair = [&](std::initializer_list<std::int64_t> a,
+                        std::initializer_list<std::int64_t> b) {
+    return fd::fingerprint(
+        fd::from_host(domain, {host_column<std::int64_t>("a", a), host_column<std::int64_t>("b", b)},
+                      nullptr));
+  };
+  EXPECT_FALSE(same(pair({1, 2, 3, 4}, {5, 6, 7, 8}), pair({2, 1, 3, 4}, {5, 6, 7, 8})));
+  EXPECT_FALSE(same(pair({1, 2, 3, 4}, {5, 6, 7, 8}), pair({5, 6, 7, 8}, {1, 2, 3, 4})));
+  const auto zero = fd::fingerprint(
+      fd::from_host(domain, {host_column<Real>("z", {0.0, 1.0, 2.0, 3.0})}, nullptr));
+  const auto negative = fd::fingerprint(
+      fd::from_host(domain, {host_column<Real>("z", {-0.0, 1.0, 2.0, 3.0})}, nullptr));
+  EXPECT_FALSE(same(zero, negative));
+  const auto infinite = std::numeric_limits<Real>::infinity();
+  EXPECT_EQ(fd::fingerprint(fd::from_host(
+                                domain, {host_column<Real>("w", {std::nan(""), infinite, 1.0, -infinite})},
+                                nullptr))
+                .nonfinite,
+            3);
+}
+
+TEST(ContinuationImage, DeviceArrayHostCopiesAreExplicitAndCounted) {
+  pops::detail::ensure_kokkos_initialized();
+  FiniteDomainRegistry domains;
+  const auto domain = domains.issue(3, 3, 939);
+  fd::Residency residency;
+  const auto array =
+      fd::from_host(domain, {host_column<std::int64_t>("pops_finite_host:k", {4, 5, 6})}, &residency);
+  EXPECT_EQ(residency.host_to_device_bytes.load(), 24u);
+  EXPECT_EQ(fd::column<std::int64_t>(array, 0).label(), "pops_finite_array:k");
+  EXPECT_EQ(fd::read<std::int64_t>(array, 0, 2, &residency), 6);
+  EXPECT_EQ(residency.device_to_host_bytes.load(), 8u);
+  EXPECT_THROW(fd::read<std::int64_t>(array, 0, 3, &residency), std::out_of_range);
+  EXPECT_THROW(fd::column<std::int64_t>(array, 1), std::logic_error);
+  const auto host = fd::to_host(array, &residency);
+  const auto& copy = std::get<fd::HostView<std::int64_t>>(host.at(0));
+  EXPECT_EQ(copy.label(), "pops_finite_host:k");
+  EXPECT_EQ(copy(1), 5);
+  EXPECT_EQ(residency.device_to_host_bytes.load(), 32u);
+  EXPECT_EQ(residency.transfers.load(), 3u);
+  // The first failing lane is one control scalar reduced on the device.
+  finite_kokkos::View<unsigned char> flags("pops_finite_control:flags", 5);
+  Kokkos::deep_copy(flags, static_cast<unsigned char>(0));
+  EXPECT_EQ(fd::first_failure(flags, 5), 5);
+  Kokkos::deep_copy(Kokkos::subview(flags, 3), static_cast<unsigned char>(1));
+  Kokkos::deep_copy(Kokkos::subview(flags, 1), static_cast<unsigned char>(1));
+  EXPECT_EQ(fd::first_failure(flags, 5), 1);
+  EXPECT_EQ(fd::first_failure(flags, 0), 0);
 }

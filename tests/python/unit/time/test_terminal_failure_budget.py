@@ -38,7 +38,8 @@ def test_terminal_codegen_uses_the_same_explicit_capacity_for_pack_and_transport
     lines = []
     emit_terminal_failure(p, {"vtype": "int64"}, "INT64_C(42)", lines, {}, "system")
     source = "\n".join(lines)
-    assert "Limits{" + ",".join(["UINT64_C(104857600)"] * 3) + "}" in source
+    assert ("Limits{" + ",".join(["UINT64_C(104857600)"] * 3) + ",&pops_finite_residency}"
+            in source)
     assert "TypedFailureCapacity{UINT64_C(104857600),UINT64_C(536870912)}" in source
     assert "67108864" not in source and "268435456" not in source
 

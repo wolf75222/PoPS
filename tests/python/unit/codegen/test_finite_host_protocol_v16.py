@@ -1,4 +1,6 @@
 """Source-level structural contracts; execution is received separately in real PoPS."""
+import re
+
 from pops.codegen.program_emit_finite_arrays import _check_domain, _store_cell
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.time import Program
@@ -31,12 +33,19 @@ def test_closed_host_map_boundary_preserves_device_kernel_and_detachment():
     assert p.validate()
     source = emit_cpp_program(p)
     assert source == emit_cpp_program(detach_compiled_program(p))
-    assert "[&]() POPS_FINITE_HOST_NOINLINE -> pops_algebra_finite::Array" in source
+    assert "[&]() POPS_FINITE_HOST_NOINLINE -> pops_algebra_finite::DeviceArray" in source
     assert "KOKKOS_FUNCTION void operator()(const std::int64_t index) const" in source
     kernel = source.split("KOKKOS_FUNCTION void operator()(", 1)[1].split("\n};", 1)[0]
     assert "NOINLINE" not in kernel and "finite_collective" not in kernel
+    # The host boundary allocates the device columns, reduces the failure lane
+    # and publishes the columns through the collective helpers; the values
+    # never cross to the host, so only O(1) control views are mirrored and no
+    # element is boxed (DM7, DM8).
     assert "finite_collective::allocate_view(" in source
-    assert "finite_collective::mirror_copy(" in source
-    assert "finite_collective::assign_any(" in source
-    assert "finite_collective::allocate_values(" in source
+    assert "finite_collective::first_failure(" in source
+    assert "finite_collective::publish(" in source
+    copies = re.findall(r"finite_collective::mirror_copy\((\w+), (\w+),", source)
+    assert copies and all(device.endswith("_control") for _, device in copies)
+    assert "finite_collective::assign_any(" not in source
+    assert "finite_collective::allocate_values(" not in source
     assert "_output_0_exhausted" not in source

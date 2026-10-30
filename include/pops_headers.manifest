@@ -440,6 +440,7 @@ sdk-support pops/runtime/program/prepared_amr_spatial_residual.hpp
 sdk-support pops/runtime/program/amr_program_context_spatial_implicit.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_imex.inc
 sdk-root pops/runtime/program/finite_kokkos.hpp
+sdk-support pops/runtime/program/finite_device_array.hpp
 sdk-support pops/runtime/program/finite_structural_storage.hpp
 sdk-root pops/runtime/program/host_face_publication.hpp
 sdk-support pops/runtime/program/amr_program_context_stencil_flux.inc
