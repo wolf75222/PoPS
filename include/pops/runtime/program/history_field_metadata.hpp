@@ -79,7 +79,7 @@ namespace history_field_detail {
 inline void charge(std::uint64_t& used, std::uint64_t count, std::uint64_t width,
                    std::uint64_t capacity) {
   if (used > capacity || (width && count > (capacity - used) / width))
-    throw std::length_error("history Field metadata exceeds its explicit byte capacity");
+    throw std::length_error("history Field metadata exceeds its installed byte capacity");
   used += count * width;
 }
 
