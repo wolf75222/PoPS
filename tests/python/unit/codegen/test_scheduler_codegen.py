@@ -56,6 +56,46 @@ def _every(clock, n, off=None):
     return adctime.Schedule(adctime.Every(adctime.AcceptedStep(clock), n), off=off)
 
 
+def _block_end(cpp, opening):
+    """Index of the brace closing ``cpp[opening]``, skipping literals and comments."""
+    depth, index, quote = 0, opening, None
+    while True:
+        char = cpp[index]
+        if quote:
+            if char == "\\":
+                index += 1
+            elif char == quote:
+                quote = None
+        elif cpp.startswith("//", index):
+            index = cpp.index("\n", index)
+        elif cpp.startswith("/*", index):
+            index = cpp.index("*/", index) + 1
+        elif char in "\"'":
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+
+
+def _cadence_branches(cpp, guard):
+    """The due and off-cadence blocks of one cadence guard, matched by brace nesting.
+
+    A due body may hold its own if/else, so the first ``} else {`` after the guard is not
+    necessarily the cadence branch.
+    """
+    start = cpp.index(guard)
+    opening = cpp.rindex("{", start, cpp.index("\n", start))
+    closing = _block_end(cpp, opening)
+    rest = cpp[closing + 1:]
+    assert rest.lstrip().startswith("else {")
+    off_opening = closing + 1 + rest.index("{")
+    return cpp[opening + 1:closing], cpp[off_opening + 1:_block_end(cpp, off_opening)]
+
+
 def _at_start(clock, off=None):
     return adctime.Schedule(adctime.AtStart(adctime.AcceptedStep(clock)), off=off)
 
@@ -630,7 +670,7 @@ def test_scheduled_transform_storage_precedes_guard_and_stage_time_stays_due(tar
     guard = "if (ctx.schedule_decision(%d," % held.id
     stage_time = "ctx.set_stage_time(1, 2);"
     assert cpp.index(declaration) < cpp.index(guard) < cpp.index(stage_time)
-    due_body, off_body = cpp[cpp.index(guard):].split("} else {", 1)
+    due_body, off_body = _cadence_branches(cpp, guard)
     assert stage_time in due_body
     assert stage_time not in off_body
     assert "transform_failed_%d" % held.id in due_body
