@@ -959,7 +959,7 @@ def _shared_interface_amr_authoring(
     from pops.boundary import TransportBoundarySet
     from pops.boundary.transport import Inflow, Outflow
     from pops.initial import InitialCondition
-    from pops.lib.amr import StateTransfer
+    from pops.lib.amr import ConservativeLinear, StateTransfer
     from pops.lib.initial import BindArray
     from pops.math import ValueExpr, ddt, div
     from pops.projection import ConservativeCellAverage
@@ -1091,15 +1091,15 @@ def _shared_interface_amr_authoring(
         )
 
     transfer = AMRTransfer()
-    transfer.state(core.tracer_state, StateTransfer())
-    transfer.state(right_state, StateTransfer())
+    transfer.state(core.tracer_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
+    transfer.state(right_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     if packed_state is not None:
-        transfer.state(packed_state, StateTransfer())
+        transfer.state(packed_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     tagging = AMRTagging(
         rules=(
             Tag(ValueExpr(core.tracer_state) > core.case.value(core.refine_threshold)),
             Tag(ValueExpr(right_state) > core.case.value(core.refine_threshold)),
-            Buffer(cells=1),
+            Buffer(cells=1, selection="refine-requests"),
         ),
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
         conflict_policy=ConflictPolicy.REFINE_WINS,

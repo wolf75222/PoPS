@@ -162,7 +162,7 @@ def build_continuation_capture_amr(*, cells=(16, 8), dt=.002, steps=2, recover=F
     threshold = case.param(RuntimeParam("capture_refinement_threshold", default=1.5))
     layout = AMR(grid=CartesianGrid(frame=frame, cells=cells, periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(pm.ValueExpr(block[state]) > case.value(threshold)), Buffer(cells=1)),
+        tagging=AMRTagging(rules=(Tag(pm.ValueExpr(block[state]) > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid.frozen(), transfer=transfer, execution=AMRExecution.synchronous())
     data = np.ones((1, cells[1], cells[0]))

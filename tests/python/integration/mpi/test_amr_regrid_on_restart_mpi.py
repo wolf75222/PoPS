@@ -352,7 +352,7 @@ def _shared_interface_resolved(component):
     from pops.boundary.transport import Inflow, Outflow
     from pops.initial import InitialCondition
     from pops.layouts import AMR
-    from pops.lib.amr import BergerRigoutsos, StateTransfer
+    from pops.lib.amr import BergerRigoutsos, ConservativeLinear, StateTransfer
     from pops.lib.initial import BindArray
     from pops.math import ValueExpr
     from pops.mesh import CartesianGrid
@@ -431,13 +431,13 @@ def _shared_interface_resolved(component):
     )
 
     transfer = AMRTransfer()
-    transfer.state(core.tracer_state, StateTransfer())
-    transfer.state(right_state, StateTransfer())
+    transfer.state(core.tracer_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
+    transfer.state(right_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     tagging = AMRTagging(
         rules=(
             Tag(ValueExpr(core.tracer_state) > core.case.value(core.refine_threshold)),
             Tag(ValueExpr(right_state) > core.case.value(core.refine_threshold)),
-            Buffer(cells=1),
+            Buffer(cells=1, selection="refine-requests"),
         ),
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
         conflict_policy=ConflictPolicy.REFINE_WINS,

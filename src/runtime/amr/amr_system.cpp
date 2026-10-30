@@ -276,8 +276,9 @@ void validate_amr_config(const AmrSystemConfig<Dim>& config) {
   if (config.regrid_every < 0)
     throw std::invalid_argument("AmrSystem regrid_every must be non-negative");
 
-  if (config.tag_selection_contract_version != 1)
-    throw std::invalid_argument("AmrSystem requires pops.amr.tag-selection@1");
+  if (config.tag_selection_contract_version != 1 && config.tag_selection_contract_version != 2)
+    throw std::invalid_argument(
+        "AmrSystem requires tag selection 1 (pops.amr.tag-selection@1) or 2 (transition reach)");
   if (config.accepted_halo_contract_version != 0 && !config.explicit_bootstrap)
     throw std::invalid_argument(
         "accepted halo preparation requires authenticated explicit bootstrap");
@@ -295,6 +296,9 @@ void validate_amr_config(const AmrSystemConfig<Dim>& config) {
     const auto buffer = config.tag_selection_buffer[axis];
     if (buffer < 0 || buffer > std::numeric_limits<int>::max())
       throw std::overflow_error("AmrSystem tag selection buffer exceeds signed coordinates");
+    if (config.tag_selection_contract_version == 2 && buffer != 0)
+      throw std::invalid_argument(
+          "AmrSystem transition reach dilates by the transition tables, not a tag buffer");
     const auto width = std::uint64_t{2} * static_cast<std::uint64_t>(buffer) + 1;
     if (width > std::numeric_limits<std::size_t>::max() ||
         tag_neighborhood > std::numeric_limits<std::size_t>::max() / width)
@@ -952,12 +956,25 @@ struct PreparedRegriddedStateTransfer {
   }
 };
 
+// Master's linear prolongation (spec 0.3, section 2.6.9) takes the monotonized-central slope over
+// both parent neighbours, the boundary ghost included. A route registered with one-sided axes takes
+// the one-sided interior slope at the physical faces of those axes instead, the prolongation of
+// API 0.2 that the library chooses by name (MG8, ROM-104); a periodic axis has no physical face.
+template <std::size_t Axes>
+std::array<bool, Axes> physical_one_sided_axes(const std::array<bool, Axes>& route_axes,
+                                               const std::array<bool, Axes>& periodicity) {
+  std::array<bool, Axes> axes{};
+  for (std::size_t axis = 0; axis < Axes; ++axis)
+    axes[axis] = route_axes[axis] && !periodicity[axis];
+  return axes;
+}
+
 template <int Dim>
 std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepare_regridded_state_transfer(
     const MultiFab<Dim>& field, const amr::hierarchy::LevelLayout<Dim>& parent_layout,
     const amr::hierarchy::LevelLayout<Dim>& child_layout,
     const SparseFieldImage<Dim>* previous_child, amr::transfer::TransferKind transfer_kind,
-    int collective_rank, const std::type_identity_t<std::array<bool, Dim>>& periodic_axes) {
+    int collective_rank, const std::type_identity_t<std::array<bool, Dim>>& one_sided_axes) {
   const int source_radius = transfer_kind == amr::transfer::TransferKind::ConstantInjection ? 0 : 1;
   if (source_radius < 0 || source_radius > 1)
     throw std::invalid_argument("AMR prepared transfer requested an unsupported source radius");
@@ -1017,10 +1034,13 @@ std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepare_regridded_state_tra
   const amr::transfer::TransferProvider<Dim, amr::transfer::Centering::Cell> provider(
       transfer_kind);
   amr::transfer::PhysicalParentBoundary<Dim> physical_boundary;
-  if (transfer_kind == amr::transfer::TransferKind::LinearProlongation) {
+  bool one_sided = false;
+  for (int axis = 0; axis < Dim; ++axis)
+    one_sided = one_sided || one_sided_axes[axis];
+  if (transfer_kind == amr::transfer::TransferKind::LinearProlongation && one_sided) {
     physical_boundary.domain = parent_layout.domain();
     for (int axis = 0; axis < Dim; ++axis)
-      physical_boundary.lower[axis] = physical_boundary.upper[axis] = !periodic_axes[axis];
+      physical_boundary.lower[axis] = physical_boundary.upper[axis] = one_sided_axes[axis];
   }
   // A deeper parent may cover only part of its domain. Authenticate the source stencil of
   // every global child patch, not unused cells in the dense communication carrier. Include
@@ -1041,7 +1061,7 @@ std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepare_regridded_state_tra
     Fab<Dim>& fab = prepared->child.fab(local);
     const auto source = std::as_const(prepared->dense_parent).view();
     prepared->kernels.push_back(
-        transfer_kind == amr::transfer::TransferKind::LinearProlongation
+        transfer_kind == amr::transfer::TransferKind::LinearProlongation && one_sided
             ? provider.prepare_physical_boundary_prolongation(
                   source, fab.view(), fab.box(), ratio, mapping, components, physical_boundary)
             : provider.prepare(source, fab.view(), fab.box(), ratio, mapping, components));
@@ -1104,12 +1124,12 @@ MultiFab<Dim> transfer_regridded_state(
     const amr::hierarchy::LevelLayout<Dim>& child_layout,
     const SparseFieldImage<Dim>* previous_child, const CommunicatorView& communicator,
     amr::transfer::TransferKind transfer_kind,
-    const std::type_identity_t<std::array<bool, Dim>>& periodic_axes) {
+    const std::type_identity_t<std::array<bool, Dim>>& one_sided_axes) {
   std::unique_ptr<PreparedRegriddedStateTransfer<Dim>> prepared;
   std::exception_ptr local_error;
   try {
     prepared = prepare_regridded_state_transfer(parent, parent_layout, child_layout, previous_child,
-                                                transfer_kind, communicator.rank(), periodic_axes);
+                                                transfer_kind, communicator.rank(), one_sided_axes);
   } catch (...) {
     local_error = std::current_exception();
   }
@@ -2716,6 +2736,7 @@ struct AmrSystem<Dim>::Impl {
     int order = 0;
     Extent<Dim> ghost_depth{};
     Extent<Dim> refinement_ratio{};
+    std::array<bool, Dim> one_sided_axes{};
   };
 
   struct FieldProviderBinding {
@@ -9504,15 +9525,15 @@ struct AmrSystem<Dim>::Impl {
     program_accepted_bytes_runtime_owned = candidate_runtime_owned;
   }
 
-  amr::transfer::TransferKind regrid_transfer_kind(int parent_level,
-                                                   std::size_t runtime_block) const {
+  const BootstrapTransferRoute* regrid_prolongation_route(int parent_level,
+                                                          std::size_t runtime_block) const {
     if (runtime_block >= blocks.size())
       throw std::out_of_range("AMR regrid transfer block is outside its prepared package");
     const std::string& subject = boundary_registry.state_route(blocks[runtime_block].name);
     const auto subject_route =
         bootstrap_subject_routes.find(std::make_pair(subject, std::string("prolongation")));
     if (subject_route == bootstrap_subject_routes.end())
-      return amr::transfer::TransferKind::LinearProlongation;
+      return nullptr;
     const auto route = bootstrap_transfer_routes.find(subject_route->second);
     if (route == bootstrap_transfer_routes.end())
       throw std::logic_error("AMR regrid transfer route lost its exact provider authority");
@@ -9521,11 +9542,27 @@ struct AmrSystem<Dim>::Impl {
         route->second.refinement_ratio != cfg.transition_ratios[transition])
       throw std::invalid_argument(
           "AMR regrid transfer route does not authenticate this ranked refinement ratio");
-    if (route->second.kernel == "conservative_linear")
+    return &route->second;
+  }
+
+  amr::transfer::TransferKind regrid_transfer_kind(int parent_level,
+                                                   std::size_t runtime_block) const {
+    const BootstrapTransferRoute* route = regrid_prolongation_route(parent_level, runtime_block);
+    if (route == nullptr)
       return amr::transfer::TransferKind::LinearProlongation;
-    if (route->second.kernel == "conservative_injection")
+    if (route->kernel == "conservative_linear")
+      return amr::transfer::TransferKind::LinearProlongation;
+    if (route->kernel == "conservative_injection")
       return amr::transfer::TransferKind::ConstantInjection;
     throw std::invalid_argument("AMR regrid selected an unsupported prolongation kernel");
+  }
+
+  /// Axes whose physical faces take the one-sided interior slope at a regrid: the non-periodic
+  /// axes of the route's mask, none without a route.
+  std::array<bool, Dim> regrid_one_sided_axes(int parent_level, std::size_t runtime_block) const {
+    const BootstrapTransferRoute* route = regrid_prolongation_route(parent_level, runtime_block);
+    return route == nullptr ? std::array<bool, Dim>{}
+                            : physical_one_sided_axes(route->one_sided_axes, cfg.periodicity);
   }
 
   std::shared_ptr<const PreparedRegridStateImages<Dim>> prepare_regrid_state_images() const {
@@ -9714,6 +9751,7 @@ struct AmrSystem<Dim>::Impl {
       std::vector<field_type>* remapped = nullptr;
       amr::transfer::TransferKind transfer_kind = amr::transfer::TransferKind::LinearProlongation;
       std::optional<runtime::program::HistoryTransferResult> temporal;
+      std::array<bool, Dim> one_sided_axes{};
     };
     std::vector<HistoryTransferPlan> transfers;
     std::optional<history_manager_type> candidate;
@@ -10146,7 +10184,8 @@ struct AmrSystem<Dim>::Impl {
                source != runtime::program::AmrProgramHistoryRemapSource::ParentDeferred && !temporal
                    ? previous
                    : nullptr,
-               &ring->second, transfer_kind, temporal});
+               &ring->second, transfer_kind, temporal,
+               regrid_one_sided_axes(parent_level, static_cast<std::size_t>(runtime_owner))});
         }
       }
       std::sort(remap_plan.begin(), remap_plan.end(),
@@ -10224,7 +10263,7 @@ struct AmrSystem<Dim>::Impl {
               transfer.previous != nullptr ? &transfer.previous->slots[slot].image : nullptr;
           transfer.remapped->push_back(
               transfer_regridded_state(*source, parent_layout, *fine_layout, retained, communicator,
-                                       transfer.transfer_kind, cfg.periodicity));
+                                       transfer.transfer_kind, transfer.one_sided_axes));
         } catch (...) {
           transfer_error = std::current_exception();
         }
@@ -10569,9 +10608,13 @@ struct AmrSystem<Dim>::Impl {
     const auto& parent = engine->hierarchy().layout(level);
     auto options = exact_cluster_options(cfg, parent);
     for (int axis = 0; axis < Dim; ++axis) {
-      // Both derived minima constrain coverage. Neither expands predicate tags.
-      const auto coverage = static_cast<std::uint64_t>(cfg.transition_buffers[level][axis]) +
-                            static_cast<std::uint64_t>(cfg.transition_lookaheads[level][axis]);
+      // pops.amr.tag-selection@1: both derived minima constrain coverage, and neither expands
+      // predicate tags. Master's transition reach nests by the transition buffer alone.
+      const auto coverage =
+          static_cast<std::uint64_t>(cfg.transition_buffers[level][axis]) +
+          (cfg.tag_selection_contract_version == 2
+               ? std::uint64_t{0}
+               : static_cast<std::uint64_t>(cfg.transition_lookaheads[level][axis]));
       if (coverage > std::numeric_limits<int>::max())
         throw std::overflow_error("AMR parent nesting coverage exceeds native coordinates");
       options.nesting_buffer[axis] = static_cast<int>(coverage);
@@ -10634,6 +10677,7 @@ struct AmrSystem<Dim>::Impl {
     const std::vector<char> current = child_coverage_on_parent(layout, child);
     std::vector<char> target = current;
     std::vector<char> buffer_seeds(target.size(), char{0});
+    const bool transition_reach = cfg.tag_selection_contract_version == 2;
     for (std::size_t ordinal = 0; ordinal < target.size(); ++ordinal) {
       bool requests_refine = refine[ordinal] != 0;
       bool requests_coarsen = coarsen[ordinal] != 0;
@@ -10662,17 +10706,25 @@ struct AmrSystem<Dim>::Impl {
                               tagging_spec->min_cycles);
         }
       }
-      // Retained coverage already includes previous buffers and clustering extras. Preserve that
-      // coverage for Keep/hysteresis without making it a new source of buffer dilation. Only an
-      // effective, accepted Refine request seeds the authored reach in this tagging cycle.
-      buffer_seeds[ordinal] = requests_refine && target[ordinal] != 0 ? char{1} : char{0};
+      // pops.amr.tag-selection@1: retained coverage already includes previous buffers and
+      // clustering extras. Preserve that coverage for Keep/hysteresis without making it a new
+      // source of buffer dilation. Only an effective, accepted Refine request seeds the authored
+      // reach in this tagging cycle. Master's transition reach seeds the whole target coverage.
+      buffer_seeds[ordinal] =
+          (requests_refine || transition_reach) && target[ordinal] != 0 ? char{1} : char{0};
     }
 
     std::array<std::size_t, Dim> reach{};
     std::array<std::size_t, Dim> width{};
     std::size_t neighborhood = 1;
+    const std::size_t transition = static_cast<std::size_t>(parent_level);
     for (int axis = 0; axis < Dim; ++axis) {
-      reach[axis] = static_cast<std::size_t>(cfg.tag_selection_buffer[axis]);
+      reach[axis] = transition_reach
+                        ? checked_size_sum(
+                              static_cast<std::size_t>(cfg.transition_buffers[transition][axis]),
+                              static_cast<std::size_t>(cfg.transition_lookaheads[transition][axis]),
+                              "AMR tagging transition reach exceeds size_t")
+                        : static_cast<std::size_t>(cfg.tag_selection_buffer[axis]);
       width[axis] =
           checked_size_sum(checked_size_product(std::size_t{2}, reach[axis],
                                                 "AMR tagging transition width exceeds size_t"),
@@ -11478,6 +11530,7 @@ struct AmrSystem<Dim>::Impl {
         std::optional<SparseFieldImage<Dim>> gathered_child;
         const SparseFieldImage<Dim>* retained = nullptr;
         std::optional<amr::transfer::TransferKind> transfer_kind;
+        std::array<bool, Dim> one_sided_axes{};
         std::exception_ptr transfer_preflight_error;
         try {
           if (regrid_sequence_state_sources) {
@@ -11488,6 +11541,7 @@ struct AmrSystem<Dim>::Impl {
             retained = &*previous_child;
           }
           transfer_kind.emplace(regrid_transfer_kind(parent_level, block));
+          one_sided_axes = regrid_one_sided_axes(parent_level, block);
         } catch (...) {
           transfer_preflight_error = std::current_exception();
         }
@@ -11504,7 +11558,7 @@ struct AmrSystem<Dim>::Impl {
         try {
           child_states[block].emplace(transfer_regridded_state(
               parent_state, parent_layout, *prepared->fine_layout(), retained, graph_communicator,
-              *transfer_kind, cfg.periodicity));
+              *transfer_kind, one_sided_axes));
         } catch (...) {
           transfer_error = std::current_exception();
         }
@@ -13915,7 +13969,7 @@ void AmrSystem<Dim>::refresh_auxiliary_on_prepared_lane(
                   *parent, p_->engine->hierarchy().layout(level - 1),
                   p_->engine->hierarchy().layout(level),
                   static_cast<const SparseFieldImage<Dim>*>(nullptr), lane.communicator(),
-                  amr::transfer::TransferKind::ConstantInjection, p_->cfg.periodicity);
+                  amr::transfer::TransferKind::ConstantInjection, std::array<bool, Dim>{});
               copy_full_field_in_place(transferred, *group);
             }
           }
@@ -20573,7 +20627,7 @@ std::size_t AmrSystem<Dim>::materialize_bootstrap_action(const std::string& subj
           p_->engine->hierarchy().layout(parent_level),
           p_->engine->hierarchy().layout(static_cast<std::size_t>(level)),
           static_cast<const SparseFieldImage<Dim>*>(nullptr), kind, communicator.rank(),
-          p_->cfg.periodicity);
+          physical_one_sided_axes(route->second.one_sided_axes, p_->cfg.periodicity));
       candidate = &transfer_materialization->child;
       materialized =
           checked_size_product(static_cast<std::size_t>(block->ncomp),
@@ -21136,7 +21190,7 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
     const std::string& provider_identity, const std::string& space, const std::string& centering,
     const std::string& representation, const std::string& storage, const std::string& operation,
     const std::string& kernel, int order, const Extent<Dim>& ghost_depth,
-    const Extent<Dim>& refinement_ratio) {
+    const Extent<Dim>& refinement_ratio, const std::array<bool, Dim>& one_sided_axes) {
   p_->require_no_native_package_callback("register_bootstrap_transfer_route");
   const ExecutionLane& lane = p_->require_package_assembly_lane();
   std::map<std::string, typename Impl::BootstrapTransferRoute> staged_routes;
@@ -21260,11 +21314,18 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
     if (operation != "prolongation" && operation != "restriction" &&
         operation != "coarse_fine_fill" && operation != "temporal_interpolation")
       throw std::invalid_argument("AMR bootstrap transfer operation has no exact native provider");
+    bool one_sided = false;
+    for (int axis = 0; axis < Dim; ++axis)
+      one_sided = one_sided || one_sided_axes[axis];
+    if (one_sided && (operation != "prolongation" || space != "cell" || order != 2))
+      throw std::invalid_argument(
+          "AMR one-sided slopes at physical faces require the order-two cell prolongation");
 
     typename Impl::BootstrapTransferRoute candidate{identity, subjects,    provider_identity,
                                                     space,    centering,   representation,
                                                     storage,  operation,   kernel,
                                                     order,    ghost_depth, refinement_ratio};
+    candidate.one_sided_axes = one_sided_axes;
     ExactContractBuilder contract;
     contract.text("pops.amr-system.bootstrap-transfer-route")
         .scalar(std::uint32_t{1})
@@ -21282,7 +21343,9 @@ void AmrSystem<Dim>::register_bootstrap_transfer_route(
           item.text(subject);
         });
     for (int axis = 0; axis < Dim; ++axis)
-      contract.scalar(ghost_depth[axis]).scalar(refinement_ratio[axis]);
+      contract.scalar(ghost_depth[axis])
+          .scalar(refinement_ratio[axis])
+          .scalar(std::int32_t{one_sided_axes[axis] ? 1 : 0});
     exact = std::move(contract).release();
 
     staged_routes = p_->bootstrap_transfer_routes;
@@ -26471,7 +26534,9 @@ AmrSystem<Dim>::prepared_program_temporal_relations() const {
 template <int Dim>
 std::vector<std::vector<std::string>> AmrSystem<Dim>::checkpoint_tag_selection_contract() const {
   std::vector<std::vector<std::string>> rows{
-      {"pops.amr.tag-selection@1", std::to_string(p_->cfg.tag_selection_contract_version)}};
+      {p_->cfg.tag_selection_contract_version == 2 ? "pops.amr.tag-selection.transition-reach"
+                                                   : "pops.amr.tag-selection@1",
+       std::to_string(p_->cfg.tag_selection_contract_version)}};
   // Read the retained immutable config, not a reconstructed tag mask.
   std::vector<std::string> selection{"tag-buffer"};
   for (int axis = 0; axis < Dim; ++axis)
@@ -26652,7 +26717,8 @@ template void AmrSystem<kNativeDimension>::rollback_bootstrap_level();
 template void AmrSystem<kNativeDimension>::register_bootstrap_transfer_route(
     const std::string&, const std::vector<std::string>&, const std::string&, const std::string&,
     const std::string&, const std::string&, const std::string&, const std::string&,
-    const std::string&, int, const Extent<kNativeDimension>&, const Extent<kNativeDimension>&);
+    const std::string&, int, const Extent<kNativeDimension>&, const Extent<kNativeDimension>&,
+    const std::array<bool, kNativeDimension>&);
 template void AmrSystem<kNativeDimension>::register_bootstrap_oriented_face_subjects(
     const std::vector<std::string>&);
 template void AmrSystem<kNativeDimension>::set_analytic_level_set(const std::vector<std::string>&,

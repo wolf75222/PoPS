@@ -106,7 +106,7 @@ def test_public_source_admission_preserves_original_equation_and_emits_uint64(wi
             tagging=AMRTagging(
                 rules=(
                     Tag(ValueExpr(block[forcing])["f0"] > case.value(threshold)),
-                    Buffer(cells=1),
+                    Buffer(cells=1, selection="refine-requests"),
                 ),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS,

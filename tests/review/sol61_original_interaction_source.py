@@ -74,7 +74,7 @@ def emit(args, *, amr=False):
         transfer.state(block[load], StateTransfer())
         threshold = case.param(RuntimeParam("refinement threshold", default=.5))
         layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-            tagging=AMRTagging(rules=(Tag(ValueExpr(block[load])["f"] > case.value(threshold)), Buffer(cells=1)),
+            tagging=AMRTagging(rules=(Tag(ValueExpr(block[load])["f"] > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,
             execution=AMRExecution.synchronous())

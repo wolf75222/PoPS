@@ -103,7 +103,7 @@ def principal_amr_case(widths=(1, 1), *, levels=2, reverse=False, singular=False
     threshold = case.param(RuntimeParam("refine_threshold",default=2.+order[0]+.09))
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(CELLS,CELLS), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,)*(levels-1)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[0][states[0]])[states[0].components[0]] > case.value(threshold)), Buffer(cells=0)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[0][states[0]])[states[0].components[0]] > case.value(threshold)), Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid.frozen(), transfer=transfer, execution=AMRExecution.synchronous())
     handles = tuple(tuple(tuple(blocks[i][p] for p in pair) for pair in parameters)

@@ -204,7 +204,7 @@ def authored(width=3, order=None, *, seed=True, boundary="periodic", uniform=Fal
             tagging=AMRTagging(
                 rules=(
                     Tag(ValueExpr(blocks[2][coefficient]) > case.value(threshold)),
-                    Buffer(cells=1),
+                    Buffer(cells=1, selection="refine-requests"),
                 ),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS,

@@ -111,7 +111,7 @@ def test_complete_original_amr_route(tol):
     threshold = case.param(RuntimeParam("refinement threshold", default=.5))
     layout = AMR(grid=CartesianGrid(frame=frame,cells=(16,12),periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2,ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[forcing])["f0"] > case.value(threshold)),Buffer(cells=1)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(block[forcing])["f0"] > case.value(threshold)),Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(1000,clock=program.clock)),transfer=transfer,execution=AMRExecution.synchronous())
     code = finish(*args,layout=layout,target="amr_system")

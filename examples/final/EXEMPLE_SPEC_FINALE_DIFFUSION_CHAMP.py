@@ -107,7 +107,7 @@ transfer=AMRTransfer()
 transfer.state(block[U],StateTransfer())
 threshold=case.param(RuntimeParam('refine_threshold',default=3.))
 layout=AMR(grid=grid,hierarchy=AMRHierarchy(max_levels=1,ratios=()),
-    tagging=AMRTagging(rules=(Tag(ValueExpr(block[U])['u']>case.value(threshold)),Buffer(cells=0)),
+    tagging=AMRTagging(rules=(Tag(ValueExpr(block[U])['u']>case.value(threshold)),Buffer(cells=0, selection="refine-requests")),
         hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
     regrid=AMRRegrid(schedule=every(100,clock=program.clock)),transfer=transfer,execution=AMRExecution.synchronous())
 nx,ny=CELLS

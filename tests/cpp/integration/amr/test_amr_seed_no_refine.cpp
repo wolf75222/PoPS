@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -176,10 +177,25 @@ std::vector<PhysicalPatch<Dim>> physical_patches(const std::vector<pops::AmrPatc
 
 template <int Dim>
 pops::AmrSystem<Dim> make_system(const pops::AmrSystemConfig<Dim>& config,
-                                 const std::vector<double>& initial) {
+                                 const std::vector<double>& initial,
+                                 const std::string& physical_face = {}) {
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "test.amr-seed-no-refine.runtime@1");
   system.install_block_state_route("tracer", "state/tracer");
+  if (!physical_face.empty()) {
+    std::vector<std::string> face_types;
+    std::vector<std::string> face_identities;
+    for (int axis = 0; axis < Dim; ++axis)
+      for (int side = 0; side < 2; ++side) {
+        face_types.push_back(config.periodicity[axis] ? "periodic" : physical_face);
+        face_identities.push_back("test.amr-seed-no-refine.face-" +
+                                  std::to_string(2 * axis + side));
+      }
+    system.install_hyperbolic_boundary("tracer", "test.amr-seed-no-refine.boundary@1", 1,
+                                       face_types,
+                                       std::vector<double>(static_cast<std::size_t>(2 * Dim), 0.0),
+                                       face_identities, {"Scalar"}, "state/tracer");
+  }
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
                                 "conservative", "explicit",
                                 static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
@@ -227,6 +243,19 @@ TEST(test_amr_seed_no_refine, TagSelectionRejectsLegacyAndRankedOverflowBeforeAl
       config.tag_selection_buffer[axis] = std::numeric_limits<int>::max();
     EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::overflow_error);
   }
+}
+
+TEST(test_amr_seed_no_refine, TransitionReachSelectionTakesNoTagBuffer) {
+  // Master's tag selection (MG8, ROM-103) dilates by the transition tables alone.
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  config.tag_selection_contract_version = 2;
+  EXPECT_NO_THROW((void)pops::AmrSystem<Dim>(config));
+  config.tag_selection_buffer[0] = 1;
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::invalid_argument);
+  config.tag_selection_buffer[0] = 0;
+  config.tag_selection_contract_version = 3;
+  EXPECT_THROW((void)pops::AmrSystem<Dim>(config), std::invalid_argument);
 }
 
 TEST(test_amr_seed_no_refine, AutomaticBootstrapRefusesFieldLeafBeforeMaterialization) {
@@ -388,6 +417,110 @@ TEST(test_amr_seed_no_refine, RegridRetainsEvolvedFineCellsAndLinearlyProlongsNe
   EXPECT_DOUBLE_EQ(injected_fine[flatten(first_child, fine_shape)],
                    injected_fine[flatten(second_child, fine_shape)])
       << "constant injection must run only when its exact route is selected explicitly";
+}
+
+TEST(test_amr_seed_no_refine,
+     NewFineCellsAtPhysicalFacesTakeTheBoundaryGhostUnlessOneSidedIsNamed) {
+  // Master's linear prolongation (MG8, ROM-104): a new fine cell whose parent touches a
+  // non-periodic face takes the monotonized-central slope over both neighbours, the boundary
+  // ghost included, as in the interior; first-order extrapolation makes that slope zero across
+  // the face. The one-sided interior slope of API 0.2 is the same route with one-sided axes.
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 16;
+  config.periodicity.fill(false);
+  config.regrid_every = 1;
+  const std::vector<double> coarse = affine_state(config.shape);
+  pops::Extent<Dim> fine_shape{};
+  pops::Extent<Dim> one_ghost{};
+  pops::Extent<Dim> ratio{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    fine_shape[axis] = config.shape[axis] * 2;
+    one_ghost[axis] = 1;
+    ratio[axis] = 2;
+  }
+
+  std::array<bool, Dim> every_axis{};
+  every_axis.fill(true);
+  for (const bool one_sided : {false, true}) {
+    SCOPED_TRACE(one_sided ? "one-sided axes" : "no one-sided axis");
+    auto system = make_system(config, coarse, "foextrap");
+    if (one_sided)
+      system.register_bootstrap_transfer_route(
+          "test::one-sided-linear-route", {"state/tracer"}, "test::one-sided-linear-provider@1",
+          "cell", "cell", "conservative", "dense", "prolongation", "conservative_linear", 2,
+          one_ghost, ratio, every_axis);
+    pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.0}});
+    ASSERT_EQ(system.n_levels(), 2);
+    const std::vector<double> fine = system.block_level_state_global("tracer", 1);
+    ASSERT_EQ(fine.size(), cell_count(fine_shape));
+    for (const int parent_x : {0, 4, 15}) {
+      // The affine state rises by one per cell: the interior and one-sided slopes are one.
+      const double slope_x = one_sided || parent_x == 4 ? 1.0 : 0.0;
+      pops::Index<Dim> parent{};
+      pops::Index<Dim> child{};
+      for (int axis = 1; axis < Dim; ++axis) {
+        parent[axis] = 4;
+        child[axis] = 8;
+      }
+      parent[0] = parent_x;
+      for (const int offset : {0, 1}) {
+        child[0] = 2 * parent_x + offset;
+        const double expected = coarse[flatten(parent, config.shape)] +
+                                slope_x * (offset == 0 ? -0.25 : 0.25) -
+                                0.25 * static_cast<double>(Dim - 1);
+        EXPECT_DOUBLE_EQ(fine[flatten(child, fine_shape)], expected)
+            << "parent " << parent_x << ", child " << child[0];
+      }
+    }
+  }
+}
+
+TEST(test_amr_seed_no_refine, OneSidedAxesRequireTheOrderTwoCellProlongation) {
+  constexpr int Dim = pops::kNativeDimension;
+  pops::AmrSystemConfig<Dim> config;
+  for (int axis = 0; axis < Dim; ++axis)
+    config.shape[axis] = 16;
+  config.periodicity.fill(false);
+  pops::Extent<Dim> no_ghost{};
+  pops::Extent<Dim> ratio{};
+  for (int axis = 0; axis < Dim; ++axis)
+    ratio[axis] = 2;
+  std::array<bool, Dim> first_axis{};
+  first_axis[0] = true;
+  auto system = make_system(config, affine_state(config.shape), "foextrap");
+  const auto register_injection = [&](const std::array<bool, Dim>& one_sided_axes) {
+    system.register_bootstrap_transfer_route(
+        "test::injection-route", {"state/tracer"}, "test::injection-provider@1", "cell", "cell",
+        "conservative", "dense", "prolongation", "conservative_injection", 1, no_ghost, ratio,
+        one_sided_axes);
+  };
+  const auto register_restriction = [&](const std::array<bool, Dim>& one_sided_axes) {
+    system.register_bootstrap_transfer_route("test::restriction-route", {"state/tracer"},
+                                             "test::restriction-provider@1", "cell", "cell",
+                                             "conservative", "dense", "restriction",
+                                             "volume_average", 1, no_ghost, ratio, one_sided_axes);
+  };
+  const auto expect_one_sided_refusal = [](const auto& register_route) {
+    EXPECT_THROW(
+        {
+          try {
+            register_route();
+          } catch (const std::invalid_argument& error) {
+            EXPECT_STREQ(
+                error.what(),
+                "AMR one-sided slopes at physical faces require the order-two cell prolongation");
+            throw;
+          }
+        },
+        std::invalid_argument);
+  };
+  expect_one_sided_refusal([&] { register_injection(first_axis); });
+  expect_one_sided_refusal([&] { register_restriction(first_axis); });
+  // A refused registration stages nothing: the same routes without one-sided axes are accepted.
+  EXPECT_NO_THROW(register_injection({}));
+  EXPECT_NO_THROW(register_restriction({}));
 }
 
 TEST(test_amr_seed_no_refine,

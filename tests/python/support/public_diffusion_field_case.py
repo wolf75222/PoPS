@@ -121,6 +121,6 @@ def one_level_amr_layout(case,frame,grid,state,program):
     transfer=AMRTransfer();transfer.state(state,StateTransfer())
     threshold=case.param(RuntimeParam('refine_threshold',default=3.))
     return AMR(grid=grid,hierarchy=AMRHierarchy(max_levels=1,ratios=()),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(state)['u']>case.value(threshold)),Buffer(cells=0)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(state)['u']>case.value(threshold)),Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(100,clock=program.clock)),transfer=transfer,execution=AMRExecution.synchronous())

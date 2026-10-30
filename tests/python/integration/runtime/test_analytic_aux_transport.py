@@ -15,7 +15,7 @@ from pops.fields import AnalyticAux, AuxiliaryBoundary
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR, Uniform
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import ConservativeLinear, StateTransfer
 from pops.lib.initial import Analytic
 from pops.math import ValueExpr, Var, ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
@@ -72,11 +72,11 @@ def test_native_analytic_metric_and_periodic_faces_match_conservative_update(
         layout = Uniform(grid)
     else:
         transfer = AMRTransfer()
-        transfer.state(block[state], StateTransfer())
+        transfer.state(block[state], StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
         threshold = case.param(RuntimeParam("unused_refinement_threshold", default=1000.))
         layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=1, ratios=()),
             tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["q"] > case.value(threshold)),
-                                    Buffer(cells=1)),
+                                    Buffer(cells=1, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid(schedule=every(100, clock=program.clock)), transfer=transfer,

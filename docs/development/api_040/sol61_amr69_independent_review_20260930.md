@@ -117,3 +117,15 @@ Independent probe source SHA256:
 
 The positive result is bounded to this exact source and actual-header host execution.
 It supplies no replacement for the root's forthcoming native acceptance.
+
+## Chosen by name (MG8, ROM-104)
+
+The runtime no longer applies this slope to every linear prolongation. `ConservativeLinear()`
+prolongs at a bootstrap and at a regrid as master does, with the monotonized-central slope over
+both parent neighbours, the boundary ghost included (spec 0.3, section 2.6.9): master's
+tutorials keep their bits only with it (MG8; adjudication, section 19). The one-sided slope
+received here is chosen by name, `ConservativeLinear(physical_faces="one-sided")`: its route
+keeps the native kernel and carries a mask of one-sided axes, `one_sided_axes`, which the
+native transfer applies on the non-periodic axes of the configuration.
+`prepare_physical_boundary_prolongation` and its C++ tests are unchanged. The spelling is
+provisional and goes to N15 (ROM-98).

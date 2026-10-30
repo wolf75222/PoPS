@@ -124,7 +124,7 @@ def build(*, factor=1, width=1, order=None, candidate_diffusion=False, amr=False
             tagging=AMRTagging(
                 rules=(
                     Tag(ValueExpr(block[energy])["H0"] > case.value(threshold)),
-                    Buffer(cells=1),
+                    Buffer(cells=1, selection="refine-requests"),
                 ),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS,

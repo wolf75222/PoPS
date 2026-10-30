@@ -203,7 +203,7 @@ def test_real_AMR_case_metadata_and_all_registration_sites_use_same_frozen_tuple
         tagging=AMRTagging(
             rules=(
                 Tag(ValueExpr(blocks[0][states[0]])[0] > case.value(threshold)),
-                Buffer(cells=0),
+                Buffer(cells=0, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,

@@ -300,9 +300,10 @@ class ResolvedTransportCondition:
     values: tuple[Expr | ScalarExpr, ...]
     requirement: BoundaryStencilRequirement
     provider: Any
+    prescribed_trace: bool = False
 
     def __post_init__(self) -> None:
-        from pops.mesh.boundaries import BoundaryProvider, BoundaryProviderKind
+        from pops.mesh.boundaries import BoundaryProvider, BoundaryProviderKind, ClosureMode
 
         if not isinstance(self.geometry, DomainBoundary):
             raise TypeError("ResolvedTransportCondition.geometry must be a DomainBoundary")
@@ -335,6 +336,16 @@ class ResolvedTransportCondition:
                 "transport condition %r cannot use boundary provider law %r"
                 % (self.condition_type, self.provider.kind.value)
             )
+        if type(self.prescribed_trace) is not bool:
+            raise TypeError("ResolvedTransportCondition.prescribed_trace must be a bool")
+        if self.prescribed_trace and (
+            not self.values
+            or self.provider.dependencies.characteristic.mode is not ClosureMode.NONE
+        ):
+            raise ValueError(
+                "only a fixed-state face without a characteristic closure can prescribe its "
+                "exterior trace"
+            )
 
     def canonical_identity(self) -> dict[str, Any]:
         return {
@@ -345,6 +356,7 @@ class ResolvedTransportCondition:
             "values": [_expression_data(value, qualified=True) for value in self.values],
             "stencil": self.requirement.canonical_identity(),
             "provider": self.provider.canonical_identity(),
+            **({"prescribed_trace": True} if self.prescribed_trace else {}),
         }
 
     inspect = canonical_identity
@@ -448,12 +460,19 @@ def _resolved_condition(
         values=condition.values,
         requirement=requirement,
         provider=provider,
+        prescribed_trace=getattr(condition, "trace", None) == "prescribed",
     )
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
 class Inflow:
-    """Prescribe every component of one block-qualified state on an inflow face."""
+    """Prescribe every component of one block-qualified state on an inflow face.
+
+    The face is realized by the mirrored ghost 2g - u (D9), whose reconstruction is also the
+    exterior trace of the numerical flux, as on master. ``trace="prescribed"`` chooses another
+    realization: the same ghost, with g itself as the exterior Riemann trace. Its spelling is
+    provisional (N15).
+    """
 
     condition_type: ClassVar[str] = "inflow"
     state: Handle
@@ -461,6 +480,7 @@ class Inflow:
     representation: Representation | None
     converter: Handle | None
     characteristic: Handle | None
+    trace: str | None
 
     def __init__(
         self,
@@ -470,8 +490,13 @@ class Inflow:
         representation: Representation | None = None,
         converter: Any = None,
         characteristic: Any = None,
+        trace: str | None = None,
     ) -> None:
         checked_state = _state(state, where="Inflow.state")
+        if trace is not None and trace != "prescribed":
+            raise ValueError("Inflow.trace must be None or 'prescribed'")
+        if trace is not None and characteristic is not None:
+            raise ValueError("characteristic no-inflow does not prescribe an exterior trace")
         if representation is not None and not isinstance(representation, Representation):
             raise TypeError("Inflow.representation must be a typed Representation or None")
         raw_values = value if isinstance(value, tuple) else (value,)
@@ -523,6 +548,7 @@ class Inflow:
                     "characteristic no-inflow requires one finite fixed conservative reference"
                 )
         object.__setattr__(self, "characteristic", characteristic)
+        object.__setattr__(self, "trace", trace)
 
     def declaration_references(self) -> tuple[Handle, ...]:
         converter = () if self.converter is None else (self.converter,)
@@ -562,6 +588,7 @@ class Inflow:
             representation=self.representation,
             converter=converter,
             characteristic=characteristic,
+            trace=self.trace,
         )
 
     def inspect(self) -> dict[str, Any]:
@@ -575,6 +602,7 @@ class Inflow:
             "converter": None if self.converter is None else self.converter.inspect(),
             "characteristic": (
                 None if self.characteristic is None else self.characteristic.inspect()),
+            **({} if self.trace is None else {"trace": self.trace}),
         }
 
     def resolve_condition(
@@ -1131,6 +1159,7 @@ class ResolvedTransportBoundarySet:
                         row, state)[0],
                     "converter": self._native_representation_contract(
                         row, state)[1],
+                    **({"prescribed_trace": True} if row.prescribed_trace else {}),
                     **({"value_protocol":"native-boundary-component-values@1"}
                        if self.requires_expression_component(row) else {}),
                     "values": (
@@ -1251,6 +1280,7 @@ class ResolvedTransportBoundarySet:
                 "values": values,
                 "analytic_programs": analytic_programs,
                 "analytic_clock": clock_id,
+                **({"prescribed_trace": True} if condition.prescribed_trace else {}),
             }
         rows = tuple(row for row in face_rows if row is not None)
         evidence = {

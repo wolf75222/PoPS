@@ -389,15 +389,28 @@ class Coarsen:
 
 @dataclass(frozen=True, slots=True)
 class Buffer:
+    """Dilate the cells selected for refinement, as master does.
+
+    Every cell of the target coverage, cells kept by hysteresis included, grows by the transition
+    buffer, ``max(cells, derived nesting buffer)``, plus the transition lookahead.
+    ``selection="refine-requests"`` chooses API 0.2's tag selection (pops.amr.tag-selection@1)
+    instead: only accepted Refine requests grow, by exactly ``cells``, and the derived nesting
+    buffer and lookahead constrain parent coverage alone. Its spelling is provisional (N15).
+    """
+
     cells: int
+    selection: str | None = None
     action: ClassVar[str] = "buffer"
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         _positive_int(self.cells, where="Buffer.cells", minimum=0)
+        if self.selection is not None and self.selection != "refine-requests":
+            raise ValueError("Buffer.selection must be None or 'refine-requests'")
 
     def inspect(self) -> dict[str, Any]:
-        return {"action": self.action, "cells": self.cells}
+        return {"action": self.action, "cells": self.cells,
+                **({} if self.selection is None else {"selection": self.selection})}
 
 
 @dataclass(frozen=True, slots=True)

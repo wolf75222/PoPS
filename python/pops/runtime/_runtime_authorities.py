@@ -306,6 +306,15 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 raise NotImplementedError(
                     "characteristic no-inflow requires a conservative reference state"
                 )
+        # The faces whose fixed state is also the exterior Riemann trace: a flag that the library
+        # sets when it lowers a condition; the engine refuses it on a face of another law.
+        prescribed_trace_faces = []
+        for face, row in enumerate(faces):
+            prescribed_trace = row.get("prescribed_trace", False)
+            if type(prescribed_trace) is not bool:
+                raise TypeError("prepared boundary face %d prescribed_trace must be a bool" % face)
+            if prescribed_trace:
+                prescribed_trace_faces.append(face)
         face_identities = [row.get("producer") for row in faces]
         if any(not isinstance(value, str) or not value for value in face_identities):
             raise TypeError(
@@ -417,6 +426,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             analytic_opcodes,
             analytic_literals,
             analytic_clocks,
+            prescribed_trace_faces,
         )
         component_rows = first.get("component_regions", [])
         if not isinstance(component_rows, list):
