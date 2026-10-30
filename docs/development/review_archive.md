@@ -54,7 +54,7 @@ unless the last column says otherwise; the archive keeps their original copies t
 | `docs/development/api_040/check_finite_amr_converged.py`, `check_m23_m05_converged.py` | `tests/python/support/fixtures/receipt_bundles/` | none |
 | `docs/development/api_040/evidence/finite-amr-converged/`, `m23-m05-converged/` (327 files) | `tests/python/support/fixtures/receipt_bundles/evidence/` | none |
 | `docs/development/api_040/joint_reconstruction_*.py` (7 files) | `benchmarks/joint_reconstruction/` | none (the resource probes and their tests pin the benchmark scripts by SHA-256) |
-| `docs/development/api_040/joint_reconstruction_*.md` (the 7 notes of those scripts) | `benchmarks/joint_reconstruction/` | one link in the v1.1 note, one in the v1.2 note |
+| `docs/development/api_040/joint_reconstruction_*.md` (the 7 notes of those scripts) | `benchmarks/joint_reconstruction/` | the script path in the run command of the benchmark note and of the resource-probe note, one link in the v1.1 note, one in the v1.2 note |
 | `docs/development/api_040/block_inverse_scaling_v1.md` | `docs/development/` | none |
 
 The tests that import or read them now name the new paths. Four documents that cited an
