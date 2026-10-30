@@ -470,6 +470,28 @@ class AmrRuntime {
                                               std::forward<Axpy>(axpy), expected);
   }
 
+  /// The same reconciliation over a coarse-face index of the ledger, which reads only the
+  /// fragments of the key's coarse face.
+  template <class Payload, class Axpy>
+  ::pops::amr::reflux::MetricFaceReflux<Payload> reconcile_reflux_for_owner(
+      const ::pops::amr::reflux::PublishedCoarseFaceIndex<Dim, Payload>& index,
+      const ::pops::amr::reflux::CoarseFaceRefluxKey<Dim>& key, std::string_view owner_identity,
+      std::string_view state_identity,
+      const ::pops::amr::reflux::FaceRefinementMapping<Dim>& mapping,
+      const ::pops::amr::reflux::MetricRefluxBudget& budget, Axpy&& axpy,
+      const ::pops::amr::reflux::MetricRefluxTemporalContract* expected = nullptr) const {
+    if (owner_identity.empty() || state_identity.empty() || key.owner != owner_identity ||
+        key.state != state_identity || key.levels.coarse < 0 ||
+        static_cast<std::size_t>(key.levels.fine) >= hierarchy_.num_levels() ||
+        key.levels.fine != key.levels.coarse + 1)
+      throw std::invalid_argument(
+          "AMR runtime reflux key does not authenticate an adjacent live state transition");
+    const auto& ratio =
+        hierarchy_.layout(static_cast<std::size_t>(key.levels.fine)).ratio_from_parent();
+    return ::pops::amr::reflux::metric_reflux(index, key, ratio, mapping, budget,
+                                              std::forward<Axpy>(axpy), expected);
+  }
+
  private:
   hierarchy_type hierarchy_;
   std::shared_ptr<const PreparedLoadBalanceAuthority<Dim>> load_balance_;

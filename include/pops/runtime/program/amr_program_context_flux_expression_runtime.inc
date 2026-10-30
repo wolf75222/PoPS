@@ -60,16 +60,40 @@ void materialize_active_flux_expression_(
     }
     if (multiblock_flux_ledger_type* incoming = active_incoming_flux_[runtime_block];
         incoming != nullptr) {
+      using incoming_entry_type = typename multiblock_flux_ledger_type::Entry;
+      using face_coordinates_type = std::array<int, Dim>;
       const std::string owner(active_block_identities_[runtime_block]);
       const auto levels = ::pops::amr::reflux::LevelTransition{active_level_ - 1, active_level_};
-      const auto coarse_entry = [&](const auto& entry, int axis, const Index<Dim>& coarse_face) {
-        return entry.key.owner == owner && entry.key.state == state_identity &&
-               entry.key.levels == levels && entry.key.axis == axis &&
-               entry.key.coarse_face == coarse_face &&
-               entry.key.attempt == active_subcycling_attempt_ &&
-               entry.key.clock.macro_step == active_subcycling_window_.begin.macro_step &&
-               entry.key.role == fragment_role_type::Coarse;
-      };
+      // Select the pending coarse fragments of this block transition once, grouped by axis and
+      // coarse face in ledger order: a fine face then reads only the fragments of its own coarse
+      // face instead of every pending fragment of its axis.
+      std::array<std::map<face_coordinates_type, std::vector<const incoming_entry_type*>>, Dim>
+          coarse_entries;
+      for (int axis = 0; axis < Dim; ++axis)
+        for (const auto& entry : incoming->pending_entries(axis))
+          if (entry.key.owner == owner && entry.key.state == state_identity &&
+              entry.key.levels == levels && entry.key.axis == axis &&
+              entry.key.attempt == active_subcycling_attempt_ &&
+              entry.key.clock.macro_step == active_subcycling_window_.begin.macro_step &&
+              entry.key.role == fragment_role_type::Coarse)
+            coarse_entries[static_cast<std::size_t>(axis)]
+                          [::pops::amr::reflux::detail::coordinate_array(entry.key.coarse_face)]
+                              .push_back(&entry);
+      // The temporal families of the fine faces of each coarse face, over every flux basis.
+      std::array<std::map<face_coordinates_type, std::set<std::string>>, Dim> fine_families;
+      if (!declared_flux_temporal_families_.empty())
+        for (const auto& [source_identity, source_term] : expression) {
+          (void)source_identity;
+          const auto& source = *source_term.basis;
+          for (const FluxBasisFace& source_face : source.faces)
+            if (source_face.role == fragment_role_type::Fine)
+              fine_families[static_cast<std::size_t>(source_face.axis)]
+                           [::pops::amr::reflux::detail::coordinate_array(source_face.coarse_face)]
+                               .emplace(declared_flux_temporal_family_(source));
+        }
+      const std::vector<const incoming_entry_type*> no_entries;
+      // The comparison depends only on the coarse face, so its first fine face decides it.
+      std::array<std::set<face_coordinates_type>, Dim> compared_coarse_faces;
       bool compared_face = false;
       for (const auto& [identity, term] : expression) {
         (void)identity;
@@ -77,12 +101,15 @@ void materialize_active_flux_expression_(
           if (face.role != fragment_role_type::Fine)
             continue;
           compared_face = true;
-          const auto& entries = incoming->pending_entries(face.axis);
-          const auto same_coarse_face = [&](const auto& entry) {
-            return coarse_entry(entry, face.axis, face.coarse_face);
-          };
-          const std::size_t coarse_count = static_cast<std::size_t>(
-              std::count_if(entries.begin(), entries.end(), same_coarse_face));
+          const std::size_t axis = static_cast<std::size_t>(face.axis);
+          const face_coordinates_type coarse_face =
+              ::pops::amr::reflux::detail::coordinate_array(face.coarse_face);
+          if (!compared_coarse_faces[axis].insert(coarse_face).second)
+            continue;
+          const auto selected = coarse_entries[axis].find(coarse_face);
+          const auto& entries =
+              selected == coarse_entries[axis].end() ? no_entries : selected->second;
+          const std::size_t coarse_count = entries.size();
           bool exact_operator_pack = false;
           if (declared_flux_temporal_families_.empty()) {
             // Legacy producers have no separate spatial authority. Preserve the
@@ -91,37 +118,25 @@ void materialize_active_flux_expression_(
                 coarse_count == stage_identities.size() &&
                 std::all_of(
                     stage_identities.begin(), stage_identities.end(), [&](const auto& stage) {
-                      return std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
-                        return same_coarse_face(entry) && entry.key.stage == stage;
+                      return std::any_of(entries.begin(), entries.end(), [&](const auto* entry) {
+                        return entry->key.stage == stage;
                       });
                     });
           } else {
-            std::set<std::string> fine_families, coarse_families;
-            for (const auto& [source_identity, source_term] : expression) {
-              (void)source_identity;
-              const auto& source = *source_term.basis;
-              const bool contributes = std::any_of(
-                  source.faces.begin(), source.faces.end(), [&](const auto& source_face) {
-                    return source_face.role == fragment_role_type::Fine &&
-                           source_face.axis == face.axis &&
-                           source_face.coarse_face == face.coarse_face;
-                  });
-              if (contributes)
-                fine_families.emplace(declared_flux_temporal_family_(source));
-            }
-            for (const auto& entry : entries) {
-              if (!same_coarse_face(entry))
-                continue;
-              ::pops::amr::reflux::validate_face_flux_fragment(entry.key, entry.measure);
-              require_declared_flux_fragment_stage_(runtime_block, entry);
-              coarse_families.emplace(entry.key.temporal_family);
+            std::set<std::string> coarse_families;
+            for (const auto* entry : entries) {
+              ::pops::amr::reflux::validate_face_flux_fragment(entry->key, entry->measure);
+              require_declared_flux_fragment_stage_(runtime_block, *entry);
+              coarse_families.emplace(entry->key.temporal_family);
             }
             // A physical flux family is independent of the number, dates and
             // identities of its local evaluations. Retain every original stage
             // and weight. Metric reflux independently verifies each family's
             // unit quadrature, exact temporal coverage, physical duration and
             // complete coarse/fine geometry before applying the correction.
-            exact_operator_pack = !fine_families.empty() && fine_families == coarse_families;
+            const auto fine = fine_families[axis].find(coarse_face);
+            exact_operator_pack = fine != fine_families[axis].end() && !fine->second.empty() &&
+                                  fine->second == coarse_families;
           }
           if (!exact_operator_pack) {
             std::string expected;
@@ -131,12 +146,11 @@ void materialize_active_flux_expression_(
               expected += stage;
             }
             std::string observed;
-            for (const auto& entry : entries)
-              if (same_coarse_face(entry)) {
-                if (!observed.empty())
-                  observed += ", ";
-                observed += entry.key.stage;
-              }
+            for (const auto* entry : entries) {
+              if (!observed.empty())
+                observed += ", ";
+              observed += entry->key.stage;
+            }
             throw std::runtime_error(
                 "AMR Program coarse/fine flux operator identities differ before face-flux "
                 "publication: expected " +
@@ -149,15 +163,7 @@ void materialize_active_flux_expression_(
       if (!compared_face) {
         bool coarse_face_exists = false;
         for (int axis = 0; axis < Dim && !coarse_face_exists; ++axis)
-          coarse_face_exists = std::any_of(
-              incoming->pending_entries(axis).begin(), incoming->pending_entries(axis).end(),
-              [&](const auto& entry) {
-                return entry.key.owner == owner && entry.key.state == state_identity &&
-                       entry.key.levels == levels && entry.key.axis == axis &&
-                       entry.key.attempt == active_subcycling_attempt_ &&
-                       entry.key.clock.macro_step == active_subcycling_window_.begin.macro_step &&
-                       entry.key.role == fragment_role_type::Coarse;
-              });
+          coarse_face_exists = !coarse_entries[static_cast<std::size_t>(axis)].empty();
         if (coarse_face_exists)
           throw std::runtime_error(
               "AMR Program coarse/fine flux operator identities differ before face-flux "

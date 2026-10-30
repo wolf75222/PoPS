@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -69,14 +70,7 @@ class Natural {
     if (a.compare(b) < 0)
       throw std::logic_error("negative exact unsigned subtraction");
     Natural out = a;
-    std::uint64_t borrow = 0;
-    for (std::size_t i = 0; i < out.words.size(); ++i) {
-      const std::uint64_t right = (i < b.words.size() ? std::uint64_t(b.words[i]) : 0) + borrow;
-      const std::uint64_t left = out.words[i];
-      out.words[i] = static_cast<std::uint32_t>(left - right);
-      borrow = left < right;
-    }
-    out.trim();
+    out.subtract_in_place_(b);
     return out;
   }
   static Natural multiply(const Natural& a, const Natural& b, std::size_t bytes) {
@@ -128,33 +122,76 @@ class Natural {
     }
     trim();
   }
+  // Quotient and remainder are unique, so every path below returns the same canonical limbs.
+  // The limb checks are those of the shift-and-subtract division whatever path computes them.
   static std::pair<Natural, Natural> divide(const Natural& a, const Natural& b, std::size_t bytes) {
     if (b.zero())
       throw std::domain_error("zero exact coefficient denominator");
     if (a.compare(b) < 0)
       return {Natural{}, a};
-    const auto steps = a.bits() - b.bits();
-    Natural divisor = shift(b, steps, bytes), remainder = a, quotient;
-    capacity(steps / 32 + 1, bytes);
-    quotient.words.assign(steps / 32 + 1, 0);
-    for (std::size_t i = steps + 1; i != 0; --i) {
-      const auto bit = i - 1;
-      if (remainder.compare(divisor) >= 0) {
-        remainder = subtract(remainder, divisor);
-        quotient.words[bit / 32] |= std::uint32_t{1} << (bit % 32);
+    require_division_budget_(a, b, bytes);
+    Natural quotient, remainder;
+    if (a.words.size() <= 2) {
+      const auto numerator = a.small(), denominator = b.small();
+      quotient = Natural(numerator / denominator);
+      remainder = Natural(numerator % denominator);
+    } else if (b.words.size() == 1) {
+      const std::uint64_t denominator = b.words[0];
+      quotient.words.assign(a.words.size(), 0);
+      std::uint64_t rest = 0;
+      for (std::size_t i = a.words.size(); i != 0; --i) {
+        const std::uint64_t value = (rest << 32) | a.words[i - 1];
+        quotient.words[i - 1] = static_cast<std::uint32_t>(value / denominator);
+        rest = value % denominator;
       }
-      divisor.half();
+      quotient.trim();
+      remainder = Natural(rest);
+    } else if (b.power_of_two_()) {
+      const auto exponent = b.bits() - 1;
+      quotient = a;
+      quotient.shift_right_(exponent);
+      remainder = a;
+      remainder.keep_low_bits_(exponent);
+    } else {
+      const auto steps = a.bits() - b.bits();
+      Natural divisor = shift(b, steps, bytes);
+      remainder = a;
+      quotient.words.assign(steps / 32 + 1, 0);
+      for (std::size_t i = steps + 1; i != 0; --i) {
+        const auto bit = i - 1;
+        if (remainder.compare(divisor) >= 0) {
+          remainder.subtract_in_place_(divisor);
+          quotient.words[bit / 32] |= std::uint32_t{1} << (bit % 32);
+        }
+        divisor.half();
+      }
+      quotient.trim();
     }
-    quotient.trim();
     return {std::move(quotient), std::move(remainder)};
   }
+  // Binary (Stein) GCD: the same unique divisor as Euclid's algorithm without any division.
+  // Euclid first divides the larger operand by the smaller one; that division's limb checks are
+  // the only resource failures of this operation, so they are replayed before computing.
   static Natural gcd(Natural a, Natural b, std::size_t bytes) {
-    while (!b.zero()) {
-      auto r = divide(a, b, bytes).second;
-      a = std::move(b);
-      b = std::move(r);
+    if (b.zero())
+      return a;
+    if (a.zero())
+      return b;
+    if (a.compare(b) >= 0)
+      require_division_budget_(a, b, bytes);
+    else
+      require_division_budget_(b, a, bytes);
+    if (a.words.size() <= 2 && b.words.size() <= 2)
+      return Natural(std::gcd(a.small(), b.small()));
+    const auto a_twos = a.trailing_zeros_(), b_twos = b.trailing_zeros_();
+    a.shift_right_(a_twos);
+    b.shift_right_(b_twos);
+    for (int order = a.compare(b); order != 0; order = a.compare(b)) {
+      Natural& larger = order > 0 ? a : b;
+      larger.subtract_in_place_(order > 0 ? b : a);
+      larger.shift_right_(larger.trailing_zeros_());
     }
-    return a;
+    return shift(a, std::min(a_twos, b_twos), bytes);
   }
   std::uint64_t small() const {
     if (words.size() > 2)
@@ -179,6 +216,69 @@ class Natural {
     }
     std::reverse(out.begin(), out.end());
     return out;
+  }
+
+ private:
+  // Limb checks of shifting `b` onto the leading bit of `a` and of the quotient storage.
+  // ExactWeight never reaches these refusals: its budgets bound every operand of divide and gcd
+  // to bytes / 4 limbs. They keep a direct Natural division within the same budget.
+  static void require_division_budget_(const Natural& a, const Natural& b, std::size_t bytes) {
+    const auto steps = a.bits() - b.bits();
+    const auto whole = steps / 32;
+    const auto part = static_cast<unsigned>(steps % 32);
+    if (whole > bytes / 4 || b.words.size() > bytes / 4 - whole)
+      throw std::length_error("exact coefficient shift budget exhausted");
+    if (part && (b.words.back() >> (32 - part)) != 0)
+      capacity(whole + b.words.size() + 1, bytes);
+    capacity(steps / 32 + 1, bytes);
+  }
+  // Requires *this >= other.
+  void subtract_in_place_(const Natural& other) {
+    std::uint64_t borrow = 0;
+    for (std::size_t i = 0; i < words.size() && (borrow || i < other.words.size()); ++i) {
+      const std::uint64_t right =
+          (i < other.words.size() ? std::uint64_t(other.words[i]) : 0) + borrow;
+      const std::uint64_t left = words[i];
+      words[i] = static_cast<std::uint32_t>(left - right);
+      borrow = left < right;
+    }
+    trim();
+  }
+  void shift_right_(std::size_t count) {
+    const auto whole = count / 32;
+    const auto part = static_cast<unsigned>(count % 32);
+    if (whole >= words.size()) {
+      words.clear();
+      return;
+    }
+    words.erase(words.begin(), words.begin() + static_cast<std::ptrdiff_t>(whole));
+    if (part)
+      for (std::size_t i = 0; i < words.size(); ++i) {
+        const std::uint32_t high = i + 1 < words.size() ? words[i + 1] : 0;
+        words[i] = (words[i] >> part) | (high << (32 - part));
+      }
+    trim();
+  }
+  void keep_low_bits_(std::size_t count) {
+    const auto whole = count / 32;
+    const auto part = static_cast<unsigned>(count % 32);
+    if (whole < words.size()) {
+      words.resize(part ? whole + 1 : whole);
+      if (part)
+        words.back() &= (std::uint32_t{1} << part) - 1;
+    }
+    trim();
+  }
+  std::size_t trailing_zeros_() const noexcept {
+    std::size_t i = 0;
+    while (i < words.size() && words[i] == 0)
+      ++i;
+    return i == words.size() ? 0 : 32 * i + static_cast<std::size_t>(std::countr_zero(words[i]));
+  }
+  bool power_of_two_() const noexcept {
+    return !zero() && std::has_single_bit(words.back()) &&
+           std::all_of(words.begin(), words.end() - 1,
+                       [](std::uint32_t word) { return word == 0; });
   }
 };
 }  // namespace exact_weight_detail

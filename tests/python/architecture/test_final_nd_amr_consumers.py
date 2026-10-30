@@ -351,7 +351,10 @@ PROGRAM_CONTRACT_EXTENSIONS = {
          "/// Rank-local structured-control copy.",
          "void axpy(field_type& destination, Real factor, const field_type& source) const"),
         ("amr_program_context_flux_expression_runtime.inc",
-         "            std::set<std::string> fine_families, coarse_families;",
+         "      // The temporal families of the fine faces of each coarse face, over every flux basis.",
+         "      const std::vector<const incoming_entry_type*> no_entries;"),
+        ("amr_program_context_flux_expression_runtime.inc",
+         "            std::set<std::string> coarse_families;",
          "          if (!exact_operator_pack)"),
     )),
     "spatial_implicit": (48, (

@@ -284,6 +284,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   eigensolve. Checked extrema return NaN on non-convergence/non-finite diagnostics, and the tri-state
   real-spectrum witness propagates the same failure into native pointwise transforms before commit.
 
+### Fixed
+
+- Divide and reduce exact weights without copying the remainder for each quotient bit:
+  `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
+  and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step
+  validates its face-flux fragments with these weights; over the first 35 accepted steps of the
+  scalar advection final example (to t = 0.03), run side by side on one 4-core container, the
+  step rate rises from 4.75 to 9.04 per minute.
+- Read the face-flux fragments of one coarse face instead of every fragment of its axis. Before
+  face-flux publication and in multiblock reflux, an AMR Program step compared each interface
+  face with all pending or published fragments of the axis, a cost that grew with the square of
+  the coarse/fine interface. Fragments are now grouped by coarse face in ledger order
+  (`PublishedCoarseFaceIndex` for the published ones), so accumulation order, corrections and
+  refusals are unchanged. On one 4-core container, the first segment of the same example (to
+  t = 0.2, 226 accepted steps) runs in 11 minutes instead of 28.
+
 ## [1.0.0] - 2026-07-16
 
 ### Added

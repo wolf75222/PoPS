@@ -29,6 +29,7 @@ using pops::amr::reflux::FaceLedgerRole;
 using pops::amr::reflux::FaceRefinementMapping;
 using pops::amr::reflux::LevelTransition;
 using pops::amr::reflux::MetricRefluxBudget;
+using pops::amr::reflux::PublishedCoarseFaceIndex;
 using pops::amr::reflux::TransactionalFaceFluxLedger;
 using pops::amr::reflux::coarse_cell_reflux_correction;
 using pops::amr::reflux::fine_faces_for_coarse_face;
@@ -1015,4 +1016,65 @@ TEST(test_nd_flux_ledger, authored_partial_integral_requires_its_independent_exa
   mutated.commit();
   EXPECT_THROW((void)metric_reflux(mutated, query, ratio, mapping, budget, scalar_axpy, &expected),
                std::runtime_error);
+}
+
+TEST(test_nd_flux_ledger, coarse_face_index_reconciles_each_face_like_a_full_ledger_scan) {
+  // Several coarse faces on both axes, their stages interleaved in the ledger, with fluxes whose
+  // sums depend on the accumulation order: each indexed reconciliation must equal the full scan
+  // bit for bit.
+  const RefinementRatio<2> ratio{2, 2};
+  const auto mapping = sample_mapping<2>();
+  const auto budget = reflux_budget();
+  std::vector<CoarseFaceRefluxKey<2>> queries;
+  for (int axis = 0; axis < 2; ++axis)
+    for (int face = 0; face < 3; ++face) {
+      auto query = sample_query<2>(axis, 7);
+      query.coarse_face[1 - axis] += 2 * face;
+      queries.push_back(query);
+    }
+  TransactionalFaceFluxLedger<2, double> ledger{ledger_budget()};
+  ledger.begin(7);
+  const std::array<std::pair<const char*, Rational>, 3> stages{
+      {{"ssp_a", Rational{0, 1}}, {"ssp_b", Rational{1, 2}}, {"ssp_c", Rational{1, 1}}}};
+  for (std::size_t stage = 0; stage < stages.size(); ++stage)
+    for (std::size_t face = 0; face < queries.size(); ++face) {
+      const double flux = 0.1 * static_cast<double>(face + 1) + 0.3 * static_cast<double>(stage);
+      accumulate_stage(ledger, queries[face], ratio, mapping, budget, stages[stage].first,
+                       stages[stage].second, Rational{1, 3}, Rational{0, 1}, Rational{1, 1}, 0.7,
+                       1.4, 0.7, flux, flux * 1.1);
+    }
+  ledger.commit();
+
+  const PublishedCoarseFaceIndex index(ledger);
+  EXPECT_EQ(&index.ledger(), &ledger);
+  for (const auto& query : queries) {
+    const auto& entries = index.entries(query.axis, query.coarse_face);
+    ASSERT_EQ(entries.size(), stages.size() * 3);
+    const auto& published = ledger.published_entries(query.axis);
+    for (std::size_t entry = 0; entry < entries.size(); ++entry) {
+      EXPECT_TRUE(entries[entry]->key.coarse_face == query.coarse_face);
+      EXPECT_GE(entries[entry], published.data());
+      EXPECT_LT(entries[entry], published.data() + published.size());
+      if (entry > 0)
+        EXPECT_LT(entries[entry - 1], entries[entry]);
+    }
+    const auto scanned = metric_reflux(ledger, query, ratio, mapping, budget, scalar_axpy);
+    const auto indexed = metric_reflux(index, query, ratio, mapping, budget, scalar_axpy);
+    EXPECT_EQ(indexed.coarse_integrated, scanned.coarse_integrated);
+    EXPECT_EQ(indexed.fine_integrated, scanned.fine_integrated);
+    EXPECT_EQ(indexed.mismatch, scanned.mismatch);
+    EXPECT_EQ(indexed.coarse_weighted_measure, scanned.coarse_weighted_measure);
+    EXPECT_EQ(indexed.fine_weighted_measure, scanned.fine_weighted_measure);
+    EXPECT_EQ(indexed.fine_face_count, scanned.fine_face_count);
+  }
+
+  // A coarse face without fragments has an empty group and fails like the full scan.
+  auto absent = queries.front();
+  absent.coarse_face[1] += 101;
+  EXPECT_TRUE(index.entries(absent.axis, absent.coarse_face).empty());
+  EXPECT_THROW((void)metric_reflux(ledger, absent, ratio, mapping, budget, scalar_axpy),
+               std::runtime_error);
+  EXPECT_THROW((void)metric_reflux(index, absent, ratio, mapping, budget, scalar_axpy),
+               std::runtime_error);
+  EXPECT_THROW((void)index.entries(2, absent.coarse_face), std::invalid_argument);
 }
