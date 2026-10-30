@@ -1,0 +1,8 @@
+# Fichiers C++ suivis que clang-format ne doit jamais reformater. clang-format (>= 18) lit ce
+# fichier : un motif par ligne, relatif a la racine du depot ; `*` ne traverse pas `/` et 19.1.7
+# ne connait pas `**`. Le job format de quality.yml saute ces fichiers.
+#
+# Instantanes historiques d'en-tetes du SDK : chaque .hpp est fige octet pour octet par son recu
+# .json (schema pops.historical-sdk-header@1, taille et SHA-256), que verifient
+# tests/python/unit/codegen/test_coupled_gradient_nd_review.py et test_analytic_aux_time_abi.py.
+tests/python/support/fixtures/*.hpp
