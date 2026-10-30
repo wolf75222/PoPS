@@ -510,7 +510,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 1
+          # Depth 2: the engine guards scan the first parent (the base of a PR) as well (MG6).
+          fetch-depth: 2
 
       - name: Download shared execution plan
         uses: actions/download-artifact@v8
@@ -533,6 +534,12 @@ jobs:
           mapfile -t architecture_tests < ci-plan/architecture-tests.txt
           test "${#architecture_tests[@]}" -gt 0
           python3 -m pytest -q "${architecture_tests[@]}"
+
+      # Spec 0.3 MG6 (Linear N2): the exception lists of the engine guards only shrink. The scan of
+      # this tree may hold no site that the scan of its first parent does not hold, whatever the
+      # lists say; a file renamed or split keeps its sites.
+      - name: Engine guard exception lists against the base
+        run: python3 -m tests.python.architecture.frozen_engine.refresh_exceptions --check-base HEAD^1
 
       - name: M2 temporal gate manifest
         run: python3 scripts/run_m2_gate.py --check-only
