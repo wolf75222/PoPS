@@ -16,9 +16,11 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+import zipfile
 
 import pytest
 
@@ -46,15 +48,53 @@ receipts = _load("qualification_receipt")
 # --------------------------------------------------------------------------- #
 GIT = ("git", "-c", "user.name=PoPS test", "-c", "user.email=test@example.invalid",
        "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main")
+#: Stand-ins for the SDK's lifecycle types, installed with the fake SDK: the receipt accepts an
+#: object only when its class is defined by an SDK file that still has its installed bytes.
+LIFECYCLE = """class _Record:
+    def __init__(self, **fields):
+        self.__dict__.update(fields)
+
+    def verify(self):
+        return None
+
+
+class ResolvedSimulationPlan(_Record):
+    pass
+
+
+class CompiledSimulationArtifact(_Record):
+    pass
+
+
+class RuntimeInstance(_Record):
+    pass
+
+
+class RunReport(_Record):
+    def to_data(self):
+        return dict(self.data)
+"""
+#: Committed oracles of the fake checkout: one plain, one closing over its bound.
+ORACLES = """def mass(runtime):
+    return {"passed": runtime.mass == 0.0, "mass": runtime.mass}
+
+
+def bounded(limit):
+    def check(runtime):
+        return {"passed": abs(runtime.mass) <= limit, "mass": runtime.mass}
+    return check
+"""
 SOURCES = {
     "python/pops/__init__.py": "VERSION = 1\n",
     "python/pops/model.py": "def rate(u):\n    return -u\n",
+    "python/pops/lifecycle.py": LIFECYCLE,
     "python/pops/py.typed": "",
     "include/pops_headers.manifest": "api pops/core.hpp\ntest-only pops/testing.hpp\n",
     "include/pops/core.hpp": "#pragma once\nint pops_core();\n",
     "include/pops/testing.hpp": "#pragma once\n",
     "src/native.cpp": "int pops_core() { return 1; }\n",
     "examples/case.py": "CASE = 'M01'\n",
+    "examples/oracle.py": ORACLES,
     "tests/data.txt": "fixture\n",
 }
 
@@ -87,7 +127,17 @@ def _record_hash(path):
     return "sha256=" + base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
 
 
-def install(repo, site, *, dimension=2, leaf=b"native leaf", abi_headers=None):
+def _wheel(path, leaf, row):
+    """A retained wheel holding the leaf and its manifest, as the official build retains it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("pops/_native/" + row["path"], leaf)
+        archive.writestr("pops/_native/variants.json",
+                         json.dumps({"schema_version": 1, "variants": [row]}))
+    return path
+
+
+def install(repo, site, *, dimension=2, leaf=b"native leaf", abi_headers=None, wheel=None):
     """Install the checkout's package, headers and one native leaf as pip would."""
     package = site / "pops"
     for relative in SOURCES:
@@ -112,9 +162,9 @@ def install(repo, site, *, dimension=2, leaf=b"native leaf", abi_headers=None):
     info = site / "pops-1.0.0.dist-info"
     info.mkdir(parents=True)
     (info / "METADATA").write_text("Name: pops\nVersion: 1.0.0\n", encoding="utf-8")
-    wheel = site.parent / "wheelhouse" / "pops-1.0.0-py3-none-any.whl"
-    wheel.parent.mkdir(parents=True, exist_ok=True)
-    wheel.write_bytes(b"retained wheel " + leaf)
+    if wheel is None:
+        wheel = _wheel(site.parent / "wheelhouse" / "pops-1.0.0-cp312-cp312-linux_x86_64.whl",
+                       leaf, row)
     (info / "direct_url.json").write_text(json.dumps({
         "url": wheel.as_uri(),
         "archive_info": {"hashes": {"sha256": hashlib.sha256(wheel.read_bytes()).hexdigest()}},
@@ -133,8 +183,19 @@ def site(tmp_path, repo):
     return root
 
 
-def _attest(repo, site, **options):
-    return cohort.attest_native_build(repo, site / "pops", 2, **options)
+def _verified(package, dimension):
+    """Stands for ``verify_native_leaf``, which loads the leaf: a fake leaf cannot be loaded."""
+    leaf = next((Path(package) / "_native" / f"dim{dimension}").iterdir())
+    return {"dimension": dimension, "native_extension": str(leaf),
+            "sha256": hashlib.sha256(leaf.read_bytes()).hexdigest()}
+
+
+def _attest(repo, site, *, before=None, **options):
+    """Attest as build_python.sh does: under the build's lease, with the source it started from."""
+    before = cohort.source_identity(repo) if before is None else before
+    with cohort.mutation_lease(site, purpose="build_python.sh --dim 2") as lease:
+        return cohort.attest_native_build(repo, site / "pops", 2, source_before=before,
+                                          lease=lease, verify=_verified, **options)
 
 
 # --------------------------------------------------------------------------- #
@@ -172,11 +233,15 @@ def test_sdk_inputs_digest_ignores_tests_and_examples(repo):
     assert cohort.source_identity(repo)["sdk_inputs_sha256"] != before
 
 
-def test_renamed_tracked_file_is_reported_once(repo):
+def test_a_rename_names_both_paths_and_a_move_out_of_the_sdk_inputs_dirties_them(repo):
     _git(repo, "mv", "tests/data.txt", "tests/moved.txt")
     source = cohort.source_identity(repo)
-    assert source["modified"] == ["tests/moved.txt"]
-    assert not source["clean"]
+    assert source["modified"] == ["tests/data.txt", "tests/moved.txt"]
+    assert not source["clean"] and source["sdk_inputs_clean"]
+    _git(repo, "mv", "python/pops/model.py", "tests/model.py")
+    moved = cohort.source_identity(repo)
+    assert "python/pops/model.py" in moved["modified"]
+    assert not moved["sdk_inputs_clean"]
 
 
 # --------------------------------------------------------------------------- #
@@ -210,7 +275,7 @@ def test_native_leaf_must_match_its_variant_manifest(site):
 def test_coherence_compares_sources_headers_and_the_native_header_token(repo, site, tmp_path):
     check = cohort.coherence(repo, site / "pops")
     assert check["coherent"], check
-    assert check["compared_files"] == 5  # 3 Python sources, 1 installed header, the manifest
+    assert check["compared_files"] == 6  # 4 Python sources, 1 installed header, the manifest
 
     (site / "pops" / "include" / "pops" / "core.hpp").write_text("#pragma once\n")
     edited = cohort.coherence(repo, site / "pops")
@@ -284,6 +349,66 @@ def test_a_build_from_modified_sdk_inputs_attests_nothing(repo, site):
         cohort.publish_cohort(repo, site / "pops")
 
 
+def test_a_build_whose_source_changed_while_it_ran_attests_nothing(repo, site):
+    before = cohort.source_identity(repo)
+    (repo / "examples/case.py").write_text("CASE = 'M02'\n")
+    _commit(repo, "a commit lands while the build runs")
+    changed = _attest(repo, site, before=before)
+    assert changed["source_changed_during_build"] == ["commit", "tree"]
+    with pytest.raises(cohort.CohortError, match="its build saw the source change"):
+        cohort.publish_cohort(repo, site / "pops")
+
+
+def test_only_the_build_attests_a_leaf_and_only_one_that_loads(repo, site, tmp_path):
+    before = cohort.source_identity(repo)
+    with pytest.raises(cohort.CohortError, match="attested only by the build"):
+        cohort.attest_native_build(repo, site / "pops", 2, source_before=before,
+                                   verify=_verified)
+    snapshot = tmp_path / "source-before.json"
+    snapshot.write_text(json.dumps({"source": before}))
+    attest = [sys.executable, "-I", str(SCRIPTS / "sdk_cohort.py"), "attest-build",
+              "--source", str(repo), "--package", str(site / "pops"), "--dimension", "2",
+              "--source-before", str(snapshot)]
+    by_hand = _cli(*attest[3:])
+    assert by_hand.returncode == 2 and "never attested by hand" in by_hand.stderr
+    other = _cli("mutate", "--installation", str(site), "--purpose", "pip install", "--", *attest)
+    assert other.returncode == 2 and "never attested by hand" in other.stderr
+    # Inside the build's lease, the fake leaf is loaded in a child interpreter and refused.
+    build = _cli("mutate", "--installation", str(site), "--purpose", "build_python.sh --dim 2",
+                 "--", *attest)
+    assert build.returncode == 2 and "does not verify" in build.stderr, build.stderr
+    assert not cohort.native_build_directory(site).exists()
+
+
+def test_a_prefix_installed_from_the_retained_wheel_finds_its_attestation(repo, site, tmp_path):
+    wheel = next((site.parent / "wheelhouse").glob("*.whl"))
+    attestation = _attest(repo, site, wheel=wheel)
+    beside = cohort.wheel_attestation_path(wheel)
+    assert json.loads(beside.read_text()) == attestation
+    assert attestation["wheel"]["leaf"]["sha256"] == attestation["leaf_sha256"]
+    assert attestation["environment"]["python"]["executable"] == sys.executable
+    prefix = tmp_path / "qualification-prefix"
+    install(repo, prefix, wheel=wheel)  # a fresh prefix: no attestation of its own
+    record = cohort.publish_cohort(repo, prefix / "pops")
+    leaf = record["native_provenance"]["leaves"][0]
+    assert leaf["attestation"] == str(beside) and leaf["problem"] is None
+    assert leaf["environment"]["python"]["executable"] == sys.executable
+    assert cohort.verify_cohort(prefix / "pops", source_root=repo)["verified"]
+
+    again = tmp_path / "second-prefix"
+    install(repo, again, wheel=wheel)
+    wheel.write_bytes(wheel.read_bytes() + b"tampered")
+    with pytest.raises(cohort.CohortError, match="no official build attests it"):
+        cohort.publish_cohort(repo, again / "pops")
+
+
+def test_wheel_tags_and_dimensions_are_read_from_the_retained_wheel(site):
+    wheel = next((site.parent / "wheelhouse").glob("*.whl"))
+    assert cohort._wheel_tag(wheel) == "cp312-cp312-linux_x86_64"
+    assert cohort._wheel_dimensions(wheel) == [2]
+    assert cohort.build_tree_record(site, 2, wheel)["found"] is False
+
+
 def test_a_cohort_needs_a_clean_source_and_a_wheel_installation(repo, site):
     _attest(repo, site)
     (repo / "tests/data.txt").write_text("edited\n")
@@ -312,6 +437,25 @@ def test_qualification_lease_is_shared_by_one_source_and_refuses_another(site):
     second.release()
     other = cohort.acquire_qualification_lease(site, "b" * 40)
     other.release()
+
+
+def test_lease_files_take_the_installation_mode_and_lock_read_only(site, monkeypatch):
+    site.chmod(0o2775)
+    cohort.acquire_qualification_lease(site, "a" * 40).release()
+    state = cohort.state_directory(site)
+    assert stat.S_IMODE(state.stat().st_mode) == 0o2775
+    for name in ("guard.lock", "lease.lock"):
+        assert stat.S_IMODE((state / name).stat().st_mode) == 0o664
+        (state / name).chmod(0o444)  # as another user's lock file looks to this one
+    cohort.acquire_qualification_lease(site, "a" * 40).release()
+
+    def denied(*_arguments, **_options):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(cohort, "write_json_atomic", denied)
+    with pytest.raises(cohort.CohortError, match="cannot write the lease record"):
+        cohort.acquire_mutation_lease(site)
+    monkeypatch.undo()
+    cohort.acquire_mutation_lease(site).release()  # the refused attempt released its lock
 
 
 def test_mutation_lease_excludes_every_qualification(site):
@@ -386,11 +530,13 @@ def test_build_python_runs_under_the_lease_and_attests_retained_wheels():
     install_command = build.index('python -m pip "${pip_args[@]}"')
     verify = build.index('verify_installed_native.py" "${native_verify_args[@]}"')
     attest = build.index('sdk_cohort.py" attest-build --source "$HERE"')
-    assert activate < build.index('sdk_cohort.py" held') < lease < install_command
+    before = build.index('sdk_cohort.py" identify --source "$HERE" > "$POPS_BUILD_SOURCE"')
+    assert activate < build.index('sdk_cohort.py" held') < lease < before < install_command
     assert install_command < verify < attest
     assert 'ORIGINAL_ARGS=("$@")' in build
     assert '-- bash "$HERE/scripts/build_python.sh" "${ORIGINAL_ARGS[@]}"' in build
-    assert '--wheel "${built_wheels[0]}"' in build[attest:]
+    assert '--source-before "$POPS_BUILD_SOURCE" --wheel "${built_wheels[0]}"' in build[attest:]
+    assert '--purpose "build_python.sh --dim $NATIVE_DIM"' in build
 
 
 # --------------------------------------------------------------------------- #
@@ -399,13 +545,25 @@ def test_build_python_runs_under_the_lease_and_attests_retained_wheels():
 def _evidence(stage):
     return {
         "E": {"files": [{"path": "examples/case.py", "sha256": "0" * 64, "committed": True}]},
-        "G": {"verified": True, "semantic_identity": "plan"},
-        "C": {"same_plan_as_G": True, "dsos": [
-            {"role": "program", "path": "/p.so", "sha256": "1" * 64, "artifact_sidecar": {}},
-            {"role": "model", "path": "/m.so", "sha256": "2" * 64}]},
-        "loaded": {"all_mapped": True, "system": "System", "installed_program_matches": True},
-        "advanced": {"same_artifact_as_C": True, "accepted_steps": 2},
-        "S": {"passed": True, "name": "mass", "oracle": "exact", "domain": "M01"},
+        "G": {"verified": True, "semantic_identity": "plan",
+              "plan_type": {"type": "pops.codegen._plans.ResolvedSimulationPlan", "in_sdk": True,
+                            "expected": "ResolvedSimulationPlan", "is_expected": True}},
+        "C": {"same_plan_as_G": True,
+              "artifact_type": {"in_sdk": True, "expected": "CompiledSimulationArtifact",
+                                "is_expected": True},
+              "dsos": [
+                  {"role": "program", "path": "/p.so", "sha256": "1" * 64, "artifact_sidecar": {}},
+                  {"role": "model", "path": "/m.so", "sha256": "2" * 64}]},
+        "loaded": {"all_mapped": True, "system": "System", "installed_program_matches": True,
+                   "runtime_type": {"in_sdk": True}, "executor_type": {"in_sdk": True},
+                   "native": {"sdk_leaf": True, "leaf_mapped": True, "system_of_leaf": True}},
+        "advanced": {"same_artifact_as_C": True, "accepted_steps": 2, "same_runtime_as_loaded": True,
+                     "report_type": {"in_sdk": True, "expected": "RunReport",
+                                     "is_expected": True}},
+        "S": {"passed": True, "name": "mass", "domain": "M01",
+              "oracle": {"qualname": "check", "origin": "source", "committed": True},
+              "arguments": [{"type": "pops.runtime._runtime_instance.RuntimeInstance",
+                             "run_object": "runtime"}]},
     }[stage]
 
 
@@ -456,6 +614,41 @@ def test_every_k6_level_reads_off_the_recorded_stages(published):
     assert edited["level"] == "none" and edited["levels"]["S"] is False
 
 
+@pytest.mark.parametrize(("stage", "key", "level", "limit"), [
+    ("G", ("plan_type", "is_expected"), "E", "G: the plan is not the SDK's"),
+    ("C", ("artifact_type", "is_expected"), "G", "C: the artifact is not the SDK's"),
+    ("loaded", ("native", "sdk_leaf"), "C", "the SDK's native leaf is not the loaded pops._pops"),
+    ("loaded", ("native", "leaf_mapped"), "C", "not mapped with its installed bytes"),
+    ("loaded", ("native", "system_of_leaf"), "C", "the System is not a class of the SDK's"),
+    ("loaded", ("runtime_type", "in_sdk"), "C", "the runtime is not an SDK object"),
+    ("advanced", ("report_type", "is_expected"), "C", "did not advance through pops.run"),
+    ("advanced", ("same_runtime_as_loaded",), "C", "did not advance through pops.run"),
+    ("S", ("oracle", "committed"), "R", "is not a committed file of the source"),
+])
+def test_r_and_s_need_the_sdk_runtime_and_a_committed_oracle(published, stage, key, level, limit):
+    _, source, sdk = published
+
+    def falsify(data):
+        evidence = next(row["evidence"] for row in data["stages"] if row["stage"] == stage)
+        for name in key[:-1]:
+            evidence = evidence[name]
+        evidence[key[-1]] = False
+    data = _receipt(source, sdk, patch=falsify)
+    assert data["level"] == level
+    assert any(limit in item for item in data["limits"]), data["limits"]
+
+
+def test_an_oracle_called_on_anything_but_the_run_is_no_s(published):
+    _, source, sdk = published
+
+    def driver_value(data):
+        data["stages"][-1]["evidence"]["arguments"] = [{"type": "builtins.dict",
+                                                        "run_object": None}]
+    data = _receipt(source, sdk, patch=driver_value)
+    assert data["level"] == "R"
+    assert data["limits"] == ["S: oracle check was not called on the runtime or report of the run"]
+
+
 def test_an_r_receipt_of_the_cohort_source_and_sdk_is_admitted(published):
     record, source, sdk = published
     verdict = receipts.admit(_receipt(source, sdk), record, require="R")
@@ -492,7 +685,7 @@ def test_a_receipt_of_another_source_or_sdk_is_refused(published):
         "no cohort record names this installation"]
 
 
-def test_a_receipt_authenticates_its_identity_and_its_levels(published, tmp_path):
+def test_a_receipt_is_self_consistent_and_its_levels_follow_from_its_stages(published, tmp_path):
     _, source, sdk = published
     data = _receipt(source, sdk)
     path = tmp_path / "receipt.json"
@@ -505,7 +698,7 @@ def test_a_receipt_authenticates_its_identity_and_its_levels(published, tmp_path
     edited = copy.deepcopy(data)
     edited["parameters"] = {"t_end": 1.0}
     path.write_text(json.dumps(edited))
-    with pytest.raises(receipts.ReceiptError, match="does not authenticate"):
+    with pytest.raises(receipts.ReceiptError, match="not self-consistent"):
         receipts.read_receipt(path)
 
 
@@ -542,33 +735,147 @@ def _fake_artifact(tmp_path, plan_identity):
         blocks=(SimpleNamespace(name="fluid", model=SimpleNamespace(so_path=str(model))),))
 
 
-def test_receipt_records_each_stage_and_never_counts_unmapped_dsos(repo, site, tmp_path):
+def _module_from(path, name):
+    """Import one file as a module named ``name``, as a process imports its own code."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_run_without_pops_reaches_no_level_past_e(repo, site, tmp_path):
+    """The reviewer's probe: plain objects and unmapped DSOs, no SDK and no native leaf."""
     plan = SimpleNamespace(verify=lambda: None, plan_identity=_Identity(token="plan"),
                            snapshot=SimpleNamespace(semantic_identity=_Identity(token="sem")),
                            resolved_dimension=2, target="system", backend="production")
     report = SimpleNamespace(to_data=lambda: {"accepted_steps": 2, "rejected_steps": 0,
                                               "final_time": .1, "stop_reason": "t_end"},
                              artifact_identity=_Identity(token="artifact"))
+    runtime = SimpleNamespace(_executor=SimpleNamespace(_s=SimpleNamespace(
+        installed_program_hash=lambda: "h0")), mass=0.0)
+    oracles = _module_from(repo / "examples" / "oracle.py", "rom17_fake_oracles_a")
     receipt = receipts.Receipt("fake case", source_root=repo, package=site / "pops",
                                directory=tmp_path / "receipts", domain="source-only")
     with receipt:
         with pytest.raises(receipts.ReceiptError, match="only after the stage C"):
-            receipt.loaded(SimpleNamespace())
+            receipt.loaded(runtime)
         receipt.equations(repo / "examples/case.py")
         receipt.plan(plan)
         receipt.compiled(_fake_artifact(tmp_path, "sem"))
         receipt.parameters(t_end=.1, cells=(16, 8))
         with pytest.raises(receipts.ReceiptError, match="only after the stage loaded"):
             receipt.advanced(report)
-        receipt.loaded(SimpleNamespace(_executor=SimpleNamespace(_s=SimpleNamespace())))
-        receipt.advanced(report)
+        receipt.loaded(runtime)
+        receipt.advanced(report, runtime)
+        receipt.property("mass", oracles.mass, runtime, domain="source-only")
     data = receipts.read_receipt(receipt.path)
-    assert [row["stage"] for row in data["stages"]] == ["E", "G", "C", "loaded", "advanced"]
-    assert data["levels"] == {"E": True, "G": True, "C": True, "R": False, "S": False}
+    assert [row["stage"] for row in data["stages"]] == list(receipts.STAGES)
+    assert data["level"] == "E", data["limits"]
+    assert data["limits"][0] == "G: the plan is not the SDK's verified ResolvedSimulationPlan"
+    assert any("the SDK's native leaf is not the loaded pops._pops" in item
+               for item in data["limits"])
     assert data["lease"]["held"] and data["lease"]["source"] == data["source"]["commit"]
     assert data["parameters"] == {"t_end": .1, "cells": [16, 8]}
-    assert any("not all found mapped" in item for item in data["limits"])
+    findings = data["overlay"]["findings"]
+    assert any(item.startswith("the receipt is not created by a committed file") for item in findings)
+    assert not receipts.admit(data, None, require="E")["admitted"]
     cohort.acquire_mutation_lease(site).release()  # closing the receipt released its lease
+
+
+def test_sdk_lifecycle_objects_reach_c_and_r_still_needs_the_native_leaf(repo, site, tmp_path):
+    lifecycle = _module_from(site / "pops" / "lifecycle.py", "rom17_fake_sdk_lifecycle")
+    oracles = _module_from(repo / "examples" / "oracle.py", "rom17_fake_oracles_b")
+    plan = lifecycle.ResolvedSimulationPlan(
+        plan_identity=_Identity(token="plan"), resolved_dimension=2, target="system",
+        backend="production", snapshot=SimpleNamespace(semantic_identity=_Identity(token="sem")))
+    fake = _fake_artifact(tmp_path, "sem")
+    artifact = lifecycle.CompiledSimulationArtifact(**vars(fake))
+    runtime = lifecycle.RuntimeInstance(_executor=lifecycle.RuntimeInstance(
+        _s=SimpleNamespace(installed_program_hash=lambda: "h0")), mass=0.0)
+    report = lifecycle.RunReport(data={"accepted_steps": 2}, artifact_identity=_Identity(
+        token="artifact"))
+    receipt = receipts.Receipt("fake SDK case", source_root=repo, package=site / "pops",
+                               directory=tmp_path, domain="source-only")
+    with receipt:
+        receipt.equations(repo / "examples/case.py")
+        receipt.plan(plan)
+        receipt.compiled(artifact)
+        receipt.loaded(runtime)
+        receipt.advanced(report, runtime)
+        receipt.property("mass", oracles.bounded(1.e-12), runtime, domain="source-only")
+        receipt.property("mass of a value", oracles.mass, SimpleNamespace(mass=0.0),
+                         domain="source-only")
+        with pytest.raises(receipts.ReceiptError, match="returned no boolean verdict"):
+            receipt.property("no verdict", lambda run: {"mass": 0.0}, runtime, domain="x")
+    data = receipts.read_receipt(receipt.path)
+    stages = {row["stage"]: row["evidence"] for row in data["stages"] if row["stage"] != "S"}
+    assert stages["G"]["plan_type"] == {"type": "rom17_fake_sdk_lifecycle.ResolvedSimulationPlan",
+                                        "in_sdk": True, "expected": "ResolvedSimulationPlan",
+                                        "is_expected": True}
+    assert stages["C"]["artifact_type"]["is_expected"]
+    assert stages["loaded"]["runtime_type"]["in_sdk"]
+    assert stages["advanced"]["report_type"]["is_expected"]
+    assert stages["advanced"]["same_runtime_as_loaded"] is True
+    assert data["level"] == "C"
+    assert data["limits"][0].startswith("R: not loaded by the SDK's runtime (the SDK's native leaf")
+    bounded, value = [row["evidence"] for row in data["stages"] if row["stage"] == "S"]
+    assert bounded["passed"] and bounded["oracle"]["origin"] == "source"
+    assert bounded["oracle"]["committed"] and bounded["oracle"]["file"] == "examples/oracle.py"
+    assert bounded["oracle"]["closure"] == {"limit": 1.e-12}
+    assert bounded["arguments"] == [{"type": "rom17_fake_sdk_lifecycle.RuntimeInstance",
+                                     "run_object": "runtime"}]
+    assert receipts._property_problems(bounded) == []
+    assert receipts._property_problems(value) == [
+        "oracle mass was not called on the runtime or report of the run"]
+    assert data["failures"] == []  # the refused oracle raised in the driver, which caught it
+
+
+def test_the_code_of_the_process_is_judged_where_it_comes_from(repo, site, monkeypatch):
+    source = cohort.source_identity(repo)
+    package = site / "pops"
+    interpreter = json.__file__
+    case = str(repo / "examples" / "case.py")
+    clean = receipts.code_observation(source, package, ["<string>", interpreter, case])
+    assert [frame["origin"] for frame in clean["driver"]] == ["internal", "interpreter",
+                                                              "source"]
+    # This test process also runs the real checkout's modules, foreign to the fake one: only the
+    # driver is judged clean here.
+    assert [item for item in receipts._code_findings(clean) if not item.startswith("module ")] \
+        == []
+
+    stray = repo.parent / "driver.py"
+    stray.write_text("pass\n")
+    planted = ModuleType("rom17_planted")
+    planted.__file__ = str(stray)
+    monkeypatch.setitem(sys.modules, "rom17_planted", planted)
+    edited = ModuleType("rom17_edited_case")
+    edited.__file__ = case
+    monkeypatch.setitem(sys.modules, "rom17_edited_case", edited)
+    (repo / "examples" / "case.py").write_text("CASE = 'edited'\n")
+    judged = receipts.code_observation(
+        source, package, [interpreter, "<string>", str(stray), str(package / "model.py")])
+    findings = receipts._code_findings(judged)
+    assert "the receipt is driven by code compiled from a string: <string>" in findings
+    assert any(item.startswith("the receipt is driven by code outside the source") and
+               item.endswith(str(stray)) for item in findings)
+    assert any(item.startswith("the receipt is driven by the SDK it qualifies") for item in findings)
+    assert any(item.startswith("the receipt is not created by a committed file") for item in findings)
+    assert "module rom17_planted loaded from %s, outside the source, the SDK and the interpreter" \
+        % stray in findings
+    assert any(item.startswith("module rom17_edited_case (examples/case.py) is not committed")
+               for item in findings)
+    assert receipts._code_findings(None) == ["the code of the process was not judged"]
+
+
+def test_the_most_specific_root_names_the_origin_of_code(tmp_path):
+    checkout = tmp_path / "checkout"
+    venv = checkout / ".venv"
+    package = venv / "lib" / "site-packages" / "pops"
+    assert receipts.code_origin(str(checkout / "examples" / "m.py"), checkout, package) == "source"
+    assert receipts.code_origin(str(package / "model.py"), checkout, package) == "sdk"
+    assert receipts.code_origin("<frozen runpy>", checkout, package) == "internal"
+    assert receipts.code_origin(str(tmp_path / "elsewhere.py"), checkout, package) == "foreign"
 
 
 def test_receipt_fails_fast_while_another_source_qualifies(repo, site):
@@ -584,7 +891,7 @@ def test_receipt_on_a_checkout_package_takes_no_lease_and_writes_nothing_there(r
         receipt.equations(repo / "examples/case.py")
     data = receipts.read_receipt(receipt.path)
     assert data["lease"] == {"held": False, "installation_root": str(repo / "python"),
-                             "skipped": "the SDK is not a retained wheel installation"}
+                             "skipped": "the SDK is no pip installation (a checkout)"}
     assert not (repo / "python" / ".pops-sdk").exists()
     assert _git(repo, "status", "--porcelain", "--untracked-files=all") == ""
     findings = data["overlay"]["findings"]

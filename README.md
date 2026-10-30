@@ -32,9 +32,9 @@ run `bash scripts/kokkos_openmp_conda.sh` before rebuilding. Backend availabilit
 property of the installed artifact.
 
 A build holds its environment exclusively, so it never replaces the SDK under a running
-qualification. `--wheel-dir DIR` retains the built wheel and records which source built it;
-[cohorts and qualification receipts](docs/developer/sdk_cohort_receipts.md) explains how such a
-build qualifies a source.
+qualification. `--wheel-dir DIR` retains the built wheel and attests, beside it, which source
+and environment built it; [cohorts and qualification receipts](docs/developer/sdk_cohort_receipts.md)
+explains how such a wheel qualifies a source.
 
 ## Run a tutorial
 

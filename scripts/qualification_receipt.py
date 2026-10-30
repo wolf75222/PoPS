@@ -3,22 +3,28 @@
 
 A receipt records what one process actually established about one requirement, stage by stage, so
 that every K6 level can be read from it.  It names the source commit, the installed SDK, every DSO
-mapped in the process, the parameters, the backend and the exact ranks.  The receiver observes the
+mapped in the process, the parameters, the backend and the exact ranks.  The receiver passes the
 real lifecycle objects (``pops.resolve``, ``pops.compile``, ``pops.bind``, ``pops.run``); the receipt
-re-checks each claim from files and process state instead of trusting the code it qualifies.
+checks that each one is an instance of the SDK it names and re-checks each claim from files and
+process state.  Some facts are reported by the qualified code itself and are named as such: the
+program hash a System installed, the program hash a mapped image exports, the ABI key and the
+runtime environment report of the native leaf.
 
 Stages and levels (K6):
 
 ``E``         the case sources, hashed and committed unchanged in the source;
-``G``         a resolved plan built by the real frontend (``pops.resolve`` of ``pops.validate``);
-``C``         the artifact compiled from that plan: every DSO hashed, its identity sidecar kept;
-``loaded``    every DSO of the artifact mapped in this process, identified by content;
-``advanced``  the bound runtime advanced by ``pops.run`` with the loaded artifact;
-``S``         a scientific property checked independently in its announced domain.
+``G``         the SDK's ``ResolvedSimulationPlan`` built by the real frontend;
+``C``         the SDK's ``CompiledSimulationArtifact`` of that plan: every DSO hashed with its sidecar;
+``loaded``    the SDK's native leaf mapped with its exact bytes, the System a class of that leaf, the
+              runtime an SDK object, and every artifact DSO mapped in this process by content;
+``advanced``  the SDK's ``RunReport`` of ``pops.run`` on that runtime and artifact;
+``S``         a committed, independent oracle that the receipt itself calls on the run.
 
 The level is the highest consecutive rung of ``E < G < C < R < S``; ``R`` needs both ``loaded`` and
-``advanced``.  A standalone C++ receipt is ``C-finite`` or ``R-finite`` and never ``R`` (K6).  A
-receipt is *admitted* to a cohort only when it names the cohort's clean source and installed SDK,
+``advanced``.  A standalone C++ receipt is ``C-finite`` or ``R-finite`` and never ``R`` (K6).  The
+code that drives the receipt and every module the process imported from the source must be
+committed unchanged; code from anywhere but the source, the SDK and the interpreter is an overlay.
+A receipt is *admitted* to a cohort only when it names the cohort's clean source and installed SDK,
 held the installation lease, saw no overlay, and reached the required level (``admit``).
 
 Commands::
@@ -30,7 +36,10 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Iterable, Mapping, Sequence
+import contextlib
+import functools
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -49,7 +58,7 @@ import sdk_cohort  # noqa: E402
 from sdk_cohort import CohortError, digest, sha256_file, utc_now  # noqa: E402
 
 
-RECEIPT_SCHEMA = "pops.receipt@1"
+RECEIPT_SCHEMA = "pops.receipt@2"
 KINDS = ("pops-runtime", "standalone-cpp")
 LADDER = ("E", "G", "C", "R", "S")
 STAGES = ("E", "G", "C", "loaded", "advanced", "S")
@@ -168,6 +177,15 @@ def _same_file(row: Mapping[str, Any], path: Path) -> bool | None:
             and os.minor(status.st_dev) == int(minor, 16))
 
 
+def _command_line() -> list[str] | None:
+    """The exact command line of this process (``python -c`` code included), where the OS has it."""
+    try:
+        raw = Path("/proc/self/cmdline").read_bytes()
+    except OSError:
+        return None
+    return [item.decode("utf-8", errors="replace")[:4000] for item in raw.split(b"\0") if item]
+
+
 def process_observation() -> dict[str, Any]:
     environment = {key: ("<redacted>" if _SECRET.search(key) else value)
                    for key, value in sorted(os.environ.items()) if _ENVIRONMENT.match(key)}
@@ -180,6 +198,7 @@ def process_observation() -> dict[str, Any]:
         "host": socket.gethostname(),
         "pid": os.getpid(),
         "argv": list(sys.argv),
+        "command_line": _command_line(),
         "cwd": os.getcwd(),
         "environment": environment,
         "sys_path_head": list(sys.path[:8]),
@@ -234,6 +253,91 @@ def backend_observation() -> dict[str, Any]:
     }
 
 
+# --- where code comes from ----------------------------------------------------------------------
+
+
+def _interpreter_roots() -> tuple[Path, ...]:
+    return tuple(sorted({Path(item) for item in (sys.prefix, sys.base_prefix, sys.exec_prefix,
+                                                 sys.base_exec_prefix) if item}))
+
+
+def _depth_within(path: Path, root: Path) -> int | None:
+    """How specific ``root`` is for ``path`` (its depth), lexically or once resolved; else None."""
+    for candidate, base in ((Path(os.path.abspath(path)), Path(os.path.abspath(root))),
+                            (Path(path).resolve(), Path(root).resolve())):
+        if candidate == base or candidate.is_relative_to(base):
+            return len(base.parts)
+    return None
+
+
+def code_origin(filename: str, source_root: Path, package: Path) -> str:
+    """Where one code file comes from: ``sdk``, ``source``, ``interpreter``, ``internal``, ``foreign``.
+
+    ``internal`` is code without a file (``<frozen ...>``, ``python -c``).  The most specific root
+    wins, so a virtual environment inside a checkout is the interpreter and a checkout under the
+    interpreter's prefix is the source.
+    """
+    if not filename or filename.startswith("<"):
+        return "internal"
+    roots = [(package, "sdk"), (source_root, "source")] + [
+        (root, "interpreter") for root in _interpreter_roots()]
+    matches = [(depth, origin) for root, origin in roots
+               if (depth := _depth_within(Path(filename), root)) is not None]
+    return max(matches)[1] if matches else "foreign"
+
+
+def code_observation(source: Mapping[str, Any], package: Path,
+                     driver: Sequence[str]) -> dict[str, Any]:
+    """Judge the code of this process: the frames that drive the receipt and every loaded module.
+
+    Code from the source must be committed unchanged; the SDK is judged by its own file table and
+    the interpreter's files are the interpreter.  ``driver`` lists the frames that created the
+    receipt, outermost first.
+    """
+    root = Path(source["root"])
+    frames = [{"file": name, "origin": code_origin(name, root, package)} for name in driver]
+    modules, foreign, interpreter = [], [], 0
+    for name, module in sorted(list(sys.modules.items()), key=lambda item: item[0]):
+        origin = getattr(module, "__file__", None)
+        if not isinstance(origin, str) or not origin:
+            continue
+        kind = code_origin(origin, root, package)
+        if kind == "source":
+            modules.append((name, Path(origin).resolve()))
+        elif kind == "foreign":
+            foreign.append({"module": name, "path": origin})
+        elif kind == "interpreter":
+            interpreter += 1
+    paths = sorted({path for _, path in modules} | {
+        Path(frame["file"]).resolve() for frame in frames if frame["origin"] == "source"})
+    judged = {Path(root / item["path"]).resolve(): item for item in committed_files(
+        source, [path for path in paths if path.is_file()])}
+    for frame in frames:
+        if frame["origin"] == "source":
+            frame["committed"] = bool(judged.get(Path(frame["file"]).resolve(), {}).get(
+                "committed"))
+    return {
+        "driver": frames,
+        "source_modules": [{"module": name, **judged.get(path, {"path": str(path),
+                                                               "committed": False})}
+                           for name, path in modules],
+        "foreign_modules": foreign,
+        "interpreter_modules": interpreter,
+    }
+
+
+def _driver_files(frame: Any) -> list[str]:
+    files = []
+    while frame is not None:
+        files.append(frame.f_code.co_filename)
+        frame = frame.f_back
+    return files[::-1]
+
+
+def _qualified_type(value: Any) -> str:
+    return type(value).__module__ + "." + type(value).__qualname__
+
+
 # --- the receipt -------------------------------------------------------------------------------
 
 
@@ -277,11 +381,12 @@ def _dso_file(path: Any, role: str) -> dict[str, Any]:
 class Receipt:
     """Record one qualification of one requirement, stage by stage, in one process.
 
-    Use it as a context manager.  Opening identifies the source and the installed SDK and, when the
-    SDK is a retained wheel installation, takes the shared qualification lease of that installation
-    for this source; closing observes the process, derives the levels, writes the receipt and
-    releases the lease.  An exception inside the block is recorded as the failure of the stage in
-    progress and the receipt is still written.
+    Use it as a context manager.  Opening identifies the source, takes the shared qualification
+    lease of the installation for this source when the SDK is a pip installation (a checkout is
+    never leased), then identifies the installed SDK; closing observes the process, derives the
+    levels, writes the receipt and releases the lease.  An exception inside the block is recorded
+    as the failure of the stage in progress and the receipt is still written.  The code that
+    creates the receipt is its driver: it must be a committed file of the source.
     """
 
     def __init__(self, requirement: str, *, source_root: Path, directory: Path | None = None,
@@ -297,6 +402,11 @@ class Receipt:
         self._artifact_identity: str | None = None
         self._plan_identity: str | None = None
         self._loaded = False
+        self._runtime: Any = None
+        self._report: Any = None
+        self._hashes: dict[Path, str | None] = {}
+        self._sdk_files: dict[str, str] = {}
+        self._driver = _driver_files(sys._getframe(1))
         self._current = "open"
         self.path: Path | None = None
         self.data: dict[str, Any] = {
@@ -328,27 +438,16 @@ class Receipt:
 
     def open(self) -> None:
         source = sdk_cohort.source_identity(self._source_root)
-        sdk = sdk_cohort.sdk_identity(self._package)
         self.data["source"] = source
-        self.data["sdk"] = sdk
-        self._sdk_files = sdk_cohort.sdk_file_table(Path(sdk["package_dir"]))
-        try:
-            self.data["coherence"] = sdk_cohort.coherence(source["root"], Path(sdk["package_dir"]))
-        except CohortError as exc:
-            self.data["coherence"] = {"coherent": False, "error": str(exc)}
-        installation = Path(sdk["installation_root"])
-        try:
-            record = sdk_cohort.read_cohort(installation)
-        except CohortError:
-            record = None
-        self.data["cohort"] = None if record is None else {
-            "cohort_id": record["cohort_id"], "source_commit": record["source"]["commit"],
-            "sdk_id": record["sdk"]["sdk_id"]}
+        package_dir = sdk_cohort.locate_package(self._package)
+        installation = package_dir.parent
+        # The lease comes before the SDK identity, so no build that respects it can replace the
+        # installation between the identity and the lease.
         self.data["lease"] = {"held": False, "installation_root": str(installation)}
-        if self._want_lease and sdk["installation"]["kind"] != "wheel":
-            # A checkout or unmanaged tree is never admitted; leasing it would write lock files
-            # into the source under qualification.
-            self.data["lease"]["skipped"] = "the SDK is not a retained wheel installation"
+        if self._want_lease and sdk_cohort._distribution(package_dir) is None:
+            # A checkout is never admitted; leasing it would write lock files into the source
+            # under qualification.
+            self.data["lease"]["skipped"] = "the SDK is no pip installation (a checkout)"
         elif self._want_lease:
             try:
                 self._lease = sdk_cohort.acquire_qualification_lease(
@@ -360,6 +459,25 @@ class Receipt:
                 self.data["lease"]["error"] = str(exc)
             else:
                 self.data["lease"] = {**self._lease.record, "held": True}
+        try:
+            sdk = sdk_cohort.sdk_identity(package_dir)
+            self.data["sdk"] = sdk
+            self._sdk_files = sdk_cohort.sdk_file_table(package_dir)
+            try:
+                self.data["coherence"] = sdk_cohort.coherence(source["root"], package_dir)
+            except CohortError as exc:
+                self.data["coherence"] = {"coherent": False, "error": str(exc)}
+            try:
+                record = sdk_cohort.read_cohort(installation)
+            except CohortError:
+                record = None
+        except BaseException:
+            if self._lease is not None:
+                self._lease.release()
+            raise
+        self.data["cohort"] = None if record is None else {
+            "cohort_id": record["cohort_id"], "source_commit": record["source"]["commit"],
+            "sdk_id": record["sdk"]["sdk_id"]}
         self._current = "E"
 
     def close(self) -> dict[str, Any]:
@@ -369,7 +487,6 @@ class Receipt:
             ("process", process_observation),
             ("backend", backend_observation),
             ("dsos", lambda: self._observe_dsos(final=True)),
-            ("ranks", self._ranks),
         )
         try:
             for key, observe in observations:
@@ -381,6 +498,8 @@ class Receipt:
                 try:
                     self.data["process"]["harness"] = committed_files(
                         self.data["source"], HARNESS, contents=_HARNESS_BYTES)
+                    self.data["process"]["code"] = code_observation(
+                        self.data["source"], Path(self.data["sdk"]["package_dir"]), self._driver)
                     now = sdk_cohort.source_identity(self._source_root)
                     self.data["process"]["source_at_close"] = {
                         "commit": now["commit"], "tree": now["tree"], "clean": now["clean"],
@@ -389,6 +508,10 @@ class Receipt:
                 except (CohortError, OSError) as exc:
                     self.fail("close:source", exc)
             self.data["overlay"] = overlay_findings(self.data, self._sdk_files)
+            try:
+                self.data["ranks"] = _jsonable(self._ranks())
+            except Exception as exc:
+                self.fail("close:ranks", exc)
         finally:
             if self._lease is not None:
                 self._lease.release()
@@ -429,7 +552,7 @@ class Receipt:
         return self._stage("E", {"files": files})
 
     def plan(self, plan: Any) -> dict[str, Any]:
-        """G: the resolved plan that the real frontend built."""
+        """G: the SDK's resolved plan that the real frontend built."""
         self._current = "G"
         verify = getattr(plan, "verify", None)
         if not callable(verify):
@@ -440,7 +563,7 @@ class Receipt:
                                            "semantic_identity", None))
         self._plan_identity = semantic
         return self._stage("G", {
-            "type": type(plan).__module__ + "." + type(plan).__qualname__,
+            "plan_type": self._type_evidence(plan, "ResolvedSimulationPlan"),
             "verified": True,
             "plan_identity": identity,
             "semantic_identity": semantic,
@@ -474,6 +597,7 @@ class Receipt:
         self._artifact_dsos = dsos
         self._artifact_identity = identity
         return self._stage("C", {
+            "artifact_type": self._type_evidence(artifact, "CompiledSimulationArtifact"),
             "artifact_identity": identity,
             "semantic_identity": semantic,
             "same_plan_as_G": self._plan_identity is not None and semantic == self._plan_identity,
@@ -484,7 +608,11 @@ class Receipt:
         })
 
     def loaded(self, runtime: Any) -> dict[str, Any]:
-        """Loaded: every artifact DSO mapped in this process, found by its exact content."""
+        """Loaded: the SDK's native leaf and every artifact DSO mapped here, found by content.
+
+        The System must be an instance of a class of that leaf and the runtime an SDK object; the
+        program hash the System installed is compared with the one the mapped image exports.
+        """
         self._current = "loaded"
         if not self._artifact_dsos:
             raise ReceiptError("a DSO is loaded only after the stage C named it")
@@ -500,8 +628,12 @@ class Receipt:
         installed_hash = installed() if callable(installed) else None
         symbols = self._program_hash_symbols(found)
         self._loaded = True
+        self._runtime = runtime
         return self._stage("loaded", {
-            "runtime": type(runtime).__module__ + "." + type(runtime).__qualname__,
+            "runtime": _qualified_type(runtime),
+            "runtime_type": self._type_evidence(runtime),
+            "executor_type": self._type_evidence(executor),
+            "native": self._native_evidence(system, mapped),
             "system": None if system is None else type(system).__qualname__,
             "installed_program_hash": installed_hash,
             "program_hash_symbols": symbols,
@@ -520,8 +652,10 @@ class Receipt:
         if not isinstance(data, Mapping):
             raise ReceiptError("advanced needs the RunReport that pops.run returns")
         artifact = _identity_token(getattr(report, "artifact_identity", None))
+        self._report = report
         evidence = {
-            "report_type": type(report).__module__ + "." + type(report).__qualname__,
+            "report_type": self._type_evidence(report, "RunReport"),
+            "same_runtime_as_loaded": None if runtime is None else runtime is self._runtime,
             "accepted_steps": data.get("accepted_steps"),
             "rejected_steps": data.get("rejected_steps"),
             "final_time": data.get("final_time"),
@@ -540,15 +674,31 @@ class Receipt:
             evidence["runtime_macro_step"] = step_of() if callable(step_of) else None
         return self._stage("advanced", evidence)
 
-    def property(self, name: str, *, value: Any, bound: Any, passed: bool, oracle: str,
+    def property(self, name: str, check: Callable[..., Any], *arguments: Any,
                  domain: str) -> dict[str, Any]:
-        """S: one scientific property, its measured value, its bound and its independent oracle."""
+        """S: call one committed, independent oracle on the run and record what it returns.
+
+        The receipt calls ``check(*arguments)`` itself; each argument must be the runtime of the
+        stage loaded or the report of the stage advanced.  The verdict is the oracle's boolean (or
+        its ``"passed"`` entry), never a value the caller passes; the oracle's file and the bounds
+        it closes over are recorded.  An oracle of the SDK is not independent.
+        """
         self._current = "S"
-        if type(passed) is not bool or not oracle or not domain:
-            raise ReceiptError("a property names its oracle and domain and has a boolean verdict")
-        return self._stage("S", {"name": name, "value": parameter_value(value),
-                                 "bound": parameter_value(bound), "passed": passed,
-                                 "oracle": oracle, "domain": domain})
+        if not isinstance(name, str) or not name or not domain or not callable(check):
+            raise ReceiptError("a property names itself and its domain and gives the oracle")
+        oracle = self._oracle_evidence(check)
+        given = [{"type": _qualified_type(item),
+                  "run_object": "runtime" if item is not None and item is self._runtime else
+                  "report" if item is not None and item is self._report else None}
+                 for item in arguments]
+        value = check(*arguments)
+        passed = value if isinstance(value, bool) else (
+            value.get("passed") if isinstance(value, Mapping) else None)
+        if type(passed) is not bool:
+            raise ReceiptError("oracle %s returned no boolean verdict" % oracle["qualname"])
+        return self._stage("S", {"name": name, "oracle": oracle, "arguments": given,
+                                 "value": parameter_value(value), "passed": passed,
+                                 "domain": domain})
 
     def fail(self, stage: str, error: BaseException) -> None:
         self.data["failures"].append({
@@ -558,6 +708,90 @@ class Receipt:
         })
 
     # -- observations ---------------------------------------------------------------------------
+
+    def _file_sha256(self, path: Path) -> str | None:
+        if path not in self._hashes:
+            self._hashes[path] = sha256_file(path) if path.is_file() else None
+        return self._hashes[path]
+
+    def _defined_in_sdk(self, cls: type) -> bool:
+        """Whether ``cls`` is defined by an SDK file that still has its installed bytes."""
+        module = sys.modules.get(getattr(cls, "__module__", None) or "")
+        origin = getattr(module, "__file__", None)
+        if not isinstance(origin, str) or not origin:
+            return False
+        path = Path(origin).resolve()
+        package = Path(self.data["sdk"]["package_dir"])
+        if not _inside(path, package):
+            return False
+        expected = self._sdk_files.get(path.relative_to(package).as_posix())
+        return expected is not None and self._file_sha256(path) == expected
+
+    def _type_evidence(self, value: Any, expected: str | None = None) -> dict[str, Any]:
+        cls = type(value)
+        bases = [base.__qualname__ for base in cls.__mro__ if self._defined_in_sdk(base)]
+        evidence: dict[str, Any] = {"type": _qualified_type(value),
+                                    "in_sdk": self._defined_in_sdk(cls)}
+        if expected is not None:
+            evidence["expected"] = expected
+            evidence["is_expected"] = expected in bases
+        return evidence
+
+    def _native_evidence(self, system: Any, mapped: Sequence[Mapping[str, Any]]
+                         ) -> dict[str, Any]:
+        """The native leaf this process loaded, and whether the System is one of its classes."""
+        native = sys.modules.get("pops._pops")
+        origin = getattr(native, "__file__", None)
+        package = Path(self.data["sdk"]["package_dir"])
+        rows = {str((package / "_native" / row["path"]).resolve()): row
+                for row in self.data["sdk"]["native"]}
+        row = rows.get(str(Path(origin).resolve())) if isinstance(origin, str) and origin \
+            else None
+        cls = type(system)
+        return {
+            "module": getattr(native, "__name__", None),
+            "file": origin,
+            "sdk_leaf": row is not None,
+            "leaf_sha256": None if row is None else row["sha256"],
+            "leaf_mapped": row is not None and any(
+                item.get("sha256") == row["sha256"] and not item.get("deleted")
+                for item in mapped),
+            "system_type": _qualified_type(system),
+            "system_of_leaf": native is not None and system is not None
+            and cls.__module__ == getattr(native, "__name__", None)
+            and getattr(native, cls.__name__, None) is cls,
+        }
+
+    def _oracle_evidence(self, check: Callable[..., Any]) -> dict[str, Any]:
+        """The oracle's own code, its origin and the values it closes over (its bounds)."""
+        function: Any = check
+        partial = None
+        if isinstance(function, functools.partial):
+            partial = {"args": parameter_value(list(function.args)),
+                       "keywords": parameter_value(dict(function.keywords))}
+            function = function.func
+        function = inspect.unwrap(getattr(function, "__func__", function))
+        code = getattr(function, "__code__", None)
+        filename = getattr(code, "co_filename", None) or ""
+        root = Path(self.data["source"]["root"])
+        origin = code_origin(filename, root, Path(self.data["sdk"]["package_dir"]))
+        judged = committed_files(self.data["source"], [Path(filename).resolve()])[0] \
+            if origin == "source" else None
+        closure: dict[str, Any] = {}
+        if code is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                closure = dict(inspect.getclosurevars(function).nonlocals)
+        return {
+            "module": getattr(function, "__module__", None),
+            "qualname": getattr(function, "__qualname__", repr(function)),
+            "file": judged["path"] if judged else filename,
+            "sha256": None if judged is None else judged["sha256"],
+            "origin": origin,
+            "committed": bool(judged and judged["committed"]),
+            "closure": {key: parameter_value(value) for key, value in sorted(closure.items())
+                        if not inspect.ismodule(value) and not callable(value)},
+            "partial": partial,
+        }
 
     def _program_hash_symbols(self, found: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         """``pops_program_hash()`` of each mapped program image, read without loading anything."""
@@ -618,10 +852,13 @@ class Receipt:
             size, rank = report.get("mpi_ranks"), report.get("mpi_rank")
         else:
             size, rank = 1, 0  # no native leaf, hence no communicator: one process
+        _levels, level, _limits = derive_levels(self.data)
         local = digest("pops.receipt-rank", {
             "sdk": self.data["sdk"]["sdk_id"], "source": self.data["source"]["commit"],
             "artifact": self._artifact_identity,
-            "dsos": sorted(row["sha256"] for row in self._artifact_dsos)})
+            "dsos": sorted(row["sha256"] for row in self._artifact_dsos),
+            "overlay": sorted((self.data["overlay"] or {}).get("findings", ["unobserved"])),
+            "level": level, "failures": len(self.data["failures"])})
         consensus = None
         gathered = None
         if self._gather is not None:
@@ -710,6 +947,7 @@ def overlay_findings(data: Mapping[str, Any], sdk_files: Mapping[str, str]) -> d
         if not item["committed"]:
             findings.append("qualification harness %s is not committed unchanged in the source"
                             % item["path"])
+    findings.extend(_code_findings((data.get("process") or {}).get("code")))
     module = sys.modules.get("pops")
     if module is not None:
         locations = [str(Path(item).resolve()) for item in getattr(module, "__path__", ())]
@@ -754,7 +992,50 @@ def overlay_findings(data: Mapping[str, Any], sdk_files: Mapping[str, str]) -> d
     for row in data.get("dsos", ()):
         if row.get("role") in ("program", "model", "component") and row.get("same_inode") is False:
             findings.append("mapped DSO %s is not the hashed file" % row["path"])
+        if row.get("role") != "sdk":
+            continue
+        if row.get("deleted"):
+            findings.append("SDK file %s is mapped but was deleted or replaced after it was loaded"
+                            % row["path"])
+            continue
+        relative = Path(row["path"]).resolve().relative_to(package).as_posix() \
+            if _inside(Path(row["path"]), package) else None
+        if relative is not None and row.get("sha256") != sdk_files.get(relative):
+            findings.append("mapped SDK file %s does not have the bytes of the SDK this receipt "
+                            "names" % relative)
+    findings = list(dict.fromkeys(findings))  # two frames of one driver file are one finding
     return {"clean": not findings, "findings": findings}
+
+
+def _code_findings(code: Mapping[str, Any] | None) -> list[str]:
+    """Overlay findings from the judged code of the process (``code_observation``)."""
+    if code is None:
+        return ["the code of the process was not judged"]
+    findings = []
+    frames = code.get("driver", [])
+    for index, frame in enumerate(frames):
+        origin, name = frame["origin"], frame["file"]
+        if origin == "foreign":
+            findings.append("the receipt is driven by code outside the source, the SDK and the "
+                            "interpreter: %s" % name)
+        elif origin == "sdk":
+            findings.append("the receipt is driven by the SDK it qualifies: %s" % name)
+        elif origin == "source" and not frame.get("committed"):
+            findings.append("driver %s is not committed unchanged in the source" % name)
+        elif origin == "internal" and not name.startswith("<frozen ") \
+                and not (index == 0 and name in ("<string>", "<stdin>")):
+            findings.append("the receipt is driven by code compiled from a string: %s" % name)
+    if not frames or frames[-1]["origin"] != "source":
+        findings.append("the receipt is not created by a committed file of the source (%s)"
+                        % (frames[-1]["file"] if frames else "no frame"))
+    for item in code.get("source_modules", ()):
+        if not item.get("committed"):
+            findings.append("module %s (%s) is not committed unchanged in the source"
+                            % (item["module"], item["path"]))
+    for item in code.get("foreign_modules", ()):
+        findings.append("module %s loaded from %s, outside the source, the SDK and the "
+                        "interpreter" % (item["module"], item["path"]))
+    return findings
 
 
 def _stage_rows(data: Mapping[str, Any], name: str) -> list[Mapping[str, Any]]:
@@ -780,31 +1061,41 @@ def derive_levels(data: Mapping[str, Any]) -> tuple[dict[str, bool], str, list[s
         item["committed"] for row in equations for item in row["evidence"]["files"])
     if equations and not stages_ok["E"]:
         limits.append("E: a case source is not committed unchanged in the source")
-    stages_ok["G"] = any(row["evidence"]["verified"] for row in _stage_rows(data, "G"))
+    plans = _stage_rows(data, "G")
+    stages_ok["G"] = any(row["evidence"]["verified"] and row["evidence"]["plan_type"]["is_expected"]
+                         for row in plans)
+    if plans and not stages_ok["G"]:
+        limits.append("G: the plan is not the SDK's verified ResolvedSimulationPlan")
     compiled = _stage_rows(data, "C")
     stages_ok["C"] = any(
-        row["evidence"]["same_plan_as_G"] and row["evidence"]["dsos"]
+        row["evidence"]["artifact_type"]["is_expected"]
+        and row["evidence"]["same_plan_as_G"] and row["evidence"]["dsos"]
         and all("artifact_sidecar" in dso for dso in row["evidence"]["dsos"]
                 if dso["role"] == "program")
         for row in compiled)
     if compiled and not stages_ok["C"]:
-        limits.append("C: the artifact is not tied to the G plan or lost its identity sidecar")
-    loaded = any(row["evidence"]["all_mapped"] and row["evidence"]["system"]
-                 and row["evidence"]["installed_program_matches"]
-                 for row in _stage_rows(data, "loaded"))
+        limits.append("C: the artifact is not the SDK's CompiledSimulationArtifact of the G plan, "
+                      "or lost its identity sidecar")
+    loads = _stage_rows(data, "loaded")
+    missing = [] if not loads else _loaded_missing(loads[-1]["evidence"])
+    loaded = any(not _loaded_missing(row["evidence"]) for row in loads)
     advanced = any(row["evidence"]["same_artifact_as_C"]
                    and (row["evidence"]["accepted_steps"] or 0) >= 1
+                   and row["evidence"]["report_type"]["is_expected"]
+                   and row["evidence"]["same_runtime_as_loaded"] is not False
                    for row in _stage_rows(data, "advanced"))
     stages_ok["R"] = loaded and advanced
     if compiled and not loaded:
-        limits.append("R: the compiled DSOs were not all found mapped in the process, or the "
-                      "System does not run the mapped program")
+        limits.append("R: not loaded by the SDK's runtime (%s)"
+                      % ("; ".join(missing) if missing else "no loaded stage"))
     if loaded and not advanced:
-        limits.append("R: the loaded artifact did not advance through pops.run")
+        limits.append("R: the loaded artifact did not advance through pops.run (the SDK's "
+                      "RunReport of the same runtime and artifact)")
     properties = _stage_rows(data, "S")
-    stages_ok["S"] = bool(properties) and all(row["evidence"]["passed"] for row in properties)
-    if properties and not stages_ok["S"]:
-        limits.append("S: a recorded property failed")
+    problems = [problem for row in properties for problem in _property_problems(row["evidence"])]
+    stages_ok["S"] = bool(properties) and not problems
+    if problems:
+        limits.append("S: " + problems[0])
     levels = {}
     reached = True
     level = "none"
@@ -817,6 +1108,36 @@ def derive_levels(data: Mapping[str, Any]) -> tuple[dict[str, bool], str, list[s
         limits.append("failed in stage %s: %s" % (data["failures"][0]["stage"],
                                                  data["failures"][0]["message"][:200]))
     return levels, level, limits
+
+
+def _loaded_missing(evidence: Mapping[str, Any]) -> list[str]:
+    """What the stage loaded lacks to show the SDK's runtime running the compiled artifact."""
+    native = evidence["native"]
+    checks = (
+        (native["sdk_leaf"], "the SDK's native leaf is not the loaded pops._pops"),
+        (native["leaf_mapped"], "the SDK's native leaf is not mapped with its installed bytes"),
+        (native["system_of_leaf"], "the System is not a class of the SDK's native leaf"),
+        (evidence["runtime_type"]["in_sdk"], "the runtime is not an SDK object"),
+        (evidence["executor_type"]["in_sdk"], "the runtime's executor is not an SDK object"),
+        (evidence["all_mapped"], "the compiled DSOs are not all mapped in the process"),
+        (evidence["installed_program_matches"],
+         "the System does not run the mapped program"),
+    )
+    return [message for passed, message in checks if not passed]
+
+
+def _property_problems(evidence: Mapping[str, Any]) -> list[str]:
+    oracle = evidence["oracle"]
+    problems = []
+    if oracle["origin"] != "source" or not oracle["committed"]:
+        problems.append("oracle %s is not a committed file of the source (%s)"
+                        % (oracle["qualname"], oracle["origin"]))
+    if not evidence["arguments"] or not all(item["run_object"] for item in evidence["arguments"]):
+        problems.append("oracle %s was not called on the runtime or report of the run"
+                        % oracle["qualname"])
+    if not evidence["passed"]:
+        problems.append("property %s failed" % evidence["name"])
+    return problems
 
 
 def receipt_id(data: Mapping[str, Any]) -> str:
@@ -848,7 +1169,8 @@ def read_receipt(path: Path) -> dict[str, Any]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     validate_receipt(data)
     if receipt_id(data) != data["receipt_id"]:
-        raise ReceiptError("receipt %s does not authenticate its own identity" % path)
+        raise ReceiptError("receipt %s is not self-consistent: its id is not the digest of its "
+                           "content" % path)
     return data
 
 
@@ -886,8 +1208,8 @@ def admit(data: Mapping[str, Any], cohort: Mapping[str, Any] | None, *,
     if not overlay.get("clean"):
         reasons.extend("overlay: " + item for item in overlay.get("findings", ["unobserved"]))
     ranks = data.get("ranks") or {}
-    if ranks.get("consensus") is not True:
-        reasons.append("ranks did not agree on the source, SDK and artifact")
+    if data["kind"] == "pops-runtime" and ranks.get("consensus") is not True:
+        reasons.append("ranks did not agree on the source, SDK, artifact, overlay and level")
     if data["status"] != "closed":
         reasons.append("the receipt is %s" % data["status"])
     if cohort is None:

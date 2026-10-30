@@ -118,6 +118,12 @@ if ! python -I "$HERE/scripts/sdk_cohort.py" held --installation "$POPS_SITE_PAC
     -- bash "$HERE/scripts/build_python.sh" "${ORIGINAL_ARGS[@]}"
 fi
 echo "installation lease: exclusive on $POPS_SITE_PACKAGES"
+# The source as this build starts. attest-build compares it with the source as the build ends: a
+# checkout that changed in between attests nothing.
+POPS_BUILD_SOURCE="$(mktemp "${TMPDIR:-/tmp}/pops-build-source.XXXXXX")"
+trap 'rm -f "$POPS_BUILD_SOURCE"' EXIT
+python -I "$HERE/scripts/sdk_cohort.py" identify --source "$HERE" > "$POPS_BUILD_SOURCE" \
+  || echo "warning: the source could not be identified; this build cannot be attested" >&2
 
 # Conda's macOS OpenMPI wrappers remember the compiler used to build the package, which is not part
 # of this deliberately AppleClang-based environment.  OpenMPI's documented override keeps mpicc,
@@ -258,7 +264,7 @@ else
   echo "      (slower, unpinned build deps). Add 'scikit-build-core' to environment.yml + 'conda env update' to fix."
 fi
 NATIVE_VARIANT_SNAPSHOT="$(mktemp -d "${TMPDIR:-/tmp}/pops-native-variants.XXXXXX")"
-cleanup_native_snapshot() { rm -rf "$NATIVE_VARIANT_SNAPSHOT"; }
+cleanup_native_snapshot() { rm -rf "$NATIVE_VARIANT_SNAPSHOT" "$POPS_BUILD_SOURCE"; }
 trap cleanup_native_snapshot EXIT
 PYTHONPATH= PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/preserve_native_variants.py" snapshot --dest "$NATIVE_VARIANT_SNAPSHOT"
@@ -296,10 +302,12 @@ PYTHONPATH= PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/verify_installed_native.py" "${native_verify_args[@]}"
 if [[ -n "$WHEEL_DIR" ]]; then
   # The retained wheel is now this environment's SDK.  Attest which source built its final Dim=N
-  # leaf, so that a cohort of this source can be published (scripts/sdk_cohort.py publish).
+  # leaf, here and beside the wheel, so that a cohort of this source can be published from the
+  # wheel (scripts/sdk_cohort.py prefix, then publish).
   python -I "$HERE/scripts/sdk_cohort.py" attest-build --source "$HERE" \
       --package "$POPS_SITE_PACKAGES/pops" --dimension "$POPS_NATIVE_DIM" \
-      --wheel "${built_wheels[0]}" -- bash scripts/build_python.sh "${ORIGINAL_ARGS[@]}" \
+      --source-before "$POPS_BUILD_SOURCE" --wheel "${built_wheels[0]}" \
+      -- bash scripts/build_python.sh "${ORIGINAL_ARGS[@]}" \
     || echo "warning: the Dim=$POPS_NATIVE_DIM build is installed but not attested;" \
             "it cannot form a cohort" >&2
 fi

@@ -7954,12 +7954,12 @@
       }
     },
     "rom17_20261029_qualification_receipt": {
-      "basis": "Conservative 300-second scheduling estimate (native-unit tier) for one native receiver that compiles M01 (one program DSO and one model DSO) into an isolated cache, binds it, runs two SSPRK2 steps, writes one qualification receipt and re-proves the installation against its retained wheel. The complete local file run in a CI-identical installed Dim=2 Kokkos Serial prefix took 133.4 seconds (one passed) on a 4-core container; this is not a GitHub CI per-file timing. Existing weights, shards and watchdogs are unchanged; replace from a complete CI per-file receipt.",
-      "estimated_seconds": 300,
+      "basis": "Conservative 600-second scheduling estimate (native tier) for two native receivers: M01 in System (one program DSO and one model DSO, two SSPRK2 steps) and the finite AMR case in AmrSystem (two levels, temporal ratio 2, three steps), each compiled into an isolated cache, bound, run, recorded in one qualification receipt and admitted against the cohort of the installation, re-proved against its retained wheel. The complete local file run in a CI-identical installed Dim=2 Kokkos Serial prefix took 285.2 seconds (two tests) on a 4-core container; this is not a GitHub CI per-file timing. Existing weights, shards and watchdogs are unchanged; replace from a complete CI per-file receipt.",
+      "estimated_seconds": 600,
       "files": [
         "tests/python/integration/runtime/test_qualification_receipt_native.py"
       ],
-      "source_sha256": "e8d3767d26098672515fdd79f6dfaf1ef6a9b2d93e163b1e926807ed777d3c0d"
+      "source_sha256": "5972a3f0f749cc623130b8a48deb9525d7497e1f09d41b62cebbcd0f89ac36e6"
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 285,
@@ -9154,5 +9154,5 @@
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
   "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
-  "tests/python/integration/runtime/test_qualification_receipt_native.py": 300
+  "tests/python/integration/runtime/test_qualification_receipt_native.py": 600
 }
