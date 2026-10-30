@@ -11,8 +11,8 @@
 # seven reads and writes of a private attribute of a core object, on six lines, that the lot 2 audit
 # found (private-attribute), and it is empty at the exit of Phase 1 (section 18).
 
-python/pops/lib/amr/__init__.py:374 private-import N12 | pops._generated_component_interfaces
-python/pops/lib/amr/__init__.py:435 private-import N12 | pops._generated_component_interfaces
+python/pops/lib/amr/__init__.py:376 private-import N12 | pops._generated_component_interfaces
+python/pops/lib/amr/__init__.py:446 private-import N12 | pops._generated_component_interfaces
 python/pops/lib/initial/__init__.py:306 private-import N8 | pops.analytic._cell_bounds
 python/pops/lib/initial/__init__.py:440 private-import N8 | pops.analytic._cell_bounds
 python/pops/lib/initial/_bootstrap_program.py:0 private-module N8 | (path)

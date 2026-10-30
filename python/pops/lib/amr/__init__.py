@@ -11,6 +11,8 @@ from typing import Any, ClassVar
 
 from pops.identity import make_identity
 
+from .criteria import gradient_norm
+
 
 class _BuiltinLoadBalance:
     """Constructor-only value implementing the open AMR load-balance data protocol."""
@@ -373,6 +375,15 @@ class SymbolicTagger:
     def require_tagging_graph(self, graph: Any) -> None:
         from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 
+        if callable(getattr(graph, "runtime_criterion_data", None)):
+            # A criterion written as functions of cell is generated into the compiled Program;
+            # the native tagging plan hands it each patch and keeps hysteresis and the buffer.
+            if (graph.hysteresis.min_cycles != 0
+                    and not NATIVE_TAGGING_PROGRAM_ABI["persistent_hysteresis"]):
+                raise NotImplementedError(
+                    "AMR hysteresis min_cycles requires native persistent tagging state; "
+                    "it is never accepted then ignored")
+            return
         registrations = getattr(graph, "registrations", None)
         authoring = getattr(graph, "graph", None)
         if not isinstance(registrations, tuple) or authoring is None:
@@ -628,4 +639,5 @@ __all__ = [
     "SymbolicTagger",
     "RoundRobin",
     "VolumeAverage",
+    "gradient_norm",
 ]

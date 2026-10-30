@@ -436,6 +436,9 @@ def _compile_resolved_problem(plan: Any) -> Any:
     balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
     validate_balance_due_contract(plan.time, balance_due_contract)
     options = _program_compile_options(plan)
+    from pops.mesh._amr import ResolvedRefinementCriterion
+
+    tagging = getattr(plan.bootstrap_plan, "tagging", None)
     return _compile_problem_impl(
         model_graph=build_program_model_graph(plan),
         time=plan.time,
@@ -447,6 +450,8 @@ def _compile_resolved_problem(plan: Any) -> Any:
         native_dimension=plan.resolved_dimension,
         shared_interface_codegen_evidence=evidence,
         physical_global_sources=plan._physical_global_sources,
+        refinement_criterion=(
+            tagging if type(tagging) is ResolvedRefinementCriterion else None),
         **options,
     )
 
@@ -471,12 +476,15 @@ def _compile_problem_impl(
     native_dimension: Any = None,
     shared_interface_codegen_evidence: Any,
     physical_global_sources: Any = None,
+    refinement_criterion: Any = None,
 ) -> Any:
     """Compile a time Program into an ABI-compatible native ``problem.so``.
 
     Only the production backend is supported; ``target`` selects system or AMR entrypoints. An
     omitted path uses the content-addressed cache, ``force`` recompiles, and ``debug`` retains C++.
-    The returned ``CompiledProblem`` carries the validated physical model and compile metadata.
+    ``refinement_criterion`` is the criterion of an adaptive layout written as regions of ``cell``,
+    generated into the same source. The returned ``CompiledProblem`` carries the validated physical
+    model and compile metadata.
     """
     import tempfile
     from pops.codegen._compile_platform import require_shared_library_compile_platform
@@ -582,6 +590,13 @@ def _compile_problem_impl(
             balance_due_contract=balance_due_contract,
             shared_interface_codegen_evidence=shared_interface_codegen_evidence,
         )
+    if refinement_criterion is not None:
+        if target != "amr_system":
+            raise ValueError("a refinement criterion is compiled into an adaptive Program only")
+        from pops.codegen.program_emit_refinement_criterion import emit_refinement_criterion
+
+        src += emit_refinement_criterion(
+            refinement_criterion, native_dimension=native_dimension)
 
     include = include or pops_include()
     sig = pops_header_signature(include)

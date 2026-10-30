@@ -616,6 +616,19 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("refine_ops"), py::arg("refine_args"), py::arg("coarsen_ops"),
           py::arg("coarsen_args"), py::arg("min_cycles"), py::arg("equality_policy"),
           py::arg("conflict_policy"), py::arg("clock_identity"), py::arg("provider_identity"))
+      .def("_set_generated_tagging", &AmrSystem::set_generated_tagging, py::arg("identity"),
+           py::arg("field_identities"), py::arg("field_blocks"), py::arg("field_variables"),
+           py::arg("field_components"), py::arg("field_reach"), py::arg("parameters"),
+           py::arg("min_cycles"), py::arg("clock_identity"), py::arg("provider_identity"))
+      .def(
+          "_tagging_requests",
+          [](AmrSystem& system, int parent_level) {
+            const std::vector<std::uint8_t> requests = system.tagging_requests(parent_level);
+            return py::bytes(reinterpret_cast<const char*>(requests.data()), requests.size());
+          },
+          "The requests of one live parent level after the equality and conflict policies, one "
+          "byte per cell of the parent domain, axis 0 fastest (1 refine, 2 coarsen, 0 keep).",
+          py::arg("parent_level"))
       .def(
           "set_poisson",
           [](AmrSystem& system, const std::string& rhs, const std::string& solver,

@@ -113,16 +113,19 @@ def _handle_token(domain: str, payload: Any) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedTaggingAuthority:
-    """Resolved tag graph plus the explicit spatial dilation requested by authoring."""
+    """Resolved tag graph, or refinement criterion written as regions of ``cell``, plus the
+    explicit spatial dilation requested by authoring."""
 
     graph: Any
     buffer_cells: int
 
     def __post_init__(self) -> None:
-        from pops.mesh._amr import ResolvedTaggingGraph
+        from pops.mesh._amr import ResolvedRefinementCriterion, ResolvedTaggingGraph
 
-        if type(self.graph) is not ResolvedTaggingGraph:
-            raise TypeError("ResolvedTaggingAuthority.graph must be a ResolvedTaggingGraph")
+        if type(self.graph) not in (ResolvedTaggingGraph, ResolvedRefinementCriterion):
+            raise TypeError(
+                "ResolvedTaggingAuthority.graph must be a ResolvedTaggingGraph or a "
+                "ResolvedRefinementCriterion")
         if isinstance(self.buffer_cells, bool) or not isinstance(self.buffer_cells, int) \
                 or self.buffer_cells < 0:
             raise ValueError("ResolvedTaggingAuthority.buffer_cells must be an integer >= 0")
@@ -238,6 +241,16 @@ class AMRTaggingResolutionContext:
         if frame != "model" and frame != self.layout_plan.normalized(layout).geometry.frame_id:
             raise ValueError("AMR indicator state frame differs from its assigned layout frame")
         return layout
+
+    def admit_criterion_state(self, state: Handle) -> None:
+        """Refuse a state that a refinement region reads but this adaptive layout does not own."""
+        if not isinstance(state, Handle) or state.kind != "state" or not state.is_resolved:
+            raise TypeError("a refinement region reads owner-qualified block states")
+        if state.owner_path.nodes[0] != self.owner.nodes[0]:
+            raise ValueError(
+                "refinement region state %s belongs to a different Case owner"
+                % state.qualified_id)
+        self._indicator_layout(state)
 
     def _discrete_context(self, state: Handle) -> Any:
         from pops.mesh._amr import DiscreteIndicatorContext
@@ -452,12 +465,17 @@ def resolve_tagging(
             raise TypeError("resolve_tagging authoring must implement %s()" % method)
     if type(context) is not AMRTaggingResolutionContext:
         raise TypeError("resolve_tagging requires an AMRTaggingResolutionContext")
+    from pops.mesh._amr import RefinementRegion, resolve_refinement_criterion
+
     resolved = authoring.resolve_references(context.resolve)
     roots: dict[str, list[Any]] = {"refine": [], "coarsen": []}
+    regions: list[tuple[str, Any]] = []
     buffer_cells = None
     for rule in resolved.rules:
         action = getattr(rule, "action", None)
-        if action in roots:
+        if action in roots and type(rule.predicate) is RefinementRegion:
+            regions.append((action, rule.predicate))
+        elif action in roots:
             roots[action].append(
                 _resolve_predicate(rule.predicate, action=action, context=context)
             )
@@ -469,6 +487,18 @@ def resolve_tagging(
             )
     if buffer_cells is None:
         raise ValueError("AMR tagging resolution lost its explicit Buffer authority")
+    if regions:
+        if roots["refine"] or roots["coarsen"]:
+            raise TypeError(
+                "AMR tagging writes every predicate as a function of cell or none of them")
+        criterion = resolve_refinement_criterion(
+            tuple(regions),
+            hysteresis=resolved.hysteresis,
+            conflict_policy=resolved.conflict_policy,
+            dimension=_dimension(context.layout_plan),
+            admit_state=context.admit_criterion_state,
+        )
+        return ResolvedTaggingAuthority(criterion, buffer_cells)
     graph = TaggingGraph(
         refine=_union(roots["refine"]),
         coarsen=_union(roots["coarsen"]),

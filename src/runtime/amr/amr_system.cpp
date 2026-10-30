@@ -2759,6 +2759,25 @@ struct AmrSystem<Dim>::Impl {
     int conflict_policy = 0;
     std::string clock_identity;
     std::string provider_identity;
+    /// The criterion generated into the compiled Program (DM13b), in place of the bytecode: the
+    /// block states it reads, in the order of its field table, the variables it reads in each one
+    /// with their component indices, its reach per axis, and its bound runtime parameters.
+    struct Generated {
+      std::string identity;
+      std::vector<std::string> field_identities;
+      std::vector<std::string> field_blocks;
+      std::vector<std::vector<std::string>> field_variables;
+      std::vector<std::vector<int>> field_components;
+      std::vector<std::array<std::size_t, Dim>> field_reach;
+      std::vector<double> parameters;
+    };
+    std::optional<Generated> generated;
+  };
+
+  /// The refinement criterion that the installed compiled Program exports, if any.
+  struct GeneratedCriterionAuthority {
+    runtime::amr::GeneratedCriterionEntry<Dim> entry = nullptr;
+    std::string identity;
   };
 
   enum class TaggingFieldKind : std::uint8_t { state, auxiliary };
@@ -3892,6 +3911,7 @@ struct AmrSystem<Dim>::Impl {
   mutable bool checkpoint_program_state_capacity_provisional = false;
   bool interface_program_state_refresh = false;
   std::optional<TaggingSpec> tagging_spec;
+  GeneratedCriterionAuthority generated_criterion;
   struct TaggerComponentAuthority {
     std::shared_ptr<component::LoadedComponent> component{};
     runtime::amr::PreparedTaggerComponentSpec spec{};
@@ -4644,6 +4664,32 @@ struct AmrSystem<Dim>::Impl {
     return std::move(contract).release();
   }
 
+  static void append_generated_tagging_contract(ExactContractBuilder& contract,
+                                                const typename TaggingSpec::Generated& generated) {
+    const auto text = [](ExactContractBuilder& item, const std::string& value) {
+      item.text(value);
+    };
+    contract.text("pops.amr.generated-refinement-criterion")
+        .scalar(std::uint32_t{1})
+        .text(generated.identity)
+        .sequence(generated.field_identities, text)
+        .sequence(generated.field_blocks, text)
+        .sequence(generated.field_variables,
+                  [&](ExactContractBuilder& item, const std::vector<std::string>& names) {
+                    item.sequence(names, text);
+                  })
+        .sequence(generated.field_components,
+                  [](ExactContractBuilder& item, const std::vector<int>& components) {
+                    item.sequence(components);
+                  })
+        .sequence(generated.field_reach,
+                  [](ExactContractBuilder& item, const std::array<std::size_t, Dim>& reach) {
+                    for (const std::size_t value : reach)
+                      item.scalar(static_cast<std::uint64_t>(value));
+                  })
+        .sequence(generated.parameters);
+  }
+
   void append_tagging_authority_contract(ExactContractBuilder& contract) const {
     contract.presence(tagging_spec.has_value());
     if (tagging_spec) {
@@ -4688,6 +4734,8 @@ struct AmrSystem<Dim>::Impl {
           .scalar(std::int32_t{tagging.conflict_policy})
           .text(tagging.clock_identity)
           .text(tagging.provider_identity);
+      if (tagging.generated)
+        append_generated_tagging_contract(contract, *tagging.generated);
     }
 
     contract.presence(tagger_component.has_value());
@@ -9020,6 +9068,51 @@ struct AmrSystem<Dim>::Impl {
       return candidate.fields.size() - 1;
     };
 
+    const auto state_block_of = [&](const std::string& block_name, const std::string& identity) {
+      const auto block = std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& value) {
+        return value.name == block_name;
+      });
+      if (block == blocks.end())
+        throw std::invalid_argument("AMR tagging state leaf names another native block");
+      const std::string& installed = boundary_registry.state_route(block_name);
+      if (identity != installed && identity != direct_amr_state_identity(block_name))
+        throw std::invalid_argument(
+            "AMR tagging state leaf differs from its exact qualified storage route");
+      return static_cast<std::size_t>(std::distance(blocks.begin(), block));
+    };
+
+    if (tagging_spec->generated) {
+      const auto& generated = *tagging_spec->generated;
+      if (generated_criterion.entry == nullptr || generated_criterion.identity != generated.identity)
+        throw std::invalid_argument(
+            "AMR generated refinement criterion is not the one exported by the installed "
+            "compiled Program");
+      candidate.program.generated_entry = generated_criterion.entry;
+      candidate.program.generated_identity = generated.identity;
+      candidate.program.generated_parameters = generated.parameters;
+      for (std::size_t field = 0; field < generated.field_identities.size(); ++field) {
+        const std::string& identity = generated.field_identities[field];
+        const std::size_t block_index = state_block_of(generated.field_blocks[field], identity);
+        const auto& names = prepared_blocks[block_index].conservative_variables.names;
+        typename runtime::amr::PreparedTaggingProgram<Dim>::GeneratedField bound;
+        for (std::size_t read = 0; read < generated.field_variables[field].size(); ++read) {
+          const int component = generated.field_components[field][read];
+          if (component < 0 || static_cast<std::size_t>(component) >= names.size() ||
+              names[static_cast<std::size_t>(component)] != generated.field_variables[field][read])
+            throw std::invalid_argument(
+                "AMR generated refinement criterion reads a variable at another component");
+          bound.components.push_back(static_cast<std::int32_t>(component));
+        }
+        bound.reach = generated.field_reach[field];
+        if (bind_field(TaggingFieldKind::state, identity, {}, block_index) != field)
+          throw std::invalid_argument(
+              "AMR generated refinement criterion repeats one field of its table");
+        candidate.program.generated_fields.push_back(std::move(bound));
+      }
+      resolved_tagging.emplace(std::move(candidate));
+      return *resolved_tagging;
+    }
+
     for (std::size_t leaf_index = 0; leaf_index < tagging_spec->leaf_subject_kinds.size();
          ++leaf_index) {
       const std::string& kind = tagging_spec->leaf_subject_kinds[leaf_index];
@@ -9029,17 +9122,7 @@ struct AmrSystem<Dim>::Impl {
       std::size_t field_index = 0;
       int component = -1;
       if (kind == "state") {
-        const auto block = std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& value) {
-          return value.name == block_name;
-        });
-        if (block == blocks.end())
-          throw std::invalid_argument("AMR tagging state leaf names another native block");
-        const std::size_t block_index =
-            static_cast<std::size_t>(std::distance(blocks.begin(), block));
-        const std::string& installed = boundary_registry.state_route(block_name);
-        if (identity != installed && identity != direct_amr_state_identity(block_name))
-          throw std::invalid_argument(
-              "AMR tagging state leaf differs from its exact qualified storage route");
+        const std::size_t block_index = state_block_of(block_name, identity);
         const auto found =
             std::find(prepared_blocks[block_index].conservative_variables.names.begin(),
                       prepared_blocks[block_index].conservative_variables.names.end(), variable);
@@ -10606,15 +10689,22 @@ struct AmrSystem<Dim>::Impl {
     return options;
   }
 
-  std::vector<amr::tagging::TagMask<Dim>> prepare_cluster_shards(
-      int parent_level, const runtime::amr::PreparedTaggerCandidates<Dim>& candidates,
-      runtime::amr::PersistentTaggingState<Dim>& staged_state) const {
+  /// The requests of one parent level after the equality and conflict policies, before
+  /// hysteresis and the buffer, over the parent domain (axis 0 fastest). Collective.
+  struct EffectiveTagRequests {
+    std::vector<char> refine;
+    std::vector<char> coarsen;
+  };
+
+  EffectiveTagRequests effective_tag_requests(
+      int parent_level, const runtime::amr::PreparedTaggerCandidates<Dim>& candidates) const {
     const auto& layout = engine->hierarchy().layout(static_cast<std::size_t>(parent_level));
     const CommunicatorView communicator = prepared_hierarchy->lane->communicator();
-    std::vector<char> refine =
-        gather_tag_mask(candidates.refine, layout.domain(), "refine", communicator);
-    std::vector<char> coarsen =
-        gather_tag_mask(candidates.coarsen, layout.domain(), "coarsen", communicator);
+    EffectiveTagRequests requests{
+        gather_tag_mask(candidates.refine, layout.domain(), "refine", communicator),
+        gather_tag_mask(candidates.coarsen, layout.domain(), "coarsen", communicator)};
+    std::vector<char>& refine = requests.refine;
+    std::vector<char>& coarsen = requests.coarsen;
     const std::vector<char> refine_equalities = gather_tag_mask(
         candidates.refine_equalities, layout.domain(), "refine-equalities", communicator);
     const std::vector<char> coarsen_equalities = gather_tag_mask(
@@ -10627,6 +10717,26 @@ struct AmrSystem<Dim>::Impl {
       for (std::size_t index = 0; index < coarsen.size(); ++index)
         coarsen[index] = static_cast<char>(coarsen[index] != 0 || refine_equalities[index] != 0 ||
                                            coarsen_equalities[index] != 0);
+    for (std::size_t ordinal = 0; ordinal < refine.size(); ++ordinal) {
+      if (refine[ordinal] == 0 || coarsen[ordinal] == 0)
+        continue;
+      if (tagging_spec->conflict_policy == 0)
+        throw std::runtime_error("AMR tagging refine/coarsen predicates conflict");
+      if (tagging_spec->conflict_policy == 1)
+        refine[ordinal] = coarsen[ordinal] = char{0};
+      else if (tagging_spec->conflict_policy == 2)
+        coarsen[ordinal] = char{0};
+      else
+        refine[ordinal] = char{0};
+    }
+    return requests;
+  }
+
+  std::vector<amr::tagging::TagMask<Dim>> prepare_cluster_shards(
+      int parent_level, const runtime::amr::PreparedTaggerCandidates<Dim>& candidates,
+      runtime::amr::PersistentTaggingState<Dim>& staged_state) const {
+    const auto& layout = engine->hierarchy().layout(static_cast<std::size_t>(parent_level));
+    const EffectiveTagRequests requests = effective_tag_requests(parent_level, candidates);
 
     std::optional<amr::hierarchy::LevelLayout<Dim>> child;
     if (static_cast<std::size_t>(parent_level + 1) < engine->hierarchy().num_levels())
@@ -10635,18 +10745,8 @@ struct AmrSystem<Dim>::Impl {
     std::vector<char> target = current;
     std::vector<char> buffer_seeds(target.size(), char{0});
     for (std::size_t ordinal = 0; ordinal < target.size(); ++ordinal) {
-      bool requests_refine = refine[ordinal] != 0;
-      bool requests_coarsen = coarsen[ordinal] != 0;
-      if (requests_refine && requests_coarsen) {
-        if (tagging_spec->conflict_policy == 0)
-          throw std::runtime_error("AMR tagging refine/coarsen predicates conflict");
-        if (tagging_spec->conflict_policy == 1)
-          requests_refine = requests_coarsen = false;
-        else if (tagging_spec->conflict_policy == 2)
-          requests_coarsen = false;
-        else
-          requests_refine = false;
-      }
+      const bool requests_refine = requests.refine[ordinal] != 0;
+      const bool requests_coarsen = requests.coarsen[ordinal] != 0;
       const bool desired = requests_refine    ? true
                            : requests_coarsen ? false
                                               : current[ordinal] != 0;
@@ -14928,7 +15028,8 @@ void AmrSystem<Dim>::install_tagger_component(
     std::shared_ptr<const component::PreparedExecutionContextV1> execution) {
   typename Impl::TaggerComponentAuthority candidate;
   require_amr_assembling(p_->lifecycle, "install_tagger_component");
-  if (p_->engine || p_->tagger_component || !component || !execution || component_id.empty() ||
+  if (p_->engine || p_->tagger_component || (p_->tagging_spec && p_->tagging_spec->generated) ||
+      !component || !execution || component_id.empty() ||
       manifest_identity.empty() || provider_identity.empty() || tagging_graph_identity.empty() ||
       layout_identity.empty() || clock_identity.empty() || parameters_json.empty() ||
       target_json.empty() || interface_version != 2)
@@ -15068,7 +15169,8 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
                  equality,
                  conflict,
                  clock_identity,
-                 provider_identity};
+                 provider_identity,
+                 std::nullopt};
     ExactContractBuilder exact;
     exact.text("pops.amr-system.prepared-tagging-authoring")
         .scalar(std::uint32_t{1})
@@ -15131,6 +15233,110 @@ void AmrSystem<Dim>::set_bootstrap_tagging(
   p_->component_tagging_plan.reset();
   p_->tagging_state.clear();
   p_->automatic_bootstrap_complete = false;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::set_generated_tagging(
+    const std::string& identity, const std::vector<std::string>& field_identities,
+    const std::vector<std::string>& field_blocks,
+    const std::vector<std::vector<std::string>>& field_variables,
+    const std::vector<std::vector<int>>& field_components,
+    const std::vector<std::vector<std::size_t>>& field_reach,
+    const std::vector<double>& parameters, int min_cycles, const std::string& clock_identity,
+    const std::string& provider_identity) {
+  p_->require_no_native_package_callback("set_generated_tagging");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
+  typename Impl::TaggingSpec candidate;
+  std::string contract;
+  std::exception_ptr local_error;
+  long local_failure = 0;
+  try {
+    require_amr_assembling(p_->lifecycle, "set_generated_tagging");
+    const std::size_t fields = field_identities.size();
+    if (p_->engine || p_->tagging_spec || p_->tagger_component || identity.empty() ||
+        fields == 0 || field_blocks.size() != fields || field_variables.size() != fields ||
+        field_components.size() != fields || field_reach.size() != fields || min_cycles < 0 ||
+        clock_identity.empty() || provider_identity.empty())
+      throw std::invalid_argument(
+          "AMR generated refinement criterion requires one complete unique pre-materialization "
+          "authority");
+    typename Impl::TaggingSpec::Generated generated{identity, field_identities, field_blocks,
+                                                    field_variables, field_components, {},
+                                                    parameters};
+    for (std::size_t field = 0; field < fields; ++field) {
+      if (field_identities[field].empty() || field_blocks[field].empty() ||
+          field_variables[field].empty() ||
+          field_variables[field].size() != field_components[field].size() ||
+          field_reach[field].size() != static_cast<std::size_t>(Dim))
+        throw std::invalid_argument("AMR generated refinement criterion has an invalid field row");
+      for (std::size_t read = 0; read < field_variables[field].size(); ++read)
+        if (field_variables[field][read].empty() || field_components[field][read] < 0)
+          throw std::invalid_argument(
+              "AMR generated refinement criterion has an invalid variable read");
+      std::array<std::size_t, Dim> reach{};
+      std::copy(field_reach[field].begin(), field_reach[field].end(), reach.begin());
+      generated.field_reach.push_back(reach);
+    }
+    for (const double value : parameters)
+      if (!std::isfinite(value))
+        throw std::invalid_argument(
+            "AMR generated refinement criterion has a non-finite bound parameter");
+    // A criterion decides once per cell (DM13b): it never reports an equality, and a decision
+    // byte that holds both requests is refused, not resolved.
+    candidate.min_cycles = min_cycles;
+    candidate.equality_policy = 0;
+    candidate.conflict_policy = 0;
+    candidate.clock_identity = clock_identity;
+    candidate.provider_identity = provider_identity;
+    candidate.generated.emplace(std::move(generated));
+    ExactContractBuilder exact;
+    exact.text("pops.amr-system.generated-tagging-authoring")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim});
+    Impl::append_generated_tagging_contract(exact, *candidate.generated);
+    exact.scalar(min_cycles).text(clock_identity).text(provider_identity);
+    contract = std::move(exact).release();
+  } catch (...) {
+    local_failure = 1;
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_failure, lane) != 0) {
+    if (local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR generated refinement criterion authoring failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("generated-amr-tagging"), std::string_view(contract)}}, lane))
+    throw std::invalid_argument(
+        "AMR generated refinement criterion contracts differ between MPI ranks");
+  p_->tagging_spec.emplace(std::move(candidate));
+  p_->resolved_tagging.reset();
+  p_->tagging_plan.reset();
+  p_->component_tagging_plan.reset();
+  p_->tagging_state.clear();
+  p_->automatic_bootstrap_complete = false;
+}
+
+template <int Dim>
+std::vector<std::uint8_t> AmrSystem<Dim>::tagging_requests(int parent_level) {
+  p_->ensure_engine();
+  const runtime::amr::PreparedTaggerCandidates<Dim> candidates = p_->execute_tagging(parent_level);
+  const ExecutionLane& lane = *p_->prepared_hierarchy->lane;
+  std::vector<std::uint8_t> requests;
+  std::exception_ptr request_error;
+  try {
+    const auto effective = p_->effective_tag_requests(parent_level, candidates);
+    requests.resize(effective.refine.size());
+    for (std::size_t ordinal = 0; ordinal < requests.size(); ++ordinal)
+      requests[ordinal] = effective.refine[ordinal] != 0    ? std::uint8_t{1}
+                          : effective.coarsen[ordinal] != 0 ? std::uint8_t{2}
+                                                            : std::uint8_t{0};
+  } catch (...) {
+    request_error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      request_error, &lane, "AMR tagging request inspection failed collectively");
+  return requests;
 }
 
 template <int Dim>
@@ -22603,6 +22809,7 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
   runtime::program::ProgramCheckpointMetadata checkpoint_metadata;
   std::vector<int> program_block_map;
   std::map<int, std::vector<double>> program_param_defaults;
+  typename Impl::GeneratedCriterionAuthority generated_criterion;
   std::exception_ptr preparation_error;
 
   try {
@@ -22849,6 +23056,30 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
         values[static_cast<std::size_t>(index)] = parameter_default(ordinal);
       }
     }
+
+    // A refinement criterion generated into the Program (DM13b) is exported with its identity;
+    // the tagging authority installed before names the criterion it expects.
+    const auto criterion_identity = reinterpret_cast<const char* (*)()>(
+        pops::dynlib::sym(handle, runtime::amr::kGeneratedCriterionIdentitySymbol));
+    generated_criterion.entry = reinterpret_cast<runtime::amr::GeneratedCriterionEntry<Dim>>(
+        pops::dynlib::sym(handle, runtime::amr::kGeneratedCriterionEntrySymbol));
+    if ((criterion_identity == nullptr) != (generated_criterion.entry == nullptr))
+      throw std::runtime_error(
+          "AmrSystem::install_program: the refinement criterion entry and identity are not "
+          "exported together");
+    if (criterion_identity != nullptr) {
+      const char* raw_identity = criterion_identity();
+      if (raw_identity == nullptr || raw_identity[0] == '\0')
+        throw std::runtime_error(
+            "AmrSystem::install_program: the refinement criterion identity is empty");
+      generated_criterion.identity = raw_identity;
+    }
+    const bool expects_criterion = p_->tagging_spec && p_->tagging_spec->generated;
+    if (expects_criterion != (generated_criterion.entry != nullptr) ||
+        (expects_criterion && p_->tagging_spec->generated->identity != generated_criterion.identity))
+      throw std::runtime_error(
+          "AmrSystem::install_program: the refinement criterion of the compiled Program differs "
+          "from the installed AMR tagging authority");
   } catch (...) {
     preparation_error = std::current_exception();
   }
@@ -22881,6 +23112,8 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
   }
 
   std::optional<PreparedAmrProgramFluxExpressionBudget> prepared_flux_expression_budget;
+  typename Impl::GeneratedCriterionAuthority previous_generated_criterion =
+      std::exchange(p_->generated_criterion, std::move(generated_criterion));
   std::exception_ptr installation_error;
   try {
     p_->program.reset_artifact_candidate_state();
@@ -22959,6 +23192,7 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
     p_->tagging_plan.reset();
     p_->component_tagging_plan.reset();
     p_->bootstrap_transaction.reset();
+    p_->generated_criterion = std::move(previous_generated_criterion);
     previous_runtime->restore(*p_);
     pops::dynlib::close(handle);
     if (n_ranks() == 1 && installation_error)
@@ -26630,6 +26864,12 @@ template void AmrSystem<kNativeDimension>::set_bootstrap_tagging(
     const std::vector<std::int32_t>&, const std::vector<std::int32_t>&,
     const std::vector<std::int32_t>&, const std::vector<std::int32_t>&, int, const std::string&,
     const std::string&, const std::string&, const std::string&);
+template void AmrSystem<kNativeDimension>::set_generated_tagging(
+    const std::string&, const std::vector<std::string>&, const std::vector<std::string>&,
+    const std::vector<std::vector<std::string>>&, const std::vector<std::vector<int>>&,
+    const std::vector<std::vector<std::size_t>>&, const std::vector<double>&, int,
+    const std::string&, const std::string&);
+template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::tagging_requests(int);
 template void AmrSystem<kNativeDimension>::install_tagger_component(
     std::shared_ptr<component::LoadedComponent>, const std::string&, const std::string&,
     std::uint32_t, const std::string&, const std::string&, const std::string&, const std::string&,

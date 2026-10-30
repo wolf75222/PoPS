@@ -88,6 +88,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   execution, and forward CI cancellation to monitored commands.
 - Finalize newly installed Darwin native variants before repeat-install hash checks while
   preserving authenticated sibling dimensions; first and incremental builds use the same path.
+- Write an AMR refinement criterion in Python: a `Tag` or `Coarsen` predicate may be a function of
+  `cell` (`cell.value(q)`, `cell.shift(axis, k)`, `cell.width(axis)`, runtime parameters), traced
+  once and generated into the compiled Program. The native tagging plan calls it on each patch in
+  place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` and
+  clustering. A criterion requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, under
+  which it decides as the tag graph does; `pops.lib.amr.gradient_norm` keeps the arithmetic of the
+  gradient leaves under the stencil the method declares (`amr_indicator_stencil`). Tag-graph
+  expressions are unchanged and are not mixed with functions of `cell` in one `AMRTagging`;
+  external Tagger components and multi-layout plans refuse a criterion.
 
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.

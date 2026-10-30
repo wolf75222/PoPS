@@ -287,6 +287,13 @@ class TaggerProvider:
         _require_component(self.component, components, where="TaggerProvider")
 
     def require_tagging_graph(self, graph: Any) -> None:
+        from pops.mesh._amr import ResolvedRefinementCriterion
+
+        if type(graph) is ResolvedRefinementCriterion:
+            raise NotImplementedError(
+                "an external AMR Tagger component runs a tag graph; a criterion written as "
+                "functions of cell is generated into the compiled Program and runs on the "
+                "builtin tagger")
         capability = _tagger_capability(self.component)
         registrations = getattr(graph, "registrations", None)
         authoring = getattr(graph, "graph", None)

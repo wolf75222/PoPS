@@ -351,40 +351,65 @@ class AMRExecution:
     runtime_execution_data = to_data
 
 
+def _rule_predicate(predicate: Any, *, where: str) -> Any:
+    """A Boolean expression of the tag graph, or a region: a function of ``cell`` (DM13b)."""
+    from pops.mesh._amr.refinement_criterion import RefinementRegion
+
+    if type(predicate) is RefinementRegion:
+        return predicate
+    if isinstance(predicate, Expr):
+        if not callable(getattr(predicate, "resolve_for_amr_predicate", None)):
+            raise TypeError("%s requires a typed symbolic Boolean expression" % where)
+        return predicate
+    if callable(predicate):
+        return RefinementRegion.trace(predicate)
+    raise TypeError(
+        "%s requires a typed symbolic Boolean expression or a function of cell" % where)
+
+
+def _predicate_data(predicate: Any) -> dict[str, Any]:
+    from pops.mesh._amr.refinement_criterion import RefinementRegion
+
+    if type(predicate) is RefinementRegion:
+        return {"protocol": "pops.amr.refinement-region.v1", "value": predicate.key_data()}
+    return _expression_data(predicate)
+
+
 @dataclass(frozen=True, slots=True)
 class Tag:
-    predicate: Expr
+    """Refine where ``predicate`` holds: a Boolean expression, or a function of ``cell`` whose
+    Boolean result is generated into the compiled Program (DM13b)."""
+
+    predicate: Any
     action: ClassVar[str] = "refine"
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if not isinstance(self.predicate, Expr) or not callable(
-                getattr(self.predicate, "resolve_for_amr_predicate", None)):
-            raise TypeError("Tag requires a typed symbolic Boolean expression")
+        object.__setattr__(self, "predicate", _rule_predicate(self.predicate, where="Tag"))
 
     def resolve_references(self, resolver: Any) -> Tag:
         return type(self)(self.predicate.resolve_references(resolver))
 
     def inspect(self) -> dict[str, Any]:
-        return {"action": self.action, "predicate": _expression_data(self.predicate)}
+        return {"action": self.action, "predicate": _predicate_data(self.predicate)}
 
 
 @dataclass(frozen=True, slots=True)
 class Coarsen:
-    predicate: Expr
+    """Coarsen where ``predicate`` holds, written as for :class:`Tag`."""
+
+    predicate: Any
     action: ClassVar[str] = "coarsen"
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if not isinstance(self.predicate, Expr) or not callable(
-                getattr(self.predicate, "resolve_for_amr_predicate", None)):
-            raise TypeError("Coarsen requires a typed symbolic Boolean expression")
+        object.__setattr__(self, "predicate", _rule_predicate(self.predicate, where="Coarsen"))
 
     def resolve_references(self, resolver: Any) -> Coarsen:
         return type(self)(self.predicate.resolve_references(resolver))
 
     def inspect(self) -> dict[str, Any]:
-        return {"action": self.action, "predicate": _expression_data(self.predicate)}
+        return {"action": self.action, "predicate": _predicate_data(self.predicate)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -421,6 +446,14 @@ class AMRTagging:
             raise TypeError("AMRTagging.hysteresis must be an exact Hysteresis")
         if type(self.conflict_policy) is not ConflictPolicy:
             raise TypeError("AMRTagging.conflict_policy must be an exact ConflictPolicy")
+        from pops.mesh._amr.refinement_criterion import RefinementRegion
+
+        regions = {type(rule.predicate) is RefinementRegion
+                   for rule in rules if type(rule) is not Buffer}
+        if len(regions) != 1:
+            raise TypeError(
+                "AMRTagging writes every Tag and Coarsen predicate the same way: either all as "
+                "functions of cell or all as tag-graph expressions")
         object.__setattr__(self, "rules", rules)
 
     @property

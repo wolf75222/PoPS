@@ -12,7 +12,9 @@
 #include <pops/mesh/storage/field_view.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/runtime/amr/generated_refinement_criterion.hpp>
 #include <pops/runtime/config/generated_component_abi.hpp>
+#include <pops/runtime/dynamic/dynlib.hpp>
 
 #include <Kokkos_Core.hpp>
 
@@ -80,6 +82,21 @@ struct PreparedTaggingProgram {
   std::string clock_identity{};
   std::string provider_identity{};
   bool prepared = false;
+
+  /// One field that a generated criterion reads: the components it reads and, per axis, the
+  /// largest offset of its reads, which the bound halo must cover.
+  struct GeneratedField {
+    std::vector<std::int32_t> components{};
+    std::array<std::size_t, Dim> reach{};
+  };
+
+  /// The criterion generated into the compiled Program (DM13b). When the entry is set the program
+  /// has no leaf, stencil or bytecode: preparation binds one view per generated field and each
+  /// patch is handed to the entry, which writes the same decision bytes as the bytecode kernel.
+  GeneratedCriterionEntry<Dim> generated_entry = nullptr;
+  std::string generated_identity{};
+  std::vector<GeneratedField> generated_fields{};
+  std::vector<double> generated_parameters{};
 };
 
 template <int Dim, class MemorySpace>
@@ -120,6 +137,11 @@ enum PreparedTaggingMask : std::uint8_t {
   kNonFinite = 1u << 4,
 };
 
+static_assert(std::uint8_t{kRefineMatch} == std::uint8_t{kGeneratedCriterionRefine} &&
+                  std::uint8_t{kCoarsenMatch} == std::uint8_t{kGeneratedCriterionCoarsen} &&
+                  std::uint8_t{kNonFinite} == std::uint8_t{kGeneratedCriterionNonFinite},
+              "a generated criterion writes the decision bytes of the bytecode kernel");
+
 enum class DeviceTagTruth : std::uint8_t { False = 0, True = 1, Unknown = 2 };
 
 struct PreparedTaggingAxisDevice {
@@ -142,21 +164,9 @@ struct PreparedTaggingLeafDevice {
   std::int32_t stencil_index = -1;
 };
 
+/// The bytecode kernel and a generated criterion index the scratch bytes of a patch identically.
 template <int Dim>
-struct PreparedTaggingMaskView {
-  std::uint8_t* values = nullptr;
-  Box<Dim> box{};
-
-  POPS_HD std::uint8_t& operator()(const Index<Dim>& index) const {
-    std::int64_t linear = 0;
-    std::int64_t stride = 1;
-    for (int axis = 0; axis < Dim; ++axis) {
-      linear += (static_cast<std::int64_t>(index[axis]) - box.lo[axis]) * stride;
-      stride *= box.length(axis);
-    }
-    return values[linear];
-  }
-};
+using PreparedTaggingMaskView = GeneratedCriterionMarks<Dim>;
 
 template <int Dim>
 struct PreparedTaggingPatchKernel {
@@ -409,6 +419,18 @@ std::string exact_program_contract(
             field.scalar(static_cast<std::int64_t>(identity.ghosts[axis]));
         });
       });
+  if (program.generated_entry != nullptr)
+    contract.text("pops.amr.generated-refinement-criterion")
+        .scalar(std::uint32_t{1})
+        .text(program.generated_identity)
+        .sequence(program.generated_fields,
+                  [](ExactContractBuilder& item,
+                     const typename PreparedTaggingProgram<Dim>::GeneratedField& field) {
+                    item.sequence(field.components);
+                    for (const std::size_t reach : field.reach)
+                      item.scalar(static_cast<std::uint64_t>(reach));
+                  })
+        .sequence(program.generated_parameters);
   for (const auto& layout : layouts)
     append_level(contract, layout.exact_identity());
   return std::move(contract).release();
@@ -600,6 +622,19 @@ class PreparedTaggingExecutionPlan {
     std::exception_ptr execution_error;
     try {
       for (Patch& patch : level.patches) {
+        if (generated_entry_ != nullptr) {
+          const GeneratedCriterionPatch<Dim> request{
+              patch.box,          patch.leaf_fields.data(),     patch.leaf_fields.size(),
+              spacing,            generated_parameters_.data(), generated_parameters_.size(),
+              patch.scratch.data()};
+          const GeneratedCriterionEntry<Dim> entry = generated_entry_;
+          const int status = ::pops::dynlib::invoke_with_host_exception(
+              [entry, &request] { return entry(&request); }, kGeneratedCriterionEntrySymbol);
+          if (status != 0)
+            throw std::runtime_error(
+                "generated AMR refinement criterion refused its patch request");
+          continue;
+        }
         const tagging_detail::PreparedTaggingPatchKernel<Dim> kernel{
             leaves_.data(),
             stencils_.data(),
@@ -767,6 +802,21 @@ class PreparedTaggingExecutionPlan {
       throw std::invalid_argument("prepared AMR tagging bytecode has an invalid final depth");
   }
 
+  static bool generated_program_complete_(const Program& program) {
+    if (program.generated_identity.empty() || program.generated_fields.empty() ||
+        !program.leaves.empty() || !program.stencils.empty() || !program.refine_ops.empty() ||
+        !program.refine_args.empty() || !program.coarsen_ops.empty() ||
+        !program.coarsen_args.empty())
+      return false;
+    for (const double value : program.generated_parameters)
+      if (!std::isfinite(value))
+        return false;
+    for (const auto& field : program.generated_fields)
+      if (field.components.empty())
+        return false;
+    return true;
+  }
+
   static PreparedTaggingExecutionPlan prepare_local_(
       const Program& program, const std::vector<std::vector<Field>>& fields_by_level,
       const std::vector<::pops::amr::hierarchy::LevelLayout<Dim>>& layouts,
@@ -777,8 +827,10 @@ class PreparedTaggingExecutionPlan {
     const std::size_t instruction_count =
         tagging_detail::checked_sum(program.refine_ops.size(), program.coarsen_ops.size(),
                                     "prepared AMR tagging instruction count exceeds size_t");
+    const bool generated = program.generated_entry != nullptr;
     if (!program.prepared || program.provider_identity.empty() || program.clock_identity.empty() ||
-        program.leaves.empty() || fields_by_level.empty() ||
+        (generated ? !generated_program_complete_(program) : program.leaves.empty()) ||
+        fields_by_level.empty() ||
         fields_by_level.size() != layouts.size() || layouts.size() != budgets.size() ||
         topology_generation == 0 || program.minimum_cycles < 0 ||
         program.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1 ||
@@ -788,12 +840,17 @@ class PreparedTaggingExecutionPlan {
         program.stencils.size() > tagging_detail::kPreparedTaggingMaximumStencils ||
         instruction_count > POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1)
       throw std::invalid_argument("prepared AMR tagging execution exceeds its authenticated ABI");
-    validate_bytecode_(program, program.refine_ops, program.refine_args, true);
-    validate_bytecode_(program, program.coarsen_ops, program.coarsen_args, false);
+    if (!generated) {
+      validate_bytecode_(program, program.refine_ops, program.refine_args, true);
+      validate_bytecode_(program, program.coarsen_ops, program.coarsen_args, false);
+    }
 
     PreparedTaggingExecutionPlan plan;
     plan.topology_generation_ = topology_generation;
     plan.communicator_ = communicator;
+    plan.generated_entry_ = program.generated_entry;
+    plan.generated_parameters_.assign(program.generated_parameters.begin(),
+                                      program.generated_parameters.end());
     plan.leaves_.reserve(program.leaves.size());
     plan.stencils_.reserve(program.stencils.size());
     plan.refine_ops_.assign(program.refine_ops.begin(), program.refine_ops.end());
@@ -940,6 +997,25 @@ class PreparedTaggingExecutionPlan {
         }
       }
 
+      if (generated) {
+        if (fields.size() != program.generated_fields.size())
+          throw std::invalid_argument(
+              "generated AMR refinement criterion fields differ from the bound fields");
+        for (std::size_t index = 0; index < fields.size(); ++index) {
+          const auto& field = program.generated_fields[index];
+          for (const std::int32_t component : field.components)
+            if (component < 0 || component >= fields[index].values->ncomp())
+              throw std::invalid_argument(
+                  "generated AMR refinement criterion reads a component outside its field");
+          const Extent<Dim>& ghosts = fields[index].values->ghosts();
+          for (int axis = 0; axis < Dim; ++axis)
+            if (field.reach[static_cast<std::size_t>(axis)] >
+                static_cast<std::size_t>(ghosts[axis]))
+              throw std::invalid_argument(
+                  "generated AMR refinement criterion reads beyond the bound field halo");
+        }
+      }
+
       std::size_t local_cells = 0;
       for (std::size_t local = 0; local < reference.local_size(); ++local)
         local_cells =
@@ -965,8 +1041,16 @@ class PreparedTaggingExecutionPlan {
         if (!layout.domain().contains(valid) || valid != layout.patches()[global_patch])
           throw std::invalid_argument(
               "prepared AMR tagging local patch differs from its authenticated level");
-        level.patches.emplace_back(valid, global_patch, plan.leaves_.size());
+        level.patches.emplace_back(valid, global_patch,
+                                   generated ? fields.size() : plan.leaves_.size());
         Patch& patch = level.patches.back();
+        if (generated)
+          for (std::size_t index = 0; index < fields.size(); ++index) {
+            if (fields[index].values->global_index(local) != global_patch)
+              throw std::invalid_argument(
+                  "prepared AMR tagging local field patch identities disagree");
+            patch.leaf_fields[index] = fields[index].values->fab(local).view();
+          }
         for (std::size_t leaf_index = 0; leaf_index < plan.leaves_.size(); ++leaf_index) {
           const DeviceLeaf& leaf = plan.leaves_[leaf_index];
           const auto* field = fields[static_cast<std::size_t>(leaf.state_index)].values;
@@ -994,6 +1078,8 @@ class PreparedTaggingExecutionPlan {
   DeviceVector<std::int32_t> refine_args_{};
   DeviceVector<std::int32_t> coarsen_ops_{};
   DeviceVector<std::int32_t> coarsen_args_{};
+  GeneratedCriterionEntry<Dim> generated_entry_ = nullptr;
+  std::vector<Real> generated_parameters_{};
   std::vector<Level> levels_{};
 };
 

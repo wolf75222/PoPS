@@ -678,6 +678,25 @@ class AmrSystem {
       const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
       int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
       const std::string& clock_identity, const std::string& provider_identity);
+  /// Install a refinement criterion generated into the compiled Program (DM13b) in place of the
+  /// bytecode: its identity, its field table (the qualified state of each field, its block, the
+  /// variables read in it with their component indices, the reach of the reads per axis) and the
+  /// bound values of its runtime parameters. install_program then requires the Program to export
+  /// this criterion. Hysteresis and the buffer stay downstream, as for the bytecode.
+  void set_generated_tagging(const std::string& identity,
+                             const std::vector<std::string>& field_identities,
+                             const std::vector<std::string>& field_blocks,
+                             const std::vector<std::vector<std::string>>& field_variables,
+                             const std::vector<std::vector<int>>& field_components,
+                             const std::vector<std::vector<std::size_t>>& field_reach,
+                             const std::vector<double>& parameters, int min_cycles,
+                             const std::string& clock_identity,
+                             const std::string& provider_identity);
+  /// The requests that the tagging authority makes on one live parent level after its equality
+  /// and conflict policies, before hysteresis and the buffer: one byte per cell of the parent
+  /// domain, axis 0 fastest (1 refine, 2 coarsen, 0 keep). An inspection route: it publishes
+  /// nothing.
+  POPS_EXPORT std::vector<std::uint8_t> tagging_requests(int parent_level);
   /// Install one authenticated native Tagger component. This private runtime seam selects the
   /// candidate evaluator only; all policy and hierarchy publication remain in AmrSystem.
   void install_tagger_component(

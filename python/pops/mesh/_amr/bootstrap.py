@@ -10,6 +10,7 @@ from pops.identity import Identity
 from .._layout_plan_contracts import LayoutPlan
 from .hierarchy import LevelTransition
 from .hierarchy_resolution import ResolvedHierarchy
+from .refinement_criterion import ResolvedRefinementCriterion
 from .tagging_resolution import ResolvedTaggingGraph
 from .transfer import (
     ResolvedAMRTransfer, CACHE, CELL_SPACE, DERIVED_FIELD,
@@ -89,7 +90,7 @@ def resolve_bootstrap(
     hierarchy: ResolvedHierarchy,
     transfers: ResolvedAMRTransfer,
     initial_conditions: _InitialConditionPlanContract,
-    tagging: ResolvedTaggingGraph,
+    tagging: ResolvedTaggingGraph | ResolvedRefinementCriterion,
     selections: Any,
     ordering: BootstrapOrdering,
     constraints: Any = (),
@@ -102,8 +103,9 @@ def resolve_bootstrap(
     if type(transfers) is not ResolvedAMRTransfer:
         raise TypeError("resolve_bootstrap transfers must be AMRTransfer")
     initial_conditions = _initial_condition_plan(initial_conditions)
-    if type(tagging) is not ResolvedTaggingGraph:
-        raise TypeError("resolve_bootstrap tagging must be ResolvedTaggingGraph")
+    if type(tagging) not in (ResolvedTaggingGraph, ResolvedRefinementCriterion):
+        raise TypeError(
+            "resolve_bootstrap tagging must be ResolvedTaggingGraph or ResolvedRefinementCriterion")
     if type(ordering) is not BootstrapOrdering:
         raise TypeError("resolve_bootstrap ordering must be BootstrapOrdering")
     if transfers.layout_plan_id != layout_plan.qualified_id or \
@@ -157,7 +159,9 @@ def resolve_bootstrap(
             if isinstance(data, Mapping):
                 return data.get("kind") == "field" or any(contains_field_handle(value) for value in data.values())
             return isinstance(data, (tuple, list)) and any(contains_field_handle(value) for value in data)
-        if contains_field_handle(tagging.graph.canonical_identity()):
+        # A refinement region reads block states only (cell.value), never a solved field.
+        if type(tagging) is ResolvedTaggingGraph \
+                and contains_field_handle(tagging.graph.canonical_identity()):
             raise NotImplementedError("field-dependent initial tagging requires an explicit pre-tagging solve")
 
     for binding in initial_conditions.bindings:
