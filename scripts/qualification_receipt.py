@@ -22,10 +22,12 @@ Stages and levels (K6):
 
 The level is the highest consecutive rung of ``E < G < C < R < S``; ``R`` needs both ``loaded`` and
 ``advanced``.  A standalone C++ receipt is ``C-finite`` or ``R-finite`` and never ``R`` (K6).  The
-process starts from a committed file of the source or from ``python -m pytest``; the code that
-drives the receipt and every module the process imported from the source must be committed
-unchanged; code compiled from a string or read from standard input, and code from anywhere but the
-source, the SDK and the interpreter's standard library and site directories, is an overlay.
+process starts from a committed file of the source or from ``python -m pytest``, and the code that
+drives the receipt descends from that entry; that code and every module the process imported from
+the source must be committed unchanged, and the interpreter may drive it only through its standard
+library and pytest's own packages.  Code compiled from a string or read from standard input, and
+code from anywhere but the source, the SDK and the interpreter's standard library and site
+directories, is an overlay.
 A receipt is *admitted* to a cohort only when it names the cohort's clean source and installed SDK,
 held the installation lease, saw no overlay, and reached the required level (``admit``).
 
@@ -62,7 +64,7 @@ import sdk_cohort  # noqa: E402
 from sdk_cohort import CohortError, digest, sha256_file, utc_now  # noqa: E402
 
 
-RECEIPT_SCHEMA = "pops.receipt@3"
+RECEIPT_SCHEMA = "pops.receipt@4"
 KINDS = ("pops-runtime", "standalone-cpp")
 LADDER = ("E", "G", "C", "R", "S")
 STAGES = ("E", "G", "C", "loaded", "advanced", "S")
@@ -268,22 +270,30 @@ def backend_observation() -> dict[str, Any]:
 #: entry of the interpreter (``cProfile``, ``trace``, ``pdb``, ``code``...) runs whatever code it
 #: is given, which no receipt judges.
 ENTRY_MODULES = ("pytest.__main__",)
+#: The packages of a site directory that may drive a receipt: pytest's own.  Any other module of a
+#: site directory on the driver's frames (a plugin placed there) is a driver no receipt judges.
+DRIVER_PACKAGES = ("pytest", "_pytest", "pluggy")
+
+
+def _standard_library() -> tuple[Path, ...]:
+    """The base interpreter's standard library (a venv has none of its own)."""
+    library = sysconfig.get_paths(vars={
+        "base": sys.base_prefix, "platbase": sys.base_exec_prefix,
+        "installed_base": sys.base_prefix, "installed_platbase": sys.base_exec_prefix})
+    return tuple(sorted({Path(library[name]) for name in ("stdlib", "platstdlib")
+                         if library.get(name)}))
 
 
 def _interpreter_roots() -> tuple[Path, ...]:
     """The interpreter's own code: its standard library and its site directories, nothing else.
 
-    The standard library is the base interpreter's (a venv has none of its own); the site
-    directories are ``site.getsitepackages()`` and the user site when it is enabled.  The rest of
-    a prefix (its root, ``bin/``) is not the interpreter: a script placed there is foreign.
+    The site directories are ``site.getsitepackages()`` and the user site when it is enabled.  The
+    rest of a prefix (its root, ``bin/``) is not the interpreter: a script placed there is foreign.
     """
-    library = sysconfig.get_paths(vars={
-        "base": sys.base_prefix, "platbase": sys.base_exec_prefix,
-        "installed_base": sys.base_prefix, "installed_platbase": sys.base_exec_prefix})
-    roots = {library["stdlib"], library["platstdlib"], *site.getsitepackages()}
+    roots = {*_standard_library(), *(Path(item) for item in site.getsitepackages() if item)}
     if site.ENABLE_USER_SITE:
-        roots.add(site.getusersitepackages())
-    return tuple(sorted({Path(item) for item in roots if item}))
+        roots.add(Path(site.getusersitepackages()))
+    return tuple(sorted(roots))
 
 
 def _depth_within(path: Path, root: Path) -> int | None:
@@ -314,19 +324,52 @@ def code_origin(filename: str, source_root: Path, package: Path,
     return max(matches)[1] if matches else "foreign"
 
 
+def interpreter_part(filename: str, roots: Sequence[Path], standard: Sequence[Path]
+                     ) -> dict[str, Any]:
+    """Which part of the interpreter one of its files is: its library and its top-level package.
+
+    The most specific root wins, so a site directory inside the standard library (a conda
+    environment) is a site directory.  ``library`` is ``stdlib`` for a module the interpreter
+    ships (``sys.stdlib_module_names``), ``site`` for a file of a site directory, and None for a
+    file placed beside the standard library under a name the interpreter does not ship.
+    """
+    best: tuple[int, Path, Path] | None = None
+    for root in roots:
+        for candidate, base in ((Path(os.path.abspath(filename)), Path(os.path.abspath(root))),
+                                (Path(filename).resolve(), Path(root).resolve())):
+            if candidate != base and candidate.is_relative_to(base):
+                if best is None or len(base.parts) > best[0]:
+                    best = (len(base.parts), root, candidate.relative_to(base))
+                break
+    if best is None:
+        return {"library": None, "package": None}
+    _, root, relative = best
+    top = relative.parts[0]
+    name = top if len(relative.parts) > 1 else top.split(".", 1)[0]
+    if root not in standard:
+        return {"library": "site", "package": name}
+    return {"library": "stdlib" if name in sys.stdlib_module_names else None, "package": name}
+
+
 def code_observation(source: Mapping[str, Any], package: Path, driver: Sequence[str], *,
-                     interpreter: Sequence[Path] | None = None) -> dict[str, Any]:
+                     interpreter: Sequence[Path] | None = None,
+                     standard: Sequence[Path] | None = None) -> dict[str, Any]:
     """Judge the code of this process: its entry, the frames that drive the receipt, every module.
 
     The entry is the file the interpreter started (``__main__``): a process started by
     ``python -c``, standard input or an interactive prompt has none, and the code it ran first is
     never judged.  Code from the source must be committed unchanged; the SDK is judged by its own
-    file table and the interpreter's standard library and site directories are the interpreter.
+    file table and the interpreter's standard library and site directories are the interpreter;
+    each frame of the interpreter records its library and package (``interpreter_part``).
     ``driver`` lists the frames that created the receipt, outermost first.
     """
     root = Path(source["root"])
     roots = _interpreter_roots() if interpreter is None else tuple(interpreter)
+    library = _standard_library() if standard is None else tuple(standard)
     frames = [{"file": name, "origin": code_origin(name, root, package, roots)} for name in driver]
+    for frame in frames:
+        if frame["origin"] == "interpreter":
+            frame.update(interpreter_part(frame["file"], roots, library))
     main = sys.modules.get("__main__")
     started = getattr(main, "__file__", None)
     started = started if isinstance(started, str) and started else None
@@ -1055,6 +1098,12 @@ _FILELESS = {"<string>": "compiled from a string (python -c, exec)",
              "<stdin>": "read from standard input"}
 
 
+def _runs_the_entry(frame: Mapping[str, Any]) -> bool:
+    """A frame of ``runpy``, which runs the entry of ``python -m`` (frozen, or from the stdlib)."""
+    return frame["file"] == "<frozen runpy>" or (
+        frame.get("library") == "stdlib" and frame.get("package") == "runpy")
+
+
 def _code_findings(code: Mapping[str, Any] | None) -> list[str]:
     """Overlay findings from the judged code of the process (``code_observation``)."""
     if code is None:
@@ -1083,6 +1132,21 @@ def _code_findings(code: Mapping[str, Any] | None) -> list[str]:
         elif origin == "internal" and not name.startswith("<frozen "):
             findings.append("the receipt is driven by code %s: %s"
                             % (_FILELESS.get(name, "without a file"), name))
+        elif origin == "interpreter" and not (
+                frame.get("library") == "stdlib"
+                or frame.get("library") == "site" and frame.get("package") in DRIVER_PACKAGES):
+            findings.append("the receipt is driven by code of the interpreter that is neither its "
+                            "standard library nor pytest (a file placed in a site directory or "
+                            "beside the standard library): %s" % name)
+    # The driver descends from the entry: a receiver called from atexit, a thread or another
+    # callback of the interpreter has none of the code that set it up on its frames.
+    started = entry.get("file") if entry.get("origin") != "internal" else None
+    outermost = next((frame for frame in frames if not _runs_the_entry(frame)), None)
+    if started and outermost is not None \
+            and os.path.normpath(outermost["file"]) != os.path.normpath(started):
+        findings.append("the receipt is not created under the process entry %s: its outermost "
+                        "frame is %s (a receiver called from atexit, a thread or another callback "
+                        "of the interpreter)" % (started, outermost["file"]))
     if not frames or frames[-1]["origin"] != "source":
         findings.append("the receipt is not created by a committed file of the source (%s)"
                         % (frames[-1]["file"] if frames else "no frame"))

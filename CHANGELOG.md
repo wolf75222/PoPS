@@ -25,7 +25,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   leases the installation, so a build never replaces an SDK under a running qualification.
   R is read only from the SDK's own native leaf, runtime and report, S from a committed oracle
   that the receipt calls itself, and the process entry, the driver and every imported module are
-  judged: a receiver starts from a committed file or `python -m pytest`, so CI starts pytest
+  judged: a receiver starts from a committed file or `python -m pytest`, under that entry, and
+  the interpreter drives it only through its standard library and pytest, so CI starts pytest
   from the committed `scripts/ci_pytest_bootstrap.py` instead of `python -c`. Only
   `build_python.sh` attests a leaf, with its build environment, here and beside the retained
   wheel; the cohort says whether that environment is official, and `sdk_cohort.py prefix`

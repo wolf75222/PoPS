@@ -974,11 +974,77 @@ def test_only_the_standard_library_and_the_site_directories_are_the_interpreter(
     def origin(path):
         return receipts.code_origin(str(path), repo, package)
     assert origin(json.__file__) == "interpreter" and origin(pytest.__file__) == "interpreter"
+    standard = receipts._standard_library()
+    assert Path(base["stdlib"]) in standard and set(standard) <= set(roots)
+    assert receipts.interpreter_part(json.__file__, roots, standard) == {
+        "library": "stdlib", "package": "json"}
+    assert receipts.interpreter_part(pytest.__file__, roots, standard) == {
+        "library": "site", "package": "pytest"}
     # The rest of a prefix is no library: its root, bin/ and a stray script are foreign.
     for stray in (Path(sys.prefix) / "driver.py",
                   Path(sysconfig.get_paths()["scripts"]) / "pytest"):
         assert all(stray != root and not stray.is_relative_to(root) for root in roots), stray
         assert origin(stray) == "foreign"
+
+
+def test_the_interpreter_drives_a_receipt_only_through_its_standard_library_and_pytest(
+        repo, site, tmp_path, monkeypatch):
+    """The final review's O8: a module placed in a site directory is no driver of a receipt."""
+    library = tmp_path / "env" / "lib" / "python3"
+    packages = library / "site-packages"  # inside the standard library, as in a conda environment
+    roots, standard = (library, packages), (library,)
+
+    def part(path):
+        return receipts.interpreter_part(str(path), roots, standard)
+    assert part(library / "runpy.py") == {"library": "stdlib", "package": "runpy"}
+    assert part(library / "importlib" / "util.py") == {"library": "stdlib", "package": "importlib"}
+    assert part(library / "adhoc.py") == {"library": None, "package": "adhoc"}
+    assert part(packages / "_pytest" / "main.py") == {"library": "site", "package": "_pytest"}
+    assert part(packages / "adhoc_plugin.py") == {"library": "site", "package": "adhoc_plugin"}
+    assert part(tmp_path / "elsewhere.py") == {"library": None, "package": None}
+
+    source = cohort.source_identity(repo)
+    case = str(repo / "examples" / "case.py")
+    monkeypatch.setitem(sys.modules, "__main__", _main_module(case))
+
+    def findings(*driver):
+        code = receipts.code_observation(source, site / "pops", [case, *map(str, driver), case],
+                                         interpreter=roots, standard=standard)
+        # This process's own modules lie outside the fake interpreter: only frames are judged.
+        return [item for item in receipts._code_findings(code) if not item.startswith("module ")]
+    assert findings(library / "runpy.py", packages / "pytest" / "__main__.py",
+                    packages / "_pytest" / "python.py", packages / "pluggy" / "_callers.py") == []
+    planted = ("the receipt is driven by code of the interpreter that is neither its standard "
+               "library nor pytest (a file placed in a site directory or beside the standard "
+               "library): %s")
+    assert findings(packages / "_pytest" / "main.py", packages / "adhoc_plugin.py") == [
+        planted % (packages / "adhoc_plugin.py")]
+    assert findings(library / "adhoc.py") == [planted % (library / "adhoc.py")]
+
+
+def test_a_receipt_is_created_under_the_entry_of_its_process():
+    """atexit, a thread or another callback of the interpreter leaves the entry off the frames."""
+    entry = {"file": "/env/site/pytest/__main__.py", "module": "pytest.__main__",
+             "origin": "interpreter"}
+
+    def frame(path, library="site", package="_pytest"):
+        return {"file": path, "origin": "interpreter", "library": library, "package": package}
+
+    def findings(*frames):
+        return receipts._code_findings({"entry": entry, "driver": list(frames)})
+    runpy = {"file": "<frozen runpy>", "origin": "internal"}
+    main = frame(entry["file"], package="pytest")
+    receiver = {"file": "/checkout/tests/test_receiver.py", "origin": "source", "committed": True}
+    assert findings(runpy, runpy, main, frame("/env/site/_pytest/python.py"), receiver) == []
+    # Without frozen modules, runpy runs from the standard library.
+    stdlib_runpy = frame("/env/lib/runpy.py", "stdlib", "runpy")
+    assert findings(stdlib_runpy, stdlib_runpy, main, receiver) == []
+    elsewhere = ("the receipt is not created under the process entry %s: its outermost frame is "
+                 "%s (a receiver called from atexit, a thread or another callback of the "
+                 "interpreter)")
+    assert findings(receiver) == [elsewhere % (entry["file"], receiver["file"])]  # from atexit
+    thread = frame("/env/lib/threading.py", "stdlib", "threading")
+    assert findings(thread, thread, receiver) == [elsewhere % (entry["file"], thread["file"])]
 
 
 #: A receiver committed in the fake checkout: it writes one receipt (stage E) under a false label.
@@ -1001,24 +1067,62 @@ sys.path[:0] = [{scripts!r}, {examples!r}]
 import receiver
 {call}
 """
+#: The same driver as a pytest plugin placed in a site directory (the final review's O8), loaded
+#: by ``python -m pytest -p`` and calling the receiver from ``pytest_configure``.
+PLUGIN = """import sys
+sys.path[:0] = [{scripts!r}, {examples!r}]
+import receiver
+
+
+def pytest_configure(config):
+    {call}
+"""
+
+
+def _venv_with_these_site_packages(prefix):
+    """A fresh venv whose site directory links this interpreter's packages (pytest among them).
+
+    ``--system-site-packages`` would expose the base interpreter's packages, not those of the venv
+    this test may run in.
+    """
+    import site as interpreter_site
+
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(prefix)], check=True)
+    python = str(prefix / "bin" / "python")
+    packages = Path(subprocess.run([python, "-c", "import sysconfig; print(sysconfig.get_path("
+                                    "'purelib'))"], capture_output=True, text=True,
+                                   check=True).stdout.strip())
+    for directory in filter(os.path.isdir, interpreter_site.getsitepackages()):
+        for item in Path(directory).iterdir():
+            if item.suffix != ".pth" and item.name != "__pycache__" \
+                    and not (packages / item.name).exists():
+                (packages / item.name).symlink_to(item)
+    return python, packages
 
 
 @pytest.mark.parametrize("entry", ("committed file", "python -c", "standard input",
                                    "script in a prefix", "python -m cProfile",
-                                   "python -c through atexit"))
+                                   "python -c through atexit", "pytest plugin in a site directory",
+                                   "pytest plugin through atexit"))
 def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo, site, tmp_path,
                                                                             entry):
-    """The second review's probes: only a committed file or python -m pytest starts a receiver."""
+    """The reviews' probes: a committed receiver writes an admitted receipt only for its own driver.
+
+    Only a committed file or python -m pytest starts a receiver, and no ad hoc code drives it:
+    not from a string, standard input or a prefix, nor from a plugin placed in a site directory,
+    directly or through atexit.
+    """
     scripts = repo / "scripts"
     scripts.mkdir()
     for path in receipts.HARNESS:  # the receipt's own harness, committed in this checkout
         (scripts / path.name).write_bytes(path.read_bytes())
     (repo / "examples" / "receiver.py").write_text(RECEIVER)
+    (repo / "examples" / "test_probe.py").write_text("def test_probe():\n    pass\n")
     out = tmp_path / "receipts"
     arguments = "%r, %r, %r" % (str(repo), str(site / "pops"), str(out))
     # Through atexit, the receiver runs with none of the driver's frames above it.
     call = ("import atexit; atexit.register(receiver.qualify, %s)" % arguments
-            if entry == "python -c through atexit" else "receiver.qualify(%s)" % arguments)
+            if entry.endswith("through atexit") else "receiver.qualify(%s)" % arguments)
     driver = DRIVER.format(scripts=str(scripts), examples=str(repo / "examples"), call=call)
     committed = repo / "examples" / "drive.py"
     committed.write_text(driver)
@@ -1026,12 +1130,20 @@ def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo
     _attest(repo, site)
     record = cohort.publish_cohort(repo, site / "pops")
     python = sys.executable
+    plugin = None
     if entry == "script in a prefix":
         prefix = tmp_path / "prefix"
         subprocess.run([sys.executable, "-m", "venv", "--without-pip", "--system-site-packages",
                         str(prefix)], check=True)
         python = str(prefix / "bin" / "python")
         (prefix / "driver.py").write_text(driver)
+    elif entry.startswith("pytest plugin"):
+        python, packages = _venv_with_these_site_packages(tmp_path / "prefix")
+        plugin = packages / "rom17_adhoc_plugin.py"
+        plugin.write_text(PLUGIN.format(scripts=str(scripts), examples=str(repo / "examples"),
+                                        call=call))
+    pytest_run = [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p",
+                  "rom17_adhoc_plugin", str(repo / "examples" / "test_probe.py")]
     command = {
         "committed file": [python, str(committed)],
         "python -c": [python, "-c", driver],
@@ -1039,9 +1151,13 @@ def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo
         "standard input": [python, "-"],
         "script in a prefix": [python, str(tmp_path / "prefix" / "driver.py")],
         "python -m cProfile": [python, "-m", "cProfile", str(committed)],
+        "pytest plugin in a site directory": pytest_run,
+        "pytest plugin through atexit": pytest_run,
     }[entry]
     environment = {key: value for key, value in os.environ.items()
-                   if key != "PYTHONPATH" and not key.startswith("POPS_")}
+                   if key not in ("PYTHONPATH", "PYTEST_ADDOPTS", "PYTEST_PLUGINS")
+                   and not key.startswith("POPS_")}
+    environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"  # only the plugin named by -p
     result = subprocess.run(command, input=driver if entry == "standard input" else None,
                             capture_output=True, text=True, env=environment, cwd=tmp_path,
                             check=False)
@@ -1049,6 +1165,7 @@ def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo
     (path,) = out.glob("*.json")
     data = receipts.read_receipt(path)
     findings = data["overlay"]["findings"]
+    started = data["process"]["code"]["entry"]
     expected = {
         "committed file": [],
         "python -c": [
@@ -1070,8 +1187,18 @@ def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo
         "python -m cProfile": [
             "the process was started by the interpreter's cProfile, which runs the code it is "
             "given; a receiver is started from a committed file or by python -m pytest"],
+        "pytest plugin in a site directory": [
+            "the receipt is driven by code of the interpreter that is neither its standard "
+            "library nor pytest (a file placed in a site directory or beside the standard "
+            "library): %s" % plugin],
+        "pytest plugin through atexit": [
+            "the receipt is not created under the process entry %s: its outermost frame is %s "
+            "(a receiver called from atexit, a thread or another callback of the interpreter)"
+            % (started["file"], repo / "examples" / "receiver.py")],
     }[entry]
     assert findings == expected, findings
+    if entry.startswith("pytest plugin"):
+        assert started["module"] == "pytest.__main__" and started["origin"] == "interpreter"
     assert data["process"]["code"]["driver"][-1]["file"] == str(repo / "examples" / "receiver.py")
     assert data["level"] == "E"
     assert receipts.admit(data, record, require="E")["admitted"] is (entry == "committed file")

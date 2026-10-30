@@ -109,10 +109,13 @@ The code of the process is judged too, and recorded with what it was judged agai
   then never be judged, so these entries are refused. CI starts pytest from the committed
   [`scripts/ci_pytest_bootstrap.py`](../../scripts/ci_pytest_bootstrap.py), with the `sys.path`
   its former `python -c` bootstrap gave;
-- its driver: every frame that leads to the creation of the `Receipt` is a committed file of the
-  source, a file of the interpreter or the interpreter's frozen code, and the innermost one is a
-  committed file of the source; code compiled from a string (`<string>`) or read from standard
-  input (`<stdin>`) is refused wherever it appears;
+- its driver: the frames that lead to the creation of the `Receipt` descend from the entry, so a
+  receiver called from `atexit`, a thread or another callback of the interpreter is refused.
+  Each of them is a committed file of the source, the interpreter's standard library, pytest's
+  own packages (`pytest`, `_pytest`, `pluggy`) or the interpreter's frozen code, and the
+  innermost one is a committed file of the source. Code compiled from a string (`<string>`) or
+  read from standard input (`<stdin>`), and any other file of a site directory (a pytest plugin
+  placed there, say), are refused wherever they appear;
 - every module it imported: a committed file of the source, a file of the SDK with its installed
   bytes, or a file of the interpreter.
 
@@ -135,7 +138,7 @@ holds the reference receivers: M01 in `System` and the finite AMR case in `AmrSy
 when every rule holds:
 
 - the receipt is self-consistent (its id is the digest of its content), of the current schema
-  (`pops.receipt@3`: a receipt written under earlier rules is refused) and its levels follow from
+  (`pops.receipt@4`: a receipt written under earlier rules is refused) and its levels follow from
   its stages; this is no signature, so a receipt is evidence only as far as the files and the
   commands that wrote it are trusted;
 - it is a PoPS runtime receipt that reaches the required level, closed without failure;
@@ -204,11 +207,16 @@ the cohort lives in a fresh qualification prefix made from the retained wheel.
 - Overlay detection covers the import system, the entry and the driver, the native selector, the
   header override and `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES`; it does not prove the absence of code
   injected by other means. Code that lies about its own file (compiled under a false file name, a
-  sourceless `.pyc`), code placed in the interpreter's standard library or site directories (a
-  `.pth` file, `sitecustomize`) and a harness patched in memory by code the receipt trusts are
-  outside what a receipt sees: like a receipt written by hand, they forge one rather than drive
-  it. A qualification prefix made by `prefix` holds the retained wheel and nothing else beside
-  the interpreter's own packages.
+  sourceless `.pyc`) and a harness patched in memory by code the receipt trusts are outside what
+  a receipt sees. The interpreter's own files are seen and believed: a receipt records the
+  modules they hold and the command line (`-p` plugins included) but hashes none of them. Code
+  placed in the standard library or inside an installed package, a `.pth` file, `sitecustomize`,
+  and a module of a site directory that changes committed code before the receiver runs (from a
+  pytest plugin's `pytest_configure`, say) therefore pass as the interpreter; a frame of such a
+  module on the driver, or a receiver it calls from `atexit` or a thread, is refused. Like a
+  receipt written by hand, these forge a receipt rather than drive it. A qualification prefix
+  made by `prefix` holds the retained wheel and nothing else beside the interpreter's own
+  packages.
 - The MPI and hardware lanes of CI still start their processes with `python -c`; a receiver run
   there is refused at E until they start from a committed file, as `ci_python_dimensions.py`
   does.
