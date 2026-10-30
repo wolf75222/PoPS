@@ -418,8 +418,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     if provider_plans is not None:
         var[("program_provider_plans",)] = provider_plans
     prelude = []
-    if program.history_field_metadata_budget is not None:
-        retained, workspace = program.history_field_metadata_budget
+    from pops.time._program.resource_budgets import resolved_history_field_metadata_budget
+    history_field_metadata = resolved_history_field_metadata_budget(program)
+    if history_field_metadata is not None:
+        retained, workspace = history_field_metadata
         prelude.append("ctx.configure_history_field_metadata(UINT64_C(%d), UINT64_C(%d));"
                        % (retained, workspace))
     if var[("stencil_flux_expressions",)]:

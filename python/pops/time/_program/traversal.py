@@ -17,7 +17,9 @@ def all_ops_with_ancestry(program: Any) -> Any:
     """Yield ``(node, ancestry)`` in lexical order with authenticated region ownership."""
     seen: set[int] = set()
 
-    pending = [(value, ()) for value in reversed(program._values)]
+    pending: list[tuple[Any, tuple[tuple[int, str], ...]]] = [
+        (value, ()) for value in reversed(program._values)
+    ]
     while pending:
         value, ancestry = pending.pop()
         value_id = getattr(value, "id", None)
