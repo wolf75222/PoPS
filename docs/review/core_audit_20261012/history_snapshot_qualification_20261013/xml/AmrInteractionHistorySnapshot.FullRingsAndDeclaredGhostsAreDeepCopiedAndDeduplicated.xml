@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuites tests="1" failures="0" disabled="0" errors="0" time="0.021" timestamp="2026-10-13T02:33:46.587" name="AllTests">
-  <testsuite name="AmrInteractionHistorySnapshot" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0.021" timestamp="2026-10-13T02:33:46.587">
-    <testcase name="FullRingsAndDeclaredGhostsAreDeepCopiedAndDeduplicated" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="56" status="run" result="completed" time="0.021" timestamp="2026-10-13T02:33:46.587" classname="AmrInteractionHistorySnapshot" />
-  </testsuite>
-</testsuites>

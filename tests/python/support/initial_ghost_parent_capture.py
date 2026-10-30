@@ -1,6 +1,6 @@
 """Strict intermediate capture disposition, not accepted-state persistence."""
 import numpy as np
-from tests.review.sol61_amr_full_carrier_offline import decode
+from tests.python.support.sol61_amr_full_carrier_offline import decode
 CANONICAL_REFUSAL='state carrier capture canonicalization; rank 0: state carrier duplicate or divergent replicated source patch'
 
 def classify_parent_capture(payload, failures, before_blob, world_size, phase):

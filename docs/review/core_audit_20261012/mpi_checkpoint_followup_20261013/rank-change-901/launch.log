@@ -1,3 +1,0 @@
-MPI group driver-test_amr_rank_change_restart: tests/python/integration/mpi/test_amr_rank_change_restart.py
-.                                                                        [100%]
-1 passed in 110.22s (0:01:50)

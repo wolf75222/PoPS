@@ -1,2 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<testsuite name="c78NativeRegridRestart" tests="1" errors="0" failures="0" skipped="0" time="192.1969794589968"><testcase name="test_regrid_on_restart_mpi_collective_rollback_and_lineage" classname="native_mpi2_restart" time="192.1969794589968" /></testsuite>

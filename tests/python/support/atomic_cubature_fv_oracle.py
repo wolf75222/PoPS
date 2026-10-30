@@ -55,7 +55,7 @@ def forward_euler(values,*,nonconservative):
 
 def authenticate_carrier_values(blob,values):
     """Cross-check complete native POPSCAR1 valid storage; ghosts are retained."""
-    from tests.review.sol61_amr_full_carrier_offline import decode
+    from tests.python.support.sol61_amr_full_carrier_offline import decode
     image=decode(np.frombuffer(blob,dtype=np.uint8))
     if image['dim']!=2 or image['real']!=64 or image['levels']!=1 or image['shard']!=-1 or len(image['blocks'])!=1:
         raise ValueError('carrier authority differs from single-level fixture')

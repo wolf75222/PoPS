@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuites tests="1" failures="0" disabled="0" errors="0" time="0.047" timestamp="2026-10-13T02:33:47.219" name="AllTests">
-  <testsuite name="AmrInteractionHistorySnapshot" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0.047" timestamp="2026-10-13T02:33:47.219">
-    <testcase name="ColdAndWarmRatioTwoRefuseWithoutAcceptedPublication" file="$REPO/tests/cpp/unit/runtime/test_amr_interaction_history_snapshot.cpp" line="189" status="run" result="completed" time="0.047" timestamp="2026-10-13T02:33:47.219" classname="AmrInteractionHistorySnapshot" />
-  </testsuite>
-</testsuites>

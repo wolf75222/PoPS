@@ -52,7 +52,7 @@ def retain_uniform_provenance(artifact,native,directory):
 
 def authenticate_owner_shard(observation,rank,ranks):
     """Test-only actual wire validation, including all grown bits and empty owners."""
-    from tests.review.sol61_amr_full_carrier_offline import decode
+    from tests.python.support.sol61_amr_full_carrier_offline import decode
     if type(rank) is not int or type(ranks) is not int or not 0<=rank<ranks:
         raise ValueError('exact rank/world authority required')
     local=decode(np.frombuffer(observation.rank_local,dtype=np.uint8))

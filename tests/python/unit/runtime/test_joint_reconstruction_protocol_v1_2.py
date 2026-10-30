@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[4]
-DOC = ROOT / "docs/development/api_040"
+DOC = ROOT / "benchmarks/joint_reconstruction"
 
 
 def load(name):
