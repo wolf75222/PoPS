@@ -149,6 +149,9 @@ jobs:
         run: |
           # gen_test_counts.py --check-matrix liste les tests disque absents de tests/test_manifest.toml.
           # Le manifest est complet : toute nouvelle entree disque non declaree est une regression.
+          # Seuls les sept tests de tests/python/unavailable_verification_tests.json (sans leurs
+          # dependances depuis bcb73f4a) en sont exemptes, tant que leurs octets restent ceux du
+          # catalogue ; une suite qui en reclame un echoue (meme regle que la garde d'architecture).
           # Capturer le statut permet de publier le detail avant d'echouer explicitement.
           set +e
           out=$(python3 docs/gen_test_counts.py --check-matrix)

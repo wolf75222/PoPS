@@ -12,11 +12,18 @@ Seven byte-pinned tests were introduced without their dependencies before M0. Th
 closed catalogue records historical unavailability, not successful execution. Any
 change to a test or return of a dependency requires explicit reclassification.
 
+The weekly manifest check of quality.yml (``docs/gen_test_counts.py --check-matrix``) applies the
+same disposition: it exempts these seven files while their bytes match the catalogue, and fails
+when a suite claims one of them.
+
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
 import hashlib
 import json
 import pathlib
+import shutil
+import subprocess
+import sys
 import tomllib
 
 import pytest
@@ -27,6 +34,7 @@ UNAVAILABLE_CATALOG = pathlib.Path("tests/python/unavailable_verification_tests.
 # Pin the catalogue independently of its contents: editing a digest, dependency,
 # or path cannot silently broaden this historical disposition.
 UNAVAILABLE_CATALOG_SHA256 = "adc9a63419d00b23d5885cf5d60e696ebb0d15da9e2276aa54788f7c63928129"
+GEN_TEST_COUNTS = pathlib.Path("docs/gen_test_counts.py")
 
 
 def _historically_unavailable_paths(repo_root, suite_dirs):
@@ -147,3 +155,54 @@ def test_active_suite_still_covers_other_tests(historical_tree):
     directory.mkdir()
     (directory / "test_active.py").write_text("def test_active(): pass\n")
     assert _uncovered_test_paths(historical_tree, ["tests/python/active"]) == []
+
+
+def _check_matrix(repo_root):
+    return subprocess.run([sys.executable, str(repo_root / GEN_TEST_COUNTS), "--check-matrix"],
+                          capture_output=True, text=True, check=False)
+
+
+def test_quality_manifest_check_exempts_exactly_the_historical_files():
+    result = _check_matrix(REPO_ROOT)
+    assert result.returncode == 0, result.stdout
+    assert "Historically unavailable, never run: 7 Python files" in result.stdout
+    assert "MISSING" not in result.stdout
+
+
+@pytest.fixture
+def matrix_tree(historical_tree):
+    (historical_tree / "docs").mkdir()
+    shutil.copy(REPO_ROOT / GEN_TEST_COUNTS, historical_tree / GEN_TEST_COUNTS)
+    (historical_tree / "tests/cpp").mkdir(parents=True)
+    active = historical_tree / "tests/python/active"
+    active.mkdir()
+    (active / "test_active.py").write_text("def test_active(): pass\n")
+    (historical_tree / "tests/test_manifest.toml").write_text(
+        '[[python.suite]]\nname = "active"\npath = "tests/python/active"\n')
+    return historical_tree
+
+
+def test_quality_manifest_check_passes_beside_the_historical_files(matrix_tree):
+    result = _check_matrix(matrix_tree)
+    assert result.returncode == 0, result.stdout
+    assert "Historically unavailable, never run: 7 Python files" in result.stdout
+
+
+@pytest.mark.parametrize("mutation", ["test_bytes", "new_test", "suite_claims"])
+def test_quality_manifest_check_refuses_drift(matrix_tree, mutation):
+    first = json.loads((matrix_tree / UNAVAILABLE_CATALOG).read_text())["tests"][0]["path"]
+    if mutation == "test_bytes":
+        test_file = matrix_tree / first
+        test_file.write_bytes(test_file.read_bytes() + b"\n# changed\n")
+        expected = f"MISSING {first}"
+    elif mutation == "new_test":
+        (matrix_tree / "tests/python/verification/test_new.py").write_text("def test_new(): pass\n")
+        expected = "MISSING tests/python/verification/test_new.py"
+    else:
+        with (matrix_tree / "tests/test_manifest.toml").open("a") as manifest:
+            manifest.write('\n[[python.suite]]\nname = "verification"\n'
+                           'path = "tests/python/verification"\n')
+        expected = f"CLAIMED {first}"
+    result = _check_matrix(matrix_tree)
+    assert result.returncode == 1, result.stdout
+    assert expected in result.stdout
