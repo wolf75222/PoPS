@@ -401,6 +401,104 @@ std::vector<Index<Dim>> fine_faces_for_coarse_face(const CoarseFaceRefluxKey<Dim
   return result;
 }
 
+namespace detail {
+
+/// Integrate the published fragments that `for_each_candidate` visits; it visits, in ledger order,
+/// published entries of `key.axis` that include every entry with the key's coarse face.
+template <int Dim, class Payload, class Axpy, class ForEachCandidate>
+MetricFaceReflux<Payload> metric_reflux_over(
+    const TransactionalFaceFluxLedger<Dim, Payload>& ledger, const CoarseFaceRefluxKey<Dim>& key,
+    const RefinementRatio<Dim>& ratio, const FaceRefinementMapping<Dim>& mapping,
+    const MetricRefluxBudget& budget, Axpy& axpy, const MetricRefluxTemporalContract* expected,
+    ForEachCandidate&& for_each_candidate) {
+  validate_reflux_key(key);
+  validate_reflux_budget(budget);
+  if (ledger.published_size() > budget.max_published_entries)
+    throw std::length_error("ND metric reflux published entries exceed their prepared budget");
+  const auto expected_fine = expected_fine_face_set(key, ratio, mapping, budget);
+  const std::set<std::array<int, Dim>> expected_coarse{coordinate_array(key.coarse_face)};
+  std::map<StageSlice, std::set<std::array<int, Dim>>> coarse_slices;
+  std::map<StageSlice, std::set<std::array<int, Dim>>> fine_slices;
+  TemporalStageFamilies coarse_temporal;
+  TemporalStageFamilies fine_temporal;
+  MetricFaceReflux<Payload> result;
+
+  for_each_candidate([&](const FaceFluxFragment<Dim, Payload>& entry) {
+    if (!matches_reflux_key(entry.key, key))
+      return;
+    const double scale = weighted_face_flux_scale(entry.measure);
+    const auto slice = stage_slice(entry.key.clock, entry.key.stage);
+    switch (entry.key.role) {
+      case FaceLedgerRole::Coarse:
+        coarse_slices[slice].insert(coordinate_array(entry.key.face));
+        register_temporal_family_slice(coarse_temporal, entry.key.temporal_family, slice,
+                                       entry.measure, temporal_slice_count(fine_temporal), budget);
+        axpy(result.coarse_integrated, scale, entry.payload);
+        result.coarse_weighted_measure += scale;
+        if (!std::isfinite(result.coarse_weighted_measure))
+          throw std::overflow_error("ND metric reflux coarse weighted measure is not finite");
+        break;
+      case FaceLedgerRole::Fine:
+        fine_slices[slice].insert(coordinate_array(entry.key.face));
+        register_temporal_family_slice(fine_temporal, entry.key.temporal_family, slice,
+                                       entry.measure, temporal_slice_count(coarse_temporal),
+                                       budget);
+        axpy(result.fine_integrated, scale, entry.payload);
+        result.fine_weighted_measure += scale;
+        if (!std::isfinite(result.fine_weighted_measure))
+          throw std::overflow_error("ND metric reflux fine weighted measure is not finite");
+        break;
+      default:
+        throw std::runtime_error("ND metric reflux observed an invalid published face role");
+    }
+  });
+
+  require_complete_slices(coarse_slices, expected_coarse, "coarse");
+  require_complete_slices(fine_slices, expected_fine, "fine");
+  validate_temporal_coverage(key, coarse_temporal, fine_temporal, expected);
+  if (!roundoff_equal(result.coarse_weighted_measure, result.fine_weighted_measure,
+                      ledger.published_size()))
+    throw std::runtime_error(
+        "ND metric reflux coarse and fine metric-time measures do not cover the same face");
+  axpy(result.mismatch, 1.0, result.fine_integrated);
+  axpy(result.mismatch, -1.0, result.coarse_integrated);
+  result.fine_face_count = expected_fine.size();
+  return result;
+}
+
+}  // namespace detail
+
+/// The published entries of one ledger grouped by axis and coarse face, each group in ledger
+/// order. It reads the ledger once, so reconciling every coarse face of a transition stays linear
+/// in its published fragments. The ledger must not change while the index is used.
+template <int Dim, class Payload>
+class PublishedCoarseFaceIndex {
+ public:
+  using Entry = FaceFluxFragment<Dim, Payload>;
+
+  explicit PublishedCoarseFaceIndex(const TransactionalFaceFluxLedger<Dim, Payload>& ledger)
+      : ledger_(&ledger) {
+    for (int axis = 0; axis < Dim; ++axis)
+      for (const Entry& entry : ledger.published_entries(axis))
+        groups_[static_cast<std::size_t>(axis)][detail::coordinate_array(entry.key.coarse_face)]
+            .push_back(&entry);
+  }
+
+  const TransactionalFaceFluxLedger<Dim, Payload>& ledger() const noexcept { return *ledger_; }
+
+  /// The published entries of `axis` whose coarse face is `coarse_face`, in ledger order.
+  const std::vector<const Entry*>& entries(int axis, const Index<Dim>& coarse_face) const {
+    const auto& groups = groups_[static_cast<std::size_t>(detail::checked_axis(axis, Dim))];
+    const auto group = groups.find(detail::coordinate_array(coarse_face));
+    return group == groups.end() ? empty_ : group->second;
+  }
+
+ private:
+  const TransactionalFaceFluxLedger<Dim, Payload>* ledger_;
+  std::array<std::map<std::array<int, Dim>, std::vector<const Entry*>>, Dim> groups_{};
+  std::vector<const Entry*> empty_;
+};
+
 /// Integrate every accepted coarse and fine stage fragment using its exact rational stage weight,
 /// authored substep duration and physical face measure.  Fine faces must form the complete
 /// tangential product for every clock-stage slice. Pending/rejected fragments are never observed.
@@ -411,60 +509,26 @@ MetricFaceReflux<Payload> metric_reflux(const TransactionalFaceFluxLedger<Dim, P
                                         const FaceRefinementMapping<Dim>& mapping,
                                         const MetricRefluxBudget& budget, Axpy&& axpy,
                                         const MetricRefluxTemporalContract* expected = nullptr) {
-  detail::validate_reflux_key(key);
-  detail::validate_reflux_budget(budget);
-  if (ledger.published_size() > budget.max_published_entries)
-    throw std::length_error("ND metric reflux published entries exceed their prepared budget");
-  const auto expected_fine = detail::expected_fine_face_set(key, ratio, mapping, budget);
-  const std::set<std::array<int, Dim>> expected_coarse{detail::coordinate_array(key.coarse_face)};
-  std::map<detail::StageSlice, std::set<std::array<int, Dim>>> coarse_slices;
-  std::map<detail::StageSlice, std::set<std::array<int, Dim>>> fine_slices;
-  detail::TemporalStageFamilies coarse_temporal;
-  detail::TemporalStageFamilies fine_temporal;
-  MetricFaceReflux<Payload> result;
+  return detail::metric_reflux_over(ledger, key, ratio, mapping, budget, axpy, expected,
+                                    [&](auto&& visit) {
+                                      for (const auto& entry : ledger.published_entries(key.axis))
+                                        visit(entry);
+                                    });
+}
 
-  for (const auto& entry : ledger.published_entries(key.axis)) {
-    if (!detail::matches_reflux_key(entry.key, key))
-      continue;
-    const double scale = weighted_face_flux_scale(entry.measure);
-    const auto slice = detail::stage_slice(entry.key.clock, entry.key.stage);
-    switch (entry.key.role) {
-      case FaceLedgerRole::Coarse:
-        coarse_slices[slice].insert(detail::coordinate_array(entry.key.face));
-        detail::register_temporal_family_slice(coarse_temporal, entry.key.temporal_family, slice,
-                                               entry.measure,
-                                               detail::temporal_slice_count(fine_temporal), budget);
-        axpy(result.coarse_integrated, scale, entry.payload);
-        result.coarse_weighted_measure += scale;
-        if (!std::isfinite(result.coarse_weighted_measure))
-          throw std::overflow_error("ND metric reflux coarse weighted measure is not finite");
-        break;
-      case FaceLedgerRole::Fine:
-        fine_slices[slice].insert(detail::coordinate_array(entry.key.face));
-        detail::register_temporal_family_slice(
-            fine_temporal, entry.key.temporal_family, slice, entry.measure,
-            detail::temporal_slice_count(coarse_temporal), budget);
-        axpy(result.fine_integrated, scale, entry.payload);
-        result.fine_weighted_measure += scale;
-        if (!std::isfinite(result.fine_weighted_measure))
-          throw std::overflow_error("ND metric reflux fine weighted measure is not finite");
-        break;
-      default:
-        throw std::runtime_error("ND metric reflux observed an invalid published face role");
-    }
-  }
-
-  detail::require_complete_slices(coarse_slices, expected_coarse, "coarse");
-  detail::require_complete_slices(fine_slices, expected_fine, "fine");
-  detail::validate_temporal_coverage(key, coarse_temporal, fine_temporal, expected);
-  if (!detail::roundoff_equal(result.coarse_weighted_measure, result.fine_weighted_measure,
-                              ledger.published_size()))
-    throw std::runtime_error(
-        "ND metric reflux coarse and fine metric-time measures do not cover the same face");
-  axpy(result.mismatch, 1.0, result.fine_integrated);
-  axpy(result.mismatch, -1.0, result.coarse_integrated);
-  result.fine_face_count = expected_fine.size();
-  return result;
+/// The same reconciliation, reading only the indexed entries of the key's coarse face.
+template <int Dim, class Payload, class Axpy>
+MetricFaceReflux<Payload> metric_reflux(const PublishedCoarseFaceIndex<Dim, Payload>& index,
+                                        const CoarseFaceRefluxKey<Dim>& key,
+                                        const RefinementRatio<Dim>& ratio,
+                                        const FaceRefinementMapping<Dim>& mapping,
+                                        const MetricRefluxBudget& budget, Axpy&& axpy,
+                                        const MetricRefluxTemporalContract* expected = nullptr) {
+  return detail::metric_reflux_over(
+      index.ledger(), key, ratio, mapping, budget, axpy, expected, [&](auto&& visit) {
+        for (const auto* entry : index.entries(key.axis, key.coarse_face))
+          visit(*entry);
+      });
 }
 
 /// Convert the integrated face mismatch into the correction of the adjacent coarse cell.  Fluxes

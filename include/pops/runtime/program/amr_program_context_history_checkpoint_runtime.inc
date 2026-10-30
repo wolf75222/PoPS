@@ -15,6 +15,9 @@ void apply_multiblock_reflux_(
       maximum_fine_faces, std::max<std::size_t>(context.flux.published_size(), 1),
       std::max<std::size_t>(context.flux.published_size(), 1)};
   const std::string& state_identity = facade_->prepared_amr_block_state_identity_(context.block);
+  // Read the published fragments once, grouped by coarse face: each interface face then reads
+  // only its own fragments, here and in the metric reconciliation.
+  const ::pops::amr::reflux::PublishedCoarseFaceIndex published(context.flux);
   for (const ProgramInterfaceFace& interface : program_interface_faces_(context.parent_level)) {
     ::pops::amr::reflux::CoarseFaceRefluxKey<Dim> query;
     query.owner = std::string(context.block_identity);
@@ -28,7 +31,6 @@ void apply_multiblock_reflux_(
     query.window_begin = context.parent_window.begin.phase;
     query.window_end = context.parent_window.end.phase;
     bool found_coarse = false;
-    const auto& entries = context.flux.published_entries(interface.axis);
     const auto matches_query = [&](const auto& entry) {
       return entry.key.owner == query.owner && entry.key.state == query.state &&
              entry.key.levels == query.levels && entry.key.axis == query.axis &&
@@ -37,10 +39,10 @@ void apply_multiblock_reflux_(
              !(entry.key.clock.phase < query.window_begin) &&
              !(query.window_end < entry.key.clock.phase);
     };
-    for (const auto& entry : entries) {
-      if (!matches_query(entry))
+    for (const auto* entry : published.entries(interface.axis, interface.coarse_face)) {
+      if (!matches_query(*entry))
         continue;
-      found_coarse = found_coarse || entry.key.role == ::pops::amr::reflux::FaceLedgerRole::Coarse;
+      found_coarse = found_coarse || entry->key.role == ::pops::amr::reflux::FaceLedgerRole::Coarse;
     }
     if (!found_coarse)
       throw std::runtime_error(
@@ -56,8 +58,8 @@ void apply_multiblock_reflux_(
     }
     const auto reflux =
         facade_->prepared_amr_multiblock_hierarchy_().topology_runtime().reconcile_reflux_for_owner(
-            context.flux, query, context.block_identity, state_identity, context.face_mapping,
-            budget, payload_axpy_, temporal);
+            published, query, context.block_identity, state_identity, context.face_mapping, budget,
+            payload_axpy_, temporal);
     const std::vector<Real> correction = ::pops::amr::reflux::coarse_cell_reflux_correction(
         reflux, cell_measure_(geometry), interface.side, payload_axpy_);
     apply_reflux_payload_(context.parent, interface.coarse_cell, correction);
