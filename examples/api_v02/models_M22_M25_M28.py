@@ -304,7 +304,7 @@ def build_m25(cells=(12,4), *, tau_distortion=.1, tau_heat=.1):
     case=pops.Case("M25_evolved_distortion_and_heat");block=case.block("continuum",model)
     plan=DiscretizationPlan();plan.rates.add(transport,method);plan.rates.add(relaxation,StateStorage());case.numerics(plan,block=block)
     dt=1.e-5;steps=8
-    _traced_ssprk2(case,block,u,balance,dt)
+    _traced_ssprk2(case,block,u,balance,dt,name="M25_SSPRK2")
     x,y=np.meshgrid((np.arange(cells[0])+.5)/cells[0],(np.arange(cells[1])+.5)/cells[1])
     initial=np.zeros((17,cells[1],cells[0]));initial[0]=1
     for i in range(3):initial[5+3*i+i]=1
@@ -450,7 +450,7 @@ def build_m24(cells=(16,4), *, pressure_relaxation=0., velocity_relaxation=0.):
     plan=DiscretizationPlan();plan.rates.add(transport,method)
     plan.rates.add(relaxation,StateStorage());case.numerics(plan,block=block)
     dt=.0005;steps=4
-    _traced_ssprk2(case,block,u,rate,dt)
+    _traced_ssprk2(case,block,u,rate,dt,name="M24_SSPRK2")
     x,y=np.meshgrid((np.arange(cells[0])+.5)/cells[0],(np.arange(cells[1])+.5)/cells[1])
     a=.45+.08*np.sin(2*np.pi*x);r1=a*(1+.03*np.cos(2*np.pi*x));r2=(1-a)*.8
     v1=.2+.02*np.cos(2*np.pi*x);v2=-.1+.03*np.sin(2*np.pi*x)

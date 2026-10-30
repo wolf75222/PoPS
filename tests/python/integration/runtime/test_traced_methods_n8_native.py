@@ -1,9 +1,10 @@
 """N8 lot 1, native: the traced profiles run bit for bit like their b6 builder.
 
 The profiles whose stages read one rate of their model write their step as the traced method
-``ssprk2`` of ``examples/api_v02/models_M01_M14.py``; ``_ssprk2``, the b6 builder they used, stays
-as the reference (MG1). Both routes are compiled, bound and run; the case invariants of b6 must
-pass on both, and the final states must be equal bitwise, as the accepted step counts.
+``shu_osher_ssprk2`` of ``examples/api_v02/models_M01_M14.py``; ``_ssprk2``, the b6 builder they
+used, stays as the reference (MG1). Both routes are compiled, bound and run under the b6 name of
+the profile's Program; the case invariants of b6 must pass on both, and the final states must be
+equal bitwise, as the accepted step counts.
 
 CI runs three distinct spatial routes: an authored scalar flux (M01), two summed rates with
 their own realizations (M04) and a coordinated face with a bed product (M07). The same test over
@@ -21,7 +22,7 @@ from tests.python.support.public_native_profile import native_profile
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
-# profile -> (module that calls _traced_ssprk2, builder, b6 program name, block)
+# profile -> (module that calls _traced_ssprk2, builder, program name on both routes, block)
 PROFILES = {
     "M01": (early, early.build_m01, "M01_SSPRK2", "fluid"),
     "M04": (early, early.build_m04, "M04_combined_SSPRK2", "fluid"),
@@ -40,17 +41,17 @@ def _run(build, block, world, route):
 def test_traced_profile_runs_bitwise_like_b6(profile, monkeypatch, isolated_native_cache,
                                              native_cxx, kokkos_root, record_property):
     del isolated_native_cache, native_cxx, kokkos_root
-    module, build, b6_name, block = PROFILES[profile]
+    module, build, name, block = PROFILES[profile]
     _, world = native_profile(dimension=2, scope="N8 traced profile %s" % profile)
     traced = _run(build, block, world, "N8 %s traced method" % profile)
 
-    def b6_route(case, block_handle, state, flow, dt):
+    def b6_route(case, block_handle, state, flow, dt, *, name):
         return early._ssprk2(case, block_handle, state, lambda p, u, point, label: flow(u), dt,
-                             name=b6_name)
+                             name=name)
     monkeypatch.setattr(module, "_traced_ssprk2", b6_route)
     b6 = _run(build, block, world, "N8 %s b6 builder" % profile)
     with collective_check(world):
-        assert traced[2].program_name == "ssprk2" and b6[2].program_name == b6_name
+        assert traced[2].program_name == b6[2].program_name == name
         assert all(row["passed"] for row in b6[3]) and all(row["passed"] for row in traced[3])
         assert traced[1] == b6[1] > 0
         if b6[0] is not None or traced[0] is not None:

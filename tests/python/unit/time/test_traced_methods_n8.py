@@ -1,20 +1,23 @@
 """N8 lot 1: traced methods elaborated by the b6 builder (spec 0.3, sections 5.2 to 5.4).
 
 The seven profiles whose stages read one rate of their model (M01, M02, M03, M04, M07, M24, M25)
-now write their step as the traced method ``ssprk2`` of ``examples/api_v02/models_M01_M14.py``.
-Their b6 builder ``_ssprk2`` stays as the parity reference (MG1). Both routes must elaborate the
-same program: equal serialized IR and equal generated C++ once the presentation names (the
-program, its values and its stages, CC2) are renamed by SSA position, and once the History
-metadata capacity that ``_ssprk2`` writes for a Program without History is set aside (B3: a traced
-case writes no resource). The C++ of M25 (17 components) takes about two minutes per route to
-generate, so this source-only module compares its IR, and its native run is compared bit for bit
-outside CI (handoff of N8 lot 1). The refusals of T33 and T34 are tested on M01.
+now write their step as the traced method ``shu_osher_ssprk2`` of
+``examples/api_v02/models_M01_M14.py``, in a Program that keeps the b6 name of the profile. Their
+b6 builder ``_ssprk2`` stays as the parity reference (MG1). Both routes must elaborate the same
+program: equal serialized IR and equal generated C++ once the presentation names (the values and
+stages, CC2) are renamed by SSA position, and once the History metadata capacity that ``_ssprk2``
+writes for a Program without History is set aside (B3: a traced case writes no resource). The C++
+of M25 (17 components) takes about two minutes per route to generate, so this source-only module
+compares its IR, and its native run is compared bit for bit outside CI (handoff of N8 lot 1). The
+refusals of E1, T33, T34 and SU10 are tested on M01.
 """
 import base64
 import json
 import re
+from decimal import Decimal
 from fractions import Fraction
 
+import numpy as np
 import pytest
 
 import pops
@@ -24,12 +27,14 @@ from pops._ir.symbolic import SymbolicTruthValueError
 from pops._structural_data import canonical_json
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
+from pops.time import FixedDt
 from pops.time._program.elaboration import Advance, Proposal, Retry, elaborate
 from pops.time._program.traced_method import (
-    Candidate, ClosedBodyViolation, IncrementNotDerivable, NotYetElaborated, method,
+    Candidate, ClosedBodyViolation, IncrementNotDerivable, IncrementTypeMismatch,
+    NotYetElaborated, method,
 )
 
-# profile -> (module that calls _traced_ssprk2, builder, name of the b6 program)
+# profile -> (module that calls _traced_ssprk2, builder, name of the program on both routes)
 PROFILES = {
     "M01": (early, early.build_m01, "M01_SSPRK2"),
     "M02": (early, early.build_m02, "M02_SSPRK2"),
@@ -44,10 +49,8 @@ B6_HISTORY_METADATA = (8 * 1024 * 1024, 16 * 1024 * 1024)
 B6_HISTORY_LINE = "  ctx.configure_history_field_metadata(UINT64_C(8388608), UINT64_C(16777216));"
 
 
-def _b6_route(name):
-    def route(case, block, state, flow, dt):
-        return early._ssprk2(case, block, state, lambda p, u, point, label: flow(u), dt, name=name)
-    return route
+def _b6_route(case, block, state, flow, dt, *, name):
+    return early._ssprk2(case, block, state, lambda p, u, point, label: flow(u), dt, name=name)
 
 
 def _spec(module, build, monkeypatch, route=None):
@@ -89,10 +92,10 @@ def _normalized(text, names):
 
 @pytest.mark.parametrize("profile", sorted(PROFILES))
 def test_traced_profile_authors_the_b6_program(profile, monkeypatch):
-    module, build, b6_name = PROFILES[profile]
-    b6 = _spec(module, build, monkeypatch, _b6_route(b6_name)).case._time
+    module, build, name = PROFILES[profile]
+    b6 = _spec(module, build, monkeypatch, _b6_route).case._time
     traced = _spec(module, build, monkeypatch).case._time
-    assert b6.name == b6_name and traced.name == "ssprk2"
+    assert b6.name == traced.name == name
     assert [(v.op, v.vtype) for v in b6._values] == [(v.op, v.vtype) for v in traced._values]
     # _ssprk2 authors a History metadata capacity for a Program without History rings.
     assert not b6._histories and not traced._histories
@@ -107,8 +110,8 @@ def test_traced_profile_authors_the_b6_program(profile, monkeypatch):
 
 @pytest.mark.parametrize("profile", CXX_PROFILES)
 def test_traced_profile_generates_the_b6_cpp(profile, monkeypatch):
-    module, build, b6_name = PROFILES[profile]
-    b6_spec = _spec(module, build, monkeypatch, _b6_route(b6_name))
+    module, build, _ = PROFILES[profile]
+    b6_spec = _spec(module, build, monkeypatch, _b6_route)
     traced_spec = _spec(module, build, monkeypatch)
     b6_lines = _normalized(_source(b6_spec), _presentation_names(b6_spec.case._time)).splitlines()
     # The one line that the History capacity of _ssprk2 adds; the Program has no History ring.
@@ -121,24 +124,26 @@ def test_traced_profile_generates_the_b6_cpp(profile, monkeypatch):
 def test_traced_profile_records_its_closed_form(monkeypatch):
     elaborations = []
 
-    def record(case, block, state, flow, dt):
-        elaborations.append(early.elaborate(early.Advance(early.ssprk2(flow=flow)), case=case,
-                                            state=block[state], proposal=early.Proposal(dt)))
+    def record(case, block, state, flow, dt, *, name):
+        elaborations.append(early.elaborate(
+            early.Advance(early.shu_osher_ssprk2(flow=flow)), case=case, state=block[state],
+            proposal=early.Proposal(dt), name=name))
     monkeypatch.setattr(early, "_traced_ssprk2", record)
     early.build_m01()
     (elaboration,) = elaborations
-    assert elaboration.program.name == "ssprk2"
+    assert elaboration.program.name == "M01_SSPRK2"
     assert elaboration.program._step_strategy.dt == elaboration.proposal.dt
     assert elaboration.advance.retry.max_attempts == 1 and elaboration.advance.accept is None
     assert elaboration.trace.describe() == {
-        "method": "ssprk2",
+        "method": "shu_osher_ssprk2",
         "components": ["flow"],
         "stages": [{"stage": 0, "c": "0", "materializes": None},
-                   {"stage": 1, "c": "1", "materializes": "ssprk2_state1"}],
+                   {"stage": 1, "c": "1", "materializes": "shu_osher_ssprk2_state1"}],
         "evaluations": [{"evaluation": 0, "component": "flow", "stage": 0},
                         {"evaluation": 1, "component": "flow", "stage": 1}],
         "increment": [{"evaluation": 0, "duration": "1/2*dt"},
                       {"evaluation": 1, "duration": "1/2*dt"}],
+        "tolerated_weights": [],
     }
 
 
@@ -149,16 +154,17 @@ def m01(monkeypatch):
     """The M01 case, its block, state, rate and step, without a program attached."""
     parts = {}
 
-    def capture(case, block, state, flow, dt):
+    def capture(case, block, state, flow, dt, *, name):
         parts.update(case=case, block=block, state=state, flow=flow, dt=dt)
     monkeypatch.setattr(early, "_traced_ssprk2", capture)
     early.build_m01()
     return parts
 
 
-def _elaborate(parts, specialized, **advance):
+def _elaborate(parts, specialized, proposal=None, **advance):
     return elaborate(Advance(specialized, **advance), case=parts["case"],
-                     state=parts["block"][parts["state"]], proposal=Proposal(parts["dt"]))
+                     state=parts["block"][parts["state"]],
+                     proposal=Proposal(parts["dt"]) if proposal is None else proposal)
 
 
 def _stage_formula(update):
@@ -172,39 +178,99 @@ def _stage_formula(update):
     return two_stage
 
 
+@method
+def forward(B, p, flow):
+    return Candidate(B.state + p.dt*flow(B.state, B.time), B.time + p.dt)
+
+
 def test_a_traced_method_is_traced_once_per_elaboration(m01):
     calls = []
 
     @method
-    def forward(B, p, flow):
+    def counted(B, p, flow):
         calls.append(None)
         return Candidate(B.state + p.dt*flow(B.state, B.time), B.time + p.dt)
-    elaboration = _elaborate(m01, forward(m01["flow"]))
+    elaboration = _elaborate(m01, counted(m01["flow"]))
     assert len(calls) == 1
-    assert m01["case"]._time is elaboration.program
-    assert elaboration.trace.increment == ((0, Fraction(1)),)
+    assert m01["case"]._time is elaboration.program and elaboration.program.name == "counted"
+    assert elaboration.trace.increment == ((0, {1: Fraction(1)}),)
 
 
-def test_exact_coefficients_decide_the_increment(m01):
-    exact = _stage_formula(lambda B, p, k0, U1, k1:
-                           Fraction(1, 3)*B.state + Fraction(2, 3)*(U1 + p.dt*k1))
-    trace = _elaborate(m01, exact(flow=m01["flow"])).trace
-    assert trace.increment == ((0, Fraction(2, 3)), (1, Fraction(2, 3)))
-    # The binary64 values of 1/3 and 2/3 sum to 1 - 2**-54: no increment derives from them.
-    rounded = _stage_formula(lambda B, p, k0, U1, k1: (1/3)*B.state + (2/3)*(U1 + p.dt*k1))
-    with pytest.raises(IncrementNotDerivable, match="exact rationals"):
-        _elaborate(m01, rounded(flow=m01["flow"]))
+@pytest.mark.parametrize("update, increment, tolerated, sums", [
+    (lambda B, p, k0, U1, k1: Fraction(1, 3)*B.state + Fraction(2, 3)*(U1 + p.dt*k1),
+     ((0, {1: Fraction(2, 3)}), (1, {1: Fraction(2, 3)})), (), []),
+    # The binary64 values of 1/3 and 2/3 sum to 1 - 2**-54: within 1e-12, listed (SU10).
+    (lambda B, p, k0, U1, k1: (1/3)*B.state + (2/3)*(U1 + p.dt*k1),
+     ((0, {1: Fraction(2/3)}), (1, {1: Fraction(2/3)})),
+     (("the candidate of 'two_stage'", 1 - Fraction(1, 2**54)),),
+     [{"where": "the candidate of 'two_stage'", "deviation": "-5.551115123125783e-17"}]),
+    # 0.1 + 0.2 + 0.7 == 1.0 in Python; their binary64 values sum to 1 - 2**-55.
+    (lambda B, p, k0, U1, k1: .1*B.state + .2*B.state + .7*U1,
+     ((0, {1: Fraction(.7)}),),
+     (("the candidate of 'two_stage'", 1 - Fraction(1, 2**55)),),
+     [{"where": "the candidate of 'two_stage'", "deviation": "-2.7755575615628914e-17"}]),
+], ids=["fractions-exact", "binary64-within-tolerance", "binary64-rounded-to-one"])
+def test_weights_are_exact_or_binary64_within_tolerance(m01, update, increment, tolerated, sums):
+    trace = _elaborate(m01, _stage_formula(update)(m01["flow"])).trace
+    assert trace.increment == increment and trace.tolerated == tolerated
+    assert trace.describe()["tolerated_weights"] == sums
 
 
-@pytest.mark.parametrize("update", [
-    lambda B, p, k0, U1, k1: .5*B.state + .5*(U1 + p.dt*k1) - .5*B.state,
-    lambda B, p, k0, U1, k1: B.state + k1,
-    lambda B, p, k0, U1, k1: B.state + p.dt*p.dt*k1,
-], ids=["state-coefficient", "rate-without-duration", "squared-duration"])
-def test_candidate_without_a_derivable_increment_is_refused(m01, update):
-    with pytest.raises(IncrementNotDerivable):
-        _elaborate(m01, _stage_formula(update)(flow=m01["flow"]))
+@pytest.mark.parametrize("update, match", [
+    (lambda B, p, k0, U1, k1: .5*B.state + .4999*(U1 + p.dt*k1),
+     "sum to 0.9999, .*within 1e-12"),
+    (lambda B, p, k0, U1, k1: .5*B.state + .5*(U1 + p.dt*k1) - .5*B.state, "sum to 0.5"),
+    (lambda B, p, k0, U1, k1: 2*B.state + p.dt*k1, "sum to 2, neither one nor zero"),
+    (lambda B, p, k0, U1, k1: U1 - B.state, "is a difference"),
+    (lambda B, p, k0, U1, k1: (.1 + .2)*B.state - .3*B.state + p.dt*k1, "is a difference"),
+    (lambda B, p, k0, U1, k1: B.state + k1, "coefficient 1, which is not a duration"),
+    (lambda B, p, k0, U1, k1: B.state + (1 + p.dt)*k1, "coefficient 1 \\+ 1\\*dt"),
+], ids=["binary64-beyond-tolerance", "weights-sum-to-one-half", "weights-sum-to-two",
+        "difference", "binary64-difference", "rate-without-duration", "rate-with-a-constant"])
+def test_candidate_outside_the_step_algebra_is_an_increment_type_mismatch(m01, update, match):
+    with pytest.raises(IncrementTypeMismatch, match=match):
+        _elaborate(m01, _stage_formula(update)(m01["flow"]))
     assert m01["case"]._time is None
+
+
+def test_durations_are_polynomials_of_the_step_that_vanish_with_it(m01):
+    trace = _elaborate(m01, _stage_formula(lambda B, p, k0, U1, k1: B.state + p.dt*p.dt*k1
+                                           + p.dt/2*k0)(m01["flow"])).trace
+    assert trace.increment == ((1, {2: Fraction(1)}), (0, {1: Fraction(1, 2)}))
+    assert trace.describe()["increment"] == [{"evaluation": 1, "duration": "1*dt^2"},
+                                             {"evaluation": 0, "duration": "1/2*dt"}]
+
+
+def test_a_closed_form_candidate_has_no_derivable_increment(m01):
+    @method
+    def decay(B, p, flow):
+        return Candidate((1 - p.dt)*B.state, B.time + p.dt)
+    with pytest.raises(IncrementNotDerivable, match="exact_flow.*increment="):
+        _elaborate(m01, decay(m01["flow"]))
+    assert m01["case"]._time is None
+
+
+@pytest.mark.parametrize("argument, match", [
+    (lambda B, p, k0: 2*B.state, "state of evaluation 1 of 'flow' combines states whose weights "
+                                 "sum to 2"),
+    (lambda B, p, k0: B.state + k0, "adds the rate flow#0 to a state with the coefficient 1"),
+    (lambda B, p, k0: p.dt*k0, "is a difference"),
+    (lambda B, p, k0: (1 - p.dt)*B.state, "depends on the step"),
+], ids=["weights-sum-to-two", "rate-without-duration", "increment-alone", "closed-form"])
+def test_the_state_of_a_rate_is_a_state(m01, argument, match):
+    @method
+    def staged(B, p, flow):
+        k0 = flow(B.state, B.time)
+        k1 = flow(argument(B, p, k0), B.time + p.dt)
+        return Candidate(B.state + p.dt*k1, B.time + p.dt)
+    with pytest.raises(IncrementTypeMismatch, match=match):
+        _elaborate(m01, staged(m01["flow"]))
+
+    @method
+    def taylor(B, p, flow):
+        k0 = flow(B.state, B.time)
+        return Candidate(B.state + p.dt*flow(B.state + p.dt*p.dt*k0, B.time + p.dt), B.time + p.dt)
+    assert _elaborate(m01, taylor(m01["flow"])).trace.increment == ((1, {1: Fraction(1)}),)
 
 
 def test_ambient_step_size_and_foreign_values_are_closed_body_violations(m01):
@@ -225,16 +291,38 @@ def test_ambient_step_size_and_foreign_values_are_closed_body_violations(m01):
         _elaborate(m01, clocked(m01["flow"]))
 
 
-def test_a_component_that_publishes_is_a_closed_body_violation(m01):
-    def publishing(u):
-        u.prog.integral_state("stash", initial=0.)  # a published quantity outside the Candidate
-        return m01["flow"](u)
+@pytest.mark.parametrize("component", [
+    lambda rate: (lambda u: u.prog.dt*rate(u)),
+    lambda rate: (lambda u: rate(u)*u.prog.dt),
+    lambda rate: (lambda u: u.prog.value("scaled", u.prog.dt*rate(u), at=u.point)),
+], ids=["dt-times-rate", "rate-times-dt", "materialized"])
+def test_a_component_that_reads_the_step_size_is_a_closed_body_violation(m01, component):
+    with pytest.raises(ClosedBodyViolation, match="reads the step size of its Program"):
+        _elaborate(m01, forward(component(m01["flow"])))
 
-    @method
-    def forward(B, p, flow):
-        return Candidate(B.state + p.dt*flow(B.state, B.time), B.time + p.dt)
-    with pytest.raises(ClosedBodyViolation, match="component"):
+
+@pytest.mark.parametrize("publish, table", [
+    (lambda prog: prog.integral_state("stash", initial=0.), "integral states"),
+    (lambda prog: prog.cadence(stride=2), "cadence"),
+    (lambda prog: prog.cell_local_time(tick_denominator=4), "cell local time"),
+    (lambda prog: prog.step_strategy(FixedDt(1.)), "step strategy"),
+], ids=["integral-state", "cadence", "cell-local-time", "step-strategy"])
+def test_a_component_that_publishes_is_a_closed_body_violation(m01, publish, table):
+    def publishing(u):
+        publish(u.prog)  # a change of the Program outside the Candidate
+        return m01["flow"](u)
+    with pytest.raises(ClosedBodyViolation, match="changed the %s of its Program" % table):
         _elaborate(m01, forward(publishing))
+
+
+@pytest.mark.parametrize("component", [
+    lambda rate: (lambda u: u),
+    lambda rate: (lambda u: u + rate(u)),
+    lambda rate: (lambda u: 2*u - u),
+], ids=["state", "state-plus-rate", "combination-of-states"])
+def test_a_component_returns_a_rate(m01, component):
+    with pytest.raises(IncrementTypeMismatch, match="type state, not a rate"):
+        _elaborate(m01, forward(component(m01["flow"])))
 
 
 def test_a_traced_value_does_not_outlive_its_trace(m01):
@@ -253,13 +341,22 @@ def test_a_traced_value_does_not_outlive_its_trace(m01):
         _elaborate(m01, reusing(m01["flow"]))
 
 
-def test_python_branching_on_a_traced_value_is_refused(m01):
+@pytest.mark.parametrize("use, error", [
+    (lambda B, p, k0: B.state + p.dt*k0 if k0 else B.state, SymbolicTruthValueError),
+    (lambda B, p, k0: float(p.dt), SymbolicTruthValueError),
+    (lambda B, p, k0: int(p.dt), SymbolicTruthValueError),
+    (lambda B, p, k0: np.asarray(B.state), SymbolicTruthValueError),
+    (lambda B, p, k0: p.dt < 1, NotYetElaborated),
+    (lambda B, p, k0: max(B.state, k0), NotYetElaborated),
+], ids=["if", "float", "int", "asarray", "comparison", "max"])
+def test_a_traced_value_has_no_truth_value_and_no_number(m01, use, error):
     @method
-    def branching(B, p, flow):
+    def deciding(B, p, flow):
         k0 = flow(B.state, B.time)
-        return Candidate(B.state + p.dt*k0 if k0 else B.state, B.time + p.dt)
-    with pytest.raises(SymbolicTruthValueError):
-        _elaborate(m01, branching(m01["flow"]))
+        use(B, p, k0)
+        return Candidate(B.state + p.dt*k0, B.time + p.dt)
+    with pytest.raises(error, match="E1|predicate"):
+        _elaborate(m01, deciding(m01["flow"]))
 
 
 def test_stage_formulas_stay_affine(m01):
@@ -267,6 +364,13 @@ def test_stage_formulas_stay_affine(m01):
         _elaborate(m01, _stage_formula(lambda B, p, k0, U1, k1: B.state + p.dt*(k0*k1))(m01["flow"]))
     with pytest.raises(TypeError, match="not a field"):
         _elaborate(m01, _stage_formula(lambda B, p, k0, U1, k1: 1. + B.state)(m01["flow"]))
+
+
+@pytest.mark.parametrize("dt", [Fraction(1, 320), Decimal("0.003125")], ids=["fraction", "decimal"])
+def test_an_exact_proposal_runs_its_nearest_binary64_step(m01, dt):
+    elaboration = _elaborate(m01, forward(m01["flow"]), proposal=Proposal(dt))
+    assert elaboration.proposal.dt == dt and type(elaboration.proposal.dt) is type(dt)
+    assert elaboration.program._step_strategy.dt == float(dt)
 
 
 @pytest.mark.parametrize("construct, match", [

@@ -6565,7 +6565,7 @@
       ]
     },
     "ci_20261030_n8_traced_methods": {
-      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 1 traced-method modules (ROM-89), on the api_v02_20261013 tiers: 300 s for the source-only module, which resolves seven profiles twice (traced method and b6 builder) and generates the C++ of six of them twice without compiling, as the analogue test_program_source_kernel_reuse.py; 600 s for three Dim2 native profile cases with two cold C++ compilations each (the traced route and the b6 reference), in the 300/600/900/1200 s native profile tiers. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container (unit from the source checkout, native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, the 135 Python shards (the full and partial packs stay within the ordinary budget with these two rows), native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 1 traced-method modules (ROM-89), on the api_v02_20261013 tiers: 300 s for the source-only module, which resolves seven profiles twice (traced method and b6 builder) and generates the C++ of six of them twice without compiling, as the analogue test_program_source_kernel_reuse.py; 600 s for three Dim2 native profile cases with two cold C++ compilations each (the traced route and the b6 reference), in the 300/600/900/1200 s native profile tiers. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container (unit from the source checkout, native with a Kokkos 4.4.01 Serial build of _pops, each beside other local test sessions); they are not GitHub CI file wall times. Existing weights, the 135 Python shards (the full and partial packs stay within the ordinary budget with these two rows), native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/integration/runtime/test_traced_methods_n8_native.py": "tests/python/integration/runtime/test_api_v02_euler_correction_native.py",
         "tests/python/unit/time/test_traced_methods_n8.py": "tests/python/unit/codegen/test_program_source_kernel_reuse.py"
@@ -6577,18 +6577,18 @@
       "local_receipts": {
         "tests/python/integration/runtime/test_traced_methods_n8_native.py": {
           "cases": 3,
-          "phase_seconds": 297.29,
-          "session_seconds": 298.2
+          "phase_seconds": 318.7,
+          "session_seconds": 321.05
         },
         "tests/python/unit/time/test_traced_methods_n8.py": {
-          "cases": 31,
-          "phase_seconds": 158.56,
-          "session_seconds": 159.55
+          "cases": 59,
+          "phase_seconds": 163.11,
+          "session_seconds": 164.94
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_traced_methods_n8_native.py": "6c1985fde81cbf5858d48e30dc36b1c910289c00f3a49c9319bae90b169335ab",
-        "tests/python/unit/time/test_traced_methods_n8.py": "1cbbad20d8f14e22c2b72fa6353b22780cf3b5e4da957d911d118aa577ab1e67"
+        "tests/python/integration/runtime/test_traced_methods_n8_native.py": "60fc4ee4a4f7592ab788b0a2877a736cc1c6c121435ea0af04c31faa58f0d6ab",
+        "tests/python/unit/time/test_traced_methods_n8.py": "722f7e1166b0354b20837f3fad3c91e333d087fb9673e6dcdb95ece99e86a64d"
       }
     },
     "declared_hardware_profiles": {

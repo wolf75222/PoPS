@@ -7,7 +7,8 @@ the builder to the case: the builder is the elaborator, and the case never calls
 
 This lot elaborates the trial of a method whose candidate reaches ``B.time + p.dt``, with the
 default acceptance (``finite()``, written ``accept=None``) and one attempt. That acceptance
-proposes the same proposal again (T28), a fixed step, which the builder runs as ``FixedDt``; the
+proposes the same proposal again (T28), a fixed step, which the builder runs as ``FixedDt`` with
+the nearest binary64 value of ``Proposal.dt``; the trace never reads that value (T33). The
 finiteness check itself, ``Retry`` budgets, other assessments and the compiled step loop are
 lowered by the compiled control of N8. Every construct of section 5 outside this lot is refused
 with ``NotYetElaborated``, which names the lot that lowers it.
@@ -27,7 +28,11 @@ from pops.time._step.strategy import FixedDt
 
 
 class Proposal:
-    """``Proposal(dt, request=None, **choices)``: the attempt parameters of a step (5.2)."""
+    """``Proposal(dt, request=None, **choices)``: the attempt parameters of a step (5.2).
+
+    ``dt`` keeps the value written, exact for a ``Fraction`` or a ``Decimal``; the step that the
+    runtime takes is its nearest binary64 value.
+    """
 
     __slots__ = ("dt", "request", "choices")
 
@@ -108,20 +113,23 @@ class Elaboration:
         self.trace = trace
 
 
-def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal) -> Elaboration:
+def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
+              name: str | None = None) -> Elaboration:
     """Elaborate ``advance`` for the block-qualified ``state`` of ``case``, from ``proposal``.
 
-    The builder is named after the method; its value and stage names are presentation (CC2).
+    The builder is named ``name``, by default after the method; that name and the value and stage
+    names are presentation (CC2), though b6 hashes them into the program identity (C47).
     """
     if not isinstance(advance, Advance):
         raise TypeError("elaborate(advance): an Advance, got %r" % (advance,))
     if not isinstance(proposal, Proposal):
         raise TypeError("elaborate(proposal=...): the first Proposal of the run, got %r"
                         % (proposal,))
-    program = _Builder(advance.method.name)
+    program = _Builder(advance.method.name if name is None else name)
     temporal = program.state(state)
     trace = advance.method.trace(program, temporal, proposal)
     program.commit(temporal.next, trace.candidate)
-    program.step_strategy(FixedDt(proposal.dt))
+    dt = proposal.dt
+    program.step_strategy(FixedDt(float(dt) if isinstance(dt, (Fraction, Decimal)) else dt))
     case.program(program)
     return Elaboration(advance, proposal, program, trace)
