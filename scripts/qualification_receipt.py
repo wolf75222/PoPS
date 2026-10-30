@@ -22,8 +22,10 @@ Stages and levels (K6):
 
 The level is the highest consecutive rung of ``E < G < C < R < S``; ``R`` needs both ``loaded`` and
 ``advanced``.  A standalone C++ receipt is ``C-finite`` or ``R-finite`` and never ``R`` (K6).  The
-code that drives the receipt and every module the process imported from the source must be
-committed unchanged; code from anywhere but the source, the SDK and the interpreter is an overlay.
+process starts from a committed file of the source or from ``python -m pytest``; the code that
+drives the receipt and every module the process imported from the source must be committed
+unchanged; code compiled from a string or read from standard input, and code from anywhere but the
+source, the SDK and the interpreter's standard library and site directories, is an overlay.
 A receipt is *admitted* to a cohort only when it names the cohort's clean source and installed SDK,
 held the installation lease, saw no overlay, and reached the required level (``admit``).
 
@@ -45,9 +47,11 @@ import os
 from pathlib import Path
 import platform
 import re
+import site
 import socket
 import subprocess
 import sys
+import sysconfig
 import traceback
 from typing import Any
 
@@ -58,7 +62,7 @@ import sdk_cohort  # noqa: E402
 from sdk_cohort import CohortError, digest, sha256_file, utc_now  # noqa: E402
 
 
-RECEIPT_SCHEMA = "pops.receipt@2"
+RECEIPT_SCHEMA = "pops.receipt@3"
 KINDS = ("pops-runtime", "standalone-cpp")
 LADDER = ("E", "G", "C", "R", "S")
 STAGES = ("E", "G", "C", "loaded", "advanced", "S")
@@ -178,11 +182,15 @@ def _same_file(row: Mapping[str, Any], path: Path) -> bool | None:
 
 
 def _command_line() -> list[str] | None:
-    """The exact command line of this process (``python -c`` code included), where the OS has it."""
+    """The exact command line of this process (``python -c`` code included).
+
+    The OS's, where it has one (``/proc``); else the arguments the interpreter was given.
+    """
     try:
         raw = Path("/proc/self/cmdline").read_bytes()
     except OSError:
-        return None
+        given = getattr(sys, "orig_argv", None)
+        return None if given is None else [str(item)[:4000] for item in given]
     return [item.decode("utf-8", errors="replace")[:4000] for item in raw.split(b"\0") if item]
 
 
@@ -256,9 +264,26 @@ def backend_observation() -> dict[str, Any]:
 # --- where code comes from ----------------------------------------------------------------------
 
 
+#: The interpreter modules that may start a receiver process: ``python -m pytest``.  Any other
+#: entry of the interpreter (``cProfile``, ``trace``, ``pdb``, ``code``...) runs whatever code it
+#: is given, which no receipt judges.
+ENTRY_MODULES = ("pytest.__main__",)
+
+
 def _interpreter_roots() -> tuple[Path, ...]:
-    return tuple(sorted({Path(item) for item in (sys.prefix, sys.base_prefix, sys.exec_prefix,
-                                                 sys.base_exec_prefix) if item}))
+    """The interpreter's own code: its standard library and its site directories, nothing else.
+
+    The standard library is the base interpreter's (a venv has none of its own); the site
+    directories are ``site.getsitepackages()`` and the user site when it is enabled.  The rest of
+    a prefix (its root, ``bin/``) is not the interpreter: a script placed there is foreign.
+    """
+    library = sysconfig.get_paths(vars={
+        "base": sys.base_prefix, "platbase": sys.base_exec_prefix,
+        "installed_base": sys.base_prefix, "installed_platbase": sys.base_exec_prefix})
+    roots = {library["stdlib"], library["platstdlib"], *site.getsitepackages()}
+    if site.ENABLE_USER_SITE:
+        roots.add(site.getusersitepackages())
+    return tuple(sorted({Path(item) for item in roots if item}))
 
 
 def _depth_within(path: Path, root: Path) -> int | None:
@@ -270,44 +295,57 @@ def _depth_within(path: Path, root: Path) -> int | None:
     return None
 
 
-def code_origin(filename: str, source_root: Path, package: Path) -> str:
+def code_origin(filename: str, source_root: Path, package: Path,
+                interpreter: Sequence[Path] | None = None) -> str:
     """Where one code file comes from: ``sdk``, ``source``, ``interpreter``, ``internal``, ``foreign``.
 
-    ``internal`` is code without a file (``<frozen ...>``, ``python -c``).  The most specific root
-    wins, so a virtual environment inside a checkout is the interpreter and a checkout under the
-    interpreter's prefix is the source.
+    ``internal`` is code without a file (``<frozen ...>``, ``<string>``, ``<stdin>``).  The most
+    specific root wins, so a virtual environment inside a checkout is the interpreter and a
+    checkout inside a site directory is the source.  ``interpreter`` defaults to this
+    interpreter's standard library and site directories (``_interpreter_roots``).
     """
     if not filename or filename.startswith("<"):
         return "internal"
     roots = [(package, "sdk"), (source_root, "source")] + [
-        (root, "interpreter") for root in _interpreter_roots()]
+        (root, "interpreter")
+        for root in (_interpreter_roots() if interpreter is None else interpreter)]
     matches = [(depth, origin) for root, origin in roots
                if (depth := _depth_within(Path(filename), root)) is not None]
     return max(matches)[1] if matches else "foreign"
 
 
-def code_observation(source: Mapping[str, Any], package: Path,
-                     driver: Sequence[str]) -> dict[str, Any]:
-    """Judge the code of this process: the frames that drive the receipt and every loaded module.
+def code_observation(source: Mapping[str, Any], package: Path, driver: Sequence[str], *,
+                     interpreter: Sequence[Path] | None = None) -> dict[str, Any]:
+    """Judge the code of this process: its entry, the frames that drive the receipt, every module.
 
-    Code from the source must be committed unchanged; the SDK is judged by its own file table and
-    the interpreter's files are the interpreter.  ``driver`` lists the frames that created the
-    receipt, outermost first.
+    The entry is the file the interpreter started (``__main__``): a process started by
+    ``python -c``, standard input or an interactive prompt has none, and the code it ran first is
+    never judged.  Code from the source must be committed unchanged; the SDK is judged by its own
+    file table and the interpreter's standard library and site directories are the interpreter.
+    ``driver`` lists the frames that created the receipt, outermost first.
     """
     root = Path(source["root"])
-    frames = [{"file": name, "origin": code_origin(name, root, package)} for name in driver]
-    modules, foreign, interpreter = [], [], 0
+    roots = _interpreter_roots() if interpreter is None else tuple(interpreter)
+    frames = [{"file": name, "origin": code_origin(name, root, package, roots)} for name in driver]
+    main = sys.modules.get("__main__")
+    started = getattr(main, "__file__", None)
+    started = started if isinstance(started, str) and started else None
+    entry = {"file": started,
+             "module": getattr(getattr(main, "__spec__", None), "name", None),
+             "origin": "internal" if started is None else code_origin(started, root, package,
+                                                                      roots)}
+    modules, foreign, interpreter_modules = [], [], 0
     for name, module in sorted(list(sys.modules.items()), key=lambda item: item[0]):
         origin = getattr(module, "__file__", None)
         if not isinstance(origin, str) or not origin:
             continue
-        kind = code_origin(origin, root, package)
+        kind = code_origin(origin, root, package, roots)
         if kind == "source":
             modules.append((name, Path(origin).resolve()))
         elif kind == "foreign":
             foreign.append({"module": name, "path": origin})
         elif kind == "interpreter":
-            interpreter += 1
+            interpreter_modules += 1
     paths = sorted({path for _, path in modules} | {
         Path(frame["file"]).resolve() for frame in frames if frame["origin"] == "source"})
     judged = {Path(root / item["path"]).resolve(): item for item in committed_files(
@@ -317,12 +355,14 @@ def code_observation(source: Mapping[str, Any], package: Path,
             frame["committed"] = bool(judged.get(Path(frame["file"]).resolve(), {}).get(
                 "committed"))
     return {
+        "entry": entry,
         "driver": frames,
         "source_modules": [{"module": name, **judged.get(path, {"path": str(path),
                                                                "committed": False})}
                            for name, path in modules],
         "foreign_modules": foreign,
-        "interpreter_modules": interpreter,
+        "interpreter_modules": interpreter_modules,
+        "interpreter_roots": [str(item) for item in roots],
     }
 
 
@@ -386,7 +426,8 @@ class Receipt:
     never leased), then identifies the installed SDK; closing observes the process, derives the
     levels, writes the receipt and releases the lease.  An exception inside the block is recorded
     as the failure of the stage in progress and the receipt is still written.  The code that
-    creates the receipt is its driver: it must be a committed file of the source.
+    creates the receipt is its driver: it must be a committed file of the source, in a process
+    started from a committed file or by ``python -m pytest``.
     """
 
     def __init__(self, requirement: str, *, source_root: Path, directory: Path | None = None,
@@ -643,8 +684,11 @@ class Receipt:
             "all_mapped": all(item["mapped_as"] for item in found),
         })
 
-    def advanced(self, report: Any, runtime: Any = None) -> dict[str, Any]:
-        """Advanced: ``pops.run`` accepted steps with the artifact this process loaded."""
+    def advanced(self, report: Any, runtime: Any) -> dict[str, Any]:
+        """Advanced: ``pops.run`` accepted steps on the runtime of the stage loaded.
+
+        ``runtime`` is the runtime that ``pops.run`` advanced: R needs it to be the loaded one.
+        """
         self._current = "advanced"
         if not self._loaded:
             raise ReceiptError("a run advances the artifact only after the stage loaded saw it")
@@ -655,7 +699,7 @@ class Receipt:
         self._report = report
         evidence = {
             "report_type": self._type_evidence(report, "RunReport"),
-            "same_runtime_as_loaded": None if runtime is None else runtime is self._runtime,
+            "same_runtime_as_loaded": runtime is self._runtime,
             "accepted_steps": data.get("accepted_steps"),
             "rejected_steps": data.get("rejected_steps"),
             "final_time": data.get("final_time"),
@@ -667,11 +711,10 @@ class Receipt:
             "artifact_identity": artifact,
             "same_artifact_as_C": artifact is not None and artifact == self._artifact_identity,
         }
-        if runtime is not None:
-            time_of = getattr(runtime, "time", None)
-            step_of = getattr(runtime, "macro_step", None)
-            evidence["runtime_time"] = time_of() if callable(time_of) else None
-            evidence["runtime_macro_step"] = step_of() if callable(step_of) else None
+        time_of = getattr(runtime, "time", None)
+        step_of = getattr(runtime, "macro_step", None)
+        evidence["runtime_time"] = time_of() if callable(time_of) else None
+        evidence["runtime_macro_step"] = step_of() if callable(step_of) else None
         return self._stage("advanced", evidence)
 
     def property(self, name: str, check: Callable[..., Any], *arguments: Any,
@@ -1007,13 +1050,28 @@ def overlay_findings(data: Mapping[str, Any], sdk_files: Mapping[str, str]) -> d
     return {"clean": not findings, "findings": findings}
 
 
+#: What a frame without a file ran; only the interpreter's frozen modules are admitted.
+_FILELESS = {"<string>": "compiled from a string (python -c, exec)",
+             "<stdin>": "read from standard input"}
+
+
 def _code_findings(code: Mapping[str, Any] | None) -> list[str]:
     """Overlay findings from the judged code of the process (``code_observation``)."""
     if code is None:
         return ["the code of the process was not judged"]
     findings = []
+    entry = code.get("entry") or {}
+    if not entry.get("file") or entry.get("origin") == "internal":  # standard input: "<stdin>"
+        findings.append("the process was not started from a file (python -c, standard input or "
+                        "an interactive prompt): the code it ran first is not judged")
+    elif entry.get("origin") == "sdk":
+        findings.append("the process was started by the SDK it qualifies: %s" % entry["file"])
+    elif entry.get("origin") == "interpreter" and entry.get("module") not in ENTRY_MODULES:
+        findings.append("the process was started by the interpreter's %s, which runs the code it "
+                        "is given; a receiver is started from a committed file or by python -m "
+                        "pytest" % (entry.get("module") or entry["file"]))
     frames = code.get("driver", [])
-    for index, frame in enumerate(frames):
+    for frame in frames:
         origin, name = frame["origin"], frame["file"]
         if origin == "foreign":
             findings.append("the receipt is driven by code outside the source, the SDK and the "
@@ -1022,9 +1080,9 @@ def _code_findings(code: Mapping[str, Any] | None) -> list[str]:
             findings.append("the receipt is driven by the SDK it qualifies: %s" % name)
         elif origin == "source" and not frame.get("committed"):
             findings.append("driver %s is not committed unchanged in the source" % name)
-        elif origin == "internal" and not name.startswith("<frozen ") \
-                and not (index == 0 and name in ("<string>", "<stdin>")):
-            findings.append("the receipt is driven by code compiled from a string: %s" % name)
+        elif origin == "internal" and not name.startswith("<frozen "):
+            findings.append("the receipt is driven by code %s: %s"
+                            % (_FILELESS.get(name, "without a file"), name))
     if not frames or frames[-1]["origin"] != "source":
         findings.append("the receipt is not created by a committed file of the source (%s)"
                         % (frames[-1]["file"] if frames else "no frame"))
@@ -1082,7 +1140,7 @@ def derive_levels(data: Mapping[str, Any]) -> tuple[dict[str, bool], str, list[s
     advanced = any(row["evidence"]["same_artifact_as_C"]
                    and (row["evidence"]["accepted_steps"] or 0) >= 1
                    and row["evidence"]["report_type"]["is_expected"]
-                   and row["evidence"]["same_runtime_as_loaded"] is not False
+                   and row["evidence"]["same_runtime_as_loaded"] is True
                    for row in _stage_rows(data, "advanced"))
     stages_ok["R"] = loaded and advanced
     if compiled and not loaded:

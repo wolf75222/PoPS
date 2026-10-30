@@ -46,6 +46,13 @@ SDK inputs it built. `build_python.sh` identifies the source before its first `p
   the build tree the C++ compiler (path, sha256, id, version), Kokkos (directory, version),
   pybind11, MPI and HDF5.
 
+The cohort's `native_provenance` says of each leaf whether its build ran in an official
+environment (`official_environment`), the one `setup_env.sh` makes: a conda prefix with
+`conda-meta`, whose `conda list --explicit` answered, and whose interpreter ran the build. A
+stand-in over a venv is not official, and the reasons say why; `native_provenance` also says it
+for the whole cohort, and `verify` prints it. ROM-17's criterion 2 (an official build) reads off
+the cohort this way; a cohort is published either way.
+
 A leaf restored from an earlier build (`preserve_native_variants`) keeps the attestation of the
 inputs it was built from, so a sibling dimension built from other sources never joins a new
 cohort. The refusal binds the PoPS tools, not a forger: an attestation is a file, and whoever can
@@ -84,7 +91,7 @@ bytes defines it.
 | G | `plan(pops.resolve(...))` | the SDK's `ResolvedSimulationPlan`, verified, with its plan and semantic identities |
 | C | `compiled(pops.compile(plan))` | the SDK's `CompiledSimulationArtifact` of the G plan; every program, model and component DSO hashed with its identity sidecar and generated C++ |
 | loaded | `loaded(pops.bind(...))` | `pops._pops` is the SDK's native leaf, mapped with its recorded bytes; the System is a class of that leaf and the runtime and its executor are SDK objects; every artifact DSO is found mapped in this process by content (private copies included); the System's `installed_program_hash()` equals `pops_program_hash()` of the mapped program, read with `RTLD_NOLOAD` |
-| advanced | `advanced(pops.run(...), runtime)` | the SDK's `RunReport` of the same runtime, with accepted steps of the artifact the C stage compiled |
+| advanced | `advanced(pops.run(...), runtime)` | the SDK's `RunReport`, with accepted steps of the artifact the C stage compiled, on the runtime `pops.run` advanced (a required argument), which must be the runtime of the stage loaded |
 | S | `property(name, check, runtime_or_report, ..., domain=)` | the receipt calls the oracle `check` itself on the runtime or report of the run and records its verdict, its file and the bounds it closes over; the oracle must be a committed file of the source, not of the SDK |
 
 The level is the highest consecutive rung of `E < G < C < R < S`; R needs both `loaded` and
@@ -92,12 +99,28 @@ The level is the highest consecutive rung of `E < G < C < R < S`; R needs both `
 reference M01 receipt qualifies two steps of M01 on 16x8 cells with the case's committed oracle,
 not M01 at the tolerances of the full case.
 
-The code that drives the qualification is judged too. Every frame that leads to the creation of
-the `Receipt` (its driver) and every module the process imported must come from the source, the
-SDK or the interpreter; a frame or module of the source must be committed unchanged, and the
-innermost driver frame must be a committed file of the source. Code compiled from a string is
-allowed only as the outermost frame (the `python -c` bootstrap of CI). A receipt is therefore
-written by a committed receiver, never by an ad hoc script.
+The code of the process is judged too, and recorded with what it was judged against
+(`process.code`):
+
+- its entry: the process starts from a committed file of the source or by `python -m pytest`.
+  `python -c`, standard input and an interactive prompt leave no file, and the interpreter's
+  other entries (`python -m cProfile`, `trace`, `pdb`...) run the code they are given. The code
+  that ran before the receipt, or a receiver called from `atexit` or a thread it started, would
+  then never be judged, so these entries are refused. CI starts pytest from the committed
+  [`scripts/ci_pytest_bootstrap.py`](../../scripts/ci_pytest_bootstrap.py), with the `sys.path`
+  its former `python -c` bootstrap gave;
+- its driver: every frame that leads to the creation of the `Receipt` is a committed file of the
+  source, a file of the interpreter or the interpreter's frozen code, and the innermost one is a
+  committed file of the source; code compiled from a string (`<string>`) or read from standard
+  input (`<stdin>`) is refused wherever it appears;
+- every module it imported: a committed file of the source, a file of the SDK with its installed
+  bytes, or a file of the interpreter.
+
+The interpreter is its standard library (the base interpreter's) and its site directories
+(`site.getsitepackages()`, and the user site when it is enabled), nothing else. A script at the
+root of a prefix or in its `bin/` is foreign, so a receiver runs pytest as `python -m pytest`,
+not through the `pytest` console script. A receipt is therefore written by a committed receiver
+started from a known entry, never by an ad hoc script.
 
 Closing the receipt also records the process (interpreter, environment variables that select
 code, the hash of the harness itself), the backend reported by the loaded native leaf, all mapped
@@ -111,16 +134,17 @@ holds the reference receivers: M01 in `System` and the finite AMR case in `AmrSy
 `qualification_receipt.py check RECEIPT --cohort COHORT [--require R] [--rehash]` exits 0 only
 when every rule holds:
 
-- the receipt is self-consistent (its id is the digest of its content) and its levels follow from
+- the receipt is self-consistent (its id is the digest of its content), of the current schema
+  (`pops.receipt@3`: a receipt written under earlier rules is refused) and its levels follow from
   its stages; this is no signature, so a receipt is evidence only as far as the files and the
   commands that wrote it are trusted;
 - it is a PoPS runtime receipt that reaches the required level, closed without failure;
 - no overlay was seen: clean source, wheel installation coherent with it, lease held, the
-  committed harness, a committed driver and committed source modules, no module from outside the
-  source, the SDK and the interpreter, `pops` and every `pops.*` module loaded from the SDK with
-  its exact bytes, every mapped SDK file (the native leaf included) with its SDK bytes and not
-  deleted, no `POPS_NATIVE_VARIANTS_ROOT` outside the SDK, no `POPS_INCLUDE` with other headers,
-  no preloaded library, and every artifact DSO the file that was hashed;
+  committed harness, a committed entry and driver and committed source modules, no module from
+  outside the source, the SDK and the interpreter, `pops` and every `pops.*` module loaded from
+  the SDK with its exact bytes, every mapped SDK file (the native leaf included) with its SDK
+  bytes and not deleted, no `POPS_NATIVE_VARIANTS_ROOT` outside the SDK, no `POPS_INCLUDE` with
+  other headers, no preloaded library, and every artifact DSO the file that was hashed;
 - the ranks agreed;
 - its source commit and tree and its SDK identity are the cohort's.
 
@@ -177,6 +201,14 @@ the cohort lives in a fresh qualification prefix made from the retained wheel.
   `prefix` is a follow-up.
 - The lease protects only the installation it names; the compilation cache (`POPS_CACHE_DIR`) is
   identified by content in each receipt, not leased.
-- Overlay detection covers the import system, the driver, the native selector, the header
-  override and `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES`; it does not prove the absence of code
-  injected by other means.
+- Overlay detection covers the import system, the entry and the driver, the native selector, the
+  header override and `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES`; it does not prove the absence of code
+  injected by other means. Code that lies about its own file (compiled under a false file name, a
+  sourceless `.pyc`), code placed in the interpreter's standard library or site directories (a
+  `.pth` file, `sitecustomize`) and a harness patched in memory by code the receipt trusts are
+  outside what a receipt sees: like a receipt written by hand, they forge one rather than drive
+  it. A qualification prefix made by `prefix` holds the retained wheel and nothing else beside
+  the interpreter's own packages.
+- The MPI and hardware lanes of CI still start their processes with `python -c`; a receiver run
+  there is refused at E until they start from a committed file, as `ci_python_dimensions.py`
+  does.

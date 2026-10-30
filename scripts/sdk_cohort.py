@@ -868,6 +868,30 @@ def _attestation_problem(attestation: Mapping[str, Any], row: Mapping[str, Any],
     return None
 
 
+def official_environment(environment: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Whether an attested build ran in a real conda environment (ROM-17, criterion 2).
+
+    ``setup_env.sh`` makes the official environment from ``environment.yml``: a conda prefix with
+    ``conda-meta``, whose package set ``conda list --explicit`` pins, and whose interpreter runs
+    the build.  A stand-in over a venv is not official, and the reasons say why.
+    """
+    environment = environment or {}
+    conda = environment.get("conda") or {}
+    prefix = conda.get("prefix")
+    python = (environment.get("python") or {}).get("executable")
+    reasons = []
+    if not prefix:
+        reasons.append("the build ran outside a conda environment (no CONDA_PREFIX)")
+    elif not conda.get("conda_meta"):
+        reasons.append("CONDA_PREFIX %s has no conda-meta: not a conda environment" % prefix)
+    if not (conda.get("list_explicit") or {}).get("sha256"):
+        reasons.append("conda list --explicit did not answer: %s"
+                       % ((conda.get("list_explicit") or {}).get("error") or "not run"))
+    if prefix and not (python and Path(python).is_relative_to(prefix)):
+        reasons.append("the build's interpreter %s is not the environment's" % python)
+    return {"official": not reasons, "reasons": reasons}
+
+
 def native_provenance(installation_root: Path, rows: Sequence[Mapping[str, Any]],
                       source: Mapping[str, Any], *,
                       wheel: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -914,10 +938,14 @@ def native_provenance(installation_root: Path, rows: Sequence[Mapping[str, Any]]
                 "packages": environment.get("packages"), "tools": environment.get("tools"),
                 "build_tree": {key: (environment.get("build_tree") or {}).get(key) for key in (
                     "found", "path", "cxx_compiler", "kokkos")}},
+            "official_environment": None if attestation is None
+            else official_environment(environment),
             "problem": problem,
         })
     return {"kind": "build-attestation", "attested": bool(leaves) and not any(
-        leaf["problem"] for leaf in leaves), "leaves": leaves}
+        leaf["problem"] for leaf in leaves), "leaves": leaves,
+        "official_environment": bool(leaves) and all(
+            (leaf["official_environment"] or {}).get("official") for leaf in leaves)}
 
 
 # --- cohort record -----------------------------------------------------------------------------
@@ -1168,7 +1196,8 @@ def verify_cohort(package: Path | None = None, *, source_root: Path | None = Non
             problems.append("checkout is at %s, cohort source is %s"
                             % (source["commit"], record["source"]["commit"]))
     return {"cohort_id": record["cohort_id"], "verified": not problems, "problems": problems,
-            "sdk_id": sdk["sdk_id"], "source": record["source"]["commit"]}
+            "sdk_id": sdk["sdk_id"], "source": record["source"]["commit"],
+            "official_environment": record["native_provenance"].get("official_environment")}
 
 
 # --- installation lease ------------------------------------------------------------------------

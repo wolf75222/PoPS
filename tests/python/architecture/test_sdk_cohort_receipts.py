@@ -13,6 +13,7 @@ import copy
 import hashlib
 import importlib.machinery
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
@@ -638,6 +639,19 @@ def test_r_and_s_need_the_sdk_runtime_and_a_committed_oracle(published, stage, k
     assert any(limit in item for item in data["limits"]), data["limits"]
 
 
+def test_r_needs_the_runtime_that_advanced_to_be_the_one_the_stage_loaded_saw(published):
+    """A report recorded without its runtime is no R: the oracle could be called on another."""
+    _, source, sdk = published
+    assert inspect.signature(receipts.Receipt.advanced).parameters["runtime"].default \
+        is inspect.Parameter.empty
+
+    def unnamed(data):
+        data["stages"][4]["evidence"]["same_runtime_as_loaded"] = None
+    data = _receipt(source, sdk, patch=unnamed)
+    assert data["level"] == "C"
+    assert any("did not advance through pops.run" in item for item in data["limits"])
+
+
 def test_an_oracle_called_on_anything_but_the_run_is_no_s(published):
     _, source, sdk = published
 
@@ -791,7 +805,7 @@ def test_a_run_without_pops_reaches_no_level_past_e(repo, site, tmp_path):
         receipt.compiled(_fake_artifact(tmp_path, "sem"))
         receipt.parameters(t_end=.1, cells=(16, 8))
         with pytest.raises(receipts.ReceiptError, match="only after the stage loaded"):
-            receipt.advanced(report)
+            receipt.advanced(report, runtime)
         receipt.loaded(runtime)
         receipt.advanced(report, runtime)
         receipt.property("mass", oracles.mass, runtime, domain="source-only")
@@ -857,16 +871,26 @@ def test_sdk_lifecycle_objects_reach_c_and_r_still_needs_the_native_leaf(repo, s
     assert data["failures"] == []  # the refused oracle raised in the driver, which caught it
 
 
+def _main_module(path=None, spec=None):
+    """A ``__main__`` as the interpreter leaves it: a file (or none) and the module ``-m`` ran."""
+    main = ModuleType("__main__")
+    if path is not None:
+        main.__file__ = str(path)
+    main.__spec__ = None if spec is None else SimpleNamespace(name=spec)
+    return main
+
+
 def test_the_code_of_the_process_is_judged_where_it_comes_from(repo, site, monkeypatch):
     source = cohort.source_identity(repo)
     package = site / "pops"
     interpreter = json.__file__
     case = str(repo / "examples" / "case.py")
-    clean = receipts.code_observation(source, package, ["<string>", interpreter, case])
-    assert [frame["origin"] for frame in clean["driver"]] == ["internal", "interpreter",
-                                                              "source"]
+    monkeypatch.setitem(sys.modules, "__main__", _main_module(case))
+    clean = receipts.code_observation(source, package, [case, interpreter, case])
+    assert [frame["origin"] for frame in clean["driver"]] == ["source", "interpreter", "source"]
+    assert clean["entry"] == {"file": case, "module": None, "origin": "source"}
     # This test process also runs the real checkout's modules, foreign to the fake one: only the
-    # driver is judged clean here.
+    # entry and the driver are judged clean here.
     assert [item for item in receipts._code_findings(clean) if not item.startswith("module ")] \
         == []
 
@@ -880,9 +904,13 @@ def test_the_code_of_the_process_is_judged_where_it_comes_from(repo, site, monke
     monkeypatch.setitem(sys.modules, "rom17_edited_case", edited)
     (repo / "examples" / "case.py").write_text("CASE = 'edited'\n")
     judged = receipts.code_observation(
-        source, package, [interpreter, "<string>", str(stray), str(package / "model.py")])
+        source, package, [interpreter, "<string>", "<stdin>", "<frozen runpy>", str(stray),
+                          str(package / "model.py")])
     findings = receipts._code_findings(judged)
-    assert "the receipt is driven by code compiled from a string: <string>" in findings
+    assert "the receipt is driven by code compiled from a string (python -c, exec): <string>" \
+        in findings
+    assert "the receipt is driven by code read from standard input: <stdin>" in findings
+    assert not any(item.endswith("<frozen runpy>") for item in findings)
     assert any(item.startswith("the receipt is driven by code outside the source") and
                item.endswith(str(stray)) for item in findings)
     assert any(item.startswith("the receipt is driven by the SDK it qualifies") for item in findings)
@@ -902,6 +930,176 @@ def test_the_most_specific_root_names_the_origin_of_code(tmp_path):
     assert receipts.code_origin(str(package / "model.py"), checkout, package) == "sdk"
     assert receipts.code_origin("<frozen runpy>", checkout, package) == "internal"
     assert receipts.code_origin(str(tmp_path / "elsewhere.py"), checkout, package) == "foreign"
+
+
+def test_a_receiver_process_starts_from_a_committed_file_or_python_m_pytest(repo, site,
+                                                                           monkeypatch):
+    """The entry is judged: code that runs before the receipt cannot hide outside its frames."""
+    source = cohort.source_identity(repo)
+    package = site / "pops"
+    case = repo / "examples" / "case.py"
+
+    def entry_findings(main):
+        monkeypatch.setitem(sys.modules, "__main__", main)
+        code = receipts.code_observation(source, package, [str(case)])
+        return [item for item in receipts._code_findings(code)
+                if item.startswith("the process was")]
+    assert entry_findings(_main_module(case)) == []
+    assert entry_findings(_main_module(pytest.__file__.replace("__init__", "__main__"),
+                                       spec="pytest.__main__")) == []
+    # python -c, standard input or an interactive prompt: no file, nothing judged before the receipt.
+    assert entry_findings(_main_module()) == [
+        "the process was not started from a file (python -c, standard input or an interactive "
+        "prompt): the code it ran first is not judged"]
+    # An interpreter entry that runs the code it is given (python -m cProfile driver.py).
+    import cProfile
+    assert entry_findings(_main_module(cProfile.__file__, spec="cProfile")) == [
+        "the process was started by the interpreter's cProfile, which runs the code it is given; "
+        "a receiver is started from a committed file or by python -m pytest"]
+    assert entry_findings(_main_module(package / "model.py", spec="pops.model")) == [
+        "the process was started by the SDK it qualifies: %s" % (package / "model.py")]
+
+
+def test_only_the_standard_library_and_the_site_directories_are_the_interpreter(repo, site):
+    import site as interpreter_site
+    import sysconfig
+
+    roots = receipts._interpreter_roots()
+    base = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix,
+                                     "installed_base": sys.base_prefix,
+                                     "installed_platbase": sys.base_exec_prefix})
+    assert {Path(base["stdlib"]), *map(Path, interpreter_site.getsitepackages())} <= set(roots)
+    package = site / "pops"
+
+    def origin(path):
+        return receipts.code_origin(str(path), repo, package)
+    assert origin(json.__file__) == "interpreter" and origin(pytest.__file__) == "interpreter"
+    # The rest of a prefix is no library: its root, bin/ and a stray script are foreign.
+    for stray in (Path(sys.prefix) / "driver.py",
+                  Path(sysconfig.get_paths()["scripts"]) / "pytest"):
+        assert all(stray != root and not stray.is_relative_to(root) for root in roots), stray
+        assert origin(stray) == "foreign"
+
+
+#: A receiver committed in the fake checkout: it writes one receipt (stage E) under a false label.
+RECEIVER = """from pathlib import Path
+
+
+def qualify(repo, package, directory):
+    import qualification_receipt as receipts
+    receipt = receipts.Receipt("M05 compiled, loaded and advanced (label only)",
+                               source_root=Path(repo), package=Path(package),
+                               directory=Path(directory), domain="M01")
+    with receipt:
+        receipt.equations(Path(repo) / "examples" / "case.py")
+    return receipt.path
+"""
+#: A driver of that receiver (the reviewer's probe): run by ``python -c``, from standard input,
+#: as a script placed in a prefix, or committed and run directly or under an interpreter entry.
+DRIVER = """import sys
+sys.path[:0] = [{scripts!r}, {examples!r}]
+import receiver
+{call}
+"""
+
+
+@pytest.mark.parametrize("entry", ("committed file", "python -c", "standard input",
+                                   "script in a prefix", "python -m cProfile",
+                                   "python -c through atexit"))
+def test_an_ad_hoc_driver_of_a_committed_receiver_is_refused_at_every_entry(repo, site, tmp_path,
+                                                                            entry):
+    """The second review's probes: only a committed file or python -m pytest starts a receiver."""
+    scripts = repo / "scripts"
+    scripts.mkdir()
+    for path in receipts.HARNESS:  # the receipt's own harness, committed in this checkout
+        (scripts / path.name).write_bytes(path.read_bytes())
+    (repo / "examples" / "receiver.py").write_text(RECEIVER)
+    out = tmp_path / "receipts"
+    arguments = "%r, %r, %r" % (str(repo), str(site / "pops"), str(out))
+    # Through atexit, the receiver runs with none of the driver's frames above it.
+    call = ("import atexit; atexit.register(receiver.qualify, %s)" % arguments
+            if entry == "python -c through atexit" else "receiver.qualify(%s)" % arguments)
+    driver = DRIVER.format(scripts=str(scripts), examples=str(repo / "examples"), call=call)
+    committed = repo / "examples" / "drive.py"
+    committed.write_text(driver)
+    _commit(repo, "a committed receiver and its driver")
+    _attest(repo, site)
+    record = cohort.publish_cohort(repo, site / "pops")
+    python = sys.executable
+    if entry == "script in a prefix":
+        prefix = tmp_path / "prefix"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", "--system-site-packages",
+                        str(prefix)], check=True)
+        python = str(prefix / "bin" / "python")
+        (prefix / "driver.py").write_text(driver)
+    command = {
+        "committed file": [python, str(committed)],
+        "python -c": [python, "-c", driver],
+        "python -c through atexit": [python, "-c", driver],
+        "standard input": [python, "-"],
+        "script in a prefix": [python, str(tmp_path / "prefix" / "driver.py")],
+        "python -m cProfile": [python, "-m", "cProfile", str(committed)],
+    }[entry]
+    environment = {key: value for key, value in os.environ.items()
+                   if key != "PYTHONPATH" and not key.startswith("POPS_")}
+    result = subprocess.run(command, input=driver if entry == "standard input" else None,
+                            capture_output=True, text=True, env=environment, cwd=tmp_path,
+                            check=False)
+    assert result.returncode == 0, result.stderr
+    (path,) = out.glob("*.json")
+    data = receipts.read_receipt(path)
+    findings = data["overlay"]["findings"]
+    expected = {
+        "committed file": [],
+        "python -c": [
+            "the process was not started from a file (python -c, standard input or an "
+            "interactive prompt): the code it ran first is not judged",
+            "the receipt is driven by code compiled from a string (python -c, exec): <string>"],
+        "python -c through atexit": [
+            "the process was not started from a file (python -c, standard input or an "
+            "interactive prompt): the code it ran first is not judged"],
+        "standard input": [
+            "the process was not started from a file (python -c, standard input or an "
+            "interactive prompt): the code it ran first is not judged",
+            "the receipt is driven by code read from standard input: <stdin>"],
+        "script in a prefix": [
+            "the receipt is driven by code outside the source, the SDK and the interpreter: %s"
+            % (tmp_path / "prefix" / "driver.py"),
+            "module __main__ loaded from %s, outside the source, the SDK and the interpreter"
+            % (tmp_path / "prefix" / "driver.py")],
+        "python -m cProfile": [
+            "the process was started by the interpreter's cProfile, which runs the code it is "
+            "given; a receiver is started from a committed file or by python -m pytest"],
+    }[entry]
+    assert findings == expected, findings
+    assert data["process"]["code"]["driver"][-1]["file"] == str(repo / "examples" / "receiver.py")
+    assert data["level"] == "E"
+    assert receipts.admit(data, record, require="E")["admitted"] is (entry == "committed file")
+
+
+def test_the_cohort_says_whether_each_leaf_was_built_in_an_official_environment(
+        repo, site, monkeypatch):
+    """ROM-17 criterion 2 reads off the cohort: a stand-in over a venv is not official."""
+    official = {"conda": {"prefix": "/envs/pops", "conda_meta": True,
+                          "list_explicit": {"sha256": "a" * 64, "error": None}},
+                "python": {"executable": "/envs/pops/bin/python"}}
+    assert cohort.official_environment(official) == {"official": True, "reasons": []}
+    stand_in = {"conda": {"prefix": "/venv", "conda_meta": False,
+                          "list_explicit": {"sha256": None, "error": "not a conda prefix"}},
+                "python": {"executable": "/usr/bin/python3"}}
+    assert cohort.official_environment(stand_in)["reasons"] == [
+        "CONDA_PREFIX /venv has no conda-meta: not a conda environment",
+        "conda list --explicit did not answer: not a conda prefix",
+        "the build's interpreter /usr/bin/python3 is not the environment's"]
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    _attest(repo, site)
+    record = cohort.publish_cohort(repo, site / "pops")
+    provenance = record["native_provenance"]
+    assert provenance["attested"] and provenance["official_environment"] is False
+    assert provenance["leaves"][0]["official_environment"] == {"official": False, "reasons": [
+        "the build ran outside a conda environment (no CONDA_PREFIX)",
+        "conda list --explicit did not answer: not run"]}
+    assert cohort.verify_cohort(site / "pops")["official_environment"] is False
 
 
 def test_receipt_fails_fast_while_another_source_qualifies(repo, site):

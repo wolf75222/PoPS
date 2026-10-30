@@ -24,9 +24,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   publishes the immutable cohort of one clean source and one retained-wheel installation and
   leases the installation, so a build never replaces an SDK under a running qualification.
   R is read only from the SDK's own native leaf, runtime and report, S from a committed oracle
-  that the receipt calls itself, and the driver and every imported module are judged; only
+  that the receipt calls itself, and the process entry, the driver and every imported module are
+  judged: a receiver starts from a committed file or `python -m pytest`, so CI starts pytest
+  from the committed `scripts/ci_pytest_bootstrap.py` instead of `python -c`. Only
   `build_python.sh` attests a leaf, with its build environment, here and beside the retained
-  wheel, and `sdk_cohort.py prefix` installs that wheel into a fresh qualification prefix.
+  wheel; the cohort says whether that environment is official, and `sdk_cohort.py prefix`
+  installs the wheel into a fresh qualification prefix.
 
 ### Changed
 
