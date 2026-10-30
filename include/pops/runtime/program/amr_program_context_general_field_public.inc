@@ -300,9 +300,9 @@ Real reduce_hierarchy_field_component(std::int64_t key, int component,
         throw std::invalid_argument(
             "hierarchy field observation component is outside solved tuple");
       if (kind == "sum")
-        local += pops::reduce_active_sum_local(field, component, &active);
+        local += count_once_(field, pops::reduce_active_sum_local(field, component, &active));
       else if (kind == "abs_sum")
-        local += pops::reduce_active_abs_sum_local(field, component, &active);
+        local += count_once_(field, pops::reduce_active_abs_sum_local(field, component, &active));
       else if (pops::reduce_masked_max_local(field, component, &active).has_active) {
         if (maximum)
           local = std::max(local, pops::reduce_active_max_local(field, component, &active));

@@ -180,16 +180,23 @@ void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLa
   throw std::runtime_error(std::string(operation) + " failed collectively");
 }
 
+// Replicated level storage is one physical copy, counted on lane rank 0 only. Every copy is
+// evaluated and a nonfinite copy is kept, so the original norm/guard failure is not hidden.
+Real count_once_(const field_type& field, Real value) const {
+  const bool replica = field.distribution().replicated() && prepared_execution_lane().rank() != 0;
+  return replica && std::isfinite(value) ? Real(0) : value;
+}
+
 public:
 Real sum_component(const field_type& field, int component) const {
   prepare_spatial_collectively([&] { require_program_field_access(field); });
-  return static_cast<Real>(
-      all_reduce_sum(pops::reduce_sum_local(field, component), prepared_execution_lane()));
+  return static_cast<Real>(all_reduce_sum(
+      count_once_(field, pops::reduce_sum_local(field, component)), prepared_execution_lane()));
 }
 Real abs_sum_component(const field_type& field, int component) const {
   prepare_spatial_collectively([&] { require_program_field_access(field); });
-  return static_cast<Real>(
-      all_reduce_sum(pops::reduce_abs_sum_local(field, component), prepared_execution_lane()));
+  return static_cast<Real>(all_reduce_sum(
+      count_once_(field, pops::reduce_abs_sum_local(field, component)), prepared_execution_lane()));
 }
 Real max_component(const field_type& field, int component) const {
   prepare_spatial_collectively([&] { require_program_field_access(field); });
@@ -212,8 +219,8 @@ Real sum_component(int program_block, const field_type& field, int component) co
   try {
     for_each_owner_active_level_(
         program_block, field, nullptr,
-        [&](const field_type& level_field, const field_type*, const field_type* active) {
-          local += pops::reduce_active_sum_local(level_field, component, active);
+        [&](const field_type& level, const field_type*, const field_type* active) {
+          local += count_once_(level, pops::reduce_active_sum_local(level, component, active));
         });
   } catch (...) {
     local_error = std::current_exception();
@@ -228,8 +235,8 @@ Real abs_sum_component(int program_block, const field_type& field, int component
   try {
     for_each_owner_active_level_(
         program_block, field, nullptr,
-        [&](const field_type& level_field, const field_type*, const field_type* active) {
-          local += pops::reduce_active_abs_sum_local(level_field, component, active);
+        [&](const field_type& level, const field_type*, const field_type* active) {
+          local += count_once_(level, pops::reduce_active_abs_sum_local(level, component, active));
         });
   } catch (...) {
     local_error = std::current_exception();
@@ -292,13 +299,8 @@ Real norm2(int program_block, const field_type& field) const {
   try {
     for_each_owner_active_level_(
         program_block, field, nullptr,
-        [&](const field_type& level_field, const field_type*, const field_type* active) {
-          const Real contribution = pops::dot_active_local(level_field, level_field, 0, active);
-          // Evaluate every copy, but count finite replicated storage once on its owned lane.
-          // Retain nonfinite contributions so the original norm/guard failure path is not hidden.
-          if (!level_field.distribution().replicated() || lane.rank() == 0 ||
-              !std::isfinite(contribution))
-            local += contribution;
+        [&](const field_type& level, const field_type*, const field_type* active) {
+          local += count_once_(level, pops::dot_active_local(level, level, 0, active));
         });
   } catch (...) {
     local_error = std::current_exception();
@@ -329,11 +331,11 @@ Real dot(int program_block, const field_type& left, const field_type& right) con
   try {
     for_each_owner_active_level_(
         program_block, left, &right,
-        [&](const field_type& left_field, const field_type* right_field, const field_type* active) {
+        [&](const field_type& level, const field_type* right_field, const field_type* active) {
           if (right_field == nullptr)
             throw std::logic_error("AMR Program dot is missing its right owner field");
-          require_same_field_contract_(left_field, *right_field, "AMR Program dot");
-          local += pops::dot_active_local(left_field, *right_field, 0, active);
+          require_same_field_contract_(level, *right_field, "AMR Program dot");
+          local += count_once_(level, pops::dot_active_local(level, *right_field, 0, active));
         });
   } catch (...) {
     local_error = std::current_exception();
