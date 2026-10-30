@@ -12,6 +12,7 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/swept_interval.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/parallel/consensus_words.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
@@ -1326,11 +1327,20 @@ class ProgramContext {
 
   /// Return the prepared embedded-boundary mask for this pointwise block, or null for Cartesian / an
   /// inactive embedded boundary.  The route consensus intentionally uses only fixed scalars: this
-  /// hot path must not build a dynamic exact-contract payload before every generated kernel.
+  /// hot path must not build a dynamic exact-contract payload before every generated kernel. The
+  /// route and the mask query are decided by one collective (spec 0.3 SV20, PF8).
   const field_type* pointwise_active_mask(int program_block, const field_type& field) const {
     const ExecutionLane& lane = prepared_execution_lane();
-    const int runtime_block = resolve_pointwise_program_block_(program_block, lane);
-    return system_->prepared_program_block_active_mask_(runtime_block, field, lane);
+    ConsensusWords<kPointwiseRouteWords + runtime::system::kPreparedActiveMaskWords> words;
+    const PointwiseRouteSlots route = add_pointwise_route_consensus_(words, program_block);
+    runtime::system::PreparedActiveMaskLocal<field_type> local;
+    if (route.runtime_block >= 0)
+      local = system_->prepared_program_block_active_mask_local_(route.runtime_block, field, lane);
+    const auto mask = runtime::system::add_active_mask_consensus(words, local);
+    words.reduce(lane);
+    require_pointwise_route_consensus_(words, route);
+    runtime::system::require_active_mask_consensus(words, mask);
+    return local.mask;
   }
 
   /// Uniform faces have no coarse coverage to exclude. Accepted-exchange producers
@@ -1433,36 +1443,54 @@ class ProgramContext {
 
   /// Reduce one generated per-cell status on the same authenticated lane and layout used by its
   /// pointwise kernel.  Empty ranks contribute negative infinity, normalized to success only when
-  /// the entire collective layout is empty.
+  /// the entire collective layout is empty. The lane, route, mask and storage checks, the local
+  /// failure and the status maximum are decided by one collective on the prepared lane, tested in
+  /// the order of the separate collectives they replace (spec 0.3 SV20, PF8).
   Real pointwise_status_max(int program_block, const field_type& status,
                             const field_type* active_cells, const ExecutionLane& lane) const {
-    require_prepared_lane_(lane, "Program pointwise status");
-    const int runtime_block = resolve_pointwise_program_block_(program_block, lane);
-    const field_type* const expected =
-        system_->prepared_program_block_active_mask_(runtime_block, status, lane);
-    if (all_reduce_max(active_cells == expected ? 0L : 1L, lane) != 0)
-      throw std::invalid_argument("Program pointwise status received a foreign active-cell mask");
-    if (all_reduce_max(status.ncomp() == 1 ? 0L : 1L, lane) != 0)
-      throw std::invalid_argument("Program pointwise status requires exactly one component");
+    const ExecutionLane& prepared = prepared_execution_lane();
+    ConsensusWords<kPointwiseRouteWords + runtime::system::kPreparedActiveMaskWords + 7> words;
+    const std::size_t foreign_lane = words.failure(&lane != &prepared);
+    const PointwiseRouteSlots route = add_pointwise_route_consensus_(words, program_block);
+    runtime::system::PreparedActiveMaskLocal<field_type> expected;
+    if (route.runtime_block >= 0)
+      expected =
+          system_->prepared_program_block_active_mask_local_(route.runtime_block, status, lane);
+    const auto mask = runtime::system::add_active_mask_consensus(words, expected);
+    const std::size_t foreign_mask = words.failure(active_cells != expected.mask);
+    const std::size_t components = words.failure(status.ncomp() != 1);
     MaskedMaxLocalResult local;
     std::exception_ptr local_error;
     try {
-      local = pops::reduce_masked_max_local(status, 0, expected);
+      local = pops::reduce_masked_max_local(status, 0, expected.mask);
     } catch (...) {
       local_error = std::current_exception();
     }
-    if (all_reduce_max(local_error ? 1L : 0L, lane) != 0) {
+    const std::size_t failed = words.failure(static_cast<bool>(local_error));
+    const std::size_t invalid = words.failure(local.has_invalid);
+    const std::size_t active = words.failure(local.has_active);
+    const std::size_t maximum = words.maximum(static_cast<double>(local.maximum));
+    words.reduce(prepared);
+    if (words.failed(foreign_lane))
+      throw std::invalid_argument(
+          "Program pointwise status requires the context's authenticated execution lane");
+    require_pointwise_route_consensus_(words, route);
+    runtime::system::require_active_mask_consensus(words, mask);
+    if (words.failed(foreign_mask))
+      throw std::invalid_argument("Program pointwise status received a foreign active-cell mask");
+    if (words.failed(components))
+      throw std::invalid_argument("Program pointwise status requires exactly one component");
+    if (words.failed(failed)) {
       if (lane.size() == 1 && local_error)
         std::rethrow_exception(local_error);
       throw std::runtime_error("Program pointwise status reduction failed collectively");
     }
-    if (all_reduce_max(local.has_invalid ? 1L : 0L, lane) != 0)
+    if (words.failed(invalid))
       return Real(3);
-    if (all_reduce_max(local.has_active ? 1L : 0L, lane) == 0)
+    if (!words.failed(active))
       return Real(0);
-    const Real maximum =
-        static_cast<Real>(all_reduce_max(static_cast<double>(local.maximum), lane));
-    return std::isfinite(maximum) ? maximum : Real(3);
+    const Real reduced = static_cast<Real>(words.value(maximum));
+    return std::isfinite(reduced) ? reduced : Real(3);
   }
 
   Real sum_component(const field_type& field, int component) const {
@@ -1495,8 +1523,7 @@ class ProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    converge_owner_reduction_(local_error, lane, "Program sum reduction");
-    return static_cast<Real>(all_reduce_sum(local, lane));
+    return reduce_owner_(local, local_error, lane, OwnerReduction::sum, "Program sum reduction");
   }
   Real abs_sum_component(int program_block, const field_type& field, int component) const {
     const ExecutionLane& lane = prepared_execution_lane();
@@ -1508,8 +1535,8 @@ class ProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    converge_owner_reduction_(local_error, lane, "Program abs-sum reduction");
-    return static_cast<Real>(all_reduce_sum(local, lane));
+    return reduce_owner_(local, local_error, lane, OwnerReduction::sum,
+                         "Program abs-sum reduction");
   }
   Real max_component(int program_block, const field_type& field, int component) const {
     const ExecutionLane& lane = prepared_execution_lane();
@@ -1521,8 +1548,7 @@ class ProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    converge_owner_reduction_(local_error, lane, "Program max reduction");
-    return static_cast<Real>(all_reduce_max(local, lane));
+    return reduce_owner_(local, local_error, lane, OwnerReduction::max, "Program max reduction");
   }
   Real min_component(int program_block, const field_type& field, int component) const {
     const ExecutionLane& lane = prepared_execution_lane();
@@ -1534,8 +1560,7 @@ class ProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    converge_owner_reduction_(local_error, lane, "Program min reduction");
-    return static_cast<Real>(all_reduce_min(local, lane));
+    return reduce_owner_(local, local_error, lane, OwnerReduction::min, "Program min reduction");
   }
   Real norm2(int program_block, const field_type& field) const {
     const ExecutionLane& lane = prepared_execution_lane();
@@ -1547,8 +1572,8 @@ class ProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    converge_owner_reduction_(local_error, lane, "Program norm2 reduction");
-    return std::sqrt(static_cast<Real>(all_reduce_sum(local, lane)));
+    return std::sqrt(
+        reduce_owner_(local, local_error, lane, OwnerReduction::sum, "Program norm2 reduction"));
   }
   Real norm_inf(int program_block, const field_type& field) const {
     const ExecutionLane& lane = prepared_execution_lane();
@@ -1560,8 +1585,8 @@ class ProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    converge_owner_reduction_(local_error, lane, "Program norm-inf reduction");
-    return static_cast<Real>(all_reduce_max(local, lane));
+    return reduce_owner_(local, local_error, lane, OwnerReduction::max,
+                         "Program norm-inf reduction");
   }
   Real dot(int program_block, const field_type& left, const field_type& right) const {
     const ExecutionLane& lane = prepared_execution_lane();
@@ -1574,8 +1599,7 @@ class ProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    converge_owner_reduction_(local_error, lane, "Program dot reduction");
-    return static_cast<Real>(all_reduce_sum(local, lane));
+    return reduce_owner_(local, local_error, lane, OwnerReduction::sum, "Program dot reduction");
   }
 
   /// pops.program.dot-all@1: raw algebra on every component of the owned active domain.
@@ -1594,8 +1618,8 @@ class ProgramContext {
     } catch (...) {
       local_error = std::current_exception();
     }
-    converge_owner_reduction_(local_error, lane, "Program dot-all reduction");
-    return pops::collective_finite_compensated_sum(local, lane.communicator());
+    return pops::collective_finite_compensated_sum(local, local_error, lane.communicator(),
+                                                   "Program dot-all reduction");
   }
 
   Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }
@@ -2816,31 +2840,79 @@ class ProgramContext {
     return runtime_block;
   }
 
-  void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLane& lane,
-                                 const char* operation) const {
-    if (all_reduce_max(local_error ? 1L : 0L, lane) == 0)
-      return;
-    if (lane.size() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error(std::string(operation) + " failed collectively");
+  enum class OwnerReduction { sum, max, min };
+
+  /// One collective per generated reduction (spec 0.3 SV20, duties 2 and 3). The local failure
+  /// travels as a second word of the same reduction, combined by the same operator (a negated
+  /// flag for min), instead of a separate vote before it. A single rank rethrows its own failure.
+  Real reduce_owner_(Real local, std::exception_ptr local_error, const ExecutionLane& lane,
+                     OwnerReduction reduction, const char* operation) const {
+    if (lane.size() == 1) {
+      if (local_error)
+        std::rethrow_exception(local_error);
+      return local;
+    }
+    const Real failed = local_error ? Real(1) : Real(0);
+    std::array<Real, 2> words{local, reduction == OwnerReduction::min ? -failed : failed};
+    switch (reduction) {
+      case OwnerReduction::sum:
+        all_reduce_sum_inplace(words.data(), 2, lane);
+        break;
+      case OwnerReduction::max:
+        all_reduce_max_inplace(words.data(), 2, lane);
+        break;
+      case OwnerReduction::min:
+        all_reduce_min_inplace(words.data(), 2, lane);
+        break;
+    }
+    if (words[1] != Real(0))
+      throw std::runtime_error(std::string(operation) + " failed collectively");
+    return words[0];
+  }
+
+  static constexpr std::size_t kPointwiseRouteWords = 5;
+
+  /// The slots of one pointwise route in a ConsensusWords: its local failure, then the program and
+  /// runtime blocks, which every rank must hold equal.
+  struct PointwiseRouteSlots {
+    int runtime_block = -1;
+    std::size_t failed = 0;
+    std::size_t program = 0;
+    std::size_t runtime = 0;
+  };
+
+  template <std::size_t Capacity>
+  PointwiseRouteSlots add_pointwise_route_consensus_(ConsensusWords<Capacity>& words,
+                                                     int program_block) const {
+    PointwiseRouteSlots route;
+    bool failed = false;
+    try {
+      route.runtime_block = sys_block(program_block);
+    } catch (...) {
+      route.runtime_block = -1;
+      failed = true;
+    }
+    route.failed = words.failure(failed);
+    route.program = words.agreement(program_block);
+    route.runtime = words.agreement(route.runtime_block);
+    return route;
+  }
+
+  template <std::size_t Capacity>
+  static void require_pointwise_route_consensus_(const ConsensusWords<Capacity>& words,
+                                                 const PointwiseRouteSlots& route) {
+    if (words.failed(route.failed))
+      throw std::runtime_error("Program pointwise block route failed collectively");
+    if (words.differs(route.program) || words.differs(route.runtime))
+      throw std::runtime_error("Program pointwise block route differs across ranks");
   }
 
   int resolve_pointwise_program_block_(int program_block, const ExecutionLane& lane) const {
-    int runtime_block = -1;
-    long local_error = 0;
-    try {
-      runtime_block = sys_block(program_block);
-    } catch (...) {
-      local_error = 1;
-    }
-    if (all_reduce_max(local_error, lane) != 0)
-      throw std::runtime_error("Program pointwise block route failed collectively");
-    const long program = static_cast<long>(program_block);
-    const long runtime = static_cast<long>(runtime_block);
-    if (all_reduce_min(program, lane) != all_reduce_max(program, lane) ||
-        all_reduce_min(runtime, lane) != all_reduce_max(runtime, lane))
-      throw std::runtime_error("Program pointwise block route differs across ranks");
-    return runtime_block;
+    ConsensusWords<kPointwiseRouteWords> words;
+    const PointwiseRouteSlots route = add_pointwise_route_consensus_(words, program_block);
+    words.reduce(lane);
+    require_pointwise_route_consensus_(words, route);
+    return route.runtime_block;
   }
 
   const std::vector<int>& require_program_block_map_() const {

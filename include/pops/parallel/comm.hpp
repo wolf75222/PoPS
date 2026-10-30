@@ -708,6 +708,19 @@ inline void all_reduce_max_inplace(Real* buffer, std::size_t count,
   }
 }
 
+inline void all_reduce_min_inplace(Real* buffer, int count, const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (communicator.active() && count > 0)
+    detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, mpi_real_datatype(),
+                                              MPI_MIN, communicator.native_handle()),
+                                "MPI_Allreduce(Real inplace min, execution communicator)");
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
 template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
 inline double all_reduce_sum(T value, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI

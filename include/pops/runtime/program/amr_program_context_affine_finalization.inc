@@ -182,8 +182,8 @@ Real composite_pair(int program_block, bool left_entry, bool right_entry,
   } catch (...) {
     error = std::current_exception();
   }
-  converge_owner_reduction_(error, lane, "physical composite pairing");
-  return pops::collective_finite_compensated_sum(accumulated, lane.communicator());
+  return pops::collective_finite_compensated_sum(accumulated, error, lane.communicator(),
+                                                 "physical composite pairing");
 }
 
 void accept_increment(double scale, double duration) const {

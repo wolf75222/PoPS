@@ -197,6 +197,7 @@ api pops/numerics/time/integrators/time_steppers.hpp
 test-only pops/numerics/time/schemes/imex.hpp
 test-only pops/numerics/time/schemes/splitting.hpp
 sdk-support pops/parallel/collective_exception.hpp
+sdk-support pops/parallel/consensus_words.hpp
 api pops/parallel/comm.hpp
 api pops/parallel/execution_lane.hpp
 sdk-support pops/parallel/field_distribution_reduction.hpp
@@ -425,6 +426,7 @@ api pops/runtime/system/field_topology_report.hpp
 sdk-support pops/runtime/system/provider_storage_binding.hpp
 sdk-support pops/runtime/system/program_field_publication.hpp
 sdk-support pops/runtime/system/prepared_embedded_boundary.hpp
+sdk-support pops/runtime/system/prepared_active_mask_consensus.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/prepared_field_rhs_inputs.hpp
 sdk-support pops/runtime/system/system_block_store.hpp

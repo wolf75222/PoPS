@@ -85,6 +85,6 @@ Real composite_integral(int program_block, Integrand integrand,
   } catch (...) {
     error = std::current_exception();
   }
-  converge_owner_reduction_(error, lane, "authored physical composite integral");
-  return pops::collective_finite_compensated_sum(accumulated, lane.communicator());
+  return pops::collective_finite_compensated_sum(accumulated, error, lane.communicator(),
+                                                 "authored physical composite integral");
 }

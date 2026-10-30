@@ -97,15 +97,13 @@ std::vector<double> System<Dim>::embedded_boundary_mask() const {
 }
 
 template <int Dim>
-const MultiFab<Dim>* System<Dim>::prepared_program_block_active_mask_(
-    int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const {
-  const ExecutionLane& prepared = prepared_boundary_execution_lane();
-  if (all_reduce_max(&lane == &prepared ? 0L : 1L, prepared) != 0)
-    throw std::invalid_argument(
-        "System pointwise active-mask provider requires its authenticated execution lane");
-
+runtime::system::PreparedActiveMaskLocal<MultiFab<Dim>>
+System<Dim>::prepared_program_block_active_mask_local_(int runtime_block,
+                                                       const MultiFab<Dim>& field,
+                                                       const ExecutionLane& lane) const {
+  runtime::system::PreparedActiveMaskLocal<MultiFab<Dim>> local;
+  local.foreign_lane = &lane != &prepared_boundary_execution_lane();
   const runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>* embedded = nullptr;
-  long local_error = 0;
   try {
     if (runtime_block < 0 || runtime_block >= p_->blocks_.size())
       throw std::out_of_range("System pointwise active-mask block index is out of range");
@@ -124,30 +122,30 @@ const MultiFab<Dim>* System<Dim>::prepared_program_block_active_mask_(
             "System pointwise active-mask geometry differs from its exact block layout");
     }
   } catch (...) {
-    local_error = 1;
+    local.invalid = true;
   }
-  if (all_reduce_max(local_error, lane) != 0)
-    throw std::invalid_argument("System pointwise active-mask preparation failed collectively");
+  if (embedded != nullptr) {
+    local.mode = static_cast<int>(static_cast<unsigned char>(embedded->mode()));
+    local.generation = embedded->generation();
+    if (!local.invalid &&
+        embedded->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive)
+      local.mask = &embedded->active_mask();
+  }
+  return local;
+}
 
-  const long local_mode =
-      embedded == nullptr ? -1L : static_cast<long>(static_cast<unsigned char>(embedded->mode()));
-  const std::uint64_t local_generation = embedded == nullptr ? 0U : embedded->generation();
-  const std::array<long, 4> generation_words{
-      static_cast<long>((local_generation >> 0U) & 0xffffU),
-      static_cast<long>((local_generation >> 16U) & 0xffffU),
-      static_cast<long>((local_generation >> 32U) & 0xffffU),
-      static_cast<long>((local_generation >> 48U) & 0xffffU),
-  };
-  if (all_reduce_min(local_mode, lane) != all_reduce_max(local_mode, lane))
-    throw std::runtime_error("System pointwise active-mask mode differs across ranks");
-  for (const long word : generation_words)
-    if (all_reduce_min(word, lane) != all_reduce_max(word, lane))
-      throw std::runtime_error("System pointwise active-mask generation differs across ranks");
-
-  if (embedded == nullptr ||
-      embedded->mode() == runtime::system::PreparedEmbeddedBoundaryMode::inactive)
-    return nullptr;
-  return &embedded->active_mask();
+/// The lane check, the local validation and the mode and generation agreement of one query are
+/// decided by one collective on the prepared lane, in that order (spec 0.3 SV20, PF8).
+template <int Dim>
+const MultiFab<Dim>* System<Dim>::prepared_program_block_active_mask_(
+    int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const {
+  const ExecutionLane& prepared = prepared_boundary_execution_lane();
+  const auto local = prepared_program_block_active_mask_local_(runtime_block, field, lane);
+  ConsensusWords<runtime::system::kPreparedActiveMaskWords> words;
+  const auto slots = runtime::system::add_active_mask_consensus(words, local);
+  words.reduce(prepared);
+  runtime::system::require_active_mask_consensus(words, slots);
+  return local.mask;
 }
 
 template <int Dim>
@@ -171,5 +169,8 @@ template const MultiFab<kNativeDimension>*
 System<kNativeDimension>::prepared_program_block_active_mask_(int,
                                                               const MultiFab<kNativeDimension>&,
                                                               const ExecutionLane&) const;
+template runtime::system::PreparedActiveMaskLocal<MultiFab<kNativeDimension>>
+System<kNativeDimension>::prepared_program_block_active_mask_local_(
+    int, const MultiFab<kNativeDimension>&, const ExecutionLane&) const;
 
 }  // namespace pops

@@ -83,3 +83,52 @@ def test_public_derivatives_dispatch_only_on_mathematical_graph_type():
     assert type(vjp(f, pairings=GraphPairings(output_pairing, input_pairing))) is GraphFunction
     with pytest.raises(TypeError, match="returned graph"):
         jvp(f, direction=(1,))
+
+
+def test_collective_identity_follows_exact_operations_of_block_reductions():
+    """Spec 0.3 SV20, duty 2: only a value that one collective gave every rank skips its vote."""
+    from types import SimpleNamespace
+    from pops.codegen.program_emit_structured_control import collective_identical
+
+    def value(identity, op, *inputs, block=None, **attrs):
+        return SimpleNamespace(id=identity, op=op, inputs=inputs, block=block, attrs=attrs)
+
+    reduction = value(1, "reduce", block=0)
+    observation = value(2, "reduce")
+    step = value(3, "requested_dt")
+    quotient = value(4, "scalar_op", reduction, reduction, fn="div")
+    assert collective_identical(reduction) and collective_identical(quotient)
+    assert collective_identical(value(5, "compare", quotient))
+    assert collective_identical(value(6, "scalar_isfinite", quotient))
+    assert collective_identical(value(7, "scalar_expression", reduction,
+                                      expression_nodes=(("input", 0, 0), ("neg", 0))))
+    assert not collective_identical(observation)
+    assert not collective_identical(value(8, "scalar_op", quotient, step, fn="mul"))
+    assert not collective_identical(value(9, "scalar_expression", reduction,
+                                          expression_nodes=(("input", 0, 0), ("exp", 0))))
+
+
+def test_reference_cg_rejects_its_collective_scalars_locally():
+    """The CG of method_krylov stops on a dot_all and steps by quotients of dot_alls: no vote on
+    them (SV20, duty 2). Its iterate budget is not a collective result and is still agreed on."""
+    import pops
+    from examples.api_v02.methods_T01_T12 import build_t04_global
+    from pops.codegen.program_models import ProgramModelGraph
+
+    spec = build_t04_global()
+    resolved = pops.resolve(pops.validate(spec.case), layout=spec.layout)
+    source = emit_cpp_program(resolved.time,
+                              model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
+    assert source.count("ctx.dot_all(") == 10
+    assert "iterate stop differs across execution lane" not in source
+    assert "replicated array Float64 bits differ" not in source
+    assert source.count("iterate budget differs across execution lane") == 2
+    guards = ('"nonfinite scalar arithmetic or invalid division"',
+              '"nonfinite affine coefficient expression"', '"replicated array has a nonfinite element"')
+    for guard in guards:
+        position = source.find(guard)
+        assert position >= 0
+        while position >= 0:
+            statement = source.rfind("if (", 0, position)
+            assert "all_reduce" not in source[statement:position]
+            position = source.find(guard, position + 1)

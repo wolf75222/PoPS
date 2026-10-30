@@ -1753,15 +1753,20 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         if due is not None:
             expression = "(%s) ? (%s) : pops::Real(0)" % (due, expression)
         lines.append("const pops::Real %s = %s;" % (var[v.id], expression))
-        from pops.codegen.program_emit_structured_control import _reject_if
-        _reject_if("!std::isfinite(%s)" % var[v.id], lines,
-                   "nonfinite scalar arithmetic or invalid division")
+        from pops.codegen.program_emit_structured_control import (
+            _reject_if, _reject_locally, collective_identical,
+        )
+        reject = _reject_locally if collective_identical(v) else _reject_if
+        reject("!std::isfinite(%s)" % var[v.id], lines,
+               "nonfinite scalar arithmetic or invalid division")
     elif v.op == "scalar_isfinite":
         from pops.codegen.program_emit_expressions import prepared_scalar_input
         var[v.id] = "std::isfinite(%s)" % prepared_scalar_input(v.inputs[0], var)
     elif v.op == "scalar_expression":
         from pops.codegen.program_emit_expressions import checked_expression_dag, prepared_scalar_input
-        from pops.codegen.program_emit_structured_control import _reject_if
+        from pops.codegen.program_emit_structured_control import (
+            _reject_if, _reject_locally, collective_identical,
+        )
         if v.vtype != "scalar" or any(item.vtype != "scalar" for item in v.inputs):
             raise TypeError("scalar expression has lost its finite scalar authority")
         body, outputs, invalid = checked_expression_dag(
@@ -1774,7 +1779,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         lines.extend("  " + line for line in body)
         lines.append("  return std::pair<pops::Real, bool>{%s, (%s)};" % (outputs[0], invalid))
         lines.append("}();")
-        _reject_if(evaluation + ".second", lines, "scalar expression domain or nonfinite result")
+        reject = _reject_locally if collective_identical(v) else _reject_if
+        reject(evaluation + ".second", lines, "scalar expression domain or nonfinite result")
         var[v.id] = "s%d" % v.id
         lines.append("const pops::Real %s = %s.first;" % (var[v.id], evaluation))
     elif v.op == "compare":

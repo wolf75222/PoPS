@@ -29,6 +29,7 @@
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 #include <pops/runtime/system/native_package_capability.hpp>
+#include <pops/runtime/system/prepared_active_mask_consensus.hpp>
 
 #include <array>
 #include <cstddef>
@@ -1598,6 +1599,12 @@ class System {
   /// become a public publication route.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_active_mask_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
+  /// The rank-local half of prepared_program_block_active_mask_, without any collective, so a
+  /// generated-Program helper decides its own checks and this query in one collective (spec 0.3
+  /// SV20, PF8) through prepared_active_mask_consensus.hpp.
+  [[nodiscard]] POPS_EXPORT runtime::system::PreparedActiveMaskLocal<MultiFab<Dim>>
+  prepared_program_block_active_mask_local_(int runtime_block, const MultiFab<Dim>& field,
+                                            const ExecutionLane& lane) const;
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_volume_fraction_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
