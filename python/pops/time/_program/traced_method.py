@@ -10,9 +10,10 @@ traces a method at each elaboration, into the Program that elaborates it; the cl
 T33. The body reads only ``B``, ``p``, its components and immutable captures. A value of a
 Program, a builder coefficient (the ambient step size among them), a clock or a time point inside
 a traced expression is refused as ``ClosedBodyViolation``. So is a component that reads the step
-size of its Program, or that changes a publication, a history, an integral, an acceptance guard or
-the step control of the Program: those tables are compared, contents included, around each
-evaluation and around the body. A Python truth test, ``float``, ``int`` or ``numpy.asarray`` of a
+size of its Program or a value it was not given, that evaluates a value at another time than the
+state it is given, that returns a rate this evaluation did not compute, or that changes a
+publication, a history, an integral, an acceptance guard or the step control of the Program:
+those tables are compared, contents included, around each evaluation and around the body. A Python truth test, ``float``, ``int`` or ``numpy.asarray`` of a
 traced value raises ``SymbolicTruthValueError`` (E1). Comparisons build predicates (SU4) and come
 with a later lot, and Python's ``max`` and ``min`` with them.
 
@@ -662,7 +663,7 @@ class _Component:
                 "the component %r changed the %s of its Program: a component evaluates a rate, "
                 "and publishes no state, history or step control outside the Candidate (T33)"
                 % (self._name, ", ".join(changed)))
-        _require_rate(program, rate, self._name, program._values[created:])
+        _require_rate(program, rate, self._name, program._values[created:], value)
         trace.evaluations.append((evaluation, self._name, ordinal))
         atom = _Atom("%s#%d" % (self._name, evaluation), evaluation)
         return TracedField(trace, rate, ((atom, _ONE),))
@@ -688,8 +689,9 @@ def _require_state(value: Any, where: str) -> None:
                         % where)
 
 
-def _require_rate(program: Any, rate: Any, component: str, created: list) -> None:
-    """What a component returns: rates of its Program, which do not read its step size."""
+def _require_rate(program: Any, rate: Any, component: str, created: list, given: Any) -> None:
+    """What a component returns: rates of its Program that this evaluation computed from the
+    state ``given`` and at its point, without reading the step size (T33, T4)."""
     terms = (list(rate.terms) if isinstance(rate, _Affine)
              else [(rate, None)] if isinstance(rate, ProgramValue) else None)
     if not terms or any(not (isinstance(value, ProgramValue) and value.is_field())
@@ -710,6 +712,26 @@ def _require_rate(program: Any, rate: Any, component: str, created: list) -> Non
         raise IncrementTypeMismatch(
             "the component %r returned a value of type %s, not a rate: a component evaluates the "
             "rate of the state it is given (SU10)" % (component, " and ".join(others)))
+    computed = {id(value) for value in created}
+    if any(id(value) not in computed for value, _ in terms):
+        raise ClosedBodyViolation(
+            "the component %r returned a rate that this evaluation did not compute, such as a "
+            "rate kept from an earlier evaluation: a component evaluates a rate at the state and "
+            "time it is given (T33, T4)" % component)
+    computed.add(id(given))
+    outside = sorted({read.name for value in created for read in value.inputs
+                      if id(read) not in computed})
+    if outside:
+        raise ClosedBodyViolation(
+            "the component %r read %s, which it was not given and did not compute: a component "
+            "evaluates a rate from the state it is given (T33, T4)" % (component, ", ".join(outside)))
+    elsewhere = [value.name for value in created
+                 if value.point is not None and value.point != given.point]
+    if elsewhere:
+        raise ClosedBodyViolation(
+            "the component %r evaluated %s at another time than the state it is given: a "
+            "component evaluates a rate at the state and time it is given, and the method states "
+            "each time, flow(U, B.time + c*p.dt) (T33, T4)" % (component, ", ".join(elsewhere)))
 
 
 # --- methods ------------------------------------------------------------------------------------

@@ -6577,18 +6577,18 @@
       "local_receipts": {
         "tests/python/integration/runtime/test_traced_methods_n8_native.py": {
           "cases": 3,
-          "phase_seconds": 318.7,
-          "session_seconds": 321.05
+          "phase_seconds": 311.58,
+          "session_seconds": 312.74
         },
         "tests/python/unit/time/test_traced_methods_n8.py": {
-          "cases": 59,
-          "phase_seconds": 163.11,
-          "session_seconds": 164.94
+          "cases": 66,
+          "phase_seconds": 165.36,
+          "session_seconds": 166.66
         }
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_traced_methods_n8_native.py": "60fc4ee4a4f7592ab788b0a2877a736cc1c6c121435ea0af04c31faa58f0d6ab",
-        "tests/python/unit/time/test_traced_methods_n8.py": "722f7e1166b0354b20837f3fad3c91e333d087fb9673e6dcdb95ece99e86a64d"
+        "tests/python/unit/time/test_traced_methods_n8.py": "4505df87a818a7417be9e1f82e7c0ca57e8e9f2f78f378d47506d98d8b79057b"
       }
     },
     "declared_hardware_profiles": {

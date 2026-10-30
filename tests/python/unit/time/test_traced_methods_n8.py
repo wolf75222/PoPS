@@ -27,10 +27,11 @@ from pops._ir.symbolic import SymbolicTruthValueError
 from pops._structural_data import canonical_json
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
-from pops.time import FixedDt
+from pops.time import FixedDt, TimePoint
 from pops.time._program.elaboration import Advance, Proposal, Retry, elaborate
+from pops.time._program.global_history_storage import prepare_issuance, publish_issuance
 from pops.time._program.traced_method import (
-    Candidate, ClosedBodyViolation, IncrementNotDerivable, IncrementTypeMismatch,
+    _GUARDED_TABLES, Candidate, ClosedBodyViolation, IncrementNotDerivable, IncrementTypeMismatch,
     NotYetElaborated, method,
 )
 
@@ -323,6 +324,52 @@ def test_a_component_that_publishes_is_a_closed_body_violation(m01, publish, tab
 def test_a_component_returns_a_rate(m01, component):
     with pytest.raises(IncrementTypeMismatch, match="type state, not a rate"):
         _elaborate(m01, forward(component(m01["flow"])))
+
+
+@pytest.mark.parametrize("restage, match", [
+    (lambda u: u.prog.value("later", u, at=u.prog.stage("later_stage", c=Fraction(1, 2))),
+     "evaluated later, rhs2 at another time"),
+    (lambda u: u.prog.value("end", u, at=TimePoint(u.prog.clock, 1)),
+     "evaluated end, rhs2 at another time"),
+    (lambda u: u.prog.value("previous", u, at=TimePoint(u.prog.clock, -1)),
+     "evaluated previous, rhs2 at another time"),
+], ids=["stage-in-component", "end-of-the-step", "previous-step"])
+def test_a_component_evaluates_at_the_time_it_is_given(m01, restage, match):
+    with pytest.raises(ClosedBodyViolation, match=match):
+        _elaborate(m01, forward(lambda u: m01["flow"](restage(u))))
+
+
+def test_a_component_may_read_its_state_again_at_its_own_time(m01):
+    again = forward(lambda u: m01["flow"](u.prog.value("start", u, at=TimePoint(u.prog.clock, 0))))
+    assert _elaborate(m01, again).trace.increment == ((0, {1: Fraction(1)}),)
+
+
+@pytest.mark.parametrize("reuse, match", [
+    (lambda rate, u, first: first[1], "returned a rate that this evaluation did not compute"),
+    (lambda rate, u, first: rate(u.prog.value("mixed", .5*u + .5*first[0], at=u.point)),
+     "read fluid, which it was not given and did not compute"),
+], ids=["rate-of-an-earlier-evaluation", "state-of-an-earlier-evaluation"])
+def test_a_component_evaluates_only_the_state_it_is_given(m01, reuse, match):
+    first = []  # the state and the rate of the first evaluation
+
+    def keeping(u):
+        if not first:
+            first.extend((u, m01["flow"](u)))
+            return first[1]
+        return reuse(m01["flow"], u, first)
+    heun = _stage_formula(lambda B, p, k0, U1, k1: B.state + p.dt/2*k0 + p.dt/2*k1)
+    with pytest.raises(ClosedBodyViolation, match=match):
+        _elaborate(m01, heun(keeping))
+
+
+def test_the_guarded_tables_are_tables_of_the_builder(m01):
+    """The guarded tables are named by strings: a table that b6 renames would leave the guard."""
+    program = _elaborate(m01, forward(m01["flow"])).program
+    # b6 creates the issuance table at the first global field history that it issues.
+    assert [name for name in _GUARDED_TABLES if not hasattr(program, name)] == [
+        "_global_field_history_issuance"]
+    publish_issuance(program, "n8", prepare_issuance(program, "n8", {}))
+    assert all(hasattr(program, name) for name in _GUARDED_TABLES)
 
 
 def test_a_traced_value_does_not_outlive_its_trace(m01):
