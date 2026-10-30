@@ -1620,9 +1620,8 @@ class ProgramContext {
     }
     const CollectiveCompensatedSum reduced = pops::collective_finite_compensated_sum_or_failure(
         local, static_cast<bool>(local_error), lane.communicator());
-    if (reduced.failed)
-      report_owner_failure_(local_error, lane, "Program dot-all reduction");
-    return reduced.value;
+    return reduced.or_vote(
+        [&] { converge_owner_reduction_(local_error, lane, "Program dot-all reduction"); });
   }
 
   Geometry<Dim> geometry() const { return system_->prepared_block_geometry(); }
@@ -2852,14 +2851,6 @@ class ProgramContext {
     throw std::runtime_error(std::string(operation) + " failed collectively");
   }
 
-  /// The failure path of a reduction that carried a local failure: every rank knows that some
-  /// rank failed and reports it through the vote that preceded the reduction before SV20.
-  [[noreturn]] void report_owner_failure_(std::exception_ptr local_error, const ExecutionLane& lane,
-                                          const char* operation) const {
-    converge_owner_reduction_(local_error, lane, operation);
-    throw std::logic_error(std::string(operation) + " lost its local failure");
-  }
-
   enum class OwnerReduction { sum, max, min };
 
   /// One collective per generated reduction (spec 0.3 SV20, duties 2 and 3). The local failure
@@ -2886,8 +2877,10 @@ class ProgramContext {
         all_reduce_min_inplace(words.data(), 2, lane);
         break;
     }
-    if (words[1] != Real(0))
-      report_owner_failure_(local_error, lane, operation);
+    if (words[1] != Real(0)) {
+      converge_owner_reduction_(local_error, lane, operation);
+      throw std::logic_error(std::string(operation) + " lost its local failure");
+    }
     return words[0];
   }
 

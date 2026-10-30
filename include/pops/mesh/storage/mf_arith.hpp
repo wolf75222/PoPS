@@ -780,6 +780,17 @@ inline const CompensatedSummaryReduction& compensated_summary_reduction() {
 struct CollectiveCompensatedSum {
   Real value = Real{0};
   bool failed = false;
+
+  /// The sum, or the failure that `vote` throws on every rank: the caller's vote that preceded
+  /// the reduction before SV20, so its messages and their precedence stay.
+  template <class Vote>
+  Real or_vote(Vote&& vote) const {
+    if (failed) {
+      std::forward<Vote>(vote)();
+      throw std::logic_error("a compensated reduction lost the local failure it carried");
+    }
+    return value;
+  }
 };
 
 /// dot-all@1 transports the two-word summaries, never fields or finalized rank scalars.

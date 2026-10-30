@@ -180,14 +180,6 @@ void converge_owner_reduction_(std::exception_ptr local_error, const ExecutionLa
   throw std::runtime_error(std::string(operation) + " failed collectively");
 }
 
-/// The failure path of a reduction that carried a local failure: every rank knows that some rank
-/// failed and reports it through the vote that preceded the reduction before SV20.
-[[noreturn]] void report_owner_failure_(std::exception_ptr local_error, const ExecutionLane& lane,
-                                        const char* operation) const {
-  converge_owner_reduction_(local_error, lane, operation);
-  throw std::logic_error(std::string(operation) + " lost its local failure");
-}
-
 public:
 Real sum_component(const field_type& field, int component) const {
   prepare_spatial_collectively([&] { require_program_field_access(field); });
@@ -397,9 +389,8 @@ Real dot_all(int program_block, const field_type& left, const field_type& right)
   }
   const CollectiveCompensatedSum reduced = pops::collective_finite_compensated_sum_or_failure(
       accumulated, static_cast<bool>(local_error), lane.communicator());
-  if (reduced.failed)
-    report_owner_failure_(local_error, lane, "AMR Program dot-all reduction");
-  return reduced.value;
+  return reduced.or_vote(
+      [&] { converge_owner_reduction_(local_error, lane, "AMR Program dot-all reduction"); });
 }
 
 Geometry<Dim> geometry() const {

@@ -40,7 +40,6 @@ def test_authentic_dot_all_finite_coverage_and_collective_control_flow(tmp_path)
     pieces = {
         "accumulator": _extract("include/pops/mesh/execution/for_each.hpp", "struct FiniteCompensatedSum"),
         "reduced": _extract(mesh, "struct CollectiveCompensatedSum"),
-        "report": _extract(uniform, "[[noreturn]] void report_owner_failure_"),
         "kernel": _extract(mesh, "template <int Dim>\nstruct FiniteOwnedDotKernel"),
         "layout": _extract(mesh, "template <int Dim, class LeftSpace, class RightSpace>\nvoid require_same_layout"),
         "measure": _extract(mesh, "template <int Dim, class MemorySpace>\nvoid validate_measure"),
@@ -79,6 +78,7 @@ SCAFFOLD = r'''
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 #define POPS_HD
 using Real=double;
@@ -150,7 +150,6 @@ struct Base {
  void converge_owner_reduction_(std::exception_ptr e,const ExecutionLane&,const char*)const {
    events+='V';if(e)std::rethrow_exception(e);
  }
- @REPORT@
 };
 struct Uniform:Base {
  Field mask{{{1}}};Uniform(){mask.width=1;}
