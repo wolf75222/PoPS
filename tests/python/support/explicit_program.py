@@ -21,6 +21,13 @@ from pathlib import Path
 from typing import Any
 
 from pops.codegen._compile_emit import _emit_route_manifest
+from pops.codegen.amr_program_context_unit import (
+    AMR_PROGRAM_CONTEXT_EXTERN,
+    AMR_PROGRAM_CONTEXT_INCLUDE,
+    amr_program_context_include,
+    amr_program_context_object,
+    amr_program_context_unit_identity,
+)
 from pops.codegen.cache import (
     _artifact_cache_lock,
     _artifact_cache_staging_path,
@@ -33,6 +40,7 @@ from pops.codegen.toolchain import (
     _probe_cxx_std,
     _run_compile,
     loader_cxx_std,
+    loader_native_dimension,
     pops_include,
     pops_loader_build_flags,
 )
@@ -247,8 +255,7 @@ def _source(
 #endif
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/program/program_context.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
-#include <pops/core/foundation/native_dimension.hpp>
+%s#include <pops/core/foundation/native_dimension.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <cstdint>
@@ -271,6 +278,10 @@ extern "C" pops::Real %s(%s*, pops::Real) {
   return std::numeric_limits<pops::Real>::infinity();
 }
 """ % (
+        # An AMR Program links the shared context unit, as a generated one does.
+        amr_program_context_include()
+        if target == "amr_system"
+        else AMR_PROGRAM_CONTEXT_INCLUDE + "\n",
         _emit_route_manifest("pops_program_route_manifest"),
         "euler",
         identity,
@@ -326,6 +337,19 @@ def _compile_program(source: str) -> str:
     compiler, compile_flags, link_flags = pops_loader_build_flags()
     standard = _probe_cxx_std(compiler, loader_cxx_std())
     link_flags = deterministic_program_link_flags(link_flags)
+    optflags = _dsl_optflags()
+    context_unit = None
+    if AMR_PROGRAM_CONTEXT_EXTERN in source:
+        native_dimension = loader_native_dimension()
+        context_unit = amr_program_context_unit_identity(
+            compiler=compiler,
+            standard=standard,
+            abi_key="%s|%s|%s|dim=%d" % (header_signature, compiler, standard, native_dimension),
+            optflags=optflags,
+            cflags=compile_flags,
+            toolchain_capture=None,
+            native_dimension=native_dimension,
+        )
     identity_material = json.dumps(
         {
             "source": source,
@@ -334,7 +358,9 @@ def _compile_program(source: str) -> str:
             "header_signature": header_signature,
             "compile_flags": compile_flags,
             "link_flags": link_flags,
-            "optflags": _dsl_optflags(),
+            "optflags": optflags,
+            **({} if context_unit is None
+               else {"amr_program_context_unit": context_unit[1].hexdigest}),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -353,17 +379,30 @@ def _compile_program(source: str) -> str:
                 cpp.write_text(source, encoding="utf-8")
                 if sys.platform == "win32":  # pragma: no cover - production compiler is POSIX-only
                     raise RuntimeError("explicit Python test Programs are unavailable on Windows")
+                context_object = () if context_unit is None else (
+                    amr_program_context_object(
+                        context_unit,
+                        compiler=compiler,
+                        standard=standard,
+                        header_signature=header_signature,
+                        include=include,
+                        optflags=optflags,
+                        cflags=compile_flags,
+                        toolchain_capture=None,
+                    ),
+                )
                 command = [
                     compiler,
                     "-shared",
                     "-fPIC",
                     "-std=" + standard,
-                    *_dsl_optflags(),
+                    *optflags,
                     '-DPOPS_HEADER_SIG="%s"' % header_signature,
                     *compile_flags,
                     "-I",
                     include,
                     str(cpp),
+                    *context_object,
                     "-o",
                     str(staging),
                     *link_flags,
