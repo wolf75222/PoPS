@@ -299,6 +299,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   their bytes match the catalogue, and a suite that claims one fails, as in the coverage fence of
   `test_manifest_suite_coverage.py`. The step had failed on these seven files since 2026-08-17;
   no test starts running.
+- The coverage fence keeps that catalogue shrink-only: a record added or rewritten, or a changed
+  header, fails even when the catalogue's SHA-256 pin is updated with it; a record may only be
+  dropped, and its test must then be claimed by a suite.
 
 ## [1.0.0] - 2026-07-16
 
