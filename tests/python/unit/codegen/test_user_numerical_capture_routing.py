@@ -133,3 +133,6 @@ def test_authored_face_frequency_guards_the_exact_default_rhs_on_both_targets():
         assert source.count("numerical_face_courant()") == 2
         assert source.count("&user_face_frequency_") == 2
         assert "ctx.max_wave_speed" not in source
+        # The Program reads the frequency of these faces, never the faces: no carrier is copied.
+        assert source.count("ctx.neg_div_flux_default_with_frequency_into(") == 2
+        assert "with_faces_into" not in source and "user_face_faces_" not in source

@@ -1197,18 +1197,21 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 authenticated_user_face(authored_face)
                 user_face_frequency = "user_face_frequency_%d" % v.id
                 lines.append("pops::Real %s=0;" % user_face_frequency)
-                if faces is None:
-                    faces = "user_face_faces_%d" % v.id
-                    lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s;" % faces)
-            if faces is not None:
+            if faces is not None or user_face_frequency:
                 frequency_suffix = (",&" + user_face_frequency) if user_face_frequency else ""
                 if target == "amr_system" and user_face_frequency:
                     # The final AMR argument follows temporal family and input trace.
                     frequency_suffix = (",nullptr,&" + user_face_frequency
                                         if input_trace is None else ",&" + user_face_frequency)
-                lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s%s);"
-                             % (bidx, var[state_in.id], var[v.id], int(v.id), faces,
-                                family_suffix + trace_suffix, frequency_suffix))
+                if faces is not None:
+                    lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s%s);"
+                                 % (bidx, var[state_in.id], var[v.id], int(v.id), faces,
+                                    family_suffix + trace_suffix, frequency_suffix))
+                else:
+                    # The Program reads only the frequency of the user face: no face carrier.
+                    lines.append("ctx.neg_div_flux_default_with_frequency_into(%d, %s, %s, %d%s%s);"
+                                 % (bidx, var[state_in.id], var[v.id], int(v.id),
+                                    family_suffix + trace_suffix, frequency_suffix))
                 if user_face_frequency:
                     var[("user_face_frequency", v.id)] = user_face_frequency
                     var[("partition_frequency", v.id)] = user_face_frequency

@@ -71,7 +71,51 @@ def user_face_source_identity(emitter: Any) -> str | None:
     return authenticated_user_face(descriptor).options["source_identity"]
 
 
+def _carries_non_finite(node: Any, operand: int) -> bool:
+    """Whether IEEE arithmetic carries a non-finite operand of ``node`` into its value.
+
+    NaN stays NaN and an infinity stays non-finite (inf - inf and 0 * inf are NaN) through these
+    positions. Any other position may return a finite value from a non-finite operand: a
+    comparison, fmin/fmax, a sign, exp(-inf), expm1(-inf), pow(x, 0) or x / inf.
+    """
+    from pops._ir.control_expr import Rounded, Where
+    from pops._ir.expr import Abs, Add, Cos, Div, Log, Mul, Neg, Sin, Sqrt, Sub
+
+    if isinstance(node, (Add, Sub, Mul, Neg, Abs, Sqrt, Sin, Cos, Log, Rounded)):
+        return True
+    if isinstance(node, Div):
+        return operand == 0
+    # A Where is the value of its selected branch; its test is a Boolean.
+    return isinstance(node, Where) and operand > 0
+
+
+def _concealed_operand_keys(roots: Any) -> tuple[set[Any], dict[int, Any]]:
+    """Structural keys of the real operands whose non-finite value may not reach a root.
+
+    Checking these and the roots refuses exactly the evaluations in which some evaluated
+    intermediate is non-finite: from a non-finite intermediate, follow its consumers towards a
+    root; each one either carries the non-finite value or is a position checked here.
+    """
+    from pops._ir.visitors import _children, _key
+
+    key_memo: dict[int, Any] = {}
+    concealed, seen, pending = set(), set(), list(roots)
+    while pending:
+        node = pending.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        for operand, child in enumerate(_children(node)):
+            # A Boolean is 0 or 1; the comparisons below it carry their own checks.
+            boolean = callable(getattr(child, "resolve_for_amr_predicate", None))
+            if not boolean and not _carries_non_finite(node, operand):
+                concealed.add(_key(child, key_memo))
+            pending.append(child)
+    return concealed, key_memo
+
+
 def emit_user_face_policy(emitter: Any) -> str:
+    from pops._ir.visitors import _key
     from pops.codegen.cpp_writer import _cse_emit
     from pops.numerics.riemann.user import authenticated_user_face
 
@@ -92,9 +136,13 @@ def emit_user_face_policy(emitter: Any) -> str:
             "pops_face_flux_left_%d" % index: "left_density.value[%d]" % index,
             "pops_face_flux_right_%d" % index: "right_density.value[%d]" % index,
         })
+    # The policy refuses a face whose evaluation meets a non-finite value. It tests its outputs
+    # and the operands that could conceal one; arithmetic carries any other to an output.
+    concealed, key_memo = _concealed_operand_keys(descriptor.expression)
     expression_lines, rendered, observed = _cse_emit(
         descriptor.expression, "pops::Real", "    ", materialize_all=True,
-        return_names=True, scalar_bindings=bindings)
+        return_names=True, scalar_bindings=bindings,
+        observe=lambda node: _key(node, key_memo) in concealed)
     finite = " && ".join([*("std::isfinite(%s)" % item for item in observed),
                           *("std::isfinite(density[%d])" % index for index in range(width))])
     lines = [
