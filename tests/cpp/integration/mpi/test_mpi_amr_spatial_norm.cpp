@@ -602,6 +602,12 @@ void measure_actual_program_norm2(bool distributed) {
   EXPECT_EQ(state.distribution().replicated(), !distributed);
   EXPECT_DOUBLE_EQ(owned, Real(8));
   EXPECT_DOUBLE_EQ(observed, Real(8));
+  // The collective sums and dot share norm2's ownership: 16 physical cells of value 2, once each.
+  EXPECT_DOUBLE_EQ(context->sum_component(state, 0), Real(32));
+  EXPECT_DOUBLE_EQ(context->abs_sum_component(state, 0), Real(32));
+  EXPECT_DOUBLE_EQ(context->sum_component(0, state, 0), Real(32));
+  EXPECT_DOUBLE_EQ(context->abs_sum_component(0, state, 0), Real(32));
+  EXPECT_DOUBLE_EQ(context->dot(0, state, state), Real(64));
   // Same owner/layout/masks; component1 is a sentinel and is not part of norm2's public contract.
   auto& vector = context->scalar_scratch(12300, 0, state, 2, 0);
   vector.set_val(Real(1000));
@@ -620,6 +626,8 @@ void measure_actual_program_norm2(bool distributed) {
   }
   EXPECT_FALSE(std::isfinite(context->norm2(0, vector)))
       << "a nonfinite participating replica must still reach the original guard predicate";
+  EXPECT_FALSE(std::isfinite(context->sum_component(0, vector, 0)));
+  EXPECT_FALSE(std::isfinite(context->dot(0, vector, vector)));
 }
 }  // namespace
 
@@ -757,5 +765,9 @@ TEST(AmrProgramNorm2Ownership, MixedReplicatedCoarsePartitionedFineUsesPerLevelO
   // 16 coarse + 64 fine valid active component-zero samples, each exactly 2.
   // This is the existing per-level sample norm, not an AMR composite-cover/volume norm.
   EXPECT_NEAR(context->norm2(0, context->state(0)), std::sqrt(Real(320)), Real(1e-13));
+  // The owner sums and dot read the same samples, with the replicated coarse copy counted once.
+  EXPECT_DOUBLE_EQ(context->sum_component(0, context->state(0), 0), Real(160));
+  EXPECT_DOUBLE_EQ(context->abs_sum_component(0, context->state(0), 0), Real(160));
+  EXPECT_DOUBLE_EQ(context->dot(0, context->state(0), context->state(0)), Real(320));
 }
 #endif

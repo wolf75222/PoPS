@@ -231,9 +231,9 @@ Real reduce_hierarchy_field_observation(
       const auto& field = snapshot->fields_[level];
       const auto& active = snapshot->active_[level];
       if (kind == "sum")
-        local += pops::reduce_active_sum_local(field, 0, &active);
+        local += count_once_(field, pops::reduce_active_sum_local(field, 0, &active));
       else if (kind == "abs_sum")
-        local += pops::reduce_active_abs_sum_local(field, 0, &active);
+        local += count_once_(field, pops::reduce_active_abs_sum_local(field, 0, &active));
       else if (pops::reduce_masked_max_local(field, 0, &active).has_active) {
         if (maximum)
           local = std::max(local, pops::reduce_active_max_local(field, 0, &active));

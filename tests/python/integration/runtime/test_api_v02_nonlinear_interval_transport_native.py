@@ -26,8 +26,10 @@ def test_nonlinear_interval_transport_and_retry(retry, isolated_native_cache, na
         assert abs(runtime.time()-.006) < 2.e-14
         assert runtime.macro_step() == 3 and report.accepted_steps == 3
         assert report.rejected_steps > 0 if retry else report.rejected_steps == 0
+        # state_global gathers the state into every rank, so every rank evaluates the same
+        # metrics from the same image.
         owners = [item for item in metrics if item["metrics_owner"]]
-        assert len(owners) == 1
+        assert len(owners) == len(metrics) and all(item == owners[0] for item in owners), metrics
         assert owners[0]["full_state_quadrature_error"] < 4.e-13
         assert owners[0]["mass_defect"] < 4.e-14
         assert owners[0]["momentum_defect"] < 4.e-14

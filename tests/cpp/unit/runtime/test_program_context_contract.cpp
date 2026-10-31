@@ -2212,7 +2212,8 @@ TEST(ProgramContextContract, NestedAcceptedSubstepsRestoreFieldsHistoriesAndExch
   }
   EXPECT_EQ(changed_window_refusal,
             n_ranks() == 1 ? "pending history publication changed its physical window"
-                           : "Program history publication preparation failed collectively");
+                           : "Program history publication preparation failed collectively; rank 0: "
+                             "pending history publication changed its physical window");
   EXPECT_EQ(sim.history_sample_identity("nested.state"), before_samples);
   EXPECT_EQ(sim.history_global("nested.state", 0), before_history_front);
   EXPECT_EQ(sim.history_fill_count("nested.state"), before_history);

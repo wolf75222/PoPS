@@ -342,7 +342,26 @@ def _canonical_json_protocol_chunks(value, *, allow_nan=True, sort_keys=True):
         if operation == 2:
             active.remove(node)
             continue
-        if isinstance(node, (Mapping, list, tuple)):
+        # Scalars come first, in the stdlib encoder's order. Their checks only walk the MRO; the
+        # Mapping check consults ABC caches, which may compare a user metaclass by equality.
+        if isinstance(node, str):
+            yield encode_string(node)
+        elif node is None:
+            yield "null"
+        elif node is True:
+            yield "true"
+        elif node is False:
+            yield "false"
+        elif isinstance(node, int):
+            yield int.__repr__(node)
+        elif isinstance(node, float):
+            if math.isfinite(node):
+                yield float.__repr__(node)
+            elif not allow_nan:
+                raise ValueError("Out of range float values are not JSON compliant")
+            else:
+                yield "NaN" if math.isnan(node) else "Infinity" if node > 0 else "-Infinity"
+        elif isinstance(node, (Mapping, list, tuple)):
             identity = id(node)
             if identity in active:
                 raise ValueError("Circular reference detected")
@@ -367,23 +386,6 @@ def _canonical_json_protocol_chunks(value, *, allow_nan=True, sort_keys=True):
                     stack.append((0, node[i]))
                     if i:
                         stack.append((1, ","))
-        elif isinstance(node, str):
-            yield encode_string(node)
-        elif node is None:
-            yield "null"
-        elif node is True:
-            yield "true"
-        elif node is False:
-            yield "false"
-        elif isinstance(node, int):
-            yield int.__repr__(node)
-        elif isinstance(node, float):
-            if math.isfinite(node):
-                yield float.__repr__(node)
-            elif not allow_nan:
-                raise ValueError("Out of range float values are not JSON compliant")
-            else:
-                yield "NaN" if math.isnan(node) else "Infinity" if node > 0 else "-Infinity"
         else:
             # Preserve the standard error for unsupported scalar objects.
             yield json.dumps(node, allow_nan=allow_nan, sort_keys=sort_keys, separators=(",", ":"))
