@@ -388,6 +388,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   (`PublishedCoarseFaceIndex` for the published ones), so accumulation order, corrections and
   refusals are unchanged. On one 4-core container, the first segment of the same example (to
   t = 0.2, 226 accepted steps) runs in 11 minutes instead of 28.
+- `ci.yml` checks, with the pinned clang-format 19.1.7, what each pull request changes in the C++
+  files, in a `format` job that the required gate aggregates (against the first parent of the
+  merge commit, about a minute, no build). It works as a ratchet: a touched file that conformed at
+  the base must still conform as a whole file, since a changed line can misalign its aligned
+  neighbours; a file that did not conform is held to its changed lines only, so a branch never
+  has to reformat a file that it found unformatted; after a change to `.clang-format` or
+  `.clang-format-ignore`, every file that conformed at the base must still conform. `quality.yml`
+  keeps its whole-tree check through the same script, `scripts/check_clang_format.sh`. The
+  historical SDK header snapshots that tests pin by SHA-256 are listed in the new
+  `.clang-format-ignore`, which both checks honor. A change to `.clang-format`,
+  `.clang-format-ignore` or the script alone is planned as metadata: it runs the `format` job and
+  no build.
 
 ## [1.0.0] - 2026-07-16
 

@@ -53,3 +53,10 @@ paths = ["tests/cpp/unit/*", "tests/cpp/integration/*", "tests/python/unit/*", "
 name = "documentation"
 paths = ["*.md", "docs/*", "tutorials/*", "LICENSE*", ".gitignore", ".codespellrc", ".markdownlint*", ".github/workflows/docs.yml", "scripts/build_docs.sh"]
 metadata = true
+
+[[component]]
+name = "format-style"
+# The C++ style and its check: no build or test reads them, and the format job of ci.yml, which runs
+# on every change outside the plan, checks every file that conformed at the base when they change.
+paths = [".clang-format", ".clang-format-ignore", "scripts/check_clang_format.sh"]
+metadata = true
