@@ -194,6 +194,72 @@ def test_delivery_diagrams_compare_forty_independent_choices_without_listing_pat
     assert session.same(unchanged, left, left) is None
 
 
+def test_delivery_diagrams_compare_success_on_every_assignment():
+    # Two queries agree only if, on every assignment of the domain, both succeed or neither
+    # does; the answer names the side that succeeds alone.
+    from pops.codegen.typed_delivery import DeliveryDiagrams
+    p, q, delivery, check = fixture()
+    owned = delivery(p, q.n)
+    condition = p.sum(q.n) > 0.
+    both = p.branch(condition, lambda b: b.success(owned), lambda b: b.success(owned))
+    one = p.branch(condition, lambda b: b.success(owned), lambda b: b.failure(q.n, 7))
+    session = DeliveryDiagrams()
+    left = session.frontier(both, lambda node: node is owned, path=('ok',))
+    right = session.frontier(one, lambda node: node is owned, path=('ok',))
+    assert left.success is session.always
+    assert right.success is not session.always and right.success is not session.never
+    assert session.same(session.always, left, right) == 'left'
+    assert session.same(session.always, right, left) == 'right'
+    assert session.same(right.success, left, right) is None
+    assert session.same(session.never, left, right) is None
+
+
+def test_a_packet_retained_under_two_conditions_is_incomplete():
+    # Wherever one coordinate of a packed ledger is retained, every coordinate is: a packet
+    # whose last coordinate follows another condition is refused, on every assignment.
+    from pops.contributions import Contribution, Delivery, Increment
+    from pops.continuations import Candidate, ContinuationSchema
+    from pops.finite_contributions import FiniteInterval, LinearMap
+    from pops.graph_functions import graph
+    from pops.ledger_provenance import _leaf_paths
+    from pops.time._program.structured_control import value_signature
+    from pops.time.variant_types import Product, type_of
+    p = Program('packet_under_two_conditions')
+    initial = p.product(q=p.float64(0), history=p.float64(0), time=p.float64(0), step=p.int64(0))
+    base = p.continuation_open(initial, ContinuationSchema(initial, time=('time',), step=('step',)))
+    old = p.continuation_read(base)
+    q = old['q']
+
+    @graph(inputs=Product(value=type_of(q)), output=type_of(q))
+    def identity(g, a):
+        return a['value']
+
+    def increment(delta):
+        action = LinearMap.differential(identity, at=p.product(value=q), wrt='value')
+        c = Contribution('J', p.float64(delta), FiniteInterval(old['time'], old['time']+1, 'clock'))
+        return Increment((c,), (Delivery(c, q, action),))
+
+    first, second = increment(1), increment(2)
+    one, two = first.pack(p), second.pack(p)
+    leaves = list(_leaf_paths(value_signature(one)))
+    assert len(leaves) > 1
+    chosen, other = old['step'] > 0, old['time'] > 0.
+    def mixed(left, right, path=()):
+        signature = value_signature(left)
+        if signature['vtype'] == 'product':
+            return p.product(**{name: mixed(left[name], right[name], path + (name,))
+                                for name, _ in signature['members']})
+        return p.branch(other if path == leaves[-1] else chosen, lambda g: left, lambda g: right)
+    proposal = p.product(h=p.float64(1))
+    value = p.branch(chosen, lambda g: first.apply(g, q, name='first'),
+                     lambda g: second.apply(g, q, name='second'))
+    with pytest.raises(ValueError, match='incomplete retained coordinates'):
+        Candidate(p, base=base, proposal=proposal,
+                  continuation=p.product(q=value, history=old['history'],
+                                         time=old['time']+proposal['h'], step=old['step']+1),
+                  increment=mixed(one, two), observations=p.product(), checks=p.product())
+
+
 def test_a_reduce_in_an_element_names_its_zero_iteration_fold():
     # O5 of the N7 lot 2 review: a reduce is a fold over the size of its set, which may be
     # zero, and its zero-iteration result delivers nothing. The refusal names that fold.
@@ -224,6 +290,16 @@ def test_a_reduce_in_an_element_names_its_zero_iteration_fold():
         require_single_delivery(p.fold(q.n, 3, lambda b, c, k: c), lambda node: False, term='T',
                                 missing='missing', duplicate='duplicate')
     assert 'may run zero times' not in str(refused.value)
+
+
+def test_the_compiler_never_lists_delivery_paths():
+    # MG7, B4: delivered_frontiers lists one row per success path; only tests may call it.
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[4] / 'python' / 'pops'
+    assert (root / 'codegen' / 'typed_delivery.py').is_file()
+    callers = sorted(str(path.relative_to(root)) for path in root.rglob('*.py')
+                     if path.name != 'typed_delivery.py' and 'delivered_frontiers' in path.read_text())
+    assert callers == []
 
 
 def _parity_swaps(p, old, state, count, swap):
