@@ -9,6 +9,7 @@
 #include <pops/parallel/collective_exception.hpp>
 #include <bit>
 #include <pops/runtime/program/profiler.hpp>
+#include <Kokkos_Profiling_ScopedRegion.hpp>
 #include <pops/runtime/program/step_transaction.hpp>
 #include <pops/runtime/program/collective_step_rejection.hpp>
 #include <pops/runtime/program/moving_interval_checkpoint.hpp>
@@ -104,6 +105,9 @@ void System<Dim>::step(double dt) {
                      communicator) != 0)
     throw std::runtime_error("System::step has a pending solve or committed parent transaction");
   runtime::program::ProfileScope scope(p_->program_.profiler_, "step");
+  // Kokkos Tools sees each step as the region "pops::step": a tool attributes the
+  // deep copies of array data to the step that makes them (DM8).
+  const Kokkos::Profiling::ScopedRegion kokkos_step_region("pops::step");
   p_->program_.profiler_.count("steps");
   p_->execute_step_transaction(
       communicator,
@@ -133,6 +137,9 @@ std::string System<Dim>::advance_program_region(double dt) {
       lane, 9, static_cast<long>(step_transaction_depth()),
       solve_outcome_authority_->pending.load(std::memory_order_acquire) == 0,
       "System::advance_program_region.solve_results");
+  // A Program region of a step that the caller opens and commits: Kokkos Tools sees it
+  // as the region "pops::program_region" (DM8).
+  const Kokkos::Profiling::ScopedRegion kokkos_program_region("pops::program_region");
   std::string port;
   try {
     runtime::program::collective_step_rejection_phase(

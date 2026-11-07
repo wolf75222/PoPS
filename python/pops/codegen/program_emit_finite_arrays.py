@@ -1,12 +1,28 @@
 """C++ value/region lowering for replicated finite arrays in the existing Program engine."""
 from __future__ import annotations
 
+import json
+import re
+
 from pops.time._program.structured_control import value_signature
 
 
 FINITE_OPS = frozenset(("finite_real", "finite_range_set", "finite_size", "finite_domain", "finite_same_domain",
                         "finite_index", "finite_index_value", "finite_index_argument", "finite_at",
                         "finite_map", "finite_scan"))
+
+# What only finite_cpp_helpers() declares: its counters, its aliases and the namespaces of the
+# finite headers it includes.
+_HELPER_NAME = re.compile(r"\b(?:pops_finite_\w|pops_algebra_finite::|finite_(?:kokkos|collective|structural|device)::)")
+
+
+def uses_finite_helpers(source):
+    """Whether generated code names a declaration of finite_cpp_helpers().
+
+    Other emitters than the finite operations reach finite storage: a typed terminal failure packs
+    its payload with finite_structural in any Program.
+    """
+    return _HELPER_NAME.search(source) is not None
 
 
 def finite_cpp_helpers():
@@ -27,6 +43,8 @@ namespace {
 std::atomic<std::uint64_t> pops_finite_kernel_launches{0};
 std::atomic<std::uint64_t> pops_finite_host_map_invocations{0};
 std::atomic<std::int64_t> pops_finite_kernel_last_failure{-1};
+// Array bytes that this Program copies between the device and the host (DM8, PF2).
+pops::runtime::program::finite_device::Residency pops_finite_residency;
 }
 extern "C" std::uint64_t pops_finite_kokkos_launch_count() {
   return pops_finite_kernel_launches.load(std::memory_order_relaxed);
@@ -40,6 +58,15 @@ extern "C" const char* pops_finite_kokkos_execution_space() {
 extern "C" std::int64_t pops_finite_kokkos_last_failure_index() {
   return pops_finite_kernel_last_failure.load(std::memory_order_relaxed);
 }
+extern "C" std::uint64_t pops_finite_device_to_host_bytes() {
+  return pops_finite_residency.device_to_host_bytes.load(std::memory_order_relaxed);
+}
+extern "C" std::uint64_t pops_finite_host_to_device_bytes() {
+  return pops_finite_residency.host_to_device_bytes.load(std::memory_order_relaxed);
+}
+extern "C" std::uint64_t pops_finite_host_transfer_count() {
+  return pops_finite_residency.transfers.load(std::memory_order_relaxed);
+}
 namespace pops_algebra_finite {
 static_assert(sizeof(pops::Real) == sizeof(std::int64_t) && std::numeric_limits<pops::Real>::is_iec559,
               "finite Float64 arrays require IEEE binary64 native Real");
@@ -48,6 +75,7 @@ using DomainRef = pops::runtime::program::FiniteDomainRef;
 using Index = pops::runtime::program::finite_structural::Index;
 using Record = pops::runtime::program::finite_structural::Record;
 using Array = pops::runtime::program::finite_structural::Array;
+using DeviceArray = pops::runtime::program::finite_device::Array;
 using pops::runtime::program::finite_structural::make_values;
 }
 '''
@@ -71,7 +99,8 @@ def finite_cpp_type(signature):
     if kind in ("product", "variant"):
         return "pops_algebra_finite::Record"
     if kind == "array":
-        return "pops_algebra_finite::Array"
+        from .program_emit_finite_kokkos import device_array
+        return "pops_algebra_finite::" + ("DeviceArray" if device_array(signature) else "Array")
     if kind in ("state", "rhs", "scalar_field"):
         return "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>"
     return {"scalar":"pops::Real", "int64":"std::int64_t", "bool":"bool",
@@ -144,7 +173,7 @@ def _check_domain(signature, token, lines):
 def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_plans,target):
     from .program_emit_structured_control import _check_region_effects, _emit_region, _slots, _copy, _storage_width
     _check_region_effects(value.attrs["body_block"])
-    from .program_emit_finite_kokkos import emit_map
+    from .program_emit_finite_kokkos import emit_map, device_array, host_snapshots, storage_type, _leaves
     if emit_map(value, var, lines):
         return
     lines.append("pops_finite_host_map_invocations.fetch_add(1, std::memory_order_relaxed);")
@@ -155,9 +184,19 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
     domain_token = var[domain.id]
     _check_domain(value_signature(domain),domain_token,lines)
     prefix = "finite_%d"%value.id
-    buffer = prefix+"_buffer"
-    lines.append("std::shared_ptr<std::vector<std::any>> %s;" % buffer)
-    _collective_call("allocate_values", (buffer, "std::size_t((%s)->size)" % domain_token), lines)
+    # A host body still publishes device columns: one counted copy per column (PF2).
+    device = device_array(signature)
+    columns = []
+    if device:
+        for leaf, _ in _leaves(element, None):
+            name = "%s_host_%d" % (prefix, len(columns))
+            lines.append("pops::runtime::program::finite_device::HostView<%s> %s;" % (storage_type(leaf), name))
+            _collective_call("allocate_host", (name, "(%s)->size" % domain_token, json.dumps(name)), lines)
+            columns.append((leaf, name))
+    else:
+        buffer = prefix+"_buffer"
+        lines.append("std::shared_ptr<std::vector<std::any>> %s;" % buffer)
+        _collective_call("allocate_values", (buffer, "std::size_t((%s)->size)" % domain_token), lines)
     if scan:
         initial = value.inputs[0]
         state_signature = value_signature(initial)
@@ -165,19 +204,26 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
         pending = _slots(state_signature,var[initial.id],value.id,"scan_next",lines,
                          slot_offset=_storage_width(state_signature))
         _copy(state_signature,current,var[initial.id],lines)
+    snapshots = host_snapshots(value, var, lines)
     index = prefix+"_index"
     lines.append("for (std::int64_t %s = 0; %s < (%s)->size; ++%s) {"%(index,index,domain_token,index))
     body = ["const pops_algebra_finite::Index %s_checked{%s, %s};"%(prefix,domain_token,index)]
     sub = dict(var)
+    sub.update(snapshots)
     sub[value.attrs["body_index"].id] = prefix+"_checked"
     if scan:
         sub[value.attrs["body_argument"].id] = current
     _emit_region(program,value.attrs["body_block"],sub,model,body,prelude,block_idx,field_plans,target)
     result = sub[value.attrs["body"].id]
     emitted = result["value"] if scan else result
-    _uniform_element(element,emitted,body)
-    packed = _packed(element, emitted, body, prefix+"_element")
-    _store_cell(packed, "(*%s)[std::size_t(%s)]" % (buffer, index), body, prefix+"_publication")
+    if device:
+        for (leaf, name), (_, token) in zip(columns, _leaves(element, emitted), strict=True):
+            stored = "static_cast<unsigned char>(%s)" % token if leaf["vtype"] == "bool" else token
+            body.append("%s(%s) = %s;" % (name, index, stored))
+    else:
+        _uniform_element(element,emitted,body)
+        packed = _packed(element, emitted, body, prefix+"_element")
+        _store_cell(packed, "(*%s)[std::size_t(%s)]" % (buffer, index), body, prefix+"_publication")
     if scan:
         _copy(state_signature,pending,result["state"],body)
         _copy(state_signature,current,pending,body)
@@ -185,7 +231,14 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
     lines.append("}")
     # The only publication freezes the private buffer after every element succeeded.
     output = prefix+"_array"
-    lines.append("const %s %s{%s, std::move(%s)};"%(finite_cpp_type(signature),output,domain_token,buffer))
+    if device:
+        lines.append("%s %s;" % (finite_cpp_type(signature), output))
+        lines.append("pops::runtime::program::finite_collective::publish_host(%s);" % ", ".join(
+            (output, domain_token, "&pops_finite_residency", "ctx.prepared_execution_lane()",
+             *(name for _, name in columns))))
+        _uniform_element(signature, output, lines)
+    else:
+        lines.append("const %s %s{%s, std::move(%s)};"%(finite_cpp_type(signature),output,domain_token,buffer))
     var[value.id] = {"state":current,"values":output} if scan else output
 
 
@@ -244,6 +297,38 @@ def emit_finite_op(program,value,var,model,lines,prelude,block_idx,field_plans,t
         lines.append("const std::int64_t %s = (%s).offset;"%(token,index))
     elif op == "finite_at":
         array,index = (var[item.id] for item in value.inputs)
+        from .program_emit_finite_kokkos import (HOST_COLUMNS, device_array, leaf_count, storage_type,
+                                                 _tree, _TYPES)
+        if device_array(value_signature(value.inputs[0])):
+            signature = value_signature(value)
+            _reject_if("!(%s).domain || !(%s).domain->visible() || !(%s).columns || (%s).domain != (%s).domain || "
+                       "(%s).offset < 0 || (%s).offset >= (%s).domain->size || (%s).columns->size() != std::size_t(%d)"
+                       %(array,array,array,index,array,index,index,array,array,leaf_count(signature)),lines,
+                       "Array access requires the same live domain instance and an in-range Index")
+            # In a host loop that does not redefine the Array: its counted host copy, made at the
+            # first read of the loop. Otherwise an explicit host read of one element, counted.
+            host = var.get((HOST_COLUMNS, array))
+            if host is not None:
+                lines.append("if (!%s) {" % host["ready"])
+                lines.append("  pops::runtime::program::finite_collective::to_host(%s);" % ", ".join(
+                    (array, "&pops_finite_residency", "ctx.prepared_execution_lane()", *host["columns"])))
+                lines.append("  %s = true;" % host["ready"])
+                lines.append("}")
+            position = [0]
+            def leaf(sig, _path):
+                if host is not None:
+                    read = "%s(std::size_t((%s).offset))" % (host["columns"][position[0]], index)
+                else:
+                    read = ("pops::runtime::program::finite_collective::read<%s>(%s, std::size_t(%d), (%s).offset, "
+                            "&pops_finite_residency, ctx.prepared_execution_lane())"
+                            % (storage_type(sig), array, position[0], index))
+                name = "%s_leaf_%d" % (token, position[0])
+                position[0] += 1
+                lines.append("const %s %s = %s;" % (_TYPES[sig["vtype"]], name,
+                                                    "(%s != 0)" % read if sig["vtype"] == "bool" else read))
+                return name
+            var[value.id] = _tree(signature, leaf)
+            return
         _reject_if("!(%s).domain || !(%s).domain->visible() || !(%s).values || (%s).domain != (%s).domain || (%s).offset < 0 || "
                    "(%s).offset >= (%s).domain->size || (%s).values->size() != std::size_t((%s).domain->size)"
                    %(array,array,array,index,array,index,index,array,array,array),lines,

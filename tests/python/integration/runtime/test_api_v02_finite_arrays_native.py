@@ -20,10 +20,10 @@ from tests.python.support.public_native_profile import native_profile
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 _FLOAT_MARKER = 970113.125
-# One generated vector storage allocation (finite_collective_execution.hpp).
-_VECTOR_ALLOCATION = re.compile(
-    r"^(\s*)pops::runtime::program::finite_collective::allocate_values\("
-    r"(finite_\d+_buffer), (.+), ctx\.prepared_execution_lane\(\)\);$")
+# One generated device column allocation of an Array (finite_collective_execution.hpp).
+_COLUMN_ALLOCATION = re.compile(
+    r"^(\s*)pops::runtime::program::finite_collective::allocate_view\("
+    r"(finite_\d+_output_\d+), (.+), (\"pops_finite_array:[^\"]+\"), ctx\.prepared_execution_lane\(\)\);$")
 
 
 def _build(kind):
@@ -130,20 +130,20 @@ def test_native_finite_array_collective_fault(kind, monkeypatch, isolated_native
     def inject(*args,**kwargs):
         source = original(*args,**kwargs)
         if kind == "allocation":
-            # Domain allocation remains valid; target precisely the first vector allocation.
-            # allocate_values runs it in allocation_phase, the collective protocol of the former
-            # inline try (bad_alloc and length_error vote exhaustion, any other exception is
+            # Domain allocation remains valid; target precisely the allocation of the map's values,
+            # one device column (not its pops_finite_control: flags). allocate_view runs it in
+            # allocation_phase (bad_alloc and length_error vote exhaustion, any other exception is
             # rethrown collectively). Run that phase with the fault first: rank 1 fails inside
             # the allocation, rank 0 allocates, and both must reject the attempt together.
             lines = source.splitlines()
-            matches = [(i,m) for i,line in enumerate(lines) if (m := _VECTOR_ALLOCATION.match(line))]
+            matches = [(i,m) for i,line in enumerate(lines) if (m := _COLUMN_ALLOCATION.match(line))]
             assert len(matches) == 1
             n, m = matches[0]
-            indent, target, count = m.groups()
+            indent, target, count, label = m.groups()
             lines[n] = (indent+"pops::runtime::program::finite_collective::allocation_phase([&] { "
                         "if (ctx.prepared_execution_lane().rank() == 1) throw std::bad_alloc(); "
-                        "%s = pops::runtime::program::finite_structural::make_values(%s); }, "
-                        "ctx.prepared_execution_lane());" % (target, count))
+                        "%s = pops::runtime::program::finite_kokkos::allocate<decltype(%s)::value_type>(%s, %s); }, "
+                        "ctx.prepared_execution_lane());" % (target, target, count, label))
             return "\n".join(lines)+"\n"
         literal = "pops::Real(%s)" % _FLOAT_MARKER.hex()
         assert source.count(literal) == 1

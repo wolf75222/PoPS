@@ -155,7 +155,9 @@ def configuration_cpp(schema, block_idx, *, distributed_storage=(0, 0)):
 
 
 def _limits(capacity):
-    return _NS + "finite_structural::Limits{" + ",".join([str(capacity)] * 3) + "}"
+    # The Program's residency counters see every host image of a device Array.
+    return (_NS + "finite_structural::Limits{" + ",".join([str(capacity)] * 3)
+            + ",&pops_finite_residency}")
 
 
 def _local_storage(signature, tokens, body, prefix, capacity):
