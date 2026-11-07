@@ -58,7 +58,9 @@ Report actual GitHub status separately from local validation.
 - C++ follows `.clang-format` under clang-format 19.1.7. The `format` job of `ci.yml` checks what
   each pull request changes in the C++ files (`scripts/check_clang_format.sh --changed-since
   HEAD^1`), and the weekly `format` job of `quality.yml` the whole tree. Install that version
-  (`pipx install clang-format==19.1.7`) and check before pushing. A file you touch that conformed
+  (`pipx install clang-format==19.1.7`) and check before pushing:
+  `bash scripts/check_clang_format.sh --changed-since origin/<target branch>` checks what your
+  branch changes since its merge base with that branch. A file you touch that conformed
   before your change must still conform as a whole file, since a changed line can misalign its
   neighbours (trailing comments, escaped newlines): `clang-format -i <file>` fixes it. In a file
   that did not conform, only your changed lines count:
