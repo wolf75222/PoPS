@@ -82,6 +82,7 @@ class _ProgramBase:
     _post_sync_recording: bool
     _transaction_stores: Any
     _acceptance_guards: tuple
+    _advance_control: Any
     _frozen: bool
 
     # --- class-level constant tables (_ProgramConstants) ---

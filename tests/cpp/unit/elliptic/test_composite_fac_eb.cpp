@@ -77,9 +77,10 @@ pops::elliptic::mg::CompositeFacBuildRequest<Dim> two_level(int cells) {
     fine_lo[axis] = cells / 2;
     fine_hi[axis] = 3 * cells / 2 - 1;
   }
-  return {{request(coarse, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{domain})),
-           request(fine, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{{fine_lo, fine_hi}}))},
-          {pops::amr::RefinementRatio<Dim>{filled<Dim>(2)}}};
+  return {
+      {request(coarse, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{domain})),
+       request(fine, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{{fine_lo, fine_hi}}))},
+      {pops::amr::RefinementRatio<Dim>{filled<Dim>(2)}}};
 }
 
 template <int Dim>
@@ -141,9 +142,9 @@ TEST(test_composite_fac_eb, aperture_ghosts_are_refused) {
   inverse_volume.set_val(pops::Real(1));
   aperture_lower.set_val(pops::Real(1));
   aperture_upper.set_val(pops::Real(1));
-  EXPECT_THROW(solver.install_embedded_boundary(0, active, inverse_volume, aperture_lower,
-                                                aperture_upper),
-               std::invalid_argument);
+  EXPECT_THROW(
+      solver.install_embedded_boundary(0, active, inverse_volume, aperture_lower, aperture_upper),
+      std::invalid_argument);
 }
 
 TEST(test_composite_fac_eb, metric_after_nullspace_is_refused) {
@@ -152,18 +153,17 @@ TEST(test_composite_fac_eb, metric_after_nullspace_is_refused) {
   constexpr int Dim = 2;
   const pops::ExecutionLane lane = pops::ExecutionLane::world("tests.composite-fac.eb.order");
   pops::elliptic::mg::CompositeFacPoisson<Dim> solver(two_level<Dim>(8), lane, {}, pops::Real(1));
-  solver.install_nullspace(
-      pops::FieldNullspacePlan<Dim>{},
-      std::vector<pops::PreparedVectorDistribution<Dim>>(
-          2, pops::PreparedVectorDistribution<Dim>::replicated()));
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           std::vector<pops::PreparedVectorDistribution<Dim>>(
+                               2, pops::PreparedVectorDistribution<Dim>::replicated()));
   pops::MultiFab<Dim> active;
   pops::MultiFab<Dim> inverse_volume;
   pops::MultiFab<Dim> aperture_lower;
   pops::MultiFab<Dim> aperture_upper;
   unit_metric(solver.phi_level(0), active, inverse_volume, aperture_lower, aperture_upper);
-  EXPECT_THROW(solver.install_embedded_boundary(0, active, inverse_volume, aperture_lower,
-                                                aperture_upper),
-               std::logic_error);
+  EXPECT_THROW(
+      solver.install_embedded_boundary(0, active, inverse_volume, aperture_lower, aperture_upper),
+      std::logic_error);
 }
 
 TEST(test_composite_fac_eb, unit_metric_solves_screened_poisson) {
@@ -183,15 +183,13 @@ TEST(test_composite_fac_eb, unit_metric_solves_screened_poisson) {
     pops::MultiFab<Dim> aperture_lower;
     pops::MultiFab<Dim> aperture_upper;
     unit_metric(solver.phi_level(level), active, inverse_volume, aperture_lower, aperture_upper);
-    solver.install_embedded_boundary(level, active, inverse_volume, aperture_lower,
-                                     aperture_upper);
+    solver.install_embedded_boundary(level, active, inverse_volume, aperture_lower, aperture_upper);
     solver.rhs_level(level).set_val(pops::Real(1));
     solver.phi_level(level).set_val(pops::Real(0));
   }
-  solver.install_nullspace(
-      pops::FieldNullspacePlan<Dim>{},
-      std::vector<pops::PreparedVectorDistribution<Dim>>(
-          2, pops::PreparedVectorDistribution<Dim>::replicated()));
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           std::vector<pops::PreparedVectorDistribution<Dim>>(
+                               2, pops::PreparedVectorDistribution<Dim>::replicated()));
   const pops::SolveReport report = solver.solve();
   EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
 }
@@ -229,15 +227,13 @@ TEST(test_composite_fac_eb, interior_cut_stays_on_weighted_operator) {
         active.fab(local).copy_from_host(host);
       }
     }
-    solver.install_embedded_boundary(level, active, inverse_volume, aperture_lower,
-                                     aperture_upper);
+    solver.install_embedded_boundary(level, active, inverse_volume, aperture_lower, aperture_upper);
     solver.rhs_level(level).set_val(pops::Real(1));
     solver.phi_level(level).set_val(pops::Real(0));
   }
-  solver.install_nullspace(
-      pops::FieldNullspacePlan<Dim>{},
-      std::vector<pops::PreparedVectorDistribution<Dim>>(
-          2, pops::PreparedVectorDistribution<Dim>::replicated()));
+  solver.install_nullspace(pops::FieldNullspacePlan<Dim>{},
+                           std::vector<pops::PreparedVectorDistribution<Dim>>(
+                               2, pops::PreparedVectorDistribution<Dim>::replicated()));
   const pops::SolveReport report = solver.solve();
   EXPECT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm;
 }

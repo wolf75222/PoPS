@@ -10,6 +10,7 @@ from pops import _api
 import pops._native_selector as selector
 import pops.codegen._phases as phases
 import pops.codegen._plans as plans
+import pops.codegen.region_facts as region_facts
 
 
 def test_public_compile_selects_dimension_from_verified_resolved_domain(
@@ -26,6 +27,10 @@ def test_public_compile_selects_dimension_from_verified_resolved_domain(
 
     plan = Resolved()
     monkeypatch.setattr(plans, "ResolvedSimulationPlan", Resolved)
+    # The expected classes are checked on the verified plan before any native work (IR21).
+    monkeypatch.setattr(
+        region_facts, "check_expected_classes", lambda value: events.append(("classes", value))
+    )
     monkeypatch.setattr(
         selector,
         "select_native_dimension",
@@ -43,7 +48,7 @@ def test_public_compile_selects_dimension_from_verified_resolved_domain(
     monkeypatch.setattr(phases, "compile", compile_phase)
 
     assert _api.compile(plan) is result
-    assert events == ["verified", ("selected", 3), ("compiled", plan)]
+    assert events == ["verified", ("classes", plan), ("selected", 3), ("compiled", plan)]
 
 
 def test_public_compile_rejects_foreign_plan_before_native_selection(

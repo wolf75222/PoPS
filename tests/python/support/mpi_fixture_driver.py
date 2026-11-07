@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -37,10 +38,25 @@ def require_rank_results(directory: Path, ranks: int, expected_cases: dict[str, 
 
 def run_fixture_world(*, ranks: int, directory: Path, tests: tuple[str, ...],
                       expected_cases: dict[str, int], expected_rank_env: str,
-                      purpose: str, timeout_seconds: int = PROCESS_TIMEOUT_SECONDS) -> None:
-    """Stay outside MPI while each child receives its requested exact native world."""
+                      purpose: str, timeout_seconds: int = PROCESS_TIMEOUT_SECONDS,
+                      partition_units: str | None = None) -> None:
+    """Stay outside MPI while each child receives its requested exact native world.
+
+    ``partition_units`` is an encoded ``mpi_partition_units`` spec: the child collects every case
+    of ``tests``, proves that collection equals the spec's inventory, and runs only its units.
+    """
     if type(timeout_seconds) is not int or not 0 < timeout_seconds <= PROCESS_TIMEOUT_SECONDS:
         raise ValueError("MPI child watchdog must fit the existing 900-second ceiling")
+    from tests.python.support import mpi_partition_units
+
+    selection = []
+    if partition_units is not None:
+        spec = mpi_partition_units.validate(json.loads(partition_units))
+        if (sorted({node.split("[", 1)[0] for node in spec["inventory"]}) != sorted(tests)
+                or Counter(node.split("::", 1)[1].split("[", 1)[0] for node in spec["units"])
+                != Counter(expected_cases)):
+            raise ValueError(purpose + " MPI partition differs from its selectors or case counts")
+        selection = ["-p", "tests.python.support.mpi_partition_units"]
     try:
         from pops._native_selector import select_native_dimension
 
@@ -60,6 +76,9 @@ def run_fixture_world(*, ranks: int, directory: Path, tests: tuple[str, ...],
     environment["POPS_REQUIRE_NATIVE_TESTS"] = "1"
     environment["POPS_NATIVE_DIM"] = "2"
     environment[expected_rank_env] = str(ranks)
+    environment.pop(mpi_partition_units.ENVIRONMENT, None)
+    if partition_units is not None:
+        environment[mpi_partition_units.ENVIRONMENT] = partition_units
     bootstrap = (
         "from pops._native_selector import select_native_dimension; "
         "native=select_native_dimension(2); world=native.mpi_world(); "
@@ -69,7 +88,7 @@ def run_fixture_world(*, ranks: int, directory: Path, tests: tuple[str, ...],
         "'--junitxml='+str(receipt), *sys.argv[2:]]))"
     )
     command = [*launcher, "-n", str(ranks), sys.executable, "-u", "-c", bootstrap,
-               str(directory), *tests]
+               str(directory), *selection, *tests]
     try:
         result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True,
                                 text=True, check=False, timeout=timeout_seconds)
@@ -93,3 +112,10 @@ def run_fixture_world(*, ranks: int, directory: Path, tests: tuple[str, ...],
         purpose + " MPI%d process failed with status %d\n%s"
         % (ranks, result.returncode, output))
     require_rank_results(directory, ranks, expected_cases, purpose=purpose)
+    if partition_units is not None:
+        units = {(str(Path(owner).with_suffix("")).replace("/", "."), name)
+                 for owner, name in (node.split("::", 1) for node in spec["units"])}
+        for rank in range(ranks):
+            cases = ET.parse(directory / ("rank%d.xml" % rank)).getroot().findall(".//testcase")
+            if {(case.attrib.get("classname"), case.attrib["name"]) for case in cases} != units:
+                raise AssertionError(purpose + " MPI rank%d partition identity differs" % rank)

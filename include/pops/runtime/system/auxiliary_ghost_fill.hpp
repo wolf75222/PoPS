@@ -37,8 +37,8 @@ namespace auxiliary_ghost_detail {
 
 inline void rethrow_collective_failure(std::exception_ptr local_error, const ExecutionLane* lane,
                                        const char* message) {
-  collectively_rethrow_exception(
-      local_error, lane ? lane->communicator() : world_communicator_view(), message);
+  collectively_rethrow_exception(local_error,
+                                 lane ? lane->communicator() : world_communicator_view(), message);
 }
 
 inline std::size_t checked_multiply(std::size_t left, std::size_t right, const char* message) {

@@ -80,16 +80,16 @@ TEST(test_float32_poisson_residual, real_is_binary32_not_a_cast) {
 TEST(test_float32_poisson_residual, manufactured_periodic_mode_matches_binary64_reference) {
   const ExecutionLane lane = ExecutionLane::world("tests.float32-poisson.manufactured");
   const Box<kDim> domain{Index<kDim>{}, Index<kDim>{kCells - 1, kCells - 1}};
-  const Geometry<kDim> geometry = Geometry<kDim>::from_bounds(
-      domain, uniform_coordinate(Real{0}), uniform_coordinate(Real{1}));
+  const Geometry<kDim> geometry =
+      Geometry<kDim>::from_bounds(domain, uniform_coordinate(Real{0}), uniform_coordinate(Real{1}));
   const BoxArray<kDim> layout = BoxArray<kDim>::from_domain(domain, uniform_extent(kCells));
   const RankSpace<kDim> ranks{Index<kDim>{}, uniform_extent(1)};
   const auto distribution = Distribution<kDim>::replicated(layout, ranks);
   std::array<bool, kDim> periodic{};
   periodic.fill(true);
   const BoundaryTopology<kDim> topology = BoundaryTopology<kDim>::axis_periodic(periodic);
-  auto options = CartesianPoissonOptions<kDim>::from_topology(topology,
-                                                             CartesianBoundaryKind::dirichlet);
+  auto options =
+      CartesianPoissonOptions<kDim>::from_topology(topology, CartesianBoundaryKind::dirichlet);
   options.relative_tolerance = Real{1e-5};
   options.maximum_iterations = 32;
   CartesianPoissonSolver<kDim> solver(geometry, layout, distribution, Index<kDim>{}, topology,

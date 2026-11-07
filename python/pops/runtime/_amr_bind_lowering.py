@@ -198,7 +198,8 @@ def _install_native_hierarchy_config(
 
 
 def _install_native_tag_selection_config(config: Any, tagging: Any, *, dimension: int) -> None:
-    """Carry the exact authored Buffer, independently of numerical nesting."""
+    """Carry the tag selection: master's transition reach, or the exact authored Buffer of
+    pops.amr.tag-selection@1, independently of numerical nesting."""
     from pops.amr._resolution import ResolvedTaggingAuthority
 
     if type(tagging) is not ResolvedTaggingAuthority:
@@ -217,8 +218,14 @@ def _install_native_tag_selection_config(config: Any, tagging: Any, *, dimension
     if not hasattr(type(config), "tag_selection_contract_version") \
             or not hasattr(type(config), "tag_selection_buffer"):
         raise TypeError("native AMR config lacks pops.amr.tag-selection@1")
-    config.tag_selection_contract_version = 1
-    config.tag_selection_buffer = (cells,) * dimension
+    if tagging.selection == "refine-requests":
+        config.tag_selection_contract_version = 1
+        config.tag_selection_buffer = (cells,) * dimension
+    else:
+        # Master's Buffer already joined the transition buffers; natively the target coverage
+        # grows by the transition buffer plus the lookahead (selection 2).
+        config.tag_selection_contract_version = 2
+        config.tag_selection_buffer = (0,) * dimension
 
 
 def amr_config_from_layout(

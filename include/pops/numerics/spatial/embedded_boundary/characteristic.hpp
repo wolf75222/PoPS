@@ -30,11 +30,11 @@ concept CharacteristicNoInflowNormalModel = requires(
 };
 
 template <class Model>
-concept CharacteristicNoInflowAxisModel = requires(
-    const Model& model, const typename Model::State& interior,
-    const typename Model::State& reference, typename Model::State& ghost) {
-  { model.characteristic_no_inflow(interior, reference, 0, -1, ghost) } -> std::same_as<bool>;
-};
+concept CharacteristicNoInflowAxisModel =
+    requires(const Model& model, const typename Model::State& interior,
+             const typename Model::State& reference, typename Model::State& ghost) {
+      { model.characteristic_no_inflow(interior, reference, 0, -1, ghost) } -> std::same_as<bool>;
+    };
 
 template <int Dim>
 POPS_HD bool axis_aligned_unit_normal(const RealVector<Dim>& normal, int& axis, int& outward_sign) {
@@ -56,10 +56,11 @@ POPS_HD bool axis_aligned_unit_normal(const RealVector<Dim>& normal, int& axis, 
 
 /// Apply the model flux-Jacobian no-inflow kernel on an outward EB interface normal.
 template <int Dim, class Model>
-POPS_HD bool apply_characteristic_no_inflow_on_normal(
-    const Model& model, const typename Model::State& interior,
-    const typename Model::State& reference, const RealVector<Dim>& normal,
-    typename Model::State& ghost) {
+POPS_HD bool apply_characteristic_no_inflow_on_normal(const Model& model,
+                                                      const typename Model::State& interior,
+                                                      const typename Model::State& reference,
+                                                      const RealVector<Dim>& normal,
+                                                      typename Model::State& ghost) {
   Real mag2 = Real(0);
   for (int axis = 0; axis < Dim; ++axis) {
     if (!Kokkos::isfinite(normal[axis]))
@@ -101,8 +102,7 @@ struct FillEmbeddedCharacteristicKernel {
         exterior(cell, component) = Real(0);
       return;
     }
-    const CutCellFractions<Dim> fractions =
-        cut_cell_fractions_from_phi_cell(phi, cell, theta_min);
+    const CutCellFractions<Dim> fractions = cut_cell_fractions_from_phi_cell(phi, cell, theta_min);
     RealVector<Dim> normal{};
     if (!cut_cell_interface_normal(fractions, normal)) {
       for (int component = 0; component < Model::n_vars; ++component)
@@ -113,8 +113,7 @@ struct FillEmbeddedCharacteristicKernel {
     typename Model::State ghost{};
     for (int component = 0; component < Model::n_vars; ++component)
       interior[component] = state(cell, component);
-    if (!apply_characteristic_no_inflow_on_normal<Dim>(model, interior, reference, normal,
-                                                       ghost)) {
+    if (!apply_characteristic_no_inflow_on_normal<Dim>(model, interior, reference, normal, ghost)) {
       for (int component = 0; component < Model::n_vars; ++component)
         exterior(cell, component) = std::numeric_limits<Real>::quiet_NaN();
       return;
@@ -125,10 +124,12 @@ struct FillEmbeddedCharacteristicKernel {
 };
 
 template <int Dim, class Model, class MemorySpace>
-void fill_embedded_characteristic_no_inflow(
-    const Model& model, const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& phi,
-    const Fab<Dim, MemorySpace>& active, const typename Model::State& reference,
-    Fab<Dim, MemorySpace>& exterior, Real theta_min = kEbCutFractionFloor) {
+void fill_embedded_characteristic_no_inflow(const Model& model, const Fab<Dim, MemorySpace>& state,
+                                            const Fab<Dim, MemorySpace>& phi,
+                                            const Fab<Dim, MemorySpace>& active,
+                                            const typename Model::State& reference,
+                                            Fab<Dim, MemorySpace>& exterior,
+                                            Real theta_min = kEbCutFractionFloor) {
   if (state.ncomp() != Model::n_vars || exterior.ncomp() != Model::n_vars || phi.ncomp() != 1 ||
       active.ncomp() != 1 || !(phi.box() == state.box()) || !(active.box() == state.box()) ||
       !(exterior.box() == state.box()) || !phi.grown_box().contains(state.box().grow(1)) ||
@@ -136,19 +137,20 @@ void fill_embedded_characteristic_no_inflow(
     throw std::invalid_argument(
         "embedded characteristic no-inflow requires state, phi, active mask, and exterior on the "
         "same patch, with one phi/mask ghost");
-  for_each_cell(state.box(),
-                FillEmbeddedCharacteristicKernel<Dim, Model>{
-                    model, state.view(), phi.view(), active.view(), exterior.view(), reference,
-                    theta_min});
+  for_each_cell(state.box(), FillEmbeddedCharacteristicKernel<Dim, Model>{
+                                 model, state.view(), phi.view(), active.view(), exterior.view(),
+                                 reference, theta_min});
   device_fence();
 }
 
 template <int Dim, class Model, class MemorySpace>
-void fill_embedded_characteristic_no_inflow(
-    const Model& model, const MultiFab<Dim, MemorySpace>& state,
-    const MultiFab<Dim, MemorySpace>& phi, const MultiFab<Dim, MemorySpace>& active,
-    const typename Model::State& reference, MultiFab<Dim, MemorySpace>& exterior,
-    Real theta_min = kEbCutFractionFloor) {
+void fill_embedded_characteristic_no_inflow(const Model& model,
+                                            const MultiFab<Dim, MemorySpace>& state,
+                                            const MultiFab<Dim, MemorySpace>& phi,
+                                            const MultiFab<Dim, MemorySpace>& active,
+                                            const typename Model::State& reference,
+                                            MultiFab<Dim, MemorySpace>& exterior,
+                                            Real theta_min = kEbCutFractionFloor) {
   if (!(state.layout() == phi.layout()) || !(state.layout() == active.layout()) ||
       !(state.layout() == exterior.layout()) || !(state.distribution() == phi.distribution()) ||
       !(state.distribution() == active.distribution()) ||
@@ -156,12 +158,11 @@ void fill_embedded_characteristic_no_inflow(
       !(state.local_rank() == phi.local_rank()) || !(state.local_rank() == active.local_rank()) ||
       !(state.local_rank() == exterior.local_rank()) || state.local_size() != phi.local_size() ||
       state.local_size() != active.local_size() || state.local_size() != exterior.local_size())
-    throw std::invalid_argument(
-        "embedded characteristic no-inflow MultiFab layouts differ");
+    throw std::invalid_argument("embedded characteristic no-inflow MultiFab layouts differ");
   for (std::size_t local = 0; local < state.local_size(); ++local)
-    ::pops::nd::fill_embedded_characteristic_no_inflow(
-        model, state.fab(local), phi.fab(local), active.fab(local), reference,
-        exterior.fab(local), theta_min);
+    ::pops::nd::fill_embedded_characteristic_no_inflow(model, state.fab(local), phi.fab(local),
+                                                       active.fab(local), reference,
+                                                       exterior.fab(local), theta_min);
 }
 
 }  // namespace pops::nd

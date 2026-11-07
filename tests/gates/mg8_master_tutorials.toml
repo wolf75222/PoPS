@@ -1,0 +1,157 @@
+schema_version = 1
+gate = "mg8-master-tutorials"
+# MG8 (spec 0.3, section 18.2) and the landing plan of N5, section 6.2: every tutorial of master's
+# docs/tutorials/scalar_advection runs in CI, from this tree and from master on the same machine,
+# and its results are compared with master's before any route that it uses is removed (MG1). A
+# difference of a result is recorded at the end of this file with its causes, by its exact name;
+# a failure, a missing run or observation and a missing or unlisted output are never recorded and
+# always fail the job (CF14). The ledger only shrinks (MG6): scripts/run_mg8_tutorials.py check
+# --check-base fails when it records more than the contract of the base revision. An entry names a
+# check, not its value, which depends on the runner's CPU: it explains every later value of that
+# check, so MG8 guards a recorded result only once its cause is fixed and its entry removed.
+# ROM-101 to ROM-104 emptied this ledger before any slice that changes a route that a tutorial
+# uses (landing plan of N5, section 6.2): every result of master's tutorials is guarded.
+master = "bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7"
+directory = "docs/tutorials/scalar_advection"
+# The ConsoleMonitor template of the tutorials: these lines are their outputs at output times.
+monitor = '^step=\d+ t=\S+ dt=\S+ dU_L2=\S+ mass=\S+$'
+
+# One installed PoPS per lane. Master's MPI-enabled module compiles MPI_COMM_WORLD artifacts
+# only, so the serial tutorials need a serial module; tutorial 16 needs a Dim3 module.
+[lanes.serial-dim2]
+dimension = 2
+ranks = 1
+mpi = false
+
+[lanes.mpi-dim2]
+dimension = 2
+ranks = 2
+mpi = true
+
+[lanes.serial-dim3]
+dimension = 3
+ranks = 1
+mpi = false
+
+# Compared for every tutorial: the return code; after each pops.run call, the clock, the hierarchy
+# and every state level bitwise, and the run report; the lines that the tutorial prints, with the
+# run directory written <tutorial>; the console-monitor lines. Outputs are compared by kind:
+# npz (every array bitwise), paraview (every series in step order: timesteps and every numeric
+# array of every dataset and piece, and the presentation of each recipe), bytes, or record (kept
+# with its SHA-256, not compared, with the reason). In an identity line, the digests only are
+# not compared: identities are versioned and differ between master and the integration head.
+
+[[tutorial]]
+id = "00"
+script = "00_domain_preview.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/00_domain_preview.svg", kind = "bytes" }]
+
+[[tutorial]]
+id = "01"
+script = "01_openmp_preset_ssprk2.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/01_openmp_preset_ssprk2.npz", kind = "npz" }]
+
+[[tutorial]]
+id = "02"
+script = "02_openmp_explicit_ssprk2.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/02_openmp_explicit_ssprk2.npz", kind = "npz" }]
+
+[[tutorial]]
+id = "03"
+script = "03_mpi_preset_ssprk2.py"
+lane = "mpi-dim2"
+
+[[tutorial]]
+id = "04"
+script = "04_mpi_explicit_ssprk2.py"
+lane = "mpi-dim2"
+
+[[tutorial]]
+id = "05"
+script = "05_openmp_amr_preset_ssprk2.py"
+lane = "serial-dim2"
+
+[[tutorial]]
+id = "06"
+script = "06_openmp_amr_explicit_ssprk2.py"
+lane = "serial-dim2"
+
+[[tutorial]]
+id = "07"
+script = "07_mpi_amr_preset_ssprk2.py"
+lane = "mpi-dim2"
+
+[[tutorial]]
+id = "08"
+script = "08_mpi_amr_explicit_ssprk2.py"
+lane = "mpi-dim2"
+
+[[tutorial]]
+id = "09"
+script = "09_openmp_amr_gradient_ssprk2.py"
+lane = "serial-dim2"
+
+[[tutorial]]
+id = "10"
+script = "10_openmp_amr_synchronous_ssprk2.py"
+lane = "serial-dim2"
+
+[[tutorial]]
+id = "11"
+script = "11_openmp_runtime_parameters.py"
+lane = "serial-dim2"
+identity_lines = ["artifact identity", "slow bind identity", "fast bind identity"]
+
+[[tutorial]]
+id = "12"
+script = "12_openmp_amr_outputs.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/12_openmp_amr_outputs/*", kind = "paraview" }]
+identity_lines = ["latest identity", "time series"]
+
+[[tutorial]]
+id = "13"
+script = "13_openmp_amr_restart.py"
+lane = "serial-dim2"
+outputs = [{ pattern = "results/13_openmp_amr_restart/*", kind = "record", reason = "a checkpoint holds the identities and continuation schema of its version; the restored state is compared through the observations of the resumed run" }]
+identity_lines = ["restart identity"]
+
+[[tutorial]]
+id = "14"
+script = "14_mpi_amr_outputs.py"
+lane = "mpi-dim2"
+outputs = [{ pattern = "results/14_mpi_amr_outputs/*", kind = "paraview" }]
+identity_lines = ["latest identity", "time series"]
+
+[[tutorial]]
+id = "15"
+script = "15_openmp_convergence.py"
+lane = "serial-dim2"
+outputs = [
+  { pattern = "results/15_openmp_convergence.npz", kind = "npz" },
+  { pattern = "figures/scalar_advection_convergence.png", kind = "bytes" },
+]
+
+[[tutorial]]
+id = "16"
+script = "16_openmp_cartesian3d_ssprk2.py"
+lane = "serial-dim3"
+outputs = [{ pattern = "results/16_openmp_cartesian3d_ssprk2.npz", kind = "npz" }]
+
+# Causes of the divergences of this tree from master, one [[cause]] each: the commits that
+# introduced it (check --verify-commits proves that each is in the history and changes code
+# that the tutorials execute), the issue that owns it and the evidence that attributes it.
+# None is left: MG8-1 found four (ROM-101 to ROM-104, evidence in
+# /mnt/project-files/landing/mg8), and each was removed by restoring master's semantics on
+# master's routes; a construct of API 0.2 that its tests assert is chosen by its own name
+# (spec 0.3, adjudication section 19).
+
+# One divergence per tutorial: the exact checks that differ, their causes and their attribution,
+# "reproduced" with the verdict of the run of the attribution build that gives master's bits
+# (under /mnt/project-files), or "inferred".
+# compare fails on a difference without an entry and on a check that no longer differs, and check
+# --check-base on an entry that the base does not have, so this list only shrinks (MG6); a failure
+# is never a divergence (CF14).

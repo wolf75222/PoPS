@@ -39,6 +39,7 @@ def test_authentic_dot_all_finite_coverage_and_collective_control_flow(tmp_path)
     contracts = "include/pops/runtime/program/amr_program_context_history_checkpoint_services.inc"
     pieces = {
         "accumulator": _extract("include/pops/mesh/execution/for_each.hpp", "struct FiniteCompensatedSum"),
+        "reduced": _extract(mesh, "struct CollectiveCompensatedSum"),
         "kernel": _extract(mesh, "template <int Dim>\nstruct FiniteOwnedDotKernel"),
         "layout": _extract(mesh, "template <int Dim, class LeftSpace, class RightSpace>\nvoid require_same_layout"),
         "measure": _extract(mesh, "template <int Dim, class MemorySpace>\nvoid validate_measure"),
@@ -77,6 +78,7 @@ SCAFFOLD = r'''
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 #define POPS_HD
 using Real=double;
@@ -127,15 +129,21 @@ struct ExecutionLane {int r=0,n=1;int rank()const{return r;}int size()const{retu
 struct Identity {enum class Family{State,History,Scratch,Direct};Family family=Family::State;int direct_level=0;};
 using Family=Identity::Family;
 std::string events;bool global_overflow=false;
-double all_reduce_sum(double x,const ExecutionLane&){events+='S';return global_overflow?x*2:x;}
-// This fixture substitutes transport; real collective summaries are tested in C++.
+// This fixture substitutes transport; real collective summaries are tested in C++. dot_all makes
+// one collective, which carries either the local summary (S) or the local failure (F); only a
+// failure is then reported by the vote (V) that preceded the collective before SV20.
 namespace pops {
-Real collective_finite_compensated_sum(const FiniteCompensatedSum& local,const ExecutionLane& lane){
- const Real result=all_reduce_sum(local.value(),lane);
+@REDUCED@
+CollectiveCompensatedSum collective_finite_compensated_sum_or_failure(
+    const FiniteCompensatedSum& local,bool failed,const ExecutionLane&){
+ events+=failed?'F':'S';
+ if(failed)return {0,true};
+ const Real result=global_overflow?local.value()*2:local.value();
  if(!local.finite()||!std::isfinite(result))throw std::overflow_error("collective overflow");
- return result;
+ return {result,false};
 }
 }
+using pops::CollectiveCompensatedSum;
 struct Base {
  using field_type=Field;ExecutionLane lane;
  const ExecutionLane& prepared_execution_lane()const{return lane;}
@@ -186,45 +194,45 @@ template<class F>void refuses(F fn,const std::string&expected){events.clear();bo
 int main(){
  const double nan=std::numeric_limits<double>::quiet_NaN();
  Field q{{{2,3}}};Uniform u;
- events.clear();ok(u.dot_all(7,q,q)==13&&events=="PVS");
+ events.clear();ok(u.dot_all(7,q,q)==13&&events=="PS");
  for(int fault=0;fault<5;++fault){Field bad=q;
    if(fault==0)bad.width=1;if(fault==1)bad.layout_id=2;
    if(fault==2)bad.distribution_id.id=2;if(fault==3)bad.rank_id=1;if(fault==4)bad.ghosts_id=1;
-   refuses([&]{u.dot_all(7,q,bad);},"PV");}
- Field poison{{{2,nan}}};refuses([&]{u.dot_all(7,poison,poison);},"PV");
+   refuses([&]{u.dot_all(7,q,bad);},"PFV");}
+ Field poison{{{2,nan}}};refuses([&]{u.dot_all(7,poison,poison);},"PFV");
  Field huge{{{1e308,1e308}}},ones{{{1,1}}};
- refuses([&]{u.dot_all(7,huge,ones);},"PV");
- refuses([&]{u.dot_all(7,huge,huge);},"PV");
+ refuses([&]{u.dot_all(7,huge,ones);},"PFV");
+ refuses([&]{u.dot_all(7,huge,huge);},"PFV");
  Field global{{{1e308,0}}};global_overflow=true;
- refuses([&]{u.dot_all(7,global,ones);},"PVS");global_overflow=false;
+ refuses([&]{u.dot_all(7,global,ones);},"PS");global_overflow=false;
  u.mask.cells={{0}};ok(u.dot_all(7,poison,poison)==0);
- u.mask.cells={{nan}};refuses([&]{u.dot_all(7,q,q);},"PV");u.mask.cells={{1}};
+ u.mask.cells={{nan}};refuses([&]{u.dot_all(7,q,q);},"PFV");u.mask.cells={{1}};
  q.distribution_id.replica=true;u.mask.distribution_id.replica=true;u.lane.n=2;u.lane.r=1;
  ok(u.dot_all(7,q,q)==0);
- poison.distribution_id.replica=true;refuses([&]{u.dot_all(7,poison,poison);},"PV");
+ poison.distribution_id.replica=true;refuses([&]{u.dot_all(7,poison,poison);},"PFV");
  u.lane.r=0;ok(u.dot_all(7,q,q)==13);
  q.distribution_id.replica=false;u.mask.distribution_id.replica=false;u.lane={};
  Facade f;f.levels={q,q};f.coverage={Field{{{0}}},Field{{{1}}}};for(auto& m:f.coverage)m.width=1;AMR a(f);
- events.clear();ok(a.dot_all(7,f.levels[0],f.levels[0])==13&&events=="VS");
+ events.clear();ok(a.dot_all(7,f.levels[0],f.levels[0])==13&&events=="S");
  ok(f.coverage_queries==2);
  f.active={Field{{{1}}},Field{{{0}}}};for(auto& m:f.active)m.width=1;ok(a.dot_all(7,f.levels[0],f.levels[0])==0);f.active.clear();
  f.levels[0].cells={{nan,nan}};ok(a.dot_all(7,f.levels[0],f.levels[0])==13);
- f.levels[1].cells={{nan,3}};refuses([&]{a.dot_all(7,f.levels[0],f.levels[0]);},"V");
+ f.levels[1].cells={{nan,3}};refuses([&]{a.dot_all(7,f.levels[0],f.levels[0]);},"FV");
  f.levels={q,q};f.coverage[0].layout_id=2;
- refuses([&]{a.dot_all(7,f.levels[0],f.levels[0]);},"V");f.coverage[0].layout_id=1;
+ refuses([&]{a.dot_all(7,f.levels[0],f.levels[0]);},"FV");f.coverage[0].layout_id=1;
  a.selected.family=Family::Direct;a.selected.direct_level=1;
  ok(a.dot_all(7,f.levels[1],f.levels[1])==13);
  a.selected.family=Family::State;for(auto& field:f.levels)field.distribution_id.replica=true;
  for(auto& mask:f.coverage)mask.distribution_id.replica=true;a.lane={1,2};
  ok(a.dot_all(7,f.levels[0],f.levels[0])==0);
  a.lane.r=0;ok(a.dot_all(7,f.levels[0],f.levels[0])==13);
- // These negatives must fail before the simulated sum. Removing the access
- // guard would let classify/resolve silently substitute the real State instead.
+ // These negatives must send their failure, never a summary, on the one collective, then report
+ // it. Removing the access guard would let classify/resolve silently substitute the real State.
  Field same_contract=f.levels[0];
- refuses([&]{a.dot_all(7,same_contract,f.levels[0]);},"V");
- refuses([&]{a.dot_all(7,f.levels[0],same_contract);},"V");
+ refuses([&]{a.dot_all(7,same_contract,f.levels[0]);},"FV");
+ refuses([&]{a.dot_all(7,f.levels[0],same_contract);},"FV");
  a.revoked=&f.levels[0];
- refuses([&]{a.dot_all(7,f.levels[0],f.levels[0]);},"V");
+ refuses([&]{a.dot_all(7,f.levels[0],f.levels[0]);},"FV");
  a.revoked=nullptr;
  std::cout<<"checks="<<checks<<"\n";
 }

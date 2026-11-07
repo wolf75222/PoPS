@@ -8,7 +8,9 @@ A tree hash is the id of the git tree that holds exactly the files of one part o
 (``cf0_paths.toml``: the core paths, or the native component tree), at their repository paths; the
 empty tree when the part has no file, as the native component tree at b6e64c1d. Two trees have the
 same hash exactly when the part has the same files with the same contents and modes. FC8 records
-these two hashes at a freeze.
+these two hashes at a freeze. The natives of the CF0 placement list (``cf0_native_placement.toml``)
+still sit in core paths, so the core tree hash covers them; a frozen path that a case touches is
+reported with the native it holds, and the issue and phase that move it (IR24).
 
 Trees are built with a temporary index in a temporary object directory that borrows the
 repository's objects, so a check writes nothing into the repository.
@@ -112,6 +114,12 @@ class ObjectStore:
             self.env = saved
 
 
+def placed_natives() -> dict[str, str]:
+    """path -> "<id>, <issue>, Phase <n>" for each file of the CF0 placement list."""
+    return {rel: "%s, %s, Phase %d" % (native["id"], native["issue"], native["phase"])
+            for native in scan.load_placement() for rel in native["files"]}
+
+
 @dataclasses.dataclass(frozen=True)
 class FrozenHashes:
     core: str
@@ -151,7 +159,10 @@ class Check:
         if self.without_case is not None:
             lines.append("  without the case: core %s, native %s"
                          % (self.without_case.core, self.without_case.native))
-        lines.extend("  frozen path in the case: %s" % path for path in self.frozen_paths)
+        natives = placed_natives()
+        for path in self.frozen_paths:
+            placed = " (CF0 placement: %s)" % natives[path] if path in natives else ""
+            lines.append("  frozen path in the case: %s%s" % (path, placed))
         return "\n".join(lines)
 
 

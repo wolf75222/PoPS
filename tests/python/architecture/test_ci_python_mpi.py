@@ -22,7 +22,8 @@ import json,os,pathlib,sys,xml.etree.ElementTree as ET
 assert sys.stdin.read()==''
 path=sys.argv[-1]
 with open(os.environ['LAUNCH_LOG'],'a') as output:
-    output.write(json.dumps({'path':path,'argv':sys.argv[1:]})+'\n')
+    output.write(json.dumps({'path':path,'argv':sys.argv[1:],
+                             'units':os.environ.get('POPS_CI_MPI_TEST_UNITS')})+'\n')
 if path==os.environ.get('FAIL_PATH'):
     raise SystemExit(int(os.environ['FAIL_STATUS']))
 reports=[arg for arg in sys.argv if arg.startswith('--junitxml=')]
@@ -45,13 +46,14 @@ if reports:
 def test_exact_groups_cover_all_declared_contracts_and_nodes_with_existing_caps():
     plan = runner.make_plan()
     assert (len(plan['groups']), plan['contract_count'], plan['orchestrator_count'],
-            plan['entrypoint_count']) == (130, 131, 29, 102)
-    assert plan['parent_launch_count'] == 155
+            plan['entrypoint_count']) == (154, 131, 29, 102)
+    assert plan['parent_launch_count'] == 191
     launches = [launch for group in plan['groups'] for launch in group['launches']]
-    assert len({(launch['path'], launch.get('parent_node', '')) for launch in launches}) == 155
+    assert len({(launch['path'], launch.get('parent_node', launch.get('partition_id', '')))
+                for launch in launches}) == 191
     assert len({launch['path'] for launch in launches}) == 131
     pairs = [row for row in plan['groups'] if row['group'].startswith('worlds-')]
-    assert len(pairs) == 25
+    assert len(pairs) == 37
     for pair in pairs:
         assert len(pair['launches']) == 2
         assert [row['path'][-7:] for row in pair['launches']] == ['mpi1.py', 'mpi2.py']
@@ -112,10 +114,96 @@ def test_partition_contract_cannot_omit_or_invent_native_coverage(mutation, fami
         runner.make_plan(manifest)
 
 
+PARTITIONED_ENTRYPOINTS = (
+    'test_api_v02_coupled_methods_native_mpi2', 'test_api_v02_implicit_derivatives_mpi2',
+    'test_api_v02_original_field_recovery_native_mpi2',
+    'test_api_v02_original_field_typed_recovery_native_mpi2', 'test_api_v02_relaxed_multiblock_native_mpi2',
+    'test_api_v14_distributed_derivatives_mpi2',
+)
+
+
+def test_ranked_partitions_split_each_receiver_into_an_exact_disjoint_cover():
+    from tests.python.support import mpi_partition_units
+
+    entries = {row['path']: row for row in runner.selection.manifest_python_mpi_entrypoints(
+        runner.selection.load_manifest()) if 'partitions' in row}
+    assert sorted(path.rsplit('/', 1)[1][:-3] for path in entries) == list(PARTITIONED_ENTRYPOINTS)
+    launches = [launch for group in runner.make_plan()['groups'] for launch in group['launches']
+                if launch['kind'] == 'ranked' and 'partition_id' in launch]
+    assert len(launches) == 18
+    for path, entry in entries.items():
+        owned = [launch for launch in launches if launch['path'] == path]
+        assert [launch['partition_id'] for launch in owned] == sorted(row['id'] for row in entry['partitions'])
+        inventory = owned[0]['inventory']
+        units = [node for launch in owned for node in launch['units']]
+        assert sorted(units) == sorted(inventory) and len(set(units)) == len(units)
+        assert all(node.startswith(entry['receiver'] + '::') for node in inventory)
+        assert "expected_cases=%d," % len(inventory) in (runner.ROOT / path).read_text()
+        for launch in owned:
+            assert launch['inventory'] == inventory
+            assert (launch['timeout_seconds'], launch['nproc']) == (1200, 2)
+            assert mpi_partition_units.validate({'partition': launch['partition_id'], 'inventory': inventory,
+                                                 'units': launch['units']})['units'] == launch['units']
+
+
+@pytest.mark.parametrize('mutation', ('omit_case', 'duplicate_case', 'foreign_case', 'malformed_case', 'single',
+                                      'bad_identity', 'unknown_field', 'empty_units'))
+def test_ranked_partition_contract_cannot_omit_duplicate_or_invent_cases(mutation):
+    manifest = copy.deepcopy(runner.selection.load_manifest())
+    suite = next(row for row in manifest['python']['suite'] if row['name'] == 'pops_python_integration_mpi')
+    row = next(row for row in suite['mpi_entrypoints']
+               if row['path'].endswith('test_api_v02_implicit_derivatives_mpi2.py'))
+    partitions = row['partitions']
+    if mutation == 'omit_case':
+        partitions[0]['nodes'].pop()
+    elif mutation == 'duplicate_case':
+        partitions[1]['nodes'][0] = partitions[0]['nodes'][0]
+    elif mutation == 'foreign_case':
+        partitions[0]['nodes'][0] = 'test_unowned_case[jvp]'
+    elif mutation == 'malformed_case':
+        partitions[0]['nodes'][0] = 'test_native_implicit_relation_derivatives[jvp] '
+    elif mutation == 'single':
+        partitions[:] = [{'id': 'whole', 'nodes': [node for row in partitions for node in row['nodes']]}]
+    elif mutation == 'bad_identity':
+        partitions[0]['id'] = 'Derivatives-Base'
+    elif mutation == 'unknown_field':
+        partitions[0]['timeout_seconds'] = 2400
+    else:
+        partitions[0]['nodes'] = []
+    with pytest.raises(SystemExit, match='MPI entrypoint partition'):
+        runner.make_plan(manifest)
+
+
+def test_run_launches_hand_each_ranked_partition_only_its_declared_units(tmp_path, monkeypatch):
+    from tests.python.support import mpi_partition_units
+
+    assert runner.TEST_UNITS_ENVIRONMENT == mpi_partition_units.ENVIRONMENT
+    groups = [group for group in runner.make_plan()['groups']
+              if group['group'].startswith('ranked-test_api_v02_coupled_methods_native_mpi2-')
+              or group['group'] == 'ranked-test_api_v02_kinetic_nd_mpi2']
+    assert len(groups) == 5
+    environment = fake_timeout_environment(tmp_path / 'tools')
+    environment[runner.TEST_UNITS_ENVIRONMENT] = '{"stale":"spec"}'
+    for group in groups:
+        assert runner.run_launches(group, sys.executable, environment, tmp_path / group['group']) == 0
+    launched = [json.loads(line) for line in (tmp_path / 'tools/launches.jsonl').read_text().splitlines()]
+    assert len(launched) == len(groups)
+    for group, row in zip(groups, launched, strict=True):
+        launch, = group['launches']
+        assert row['path'] == launch['path']
+        if 'partition_id' in launch:
+            assert mpi_partition_units.from_environment({mpi_partition_units.ENVIRONMENT: row['units']}) == {
+                'partition': launch['partition_id'], 'inventory': launch['inventory'], 'units': launch['units']}
+        else:
+            assert row['units'] is None
+    monkeypatch.setenv(runner.TEST_UNITS_ENVIRONMENT, '{"stale":"spec"}')
+    assert runner.TEST_UNITS_ENVIRONMENT not in runner.installed_environment()
+
+
 def test_partition_parent_xml_requires_exact_owned_module_and_selected_node(tmp_path):
     launches = [launch for group in runner.make_plan()['groups'] for launch in group['launches']
                 if 'parent_node' in launch]
-    assert len(launches) == 30
+    assert len(launches) == 60
     for launch in launches:
         root = ET.Element('testsuite')
         case = ET.SubElement(root, 'testcase', name=launch['parent_node'],
@@ -162,7 +250,7 @@ def test_plan_cli_exports_the_same_complete_dynamic_matrix(tmp_path):
     values = dict(line.split('=', 1) for line in outputs.read_text().splitlines())
     matrix = json.loads(values['matrix'])
     assert matrix['include'] == [{'group': row['group']} for row in plan['groups']]
-    assert values['group_count'] == '130'
+    assert values['group_count'] == '154'
 
 
 def wheel_artifact(tmp_path):

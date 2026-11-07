@@ -64,6 +64,7 @@
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // owned immutable RuntimeParams
 #include <pops/runtime/program/accepted_exchange.hpp>
+#include <pops/runtime/program/advance_run.hpp>
 #include <pops/runtime/program/moving_interval_geometry.hpp>
 #include <pops/runtime/program/collective_step_rejection.hpp>
 #include <pops/runtime/program/continuation_authority.hpp>
@@ -630,6 +631,12 @@ struct ProgramRuntimeState {
   /// min(native CFL, program bound). EMPTY when no Program exports a bound, so the native CFL is used
   /// unchanged. The closure owns no Python callback and executes entirely in the compiled module.
   std::function<Real(Real)> dt_bound_;
+  /// Attempt budget (Retry.max_attempts, spec 0.3 T38) of the elaborated Advance whose compiled run
+  /// the installed artifact declares; 0 when the Program has no compiled Advance control. Read only
+  /// by System::run_advance.
+  int advance_max_attempts_ = 0;
+  /// Fixed-proposal segment that the next System::run_advance continues (advance_run.hpp).
+  AdvanceSegment advance_segment_{};
   /// GLOBAL macro-step cadence (ADC-411): substeps n partitions one representable accepted window;
   /// stride M runs the program once per M macro-steps (hold-then-catch-up). The accepted dt arguments
   /// are retained as reproducible left-folded provenance, while one prepared facade endpoint owns the
@@ -805,6 +812,8 @@ struct ProgramRuntimeState {
     AmrContinuationRematerializer continuation_rematerializer;
 
     std::function<Real(Real)> dt_bound;
+    int advance_max_attempts = 0;
+    AdvanceSegment advance_segment{};
     std::uint64_t generation = 0;
     std::string installed_hash;
     std::vector<std::array<std::uint64_t, 4>> operator_authorities;
@@ -995,6 +1004,8 @@ struct ProgramRuntimeState {
     continuation_rematerializer_ = nullptr;
 
     dt_bound_ = nullptr;
+    advance_max_attempts_ = 0;
+    advance_segment_ = {};
     installed_hash_.clear();
     operator_authorities_.clear();
     history_replay_authorities_.clear();
@@ -1026,6 +1037,8 @@ struct ProgramRuntimeState {
                                        continuation_rematerializer_,
 
                                        dt_bound_,
+                                       advance_max_attempts_,
+                                       advance_segment_,
                                        step_install_generation_,
                                        installed_hash_,
                                        operator_authorities_,
@@ -1078,6 +1091,8 @@ struct ProgramRuntimeState {
     continuation_rematerializer_ = std::move(snapshot.continuation_rematerializer);
 
     dt_bound_ = std::move(snapshot.dt_bound);
+    advance_max_attempts_ = snapshot.advance_max_attempts;
+    advance_segment_ = snapshot.advance_segment;
     step_install_generation_ = snapshot.generation;
     installed_hash_ = std::move(snapshot.installed_hash);
     operator_authorities_ = std::move(snapshot.operator_authorities);

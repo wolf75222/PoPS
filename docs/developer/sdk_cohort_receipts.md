@@ -117,13 +117,37 @@ The code of the process is judged too, and recorded with what it was judged agai
   read from standard input (`<stdin>`), and any other file of a site directory (a pytest plugin
   placed there, say), are refused wherever they appear;
 - every module it imported: a committed file of the source, a file of the SDK with its installed
-  bytes, or a file of the interpreter.
+  bytes, or a file of the interpreter that the environment's manifests record (below).
 
 The interpreter is its standard library (the base interpreter's) and its site directories
 (`site.getsitepackages()`, and the user site when it is enabled), nothing else. A script at the
 root of a prefix or in its `bin/` is foreign, so a receiver runs pytest as `python -m pytest`,
 not through the `pytest` console script. A receipt is therefore written by a committed receiver
 started from a known entry, never by an ad hoc script.
+
+A module of a site directory can drive a receiver without a frame of its own: a
+`functools.partial` bound as a pytest hook is called from pluggy's frame. So every file of the
+interpreter that a module or a frame of the driver comes from is judged against the manifests
+of the environment (`process.code.interpreter_files`): the `RECORD` of each distribution
+installed in a site directory (or a legacy egg's `installed-files.txt`, which records no digest)
+and, in a conda environment, the `conda-meta` of its prefix, which lists the standard library
+too. For a venv, such as a qualification prefix, that is the `conda-meta` of the environment it
+is made from. A file is recorded when its bytes have a digest one of them records; a file conda
+rewrote when it linked its package is compared with `sha256_in_prefix`. Refused, wherever they
+come from:
+
+- a file of a site directory that no manifest lists: a plugin placed there, or a module dropped
+  inside an installed package;
+- a file whose bytes match none of the digests its manifests record;
+- in a conda environment, a file in or beside its standard library that `conda-meta` does not
+  list (a record that cannot be read in full lists nothing).
+
+A distribution that lists no installed file (a system package manager's install, such as a
+Debian package, which carries no `RECORD`; a `SOURCES.txt` names the files of a source tree) is
+believed for the top-level names its `top_level.txt` declares, and the receipt names it and its
+distribution; a module of one that declares no name is refused like any file no manifest lists.
+Outside a conda environment, the standard library is believed, with any file placed beside it
+(`sitecustomize`, say).
 
 Closing the receipt also records the process (interpreter, environment variables that select
 code, the hash of the harness itself), the backend reported by the loaded native leaf, all mapped
@@ -138,13 +162,14 @@ holds the reference receivers: M01 in `System` and the finite AMR case in `AmrSy
 when every rule holds:
 
 - the receipt is self-consistent (its id is the digest of its content), of the current schema
-  (`pops.receipt@4`: a receipt written under earlier rules is refused) and its levels follow from
+  (`pops.receipt@5`: a receipt written under earlier rules is refused) and its levels follow from
   its stages; this is no signature, so a receipt is evidence only as far as the files and the
   commands that wrote it are trusted;
 - it is a PoPS runtime receipt that reaches the required level, closed without failure;
 - no overlay was seen: clean source, wheel installation coherent with it, lease held, the
   committed harness, a committed entry and driver and committed source modules, no module from
-  outside the source, the SDK and the interpreter, `pops` and every `pops.*` module loaded from
+  outside the source, the SDK and the interpreter, every file of the interpreter recorded by the
+  environment's manifests with its bytes, `pops` and every `pops.*` module loaded from
   the SDK with its exact bytes, every mapped SDK file (the native leaf included) with its SDK
   bytes and not deleted, no `POPS_NATIVE_VARIANTS_ROOT` outside the SDK, no `POPS_INCLUDE` with
   other headers, no preloaded library, and every artifact DSO the file that was hashed;
@@ -181,11 +206,19 @@ the cohort lives in a fresh qualification prefix made from the retained wheel.
    `prefix` makes a venv of the build environment's interpreter (`--system-site-packages`, so a
    conda environment's NumPy and pytest stay visible), installs the wheel alone, proves the
    installation byte-identical to the wheel and verifies its native leaf.
-5. Run the receivers of the lot with that interpreter and `env -u PYTHONPATH`, writing their
+5. Judge the files of that interpreter: `"$PY" -I scripts/qualification_receipt.py
+   judge-interpreter` judges every code file of its standard library and site directories that
+   an import reaches, as a receipt would if a receiver loaded it, lists each one a receipt would
+   refuse and exits 1 when there is one. It leaves out, and lists, the SDK, which `verify` judges,
+   every copy that the import of its name does not reach, such as the build environment's `pops`
+   and the sibling leaves restored there after pip, behind the prefix's own, and every file that
+   no import names, such as a module built for another Python. Two layouts escape it (see
+   Limits). It takes seconds, where a refused receipt shows only once its receiver has run.
+6. Run the receivers of the lot with that interpreter and `env -u PYTHONPATH`, writing their
    receipts; for the reference receivers:
    `env -u PYTHONPATH PYTHONNOUSERSITE=1 POPS_NATIVE_DIM=2 POPS_CI_PYTEST_TIMINGS_DIR="$OUT" "$PY"
    -m pytest tests/python/integration/runtime/test_qualification_receipt_native.py`.
-6. Admit each receipt: `"$PY" -I scripts/qualification_receipt.py check RECEIPT --cohort
+7. Admit each receipt: `"$PY" -I scripts/qualification_receipt.py check RECEIPT --cohort
    "$SITE/.pops-sdk/cohort.json" --require R --rehash`. Archive the cohort record, the receipts
    and the exact commands with the lot's handoff.
 
@@ -204,19 +237,37 @@ the cohort lives in a fresh qualification prefix made from the retained wheel.
   `prefix` is a follow-up.
 - The lease protects only the installation it names; the compilation cache (`POPS_CACHE_DIR`) is
   identified by content in each receipt, not leased.
-- Overlay detection covers the import system, the entry and the driver, the native selector, the
-  header override and `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES`; it does not prove the absence of code
-  injected by other means. Code that lies about its own file (compiled under a false file name, a
-  sourceless `.pyc`) and a harness patched in memory by code the receipt trusts are outside what
-  a receipt sees. The interpreter's own files are seen and believed: a receipt records the
-  modules they hold and the command line (`-p` plugins included) but hashes none of them. Code
-  placed in the standard library or inside an installed package, a `.pth` file, `sitecustomize`,
-  and a module of a site directory that changes committed code before the receiver runs (from a
-  pytest plugin's `pytest_configure`, say) therefore pass as the interpreter; a frame of such a
-  module on the driver, or a receiver it calls from `atexit` or a thread, is refused. Like a
-  receipt written by hand, these forge a receipt rather than drive it. A qualification prefix
-  made by `prefix` holds the retained wheel and nothing else beside the interpreter's own
-  packages.
+- Overlay detection covers the import system, the entry and the driver, the files of the
+  interpreter, the native selector, the header override and `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES`;
+  it does not prove the absence of code injected by other means. Code that lies about its own file
+  (compiled under a false file name, a sourceless `.pyc`, bytecode cached beside a recorded
+  source) and a harness patched in memory by code the receipt trusts are outside what a receipt
+  sees. The frame rule alone refuses only a module that is on the driver; a module that hands
+  pytest a callable without a frame of its own is refused because its file is no manifest's. What
+  no manifest records stays believed: the lines of a `.pth` file, which run at startup without a
+  module of their own, the modules of a distribution that lists no file (Debian's `setuptools` and
+  its `_distutils_hack`, say), the standard library outside a conda environment and any file
+  placed beside it, and a manifest rewritten to match changed files. Like a receipt written by
+  hand, these forge a receipt rather than drive it. A qualification prefix made by `prefix` holds
+  the retained wheel and nothing else beside the interpreter's own packages.
+- An environment can be refused although nothing was placed in it. A system package that lists
+  no installed file and declares no top-level name (a package built without setuptools writes no
+  `top_level.txt`: Debian's `packaging`, `pyparsing` and `wheel` declare none) is refused as soon
+  as a receiver loads one of its modules. virtualenv and `uv venv` put a `_virtualenv.py` that no
+  manifest records in the site directory they make, and it runs at startup. A receiver therefore
+  runs where pip or conda installed what it loads, in a venv made by `python -m venv`, as
+  `prefix` makes it; `judge-interpreter` shows such files before a receiver runs.
+- `judge-interpreter` resolves each top-level name as `PathFinder` does, so two layouts escape
+  it. In a legacy namespace package, whose `__init__.py` calls `pkgutil.extend_path` or
+  `pkg_resources.declare_namespace`, with a portion in each of two site directories, the finder
+  stops at the first portion and the other is listed as masked, although `extend_path` adds it
+  to the package's `__path__` and an import of one of its submodules loads it. A file that the
+  walk meets under two names, through a link, is taken under the first: when that name is masked
+  or names no module, the file is listed and not judged, even if an import reaches it under the
+  other. A receipt still judges such a file, and refuses it if no manifest records it, when a
+  receiver loads it.
 - The MPI and hardware lanes of CI still start their processes with `python -c`; a receiver run
   there is refused at E until they start from a committed file, as `ci_python_dimensions.py`
-  does.
+  does. The MPI lane also installs its Python stack with apt (`python3-packaging`,
+  `python3-pytest`...): a receiver there will need pip's packages, or a reading of dpkg's records
+  (`/var/lib/dpkg/info/*.md5sums`) like the one of `conda-meta`.

@@ -156,6 +156,7 @@ class _CodegenMixin(_HyperbolicModel):
         native_field_roles: Any = None,
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
+        native_route: Any = None,
     ) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.emit_cpp_native_loader."""
         return _cg_compile().emit_cpp_native_loader(
@@ -167,6 +168,7 @@ class _CodegenMixin(_HyperbolicModel):
             native_field_roles=native_field_roles,
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
+            native_route=native_route,
         )
 
     def compile_native(
@@ -237,6 +239,7 @@ class _CodegenMixin(_HyperbolicModel):
         _native_field_roles: Any = None,
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
+        _native_route: Any = None,
     ) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.compile_model."""
         return _cg_compile().compile_model(
@@ -254,6 +257,7 @@ class _CodegenMixin(_HyperbolicModel):
             _native_field_roles=_native_field_roles,
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
+            _native_route=_native_route,
         )
 
     def emit_cpp_elliptic(

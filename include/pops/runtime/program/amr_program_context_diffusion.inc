@@ -9,6 +9,30 @@ void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_s
                                           std::string_view temporal_family = {},
                                           const RhsInputTrace* input_trace = nullptr,
                                           Real* transport_frequency = nullptr) const {
+  neg_div_flux_default_observed_into_(program_block, stage_state, rhs, rate_id, &faces,
+                                      temporal_family, input_trace, transport_frequency);
+}
+
+/// The same flux-only residual for a Program that reads only the incident-face frequency of its
+/// exact faces (the stability guard of a riemann.User face): no face carrier is copied.
+void neg_div_flux_default_with_frequency_into(int program_block, field_type& stage_state,
+                                              field_type& rhs, int rate_id,
+                                              std::string_view temporal_family,
+                                              const RhsInputTrace* input_trace,
+                                              Real* transport_frequency) const {
+  if (transport_frequency == nullptr)
+    throw std::invalid_argument("AMR face-frequency residual requires its frequency output");
+  neg_div_flux_default_observed_into_(program_block, stage_state, rhs, rate_id, nullptr,
+                                      temporal_family, input_trace, transport_frequency);
+}
+
+private:
+void neg_div_flux_default_observed_into_(int program_block, field_type& stage_state,
+                                         field_type& rhs, int rate_id,
+                                         std::vector<nd::FaceField<Dim>>* faces,
+                                         std::string_view temporal_family,
+                                         const RhsInputTrace* input_trace,
+                                         Real* transport_frequency) const {
   const ExecutionLane& lane = prepared_execution_lane();
   if (all_reduce_min(transport_frequency ? 1L : 0L, lane) !=
       all_reduce_max(transport_frequency ? 1L : 0L, lane))
@@ -28,13 +52,13 @@ void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_s
   std::exception_ptr copy_error;
   Real local_frequency = Real(0);
   try {
-    faces = evaluation.integrated_face_fluxes;
+    if (faces)
+      *faces = evaluation.integrated_face_fluxes;
     if (transport_frequency) {
       if (!evaluation.face_speeds_valid)
         throw std::invalid_argument("AMR transport frequency requires evaluated Cartesian faces");
       local_frequency = nd::maximum_incident_face_frequency(
-          stage_state, evaluation.face_speed_bounds, geometry(),
-          evaluation.face_frequency_scratch);
+          stage_state, evaluation.face_speed_bounds, geometry());
     }
   } catch (...) {
     copy_error = std::current_exception();
@@ -55,6 +79,8 @@ void neg_div_flux_default_with_faces_into(int program_block, field_type& stage_s
                               FluxBasisProvider::PreparedDefaultFlux, temporal_family);
   count_kernel_();
 }
+
+public:
 
 /// A grouped partition guard can require the face envelope after its RHS has
 /// already been evaluated. Re-evaluate at the same stage without attaching an
@@ -78,8 +104,7 @@ Real evaluated_transport_frequency(int program_block, field_type& stage_state,
     if (!evaluation.face_speeds_valid)
       throw std::invalid_argument("AMR partition frequency requires evaluated Cartesian faces");
     local_frequency = nd::maximum_incident_face_frequency(
-        stage_state, evaluation.face_speed_bounds, geometry(),
-        evaluation.face_frequency_scratch);
+        stage_state, evaluation.face_speed_bounds, geometry());
   } catch (...) { error = std::current_exception(); }
   if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
     if (lane.size() == 1 && error)

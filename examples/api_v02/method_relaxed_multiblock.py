@@ -12,11 +12,11 @@ import pops
 from pops import math as pm
 from pops.amr import (AMRClockRelation, AMRExecution, AMRHierarchy, AMRRegrid,
                      AMRTagging, AMRTransfer, Buffer, ConflictPolicy,
-                     EqualityPolicy, Hysteresis, Tag)
+                     EqualityPolicy, Hysteresis, PatchLayout, Tag)
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import ConservativeLinear, StateTransfer
 from pops.mesh import CartesianGrid
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
@@ -59,7 +59,7 @@ def build_t10_multiblock(numerical_flux, *, cells=(32, 16), temporal_ratio=2,
         plan = DiscretizationPlan()
         plan.rates.add(rate, finite_volume)
         plan.boundaries.add(TransportBoundarySet({
-            boundaries.x_min: Inflow(state=subject, value=(0.,)),
+            boundaries.x_min: Inflow(state=subject, value=(0.,), trace="prescribed"),
             boundaries.x_max: Outflow(state=subject),
             boundaries.y_min: Outflow(state=subject),
             boundaries.y_max: Outflow(state=subject),
@@ -95,7 +95,7 @@ def build_t10_multiblock(numerical_flux, *, cells=(32, 16), temporal_ratio=2,
         p.step_strategy(FixedDt(h))
     case.program(p)
     transfer = AMRTransfer()
-    for subject in subjects: transfer.state(subject, StateTransfer())
+    for subject in subjects: transfer.state(subject, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     from pops.params import RuntimeParam
     threshold = case.param(RuntimeParam("refine_threshold", default=.5))
     tags = tuple(Tag(pm.ValueExpr(subject)["q"] > case.value(threshold)) for subject in subjects)
@@ -105,9 +105,12 @@ def build_t10_multiblock(numerical_flux, *, cells=(32, 16), temporal_ratio=2,
                  AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)))
     layout = AMR(grid=CartesianGrid(frame=frame, cells=cells),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(*tags, Buffer(cells=1)),
+        tagging=AMRTagging(rules=(*tags, Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
-        regrid=AMRRegrid.frozen(), transfer=transfer, execution=execution)
+        regrid=AMRRegrid.frozen(), transfer=transfer, execution=execution,
+        # A distributed multi-block interface needs one owner per patch: the default
+        # layout would replicate the coarse level on every MPI rank.
+        patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=16))
     x, y = np.meshgrid((np.arange(cells[0])+.5)/cells[0], (np.arange(cells[1])+.5)/cells[1])
     initial = {}
     for i, subject in enumerate(subjects):

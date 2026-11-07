@@ -327,10 +327,11 @@ concept ExactPrimitiveToConservativeModel =
       { model.to_conservative(primitive) } -> std::same_as<typename Model::State>;
     };
 
-/// A prescribed boundary state is a Riemann trace, not a ghost-cell value.
-/// The ghost extension remains available to reconstruction and diffusion; only
-/// the exterior reconstructed trace is replaced here, before model
-/// admissibility and numerical-flux checks.
+/// On a fixed-state face that prescribes its exterior trace (with_prescribed_trace_faces), the
+/// prescribed boundary state is a Riemann trace, not a ghost-cell value. The ghost extension remains
+/// available to reconstruction and diffusion; only the exterior reconstructed trace is replaced
+/// here, before model admissibility and numerical-flux checks. Another fixed-state face keeps the
+/// reconstructed trace of its mirrored ghost 2g - u (D9).
 template <int Dim>
 struct PrescribedFaceTrace {
   Geometry<Dim> geometry;
@@ -748,6 +749,27 @@ class PreparedHyperbolicBoundary {
   const std::array<bool, 2 * Dim>& omitted_interface_faces() const noexcept {
     return omitted_interface_faces_;
   }
+  /// The fixed-state faces whose prescribed state is also the exterior Riemann trace of the
+  /// numerical flux (PrescribedFaceTrace). The other fixed-state faces leave that trace to the
+  /// reconstruction of their mirrored ghost. The library sets these faces when it lowers a
+  /// boundary condition; the law of each face stays its own.
+  PreparedHyperbolicBoundary with_prescribed_trace_faces(const std::vector<int>& ordinals) const {
+    std::array<bool, 2 * Dim> prescribed{};
+    for (int ordinal : ordinals) {
+      if (ordinal < 0 || ordinal >= 2 * Dim ||
+          faces_[static_cast<std::size_t>(ordinal)].law != HyperbolicBoundaryLaw::FixedState ||
+          prescribed[static_cast<std::size_t>(ordinal)])
+        throw std::invalid_argument(
+            "every face that prescribes its exterior trace must be one unique fixed-state face");
+      prescribed[static_cast<std::size_t>(ordinal)] = true;
+    }
+    PreparedHyperbolicBoundary copy(*this);
+    copy.prescribed_trace_faces_ = prescribed;
+    return copy;
+  }
+  const std::array<bool, 2 * Dim>& prescribed_trace_faces() const noexcept {
+    return prescribed_trace_faces_;
+  }
   void require_unreserved_boundary_flux_face(int axis, int side) const {
     (void)face(axis, side);
     if (omitted_interface_faces_[static_cast<std::size_t>(2 * axis + (side > 0 ? 1 : 0))])
@@ -858,6 +880,7 @@ class PreparedHyperbolicBoundary {
                                                 corner_policy_, explicit_periodic_identifications_);
     converted.prepared_geometry_ = prepared_geometry_;
     converted.omitted_interface_faces_ = omitted_interface_faces_;
+    converted.prescribed_trace_faces_ = prescribed_trace_faces_;
     return converted;
   }
 
@@ -1191,8 +1214,9 @@ class PreparedHyperbolicBoundary {
     result.programs = device_analytic_programs_.data();
     for (int ordinal = 0; ordinal < 2 * Dim; ++ordinal) {
       const auto& prepared = faces_[static_cast<std::size_t>(ordinal)];
-      result.prescribed[ordinal] =
-          prepared.law == HyperbolicBoundaryLaw::FixedState && !omitted_interface_faces_[ordinal];
+      result.prescribed[ordinal] = prepared.law == HyperbolicBoundaryLaw::FixedState &&
+                                   prescribed_trace_faces_[ordinal] &&
+                                   !omitted_interface_faces_[ordinal];
       result.analytic[ordinal] = !prepared.analytic_state.empty();
       result.primitive[ordinal] =
           prepared.authored_representation == HyperbolicStateRepresentation::Primitive;
@@ -1698,6 +1722,7 @@ class PreparedHyperbolicBoundary {
 
   std::array<PreparedHyperbolicFace, 2 * Dim> faces_{};
   std::array<bool, 2 * Dim> omitted_interface_faces_{};
+  std::array<bool, 2 * Dim> prescribed_trace_faces_{};
   std::vector<Transform> component_transforms_;
   HyperbolicCornerPolicy corner_policy_ = HyperbolicCornerPolicy::NotRequired;
   bool explicit_periodic_identifications_ = false;

@@ -19,7 +19,7 @@ from pops.fields import (CellMidpoint, FieldBoundary, FieldDiscretization,
                          FieldProblem, bcs)
 from pops.fields.methods import CellCenteredSecondOrder
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import ConservativeLinear, StateTransfer
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.model import FieldSpace, PhysicalDimension, PhysicalSupport
 from pops.numerics import DiscretizationPlan, ProgramRealization, StateStorage
@@ -161,12 +161,12 @@ def build_stencil_extensions(*, cells=(24, 16), sample="cell", amr=True,
         subjects["marker"] = marker_block[marker]
         transfer = AMRTransfer()
         for subject in subjects.values():
-            transfer.state(subject, StateTransfer())
+            transfer.state(subject, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
         threshold = case.param(RuntimeParam("static_refinement", default=.5))
         grid = CartesianGrid(frame=frame, cells=cells,
             periodic=PeriodicAxes(frame.axes if periodic else (frame.axes[1],)))
         layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-            tagging=AMRTagging(rules=(Tag(pm.ValueExpr(marker_block[marker]) > case.value(threshold)), Buffer(cells=1)),
+            tagging=AMRTagging(rules=(Tag(pm.ValueExpr(marker_block[marker]) > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid.frozen(), transfer=transfer,
             execution=AMRExecution.synchronous() if sample == "field" else

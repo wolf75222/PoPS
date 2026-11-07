@@ -113,21 +113,39 @@ def _handle_token(domain: str, payload: Any) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedTaggingAuthority:
-    """Resolved tag graph plus the explicit spatial dilation requested by authoring."""
+    """Resolved tag graph, or refinement criterion written as regions of ``cell``, plus the
+    explicit spatial dilation requested by authoring.
+
+    ``selection`` is None for master's Buffer, whose cells join the transition buffer, and
+    ``"refine-requests"`` for API 0.2's tag selection (pops.amr.tag-selection@1).
+    """
 
     graph: Any
     buffer_cells: int
+    selection: str | None = None
 
     def __post_init__(self) -> None:
-        from pops.mesh._amr import ResolvedTaggingGraph
+        from pops.mesh._amr import ResolvedRefinementCriterion, ResolvedTaggingGraph
 
-        if type(self.graph) is not ResolvedTaggingGraph:
-            raise TypeError("ResolvedTaggingAuthority.graph must be a ResolvedTaggingGraph")
+        if type(self.graph) not in (ResolvedTaggingGraph, ResolvedRefinementCriterion):
+            raise TypeError(
+                "ResolvedTaggingAuthority.graph must be a ResolvedTaggingGraph or a "
+                "ResolvedRefinementCriterion")
         if isinstance(self.buffer_cells, bool) or not isinstance(self.buffer_cells, int) \
                 or self.buffer_cells < 0:
             raise ValueError("ResolvedTaggingAuthority.buffer_cells must be an integer >= 0")
+        if self.selection is not None and self.selection != "refine-requests":
+            raise ValueError(
+                "ResolvedTaggingAuthority.selection must be None or 'refine-requests'")
 
     def canonical_identity(self) -> dict[str, Any]:
+        if self.selection is None:
+            return {
+                "schema_version": 1,
+                "authority_type": "resolved_amr_tagging",
+                "graph": self.graph.canonical_identity(),
+                "buffer_cells": self.buffer_cells,
+            }
         return {
             "schema_version": 2,
             "authority_type": "resolved_amr_tagging",
@@ -238,6 +256,16 @@ class AMRTaggingResolutionContext:
         if frame != "model" and frame != self.layout_plan.normalized(layout).geometry.frame_id:
             raise ValueError("AMR indicator state frame differs from its assigned layout frame")
         return layout
+
+    def admit_criterion_state(self, state: Handle) -> None:
+        """Refuse a state that a refinement region reads but this adaptive layout does not own."""
+        if not isinstance(state, Handle) or state.kind != "state" or not state.is_resolved:
+            raise TypeError("a refinement region reads owner-qualified block states")
+        if state.owner_path.nodes[0] != self.owner.nodes[0]:
+            raise ValueError(
+                "refinement region state %s belongs to a different Case owner"
+                % state.qualified_id)
+        self._indicator_layout(state)
 
     def _discrete_context(self, state: Handle) -> Any:
         from pops.mesh._amr import DiscreteIndicatorContext
@@ -444,7 +472,9 @@ def resolve_tagging(
     authoring: Any,
     context: AMRTaggingResolutionContext,
 ) -> ResolvedTaggingAuthority:
-    """Resolve an object-level priority list into one authenticated inert tag graph."""
+    """Resolve an object-level priority list into one authenticated inert tag graph, or one
+    refinement criterion written as regions of ``cell``, with the dilation and the selection of
+    its Buffer."""
     from pops.mesh._amr import TaggingGraph
 
     for method in ("resolve_references", "inspect"):
@@ -452,30 +482,51 @@ def resolve_tagging(
             raise TypeError("resolve_tagging authoring must implement %s()" % method)
     if type(context) is not AMRTaggingResolutionContext:
         raise TypeError("resolve_tagging requires an AMRTaggingResolutionContext")
+    from pops.mesh._amr import RefinementRegion, resolve_refinement_criterion
+
     resolved = authoring.resolve_references(context.resolve)
     roots: dict[str, list[Any]] = {"refine": [], "coarsen": []}
+    regions: list[tuple[str, Any]] = []
     buffer_cells = None
+    selection = None
     for rule in resolved.rules:
         action = getattr(rule, "action", None)
-        if action in roots:
+        if action in roots and type(rule.predicate) is RefinementRegion:
+            regions.append((action, rule.predicate))
+        elif action in roots:
             roots[action].append(
                 _resolve_predicate(rule.predicate, action=action, context=context)
             )
         elif action == "buffer":
             buffer_cells = rule.cells
+            selection = getattr(rule, "selection", None)
         else:
             raise TypeError(
                 "AMR tagging rule must expose action refine, coarsen, or buffer"
             )
     if buffer_cells is None:
         raise ValueError("AMR tagging resolution lost its explicit Buffer authority")
-    graph = TaggingGraph(
-        refine=_union(roots["refine"]),
-        coarsen=_union(roots["coarsen"]),
-        hysteresis=resolved.hysteresis,
-        conflict_policy=resolved.conflict_policy,
-    ).resolve()
-    return ResolvedTaggingAuthority(graph, buffer_cells)
+    if regions:
+        if roots["refine"] or roots["coarsen"]:
+            raise TypeError(
+                "AMR tagging writes every predicate as a function of cell or none of them")
+        graph = resolve_refinement_criterion(
+            tuple(regions),
+            hysteresis=resolved.hysteresis,
+            conflict_policy=resolved.conflict_policy,
+            dimension=_dimension(context.layout_plan),
+            admit_state=context.admit_criterion_state,
+        )
+    else:
+        graph = TaggingGraph(
+            refine=_union(roots["refine"]),
+            coarsen=_union(roots["coarsen"]),
+            hysteresis=resolved.hysteresis,
+            conflict_policy=resolved.conflict_policy,
+        ).resolve()
+    # Both routes carry the Buffer's selection: master's transition reach, or the cells around
+    # each refine request (pops.amr.tag-selection@1).
+    return ResolvedTaggingAuthority(graph, buffer_cells, selection)
 
 
 @dataclass(frozen=True, slots=True)
@@ -658,9 +709,14 @@ def _hierarchy(
             )
         ),
     )
-    # Authored tag dilation is a separate selection policy. Derived nesting
-    # constrains parent coverage, never which cells the predicates select.
-    minimum_buffer = nesting.minimum_buffer
+    # Master's Buffer joins the transition buffer, which dilates the target coverage natively.
+    # Under pops.amr.tag-selection@1 the authored dilation is a separate selection policy, and
+    # derived nesting constrains parent coverage, never which cells the predicates select.
+    minimum_buffer = (
+        nesting.minimum_buffer
+        if tagging.selection == "refine-requests"
+        else tuple(max(tagging.buffer_cells, value) for value in nesting.minimum_buffer)
+    )
     hierarchy_data = _protocol(
         authoring, "to_data", where="AMR hierarchy authority"
     )()

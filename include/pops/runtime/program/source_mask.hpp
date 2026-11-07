@@ -31,9 +31,8 @@ void apply_component_keep_mask(MultiFab<Dim>& field, const std::vector<int>& kee
       continue;
     for (std::size_t local = 0; local < field.local_size(); ++local) {
       const FieldView<Real, Dim> view = field.fab(local).view();
-      for_each_cell(field.box(local), [=] POPS_HD(const Index<Dim>& cell) {
-        view(cell, component) = Real(0);
-      });
+      for_each_cell(field.box(local),
+                    [=] POPS_HD(const Index<Dim>& cell) { view(cell, component) = Real(0); });
     }
   }
 }

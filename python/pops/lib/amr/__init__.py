@@ -11,6 +11,8 @@ from typing import Any, ClassVar
 
 from pops.identity import make_identity
 
+from .criteria import gradient_norm
+
 
 class _BuiltinLoadBalance:
     """Constructor-only value implementing the open AMR load-balance data protocol."""
@@ -180,6 +182,18 @@ class _ImmutableTransferPolicy:
 
 @dataclass(frozen=True, slots=True)
 class ConservativeLinear(_ImmutableTransferPolicy):
+    """Conservative limited-linear prolongation, as master realizes it.
+
+    Every child takes the monotonized-central slope of its parent over both neighbours, the
+    boundary ghost of a physical face included (spec 0.3, section 2.6.9).
+    ``physical_faces="one-sided"`` names another prolongation, the one of API 0.2: a parent on
+    a physical face takes the one-sided interior slope, unlimited, and reads no ghost there.
+    It lowers to the same native route with a mask of one-sided axes, ``one_sided_axes``, that
+    the native transfer applies on the non-periodic axes. The spelling is provisional (N15,
+    ROM-98).
+    """
+
+    physical_faces: str | None = None
     native_route: ClassVar[str] = "conservative_linear"
     order: ClassVar[int] = 2
     ghost_depth: ClassVar[tuple[int, ...]] = (1,)
@@ -188,6 +202,16 @@ class ConservativeLinear(_ImmutableTransferPolicy):
     refinement_ratios: ClassVar[tuple[int, ...]] = ()
     conservative: ClassVar[bool] = True
     temporal: ClassVar[bool] = False
+
+    def __post_init__(self) -> None:
+        if self.physical_faces is not None and self.physical_faces != "one-sided":
+            raise ValueError("ConservativeLinear.physical_faces must be None or 'one-sided'")
+
+    @property
+    def one_sided_axes(self) -> tuple[int, ...]:
+        """1 on every axis whose physical faces take the one-sided slope, broadcast like
+        ``ghost_depth``."""
+        return (1,) if self.physical_faces == "one-sided" else (0,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,6 +397,15 @@ class SymbolicTagger:
     def require_tagging_graph(self, graph: Any) -> None:
         from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 
+        if callable(getattr(graph, "runtime_criterion_data", None)):
+            # A criterion written as functions of cell is generated into the compiled Program;
+            # the native tagging plan hands it each patch and keeps hysteresis and the buffer.
+            if (graph.hysteresis.min_cycles != 0
+                    and not NATIVE_TAGGING_PROGRAM_ABI["persistent_hysteresis"]):
+                raise NotImplementedError(
+                    "AMR hysteresis min_cycles requires native persistent tagging state; "
+                    "it is never accepted then ignored")
+            return
         registrations = getattr(graph, "registrations", None)
         authoring = getattr(graph, "graph", None)
         if not isinstance(registrations, tuple) or authoring is None:
@@ -628,4 +661,5 @@ __all__ = [
     "SymbolicTagger",
     "RoundRobin",
     "VolumeAverage",
+    "gradient_norm",
 ]

@@ -379,6 +379,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_program_context_contract": (2,),
         "test_program_runtime": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
+        "test_reduction_collectives": (2, 3, 4),
         "test_system_interface_core_session": (2,),
         "test_tensor_coarse_gmres": (2,),
         "test_tensor_diagonal_mg_preconditioner": (2,),
@@ -400,7 +401,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 145
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 148
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -411,6 +412,8 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     assert ctest_plan["test_distributed_array_np2"] == 2
     assert ctest_plan["test_distributed_array_np3"] == 3
     assert ctest_plan["test_world_communicator_np2"] == 2
+    assert ctest_plan["test_reduction_collectives_np3"] == 3
+    assert ctest_plan["test_reduction_collectives_np4"] == 4
     assert ctest_plan["test_amr_history_remap_collective_np2"] == 2
     assert ctest_plan["test_amr_interaction_history_snapshot_np2"] == 2
     assert ctest_plan["test_tensor_diagonal_mg_preconditioner_np2"] == 2
@@ -832,7 +835,7 @@ def test_cpp_target_label_fence_rejects_overescaped_ctest_labels(
 def test_manifest_projects_exact_python_mpi_entrypoints():
     """Script-style MPI contracts carry their launcher ranks in the manifest, not CI YAML."""
     sel = _load("ci_select_tests")
-    assert sel.manifest_python_mpi_entrypoints(sel.load_manifest()) == [
+    expected = [
         {
             "suite": "pops_python_integration_io",
             "path": "tests/python/integration/io/test_hdf5_parallel.py",
@@ -1442,6 +1445,64 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
             "nproc": 2,
         },
     ]
+    # Entrypoints whose receiver is split by measured cost into disjoint pytest units.
+    implicit = "test_native_implicit_relation_derivatives[%s]"
+    continuation = "test_distributed_jvp_vjp_complete_native_continuation[%s]"
+    recovery = "test_original_field_recovery_preserves_result_and_complete_restart[%s]"
+    typed = "test_original_typed_recovery_keeps_array_values_code_and_restart[%s]"
+    partitioned = {
+        "test_api_v02_coupled_methods_native_mpi2.py": ("test_api_v02_coupled_methods_native.py", (
+            ("schur", ["test_native_global_nonsymmetric_schur"]),
+            ("roots_imex", ["test_native_global_selected_roots[frozen-1]",
+                            "test_native_global_selected_roots[unknown-1]",
+                            "test_native_global_selected_roots[unknown--1]",
+                            "test_native_imex_second_order"]),
+            ("mprk22_zero_circulation", ["test_native_mprk22_network[0.0-False]"]),
+            ("mprk22_empty_circulating", ["test_native_mprk22_network[1.5-True]"]),
+        )),
+        "test_api_v02_implicit_derivatives_mpi2.py": ("test_api_v02_implicit_derivatives_native.py", (
+            ("derivatives_base_gauge", [implicit % mode for mode in ("jvp", "vjp", "bad_base", "bad_gauge")]),
+            ("tangent_constraints_budget", [implicit % mode for mode in (
+                "bad_tangent", "omit_constraints", "singular", "nondifferentiable", "budget")]
+             + ["test_native_wrong_tangent_prevents_commit"]),
+        )),
+        "test_api_v14_distributed_derivatives_mpi2.py": ("test_distributed_derivatives_v14_native.py", (
+            ("jvp_vjp_continuation", [continuation % mode for mode in (
+                "gather-False", "scatter-False", "scan-False", "gather-True")]),
+            ("foreign_tangent_topology",
+             ["test_distributed_ad_rejects_foreign_tangent_instance_even_empty[%s]" % flag
+              for flag in ("False", "True")]
+             + ["test_request_topology_surface_and_open_branch_native[%s]" % flags
+                for flags in ("False-False", "False-True", "True-False", "True-True")]),
+        )),
+        "test_api_v02_original_field_recovery_native_mpi2.py": ("test_api_v02_original_field_recovery_native.py", (
+            ("capture_success_runtime", [recovery % "capture_success", recovery % "capture_runtime"]),
+            ("capture_terminal_user", [recovery % "capture_terminal", recovery % "capture_user"]),
+            ("iterate_success_budget", [recovery % "iterate_success", recovery % "iterate_budget"]),
+            ("iterate_runtime", [recovery % "iterate_runtime"]),
+        )),
+        "test_api_v02_original_field_typed_recovery_native_mpi2.py": (
+            "test_api_v02_original_field_typed_recovery_native.py", (
+                ("capture_typed", [typed % "capture_typed-3.45"]),
+                ("iterate_typed_success", [typed % "iterate_typed_success-0.32"]),
+                ("iterate_typed_error", [typed % "iterate_typed_error-3.9"]),
+                ("iterate_typed_budget", [typed % "iterate_typed_budget--7"]),
+            )),
+        "test_api_v02_relaxed_multiblock_native_mpi2.py": ("test_api_v02_relaxed_multiblock_native.py", (
+            ("ratio_one", ["test_affine_multiblock_transports_native_interface_measures[1]"]),
+            ("ratio_two_rejection", ["test_affine_multiblock_transports_native_interface_measures[2]",
+                                     "test_rejection_after_multiblock_affine_publication_restores_interface_ledger"]),
+        )),
+    }
+    for row in expected:
+        name = row["path"].rsplit("/", 1)[1]
+        if name in partitioned:
+            receiver, partitions = partitioned.pop(name)
+            row["receiver"] = "tests/python/integration/runtime/" + receiver
+            row["partitions"] = [{"id": identity, "nodes": [row["receiver"] + "::" + node for node in nodes]}
+                                 for identity, nodes in partitions]
+    assert partitioned == {}
+    assert sel.manifest_python_mpi_entrypoints(sel.load_manifest()) == expected
 
 
 def test_manifest_projects_serial_python_mpi_orchestrators():
@@ -1569,11 +1630,22 @@ def test_manifest_projects_serial_python_mpi_orchestrators():
     for row in expected:
         path = row["path"]
         if "test_public_amr_profile_mpi" in path:
-            ids = ("tag_selection", "stationary_regrids", "evolving_halo", "evolved_spatial", "evolved_spatial_v4")
+            ids = ("tag_selection_linear", "tag_selection_injection", "stationary_regrids_buffer",
+                   "stationary_regrids_cadence_levels", "evolving_halo", "evolved_spatial", "evolved_spatial_v4")
             function = "test_public_amr_fixtures"
         elif "test_public_amr_original_field_mpi" in path:
-            ids = ("saved_restart", "parent_rollback_retry")
+            ids = ("saved_restart_16_implicit_zero", "saved_restart_16_declared_zero",
+                   "saved_restart_32_declared_zero", "parent_rollback_retry")
             function = "test_public_amr_original"
+        elif "test_public_captured_diffusion_mpi" in path:
+            ids = ("captured_width1", "captured_width3", "candidate_width1", "candidate_width3")
+            function = "test_public_captured_and_candidate_diffusion"
+        elif "test_public_evolved_original_stage_mpi" in path:
+            ids = ("width1_dt001", "width1_dt002", "width2_dt001", "width2_dt002")
+            function = "test_public_evolved_original_stage"
+        elif "test_public_spatial_interaction_mpi" in path:
+            ids = ("saved_history", "refusals", "pole_and_bind")
+            function = "test_public_spatial_interaction"
         elif "test_public_typed_newton_mpi" in path:
             ids = ("relative_uniform", "relative_amr", "floor_uniform", "floor_amr",
                    "absolute_uniform", "absolute_amr", "overflow_uniform", "overflow_amr")
@@ -1613,7 +1685,7 @@ def test_native_module_cache_keys_use_post_install_include_identity():
     assert all("-headers${{ steps.kokkos.outputs.compiler-includes }}" in line for line in keys)
     openmp_key = next(line for line in workflow.splitlines() if "key: pops-module-openmp-" in line)
     assert "-headers${{ steps.openmp-compiler-includes.outputs.identity }}" in openmp_key
-    openmp = workflow.split("\n  kokkos-openmp:\n", 1)[1]
+    openmp = workflow.split("\n  kokkos-openmp:\n", 1)[1].split("\n  mg8-tutorials:\n", 1)[0]
     assert openmp.index("Install MPI SDK") < openmp.index("id: openmp-compiler-includes")
     assert openmp.index("id: openmp-compiler-includes") < openmp.index("key: pops-module-")
     action = (REPO_ROOT / ".github/actions/setup-kokkos/action.yml").read_text()
@@ -2080,6 +2152,8 @@ def test_python_mpi_workflow_executes_every_plan_row_with_stdin_reading_child(
         for row in all_launches
     ]
     assert [row["path"] for row in launched] == expected_selectors
+    assert [row["units"] is not None for row in launched] == [
+        row["kind"] == "ranked" and "partition_id" in row for row in all_launches]
     for row in launched:
         assert row["argv"][:2] == ["--signal=TERM", "--kill-after=30s"]
         assert row["argv"][2] in {"900s", "1200s", "1500s"}
@@ -2257,7 +2331,6 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "build-mpi/python-mpi-plan.tsv" in mpi_block
     assert "--orchestrator-plan-file build-mpi/python-mpi-orchestrators.txt" in mpi_block
     assert "--parallel 1 --target _pops" in mpi_block
-    assert '--parallel 1 --target "${isolated_targets[@]}"' in mpi_block
     assert '--parallel 4 --target "${remaining0_targets[@]}"' in mpi_block
     assert 'test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 3' in mpi_block
     assert "steps.mpi-test-plan.outputs.cpp_label_build_isolated_targets" in mpi_block
@@ -2271,10 +2344,30 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 60" in native_build_step
     assert native_build_step.count('28m \\') == 3
     assert "POPS_HEAVY_TEST_TU_POOL" not in native_build_step
+    # One watchdog: the loader fixture DSOs two at a time, then the isolated targets with one
+    # compiler, so test_program_runtime never shares the runner with another compiler.
+    isolated_phase = native_build_step.split(
+        'run_with_heartbeat "MPI isolated native test build" 28m \\\n', 1
+    )[1].split('run_with_heartbeat "MPI remaining native test build0" 28m', 1)[0]
+    fixture_build = (
+        "cmake --build --preset ci-mpi --parallel 2 --target pops_synthetic_loader_fixtures &&"
+    )
+    isolated_build = 'cmake --build --preset ci-mpi --parallel 1 --target "$@"\''
+    assert isolated_phase.count("cmake --build") == 2
+    assert 0 <= isolated_phase.find(fixture_build) < isolated_phase.find(isolated_build)
+    assert isolated_phase.rstrip().endswith(' isolated "${isolated_targets[@]}"')
+    tests_cmake = (REPO_ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    fixture_rules = tests_cmake.split("foreach(_variant ", 1)[1].split("endforeach()", 1)[0]
+    # The heavy-TU pool bounds the fixtures by its two slots whatever the parallelism.
+    assert "JOB_POOL pops_heavy_test_tu" in fixture_rules
+    assert (
+        "add_dependencies(test_amr_synthetic_program_loader_transaction "
+        "pops_synthetic_loader_fixtures)"
+    ) in tests_cmake
     configure_step = mpi_block.split(
         "- name: Configure + link Python module (MPI + Kokkos Serial)\n", 1
     )[1].split("\n      - name: Build complete native MPI inventory in three phases\n", 1)[0]
-    # Two heavy -O0 test units at a time fit the runner; the isolated phase keeps one.
+    # Two heavy -O0 test units at a time fit the runner; test_program_runtime keeps one.
     assert "-DPOPS_HEAVY_TEST_TU_POOL=2" in configure_step
     assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
     assert "ctest --preset ci-mpi -N --show-only=json-v1" in mpi_block
@@ -2370,7 +2463,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     for linked_artifact in ("build-kokkos", ".so", ".a", ".dylib"):
         assert linked_artifact not in openmp_prewarm_upload
 
-    openmp_block = workflow.split("\n  kokkos-openmp:\n", 1)[1]
+    openmp_block = workflow.split("\n  kokkos-openmp:\n", 1)[1].split("\n  mg8-tutorials:\n", 1)[0]
     assert "name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})" in openmp_block
     job_budget = re.search(
         r"timeout-minutes: \$\{\{ matrix.kind == 'python' && (\d+) \|\| (\d+) \}\}",
@@ -2660,7 +2753,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
-    assert 'SHARD_TOTAL: "137"' in python_shards_block
+    assert 'SHARD_TOTAL: "140"' in python_shards_block
     assert "strategy.job-total" not in python_shards_block
     for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
         assert "name: ci-plan" in block

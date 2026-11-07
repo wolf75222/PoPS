@@ -165,7 +165,7 @@ def _resolved(native_cxx, *, max_iterations=HIGH_BUDGET_MAX_ITERATIONS):
         tagging=AMRTagging(
             rules=(
                 Tag(ValueExpr(marker) > case.value(threshold)),
-                Buffer(cells=1),
+                Buffer(cells=1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,

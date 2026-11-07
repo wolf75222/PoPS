@@ -57,7 +57,7 @@ from pops.continuations import ContinuationSchema,Candidate
 from pops.contributions import Contribution,Delivery,Increment,FiniteInterval,LinearMap
 from pops.ledger_provenance import InventoryBinding,validate_program_contracts
 from pops.inventory_decode import checked_inventory_decode
-from pops.codegen.realization_delivery import delivered_frontiers
+from pops.codegen.typed_delivery import delivered_frontiers
 from test_inventory_decode_v15 import problem
 
 

@@ -393,14 +393,16 @@ void bind_system_assembly(py::class_<System>& cls) {
              const std::vector<std::string>& face_converter_identities,
              const std::vector<std::vector<std::string>>& face_analytic_opcodes,
              const std::vector<std::vector<double>>& face_analytic_literals,
-             const std::vector<std::string>& face_analytic_clocks) {
+             const std::vector<std::string>& face_analytic_clocks,
+             const std::vector<int>& prescribed_trace_faces) {
             reject_unqualified_periodic_identifications<pops::kNativeDimension>(
                 periodic_identifications, "ranked Cartesian boundary authority");
             auto boundary = pops::prepare_hyperbolic_boundary<pops::kNativeDimension>(
                                 face_types, face_values, face_identities, component_roles, false,
                                 face_representations, face_converter_identities,
                                 face_analytic_opcodes, face_analytic_literals, face_analytic_clocks)
-                                .with_omitted_interface_faces(omitted_interface_faces);
+                                .with_omitted_interface_faces(omitted_interface_faces)
+                                .with_prescribed_trace_faces(prescribed_trace_faces);
             system.install_prepared_hyperbolic_boundary(
                 name, identity, required_depth, state_identity,
                 std::make_shared<pops::PreparedHyperbolicBoundary<pops::kNativeDimension>>(
@@ -416,6 +418,7 @@ void bind_system_assembly(py::class_<System>& cls) {
           py::arg("face_analytic_opcodes") = std::vector<std::vector<std::string>>{},
           py::arg("face_analytic_literals") = std::vector<std::vector<double>>{},
           py::arg("face_analytic_clocks") = std::vector<std::string>{},
+          py::arg("prescribed_trace_faces") = std::vector<int>{},
           "Install one resolved per-block ghost-production plan before block construction.")
       .def("_install_block_state_route", &System::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
@@ -1215,6 +1218,32 @@ void bind_system_stepping(py::class_<System>& cls) {
           },
           py::arg("provider_slot"))
       .def("step", &System::step, py::arg("dt"))
+      // One compiled run of the installed Advance; the interpreter only receives its counters.
+      .def(
+          "_run_advance",
+          [](System& system, double until, double proposal, std::int64_t max_steps) {
+            const auto report = system.run_advance(until, proposal, max_steps);
+            py::dict result;
+            result["steps"] = report.steps;
+            result["rejections"] = report.rejections;
+            result["stop"] = static_cast<int>(report.stop);
+            result["attempts"] = report.attempts;
+            result["rejection"] = report.rejection;
+            result["segment_origin"] = report.segment.origin;
+            result["segment_steps"] = report.segment.steps;
+            return result;
+          },
+          py::arg("until"), py::arg("proposal"), py::arg("max_steps"))
+      .def("_advance_max_attempts", &System::advance_max_attempts)
+      .def_static(
+          "_advance_attempt_duration",
+          [](double time, double proposal, double frontier, double origin, std::int64_t steps) {
+            const auto duration = pops::runtime::program::advance_attempt_duration(
+                time, proposal, frontier, origin, steps);
+            return py::make_tuple(duration.dt, duration.lands, duration.continuous);
+          },
+          py::arg("time"), py::arg("proposal"), py::arg("frontier"), py::arg("origin"),
+          py::arg("steps"))
       .def("_advance_program_region", &System::advance_program_region, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)

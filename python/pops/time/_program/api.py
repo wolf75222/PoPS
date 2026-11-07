@@ -196,6 +196,9 @@ class Program(
         self._integral_transfers = []
         self._transaction_stores = ALL_PROVISIONAL_STORES
         self._acceptance_guards = ()
+        # The compiled control of the Advance this Program elaborates (control.AdvanceControl), or
+        # None for a Program authored on the builder; it enters the Program identity.
+        self._advance_control = None
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
         # freeze, adding an IR node (via _new) RAISES -- a compiled artifact is frozen to exactly the
         # program it was compiled from. Emission / hashing are pure reads and stay allowed.
@@ -299,6 +302,17 @@ class Program(
         self._step_strategy = strategy
         self._transaction_stores = stores
         return self
+
+    def _set_advance_control(self, control: Any) -> None:
+        """Record, once, the compiled control of the Advance that this Program elaborates."""
+        from .control import AdvanceControl
+
+        self._guard_mutable("set the Advance control")
+        if type(control) is not AdvanceControl:
+            raise TypeError("Program._set_advance_control takes an AdvanceControl")
+        if self._advance_control is not None:
+            raise ValueError("Program already elaborates an Advance")
+        self._advance_control = control
 
     def cadence(self, *, substeps: Any = 1, stride: Any = 1) -> Any:
         """Declare the global Program cadence once, before compile.
