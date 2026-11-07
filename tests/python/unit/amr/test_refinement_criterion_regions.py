@@ -7,13 +7,14 @@ traced surface, the resolved criterion and its C++; the native parity with the t
 """
 from __future__ import annotations
 
+import operator
 import re
 
 import pops
 import pytest
 from pops.amr import Coarsen, ConflictPolicy, EqualityPolicy, Hysteresis, Tag
 from pops.lib.amr import gradient_norm
-from pops.math import ValueExpr, grad, norm
+from pops.math import ValueExpr, grad, norm, where
 from pops.mesh._amr import CriterionCell, RefinementRegion, ResolvedRefinementCriterion
 from tests.python.support.refinement_criterion_cases import advection_case
 
@@ -240,6 +241,40 @@ def test_every_comparison_is_evaluated_before_the_rules_join_them() -> None:
     assert "Kokkos::isfinite(%s)" % shifted in source
     assert "Kokkos::isfinite(%s)" % below in source
 
+
+def test_a_where_inside_an_operand_is_the_cond_of_ir4() -> None:
+    from pops.codegen.program_emit_refinement_criterion import emit_refinement_criterion
+    from pops.mesh._amr.refinement_criterion import certainly
+
+    _, _, names = advection_case(_value_rules)
+
+    def flag(test):
+        return lambda cell: where(test(cell.value(names.state), names.value("refine")),
+                                  lambda: 1.0, lambda: 0.0) > 0.5
+
+    # The tag graph cannot write a where, and the strict rule of its leaves does not reach the test
+    # of one: that test is the two-valued Boolean of the cond of IR4, which may compare at equality.
+    for test in (operator.ge, operator.le, operator.eq):
+        region = Tag(flag(test)).predicate.expression
+        assert _key(certainly(region)) == _key(region)
+
+    def guarded(names):
+        x, _ = names.frame.axes
+        return (Tag(lambda cell: where(cell.value(names.state) == names.value("refine"),
+                                       lambda: cell.shift(x, 1).value(names.state),
+                                       lambda: 0.0) > names.value("coarsen")),)
+
+    source = emit_refinement_criterion(_resolved(guarded).bootstrap_plan.tagging,
+                                       native_dimension=2)
+    body = source[source.index("operator()"):source.index("const bool finite")]
+    test = re.search(r"const pops::Real (cse\d+_) = \(cse\d+_ == cse\d+_\);", body).group(1)
+    guard = re.search(r"pops::Real (guard\d+_cse\d+_) = 0;", body).group(1)
+    # Only the branch that the test selects is evaluated: the shifted read happens inside it, and
+    # where the test is false its value keeps the zero it starts with, so it marks no cell.
+    assert body.count("fields[0](at0_, 0)") == 1
+    assert re.search(r"\(%s \? \(\[&\]\(\) \{ %s = fields\[0\]\(at0_, 0\); return %s; \}\(\)\)"
+                     % (test, guard, guard), body)
+    assert "Kokkos::isfinite(%s)" % guard in source
 
 def test_gradient_norm_is_the_region_written_by_hand() -> None:
     # CF4: the library object and the same region written in a case have one identity.

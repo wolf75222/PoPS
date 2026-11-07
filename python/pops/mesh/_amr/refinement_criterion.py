@@ -6,11 +6,15 @@ reads a block state at the cell, ``cell.shift(axis, k)`` is the cell ``k`` steps
 read like ``cell``, and ``cell.width(axis)`` is the width of the cells of the level along an axis.
 A runtime parameter enters as ``case.value(param)`` and is bound at ``bind``.
 
-A region decides as a rule of the tag graph does. It compares with a strict ``<`` or ``>``, and a
-comparison at exact equality decides nothing (``EqualityPolicy.HOLD``); ``~``, ``&`` and ``|``
-follow Kleene's three-valued logic, and a rule acts on the cells where its region is certainly
-true (:func:`certainly`). Every comparison of every rule is evaluated, so a non-finite value that
-any of them reads rejects the level, as it does for the bytecode.
+A region decides as a rule of the tag graph does. The comparisons that ``~``, ``&`` and ``|`` join
+are a strict ``<`` or ``>``, and one at exact equality decides nothing (``EqualityPolicy.HOLD``);
+``~``, ``&`` and ``|`` follow Kleene's three-valued logic, and a rule acts on the cells where its
+region is certainly true (:func:`certainly`). Each of these comparisons is evaluated, so a
+non-finite value that any of them reads rejects the level, as it does for the bytecode. A
+``where`` inside an operand, which the tag graph cannot write, is the ``cond`` of IR4: its test is
+a two-valued Boolean that may compare with ``<=``, ``>=`` or ``==``, and only the branch that it
+selects is evaluated, so a non-finite value read only in the other branch does not reject the
+level.
 
 The resolved criterion decides ``where(refine, refine, where(coarsen, coarsen, keep))`` on each
 cell of a level, ``refine`` being the union of the refine regions and ``coarsen`` the union of the
@@ -166,7 +170,9 @@ def certainly(expression: Expr, truth: bool = True) -> Expr:
     As a leaf of the tag graph, a strict comparison at exact equality decides nothing: ``a < b`` is
     certainly true where a < b and certainly false where a > b. ``~``, ``&`` and ``|`` follow
     Kleene's three-valued logic, so the result joins strict comparisons of the same operands with
-    ``&`` and ``|`` and holds no negation: ``~(a < b)`` is certainly true where a > b only.
+    ``&`` and ``|`` and holds no negation: ``~(a < b)`` is certainly true where a > b only. The
+    operands of a comparison are kept as they are: a ``where`` there is the ``cond`` of IR4, whose
+    test is two-valued.
     """
     if isinstance(expression, BooleanNot):
         return certainly(expression.a, not truth)

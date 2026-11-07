@@ -10,10 +10,12 @@ bytecode of the tag graph.
 
 Each rule is lowered to the cells where its region is certainly true (``certainly``): strict
 comparisons joined by ``&`` and ``|``, with no negation left, so that a comparison at exact equality
-decides nothing, as a leaf of the bytecode does under ``EqualityPolicy.HOLD``. Every comparison of
-every rule is evaluated before ``&`` and ``|`` join them, as the bytecode evaluates every leaf and
-IR4 the operands of an operation, so a non-finite value that any comparison reads marks the cell.
-Only a ``where`` inside an operand evaluates one branch.
+decides nothing, as a leaf of the bytecode does under ``EqualityPolicy.HOLD``. Every comparison
+that ``&`` and ``|`` join is evaluated before they join it, as the bytecode evaluates every leaf and
+IR4 the operands of an operation, so a non-finite value that any of them reads marks the cell. A
+``where`` inside an operand is the ``cond`` of IR4: its two-valued test is evaluated, then only the
+branch that it selects, and the values of the other branch keep the zero they start with, so a
+non-finite value read there does not mark the cell.
 """
 from __future__ import annotations
 
