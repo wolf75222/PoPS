@@ -6697,7 +6697,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1144,
+    "estimated_count": 1146,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6945,6 +6945,7 @@
       "tests/python/integration/runtime/test_isothermal_vacuum_boundary_rollback.py",
       "tests/python/integration/runtime/test_isothermal_vacuum_floor_inactive.py",
       "tests/python/integration/runtime/test_isothermal_vacuum_floor_system.py",
+      "tests/python/integration/runtime/test_lib_numerics_reconstructions_native.py",
       "tests/python/integration/runtime/test_local_product_operators_runtime.py",
       "tests/python/integration/runtime/test_local_product_readonly_runtime.py",
       "tests/python/integration/runtime/test_local_residual_domain_runtime.py",
@@ -7460,6 +7461,7 @@
       "tests/python/unit/numerics/test_hall_independent_oracle.py",
       "tests/python/unit/numerics/test_indicator_stencils.py",
       "tests/python/unit/numerics/test_lib_numerics_faces.py",
+      "tests/python/unit/numerics/test_lib_numerics_reconstructions.py",
       "tests/python/unit/numerics/test_m05_shear_independent_review.py",
       "tests/python/unit/numerics/test_m07_hydrostatic_public_gap.py",
       "tests/python/unit/numerics/test_m08_independent_receipt.py",
@@ -8044,7 +8046,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1209,
+    "total_files": 1211,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8185,6 +8187,20 @@
       },
       "source_sha256": {
         "tests/python/unit/time/test_typed_delivery_cf7.py": "de4646554623af66dc8c7b2a1d975c827ad039a28567926f7007d6a34f781927"
+      }
+    },
+    "n3_20261107_reconstructions": {
+      "basis": "Scheduling estimates for N3 reconstructions and limiters (ROM-87), not CI receipts. The source unit file builds the reconstructions without compiling a case and compiles four standalone C++ programs that put the generated MUSCL policy beside the native limiter policies: 3 s locally on 4 cores, so the 30 s tier of a compiler-gated source file. The parity file compiles master's tutorial 02 eight times, four limiters by two routes (native MUSCL and pops.lib.numerics.muscl, ScalarUpwind on both): 376 s locally on 4 cores with Kokkos Serial and nothing else running (pytest timing receipt, 91.8 to 95.3 s per row), so 600 s with the margin of N3a (1400 s for 1244 s beside other compiles). Refresh from complete CI timing artifacts.",
+      "files": {
+        "tests/python/unit/numerics/test_lib_numerics_reconstructions.py": {
+          "estimated_seconds": 30,
+          "kind": "source_unit"
+        },
+        "tests/python/integration/runtime/test_lib_numerics_reconstructions_native.py": {
+          "estimated_seconds": 600,
+          "kind": "native_profile",
+          "analogue": "tests/python/integration/runtime/test_api_v02_python_faces_native.py"
+        }
       }
     }
   },
@@ -9396,5 +9412,7 @@
   "tests/python/integration/runtime/test_traced_methods_n8_native.py": 600,
   "tests/python/unit/time/test_traced_methods_n8.py": 300,
   "tests/python/integration/runtime/test_compiled_control_n8_native.py": 600,
-  "tests/python/unit/time/test_compiled_control_n8.py": 30
+  "tests/python/unit/time/test_compiled_control_n8.py": 30,
+  "tests/python/unit/numerics/test_lib_numerics_reconstructions.py": 30,
+  "tests/python/integration/runtime/test_lib_numerics_reconstructions_native.py": 600
 }
