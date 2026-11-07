@@ -611,9 +611,14 @@ def judge_interpreter(*, interpreter: Sequence[Path] | None = None,
     ``pops`` and the sibling leaves restored there, behind the qualification prefix's, say); a
     file under no entry or that no module name reaches (``foo.bar.py``, a directory such as
     ``numpy.libs``, or a module built for another Python).  A name that is no identifier is still
-    a name: sysconfig imports its ``_sysconfigdata_*`` module by name.  The bytecode caches
-    (``__pycache__``) are not walked, as a receipt leaves them.  ``path`` is ``_import_path`` by
-    default; the other defaults are those of ``code_observation``.
+    a name: sysconfig imports its ``_sysconfigdata_*`` module by name.  Names resolve as
+    ``PathFinder`` resolves them, so two layouts escape the judgment (the limits of
+    ``docs/developer/sdk_cohort_receipts.md``): a portion that ``pkgutil.extend_path`` adds to a
+    legacy namespace package from a later site directory is listed as masked, and a file met
+    under two names, through a link, is taken under the first.  A receipt still judges either
+    when a receiver loads it.  The bytecode caches (``__pycache__``) are not walked, as a
+    receipt leaves them.  ``path`` is ``_import_path`` by default; the other defaults are those
+    of ``code_observation``.
     """
     roots = _interpreter_roots() if interpreter is None else tuple(interpreter)
     library = _standard_library() if standard is None else tuple(standard)
