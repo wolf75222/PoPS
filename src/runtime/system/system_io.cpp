@@ -1213,7 +1213,7 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     if (!p_->program_.advance_output_scalar_counts_.empty()) {
       System<Dim>* self = this;
       p_->program_.advance_output_scalars_ = [self, advance_output_scalars](int output,
-                                                                           Real* values) {
+                                                                            Real* values) {
         advance_output_scalars(self, output, values);
       };
     } else {

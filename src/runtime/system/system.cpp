@@ -261,8 +261,8 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     if (report.steps == max_steps)
       return finish(AdvanceRunStop::kStepBudget);
     const double frontier = runtime::program::advance_next_frontier(p_->t, until, outputs, cursors);
-    const auto duration = runtime::program::advance_attempt_duration(
-        p_->t, proposal, frontier, segment.origin, segment.steps);
+    const auto duration = runtime::program::advance_attempt_duration(p_->t, proposal, frontier,
+                                                                     segment.origin, segment.steps);
     for (std::int64_t attempt = 1;; ++attempt) {
       try {
         step(duration.dt);
@@ -291,9 +291,8 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     if (duration.lands && p_->t != frontier)
       throw std::logic_error("System::run_advance did not publish its frontier exactly");
     for (std::size_t output = 0; output < outputs.size(); ++output)
-      if (runtime::program::advance_output_due(output, p_->t,
-                                               static_cast<std::int64_t>(p_->macro_step_),
-                                               outputs, cursors))
+      if (runtime::program::advance_output_due(
+              output, p_->t, static_cast<std::int64_t>(p_->macro_step_), outputs, cursors))
         evaluate(output);
   }
   return finish(AdvanceRunStop::kReached);
