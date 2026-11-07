@@ -36,6 +36,7 @@ from .cpp_strings import cpp_string_literal
 from .program_source_map import emission_program_hash, emission_scope
 from .program_kernel_registry import kernel_scope, kernel_definitions
 from .program_uniform_finite import uniform_scope, uniform_definitions
+from .program_shared_definitions import shared_scope, shared_definitions
 from pops.time.references import block_name
 
 import json  # noqa: F401  (kept for any external reference to program_codegen.json)
@@ -170,6 +171,7 @@ def _emit_resolved_cpp_program(
 @emission_scope
 @kernel_scope
 @uniform_scope
+@shared_scope
 def _emit_cpp_program_impl(
     program: Any,
     model: Any = None,
@@ -346,8 +348,6 @@ def _emit_cpp_program_impl(
     distributed_ops = DISTRIBUTED_OPS | FIELD_REPRESENTATION_OPS
     uses_distributed = any(value.op in distributed_ops or any(
         child.op in distributed_ops for child in program._subblock_value_refs(value)) for value in finite_roots)
-    # Rendered in this order: uniform_definitions() closes the registrations that the parts
-    # after it must not extend.
     parts = dict(
         name=cpp_string_literal(program.name),
         hash=emission_program_hash(program),
@@ -362,9 +362,6 @@ def _emit_cpp_program_impl(
                          + _emit_uniform_history_metadata(program, target)),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
-        model_helpers=(uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
-                       + _emit_program_model_helpers(program, authority)
-                       + provider_plans.source_kernel_helpers.cpp()),
         block_names=(_emit_block_names(program, value_authority.block_names)
                      + (_emit_uniform_clock_manifest(program) if target == "system" else "")),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
@@ -382,6 +379,12 @@ def _emit_cpp_program_impl(
             post_synchronization,
         ),
     )
+    # The install entries are regions too (an AMR entry builds its continuation
+    # configurations), so the translation-unit definitions are rendered after them.
+    parts["model_helpers"] = (
+        uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
+        + _emit_program_model_helpers(program, authority)
+        + provider_plans.source_kernel_helpers.cpp() + shared_definitions())
     # The finite helpers follow the code that names them, not only the finite operations.
     if uses_finite_arrays or uses_distributed or any(
             uses_finite_helpers(part) for part in parts.values() if isinstance(part, str)):

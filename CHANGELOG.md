@@ -482,6 +482,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - The coverage fence keeps that catalogue shrink-only: a record added or rewritten, or a changed
   header, fails even when the catalogue's SHA-256 pin is updated with it; a record may only be
   dropped, and its test must then be claimed by a suite.
+- Emit less C++ per generated Program, so that the Hall MHD CT Program compiles. Each translation
+  unit now defines once its continuation field callbacks, each distinct schema construction, each
+  distinct terminal exit of a distributed map and each distinct staging of an Array captured by a
+  device map; the collective entry points receive their callable through a non-owning view; and
+  the step body continues in nested functions at top-level operation boundaries. Operations, their
+  order, their values and schema identities are unchanged. On one 4-core container the Hall source
+  goes from 30.0 to 17.7 MB and compiles in 357 s within 4.8 GiB, where it did not fit in 12 GiB
+  before.
 
 ## [1.0.0] - 2026-07-16
 
