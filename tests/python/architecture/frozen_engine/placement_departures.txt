@@ -1,0 +1,14 @@
+# Departures from the CF0 placement list (spec 0.3: FC6, FC6b, IR24, PF14; Linear N2).
+#
+# A native of the b6 placement list (B6_PLACEMENT in test_cf0_frozen_engine_paths.py) leaves
+# cf0_native_placement.toml only when it moves to the native component tree or, for a named
+# method, is removed (FC6, PF14). The PR that drops an entry, or a file of an entry, adds one line
+# here per dropped (id, file), naming where that native went:
+#
+#     <id> <file> | moved <file of the native component tree>
+#     <id> <file> | removed <the PF14 record of its removal>
+#
+# A native that covers whole files must also have left the core paths; a rename within them is
+# neither a move nor a removal. For an entry that cites lines, the file may stay in a core path,
+# and the line says where the cited code went. Lines are never removed: at the freeze (FC8) this
+# file names where every native of b6 went.

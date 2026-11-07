@@ -5,7 +5,8 @@ the CF0 placement list.
 CF7, CF8). ``frozen_engine/cf0_native_placement.toml`` names each native of IR24 that still sits in
 a core path, with its issue, phase and interface; it only shrinks (MG6), keeps only Phase 2 entries
 at the exit of Phase 1 and is empty at the freeze (FC6, FC8). Each entry keeps its b6 issue and
-phase, and a native leaves the list only when it leaves the core paths. Every guard reads it through
+phase, and a native leaves the list only by a departure that ``frozen_engine/placement_departures.txt``
+declares: moved to the native component tree, or removed (PF14). Every guard reads it through
 ``scan.load_placement``: this test, CF1 (``cf1.placed_natives``) and CF2 (the N9 path rule of
 ``cf2.py`` and the closed interface list).
 
@@ -85,12 +86,34 @@ B6_PLACEMENT = {
     )),
     "level-transfer-restriction": ("G06", 2, ("include/pops/amr/transfer/transfer_provider.hpp",)),
 }
+# The b6 entries that cite lines: their native is that code, not the whole file (IR24).
+B6_CITED_LINES = {
+    "face-loop-stencil-flux": (112, 132, 156), "face-loop-generated-system-block": (1704,),
+    "face-loop-generated-amr-system-block": (2265,), "direct-sum-spatial-interaction": ("423-437",),
+    "path-conservative-rusanov": ("82-95",), "level-transfer-restriction": (25,),
+}
+DEPARTURES = scan.HERE / "placement_departures.txt"
 # IR24: the issue and phase of each class of native.
 IR24_ISSUE_PHASE = {"N3": 1, "N9": 2, "G05": 2, "G06": 2}
 
 
 def _natives():
     return scan.load_placement()
+
+
+def _departures():
+    """(id, file) -> (kind, where) for each line of placement_departures.txt."""
+    found = {}
+    for raw in DEPARTURES.read_text(encoding="utf-8").splitlines():
+        if not raw.strip() or raw.startswith("#"):
+            continue
+        left, _, right = raw.partition(" | ")
+        native, rel = left.split()
+        kind, _, where = right.partition(" ")
+        assert kind in ("moved", "removed") and where.strip(), "malformed departure: %r" % raw
+        assert (native, rel) not in found, "departure declared twice: %r" % raw
+        found[native, rel] = (kind, where.strip())
+    return found
 
 
 def _line_numbers(spec):
@@ -157,23 +180,38 @@ def test_placement_entries_keep_their_b6_issue_phase_and_files():
                          % (row["id"], row["issue"], row["phase"], issue, phase))
         wrong.extend("%s: %s is not a file of this native at b6" % (row["id"], rel)
                      for rel in row["files"] if rel not in files)
+        if bool(row.get("lines")) != (row["id"] in B6_CITED_LINES):
+            wrong.append("%s: %s at b6" % (row["id"], "cites lines" if row["id"] in B6_CITED_LINES
+                                             else "covers whole files"))
     assert not wrong, (
         "MG6: a CF0 placement entry keeps its b6 issue and phase and only loses files:\n  "
         + "\n  ".join(wrong))
 
 
-def test_a_native_leaves_the_list_only_when_it_leaves_the_core_paths():
+def test_a_native_leaves_the_list_only_by_a_declared_departure():
     """FC6: until a native moves to the native component tree or, for a named method, is removed,
-    the placement list names it."""
+    the placement list names it. Each (id, file) of b6 that the list no longer names has its line
+    in placement_departures.txt. A native that covers whole files has also left the core paths,
+    and a move names a file of the native component tree."""
     engine = scan.load_cf0()
     tracked = set(scan.tracked_files())
     listed = {(row["id"], rel) for row in _natives() for rel in row["files"]}
-    dropped = ["%s: %s" % (native, rel) for native, (_, _, files) in sorted(B6_PLACEMENT.items())
-               for rel in files
-               if (native, rel) not in listed and rel in tracked and engine.is_core(rel)]
-    assert not dropped, (
-        "FC6: these natives left cf0_native_placement.toml but still sit in core paths:\n  "
-        + "\n  ".join(dropped))
+    left = {(native, rel) for native, (_, _, files) in B6_PLACEMENT.items() for rel in files
+            if (native, rel) not in listed}
+    departures = _departures()
+    wrong = ["%s %s left the list with no line in %s" % (native, rel, DEPARTURES.name)
+             for native, rel in sorted(left - set(departures))]
+    wrong += ["%s %s left the list but still sits in a core path" % (native, rel)
+              for native, rel in sorted(left & set(departures))
+              if native not in B6_CITED_LINES and rel in tracked and engine.is_core(rel)]
+    for (native, rel), (kind, where) in sorted(departures.items()):
+        if (native, rel) not in left:
+            wrong.append("%s %s: a departure of a native that %s" % (
+                native, rel, "the list still names" if (native, rel) in listed else "b6 did not list"))
+        elif kind == "moved" and not (where in tracked and engine.is_native(where)):
+            wrong.append("%s %s: moved to %s, not a file of the native component tree"
+                         % (native, rel, where))
+    assert not wrong, "FC6: CF0 placement departures:\n  " + "\n  ".join(wrong)
 
 
 def test_placement_entries_name_files_still_in_core_paths():
