@@ -340,11 +340,23 @@ chk(
 pc_plan = _resolved_case("predictor_corrector")
 pc_src = _emit_resolved(pc_plan)
 pc_field_solves = tuple(value for value in pc_plan.time._values if value.op == "solve_fields")
+
+
+def _stage_operand(value):
+    # A unit-coefficient stage copy binds its consumers to the identity alias of the same issued
+    # value (the context-owned copy only when a Field representation is pending), never to
+    # another stage's storage.
+    if (value.op == "linear_combine" and len(value.inputs) == 1
+            and dict(value.attrs["coeffs"][0]) == {0: 1}):
+        return "identity_observed_%d" % value.id
+    return "u%d" % value.id
+
+
 pc_field_calls = tuple(
-    "ctx.solve_fields_from_state_at(field_boundary_point_%d, %s, 0, u%d);" % (
+    "ctx.solve_fields_from_state_at(field_boundary_point_%d, %s, 0, %s);" % (
         solve.id,
         json.dumps(pc_plan.field_plans[solve.attrs["field"].local_id].native_options["provider_slot"]),
-        solve.inputs[0].id,
+        _stage_operand(solve.inputs[0]),
     )
     for solve in pc_field_solves
 )

@@ -64,7 +64,12 @@ def test_local_linear_prepares_exact_consumer_at_implicit_point_before_any_view(
     kernel = body.index("pops::for_each_cell(")
     assert stage < position < loop < view < kernel
     assert body.count(preparation) == 1
-    expected = re.escape(preparation + cpp_string_expression(qid) + ", 0, u%d, " % predictor.id)
+    # The unit-coefficient predictor binds its consumers to its identity alias, which
+    # selects the evaluated scratch unless a pending Field representation is retained.
+    observed = "identity_observed_%d" % predictor.id
+    assert ("auto& %s = identity_owner_%d ? *identity_owner_%d : u%d;"
+            % (observed, predictor.id, predictor.id, predictor.id)) in source
+    expected = re.escape(preparation + cpp_string_expression(qid) + ", 0, %s, " % observed)
     assert re.search(expected + r"\d+\)", body)
     assert "provider_values_view<1>(%s, 0, li)" % cpp_string_expression(qid) in body
     assert "ctx.aux(" not in source

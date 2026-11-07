@@ -3124,11 +3124,8 @@ class ProgramContext {
       error = std::current_exception();
     }
     const auto& lane = prepared_execution_lane();
-    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && error)
-        std::rethrow_exception(error);
-      throw std::runtime_error("Program history publication preparation failed collectively");
-    }
+    collectively_rethrow_exception(error, lane,
+                                   "Program history publication preparation failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs({{"pops.program.history", contract}}, lane))
       throw std::invalid_argument("Program history publication identity differs between ranks");
     static_assert(std::is_nothrow_swappable_v<field_type>);
