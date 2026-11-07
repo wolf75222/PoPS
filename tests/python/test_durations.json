@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1152,
+    "estimated_count": 1153,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6986,6 +6986,7 @@
       "tests/python/integration/runtime/test_isothermal_vacuum_boundary_rollback.py",
       "tests/python/integration/runtime/test_isothermal_vacuum_floor_inactive.py",
       "tests/python/integration/runtime/test_isothermal_vacuum_floor_system.py",
+      "tests/python/integration/runtime/test_lib_face_body_swap_native.py",
       "tests/python/integration/runtime/test_lib_numerics_reconstructions_native.py",
       "tests/python/integration/runtime/test_local_product_operators_runtime.py",
       "tests/python/integration/runtime/test_local_product_readonly_runtime.py",
@@ -8090,7 +8091,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1217,
+    "total_files": 1218,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8314,6 +8315,16 @@
         }
       },
       "source_sha256": "68fef40a86300a8afe9b7886827ec7496ed08b4324254dc0ec561140673b1523"
+    },
+    "n3_20261107_flux_family": {
+      "basis": "Scheduling estimate for the flux family of Linear N3 (ROM-87, lot 1), not a CI receipt. The file compiles six artifacts: the CF4 body swap (the L1 upwind body and the L5 Scharfetter-Gummel body on one periodic 24 x 8 case, two SSPRK2 steps each) and master's scalar-advection tutorial 02 three times (native ScalarUpwind under AdaptiveCFL and under FixedDt, upwind(speed=) under FixedDt, 64 x 64, MUSCL(VanLeer), to t = 0.2) and once more as written with upwind(speed=), refused at its first step (ROM-107). Analogue: test_api_v02_python_face_inputs_native.py, six artifacts, 695 s locally, estimate 850 s. Local run of the file on 479e872 with this lot: 377 s for its four tests and six artifacts (the ROM-107 test alone: 79 s), one cloud container, 4 cores, Kokkos Serial Dim2, cold isolated cache.",
+      "files": {
+        "tests/python/integration/runtime/test_lib_face_body_swap_native.py": {
+          "analogue": "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py",
+          "estimated_seconds": 600,
+          "source_sha256": "f0d99c43bac09b459d6c0829b8a521298b6cd332b688e7c79a81041078bcc75d"
+        }
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
@@ -9532,5 +9543,6 @@
   "tests/python/integration/runtime/test_lib_numerics_reconstructions_native.py": 600,
   "tests/python/unit/codegen/test_program_code_volume_f7.py": 15,
   "tests/python/integration/runtime/test_advance_outputs_n8_native.py": 600,
-  "tests/python/unit/time/test_advance_outputs_n8.py": 30
+  "tests/python/unit/time/test_advance_outputs_n8.py": 30,
+  "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 600
 }

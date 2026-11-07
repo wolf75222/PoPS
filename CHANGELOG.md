@@ -116,6 +116,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   derived `hll(F, Uh)` reads them and matches `riemann.HLL()` on M03 and M16; `rusanov` takes
   `smax(uL, uR, n)` and `upwind` takes `speed(face)`, both matching `riemann.Rusanov()` on M01
   when they read the normal (spec 0.3 section 4.4, ROM-99).
+- Write the fluxes of `pops.lib.numerics` to the rows of spec 0.3 section 2.6.9 (N3, ROM-87):
+  `upwind(F, Uh, speed=f)` gives s uL where s = f(face) > 0, else s uR, and records |s| as its
+  speed; `hll(F, Uh)` records max(|sL|, |sR|) of its pair and drops the pilot's `speeds=` option.
+  The native face loop of `riemann.User` passes the CF4 body-swap parity with the L1 upwind body
+  and the L5 Scharfetter-Gummel body, and `upwind(speed=f)` matches master's
+  `riemann.ScalarUpwind` on the case of scalar-advection tutorial 02. `upwind(F, Uh)` without
+  `speed=` stays Rusanov with the R9 speed until a face reads F(1).n (CF15, ROM-106).
 - Evaluate a `riemann.User` face residual on the transport prepared at bind, like the native face:
   no field is allocated per evaluation, the face carrier is copied only when a Program reads it,
   and the stability frequency is read from the recorded face speeds, on the prepared transport in
