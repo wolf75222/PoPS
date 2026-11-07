@@ -1,5 +1,5 @@
-"""N3 (ROM-87): muscl and the limiters written in Python (pops.lib.numerics) against b6's native
-routes, on the case of master's tutorial 02 (docs/tutorials/scalar_advection/02).
+"""N3 (ROM-87): muscl, the limiters and weno5 written in Python (pops.lib.numerics) against b6's
+native routes, on the case of master's tutorial 02 (docs/tutorials/scalar_advection/02).
 
 The case is the tutorial's: 64 x 64 cells, the authored flux a u with a = (1, 0.25), inflow on
 x_min and y_min, outflow on x_max and y_max, SSPRK2 written in pops.Program, AdaptiveCFL(0.45)
@@ -8,7 +8,8 @@ up to t = 0.2. Each row compiles it twice, with the native
 being master's ``riemann.ScalarUpwind`` in both so that the reconstruction is the only
 difference, and runs both artifacts from the same initial state. The two runs take the same steps
 and reach the same time; their final states agree to rounding, and their L1 and L-infinity
-differences and bitwise equality are recorded.
+differences and bitwise equality are recorded. The ``weno5`` row does the same with the native
+``reconstruction.WENO5()`` and ``weno5(U)``.
 
 The tutorial with a Python face flux as well is not a row here: under the tutorial's AdaptiveCFL
 a riemann.User face is refused at the first step (user_face_numerical_stability, ROM-107), a
@@ -27,7 +28,7 @@ from pops.boundary.transport import Inflow, Outflow
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
-from pops.lib.numerics import mc, minmod, muscl, superbee, vanleer
+from pops.lib.numerics import mc, minmod, muscl, superbee, vanleer, weno5
 from pops.math import ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -167,3 +168,15 @@ def test_python_muscl_matches_the_native_muscl(name, isolated_native_cache, nati
     with collective_check(world):
         _assert_parity(native, python, record_property)
 
+
+
+def test_python_weno5_matches_the_native_weno5(isolated_native_cache, native_cxx, kokkos_root,
+                                               record_property):
+    del isolated_native_cache, native_cxx, kokkos_root
+    _native, world = native_profile(dimension=2, scope="N3 weno5")
+    native = _run(world, lambda flux, U, velocity: _native_scalar_upwind(
+        flux, U, reconstruction.WENO5(), velocity), "N3 weno5 native")
+    python = _run(world, lambda flux, U, velocity: _native_scalar_upwind(
+        flux, U, weno5(U), velocity), "N3 weno5 Python")
+    with collective_check(world):
+        _assert_parity(native, python, record_property)

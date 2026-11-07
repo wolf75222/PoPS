@@ -16,6 +16,11 @@
   here. The bits differ in one other place, counted too: a cell value -0 with a zero slope, whose
   native trace on the negative face is -0 + (-1/2) 0 = -0, while the mirrored body gives
   -0 + (1/2) 0 = +0; the two traces compare equal.
+* The generated policy of ``weno5(U)`` is compiled beside the native ``pops::Weno5`` (``weno5z``)
+  with the default regulariser and with 1e-6, over every five-sample stencil of a grid that
+  holds both sides of the native rescaling bound 1e37, and over smooth and jumping profiles from
+  1e-30 to 1e49 in magnitude: where the native trace is finite the bits are equal, and where it
+  is not the generated policy refuses.
 """
 from __future__ import annotations
 
@@ -29,7 +34,7 @@ import pytest
 
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.lib.numerics import Reconstruct, mc, minmod, muscl, superbee, vanleer
+from pops.lib.numerics import Reconstruct, mc, minmod, muscl, superbee, vanleer, weno5
 from pops.numerics import reconstruction
 
 REPO = Path(__file__).resolve().parents[4]
@@ -101,6 +106,23 @@ def test_reconstruct_refuses_reads_it_cannot_realize(body, message):
     U = _state()
     with pytest.raises(TypeError, match=message):
         Reconstruct(U, body(U))
+
+
+def test_weno5_derives_its_stencil_and_checks_its_regulariser():
+    U = _state()
+    default = weno5(U)
+    assert default.options["sample_offsets"] == (-2, -1, 0, 1, 2)
+    assert default.options["ghost_depth"] == 3 and default.options["formal_order"] == 5
+    assert weno5(U, epsilon=1e-40).options["source_identity"] == \
+        default.options["source_identity"]
+    assert weno5(U, epsilon=1e-6).options["source_identity"] != \
+        default.options["source_identity"]
+    for bad in (0., -1e-6, math.inf, math.nan):
+        with pytest.raises(ValueError, match="epsilon"):
+            weno5(U, epsilon=bad)
+    for bad in (True, "1e-6"):
+        with pytest.raises(TypeError, match="epsilon"):
+            weno5(U, epsilon=bad)
 
 
 def test_builders_refuse_values_that_are_not_functions():
@@ -206,3 +228,91 @@ def test_generated_muscl_policy_is_the_native_limiter_bit_for_bit(name, native_c
     else:
         # Only differences whose product passes the largest double: |a|, |b| >= 1e154 here.
         assert 0 < product_refusals < refused
+
+
+# WENO5: five-sample stencils over zeros of both signs, subnormal, tiny, ordinary, values on both
+# sides of the native rescaling bound 1e37, huge and non-finite samples.
+_WENO_VALUES = (0., -0., 5e-324, -1e-300, 0.3, 1., -1., 2.5, 1e30, 9e36, -2e37, 1e300,
+                math.inf, math.nan)
+
+
+def _weno_program(epsilon):
+    from pops.codegen.user_reconstruction_lowering import emit_user_reconstruction_policy
+
+    policy = emit_user_reconstruction_policy(
+        SimpleNamespace(_user_reconstruction=weno5(_state(), epsilon=epsilon)))
+    values = ", ".join(_cpp_double(v) for v in _WENO_VALUES)
+    native_eps = "" if epsilon is None else "  native.eps = %s;" % float.hex(float(epsilon))
+    return "\n".join((
+        "#include <cmath>", "#include <cstdint>", "#include <cstdio>", "#include <cstring>",
+        "#include <limits>", "#include <pops/numerics/fv/reconstruction.hpp>",
+        policy,
+        "struct Sampler { const double* centre; int orientation;",
+        "  double operator()(int offset) const { return centre[orientation*offset]; } };",
+        "static std::uint64_t bits(double x) { std::uint64_t b; std::memcpy(&b, &x, 8); return b; }",
+        "static long equal = 0, refused = 0;",
+        "static bool compare(const pops::Weno5& native,",
+        "                    const pops_generated::UserReconstructionPolicy& generated,",
+        "                    const double* cells) {",
+        "  for (int orientation : {1, -1}) {",
+        "    const double expected = native.stencil_face_value(Sampler{cells + 2, orientation});",
+        "    const double got = generated.stencil_face_value(Sampler{cells + 2, orientation});",
+        "    if (std::isfinite(expected) ? bits(got) == bits(expected) : std::isnan(got)) {",
+        "      ++(std::isfinite(expected) ? equal : refused);",
+        "      continue;",
+        "    }",
+        "    std::printf(\"MISMATCH %a %a %a %a %a o=%d native=%a generated=%a\\n\", cells[0],",
+        "                cells[1], cells[2], cells[3], cells[4], orientation, expected, got);",
+        "    return false;",
+        "  }",
+        "  return true;",
+        "}",
+        "int main() {",
+        "  const double values[] = {%s};" % values,
+        "  const int n = sizeof(values)/sizeof(values[0]);",
+        "  const pops_generated::UserReconstructionPolicy generated{};",
+        "  pops::Weno5 native{};",
+        native_eps,
+        "  double cells[5];",
+        "  for (int a = 0; a < n; ++a) for (int b = 0; b < n; ++b) for (int c = 0; c < n; ++c)",
+        "  for (int d = 0; d < n; ++d) for (int e = 0; e < n; ++e) {",
+        "    cells[0] = values[a]; cells[1] = values[b]; cells[2] = values[c];",
+        "    cells[3] = values[d]; cells[4] = values[e];",
+        "    if (!compare(native, generated, cells)) return 1;",
+        "  }",
+        "  // Smooth and rough profiles at magnitudes from 1e-30 to 1e36 and beyond the rescaling",
+        "  // bound: a sine with a shift and a jump, sampled at a deterministic sequence of phases.",
+        "  std::uint64_t state = 88172645463325252ull;",
+        "  for (int trial = 0; trial < 200000; ++trial) {",
+        "    state ^= state << 13; state ^= state >> 7; state ^= state << 17;",
+        "    const double phase = double(state % 100000) / 100000.0 * 6.283185307179586;",
+        "    const double magnitude = std::pow(10.0, double(int(state >> 20) % 80) - 30.0);",
+        "    const int jump = int((state >> 40) % 6);",
+        "    for (int k = 0; k < 5; ++k)",
+        "      cells[k] = magnitude * (std::sin(phase + 0.3 * k) + (k >= jump ? 0.5 : 0.0));",
+        "    if (!compare(native, generated, cells)) return 1;",
+        "  }",
+        "  std::printf(\"%ld %ld\\n\", equal, refused);",
+        "  return 0;",
+        "}",
+    ))
+
+
+@pytest.mark.compiler
+@pytest.mark.parametrize("epsilon", (None, 1e-6))
+def test_generated_weno5_policy_is_the_native_weno5z_bit_for_bit(epsilon, native_cxx, tmp_path,
+                                                                 record_property):
+    source = tmp_path / "weno5.cpp"
+    source.write_text(_weno_program(epsilon))
+    binary = tmp_path / "weno5"
+    compiled = subprocess.run(
+        [native_cxx, "-std=c++20", "-O2", "-I", str(REPO / "include"), str(source),
+         "-o", str(binary)], capture_output=True, text=True, check=False)
+    assert compiled.returncode == 0, compiled.stderr[-4000:]
+    ran = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stdout[-2000:]
+    equal, refused = map(int, ran.stdout.split())
+    record_property("bitwise_equal_traces", equal)
+    record_property("refused_by_both", refused)
+    assert equal + refused == 2*(len(_WENO_VALUES)**5 + 200000)
+    assert equal > len(_WENO_VALUES)**5

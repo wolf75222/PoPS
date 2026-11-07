@@ -8190,14 +8190,14 @@
       }
     },
     "n3_20261107_reconstructions": {
-      "basis": "Scheduling estimates for N3 reconstructions and limiters (ROM-87), not CI receipts. The source unit file builds the reconstructions without compiling a case and compiles four standalone C++ programs that put the generated MUSCL policy beside the native limiter policies: 3 s locally on 4 cores, so the 30 s tier of a compiler-gated source file. The parity file compiles master's tutorial 02 eight times, four limiters by two routes (native MUSCL and pops.lib.numerics.muscl, ScalarUpwind on both): 376 s locally on 4 cores with Kokkos Serial and nothing else running (pytest timing receipt, 91.8 to 95.3 s per row), so 600 s with the margin of N3a (1400 s for 1244 s beside other compiles). Refresh from complete CI timing artifacts.",
+      "basis": "Scheduling estimates for N3 reconstructions and limiters (ROM-87), not CI receipts. The source unit file builds the reconstructions without compiling a case and compiles six standalone C++ programs that put the generated MUSCL and WENO5 policies beside the native ones: 7 s locally on 4 cores, so the 30 s tier of a compiler-gated source file. The parity file compiles master's tutorial 02 ten times, four limiters and WENO5 by two routes (native MUSCL or WENO5 and pops.lib.numerics.muscl or weno5, ScalarUpwind on both): 91.0 to 95.3 s per MUSCL row and 104.0 s for the WENO5 row locally on 4 cores with Kokkos Serial and nothing else running (pytest receipts), 477 s in all, so 750 s with the margin of N3a (1400 s for 1244 s beside other compiles). Refresh from complete CI timing artifacts.",
       "files": {
         "tests/python/unit/numerics/test_lib_numerics_reconstructions.py": {
           "estimated_seconds": 30,
           "kind": "source_unit"
         },
         "tests/python/integration/runtime/test_lib_numerics_reconstructions_native.py": {
-          "estimated_seconds": 600,
+          "estimated_seconds": 750,
           "kind": "native_profile",
           "analogue": "tests/python/integration/runtime/test_api_v02_python_faces_native.py"
         }
@@ -9414,5 +9414,5 @@
   "tests/python/integration/runtime/test_compiled_control_n8_native.py": 600,
   "tests/python/unit/time/test_compiled_control_n8.py": 30,
   "tests/python/unit/numerics/test_lib_numerics_reconstructions.py": 30,
-  "tests/python/integration/runtime/test_lib_numerics_reconstructions_native.py": 600
+  "tests/python/integration/runtime/test_lib_numerics_reconstructions_native.py": 750
 }
