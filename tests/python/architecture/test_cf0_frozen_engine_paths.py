@@ -86,7 +86,8 @@ B6_PLACEMENT = {
     )),
     "level-transfer-restriction": ("G06", 2, ("include/pops/amr/transfer/transfer_provider.hpp",)),
 }
-# The b6 entries that cite lines: their native is that code, not the whole file (IR24).
+# The b6 entries that cite lines: their native is that code, not the whole file (IR24). The test
+# reads the ids; the values record the lines that IR24 cites at b6.
 B6_CITED_LINES = {
     "face-loop-stencil-flux": (112, 132, 156), "face-loop-generated-system-block": (1704,),
     "face-loop-generated-amr-system-block": (2265,), "direct-sum-spatial-interaction": ("423-437",),

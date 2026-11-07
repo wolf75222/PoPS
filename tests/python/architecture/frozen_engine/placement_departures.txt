@@ -12,3 +12,14 @@
 # neither a move nor a removal. For an entry that cites lines, the file may stay in a core path,
 # and the line says where the cited code went. Lines are never removed: at the freeze (FC8) this
 # file names where every native of b6 went.
+#
+# test_cf0_frozen_engine_paths.py checks the form of each line, that its native left the list,
+# that a whole-file native left the core paths and that a move names a tracked file of the native
+# component tree. The rest rests on the line being true, and the review of its PR checks it:
+# - a whole-file native renamed within the core paths also loses its old path, so a false
+#   "removed" line lets it pass (the rename shows in the diff, and its CF2 sites need
+#   refresh_exceptions --allow-moves);
+# - a "moved" line may name any file of the native tree, so the review checks that it holds the
+#   native;
+# - a "removed" line for an entry that cites lines passes while the cited code stays, since its
+#   file stays in a core path.
