@@ -611,27 +611,58 @@ def _planned_coarse_distribution(patch_layout_data: Any, context: AMRResolutionC
 
     The interface scheduler refuses a cross-block interface whose endpoint is replicated as soon
     as it runs on two ranks or more ("distributed multi-block interfaces require unique patch
-    ownership"). So the plan partitions the coarse level of a hierarchy whose blocks carry a
-    cross-block interface, and keeps the replicated coarse level of b6 otherwise. A plan does
-    not depend on the rank count, so a case that requires a replicated coarse level for such a
-    hierarchy writes a constraint the runtime cannot run, and the plan refuses it (IR22).
+    ownership"). So, when the case writes no constraint, the plan partitions the coarse level of
+    a hierarchy whose blocks carry a cross-block interface, and keeps the replicated coarse level
+    of b6 otherwise. A constraint the case writes is kept as written; ``pops.compile`` refuses the
+    one the runtime cannot run (``check_coarse_distribution``).
     """
     authored = patch_layout_data["distribute_coarse"]
-    carries_interface = any(
-        tuple(getattr(row, "interfaces", ()) or ()) for row in context.numerics)
     if authored is None:
-        return carries_interface
-    if authored is False and carries_interface:
-        from pops._ir.refusals import ScheduleIllegal
-
-        raise ScheduleIllegal(
-            "a cross-block interface needs one owner per patch of the coarse level, and a "
-            "replicated coarse level has one copy per rank; omit the constraint and the plan "
-            "partitions the coarse level",
-            subject=context.layout_plan.qualified_id,
-            constraint="PatchLayout(distribute_coarse=False)",
-        )
+        return any(tuple(getattr(row, "interfaces", ()) or ()) for row in context.numerics)
     return authored
+
+
+def _block_carries_interface(block: Any) -> bool:
+    numerics = getattr(block, "numerics", None)
+    if numerics is None:
+        return False
+    if tuple(getattr(numerics, "interfaces", ()) or ()):
+        return True
+    return any(tuple(getattr(boundary, "interfaces", ()) or ())
+               for boundary in getattr(numerics, "boundaries", ()))
+
+
+def check_coarse_distribution(plan: Any) -> None:
+    """Refuse a replicated coarse level under a cross-block interface (IR22, spec 0.3 C50).
+
+    An artefact does not depend on the rank count, and the interface scheduler needs one owner
+    per patch of an endpoint as soon as two ranks run it. A hierarchy whose coarse level is
+    replicated and whose blocks carry a cross-block interface is therefore a storage constraint
+    the runtime cannot run on every rank count the artefact admits. The plan only reaches that
+    state from an authored ``PatchLayout(distribute_coarse=False)``, since its own choice
+    partitions such a level; ``pops.compile`` refuses it before any native work, whatever the
+    rank count.
+    """
+    authorities = getattr(plan, "layout_amr_authorities", None) or {}
+    if not authorities:
+        return
+    block_layouts = {row.subject.local_id: row.layout.qualified_id
+                     for row in plan.layout_plan.assignments if row.subject_kind == "block"}
+    for layout_id, row in authorities.items():
+        options = row.authorities.hierarchy.plan.patch_generation.options.to_data()
+        if options["distribute_coarse"] is not False:
+            continue
+        if any(block_layouts.get(block.name) == layout_id and _block_carries_interface(block)
+               for block in plan.blocks):
+            from pops._ir.refusals import ScheduleIllegal
+
+            raise ScheduleIllegal(
+                "a cross-block interface needs one owner per patch of the coarse level, and a "
+                "replicated coarse level has one copy per rank; omit the constraint and the "
+                "plan partitions the coarse level",
+                subject=layout_id,
+                constraint="PatchLayout(distribute_coarse=False)",
+            )
 
 
 def _hierarchy(

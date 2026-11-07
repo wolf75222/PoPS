@@ -55,7 +55,11 @@ def test_replicated_coarse_constraint_on_a_cross_block_interface_is_schedule_ill
     flux = transport_trace_flux()
     spec = build_t10_multiblock(flux)
     layout = _t10_with_patch_layout(spec, PatchLayout(distribute_coarse=False))
+    plan = pops.resolve(pops.validate(spec.case), layout=layout, components=(flux,))
+    hierarchy = next(iter(plan.layout_amr_authorities.values())).authorities.hierarchy
+    assert hierarchy.plan.patch_generation.options.to_data()["distribute_coarse"] is False
+    # Refused by pops.compile before any native work, whatever the rank count (C50, P3).
     with pytest.raises(ScheduleIllegal, match="one owner per patch") as refusal:
-        pops.resolve(pops.validate(spec.case), layout=layout, components=(flux,))
-    assert refusal.value.rule == "IR22" and refusal.value.phase == "resolve"
+        pops.compile(plan)
+    assert refusal.value.rule == "IR22" and refusal.value.phase == "compile"
     assert refusal.value.constraint == "PatchLayout(distribute_coarse=False)"

@@ -40,8 +40,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - ROM-85 (N10, lot 2, C50): the plan chooses the distribution of the coarse level (spec 0.3 DM3,
   §21.6, adjudication §26). `PatchLayout.distribute_coarse` defaults to `None`; the plan partitions
   the coarse level when it carries a cross-block interface and replicates it otherwise, so T10 no
-  longer writes a `PatchLayout`. An explicit `distribute_coarse=False` on an interface is refused at
-  resolve by the new typed refusal `ScheduleIllegal` (IR22).
+  longer writes a `PatchLayout`. An explicit `distribute_coarse=False` on an interface is refused by
+  `pops.compile`, before any native work and whatever the rank count, with the new typed refusal
+  `ScheduleIllegal` (IR22, phase compile). The resolved plan identity of an AMR case without a
+  `PatchLayout` changes once: its authored data now says "no constraint" (`None`), and the resolved
+  patch-generation options record the plan's choice.
 
 - ROM-90 (N9, lot 1): decide each Program reduction and its checks in one collective (spec 0.3
   SV20, duties 2 and 3, and PF8). `dot_all` and the AMR composite pairing and integral send the
