@@ -27,6 +27,7 @@
 #
 # NOT `set -u`: `conda activate` references unset variables in its own shell hook.
 set -eo pipefail
+ORIGINAL_ARGS=("$@")
 
 ENV_NAME="${POPS_ENV_NAME:-pops}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -100,6 +101,29 @@ conda activate "$ENV_NAME"
 export POPS_NATIVE_DIM="$NATIVE_DIM"
 echo "--- env '$ENV_NAME' active (CONDA_PREFIX=$CONDA_PREFIX) ---"
 echo "native spatial specialization: Dim=$POPS_NATIVE_DIM"
+
+# --- installation lease -----------------------------------------------------------------------------
+# Installing replaces the SDK that this environment's qualifications run on.  The whole build runs
+# under the exclusive lease of the installation (scripts/sdk_cohort.py): it fails fast while a
+# qualification holds it, and no qualification starts before the build has installed and attested.
+POPS_SITE_PACKAGES="$(python -I -c 'import sysconfig; print(sysconfig.get_path("platlib"))')"
+if ! python -I "$HERE/scripts/sdk_cohort.py" held --installation "$POPS_SITE_PACKAGES"; then
+  if [[ -n "${POPS_SDK_LEASE_REEXEC:-}" ]]; then
+    echo "the exclusive lease of $POPS_SITE_PACKAGES is not held after re-execution" >&2
+    exit 3
+  fi
+  export POPS_SDK_LEASE_REEXEC=1
+  exec python -I "$HERE/scripts/sdk_cohort.py" mutate --installation "$POPS_SITE_PACKAGES" \
+    --purpose "build_python.sh --dim $NATIVE_DIM" \
+    -- bash "$HERE/scripts/build_python.sh" "${ORIGINAL_ARGS[@]}"
+fi
+echo "installation lease: exclusive on $POPS_SITE_PACKAGES"
+# The source as this build starts. attest-build compares it with the source as the build ends: a
+# checkout that changed in between attests nothing.
+POPS_BUILD_SOURCE="$(mktemp "${TMPDIR:-/tmp}/pops-build-source.XXXXXX")"
+trap 'rm -f "$POPS_BUILD_SOURCE"' EXIT
+python -I "$HERE/scripts/sdk_cohort.py" identify --source "$HERE" > "$POPS_BUILD_SOURCE" \
+  || echo "warning: the source could not be identified; this build cannot be attested" >&2
 
 # Conda's macOS OpenMPI wrappers remember the compiler used to build the package, which is not part
 # of this deliberately AppleClang-based environment.  OpenMPI's documented override keeps mpicc,
@@ -240,7 +264,7 @@ else
   echo "      (slower, unpinned build deps). Add 'scikit-build-core' to environment.yml + 'conda env update' to fix."
 fi
 NATIVE_VARIANT_SNAPSHOT="$(mktemp -d "${TMPDIR:-/tmp}/pops-native-variants.XXXXXX")"
-cleanup_native_snapshot() { rm -rf "$NATIVE_VARIANT_SNAPSHOT"; }
+cleanup_native_snapshot() { rm -rf "$NATIVE_VARIANT_SNAPSHOT" "$POPS_BUILD_SOURCE"; }
 trap cleanup_native_snapshot EXIT
 PYTHONPATH= PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/preserve_native_variants.py" snapshot --dest "$NATIVE_VARIANT_SNAPSHOT"
@@ -276,6 +300,17 @@ else
 fi
 PYTHONPATH= PYTHONNOUSERSITE=1 \
   python "$HERE/scripts/verify_installed_native.py" "${native_verify_args[@]}"
+if [[ -n "$WHEEL_DIR" ]]; then
+  # The retained wheel is now this environment's SDK.  Attest which source built its final Dim=N
+  # leaf, here and beside the wheel, so that a cohort of this source can be published from the
+  # wheel (scripts/sdk_cohort.py prefix, then publish).
+  python -I "$HERE/scripts/sdk_cohort.py" attest-build --source "$HERE" \
+      --package "$POPS_SITE_PACKAGES/pops" --dimension "$POPS_NATIVE_DIM" \
+      --source-before "$POPS_BUILD_SOURCE" --wheel "${built_wheels[0]}" \
+      -- bash scripts/build_python.sh "${ORIGINAL_ARGS[@]}" \
+    || echo "warning: the Dim=$POPS_NATIVE_DIM build is installed but not attested;" \
+            "it cannot form a cohort" >&2
+fi
 echo ""
 echo "--- pops.runtime.doctor.doctor() ---"
 PYTHONPATH= PYTHONNOUSERSITE=1 \

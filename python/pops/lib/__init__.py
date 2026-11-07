@@ -7,8 +7,8 @@ packages and keeps ``pops.lib`` for things that are ready to use (criterion 7: p
 * :mod:`pops.lib.models` -- provided physical models (HyQMOM15 / Gaussian);
 * :mod:`pops.lib.initial` -- native initial profiles;
 * :mod:`pops.lib.amr` -- native transfer implementations;
-* :mod:`pops.lib.numerics` -- builders of the discrete algebra (spec 0.3 IR25), from the
-  FaceFlux pilot of N7a.
+* :mod:`pops.lib.numerics` -- numerical fluxes written in Python (spec 0.3 section 4.4) and
+  builders of the discrete algebra (spec 0.3 IR25), from the N3a and N7a pilots.
 
 The relocated central catalogs now live in:
 

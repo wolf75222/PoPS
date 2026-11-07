@@ -16,8 +16,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 
+### Added
+
+- ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
+  qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
+  SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
+  publishes the immutable cohort of one clean source and one retained-wheel installation and
+  leases the installation, so a build never replaces an SDK under a running qualification.
+  R is read only from the SDK's own native leaf, runtime and report, S from a committed oracle
+  that the receipt calls itself, and the process entry, the driver and every imported module are
+  judged: a receiver starts from a committed file or `python -m pytest`, under that entry, and
+  the interpreter drives it only through its standard library and pytest, so CI starts pytest
+  from the committed `scripts/ci_pytest_bootstrap.py` instead of `python -c`. Only
+  `build_python.sh` attests a leaf, with its build environment, here and beside the retained
+  wheel; the cohort says whether that environment is official, and `sdk_cohort.py prefix`
+  installs the wheel into a fresh qualification prefix.
+
 ### Changed
 
+- Move the review material of the API 0.4.0 and API 0.2 work (`docs/development/api_040/`,
+  `docs/review/`, `tests/review/`, `outputs/`, `docs/dev/`; 3,281 files) out of the code tree
+  into an archive with a SHA-256 manifest, described in `docs/development/review_archive.md`.
+  What tests and docs still read (17 files and two receipt bundles of 327 files), and the notes
+  of the seven benchmark scripts that stay, move to
+  `tests/python/support/`, `tests/cpp/integration/runtime/`, `benchmarks/joint_reconstruction/`
+  and `docs/development/`.
 - Install a plan default History Field metadata capacity (8 MiB retained, 16 MiB workspace) for
   every Program with a History ring that does not author `history_field_metadata_budget`, so a
   case whose History metadata fits it writes no infrastructure budget to retain Field support
@@ -42,6 +65,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   Preserve scientific typing, inventory provenance, transactional publication and
   explicit backend limits; document the 28-model/12-method CPU reception separately
   from GitHub CI and full scientific-family qualification.
+- Write the Rusanov, upwind and HLL face fluxes in Python in `pops.lib.numerics`
+  (`rusanov(F, Uh, smax)`, `upwind(F, Uh, speed)`, `hll(F, Uh, speeds)`): each returns a
+  finite-volume realization whose `riemann.User` face body becomes the generated C++ face policy.
+  The M01 and M03 examples use `rusanov` by default and keep the native routes as `native_rusanov`
+  and `native_hll`, with bitwise equal final states; `benchmarks/n3a/` times both routes.
+- Pass a `riemann.User` face body two more inputs by name: the face normal `n` and the signed
+  wave-speed interval `speeds` = (sL, sR) that the model declares along it, united over the two
+  traces; the generated policy evaluates each only where the body reads it, and a face that reads
+  `speeds` on a model that declares no signed pair is refused when the case is validated. Like
+  the native HLL, the face reads (sL, sR) first and refuses a trace whose interval is not finite
+  or not ordered; a body that names `n` or `speeds` among its five face inputs is refused. The
+  derived `hll(F, Uh)` reads them and matches `riemann.HLL()` on M03 and M16; `rusanov` takes
+  `smax(uL, uR, n)` and `upwind` takes `speed(face)`, both matching `riemann.Rusanov()` on M01
+  when they read the normal (spec 0.3 section 4.4, ROM-99).
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.

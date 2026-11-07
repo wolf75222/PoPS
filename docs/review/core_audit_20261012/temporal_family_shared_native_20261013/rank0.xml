@@ -1,2 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<testsuite name="999NativeRegridRestart" tests="1" errors="0" failures="0" skipped="0" time="81.70453600000474"><testcase name="test_regrid_on_restart_mpi_shared_interface_transaction" classname="native_mpi2_restart" time="81.70453600000474" /></testsuite>
