@@ -1493,7 +1493,10 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_api_v02_spatial_bdf2_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_temporal_field_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_relaxed_history_native_mpi2.py", nproc = 2, native_dimension = 2 },
-  { path = "tests/python/integration/mpi/test_api_v02_relaxed_multiblock_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_relaxed_multiblock_native_mpi2.py", nproc = 2, native_dimension = 2, partitions = [
+    { id = "ratio_one", nodes = ["test_affine_multiblock_transports_native_interface_measures[1]"] },
+    { id = "ratio_two_rejection", nodes = ["test_affine_multiblock_transports_native_interface_measures[2]", "test_rejection_after_multiblock_affine_publication_restores_interface_ledger"] },
+  ] },
   { path = "tests/python/integration/mpi/test_api_v02_authored_stability_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_composite_integral_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_nonlinear_interval_transport_native_mpi2.py", nproc = 2, native_dimension = 2 },

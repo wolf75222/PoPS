@@ -186,6 +186,9 @@ Run 41037321460 of PR #705 (`cf2f510`) stopped eight ranked groups at 1200 secon
 groups at their 840-second child watchdog. Its serial shards give each case's cost; the cases each
 MPI group finished before its limit bound the ratio R of MPI to serial cost. Partitions aim at 60%
 of the budget at the upper bound of R. A single case cannot be split further.
+`relaxed_multiblock_native` failed its first case in that run, which hid the other two (fixed by
+PR #721). Its three cases cost 917 seconds serial (shard 45); its R is bounded by its relaxed
+siblings in the same run (0.66 to 1.16) and by its local np2 to one-rank ratio with that fix (1.22).
 
 | MPI group | Cases | R | Partitions | Largest partition, predicted |
 | --- | --- | --- | --- | --- |
@@ -194,6 +197,7 @@ of the budget at the upper bound of R. A single case cannot be split further.
 | `coupled_methods_native` (ranked) | 7 | 0.81 to 1.53 | 4 | `mprk22_network[1.5-True]` alone, 796 to 1504 s |
 | `original_field_recovery_native` (ranked) | 7 | 1.38 to 1.72 | 4 | 602 s (50%) |
 | `original_field_typed_recovery_native` (ranked) | 4 | 1.29 to 1.72 | 4 | 400 s (33%) |
+| `relaxed_multiblock_native` (ranked) | 3 | 0.66 to 1.22 | 2 | 705 s (59%) |
 | `amr_original_field`, saved restart (worlds) | 3 | at most 1.43 | 3 | 553 s (66%) |
 | `captured_diffusion` (worlds) | 4 | 1.38 to 1.88 | 4 | about 300 s (36%) |
 | `evolved_original_stage` (worlds) | 8 | at most 1.35 | 4 | 422 s (50%) |

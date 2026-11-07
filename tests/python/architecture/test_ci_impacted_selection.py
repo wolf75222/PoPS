@@ -1485,6 +1485,11 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
                 ("iterate_typed_error", [typed % "iterate_typed_error-3.9"]),
                 ("iterate_typed_budget", [typed % "iterate_typed_budget--7"]),
             )),
+        "test_api_v02_relaxed_multiblock_native_mpi2.py": ("test_api_v02_relaxed_multiblock_native.py", (
+            ("ratio_one", ["test_affine_multiblock_transports_native_interface_measures[1]"]),
+            ("ratio_two_rejection", ["test_affine_multiblock_transports_native_interface_measures[2]",
+                                     "test_rejection_after_multiblock_affine_publication_restores_interface_ledger"]),
+        )),
     }
     for row in expected:
         name = row["path"].rsplit("/", 1)[1]

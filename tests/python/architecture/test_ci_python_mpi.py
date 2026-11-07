@@ -46,11 +46,11 @@ if reports:
 def test_exact_groups_cover_all_declared_contracts_and_nodes_with_existing_caps():
     plan = runner.make_plan()
     assert (len(plan['groups']), plan['contract_count'], plan['orchestrator_count'],
-            plan['entrypoint_count']) == (153, 131, 29, 102)
-    assert plan['parent_launch_count'] == 190
+            plan['entrypoint_count']) == (154, 131, 29, 102)
+    assert plan['parent_launch_count'] == 191
     launches = [launch for group in plan['groups'] for launch in group['launches']]
     assert len({(launch['path'], launch.get('parent_node', launch.get('partition_id', '')))
-                for launch in launches}) == 190
+                for launch in launches}) == 191
     assert len({launch['path'] for launch in launches}) == 131
     pairs = [row for row in plan['groups'] if row['group'].startswith('worlds-')]
     assert len(pairs) == 37
@@ -117,7 +117,8 @@ def test_partition_contract_cannot_omit_or_invent_native_coverage(mutation, fami
 PARTITIONED_ENTRYPOINTS = (
     'test_api_v02_coupled_methods_native_mpi2', 'test_api_v02_implicit_derivatives_mpi2',
     'test_api_v02_original_field_recovery_native_mpi2',
-    'test_api_v02_original_field_typed_recovery_native_mpi2', 'test_api_v14_distributed_derivatives_mpi2',
+    'test_api_v02_original_field_typed_recovery_native_mpi2', 'test_api_v02_relaxed_multiblock_native_mpi2',
+    'test_api_v14_distributed_derivatives_mpi2',
 )
 
 
@@ -129,7 +130,7 @@ def test_ranked_partitions_split_each_receiver_into_an_exact_disjoint_cover():
     assert sorted(path.rsplit('/', 1)[1][:-3] for path in entries) == list(PARTITIONED_ENTRYPOINTS)
     launches = [launch for group in runner.make_plan()['groups'] for launch in group['launches']
                 if launch['kind'] == 'ranked' and 'partition_id' in launch]
-    assert len(launches) == 16
+    assert len(launches) == 18
     for path, entry in entries.items():
         owned = [launch for launch in launches if launch['path'] == path]
         assert [launch['partition_id'] for launch in owned] == sorted(row['id'] for row in entry['partitions'])
@@ -249,7 +250,7 @@ def test_plan_cli_exports_the_same_complete_dynamic_matrix(tmp_path):
     values = dict(line.split('=', 1) for line in outputs.read_text().splitlines())
     matrix = json.loads(values['matrix'])
     assert matrix['include'] == [{'group': row['group']} for row in plan['groups']]
-    assert values['group_count'] == '153'
+    assert values['group_count'] == '154'
 
 
 def wheel_artifact(tmp_path):
