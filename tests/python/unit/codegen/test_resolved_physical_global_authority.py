@@ -224,7 +224,7 @@ def test_detached_emission_preserves_exact_live_parent_ir_manifest_and_cpp(
 
 
 def test_historical_parent_receipt_remains_byte_exact():
-    parent = Path(__file__).resolve().parents[4] / "docs/development/api_040/sol61_global_authority_parent_parity.json"
+    parent = Path(__file__).resolve().parents[2] / "support/fixtures/sol61_global_authority_parent_parity.json"
     raw = parent.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == "6e088b12ec19cbaa84c47f36edd84d90900320573d1343b973ee037cd626f6b0"
     assert set(json.loads(raw)) == {str((physical, periodic))

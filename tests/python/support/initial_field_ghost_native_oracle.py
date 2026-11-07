@@ -1,6 +1,6 @@
 """Offline independent uniform Helmholtz/FE/Ghost reference, no PoPS import."""
 import numpy as np
-from tests.review.sol61_amr_full_carrier_offline import decode
+from tests.python.support.sol61_amr_full_carrier_offline import decode
 
 CONTRACT='accepted-initial-field-ghost-public@4'
 DT=1/64
