@@ -138,6 +138,7 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "dt_bound",
         "step_transaction",
         "advance_control",
+        "advance_outputs",
         "cadence",
         "cell_local_time",
         "post_synchronization_commits",
@@ -194,6 +195,14 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
             "nodes": [_semantic_node(row) for row in bound["nodes"]],
             "result": bound["result"],
         }
+    if "advance_outputs" in serialized:
+        outputs = serialized["advance_outputs"]
+        if type(outputs) is not list or any(
+                not isinstance(row, Mapping) or set(row) != {"nodes", "record"} for row in outputs):
+            raise TypeError("Program advance_outputs semantic data has an unsupported schema")
+        result["advance_outputs"] = [
+            {"nodes": [_semantic_node(node) for node in row["nodes"]], "record": row["record"]}
+            for row in outputs]
     return semantic_value(
         _drop_program_presentation(result, program_clock_owner),
         where="Program semantic payload",

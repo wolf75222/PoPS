@@ -83,6 +83,7 @@ class _ProgramBase:
     _transaction_stores: Any
     _acceptance_guards: tuple
     _advance_control: Any
+    _advance_outputs: tuple
     _frozen: bool
 
     # --- class-level constant tables (_ProgramConstants) ---
