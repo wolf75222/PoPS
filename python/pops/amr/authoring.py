@@ -99,17 +99,21 @@ def _expression_data(value: Expr) -> dict[str, Any]:
 class PatchLayout:
     """Public authority for the coarse-level patch distribution.
 
+    ``distribute_coarse=None`` (the default) lets the plan choose the distribution (spec 0.3
+    DM3, gap C50): the coarse level is partitioned, one owner per patch, when a block of the
+    hierarchy carries a cross-block interface, and replicated on every rank otherwise. An
+    explicit ``True`` or ``False`` is a constraint on that choice, which the plan checks.
     ``coarse_max_grid=None`` delegates the tile-size choice to the selected native patch
     provider. The public value deliberately never exposes the provider's integer sentinel.
     """
 
-    distribute_coarse: bool = False
+    distribute_coarse: bool | None = None
     coarse_max_grid: int | None = None
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if type(self.distribute_coarse) is not bool:
-            raise TypeError("PatchLayout.distribute_coarse must be an exact bool")
+        if self.distribute_coarse is not None and type(self.distribute_coarse) is not bool:
+            raise TypeError("PatchLayout.distribute_coarse must be None or an exact bool")
         if self.coarse_max_grid is not None:
             if type(self.coarse_max_grid) is not int:
                 raise TypeError(

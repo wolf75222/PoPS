@@ -606,6 +606,34 @@ def _combined_requirement(
     )
 
 
+def _planned_coarse_distribution(patch_layout_data: Any, context: AMRResolutionContext) -> bool:
+    """Choose the distribution of the coarse level (spec 0.3 DM3, PF3, gap C50).
+
+    The interface scheduler refuses a cross-block interface whose endpoint is replicated as soon
+    as it runs on two ranks or more ("distributed multi-block interfaces require unique patch
+    ownership"). So the plan partitions the coarse level of a hierarchy whose blocks carry a
+    cross-block interface, and keeps the replicated coarse level of b6 otherwise. A plan does
+    not depend on the rank count, so a case that requires a replicated coarse level for such a
+    hierarchy writes a constraint the runtime cannot run, and the plan refuses it (IR22).
+    """
+    authored = patch_layout_data["distribute_coarse"]
+    carries_interface = any(
+        tuple(getattr(row, "interfaces", ()) or ()) for row in context.numerics)
+    if authored is None:
+        return carries_interface
+    if authored is False and carries_interface:
+        from pops._ir.refusals import ScheduleIllegal
+
+        raise ScheduleIllegal(
+            "a cross-block interface needs one owner per patch of the coarse level, and a "
+            "replicated coarse level has one copy per rank; omit the constraint and the plan "
+            "partitions the coarse level",
+            subject=context.layout_plan.qualified_id,
+            constraint="PatchLayout(distribute_coarse=False)",
+        )
+    return authored
+
+
 def _hierarchy(
     authoring: Any,
     patch_layout: Any,
@@ -755,6 +783,7 @@ def _hierarchy(
         )
     patch_layout_data = _protocol(
         patch_layout, "to_data", where="AMR patch layout authority")()
+    distribute_coarse = _planned_coarse_distribution(patch_layout_data, context)
     from pops.amr._load_balance_contract import load_balance_provider_data
 
     load_balance_data = load_balance_provider_data(load_balance)
@@ -779,7 +808,7 @@ def _hierarchy(
             provider("box_array", "amr_patch_generation_provider"),
             CanonicalOptions({
                 "native_route": "box_array",
-                "distribute_coarse": patch_layout_data["distribute_coarse"],
+                "distribute_coarse": distribute_coarse,
                 "coarse_max_grid": patch_layout_data["coarse_max_grid"],
             }),
         ),

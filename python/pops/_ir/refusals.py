@@ -80,5 +80,26 @@ class CoverageNotExact(ValueError):
                          % (type(self).__name__, self.rule, self.phase, message, term, times))
 
 
+class ScheduleIllegal(ValueError):
+    """A storage constraint written by a case that the plan cannot satisfy (IR22, DM3).
+
+    The plan chooses every storage layout and distribution; a case MAY constrain the choice, and
+    the plan refuses a constraint that the runtime cannot run. At this commit the one storage
+    constraint a case can write is the b6 form ``PatchLayout(distribute_coarse=...)``, which
+    spec 0.3 §21.6 maps to the plan's distribution; the ``storage_hint`` directive of IR22 comes
+    with the schedules of N7.
+    """
+
+    rule = "IR22"
+    phase = "resolve"
+
+    def __init__(self, message, *, subject, constraint):
+        self.subject = subject
+        self.constraint = constraint
+        super().__init__("%s (%s, %s): %s; constraint %s on %s"
+                         % (type(self).__name__, self.rule, self.phase, message, constraint,
+                            subject))
+
+
 __all__ = ["ClassNotReached", "ConservationNotStructural", "CoverageNotExact",
-           "DeliveryNotStructural", "PropertyNotDerived", "RegionRefusal"]
+           "DeliveryNotStructural", "PropertyNotDerived", "RegionRefusal", "ScheduleIllegal"]
