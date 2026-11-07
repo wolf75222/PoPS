@@ -360,6 +360,9 @@ class _ProgramSerialization(_ProgramBase):
         cell_local_time = self.cell_local_time_contract()
         if cell_local_time is not None:
             result["cell_local_time"] = cell_local_time.to_data()
+        regrid = getattr(self, "_regrid", None)
+        if regrid is not None:
+            result["regrid"] = regrid.to_data()
         if self._histories:
             result["histories"] = [
                 {

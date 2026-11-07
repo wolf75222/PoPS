@@ -6708,7 +6708,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1147,
+    "estimated_count": 1149,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6744,6 +6744,7 @@
       "tests/python/integration/amr/test_refinement_criterion_nonfinite.py",
       "tests/python/integration/amr/test_refinement_criterion_parity.py",
       "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py",
+      "tests/python/integration/amr/test_regrid_decision_native.py",
       "tests/python/integration/amr/test_symbolic_path_amr_runtime.py",
       "tests/python/integration/bindings/test_amr_rectangular_array_orientation.py",
       "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
@@ -7063,6 +7064,7 @@
       "tests/python/unit/amr/test_local_state_storage_amr.py",
       "tests/python/unit/amr/test_public_amr_resolution.py",
       "tests/python/unit/amr/test_refinement_criterion_regions.py",
+      "tests/python/unit/amr/test_regrid_decision.py",
       "tests/python/unit/amr/test_tagging_graph_identity_lowering.py",
       "tests/python/unit/amr/test_value_expr_tagging_protocol.py",
       "tests/python/unit/amr/test_vector_component_tagging.py",
@@ -8058,7 +8060,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1212,
+    "total_files": 1214,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8249,6 +8251,25 @@
       "weights_seconds": {
         "tests/python/integration/io/test_time_history_checkpoint.py": 140.0,
         "tests/python/integration/io/test_time_history_checkpoint_identity.py": 155.0
+      }
+    },
+    "n12_20261107_regrid_decision": {
+      "basis": "Scheduling estimates for Regrid(criterion, when) written in the Program (Linear N12, ROM-95, lot 2): the source-only unit file traces, resolves and emits the decision of the tutorial-09 case; the native file compiles and runs complete adaptive Programs whose decision is generated into the Program. Local receipts are one cloud container, Kokkos Serial Dim2, cold isolated caches; they are not GitHub wall times. Replace from complete CI timing receipts.",
+      "files": {
+        "tests/python/unit/amr/test_regrid_decision.py": {
+          "analogue": "tests/python/unit/amr/test_refinement_criterion_regions.py",
+          "estimated_seconds": 60,
+          "local_receipt": "19 passed in 11.8 s (07/11, source-only, no compile)",
+          "reason": "source-only: traces, resolves and emits the decision of the tutorial-09 case about fifteen times; no compile",
+          "source_sha256": "b03558083698544d3d1cfcbe45b16c8b626341db3cb89ace1d48f337e841997d"
+        },
+        "tests/python/integration/amr/test_regrid_decision_native.py": {
+          "analogue": "tests/python/integration/amr/test_refinement_criterion_parity.py",
+          "estimated_seconds": 900,
+          "local_receipt": "3 passed in 325.8 s (07/11, gcc 13, Kokkos Serial, Dim2, cold isolated cache)",
+          "reason": "three Programs compiled cold (layout cadence, every(2) and a state predicate) and five adaptive runs of the tutorial-09 case",
+          "source_sha256": "a4d62430162e070d766282fe6fa8f9ca093b1ce8370b3c5d59949306acb496f7"
+        }
       }
     }
   },
@@ -9463,5 +9484,7 @@
   "tests/python/unit/time/test_compiled_control_n8.py": 30,
   "tests/python/integration/io/test_time_history_checkpoint_identity.py": 155.0,
   "tests/python/integration/runtime/test_finite_array_residency_native.py": 600,
-  "tests/python/integration/runtime/test_terminal_failure_finite_helpers_native.py": 150
+  "tests/python/integration/runtime/test_terminal_failure_finite_helpers_native.py": 150,
+  "tests/python/unit/amr/test_regrid_decision.py": 60,
+  "tests/python/integration/amr/test_regrid_decision_native.py": 900
 }

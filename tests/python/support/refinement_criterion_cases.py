@@ -3,6 +3,8 @@
 The case is tutorial 09 of the scalar-advection series (SSPRK2, MUSCL-Van Leer, upwind, two levels,
 regrid every two steps). Only the rules of its AMRTagging change, so a test can run the same physics
 with the bytecode tag graph and with the criterion generated into the compiled Program (DM13b).
+With ``when=``, the criterion and the decision to regrid are written in the Program instead of the
+adaptive layout: ``program.regrid(Regrid(criterion, when))`` (N12 lot 2).
 """
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ from pops.amr import (
     ConflictPolicy,
     EqualityPolicy,
     Hysteresis,
+    Regrid,
 )
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow
@@ -54,6 +57,7 @@ def advection_case(
     conflict_policy: ConflictPolicy = ConflictPolicy.REFINE_WINS,
     buffer: Buffer | None = None,
     name: str = "refinement_criterion_case",
+    when: Callable[[SimpleNamespace], Any] | None = None,
 ) -> tuple[Any, Any, SimpleNamespace]:
     """(case, layout, names); ``rules(names)`` returns the Tag and Coarsen rules of the case.
 
@@ -61,7 +65,9 @@ def advection_case(
     ``names.value(key)`` its value in an expression. ``refine`` and ``coarsen`` default to the
     thresholds of tutorial 09. ``names.gradient`` is the discrete gradient of the finite-volume
     method, the stencil the tag graph reads for ``grad(...)``. ``buffer`` replaces the
-    ``Buffer(cells=2)`` of tutorial 09.
+    ``Buffer(cells=2)`` of tutorial 09. ``when(names)``, if given, returns the ``when`` body of the
+    ``Regrid`` that the Program then writes, with the criterion; the layout writes neither
+    ``tagging=`` nor ``regrid=``.
     """
     domain = Rectangle("unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).tag("fluid")
     frame = domain.frame(Cartesian2D())
@@ -105,7 +111,7 @@ def advection_case(
     params = {key: case.param(RuntimeParam("%s_threshold" % key, default=value))
               for key, value in defaults.items()}
     names = SimpleNamespace(
-        case=case, frame=frame, state=state, params=params,
+        case=case, frame=frame, state=state, params=params, program=program,
         value=lambda key: case.value(params[key]),
         gradient=method.amr_indicator_stencil(dimension=len(frame.axes)))
     tagging = AMRTagging(
@@ -114,9 +120,13 @@ def advection_case(
         conflict_policy=conflict_policy)
     transfer = AMRTransfer()
     transfer.state(state, StateTransfer())
-    layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)), tagging=tagging,
-                 regrid=AMRRegrid(schedule=every(2, clock=program.clock)), transfer=transfer,
-                 execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)))
+    regrid: dict[str, Any] = {
+        "tagging": tagging, "regrid": AMRRegrid(schedule=every(2, clock=program.clock))}
+    if when is not None:
+        program.regrid(Regrid(tagging, when(names)))
+        regrid = {}
+    layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)), transfer=transfer,
+                 execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)), **regrid)
     return case, layout, names
 
 

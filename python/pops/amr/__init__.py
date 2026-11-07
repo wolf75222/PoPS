@@ -19,6 +19,7 @@ from .authoring import (
 )
 from pops.mesh._amr.transfer import AMRTransfer
 from pops.mesh._amr import IgnoreAMRCriteria
+from pops.mesh._amr.regrid_decision import Regrid, largest_cells, smallest_cells
 from pops.mesh._amr.hierarchy_native import (
     PreparedHierarchyNativeLowering,
     PreparedHierarchyNativeProvider,
@@ -62,6 +63,7 @@ __all__ = [
     "EqualityPolicy",
     "Hysteresis",
     "IgnoreAMRCriteria",
+    "largest_cells",
     "NativeAMRActionKind",
     "NativeAMRMaterializationCapabilities",
     "NativeAMRMaterializationDescriptor",
@@ -69,8 +71,10 @@ __all__ = [
     "PatchLayout",
     "PreparedHierarchyNativeLowering",
     "PreparedHierarchyNativeProvider",
+    "Regrid",
     "RefluxProvider",
     "ResolvedAMRProviderBinding",
+    "smallest_cells",
     "Tag",
     "TaggerProvider",
     "TransferCapabilities",

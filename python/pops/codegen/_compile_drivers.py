@@ -606,6 +606,11 @@ def _compile_problem_impl(
 
         src += emit_refinement_criterion(
             refinement_criterion, native_dimension=native_dimension)
+        if refinement_criterion.decision is not None:
+            from pops.codegen.program_emit_regrid_decision import emit_regrid_decision
+
+            src += emit_regrid_decision(
+                refinement_criterion.decision, native_dimension=native_dimension)
 
     include = include or pops_include()
     sig = pops_header_signature(include)

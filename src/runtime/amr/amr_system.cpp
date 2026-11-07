@@ -6,6 +6,7 @@
 #include <Kokkos_Profiling_ScopedRegion.hpp>
 #include "../system/auxiliary_consumer_preparation.hpp"
 #include <pops/runtime/amr/amr_layout_transfer_bridge.hpp>
+#include <pops/runtime/amr/generated_regrid_decision.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
 #include <pops/runtime/checkpoint/state_carriers.hpp>
@@ -3932,6 +3933,28 @@ struct AmrSystem<Dim>::Impl {
   bool interface_program_state_refresh = false;
   std::optional<TaggingSpec> tagging_spec;
   GeneratedCriterionAuthority generated_criterion;
+  /// The regrid decision generated into the compiled Program (DM13b, T33): the field table of its
+  /// indicators, its bound runtime parameters and its number of indicators. When set, the decision
+  /// replaces the configured cadence after each accepted step.
+  struct RegridDecisionSpec {
+    std::string identity;
+    std::vector<std::string> field_identities;
+    std::vector<std::string> field_blocks;
+    std::vector<std::vector<std::string>> field_variables;
+    std::vector<std::vector<int>> field_components;
+    std::vector<double> parameters;
+    std::size_t indicator_count = 0;
+  };
+  std::optional<RegridDecisionSpec> regrid_decision_spec;
+  /// The regrid decision that the installed compiled Program exports, if any.
+  struct GeneratedRegridDecisionAuthority {
+    runtime::amr::GeneratedIndicatorEntry<Dim> indicator = nullptr;
+    runtime::amr::GeneratedRegridDecisionEntry decision = nullptr;
+    std::string identity;
+  };
+  GeneratedRegridDecisionAuthority generated_regrid_decision;
+  /// Inputs and result of the last generated decision (inspection only).
+  std::vector<double> last_regrid_decision;
   struct TaggerComponentAuthority {
     std::shared_ptr<component::LoadedComponent> component{};
     runtime::amr::PreparedTaggerComponentSpec spec{};
@@ -4710,6 +4733,164 @@ struct AmrSystem<Dim>::Impl {
         .sequence(generated.parameters);
   }
 
+  static void append_regrid_decision_contract(ExactContractBuilder& contract,
+                                              const RegridDecisionSpec& decision) {
+    const auto text = [](ExactContractBuilder& item, const std::string& value) {
+      item.text(value);
+    };
+    contract.text("pops.amr.generated-regrid-decision")
+        .scalar(std::uint32_t{1})
+        .text(decision.identity)
+        .sequence(decision.field_identities, text)
+        .sequence(decision.field_blocks, text)
+        .sequence(decision.field_variables,
+                  [&](ExactContractBuilder& item, const std::vector<std::string>& names) {
+                    item.sequence(names, text);
+                  })
+        .sequence(decision.field_components,
+                  [](ExactContractBuilder& item, const std::vector<int>& components) {
+                    item.sequence(components);
+                  })
+        .sequence(decision.parameters)
+        .scalar(static_cast<std::uint64_t>(decision.indicator_count));
+  }
+
+  /// The block of a state that a generated decision reads, checked against its storage route.
+  std::size_t regrid_decision_block(const std::string& block_name,
+                                    const std::string& identity) const {
+    const auto block = std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& value) {
+      return value.name == block_name;
+    });
+    if (block == blocks.end())
+      throw std::invalid_argument("AMR generated regrid decision reads another native block");
+    const std::string& installed = boundary_registry.state_route(block_name);
+    if (identity != installed && identity != direct_amr_state_identity(block_name))
+      throw std::invalid_argument(
+          "AMR generated regrid decision reads a state outside its exact qualified storage route");
+    return static_cast<std::size_t>(std::distance(blocks.begin(), block));
+  }
+
+  /// Evaluate the generated regrid decision on the accepted state after a step (DM13b, T33).
+  /// Each indicator is the largest value of its function of cell over the valid cells of every
+  /// level, reduced over the patches and the ranks; the decision reads the accepted step count,
+  /// the accepted time and those values. A non-finite indicator fails the step collectively.
+  bool decide_generated_regrid(const ExecutionLane& lane) {
+    const RegridDecisionSpec& spec = *regrid_decision_spec;
+    const GeneratedRegridDecisionAuthority& authority = generated_regrid_decision;
+    std::vector<double> largest(spec.indicator_count, -std::numeric_limits<double>::infinity());
+    long local_non_finite = 0;
+    std::exception_ptr local_error;
+    try {
+      if (authority.indicator == nullptr || authority.decision == nullptr ||
+          authority.identity != spec.identity)
+        throw std::logic_error(
+            "AMR generated regrid decision is not the one exported by the installed Program");
+      if (prepared_blocks.size() != blocks.size())
+        throw std::logic_error("AMR generated regrid decision lost its prepared block graph");
+      std::vector<std::size_t> field_blocks;
+      for (std::size_t field = 0; field < spec.field_identities.size(); ++field) {
+        const std::size_t block =
+            regrid_decision_block(spec.field_blocks[field], spec.field_identities[field]);
+        const auto& names = prepared_blocks[block].conservative_variables.names;
+        for (std::size_t read = 0; read < spec.field_variables[field].size(); ++read) {
+          const int component = spec.field_components[field][read];
+          if (component < 0 || static_cast<std::size_t>(component) >= names.size() ||
+              names[static_cast<std::size_t>(component)] != spec.field_variables[field][read])
+            throw std::invalid_argument(
+                "AMR generated regrid decision reads a variable at another component");
+        }
+        field_blocks.push_back(block);
+      }
+      std::vector<Real> parameters(spec.parameters.begin(), spec.parameters.end());
+      const auto& hierarchy = engine->hierarchy();
+      for (std::size_t level = 0; level < hierarchy.num_levels(); ++level) {
+        const Geometry<Dim> geometry =
+            Geometry<Dim>::from_bounds(hierarchy.layout(level).domain(), cfg.lower, cfg.upper);
+        std::array<Real, Dim> spacing{};
+        for (int axis = 0; axis < Dim; ++axis)
+          spacing[static_cast<std::size_t>(axis)] = geometry.spacing(axis);
+        std::vector<const field_type*> states;
+        for (const std::size_t block : field_blocks)
+          states.push_back(&block_state(block, level));
+        if (states.empty())
+          continue;
+        for (std::size_t local = 0; local < states.front()->local_size(); ++local) {
+          std::vector<FieldView<const Real, Dim>> views;
+          for (const field_type* state : states) {
+            if (state->local_size() != states.front()->local_size() ||
+                state->global_index(local) != states.front()->global_index(local) ||
+                state->box(local) != states.front()->box(local))
+              throw std::invalid_argument(
+                  "AMR generated regrid decision fields disagree on their local patches");
+            views.push_back(state->fab(local).view());
+          }
+          for (std::size_t indicator = 0; indicator < spec.indicator_count; ++indicator) {
+            Real value = -std::numeric_limits<Real>::infinity();
+            std::uint8_t non_finite = 0;
+            const runtime::amr::GeneratedIndicatorPatch<Dim> request{states.front()->box(local),
+                                                                     views.data(),
+                                                                     views.size(),
+                                                                     spacing,
+                                                                     parameters.data(),
+                                                                     parameters.size(),
+                                                                     indicator,
+                                                                     &value,
+                                                                     &non_finite};
+            const auto entry = authority.indicator;
+            const int status = ::pops::dynlib::invoke_with_host_exception(
+                [entry, &request] { return entry(&request); },
+                runtime::amr::kGeneratedIndicatorEntrySymbol);
+            if (status != 0)
+              throw std::runtime_error("generated AMR regrid indicator refused its patch request");
+            if (non_finite != 0)
+              local_non_finite = 1;
+            else
+              largest[indicator] = std::max(largest[indicator], static_cast<double>(value));
+          }
+        }
+      }
+    } catch (...) {
+      local_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        local_error, &lane, "AMR generated regrid indicators failed collectively");
+    if (all_reduce_max(local_non_finite, lane) != 0)
+      throw std::runtime_error(
+          "AMR generated regrid decision read a non-finite indicator of the accepted state");
+    for (double& value : largest)
+      value = all_reduce_max(value, lane);
+    std::uint8_t regrid = 0;
+    std::exception_ptr decision_error;
+    try {
+      std::vector<Real> indicators(largest.begin(), largest.end());
+      std::vector<Real> parameters(spec.parameters.begin(), spec.parameters.end());
+      const runtime::amr::GeneratedRegridDecisionRequest request{
+          static_cast<std::int64_t>(macro_step),
+          static_cast<Real>(accepted_time),
+          indicators.data(),
+          indicators.size(),
+          parameters.data(),
+          parameters.size(),
+          &regrid};
+      const auto entry = authority.decision;
+      const int status = ::pops::dynlib::invoke_with_host_exception(
+          [entry, &request] { return entry(&request); },
+          runtime::amr::kGeneratedRegridDecisionEntrySymbol);
+      if (status != 0)
+        throw std::runtime_error("generated AMR regrid decision refused its request");
+    } catch (...) {
+      decision_error = std::current_exception();
+    }
+    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+        decision_error, &lane, "AMR generated regrid decision failed collectively");
+    if (all_reduce_max(static_cast<long>(regrid != 0), lane) !=
+        -all_reduce_max(-static_cast<long>(regrid != 0), lane))
+      throw std::runtime_error("AMR generated regrid decision differs between MPI ranks");
+    last_regrid_decision.assign({static_cast<double>(macro_step), regrid != 0 ? 1.0 : 0.0});
+    last_regrid_decision.insert(last_regrid_decision.end(), largest.begin(), largest.end());
+    return regrid != 0;
+  }
+
   void append_tagging_authority_contract(ExactContractBuilder& contract) const {
     contract.presence(tagging_spec.has_value());
     if (tagging_spec) {
@@ -4756,6 +4937,8 @@ struct AmrSystem<Dim>::Impl {
           .text(tagging.provider_identity);
       if (tagging.generated)
         append_generated_tagging_contract(contract, *tagging.generated);
+      if (regrid_decision_spec)
+        append_regrid_decision_contract(contract, *regrid_decision_spec);
     }
 
     contract.presence(tagger_component.has_value());
@@ -15366,6 +15549,77 @@ void AmrSystem<Dim>::set_generated_tagging(
 }
 
 template <int Dim>
+void AmrSystem<Dim>::set_generated_regrid_decision(
+    const std::string& identity, const std::vector<std::string>& field_identities,
+    const std::vector<std::string>& field_blocks,
+    const std::vector<std::vector<std::string>>& field_variables,
+    const std::vector<std::vector<int>>& field_components, const std::vector<double>& parameters,
+    std::size_t indicator_count) {
+  p_->require_no_native_package_callback("set_generated_regrid_decision");
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
+  typename Impl::RegridDecisionSpec candidate;
+  std::string contract;
+  std::exception_ptr local_error;
+  long local_failure = 0;
+  try {
+    require_amr_assembling(p_->lifecycle, "set_generated_regrid_decision");
+    const std::size_t fields = field_identities.size();
+    if (p_->engine || p_->regrid_decision_spec || !p_->tagging_spec ||
+        !p_->tagging_spec->generated || identity.empty() || field_blocks.size() != fields ||
+        field_variables.size() != fields || field_components.size() != fields ||
+        (indicator_count == 0) != (fields == 0))
+      throw std::invalid_argument(
+          "AMR generated regrid decision requires one complete unique pre-materialization "
+          "authority after a generated refinement criterion");
+    for (std::size_t field = 0; field < fields; ++field) {
+      if (field_identities[field].empty() || field_blocks[field].empty() ||
+          field_variables[field].empty() ||
+          field_variables[field].size() != field_components[field].size())
+        throw std::invalid_argument("AMR generated regrid decision has an invalid field row");
+      for (std::size_t read = 0; read < field_variables[field].size(); ++read)
+        if (field_variables[field][read].empty() || field_components[field][read] < 0)
+          throw std::invalid_argument(
+              "AMR generated regrid decision has an invalid variable read");
+    }
+    for (const double value : parameters)
+      if (!std::isfinite(value))
+        throw std::invalid_argument(
+            "AMR generated regrid decision has a non-finite bound parameter");
+    candidate = {identity,         field_identities, field_blocks, field_variables,
+                 field_components, parameters,       indicator_count};
+    ExactContractBuilder exact;
+    exact.text("pops.amr-system.generated-regrid-decision-authoring")
+        .scalar(std::uint32_t{1})
+        .scalar(std::int32_t{Dim});
+    Impl::append_regrid_decision_contract(exact, candidate);
+    contract = std::move(exact).release();
+  } catch (...) {
+    local_failure = 1;
+    local_error = std::current_exception();
+  }
+  if (all_reduce_max(local_failure, lane) != 0) {
+    if (local_error)
+      std::rethrow_exception(local_error);
+    throw std::runtime_error("AMR generated regrid decision authoring failed collectively");
+  }
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("generated-amr-regrid-decision"), std::string_view(contract)}}, lane))
+    throw std::invalid_argument("AMR generated regrid decision contracts differ between MPI ranks");
+  p_->regrid_decision_spec.emplace(std::move(candidate));
+  p_->last_regrid_decision.clear();
+}
+
+template <int Dim>
+std::string AmrSystem<Dim>::generated_regrid_decision_identity() const {
+  return p_->regrid_decision_spec ? p_->regrid_decision_spec->identity : std::string{};
+}
+
+template <int Dim>
+std::vector<double> AmrSystem<Dim>::last_regrid_decision() const {
+  return p_->last_regrid_decision;
+}
+
+template <int Dim>
 std::vector<std::uint8_t> AmrSystem<Dim>::tagging_requests(int parent_level) {
   p_->ensure_engine();
   const runtime::amr::PreparedTaggerCandidates<Dim> candidates = p_->execute_tagging(parent_level);
@@ -21728,6 +21982,11 @@ void AmrSystem<Dim>::complete_program_step_() {
   }
   if (!p_->tagging_spec || p_->cfg.regrid_every == 0 || p_->macro_step % p_->cfg.regrid_every != 0)
     return;
+  // A decision generated into the Program (DM13b) replaces the cadence: it reads the accepted
+  // continuation after the step and returns whether the hierarchy regrids now.
+  if (p_->regrid_decision_spec &&
+      !p_->decide_generated_regrid(p_->require_package_assembly_lane()))
+    return;
   const auto history_sources = p_->prepare_history_hierarchy_images();
   // Freeze every block endpoint before a parent replacement truncates its descendants.
   // execute_transaction remains the sole accepted-state publication/rollback authority.
@@ -22873,6 +23132,7 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
   std::vector<int> program_block_map;
   std::map<int, std::vector<double>> program_param_defaults;
   typename Impl::GeneratedCriterionAuthority generated_criterion;
+  typename Impl::GeneratedRegridDecisionAuthority generated_regrid_decision;
   std::exception_ptr preparation_error;
 
   try {
@@ -23137,6 +23397,36 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
             "AmrSystem::install_program: the refinement criterion identity is empty");
       generated_criterion.identity = raw_identity;
     }
+    // A regrid decision generated into the Program (DM13b) is exported the same way.
+    const auto decision_identity = reinterpret_cast<const char* (*)()>(
+        pops::dynlib::sym(handle, runtime::amr::kGeneratedRegridDecisionIdentitySymbol));
+    generated_regrid_decision.indicator =
+        reinterpret_cast<runtime::amr::GeneratedIndicatorEntry<Dim>>(
+            pops::dynlib::sym(handle, runtime::amr::kGeneratedIndicatorEntrySymbol));
+    generated_regrid_decision.decision = reinterpret_cast<runtime::amr::GeneratedRegridDecisionEntry>(
+        pops::dynlib::sym(handle, runtime::amr::kGeneratedRegridDecisionEntrySymbol));
+    const bool any_decision_symbol = decision_identity != nullptr ||
+                                     generated_regrid_decision.indicator != nullptr ||
+                                     generated_regrid_decision.decision != nullptr;
+    if (any_decision_symbol &&
+        (decision_identity == nullptr || generated_regrid_decision.indicator == nullptr ||
+         generated_regrid_decision.decision == nullptr))
+      throw std::runtime_error(
+          "AmrSystem::install_program: the regrid decision entries and identity are not "
+          "exported together");
+    if (decision_identity != nullptr) {
+      const char* raw_identity = decision_identity();
+      if (raw_identity == nullptr || raw_identity[0] == '\0')
+        throw std::runtime_error(
+            "AmrSystem::install_program: the regrid decision identity is empty");
+      generated_regrid_decision.identity = raw_identity;
+    }
+    const bool expects_decision = p_->regrid_decision_spec.has_value();
+    if (expects_decision != any_decision_symbol ||
+        (expects_decision && p_->regrid_decision_spec->identity != generated_regrid_decision.identity))
+      throw std::runtime_error(
+          "AmrSystem::install_program: the regrid decision of the compiled Program differs from "
+          "the installed AMR regrid authority");
     const bool expects_criterion = p_->tagging_spec && p_->tagging_spec->generated;
     if (expects_criterion != (generated_criterion.entry != nullptr) ||
         (expects_criterion &&
@@ -23178,6 +23468,8 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
   std::optional<PreparedAmrProgramFluxExpressionBudget> prepared_flux_expression_budget;
   typename Impl::GeneratedCriterionAuthority previous_generated_criterion =
       std::exchange(p_->generated_criterion, std::move(generated_criterion));
+  typename Impl::GeneratedRegridDecisionAuthority previous_generated_regrid_decision =
+      std::exchange(p_->generated_regrid_decision, std::move(generated_regrid_decision));
   std::exception_ptr installation_error;
   try {
     p_->program.reset_artifact_candidate_state();
@@ -23257,6 +23549,7 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
     p_->component_tagging_plan.reset();
     p_->bootstrap_transaction.reset();
     p_->generated_criterion = std::move(previous_generated_criterion);
+    p_->generated_regrid_decision = std::move(previous_generated_regrid_decision);
     previous_runtime->restore(*p_);
     pops::dynlib::close(handle);
     if (n_ranks() == 1 && installation_error)
@@ -26943,6 +27236,12 @@ template void AmrSystem<kNativeDimension>::set_generated_tagging(
     const std::vector<std::vector<std::size_t>>&, const std::vector<double>&, int,
     const std::string&, const std::string&);
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::tagging_requests(int);
+template void AmrSystem<kNativeDimension>::set_generated_regrid_decision(
+    const std::string&, const std::vector<std::string>&, const std::vector<std::string>&,
+    const std::vector<std::vector<std::string>>&, const std::vector<std::vector<int>>&,
+    const std::vector<double>&, std::size_t);
+template std::string AmrSystem<kNativeDimension>::generated_regrid_decision_identity() const;
+template std::vector<double> AmrSystem<kNativeDimension>::last_regrid_decision() const;
 template void AmrSystem<kNativeDimension>::install_tagger_component(
     std::shared_ptr<component::LoadedComponent>, const std::string&, const std::string&,
     std::uint32_t, const std::string&, const std::string&, const std::string&, const std::string&,
