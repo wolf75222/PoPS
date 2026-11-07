@@ -639,6 +639,12 @@ labels = ["unit", "parallel", "fast"]
 mpi_variants = [1, 2]
 
 [[cpp.suite]]
+name = "test_reduction_collectives"
+sources = ["tests/cpp/unit/parallel/test_reduction_collectives.cpp"]
+labels = ["unit", "parallel", "fast"]
+mpi_variants = [2, 3, 4]
+
+[[cpp.suite]]
 name = "test_native_field_attachment"
 sources = ["tests/cpp/unit/runtime/test_native_field_attachment.cpp"]
 labels = ["unit", "runtime", "fast"]
