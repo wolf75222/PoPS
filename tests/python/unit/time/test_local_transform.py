@@ -19,6 +19,9 @@ from pops.time import AccumulateDt, Hold, Program, Zero
 
 from typed_program_support import state_refs
 
+_ISSUES_REPRESENTATIONS = (
+    "pops.codegen.program_emit_spatial_representation.program_issues_field_representations")
+
 
 def _canonical_emit_model(model: Model) -> Model:
     """Resolve the fixture through its canonical Module/provider-pack authority."""
@@ -154,6 +157,31 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     assert "= &ctx.scalar_scratch(" in callbacks
 
 
+@pytest.mark.parametrize("target,reduction", (
+    ("system", "pointwise_status_max"), ("amr_system", "pointwise_level_status_max"),
+))
+def test_discharging_transform_reduces_its_status_once_on_each_path(
+        target, reduction, monkeypatch) -> None:
+    from tests.python.unit.codegen.test_scheduler_codegen import _block_end
+
+    monkeypatch.setattr(_ISSUES_REPRESENTATIONS, lambda program: True)
+    model, _, _, program = _transform_program()
+    (transform,) = (value for value in program._values if value.op == "local_transform")
+    source = emit_cpp_program(program, model=_canonical_emit_model(model), target=target)
+    reductions = [match.start() for match in re.finditer(
+        r"ctx\.%s\(0, transform_status_field_%d, " % (reduction, transform.id), source)]
+    discharge = source.index("if (transform_%d_pending) {" % transform.id)
+    discharge_end = _block_end(source, source.index("{", discharge))
+    assert source.startswith("} else {", discharge_end)
+    plain_end = _block_end(source, discharge_end + len("} else "))
+    published = source.index("ctx.own_discharged_field_representation(", discharge)
+    # The status reduction is collective. Each path converges once, the discharge before it
+    # publishes its owner and the plain kernel before any consumer reads its scratch.
+    assert len(reductions) == 2
+    assert discharge < reductions[0] < published < discharge_end < reductions[1] < plain_end
+    assert plain_end < source.index("auto& transform_observed_%d = " % transform.id)
+
+
 def test_generated_operator_preflight_keeps_only_unqualified_cartesian_kernels() -> None:
     # The public emitter records source provenance around the actual dispatcher.
     assert "_emit_op_impl(" in inspect.getsource(program_emit_ops._emit_op)
@@ -256,16 +284,23 @@ def test_local_transform_observes_guarded_temporaries_after_their_declarations()
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-def test_compiled_local_transform_body_keeps_guarded_finite_checks_in_scope(tmp_path):
+def test_compiled_local_transform_body_keeps_guarded_finite_checks_in_scope(tmp_path, monkeypatch):
     import ctypes
     import re
     import subprocess
     from pops.codegen.toolchain import _default_cxx, _probe_cxx_std, loader_cxx_std
     model, _, _, program = _transform_program(boolean_domain=True)
-    generated = emit_cpp_program(program, model=_canonical_emit_model(model))
+    emit_model = _canonical_emit_model(model)
     first, last = "pops::Real transform_failed_ = pops::Real(0);", "statusA(index, 0) = transform_failed_;"
+    # This Program issues no Field representation: it evaluates the plain kernel only.
+    plain = emit_cpp_program(program, model=emit_model)
+    assert len(re.findall(re.escape(first), plain)) == 1
+    assert "CapturedTransformReads<" not in plain
+    # Where a representation can reach the transform, the kernel discharging it and the
+    # plain kernel each own a scalar body.
+    monkeypatch.setattr(_ISSUES_REPRESENTATIONS, lambda program: True)
+    generated = emit_cpp_program(program, model=emit_model)
     starts = [match.start() for match in re.finditer(re.escape(first), generated)]
-    # The kernel discharging a Field representation and the plain kernel each own a scalar body.
     assert len(starts) == 2
     source = '#include <cmath>\nnamespace pops { using Real = double; }\nnamespace Kokkos { using std::isfinite; }\n'
     for kernel, start in enumerate(starts):
@@ -316,26 +351,39 @@ def _scheduled_transform_program(off):
 
 
 @pytest.mark.compiler
-@pytest.mark.parametrize("policy", (Hold, AccumulateDt, Zero))
-def test_scheduled_local_transform_program_compiles_with_its_off_cadence_value(policy, tmp_path):
+@pytest.mark.parametrize("policy,issues", (
+    (Hold, False), (AccumulateDt, False), (Zero, False), (Zero, True),
+), ids=("Hold", "AccumulateDt", "Zero", "Zero-issuing"))
+def test_scheduled_local_transform_program_compiles_with_its_off_cadence_value(
+        policy, issues, tmp_path, monkeypatch):
     import subprocess
     from pathlib import Path
     from tests.python.support.native_syntax_toolchain import configured_kokkos_toolchain
 
+    if issues:
+        monkeypatch.setattr(_ISSUES_REPRESENTATIONS, lambda program: True)
     model, program, held = _scheduled_transform_program(policy())
     generated = emit_cpp_program(program, model=_canonical_emit_model(model))
     guard = generated.index("if (ctx.schedule_decision(%d," % held.id)
     owner = "transform_closed_owner_%d" % held.id
-    if policy is Zero:
+    if issues:
         # Consumers bind after both cadence branches, so an off-cadence step reads the zeroed scratch.
         assert generated.index("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % owner) < guard
         assert (generated.index("u%d.set_val(" % held.id, guard)
                 < generated.index("auto& transform_observed_%d = " % held.id))
     else:
-        # The schedule cache restores numbers only: a held value refuses the discharge path.
+        # The schedule cache restores numbers only, and a Program without an issuer has no
+        # Field representation to discharge: the due evaluation refuses one before evaluating.
         assert owner not in generated
-        assert (guard < generated.index("cannot discharge a Field representation")
+        assert "transform_observed_%d" % held.id not in generated
+        refusal = ("its Program issues none" if policy is Zero
+                   else "schedule cache restores numerical values")
+        assert (guard < generated.index(refusal)
                 < generated.index("pops::Real transform_failed_ = pops::Real(0);", guard))
+        if policy is Zero:
+            # The consumer reads the scratch itself, which an off-cadence step zeroes.
+            assert (generated.index("u%d.set_val(" % held.id, guard)
+                    < generated.index("static_cast<pops::Real>(dt), u%d, dt" % held.id, guard))
     root = Path(__file__).resolve().parents[4]
     cpp = tmp_path / "program.cpp"
     cpp.write_text(generated)

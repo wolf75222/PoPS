@@ -10,11 +10,28 @@ from .program_emit_transform_obligation import emit_closed_transform
 from .program_models import model_for_node
 
 
+def issues_field_representation(value: Any) -> bool:
+    """Whether this spatial solve attaches its accumulation map to its raw result."""
+    return value.attrs["physical_mapping"]["accumulation"] is not None
+
+
+def program_issues_field_representations(program: Any) -> bool:
+    """Whether any Field of this Program can carry a pending representation.
+
+    emit_spatial_representation is the only issuer. A retained or restored
+    obligation keeps its producer support, which must name this Program, so a
+    Program without an issuer never meets one; its transforms need no discharge.
+    """
+    from pops.codegen.program_lowerability import all_ops
+    return any(value.op == "solve_spatial_nonlinear" and issues_field_representation(value)
+               for value in all_ops(program))
+
+
 def emit_spatial_representation(program: Any, value: Any, variables: Any, model: Any,
                                 lines: list[str], block_indices: Any, target: str) -> None:
     # The already-validated residual is the authority for the transformation.
     # An identity coordinate has no pending transformation to retain.
-    if value.attrs["physical_mapping"]["accumulation"] is None:
+    if not issues_field_representation(value):
         return
     from pops.time.references import handle_data
     from pops.time._program.serialization import _json_ready
