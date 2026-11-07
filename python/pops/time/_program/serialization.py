@@ -49,7 +49,9 @@ def ir_identity_reuse() -> Iterator[None]:
     first read of a frozen Program, authoring or detached, projects its IR and later reads reuse
     that identity. When the operation succeeds every identity is projected again outside the
     scope, so a definition changed during compilation, or an out-of-contract edit of a clone, still
-    fails it. Nothing is retained on a Program, and a failed operation leaves no witness.
+    fails it. Nothing is retained on a Program, and a failed operation leaves no witness. With or
+    without an error, the graphs converted from the Programs read in the scope leave the conversion
+    cache when it ends (``_forget_scope_graphs``).
     """
     inherited = _IR_IDENTITY_REUSE.get()
     if inherited is not None and inherited.applies():
@@ -64,9 +66,24 @@ def ir_identity_reuse() -> Iterator[None]:
         observed = tuple(reuse.identities.values())
         reuse.identities.clear()
         _IR_IDENTITY_REUSE.reset(token)
+        _forget_scope_graphs(program for program, _identity in observed)
     for program, expected in observed:
         if program._ir_hash() != expected:
             raise RuntimeError("Program IR identity changed during pops.compile")
+
+
+def _forget_scope_graphs(programs: Iterable[Any]) -> None:
+    """Drop the converted graphs of the Programs that a reuse scope read.
+
+    ``program_to_graph`` caches a detached clone's graph under the identity it reads. Inside the
+    scope that is the identity of the clone's first read, not necessarily the identity of the
+    contents it converted, so no such binding may outlive the scope: afterwards a graph is
+    converted again under a freshly projected identity.
+    """
+    from pops.time._program.graph_conversion import _detached_graphs
+
+    for program in programs:
+        _detached_graphs.pop(program, None)
 
 
 def _raise_ir_version(result: dict[str, Any], version: int) -> None:

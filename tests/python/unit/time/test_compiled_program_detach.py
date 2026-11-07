@@ -243,11 +243,13 @@ def test_source_mutations_and_stale_containers_cannot_change_detached_program():
 
 
 def _counted_projections(monkeypatch):
+    """Record each Program whose IR identity projection (``include_provenance=False``) runs."""
     projections = []
     original = Program._serialize
 
     def counted(self, *args, **kwargs):
-        projections.append(self)
+        if kwargs.get("include_provenance", True) is False:
+            projections.append(self)
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(Program, "_serialize", counted)
@@ -303,6 +305,48 @@ def test_compile_identity_reuse_fails_when_a_reused_identity_changed(change):
                 object.__setattr__(detached, "name", "altered")
             assert changed._ir_hash() == expected
     assert changed._ir_hash() != expected
+
+
+def test_compile_identity_reuse_leaves_no_graph_binding_after_the_scope():
+    from pops.codegen.program_graph_lowering import emit_program_graph
+    from pops.time._program.serialization import ir_identity_reuse
+
+    program = Program("cached")
+    program.int64(3)
+    detached = detach_compiled_program(program)
+    with ir_identity_reuse():
+        detached._ir_hash()
+        # A transient out-of-contract edit, undone before the scope ends: the exit passes.
+        object.__setattr__(detached, "name", "altered")
+        altered = detached.to_graph()
+        object.__setattr__(detached, "name", "cached")
+    # The graph converted under the first read's identity does not outlive the scope.
+    assert detached.to_graph() is not altered
+    with pytest.raises(ValueError, match="does not match"):
+        emit_program_graph(altered, lowering_program=detached)
+
+
+def test_compile_identity_reuse_is_bound_to_the_thread_that_opens_it(monkeypatch):
+    import contextvars
+    import threading
+
+    from pops.time._program.serialization import ir_identity_reuse
+
+    source = _authored_program()["program"].freeze()
+    expected = source._ir_hash()
+    projections = _counted_projections(monkeypatch)
+    with ir_identity_reuse():
+        assert source._ir_hash() == expected
+        context = contextvars.copy_context()
+        reads = []
+        worker = threading.Thread(target=lambda: context.run(
+            lambda: reads.extend(source._ir_hash() for _ in range(2))))
+        worker.start()
+        worker.join()
+        assert reads == [expected, expected]
+    # The opening thread's first read and exit authentication, plus a fresh projection for each
+    # read of the copied context on the other thread.
+    assert projections == [source] * 4
 
 
 def test_detached_program_does_not_keep_source_program_or_registries_alive():

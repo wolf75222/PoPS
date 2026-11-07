@@ -7,6 +7,7 @@ from weakref import WeakKeyDictionary
 
 # Detached Programs are deeply frozen and graphs retain no authoring authorities.
 # Rehash on every lookup: reuse avoids repeated conversion, never the identity check.
+# An ir_identity_reuse scope removes the entries of the Programs it read when it ends.
 _detached_graphs: WeakKeyDictionary[Any, tuple[str, Any]] = WeakKeyDictionary()
 
 
