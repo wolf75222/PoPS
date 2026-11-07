@@ -16,11 +16,12 @@ def issues_field_representation(value: Any) -> bool:
 
 
 def program_issues_field_representations(program: Any) -> bool:
-    """Whether any Field of this Program can carry a pending representation.
+    """Whether this Program issues a Field representation that its transforms may discharge.
 
     emit_spatial_representation is the only issuer. A retained or restored
     obligation keeps its producer support, which must name this Program, so a
-    Program without an issuer never meets one; its transforms need no discharge.
+    Program without an issuer never meets one it could discharge. A decoded one
+    without support is refused by the transform before evaluation.
     """
     from pops.codegen.program_lowerability import all_ops
     return any(value.op == "solve_spatial_nonlinear" and issues_field_representation(value)
@@ -31,6 +32,8 @@ def emit_spatial_representation(program: Any, value: Any, variables: Any, model:
                                 lines: list[str], block_indices: Any, target: str) -> None:
     # The already-validated residual is the authority for the transformation.
     # An identity coordinate has no pending transformation to retain.
+    # program_issues_field_representations decides from the same predicate whether
+    # transforms emit their discharge, so a new issuer must be visible there too.
     if not issues_field_representation(value):
         return
     from pops.time.references import handle_data

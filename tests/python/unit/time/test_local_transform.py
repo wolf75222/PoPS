@@ -157,19 +157,11 @@ def test_local_transform_program_emits_one_collective_fail_closed_kernel() -> No
     assert "= &ctx.scalar_scratch(" in callbacks
 
 
-@pytest.mark.parametrize("target,reduction", (
-    ("system", "pointwise_status_max"), ("amr_system", "pointwise_level_status_max"),
-))
-def test_discharging_transform_reduces_its_status_once_on_each_path(
-        target, reduction, monkeypatch) -> None:
+def _assert_one_status_reduction_per_path(source, transform, reduction):
     from tests.python.unit.codegen.test_scheduler_codegen import _block_end
 
-    monkeypatch.setattr(_ISSUES_REPRESENTATIONS, lambda program: True)
-    model, _, _, program = _transform_program()
-    (transform,) = (value for value in program._values if value.op == "local_transform")
-    source = emit_cpp_program(program, model=_canonical_emit_model(model), target=target)
     reductions = [match.start() for match in re.finditer(
-        r"ctx\.%s\(0, transform_status_field_%d, " % (reduction, transform.id), source)]
+        r"ctx\.%s\(\d+, transform_status_field_%d, " % (reduction, transform.id), source)]
     discharge = source.index("if (transform_%d_pending) {" % transform.id)
     discharge_end = _block_end(source, source.index("{", discharge))
     assert source.startswith("} else {", discharge_end)
@@ -180,6 +172,32 @@ def test_discharging_transform_reduces_its_status_once_on_each_path(
     assert len(reductions) == 2
     assert discharge < reductions[0] < published < discharge_end < reductions[1] < plain_end
     assert plain_end < source.index("auto& transform_observed_%d = " % transform.id)
+
+
+@pytest.mark.parametrize("target,reduction", (
+    ("system", "pointwise_status_max"), ("amr_system", "pointwise_level_status_max"),
+))
+def test_discharging_transform_reduces_its_status_once_on_each_path(
+        target, reduction, monkeypatch) -> None:
+    monkeypatch.setattr(_ISSUES_REPRESENTATIONS, lambda program: True)
+    model, _, _, program = _transform_program()
+    (transform,) = (value for value in program._values if value.op == "local_transform")
+    source = emit_cpp_program(program, model=_canonical_emit_model(model), target=target)
+    _assert_one_status_reduction_per_path(source, transform, reduction)
+
+
+def test_issuing_program_transform_reduces_its_status_once_on_each_path() -> None:
+    import pops
+    from tests.python.unit.time.test_implicit_stage_request import make_source_stage
+
+    # A real issuer: a nonlinear implicit stage attaches its accumulation map, then its
+    # transform discharges it. No AMR fixture issues one yet, so the AMR target is covered
+    # by the forced predicate above.
+    case, layout = make_source_stage(nonlinear=True)
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    (transform,) = (value for value in plan.time._values if value.op == "local_transform")
+    source = emit_cpp_program(plan.time, model=lower_and_validate(plan.blocks[0].model)[0])
+    _assert_one_status_reduction_per_path(source, transform, "pointwise_status_max")
 
 
 def test_generated_operator_preflight_keeps_only_unqualified_cartesian_kernels() -> None:
