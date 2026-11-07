@@ -181,9 +181,19 @@ def flow_bootstrap_tagging(
     clock_identity: str,
     field_plans: Any = None,
 ) -> None:
-    """Compile one authenticated tagging graph to the native data-only VM."""
+    """Compile one authenticated tagging graph to the native data-only VM.
+
+    A criterion written as regions of ``cell`` is already generated into the compiled Program: its
+    field and parameter tables are installed in place of the bytecode.
+    """
     if not isinstance(clock_identity, str) or not clock_identity:
         raise ValueError("pops.bind: AMR tagging requires one exact clock identity")
+    from pops.mesh._amr import ResolvedRefinementCriterion
+
+    if type(bootstrap.tagging) is ResolvedRefinementCriterion:
+        _flow_refinement_criterion(
+            sim, bootstrap.tagging, params, clock_identity=clock_identity)
+        return
     data = bootstrap.tagging.runtime_tagging_data(params)
     if (
         type(data) is not dict
@@ -419,6 +429,56 @@ def flow_bootstrap_tagging(
         str(data.get("conflict_policy")),
         clock_identity,
         program_identity,
+    )
+
+
+def _flow_refinement_criterion(
+    sim: Any, criterion: Any, params: Any, *, clock_identity: str,
+) -> None:
+    """Install the tables of a criterion generated into the compiled Program (DM13b)."""
+    data = criterion.runtime_criterion_data(params)
+    if (
+        type(data) is not dict
+        or data.get("schema_version") != 1
+        or data.get("criterion_type") != "amr_refinement_criterion_runtime"
+        or data.get("identity") != criterion.qualified_id
+    ):
+        raise ValueError("pops.bind: refinement criterion returned an unsupported runtime manifest")
+    hysteresis = data.get("hysteresis")
+    if type(hysteresis) is not dict or hysteresis.get("hysteresis_type") != "min_cycles":
+        raise ValueError("pops.bind: unsupported AMR hysteresis manifest")
+    min_cycles = hysteresis.get("min_cycles")
+    if isinstance(min_cycles, bool) or not isinstance(min_cycles, int) or min_cycles < 0:
+        raise ValueError("pops.bind: AMR hysteresis min_cycles must be an integer >= 0")
+    fields = data.get("fields")
+    if not isinstance(fields, list) or not fields:
+        raise ValueError("pops.bind: a refinement criterion reads at least one field")
+    from pops.identity import make_identity
+    from pops.identity.semantic import semantic_value
+
+    payload = {
+        "schema_version": 1,
+        "program_type": "bound_amr_refinement_criterion",
+        "criterion_identity": data["identity"],
+        "fields": fields,
+        "parameters": data["parameters"],
+        "minimum_cycles": min_cycles,
+    }
+    provider_identity = make_identity(
+        "bound-amr-refinement-criterion",
+        semantic_value(payload, where="bound AMR refinement criterion"),
+    ).token
+    sim._set_generated_tagging(
+        data["identity"],
+        [row["state"] for row in fields],
+        [row["block"] for row in fields],
+        [row["variables"] for row in fields],
+        [row["components"] for row in fields],
+        [row["reach"] for row in fields],
+        data["parameters"],
+        min_cycles,
+        clock_identity,
+        provider_identity,
     )
 
 

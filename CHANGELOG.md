@@ -134,6 +134,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   execution, and forward CI cancellation to monitored commands.
 - Finalize newly installed Darwin native variants before repeat-install hash checks while
   preserving authenticated sibling dimensions; first and incremental builds use the same path.
+- Write an AMR refinement criterion in Python: a `Tag` or `Coarsen` predicate may be a function of
+  `cell` (`cell.value(q)`, `cell.shift(axis, k)`, `cell.width(axis)`, runtime parameters), traced
+  once and generated into the compiled Program. The native tagging plan calls it on each patch in
+  place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` and
+  clustering. A criterion requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, and its
+  rules decide as those of the tag graph do. The comparisons that `~`, `&` and `|` join are a
+  strict `<` or `>` (`<=`, `>=` and `==` are refused at the line of the rule) and follow Kleene's
+  three-valued logic, so one at exact equality decides nothing and neither does its negation under
+  `~`. Each of them is evaluated, so a non-finite sample rejects the level on both routes, even
+  where the left operand of `&` or `|` already decides the rule. A `where` inside an operand, which
+  the tag graph cannot write, is the `cond` of IR4: its test is two-valued and may compare with
+  `<=`, `>=` or `==`, and only the branch that it selects is evaluated, so a non-finite sample read
+  only in the other branch does not reject the level.
+  `pops.lib.amr.gradient_norm` keeps the arithmetic of the gradient leaves under the stencil the
+  method declares (`amr_indicator_stencil`). Tag-graph expressions are unchanged and are not mixed
+  with functions of `cell` in one `AMRTagging`; external Tagger components and multi-layout plans
+  refuse a criterion.
 
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.
