@@ -274,3 +274,30 @@ def test_json_depth_preflight_does_not_compare_user_metaclass():
     value = {"key": Text("text")}
     assert _plain_json_depths(value) is None
     assert "".join(canonical_json_chunks(value)) == '{"key":"text"}'
+
+
+def test_json_protocol_does_not_compare_user_metaclass_below_a_mapping_diamond():
+    # A class reached twice below Mapping (h5py's MutableMappingHDF5, once h5py is imported) makes
+    # the second ABC subclass check find its own negative-cache weakref, compared by equality.
+    from collections.abc import Mapping
+    from pops._structural_data import canonical_json_chunks
+
+    class Meta(type):
+        def __eq__(cls, other):
+            raise RuntimeError("unexpected type equality")
+
+        __hash__ = type.__hash__
+
+    class Text(str, metaclass=Meta):
+        pass
+
+    class Left(Mapping):
+        pass
+
+    class Right(Mapping):
+        pass
+
+    class Both(Left, Right):  # its presence below Mapping is the precondition
+        pass
+
+    assert "".join(canonical_json_chunks({"key": Text("text")})) == '{"key":"text"}'

@@ -19,8 +19,11 @@ POPS_PROCESS_TIMEOUT = 1200
 def _metrics(spec, runtime, world):
     rows = profile_gather_value(world, collective_call(world, lambda: spec.invariants(runtime)))
     with collective_check(world):
+        # The state gathers give every rank the full image, so every rank evaluates the same
+        # metrics.
         owners = [row for row in rows if row.get("metrics_owner", True)]
-        assert len(owners) == 1 and owners[0]["passed"], rows
+        assert len(owners) == len(rows) and all(row == owners[0] for row in owners), rows
+        assert owners[0]["passed"], rows
     return rows
 
 
