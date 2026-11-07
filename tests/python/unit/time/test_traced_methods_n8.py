@@ -5,11 +5,13 @@ now write their step as the traced method ``shu_osher_ssprk2`` of
 ``examples/api_v02/models_M01_M14.py``, in a Program that keeps the b6 name of the profile. Their
 b6 builder ``_ssprk2`` stays as the parity reference (MG1). Both routes must elaborate the same
 program: equal serialized IR and equal generated C++ once the presentation names (the values and
-stages, CC2) are renamed by SSA position, and once the History metadata capacity that ``_ssprk2``
-writes for a Program without History is set aside (B3: a traced case writes no resource). The C++
-of M25 (17 components) takes about two minutes per route to generate, so this source-only module
-compares its IR, and its native run is compared bit for bit outside CI (handoff of N8 lot 1). The
-refusals of E1, T33, T34 and SU10 are tested on M01.
+stages, CC2) are renamed by SSA position, once the History metadata capacity that ``_ssprk2``
+writes for a Program without History is set aside (B3: a traced case writes no resource), and
+once the default acceptance ``finite()`` that N8 lot 2 adds to every elaborated Advance is taken
+out, node by node and line by line, after checking it is exactly the assessment of the candidate
+and its compiled control. The C++ of M25 (17 components) takes about two minutes per route to
+generate, so this source-only module compares its IR, and its native run is compared bit for bit
+outside CI (handoff of N8 lot 1). The refusals of E1, T33, T34 and SU10 are tested on M01.
 """
 import base64
 import json
@@ -28,12 +30,14 @@ from pops._structural_data import canonical_json
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
 from pops.time import FixedDt, TimePoint
+from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT, ADVANCE_CONTROL_SCHEMA
 from pops.time._program.elaboration import Advance, Proposal, Retry, elaborate
 from pops.time._program.global_history_storage import prepare_issuance, publish_issuance
 from pops.time._program.traced_method import (
     _GUARDED_TABLES, Candidate, ClosedBodyViolation, IncrementNotDerivable, IncrementTypeMismatch,
     NotYetElaborated, method,
 )
+from pops.time.solve_outcome import RejectAttempt
 
 # profile -> (module that calls _traced_ssprk2, builder, name of the program on both routes)
 PROFILES = {
@@ -48,6 +52,17 @@ PROFILES = {
 CXX_PROFILES = ("M01", "M02", "M03", "M04", "M07", "M24")
 B6_HISTORY_METADATA = (8 * 1024 * 1024, 16 * 1024 * 1024)
 B6_HISTORY_LINE = "  ctx.configure_history_field_metadata(UINT64_C(8388608), UINT64_C(16777216));"
+# The default acceptance finite() of N8 lot 2: the all-component norm of the candidate, its
+# finiteness, and the guard that the commit reads in place of the candidate.
+FINITE_OPS = [("reduce", "scalar"), ("scalar_isfinite", "bool"), ("acceptance_guard", "state")]
+FINITE_GUARD = {"name": "finite", "role": "invariant", "action": RejectAttempt().to_data()}
+SOURCE_MAP_SPAN = re.compile(r"\s*// pops-source-map@1 (begin|end) (\{.*\})$")
+INVENTORY = "// pops-source-map@1 inventory "
+CONTROL_LINES = [
+    "// Compiled control of the elaborated Advance (spec 0.3 section 5.2): the attempts of",
+    "// one step (Retry.max_attempts, T38). System::run_advance repeats a rejected proposal.",
+    'extern "C" int pops_program_advance_max_attempts() { return 1; }',
+]
 
 
 def _b6_route(case, block, state, flow, dt, *, name):
@@ -66,6 +81,79 @@ def _source(spec):
     assert resolved.time is spec.case._time
     return emit_cpp_program(resolved.time, model_graph=ProgramModelGraph.from_resolved_blocks(
         resolved.blocks))
+
+
+def _without_finite(ir, b6_ir):
+    """``ir`` without its finite() assessment, checked to be exactly the one of N8 lot 2."""
+    ir = json.loads(canonical_json(ir))
+    *nodes, norm, finite, guard = ir["nodes"]
+    (b6_commit,) = b6_ir["commits"]
+    candidate = b6_commit["value"]
+    last = nodes[-1]["id"]
+    assert [norm["id"], finite["id"], guard["id"]] == [last + 1, last + 2, last + 3]
+    assert (norm["op"], norm["inputs"], norm["attrs"]) == ("reduce", [candidate], {
+        "kind": "norm_inf_all", "component_contract": "pops.program.norm-inf-all@1"})
+    assert (finite["op"], finite["inputs"], finite["attrs"]) == (
+        "scalar_isfinite", [norm["id"]], {})
+    assert (guard["op"], guard["inputs"], guard["attrs"]) == (
+        "acceptance_guard", [candidate, finite["id"]], {
+            "guard": "finite", "action": RejectAttempt().to_data(),
+            "assessment": ADVANCE_ASSESSMENT_CONTRACT})
+    # The guard is the candidate on its successful path: same name, type, owner and point.
+    (candidate_node,) = [node for node in nodes if node["id"] == candidate]
+    assert {key: guard[key] for key in guard if key not in ("id", "op", "inputs", "attrs")} == {
+        key: candidate_node[key] for key in candidate_node
+        if key not in ("id", "op", "inputs", "attrs")}
+    (commit,) = ir["commits"]
+    assert commit["value"] == guard["id"]
+    commit["value"] = candidate
+    ir["nodes"] = nodes
+    assert ir["step_transaction"]["guards"] == [FINITE_GUARD]
+    ir["step_transaction"]["guards"] = []
+    assert ir.pop("advance_control") == {
+        "schema": ADVANCE_CONTROL_SCHEMA, "accept": [{"assess": "finite", "origin": "default"}],
+        "retry": {"max_attempts": 1, "max_transforms": 0},
+        "proposal": {"dt": b6_ir["step_transaction"]["strategy"]["dt"]["value"]}}
+    assert ir["version"] == max(b6_ir["version"], 30)
+    ir["version"] = b6_ir["version"]
+    return ir
+
+
+def _without_finite_cpp(lines):
+    """The generated lines without the finite() assessment, checked on the way: the source-map
+    spans of its three nodes, their inventory rows and the exported attempt budget."""
+    inventory = [line for line in lines if line.startswith(INVENTORY)]
+    assert len(inventory) == 1
+    rows = json.loads(inventory[0][len(INVENTORY):])["nodes"]
+    assessment = [row["ssa"] for row in rows[-3:]]
+    assert [row["op"] for row in rows[-3:]] == [op for op, _ in FINITE_OPS]
+    kept, dropped, inside = [], [], None
+    for line in lines:
+        span = SOURCE_MAP_SPAN.match(line)
+        ssa = json.loads(span.group(2))["ssa"] if span else None
+        if inside is None and span and span.group(1) == "begin" and ssa in assessment:
+            inside = ssa
+        if inside is not None:
+            dropped.append(line.strip())
+            if span and span.group(1) == "end" and ssa == inside:
+                inside = None
+            continue
+        if line.startswith(INVENTORY):
+            data = json.loads(line[len(INVENTORY):])
+            data["nodes"] = data["nodes"][:-3]
+            line = INVENTORY + canonical_json(data)
+        kept.append(line)
+    assert inside is None
+    start = kept.index(CONTROL_LINES[0])
+    assert kept[start:start + 3] == CONTROL_LINES
+    del kept[start:start + 3]
+    (candidate,) = [row["cpp_bindings"][0] for row in rows if row["ssa"] == rows[-1]["inputs"][0]]
+    norm = rows[-3]["cpp_bindings"][0]
+    assert "const pops::Real %s = ctx.norm_inf_all(0, %s);" % (norm, candidate) in dropped
+    assert ("throw pops::runtime::program::StepAttemptRejected(pops::SolveStatus::"
+            "kInvalidEvaluation, \"assessment\", \"Advance assessment 'finite' rejected the "
+            "candidate\");") in dropped
+    return kept
 
 
 def _presentation_names(program):
@@ -97,15 +185,17 @@ def test_traced_profile_authors_the_b6_program(profile, monkeypatch):
     b6 = _spec(module, build, monkeypatch, _b6_route).case._time
     traced = _spec(module, build, monkeypatch).case._time
     assert b6.name == traced.name == name
-    assert [(v.op, v.vtype) for v in b6._values] == [(v.op, v.vtype) for v in traced._values]
+    assert [(v.op, v.vtype) for v in b6._values] + FINITE_OPS == [
+        (v.op, v.vtype) for v in traced._values]
     # _ssprk2 authors a History metadata capacity for a Program without History rings.
     assert not b6._histories and not traced._histories
     assert b6.history_field_metadata_budget == B6_HISTORY_METADATA
     assert traced.history_field_metadata_budget is None
     b6_ir = b6._serialize(include_provenance=False)
     b6_ir["history_field_metadata_budget"] = None
+    traced_ir = _without_finite(traced._serialize(include_provenance=False), b6_ir)
     assert _normalized(canonical_json(b6_ir), _presentation_names(b6)) == _normalized(
-        canonical_json(traced._serialize(include_provenance=False)), _presentation_names(traced))
+        canonical_json(traced_ir), _presentation_names(traced))
     assert b6.to_graph().graph_hash != traced.to_graph().graph_hash  # names are hashed (C47)
 
 
@@ -118,8 +208,8 @@ def test_traced_profile_generates_the_b6_cpp(profile, monkeypatch):
     # The one line that the History capacity of _ssprk2 adds; the Program has no History ring.
     assert b6_lines.count(B6_HISTORY_LINE) == 1
     b6_lines.remove(B6_HISTORY_LINE)
-    assert b6_lines == _normalized(_source(traced_spec),
-                                   _presentation_names(traced_spec.case._time)).splitlines()
+    assert b6_lines == _without_finite_cpp(_normalized(
+        _source(traced_spec), _presentation_names(traced_spec.case._time)).splitlines())
 
 
 def test_traced_profile_records_its_closed_form(monkeypatch):
@@ -135,6 +225,8 @@ def test_traced_profile_records_its_closed_form(monkeypatch):
     assert elaboration.program.name == "M01_SSPRK2"
     assert elaboration.program._step_strategy.dt == elaboration.proposal.dt
     assert elaboration.advance.retry.max_attempts == 1 and elaboration.advance.accept is None
+    assert elaboration.control is elaboration.program._advance_control
+    assert elaboration.control.assessments == (("finite", "default"),)
     assert elaboration.trace.describe() == {
         "method": "shu_osher_ssprk2",
         "components": ["flow"],
@@ -447,14 +539,14 @@ def test_stage_formulas_stay_affine(m01):
 def test_an_exact_proposal_runs_its_nearest_binary64_step(m01, dt):
     elaboration = _elaborate(m01, forward(m01["flow"]), proposal=Proposal(dt))
     assert elaboration.proposal.dt == dt and type(elaboration.proposal.dt) is type(dt)
-    assert elaboration.program._step_strategy.dt == float(dt)
+    assert elaboration.program._step_strategy.dt == elaboration.control.first_dt == float(dt)
 
 
 @pytest.mark.parametrize("construct, match", [
     (lambda parts: _elaborate(parts, _stage_formula(lambda B, p, k0, U1, k1: U1)(parts["flow"]),
                               accept=object()), "assessment"),
     (lambda parts: _elaborate(parts, _stage_formula(lambda B, p, k0, U1, k1: U1)(parts["flow"]),
-                              retry=Retry(max_attempts=2)), "retry budgets"),
+                              retry=Retry(max_transforms=1)), "transforms"),
     (lambda parts: _elaborate(parts, _stage_formula(lambda B, p, k0, U1, k1: U1)(parts["flow"]),
                               clock=object()), "clocks"),
     (lambda parts: method(lambda B, p: None, memory=object()), "method memory"),
