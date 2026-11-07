@@ -472,6 +472,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     # branches. Evaluation context and kernels remain in the guarded body.
     output_setup_end = None
     observed_output = None
+    consumer_binding = None
     delegated_before_write = None
     evaluation_prelude = []
     if v.op in {"source", "implicit_source", "local_transform", "affine_moment_update", "apply", "integral_candidate",
@@ -942,6 +943,16 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 "auto* %s = &ctx.scalar_scratch(%d, 0, ctx.state(%d), 1, 0);"
                 % (status_resource, int(v.id), bidx))
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (var[v.id], state_resource))
+        closed_owner = "transform_closed_owner_%d" % v.id
+        held = False
+        if v.op == "local_transform":
+            from .program_emit_schedule import restores_held_value
+            held = restores_held_value(v)
+            if not held:
+                # Storage setup precedes any cadence guard: every branch and every later
+                # consumer sees the owner, which only an evaluated discharge sets.
+                lines.append("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;"
+                             % closed_owner)
         output_setup_end = len(lines)
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = *%s;" % (status, status_resource))
         lines.append(
@@ -958,31 +969,42 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             from pops.time.value_signatures import value_signature
             pending_lines, pending = emit_pending_presence(var[state_in.id], "transform_%d" % v.id)
             lines += pending_lines
-            closed_owner = "transform_closed_owner_%d" % v.id
-            lines.append("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % closed_owner)
-            lines.append("if (%s) {" % pending)
-            closed, owned = emit_closed_transform(
-                model=node_model, name=v.attrs["transform"], source=var[state_in.id],
-                output=var[v.id], status=status, mask=active_mask, owner=bidx,
-                signature=value_signature(state_in), block_indices=block_idx,
-                provider_plans=provider_plans,
-                consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
-                stem="closed_transform_%d" % v.id,
-                capacity=program.representation_workspace_byte_capacity,
-                target=target, issue=False)
-            lines += ["  " + line for line in closed]
-            lines.append("  %s = std::move(%s);" % (closed_owner, owned))
-            lines.append("} else {")
-            lines += ["  " + line for line in _emit_local_transform_kernel(
+            kernel = _emit_local_transform_kernel(
                 node_model, v.attrs["transform"], var[state_in.id], var[v.id], status,
                 active_mask, bidx,
                 provider_plans=provider_plans,
                 consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
-            )]
-            lines.append("}")
-            alias = "transform_observed_%d" % v.id
-            lines.append("auto& %s = %s ? *%s : %s;" % (alias, closed_owner, closed_owner, var[v.id]))
-            var[v.id] = alias
+            )
+            if held:
+                # The schedule cache restores numbers into this scratch, never the Field
+                # description a discharge binds. Holding one would serve an off-cadence
+                # value without its producer, so the due evaluation refuses it first.
+                lines.append("if (%s)" % pending)
+                lines.append("  throw std::invalid_argument(%s);" % json.dumps(
+                    "held local transform '%s' cannot discharge a Field representation: its "
+                    "schedule cache restores numerical values without their Field description"
+                    % v.attrs["transform"]))
+                lines += kernel
+            else:
+                lines.append("if (%s) {" % pending)
+                closed, owned = emit_closed_transform(
+                    model=node_model, name=v.attrs["transform"], source=var[state_in.id],
+                    output=var[v.id], status=status, mask=active_mask, owner=bidx,
+                    signature=value_signature(state_in), block_indices=block_idx,
+                    provider_plans=provider_plans,
+                    consumer_qid=program_provider_consumer_qid(node_model, v.id, v.block),
+                    stem="closed_transform_%d" % v.id,
+                    capacity=program.representation_workspace_byte_capacity,
+                    target=target, issue=False)
+                lines += ["  " + line for line in closed]
+                lines.append("  %s = std::move(%s);" % (closed_owner, owned))
+                lines.append("} else {")
+                lines += ["  " + line for line in kernel]
+                lines.append("}")
+                alias = "transform_observed_%d" % v.id
+                # Bound after the cadence branches: an off-cadence step keeps the scratch.
+                consumer_binding = (alias, "auto& %s = %s ? *%s : %s;"
+                                    % (alias, closed_owner, closed_owner, var[v.id]))
         reduced = "transform_failed_%d" % v.id
         # AMR transforms (including after-synchronization and composite Q maps) are
         # produced and checked collectively one level at a time. Sibling statuses
@@ -1970,6 +1992,11 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         lines.extend(emit_stencil_exchange_capture(v, var, block=bidx, target=target))
     _emit_schedule_wrap(program, v, var, lines, _profile_start,
                         output_setup_end=output_setup_end)
+    if consumer_binding is not None:
+        # The cadence policy stores and restores the evaluated scratch. Consumers
+        # select the discharged owner, which exists only after a due evaluation.
+        var[v.id], binding = consumer_binding
+        lines.append(binding)
     # PER-NODE PROFILING (ADC-459): if this op emitted at least one statement, bracket those
     # statements with the steady_clock pair (see the note at the top of _emit_op). A ProfileScope is
     # named "node:<v.name>"; profile_record(name, _pt) accumulates now() - _pt into the System

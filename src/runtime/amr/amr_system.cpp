@@ -25603,8 +25603,8 @@ std::pair<std::size_t, std::size_t> AmrSystem<Dim>::checkpoint_program_state_cap
       }
     }
     // The metadata envelope has its own frozen workspace bound, independent of
-    // whether any History value carries an FV face expression. Its complete
-    // output is bounded before serialization, including the nested FLX image.
+    // whether any History value carries an FV face expression. That bound covers
+    // the envelope around the nested FLX image, which keeps the bound above.
     shape.history_flux_payload_bytes = checked_size_sum(
         shape.history_flux_payload_bytes, metadata.history_field_metadata_workspace_bytes,
         "AMR history Field metadata checkpoint capacity exceeds size_t");

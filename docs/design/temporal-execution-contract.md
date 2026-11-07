@@ -184,10 +184,14 @@ publication may produce a value greater than zero, and `UINT64_MAX` is refused a
 emitted `checkpoint_migration` member is reserved by the live Uniform resource budget in a fixed 16 Ki
 character envelope. The supported route requires the same grid and accepted clock, Dense fully
 stored histories with a matching outgoing-`dt` ledger, and no qualified field providers, scheduled
-caches, or ConsumerGraph state. It validates and reopens the complete current payload before an
-atomic no-clobber publication; the source and authority are never modified. Other v2 variants
-remain unsupported. Runtime restart contains no migration import or compatibility branch and
-continues to reject every historical payload.
+caches, or ConsumerGraph state. A History ring gives the authority the plan default History Field
+metadata contract, so its accepted exchange image is the `POPSEX06` envelope: migration requires
+an empty wrapped mailbox and an empty metadata table, keeps both byte-identically, and writes each
+ring's sample ledger as explicit unknown provenance, as it does for the history sample identities.
+It validates and reopens the complete current payload before an atomic no-clobber publication; the
+source and authority are never modified. Other v2 variants remain unsupported. Runtime restart
+contains no migration import or compatibility branch and continues to reject every historical
+payload.
 
 `RuntimeInstance` obtains each consumer moment from the accepted cursor of the consumer's qualified
 clock. A missing clock, provisional phase, or desynchronized cursor is an error. Consequently a

@@ -40,9 +40,8 @@ def checkpoint_exports(program):
                      % (prefix, json.dumps(schema.get("identity", ""))))
         lines.append('extern "C" std::uint64_t %s_byte_capacity() { return %d; }'
                      % (prefix, schema.get("byte_capacity", 0)))
-    budget = getattr(program, "history_field_metadata_budget", None)
-    from pops.time._program.resource_budgets import validate_history_field_metadata_budget
-    validate_history_field_metadata_budget(budget)
+    from pops.time._program.resource_budgets import resolved_history_field_metadata_budget
+    budget = resolved_history_field_metadata_budget(program)
     for suffix, capacity in zip(("storage_bytes", "workspace_bytes"), budget or (0, 0), strict=True):
         lines.append('extern "C" std::uint64_t pops_program_history_field_metadata_%s() { return %d; }'
                      % (suffix, capacity))

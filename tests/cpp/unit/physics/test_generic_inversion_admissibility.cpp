@@ -14,6 +14,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -54,6 +55,31 @@ struct BorrowedPredicate {
 
 static_assert(!pops::device_capture_v<pops::CustomInequality<HostContainerPredicate>>);
 static_assert(!pops::device_capture_v<pops::CustomInequality<BorrowedPredicate>>);
+
+template <class Storage>
+struct RecoveryAdmissibilityModel {
+  using State = pops::StateVec<1>;
+  using Prim = pops::StateVec<1>;
+  static constexpr int dimension = pops::kNativeDimension;
+  static constexpr int n_vars = 1;
+  Storage storage;
+  using pops_device_capture_members = pops::DeviceCaptureMembers<decltype(storage)>;
+
+  POPS_HD Prim to_primitive(const State& state) const { return state; }
+  POPS_HD State to_conservative(const Prim& primitive) const { return primitive; }
+  POPS_HD bool recovery_admissible(const Prim&, int*) const { return true; }
+};
+
+// The recovery predicate owns exactly its model: bound runtime parameters are captured through
+// the model's exhaustive contract, and a host container still never is.
+using ParameterRecoveryModel = RecoveryAdmissibilityModel<pops::RuntimeParams>;
+static_assert(
+    pops::device_capture_v<pops::ModelRecoveryAdmissibilityProvider<ParameterRecoveryModel>>);
+static_assert(
+    !pops::device_capture_v<
+        pops::ModelRecoveryAdmissibilityProvider<RecoveryAdmissibilityModel<std::vector<double>>>>);
+static_assert(sizeof(decltype(pops::prepare_model_recovery_admissibility(
+                  std::declval<const ParameterRecoveryModel&>()))) > 0);
 
 enum class RecoveryFailure : std::uint8_t {
   kNone = 0,

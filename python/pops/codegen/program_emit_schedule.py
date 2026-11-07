@@ -151,6 +151,25 @@ def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: b
     )
 
 
+def _guarded_schedule_lowering(v: Any) -> ScheduleLoweringIR | None:
+    """Node @p v's schedule lowering, or None when no cadence guard wraps it: no schedule, or
+    always() on the accepted-step timeline (byte-identical to the unscheduled lowering)."""
+    sched = v.attrs.get("schedule")
+    if sched is None:
+        return None
+    lowering = _lower_schedule_ir(v, sched)
+    if (lowering.due.kind is ScheduleDueKind.ALWAYS
+            and lowering.domain.timeline is ScheduleTimeline.ACCEPTED_STEP):
+        return None
+    return lowering
+
+
+def restores_held_value(v: Any) -> bool:
+    """Whether an off-cadence step serves node @p v's value restored from the schedule cache."""
+    lowering = _guarded_schedule_lowering(v)
+    return lowering is not None and ScheduleAction.RESTORE in lowering.off.off_cadence
+
+
 def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any,
                         *, output_setup_end: int | None = None) -> None:
     """Wrap the C++ statements node @p v emitted (``lines[start:]``) in its schedule's due-test guard
@@ -158,12 +177,8 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any,
     field output freshness belongs to the typed ProviderPack transaction and cannot be raw-cached.
     An always()/absent schedule
     leaves the lines untouched (byte-identical to the unscheduled lowering)."""
-    sched = v.attrs.get("schedule")
-    if sched is None:
-        return
-    lowering = _lower_schedule_ir(v, sched)
-    if (lowering.due.kind is ScheduleDueKind.ALWAYS
-            and lowering.domain.timeline is ScheduleTimeline.ACCEPTED_STEP):
+    lowering = _guarded_schedule_lowering(v)
+    if lowering is None:
         return
     policy = lowering.off
     is_aux = v.op in _AUX_OUTPUT_OPS

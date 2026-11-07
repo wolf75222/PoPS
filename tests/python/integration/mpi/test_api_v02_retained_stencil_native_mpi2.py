@@ -3,4 +3,4 @@ from tests.python.support.mpi_pytest_entrypoint import run
 
 
 if __name__ == "__main__":
-    raise SystemExit(run('tests/python/integration/runtime/test_api_v02_retained_stencil_native.py', expected_cases=5, ranks=2))
+    raise SystemExit(run('tests/python/integration/runtime/test_api_v02_retained_stencil_native.py', expected_cases=6, ranks=2))
