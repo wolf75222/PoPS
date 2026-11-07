@@ -182,14 +182,13 @@ def compile_euler_artifact(model: Model, **options: Any) -> Any:
     return artifact
 
 
-def compile_euler_component(
-    model: Model,
-    *,
-    cells: int = 16,
-    cxx: str | None = None,
-) -> Any:
-    """Return the one detached component produced by :func:`compile_euler_artifact`."""
-    artifact = compile_euler_artifact(model, cells=cells, cxx=cxx)
+def compile_euler_component(model: Model, **options: Any) -> Any:
+    """Return the one detached component produced by :func:`compile_euler_artifact`.
+
+    ``options`` are the keywords of ``resolve_euler_case``; the component serves only the route
+    they resolve.
+    """
+    artifact = compile_euler_artifact(model, **options)
     if len(artifact.blocks) != 1:
         raise AssertionError("Euler fixture must compile exactly one block component")
     return artifact.blocks[0].model
