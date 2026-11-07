@@ -12,6 +12,8 @@ declares: moved to the native component tree, or removed (PF14). Every guard rea
 
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
+import pytest
+
 from tests.python.architecture.frozen_engine import scan
 
 # CF0 at b6e64c1d, verbatim: include/, src/, python/bindings/, python/pops/ except python/pops/lib/,
@@ -102,16 +104,19 @@ def _natives():
     return scan.load_placement()
 
 
-def _departures():
-    """(id, file) -> (kind, where) for each line of placement_departures.txt."""
+def _departures(path=DEPARTURES):
+    """(id, file) -> (kind, where) for each line of placement_departures.txt: "<id> <file> | moved
+    <file of the native component tree>" or "<id> <file> | removed <PF14 record>"."""
     found = {}
-    for raw in DEPARTURES.read_text(encoding="utf-8").splitlines():
+    for raw in path.read_text(encoding="utf-8").splitlines():
         if not raw.strip() or raw.startswith("#"):
             continue
-        left, _, right = raw.partition(" | ")
-        native, rel = left.split()
+        left, bar, right = raw.partition(" | ")
+        names = left.split()
         kind, _, where = right.partition(" ")
-        assert kind in ("moved", "removed") and where.strip(), "malformed departure: %r" % raw
+        assert bar and len(names) == 2 and kind in ("moved", "removed") and where.strip(), (
+            "malformed departure: %r" % raw)
+        native, rel = names
         assert (native, rel) not in found, "departure declared twice: %r" % raw
         found[native, rel] = (kind, where.strip())
     return found
@@ -213,6 +218,31 @@ def test_a_native_leaves_the_list_only_by_a_declared_departure():
             wrong.append("%s %s: moved to %s, not a file of the native component tree"
                          % (native, rel, where))
     assert not wrong, "FC6: CF0 placement departures:\n  " + "\n  ".join(wrong)
+
+
+_FFT = "solver-fft include/pops/numerics/elliptic/poisson/poisson_fft.hpp"
+
+
+@pytest.mark.parametrize("line", [
+    _FFT + " removed probe",                          # no bar
+    "solver-fft | removed probe",                     # no file
+    "solver-fft a.hpp b.hpp | removed probe",         # two files
+    _FFT + " | gone probe",                           # neither moved nor removed
+    _FFT + " | removed",                              # no record
+])
+def test_a_malformed_departure_line_is_named(tmp_path, line):
+    path = tmp_path / DEPARTURES.name
+    path.write_text("# header\n%s\n" % line, encoding="utf-8")
+    with pytest.raises(AssertionError, match="malformed departure"):
+        _departures(path)
+
+
+def test_a_departure_declared_twice_is_named(tmp_path):
+    path = tmp_path / DEPARTURES.name
+    path.write_text("%s | removed probe\n%s | removed other record\n" % (_FFT, _FFT),
+                    encoding="utf-8")
+    with pytest.raises(AssertionError, match="departure declared twice"):
+        _departures(path)
 
 
 def test_placement_entries_name_files_still_in_core_paths():
