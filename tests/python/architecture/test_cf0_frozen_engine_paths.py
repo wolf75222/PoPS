@@ -4,7 +4,8 @@ the CF0 placement list.
 ``frozen_engine/cf0_paths.toml`` is the one CF0 list that every engine guard reads (CF0b, CF1, CF2,
 CF7, CF8). ``frozen_engine/cf0_native_placement.toml`` names each native of IR24 that still sits in
 a core path, with its issue, phase and interface; it only shrinks (MG6), keeps only Phase 2 entries
-at the exit of Phase 1 and is empty at the freeze (FC6, FC8). Every guard reads it through
+at the exit of Phase 1 and is empty at the freeze (FC6, FC8). Each entry keeps its b6 issue and
+phase, and a native leaves the list only when it leaves the core paths. Every guard reads it through
 ``scan.load_placement``: this test, CF1 (``cf1.placed_natives``) and CF2 (the N9 path rule of
 ``cf2.py`` and the closed interface list).
 
@@ -19,15 +20,71 @@ CF0_CORE = ("include/", "src/", "python/bindings/", "python/pops/", "cmake/", "s
             "CMakeLists.txt", "python/CMakeLists.txt", "src/CMakeLists.txt", "pyproject.toml")
 CF0_EXCLUDED = ("python/pops/lib/",)
 
-# The ids of the b6 placement list. The list only shrinks (MG6); never add an id here.
-B6_PLACEMENT_IDS = frozenset({
-    "face-loop-stencil-flux", "face-loop-generated-system-block",
-    "face-loop-generated-amr-system-block", "solver-krylov", "solver-newton-krylov",
-    "solver-multigrid", "solver-preconditioner", "solver-fft", "solver-polar-poisson",
-    "solver-cartesian-poisson", "solver-dense-residual-basis", "solver-amr-tensor",
-    "direct-sum-spatial-interaction", "path-conservative-rusanov", "level-transfer-reflux-ledger",
-    "level-transfer-restriction",
-})
+# The b6 placement list (IR24, adjudication section 17), verbatim: id -> (issue, phase, files).
+# The list only shrinks (MG6): never add an id or a file here; an issue or a phase changes only
+# with spec 0.3.
+B6_PLACEMENT = {
+    "face-loop-stencil-flux": ("N3", 1, ("include/pops/numerics/fv/stencil_flux.hpp",)),
+    "face-loop-generated-system-block": ("N3", 1, (
+        "include/pops/runtime/builders/compiled/generated_system_block.hpp",
+    )),
+    "face-loop-generated-amr-system-block": ("N3", 1, (
+        "include/pops/runtime/builders/compiled/generated_amr_system_block.hpp",
+    )),
+    "solver-krylov": ("N9", 2, (
+        "include/pops/numerics/elliptic/linear/generic_krylov.hpp",
+        "include/pops/numerics/elliptic/linear/krylov_method_provider.hpp",
+        "include/pops/numerics/elliptic/linear/krylov_workspace.hpp",
+        "include/pops/runtime/amr/tensor_coarse_gmres.hpp",
+    )),
+    "solver-newton-krylov": ("N9", 2, (
+        "include/pops/numerics/elliptic/interface/field_newton_krylov.hpp",
+        "include/pops/numerics/elliptic/interface/amr_field_newton_krylov.hpp",
+    )),
+    "solver-multigrid": ("N9", 2, (
+        "include/pops/numerics/elliptic/mg/geometric_mg.hpp",
+        "include/pops/numerics/elliptic/mg/composite_fac_nlevel.hpp",
+        "include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp",
+        "include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp",
+    )),
+    "solver-preconditioner": ("N9", 2, (
+        "include/pops/numerics/elliptic/mg/tensor_diagonal_preconditioner.hpp",
+    )),
+    "solver-fft": ("N9", 2, (
+        "include/pops/numerics/elliptic/poisson/poisson_fft.hpp",
+        "include/pops/numerics/elliptic/poisson/poisson_fft_1d_internal.hpp",
+        "include/pops/numerics/elliptic/poisson/poisson_fft_device_kernels.hpp",
+        "include/pops/numerics/elliptic/poisson/poisson_fft_multifab.hpp",
+        "include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp",
+    )),
+    "solver-polar-poisson": ("N9", 2, (
+        "include/pops/numerics/elliptic/polar/polar_poisson_solver.hpp",
+        "include/pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp",
+    )),
+    "solver-cartesian-poisson": ("N9", 2, (
+        "include/pops/numerics/elliptic/nd/cartesian_poisson.hpp",
+        "include/pops/numerics/elliptic/poisson/poisson_operator.hpp",
+    )),
+    "solver-dense-residual-basis": ("N9", 2, (
+        "include/pops/numerics/elliptic/interface/full_residual_basis_lu.hpp",
+    )),
+    "solver-amr-tensor": ("N9", 2, (
+        "include/pops/runtime/amr/amr_tensor_elliptic.hpp",
+        "include/pops/runtime/amr/hierarchy_tensor_solver_provider.hpp",
+        "include/pops/runtime/amr/tensor_composite_fac.hpp",
+    )),
+    "direct-sum-spatial-interaction": ("G05", 2, (
+        "include/pops/runtime/program/spatial_direct_interaction.hpp",
+    )),
+    "path-conservative-rusanov": ("G06", 2, ("include/pops/numerics/fv/path_flux.hpp",)),
+    "level-transfer-reflux-ledger": ("G06", 2, (
+        "include/pops/amr/reflux/face_flux_ledger.hpp",
+        "include/pops/amr/reflux/metric_reflux.hpp",
+        "include/pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp",
+        "include/pops/numerics/time/amr/reflux/amr_reflux_mf.hpp",
+    )),
+    "level-transfer-restriction": ("G06", 2, ("include/pops/amr/transfer/transfer_provider.hpp",)),
+}
 # IR24: the issue and phase of each class of native.
 IR24_ISSUE_PHASE = {"N3": 1, "N9": 2, "G05": 2, "G06": 2}
 
@@ -84,9 +141,39 @@ def test_frozen_engine_classification():
 def test_placement_list_only_shrinks():
     ids = [row["id"] for row in _natives()]
     assert len(ids) == len(set(ids)), "duplicate ids in cf0_native_placement.toml"
-    assert set(ids) <= B6_PLACEMENT_IDS, (
+    assert set(ids) <= set(B6_PLACEMENT), (
         "MG6: the CF0 placement list only shrinks; new entries are refused: %s"
-        % sorted(set(ids) - B6_PLACEMENT_IDS))
+        % sorted(set(ids) - set(B6_PLACEMENT)))
+
+
+def test_placement_entries_keep_their_b6_issue_phase_and_files():
+    wrong = []
+    for row in _natives():
+        if row["id"] not in B6_PLACEMENT:
+            continue  # test_placement_list_only_shrinks
+        issue, phase, files = B6_PLACEMENT[row["id"]]
+        if (row["issue"], row["phase"]) != (issue, phase):
+            wrong.append("%s: %s, Phase %s instead of %s, Phase %d (IR24)"
+                         % (row["id"], row["issue"], row["phase"], issue, phase))
+        wrong.extend("%s: %s is not a file of this native at b6" % (row["id"], rel)
+                     for rel in row["files"] if rel not in files)
+    assert not wrong, (
+        "MG6: a CF0 placement entry keeps its b6 issue and phase and only loses files:\n  "
+        + "\n  ".join(wrong))
+
+
+def test_a_native_leaves_the_list_only_when_it_leaves_the_core_paths():
+    """FC6: until a native moves to the native component tree or, for a named method, is removed,
+    the placement list names it."""
+    engine = scan.load_cf0()
+    tracked = set(scan.tracked_files())
+    listed = {(row["id"], rel) for row in _natives() for rel in row["files"]}
+    dropped = ["%s: %s" % (native, rel) for native, (_, _, files) in sorted(B6_PLACEMENT.items())
+               for rel in files
+               if (native, rel) not in listed and rel in tracked and engine.is_core(rel)]
+    assert not dropped, (
+        "FC6: these natives left cf0_native_placement.toml but still sit in core paths:\n  "
+        + "\n  ".join(dropped))
 
 
 def test_placement_entries_name_files_still_in_core_paths():
