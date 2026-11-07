@@ -382,11 +382,18 @@ def _emit_cpp_program_impl(
     )
     # The install entries are regions too (an AMR entry builds its continuation
     # configurations), so the translation-unit definitions are rendered after them.
+    # This order changes nothing the other definitions read: the uniform schemas, device
+    # kernels and shared source kernels are all registered before block_names is computed
+    # (prelude, body, dt bound, Advance outputs, AMR hierarchy bodies), and no part from
+    # block_names on writes them; only the AMR entry registers, into the shared registry,
+    # the continuation schemas that shared_definitions() renders.
     parts["model_helpers"] = (
         uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
         + _emit_program_model_helpers(program, authority)
         + provider_plans.source_kernel_helpers.cpp() + shared_definitions())
     # The finite helpers follow the code that names them, not only the finite operations.
+    # The search reads every part, the translation-unit definitions included, so a shared
+    # routine that names a finite helper brings it in as its inline form did.
     if uses_finite_arrays or uses_distributed or any(
             uses_finite_helpers(part) for part in parts.values() if isinstance(part, str)):
         finite_helpers = finite_cpp_helpers()
