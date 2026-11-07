@@ -349,6 +349,45 @@ def test_compile_identity_reuse_is_bound_to_the_thread_that_opens_it(monkeypatch
     assert projections == [source] * 4
 
 
+def test_public_compile_reads_identities_in_one_reuse_scope(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    import pops
+    import pops._native_selector as selector
+    import pops.codegen._phases as phases
+    import pops.codegen._plans as plans
+    from pops import _api
+
+    source = _authored_program()["program"].freeze()
+    expected = source._ir_hash()
+    projections = _counted_projections(monkeypatch)
+    result = object()
+
+    class Resolved:
+        resolved_dimension = 2
+
+        @staticmethod
+        def verify() -> None:
+            assert source._ir_hash() == expected
+
+    def compile_phase(plan):
+        assert [source._ir_hash(), source._ir_hash()] == [expected, expected]
+        return result
+
+    bootstrap = ModuleType("pops._bootstrap")
+    monkeypatch.setattr(plans, "ResolvedSimulationPlan", Resolved)
+    monkeypatch.setattr(selector, "select_native_dimension", lambda dimension: None)
+    monkeypatch.setitem(sys.modules, "pops._bootstrap", bootstrap)
+    monkeypatch.setattr(pops, "_bootstrap", bootstrap, raising=False)
+    monkeypatch.setattr(phases, "compile", compile_phase)
+
+    assert _api.compile(Resolved()) is result
+    # The plan check and the compile phase read in one scope: the first read projects, the
+    # later reads reuse it, and the successful exit authenticates it once.
+    assert projections == [source, source]
+
+
 def test_detached_program_does_not_keep_source_program_or_registries_alive():
     def build():
         authored = _authored_program()
