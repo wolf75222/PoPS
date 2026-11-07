@@ -41,17 +41,19 @@ _IR_IDENTITY_REUSE: ContextVar[_IdentityReuse | None] = ContextVar(
 
 
 @contextmanager
-def ir_identity_reuse() -> Iterator[None]:
-    """Project each frozen Program identity once within one synchronous compile.
+def ir_identity_reuse(operation: str) -> Iterator[None]:
+    """Project each frozen Program identity once within one synchronous public operation.
 
+    ``pops.resolve`` reads the Program it freezes for its snapshots and plan evidence, and
     ``pops.compile`` re-verifies its plan, detaches the Program twice, converts and lowers the
     clones and checks the artifact; each check hashed the whole IR again. Inside this scope the
     first read of a frozen Program, authoring or detached, projects its IR and later reads reuse
-    that identity. When the operation succeeds every identity is projected again outside the
-    scope, so a definition changed during compilation, or an out-of-contract edit of a clone, still
-    fails it. Nothing is retained on a Program, and a failed operation leaves no witness. With or
-    without an error, the graphs converted from the Programs read in the scope leave the conversion
-    cache when it ends (``_forget_scope_graphs``).
+    that identity; a read made before a Program is frozen still projects. When ``operation``
+    succeeds every identity is projected again outside the scope, so a definition changed during
+    it, or an out-of-contract edit of a clone, still fails it with a RuntimeError naming
+    ``operation``. Nothing is retained on a Program, and a failed operation leaves no witness.
+    With or without an error, the graphs converted from the Programs read in the scope leave the
+    conversion cache when it ends (``_forget_scope_graphs``).
     """
     inherited = _IR_IDENTITY_REUSE.get()
     if inherited is not None and inherited.applies():
@@ -69,7 +71,7 @@ def ir_identity_reuse() -> Iterator[None]:
         _forget_scope_graphs(program for program, _identity in observed)
     for program, expected in observed:
         if program._ir_hash() != expected:
-            raise RuntimeError("Program IR identity changed during pops.compile")
+            raise RuntimeError("Program IR identity changed during %s" % operation)
 
 
 def _forget_scope_graphs(programs: Iterable[Any]) -> None:

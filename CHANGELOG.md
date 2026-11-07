@@ -398,6 +398,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   identities are unchanged (identical hashes for 116 example builders and for the depth test at
   depths 20, 40, 80 and 160). On one 4-core container, `compile` of the depth-160 test takes
   740 s instead of 1147 s.
+- Open the same identity reuse scope in `pops.resolve`. Resolve freezes the authoring Program,
+  then each snapshot and plan-evidence check projected its whole IR again. Within the scope the
+  first read after the freeze projects and later reads reuse it; reads made before the freeze
+  still project. The identity is projected again when resolve ends: a change raises `Program IR
+  identity changed during pops.resolve` and no plan is returned. Plan, artifact and Program
+  identities are unchanged (depth test at 40 and 160). On one 4-core container, `resolve` of the
+  depth-160 test takes 332 s instead of 392 s.
 - `ci.yml` checks, with the pinned clang-format 19.1.7, what each pull request changes in the C++
   files, in a `format` job that the required gate aggregates (against the first parent of the
   merge commit, about a minute, no build). It works as a ratchet: a touched file that conformed at
