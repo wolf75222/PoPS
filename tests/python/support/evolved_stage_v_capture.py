@@ -101,7 +101,7 @@ def capture_initial_carriers(world,runtime,directory,authority):
     evidence=collective_call(world,save)
     # Real refusal persisted before admission; no NPY/carrier substitute.
     if any(failures):raise AssertionError(failures)
-    from tests.review.sol61_amr_full_carrier_offline import decode
+    from tests.python.support.sol61_amr_full_carrier_offline import decode
     def validate():
         image=decode(np.frombuffer(raw,dtype=np.uint8))
         validate_initial_envelope(image,world_size(world),authority=authority)

@@ -1,0 +1,33 @@
+# CF0 (spec 0.3, section 16.1; FC6b): the core paths and the native component tree.
+#
+# Every engine guard of Linear N2 (CF0b, CF1, CF2, CF7, CF8) reads this file; none of them carries
+# its own copy of the list. A directory entry ends with "/", a file entry does not.
+#
+# The frozen engine is the union of the core paths and of the native component tree (FC6b). Moving
+# a file between the core paths, the native component tree and the rest is a change of the frozen
+# engine (CF0).
+
+[core]
+include = [
+    "include/",
+    "src/",
+    "python/bindings/",
+    "python/pops/",
+    "cmake/",
+    "schemas/",
+    "CMakeLists.txt",
+    "python/CMakeLists.txt",
+    "src/CMakeLists.txt",
+    "pyproject.toml",
+]
+# python/pops/lib/ is outside the core (CF0, CF0b): the library is Python over the public surface.
+exclude = [
+    "python/pops/lib/",
+]
+
+[native_tree]
+# The native component tree of qualified substitutions (SV12). Its path is fixed by N5; "native/" is
+# the default that CF0 names. It is outside the core paths and inside the frozen engine. It does not
+# exist at b6e64c1d: the natives of IR24 still sit in core paths and are named, one by one, by
+# cf0_native_placement.toml.
+path = "native/"

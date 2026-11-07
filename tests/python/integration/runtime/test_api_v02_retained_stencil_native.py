@@ -3,12 +3,13 @@ import numpy as np
 import pops
 import pytest
 
+from pops.time._program.resource_budgets import DEFAULT_HISTORY_FIELD_METADATA_BUDGET
 from examples.api_v02.method_retained_stencil import build_retained_stencil, initial_state, reference
 from tests.python.integration.runtime.test_api_v02_scoped_stencil_native import _receipts
 from tests.python.support.api_v02_native import _bind, _compile, execute_case
 from tests.python.support.collective_checks import collective_attempt, collective_call, collective_check
 from tests.python.support.integral_state_receipts import collective_directory
-from tests.python.support.public_native_profile import native_profile
+from tests.python.support.public_native_profile import native_profile, profile_gather_value
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
@@ -74,6 +75,42 @@ def test_retained_ab2_faces_restart_without_replaying_accepted_origin(retention,
         rhs = collective_call(world, replay._executor._s._checkpoint_continuation_image)
         with collective_check(world):
             assert lhs == rhs, "complete retained Field metadata and accepted State origins restart exactly"
+
+
+def test_retained_ab2_history_checkpoint_exceeds_the_default_metadata_workspace(tmp_path,
+        isolated_native_cache, native_cxx, kokkos_root):
+    del isolated_native_cache, native_cxx, kokkos_root
+    _, world = native_profile(dimension=2, scope="retained AB2 large history")
+    # No budget is written. The rank owning the single Cartesian box keeps a retained-face
+    # image larger than the default metadata workspace, which bounds only the History Field
+    # envelope around each rank's image.
+    cells = (64, 32)
+    spec = collective_call(world, lambda: build_retained_stencil(
+        retention="history", steps=2, cells=cells, dt=.16/cells[0]))
+    runtime, artifact, _ = execute_case(lambda: spec, world, "retained AB2 large history")
+    image = collective_call(world, runtime._executor._checkpoint_program_exchanges)
+    sizes = profile_gather_value(world, (int.from_bytes(image[8:16], "little"), len(image)))
+    with collective_check(world):
+        workspace = DEFAULT_HISTORY_FIELD_METADATA_BUDGET[1]
+        assert image.startswith(b"POPSEX06") and image[16:24] == b"POPSEX05"
+        assert max(nested for nested, _ in sizes) > workspace
+        assert all(workspace >= size - nested for nested, size in sizes)
+    directory = collective_directory(world, tmp_path)
+    path = collective_call(world, lambda: runtime.checkpoint(str(directory / "AB2-large-history")))
+    replay = _bind(spec, artifact, world)
+    collective_call(world, lambda: replay.restart(path))
+    restored = collective_call(world, replay._executor._checkpoint_program_exchanges)
+    with collective_check(world):
+        assert restored == image
+    for candidate in (runtime, replay):
+        collective_call(world, lambda candidate=candidate: pops.run(
+            candidate, t_end=3*spec.dt, max_steps=1, console=False))
+    left = collective_call(world, lambda: runtime.state_global("method"))
+    right = collective_call(world, lambda: replay.state_global("method"))
+    with collective_check(world):
+        assert runtime.macro_step() == replay.macro_step() == 3
+        if left is not None:
+            np.testing.assert_array_equal(left, right)
 
 
 @pytest.mark.parametrize("retention", ("history", "continuation"))

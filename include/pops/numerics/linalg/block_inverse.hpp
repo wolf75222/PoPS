@@ -6,7 +6,7 @@
 /// operation written in a pinned order. All sizes first equilibrate rows and use partial-pivot
 /// Gauss-Jordan to decide numerical admissibility. Outside the closed-form range, that balanced
 /// inverse supplies the result. The relative pivot threshold is max(tol, N*epsilon), never a
-/// determinant threshold carrying physical units. See docs/development/api_040/block_inverse_scaling_v1.md.
+/// determinant threshold carrying physical units. See docs/development/block_inverse_scaling_v1.md.
 ///
 /// WHY A SEPARATE, PINNED-ORDER INTRINSIC. The condensed-implicit codegen (ADC-637) assembles the
 /// tensor elliptic coefficient ``A = I + c*rho*M^{-1}`` from a per-cell block ``M = I - theta*dt*J``

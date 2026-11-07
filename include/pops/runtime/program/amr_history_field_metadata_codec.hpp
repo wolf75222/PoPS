@@ -74,6 +74,8 @@ void require_manager_metadata(const Manager& manager, std::string_view program) 
 
 // The FLX representation is nested verbatim. Metadata has its own installed
 // resource budget and is present even for histories with no face expression.
+// That workspace bounds the envelope around the FLX image, never the image itself,
+// which keeps the bound it has without metadata.
 // Samples bind every metadata slot to the already restored History image.
 template <class Manager>
 std::vector<std::uint8_t> encode_amr_history_field_metadata(std::vector<std::uint8_t> flux,
@@ -93,7 +95,6 @@ std::vector<std::uint8_t> encode_amr_history_field_metadata(std::vector<std::uin
   if (manager.slot_fields.size() != manager.histories.size())
     throw std::invalid_argument("AMR history metadata omits or adds a ring");
   std::uint64_t fixed = 32;
-  charge(fixed, flux.size(), 1, budget.workspace_bytes);
   for (const auto& [name, ring] : manager.histories) {
     if (manager.slot_fields.at(name).size() != ring.size() ||
         manager.validated_samples(name).size() != ring.size())
@@ -106,21 +107,19 @@ std::vector<std::uint8_t> encode_amr_history_field_metadata(std::vector<std::uin
     charge(fixed, name.size(), 1, budget.workspace_bytes);
     charge(fixed, ring.size(), 64, budget.workspace_bytes);
   }
-  // The original FLX vector, PMR lookup, metadata wire and full envelope can
-  // coexist. Reserve their complete peak before allocating either output.
-  const HistoryFieldMetadataBudget encoding_budget{budget.retained_bytes,
-                                                   budget.workspace_bytes - flux.size()};
-  Tables tables(encoding_budget.workspace_bytes);
-  tables.collect(manager.slot_fields, encoding_budget);
+  // The PMR lookup, metadata wire and envelope around the FLX image can coexist.
+  // Reserve their complete peak before allocating either output.
+  Tables tables(budget.workspace_bytes);
+  tables.collect(manager.slot_fields, budget);
   auto peak = fixed;
-  charge(peak, flux.size(), 1, budget.workspace_bytes);
   charge(peak, tables.workspace.used(), 1, budget.workspace_bytes);
   charge(peak, tables.wire, 2, budget.workspace_bytes);
   const auto metadata = encode_prepared_history_field_metadata(manager.slot_fields, tables);
   std::uint64_t size = fixed;
   charge(size, metadata.size(), 1, budget.workspace_bytes);
-  if (size > std::numeric_limits<std::size_t>::max())
+  if (size > std::numeric_limits<std::size_t>::max() - flux.size())
     throw std::length_error("AMR history metadata envelope is not addressable");
+  size += flux.size();
   Writer out(static_cast<std::size_t>(size));
   out.bytes.insert(out.bytes.end(), amr_history_field_detail::magic.begin(),
                    amr_history_field_detail::magic.end());
@@ -156,10 +155,14 @@ PreparedAmrHistoryFieldMetadata prepare_amr_history_field_metadata(
       throw std::invalid_argument("AMR checkpoint omits installed history Field metadata");
     return {bytes, {}};
   }
-  if (!budget.enabled() || bytes.size() > budget.workspace_bytes)
+  if (!budget.enabled())
     throw std::length_error("AMR history metadata envelope exceeds its installed workspace");
   history_field_detail::Reader in{bytes, amr_history_field_detail::magic.size()};
   const auto flux = amr_history_field_detail::blob(in);
+  // As in the encoder, the borrowed envelope is charged without its FLX image.
+  const auto envelope = bytes.size() - flux.size();
+  if (envelope > budget.workspace_bytes)
+    throw std::length_error("AMR history metadata envelope exceeds its installed workspace");
   const auto metadata = amr_history_field_detail::blob(in);
   if (in.word() != manager.histories.size())
     throw std::invalid_argument("AMR history metadata envelope omits or adds a ring");
@@ -176,8 +179,8 @@ PreparedAmrHistoryFieldMetadata prepare_amr_history_field_metadata(
     throw std::invalid_argument("AMR history metadata envelope has trailing bytes");
   // The metadata span is already part of the envelope: subtract only the other
   // borrowed bytes here; its decoder charges the metadata bytes plus scratch.
-  const HistoryFieldMetadataBudget nested{
-      budget.retained_bytes, budget.workspace_bytes - (bytes.size() - metadata.size())};
+  const HistoryFieldMetadataBudget nested{budget.retained_bytes,
+                                          budget.workspace_bytes - (envelope - metadata.size())};
   auto fields = decode_history_field_metadata(metadata, manager.histories, nested);
   require_history_field_program(fields, program);
   for (const auto& [name, slots] : fields)

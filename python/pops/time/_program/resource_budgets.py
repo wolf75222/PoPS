@@ -49,9 +49,10 @@ def validate_history_field_metadata_budget(value):
         )
 
 
-# Plan default of the History Field metadata resource: no case has to author a memory budget
-# for its History to retain Field support and representation (spec 0.3, B3). It is the
-# capacity that the API 0.2 examples and fixtures declare explicitly.
+# Plan default of the History Field metadata resource: a case whose History metadata fits it
+# authors no memory budget to retain Field support and representation (spec 0.3, B3). It bounds
+# the metadata only, never the exchange or FLX image nested in a checkpoint envelope. Most API 0.2
+# examples and fixtures declare this capacity explicitly; two declare (8 MiB, 8 MiB).
 DEFAULT_HISTORY_FIELD_METADATA_BUDGET = (8 * 1024 * 1024, 16 * 1024 * 1024)
 
 

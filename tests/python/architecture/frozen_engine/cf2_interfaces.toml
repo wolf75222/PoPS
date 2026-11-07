@@ -1,0 +1,88 @@
+# The closed list of generic interfaces of the substitution protocol (spec 0.3: FC6b, section 15.2
+# item 6, CF2; Linear N2), and where each native interface of b6 stands against it.
+#
+# The protocol of b6 declares its native interfaces in schemas/component_catalog.v2.json
+# ("native_interface_abis"), generated into python/pops/_generated_component_interfaces.py and
+# include/pops/runtime/config/generated_component_abi.hpp. test_native_interfaces_closed.py checks
+# that every interface the catalogue declares is either mapped to an entry of the closed list, kept
+# as the binding of a solver substitution, or listed below as an exception with the issue that
+# takes it out of the protocol. An interface added to the catalogue outside the closed list fails.
+
+[closed]
+# FC6b, in its order. Each is parameterized only by generated bodies. There is one FFT entry: a
+# derived symbol (IR15) along all or a subset of the axes of a lattice, or along the fibres of a
+# product lattice, batched over the other axes, each transformed axis periodic or zero-padded.
+interfaces = [
+    "linear_action",
+    "preconditioner_apply",
+    "krylov_driver",
+    "multigrid_cycle",
+    "fft",
+    "dense_banded_factorization",
+    "loop_over_generated_body",
+    "level_transfer",
+]
+
+[mapped]
+# A b6 interface that already is an entry of the closed list.
+reflux = "level_transfer"
+
+[binding]
+# FC6b: field_solver stays only as the binding of a solver substitution to its reference (SV12, SV13).
+field_solver = "binding of a solver substitution to its reference (SV12, SV13)"
+
+# Interfaces of b6 outside the closed list. The list only shrinks (MG6): an entry whose interface the
+# catalogue no longer declares fails until it is removed here.
+
+[[exception]]
+name = "numerical_flux"
+issue = "N3"
+reason = "physics-level native interface (C38): a named flux is generated code, never a substitution"
+
+[[exception]]
+name = "ghost_boundary"
+issue = "N3"
+reason = "physics-level native interface (C38); boundary families are G04"
+
+[[exception]]
+name = "field_boundary_closure"
+issue = "N3"
+reason = "physics-level native interface (C38)"
+
+[[exception]]
+name = "boundary_flux"
+issue = "N3"
+reason = "physics-level native interface (C38)"
+
+[[exception]]
+name = "accepted_initial_ghost"
+issue = "N3"
+reason = "physics-level native interface (C38)"
+
+[[exception]]
+name = "transfer"
+issue = "N3"
+reason = "physics-level native interface (C38); its AMR transfer kernels are generated Transfers of G11 (C43)"
+
+[[exception]]
+name = "tagger"
+issue = "N12"
+reason = "physics-level native interface (C38): the refinement criterion is a generated region (DM13b)"
+
+# The next three are not physics-level. Spec 0.3 settled them on 29/10 (FC6b and C38, adjudication
+# section 17): they leave the protocol too, with these owners in C38.
+
+[[exception]]
+name = "clustering"
+issue = "N12"
+reason = "clustering is core machinery with no reference region to bind a native to (section 2.3, DM13); FC6b, C38, Phase 1"
+
+[[exception]]
+name = "field_topology"
+issue = "G10"
+reason = "coverage, cut-cell fractions and connected components are geometry of the support that the plan binds (section 4.3); the kernels that depend on them are derived (SV2, R13); FC6b, C38, Phase 2"
+
+[[exception]]
+name = "writer"
+issue = "N8"
+reason = "I/O is core machinery with no reference region to bind a native to (section 2.3); FC6b, C38"

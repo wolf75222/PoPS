@@ -16,10 +16,10 @@ from tests.python.support.amr_snapshots import composite_active_mask
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.public_native_profile import native_profile, rank_and_size
-from tests.review.sol61_amr_full_carrier_offline import decode
+from tests.python.support.sol61_amr_full_carrier_offline import decode
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION
 from tests.python.support.evolving_accepted_halo_oracle import full_carrier,halo_rows
-from tests.review.sol61_tag_selection_oracle import receive
+from tests.python.support.sol61_tag_selection_oracle import receive
 from tests.python.support.evolving_accepted_halo_archive import truncated_carrier_archive
 
 def observe(world,runtime):

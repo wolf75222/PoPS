@@ -250,6 +250,18 @@ class FiniteVolume(Descriptor):
                 "reconstruction AMR gradient stencil exceeds its declared ghost_depth")
         return gradient_stencil(axis, dimension=dimension)
 
+    def validate_model(self, model: Any) -> bool:
+        """Refuse a face that reads a declaration the complete ``model`` does not make.
+
+        A source-authored face that reads the signed wave speeds needs the model to declare them
+        (R9); the refusal comes while the case is validated, before any code is generated.
+        """
+        if getattr(self.riemann, "scheme", None) == "source_face":
+            from pops.numerics.riemann.user import require_declared_wave_speeds
+
+            require_declared_wave_speeds(self.riemann, model, where="FiniteVolume")
+        return True
+
     def validate_rate_contract(self, contract: Any) -> bool:
         """Prove this method discretizes the exact physical flux and evolved state."""
         if not isinstance(contract, Mapping) or "flux" not in contract or "state" not in contract:

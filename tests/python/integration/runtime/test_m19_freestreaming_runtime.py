@@ -24,7 +24,7 @@ from tests.python.support.collective_checks import collective_call, collective_c
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.m19_freestreaming import CASES, FINAL_TIME, FRAME, MODULE, build
 from tests.python.support.native_execution_context import artifact_execution_context
-from tests.review.sol61_m19_freestreaming_oracle import cell_centers, initial, moments, receive
+from tests.python.support.sol61_m19_freestreaming_oracle import cell_centers, initial, moments, receive
 
 SCHEMA = "pops.m19-freestreaming-native-fixture@2"
 PHASES = ("initial", "accepted", "continuous", "restored", "replay")
@@ -235,7 +235,7 @@ def test_native_m19_signed_freestreaming_exact_restart(nx, nv, tmp_path, record_
         if _root(world):
             binaries, programs, model_sources, model_manifests = _capture_components(artifact, directory)
             from tests.python.support import m19_freestreaming as physical_source
-            from tests.review import sol61_m19_freestreaming_oracle as scientific_source
+            from tests.python.support import sol61_m19_freestreaming_oracle as scientific_source
             receipt = {"schema": SCHEMA, "dimension": 2, "rank": 0,
                 "size": 1 if world is None else int(world.size), "nx": nx, "nv": nv,
                 "native_axes": {"velocity": 0, "position": 1},

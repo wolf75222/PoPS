@@ -18,7 +18,7 @@ from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.evolved_stage_v_capture import retain_v_provenance
 from tests.python.integration.mpi._compile_once import compile_resolved_plan_once
-from tests.review.sol61_m19_amr_consumed_offline import (
+from tests.python.support.sol61_m19_amr_consumed_offline import (
     verify_step,
     checkpoint_children,
     checkpoint_states,

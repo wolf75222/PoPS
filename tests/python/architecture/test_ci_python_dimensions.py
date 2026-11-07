@@ -1,6 +1,8 @@
 """CI must preserve scientific geometry and isolate incompatible native artifacts."""
 
 import json
+import runpy
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -125,6 +127,7 @@ def test_true_install_stages_unset_source_paths_and_preserve_groups(tmp_path, mo
         assert "--ignore-installed" in group[1][0] and "--prefix" in group[1][0]
         assert any("prove_installed_wheel.py" in arg for arg in group[2][0])
         assert group[3][0][-1] == "--expect-serial"
+        assert group[4][0][1:3] == ["-u", str(runner.BOOTSTRAP)] and "-c" not in group[4][0]
         assert group[4][0][group[4][0].index("-o") + 1] == "pythonpath="
         assert group[4][1]["POPS_NATIVE_DIM"] == str(d)
         assert (tmp_path / "timings" / ("dim%d" % d) / "selected.txt").read_text() == [
@@ -173,7 +176,38 @@ def test_install_auth_failure_stops_pytest_and_stays_red(tmp_path, monkeypatch):
         == 7
     )
     assert len(calls) == 3
-    assert not any("-c" in command for command in calls)
+    assert not any(str(runner.BOOTSTRAP) in command for command in calls)
+
+
+def test_pytest_starts_from_the_committed_bootstrap_with_the_path_python_c_gave_it(
+    tmp_path, monkeypatch
+):
+    """A committed entry file, so that a qualification receipt can judge what started pytest."""
+    seen = {}
+    monkeypatch.setattr(pytest, "main", lambda arguments: seen.update(
+        arguments=arguments, path=list(sys.path)) or 0)
+    monkeypatch.setattr(sys, "argv", [str(runner.BOOTSTRAP), "-v", "two.py"])
+    rest = list(sys.path)  # the interpreter's own entries, after the script's directory
+    here = [] if sys.flags.safe_path else [str(runner.BOOTSTRAP.parent)]
+    cwd = [] if sys.flags.safe_path else [""]
+    prefix = tmp_path / "prefix"
+    for root, package, refusal in (
+            (prefix, prefix / "lib/site-packages/pops/__init__.py", None),
+            (prefix, runner.ROOT / "python/pops/__init__.py", "not to the installed"),
+            # a prefix inside the checkout still never runs the checkout's package
+            (runner.ROOT, runner.ROOT / "python/pops/__init__.py", "not to the installed")):
+        monkeypatch.setattr(sys, "prefix", str(root))
+        monkeypatch.setitem(sys.modules, "pops", SimpleNamespace(__file__=str(package)))
+        monkeypatch.setattr(sys, "path", [*here, *rest])
+        seen.clear()
+        with pytest.raises(SystemExit) as exited:
+            runpy.run_path(str(runner.BOOTSTRAP), run_name="__main__")
+        if refusal is None:
+            assert exited.value.code == 0
+            assert seen == {"arguments": ["-v", "two.py"], "path": [
+                str(runner.ROOT / "scripts"), str(runner.ROOT), *cwd, *rest]}
+        else:
+            assert refusal in str(exited.value.code) and seen == {}
 
 
 def test_ci_builds_and_downloads_each_declared_dimension():
@@ -256,7 +290,7 @@ def test_dim1_stage_failure_remains_red_and_dim2_still_executes(
             "wheel-proof"
             if any("prove_installed_wheel.py" in str(arg) for arg in command)
             else "pytest"
-            if "-c" in command
+            if str(runner.BOOTSTRAP) in command
             else "other"
         )
         calls.append((dimension, stage, command))

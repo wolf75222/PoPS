@@ -39,6 +39,13 @@ paths = ["python/pops/*"]
 architecture = true
 
 [[component]]
+name = "engine-guards"
+# Spec 0.3 engine guards (Linear N2): the CF0 path list, the CF0 placement list, the closed interface
+# list and the exception lists that only shrink. Their source-reading tests are architecture gates.
+paths = ["tests/python/architecture/frozen_engine/*"]
+architecture = true
+
+[[component]]
 name = "component-tests"
 paths = ["tests/cpp/unit/*", "tests/cpp/integration/*", "tests/python/unit/*", "tests/python/integration/*", "tests/python/examples/*", "tests/python/verification/*", "tests/python/architecture/test_*.py"]
 
