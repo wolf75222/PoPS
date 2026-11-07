@@ -329,7 +329,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `.clang-format-ignore`, every file that conformed at the base must still conform. `quality.yml`
   keeps its whole-tree check through the same script, `scripts/check_clang_format.sh`. The
   historical SDK header snapshots that tests pin by SHA-256 are listed in the new
-  `.clang-format-ignore`, which both checks honor.
+  `.clang-format-ignore`, which both checks honor. A change to `.clang-format`,
+  `.clang-format-ignore` or the script alone is planned as metadata: it runs the `format` job and
+  no build.
 
 ## [1.0.0] - 2026-07-16
 
