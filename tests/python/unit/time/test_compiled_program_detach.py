@@ -357,6 +357,7 @@ def test_public_compile_reads_identities_in_one_reuse_scope(monkeypatch):
     import pops._native_selector as selector
     import pops.codegen._phases as phases
     import pops.codegen._plans as plans
+    import pops.codegen.region_facts as region_facts
     from pops import _api
 
     source = _authored_program()["program"].freeze()
@@ -377,6 +378,9 @@ def test_public_compile_reads_identities_in_one_reuse_scope(monkeypatch):
 
     bootstrap = ModuleType("pops._bootstrap")
     monkeypatch.setattr(plans, "ResolvedSimulationPlan", Resolved)
+    # pops.compile also checks the expected region classes of the verified plan (#710, IR21);
+    # this stand-in plan has no regions.
+    monkeypatch.setattr(region_facts, "check_expected_classes", lambda plan: ())
     monkeypatch.setattr(selector, "select_native_dimension", lambda dimension: None)
     monkeypatch.setitem(sys.modules, "pops._bootstrap", bootstrap)
     monkeypatch.setattr(pops, "_bootstrap", bootstrap, raising=False)

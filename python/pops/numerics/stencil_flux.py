@@ -104,6 +104,29 @@ class StencilFlux:
                            for d in range(self.dimension))
                      for index in range(len(self.field_components)))
 
+    def regions(self, name):
+        """The face region of each axis, with the reads of its row (IR14, IR17, IR20, IR21).
+
+        A sample at offset o read on the faces normal to a goes through
+        ``Compose(Shift(o), Incidence(face(a), cell, side="right"))``: offsets count from the
+        right incident cell. A row reads the samples whose leaves it holds, so the reads are
+        those of each axis, where ``samples`` pools them. The face value goes to the left cell
+        with weight -1 and to the right cell with weight +1, the native assembly
+        net(cell) = J(cell) - J(cell + e_a) (include/pops/numerics/fv/stencil_flux.hpp@b6), and
+        the native face loop expects the class face incidence. The array labels are
+        ``("state", component)`` and ``("field", slot, component)``.
+        """
+        from pops.model.face_regions import face_regions
+        from pops.model.stencil_expression import row_leaf_names
+        labelled = tuple((v.name, ("state", c), offset) for offset, c, v in self.samples) + tuple(
+            (v.name, ("field", f, c), offset) for f, offset, c, v in self.field_samples)
+        reads = []
+        for row in self.rows:
+            leaves = row_leaf_names(row)
+            reads.append(tuple((label, offset, "right")
+                               for leaf, label, offset in labelled if leaf in leaves))
+        return face_regions(name, self.dimension, tuple(reads))
+
     def to_data(self):
         from pops.model.hash_data import canonical_hash_data
         return {"schema": 3, "kind": "stencil_flux", "dimension": self.dimension,
