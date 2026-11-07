@@ -394,6 +394,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   is compiled for the route of the block it installs. A package without a catalogue route (state
   storage, source-authored or coordinated faces, external Riemann bricks) and a direct
   `model.compile()` keep their current route set.
+- ROM-88 (N7, lot 3): the provenance validators of current dependencies and inventory ledgers
+  compare their queries on one shared decision diagram (`DeliveryDiagrams` in
+  `pops.codegen.typed_delivery`) instead of listing the success paths of the Program (spec 0.3
+  MG7, B4). A choice is a boolean diagram, an exact frontier is kept per delivered value, and two
+  queries are compared by walking their diagrams together: a record chosen by the parity of 40
+  independent conditions validates in under a second, where the former validator took 198 s at
+  12. On each assignment of the conditions, the compared queries both succeed or both fail, and
+  every coordinate of a packed ledger is retained wherever one is. A missing delivery names the
+  folds whose zero-iteration alternative alone misses the term, such as a `reduce` in a map
+  element.
 
 ### Fixed
 
