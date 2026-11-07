@@ -18,6 +18,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-85 (N10, phase 1, lot 1a): the vocabulary of the one array type (spec 0.3 DM1 to DM3, IR1 to
+  IR3). `pops._ir.arrays` holds the value types of IR1 (`Array(D, T)`, `Product`, `Variant`,
+  `Result`, `Iteration`, `Index`, scalars, and `Untyped` for what the plan cannot type yet);
+  `pops._ir.index_sets` the index-set constructors of IR2 with the descriptors of IR3, equal by
+  instance; `pops._ir.data_model` the support placement of each block (co-located blocks share one
+  set of cells, the endpoints of a cross-block interface get one each), a total `ir_type` and the
+  layout record of every data value (`data_layout_and_distribution`). Nothing in the builder or
+  the lowering reads them before the retyping (architecture test). `scripts/dmt1.py` and the
+  `DM-T1` workflow compare the generated C++ of the 40 API profiles between a pull request and its
+  merge base, without a native build; `scripts/n10_dispatch_inventory.py` lists the field-or-array
+  dispatch lines that the retyping moves.
+
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
   SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
