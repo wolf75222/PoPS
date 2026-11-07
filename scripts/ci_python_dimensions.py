@@ -16,6 +16,8 @@ import ci_python_test_units  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests/python/native_dimensions.json"
+#: The committed file that starts pytest in each installed prefix (never ``python -c`` code).
+BOOTSTRAP = ROOT / "scripts/ci_pytest_bootstrap.py"
 
 
 def partition(paths: list[str], contract: dict) -> dict[int, list[str]]:
@@ -95,16 +97,8 @@ def run_groups(groups: dict[int, list[str]], packages: Path, timings: Path,
         (receipts / "installation-stages.json").write_text(json.dumps(stage_receipts, indent=2) + "\n")
         if not verified:
             continue
-        bootstrap = (
-            "import sys; from pathlib import Path; "
-            f"sys.path[:0]=[{str(ROOT / 'scripts')!r},{str(ROOT)!r}]; "
-            "import pops; "
-            "assert Path(pops.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()); "
-            f"assert not Path(pops.__file__).resolve().is_relative_to(Path({str(ROOT)!r})); "
-            "import pytest; raise SystemExit(pytest.main(sys.argv[1:]))"
-        )
         result = subprocess.run(
-            [str(python), "-u", "-c", bootstrap, "-v", "-ra", "--durations=20",
+            [str(python), "-u", str(BOOTSTRAP), "-v", "-ra", "--durations=20",
              "-o", "pythonpath=", "-o", f"cache_dir={receipts / 'pytest-cache'}",
              f"--basetemp={receipts / 'pytest-tmp'}", "-p", "ci_pytest_timings", "-p", "ci_python_test_units",
              f"--junitxml={receipts / 'junit.xml'}",

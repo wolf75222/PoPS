@@ -11,8 +11,8 @@ from tests.python.support.native_execution_context import artifact_execution_con
 from tests.python.support.public_native_profile import native_profile, rank_and_size
 from tests.python.support.amr_snapshots import composite_active_mask
 from tests.python.support.tag_selection_case import build, DT
-from tests.review.sol61_tag_selection_oracle import physical_tags, receive
-from tests.review.sol61_amr_full_carrier_offline import decode
+from tests.python.support.sol61_tag_selection_oracle import physical_tags, receive
+from tests.python.support.sol61_amr_full_carrier_offline import decode
 from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.tag_phase_capture import capture
 

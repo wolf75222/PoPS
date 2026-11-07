@@ -1,6 +1,6 @@
 """Pure fixture integrity checks; independent wire decoder, never a runtime backend."""
 import numpy as np
-from tests.review.sol61_amr_full_carrier_offline import decode,require
+from tests.python.support.sol61_amr_full_carrier_offline import decode,require
 
 
 def observe_storage(runtime):

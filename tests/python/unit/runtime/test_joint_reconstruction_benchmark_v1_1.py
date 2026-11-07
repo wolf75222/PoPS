@@ -12,7 +12,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[4]
-DOCS = ROOT / "docs" / "development" / "api_040"
+DOCS = ROOT / "benchmarks" / "joint_reconstruction"
 
 
 def _load(path: Path):
