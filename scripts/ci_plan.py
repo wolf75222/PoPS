@@ -61,7 +61,7 @@ def classify(changed: list[str]) -> tuple[dict, list[str]]:
         impact[path] = {
             "components": [rule["name"] for rule in matches],
             **{flag: any(rule.get(flag, False) for rule in matches)
-               for flag in ("full", "mpi", "architecture", "metadata")},
+               for flag in ("full", "mpi", "architecture", "metadata", "format_bench")},
         }
         if not matches:
             full_reasons.append(f"unmapped-path:{path}")
@@ -161,6 +161,10 @@ def make_plan(changed: list[str], *, event_name: str, output_dir: Path,
         "mpi_required": full or bool(mpi_imports) or bool(set(changed) & mpi_paths)
                         or any(row["mpi"] for row in impact.values()),
         "openmp_required": full,
+        # The bench of the format check runs when the check, its bench or a style file changes,
+        # and when the changed paths are unknown.
+        "format_bench_required": UNKNOWN_DIFF in changed
+                                 or any(row["format_bench"] for row in impact.values()),
         "cpp_matrix": [i for i, shard in enumerate(cpp["target_shards"]) if shard] or [0],
         "python_matrix": [i for i, shard in enumerate(python_shards) if shard] or [0],
         "python_dimensions": sorted(dimensions) or [2],

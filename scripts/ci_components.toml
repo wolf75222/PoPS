@@ -56,7 +56,12 @@ metadata = true
 
 [[component]]
 name = "format-style"
-# The C++ style and its check: no build or test reads them, and the format job of ci.yml, which runs
-# on every change outside the plan, checks every file that conformed at the base when they change.
-paths = [".clang-format", ".clang-format-ignore", "scripts/check_clang_format.sh"]
+# The C++ style, at any depth, its check and the check's bench: no build or test reads them. The
+# format job of ci.yml, which runs on every change outside the plan, checks every file that
+# conformed at the base when the style changes; the format-bench job replays the bench when any of
+# them changes.
+paths = [".clang-format", "_clang-format", ".clang-format-ignore", "**/.clang-format",
+         "**/_clang-format", "**/.clang-format-ignore", "scripts/check_clang_format.sh",
+         "scripts/test_check_clang_format.sh"]
 metadata = true
+format_bench = true

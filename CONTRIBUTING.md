@@ -66,7 +66,9 @@ Report actual GitHub status separately from local validation.
   that did not conform, only your changed lines count:
   `git clang-format --binary "$(command -v clang-format)" <base>` formats the lines that differ
   from `<base>`. Files listed in `.clang-format-ignore` are byte-pinned data and are never
-  formatted.
+  formatted. A change to the script, to its bench or to a style file also runs the `format-bench`
+  job, `bash scripts/test_check_clang_format.sh`, which replays the cases of the check in a
+  throwaway repository; run it locally too.
 - Keep public headers self-contained, use `#pragma once`, and preserve existing naming within
   a subsystem. Use explicit ownership and typed handles instead of name-based runtime dispatch.
 - Check authored input at host boundaries. Exceptions must not escape device kernels; carry

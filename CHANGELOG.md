@@ -34,6 +34,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- A `format-bench` job of `ci.yml`, aggregated by `gate`, replays
+  `scripts/test_check_clang_format.sh`, the bench of `scripts/check_clang_format.sh`, when the plan
+  sees the script, the bench or a style file (`.clang-format`, `_clang-format`,
+  `.clang-format-ignore`, at any depth) change: the cases of the check run in a throwaway repository
+  with their own probe files and style, so none depends on the tree. Style files at any depth are
+  planned as metadata, like the root ones. Started from a subdirectory, the check works from the
+  repository root, and against a base that is not an ancestor of the checkout it starts from their
+  merge base.
 - Move the review material of the API 0.4.0 and API 0.2 work (`docs/development/api_040/`,
   `docs/review/`, `tests/review/`, `outputs/`, `docs/dev/`; 3,281 files) out of the code tree
   into an archive with a SHA-256 manifest, described in `docs/development/review_archive.md`.
