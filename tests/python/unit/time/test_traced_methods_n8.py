@@ -1,8 +1,9 @@
 """N8 lot 1: traced methods elaborated by the b6 builder (spec 0.3, sections 5.2 to 5.4).
 
-The seven profiles whose stages read one rate of their model (M01, M02, M03, M04, M07, M24, M25)
-now write their step as the traced method ``shu_osher_ssprk2`` of
-``examples/api_v02/models_M01_M14.py``, in a Program that keeps the b6 name of the profile. Their
+The nine profiles whose stages read one rate of their model (M01, M02, M03, M04, M07, M24, M25,
+and since lot 4 the stencil fluxes of M05 and M23, through ``stencil_rate``) now write their step
+as the traced method ``shu_osher_ssprk2`` of ``examples/api_v02/models_M01_M14.py``, in a Program
+that keeps the b6 name of the profile. Their
 b6 builder ``_ssprk2`` stays as the parity reference (MG1). Both routes must elaborate the same
 program: equal serialized IR and equal generated C++ once the presentation names (the values and
 stages, CC2) are renamed by SSA position, once the History metadata capacity that ``_ssprk2``
@@ -45,13 +46,17 @@ PROFILES = {
     "M02": (early, early.build_m02, "M02_SSPRK2"),
     "M03": (early, early.build_m03, "M03_SSPRK2"),
     "M04": (early, early.build_m04, "M04_combined_SSPRK2"),
+    "M05": (early, early.build_m05, "M05_SSPRK2"),
     "M07": (early, early.build_m07, "M07_SSPRK2"),
+    "M23": (late, late.build_m23, "M23_SSPRK2"),
     "M24": (late, late.build_m24, "M24_SSPRK2"),
     "M25": (late, late.build_m25, "M25_SSPRK2"),
 }
-CXX_PROFILES = ("M01", "M02", "M03", "M04", "M07", "M24")
+CXX_PROFILES = ("M01", "M02", "M03", "M04", "M05", "M07", "M23", "M24")
 B6_HISTORY_METADATA = (8 * 1024 * 1024, 16 * 1024 * 1024)
 B6_HISTORY_LINE = "  ctx.configure_history_field_metadata(UINT64_C(8388608), UINT64_C(16777216));"
+STENCIL_EXPRESSIONS = re.compile(
+    r"(ctx\.configure_stencil_expressions\(UINT64_C\(\d+\), UINT64_C\(\d+\), )UINT64_C\((\d+)\)\)")
 # The default acceptance finite() of N8 lot 2: the all-component norm of the candidate, its
 # finiteness, and the guard that the commit reads in place of the candidate.
 FINITE_OPS = [("reduce", "scalar"), ("scalar_isfinite", "bool"), ("acceptance_guard", "state")]
@@ -199,17 +204,32 @@ def test_traced_profile_authors_the_b6_program(profile, monkeypatch):
     assert b6.to_graph().graph_hash != traced.to_graph().graph_hash  # names are hashed (C47)
 
 
+def _stencil_identity_capacity(lines, program):
+    """``lines`` with the identity capacity of the stencil expressions taken out, checked first:
+    the byte length of the serialized IR of ``program``, which the finite() assessment, the
+    compiled control and the names of the traced route lengthen (program_emit_control.py)."""
+    capacity = len(canonical_json(program._serialize(include_provenance=False)).encode("utf-8"))
+    return [STENCIL_EXPRESSIONS.sub(lambda m: (
+        m.group(0) if int(m.group(2)) != capacity else m.group(1) + "<IR bytes>)"), line)
+        for line in lines]
+
+
 @pytest.mark.parametrize("profile", CXX_PROFILES)
 def test_traced_profile_generates_the_b6_cpp(profile, monkeypatch):
     module, build, _ = PROFILES[profile]
     b6_spec = _spec(module, build, monkeypatch, _b6_route)
     traced_spec = _spec(module, build, monkeypatch)
-    b6_lines = _normalized(_source(b6_spec), _presentation_names(b6_spec.case._time)).splitlines()
+    b6, traced = b6_spec.case._time, traced_spec.case._time
+    b6_lines = _stencil_identity_capacity(
+        _normalized(_source(b6_spec), _presentation_names(b6)).splitlines(), b6)
     # The one line that the History capacity of _ssprk2 adds; the Program has no History ring.
     assert b6_lines.count(B6_HISTORY_LINE) == 1
     b6_lines.remove(B6_HISTORY_LINE)
-    assert b6_lines == _without_finite_cpp(_normalized(
-        _source(traced_spec), _presentation_names(traced_spec.case._time)).splitlines())
+    traced_lines = _stencil_identity_capacity(
+        _normalized(_source(traced_spec), _presentation_names(traced)).splitlines(), traced)
+    assert b6_lines == _without_finite_cpp(traced_lines)
+    # The stencil profiles (M05, M23) configure their expressions on both routes.
+    assert sum("<IR bytes>" in line for line in b6_lines) == int(profile in ("M05", "M23"))
 
 
 def test_traced_profile_records_its_closed_form(monkeypatch):

@@ -1719,7 +1719,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             if v.attrs.get("component_contract") != "pops.program.norm-inf-all@1":
                 raise ValueError("norm_inf_all lost its all-component contract")
             if target == "amr_system":
-                raise NotImplementedError(
+                from pops.time._program.traced_method import NotYetElaborated
+                raise NotYetElaborated(
                     "norm_inf_all, the finite() assessment of an elaborated Advance, runs on the "
                     "Uniform route; the AMR route of the compiled control is a later lot of N8")
             (u,) = v.inputs

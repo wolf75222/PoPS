@@ -527,7 +527,8 @@ def _emit_advance_outputs(program: Any, model: Any, target: str) -> str:
     if not regions:
         return ""
     if target != "system":
-        raise NotImplementedError(
+        from pops.time._program.traced_method import NotYetElaborated
+        raise NotYetElaborated(
             "the Outputs of an elaborated Advance run on the Uniform route; the AMR route of the "
             "compiled control is a later lot of N8")
     from pops.time._program.dt_bound import readonly_query_nodes
