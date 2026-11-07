@@ -203,11 +203,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # Banc du controle de style (N5, ROM-84) : quand le plan voit changer le script, son banc ou un
-  # fichier de style (.clang-format, _clang-format, .clang-format-ignore, a toute profondeur), le
-  # banc rejoue les cas du script dans un depot git jetable, avec ses propres fichiers sondes et son
-  # propre style : aucun cas ne lit un fichier de l'arbre, aucun n'est saute. Quelques secondes,
-  # sans build.
+  # Banc du controle de style (N5, ROM-84) : sur tout plan complet, et quand le plan voit changer le
+  # script, son banc ou un fichier de style (.clang-format, _clang-format, .clang-format-ignore, a
+  # toute profondeur), le banc rejoue les cas du script dans un depot git jetable, avec ses propres
+  # fichiers sondes et son propre style : aucun cas ne lit un fichier de l'arbre, aucun n'est saute.
+  # Quelques secondes, sans build. Le plan complet couvre une modification de ce job et les
+  # evenements qui ne planifient aucun diff (push, nuit, dispatch).
   format-bench:
     name: clang-format (banc du script)
     runs-on: ubuntu-latest

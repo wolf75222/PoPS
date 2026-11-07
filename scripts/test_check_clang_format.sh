@@ -5,16 +5,19 @@
 #
 #   bash scripts/test_check_clang_format.sh [SCRIPT]
 #
-# SCRIPT defaults to the check_clang_format.sh next to this file. The format job of ci.yml runs the
-# bench when the script, the bench or a style file changes. It needs clang-format and
-# git-clang-format 19.1.7 on PATH (pipx install clang-format==19.1.7). The developer's own git
-# settings are kept out. Exit status: the number of failed checks.
+# SCRIPT defaults to the check_clang_format.sh next to this file. The format-bench job of ci.yml
+# runs the bench on every full plan and when the script, the bench or a style file changes. It
+# needs clang-format and git-clang-format 19.1.7 on PATH (pipx install clang-format==19.1.7). The
+# developer's own git settings and the job summary of CI are kept out. Exit status: the number of
+# failed checks.
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source_script=$(realpath "${1:-$here/check_clang_format.sh}")
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# Each run of the check would add its summary to that of the CI job.
+unset GITHUB_STEP_SUMMARY
 repo=$tmp/repo
 git -c init.defaultBranch=probe init -q "$repo"
 cd "$repo"
@@ -240,6 +243,18 @@ git checkout -q --detach "$fork_point"
 sed -i "/^namespace probe/a $probe_good" include/probe/plain.hpp
 case_ "16. branch behind its base, checked against the base" 0 \
   bash "$script" --changed-since "$ahead"
+
+# 17. A renamed file counts as added, though git diff detects renames by default: a non-conforming
+# line in it fails.
+reset_probe
+git mv include/probe/conforming.hpp include/probe/renamed.hpp
+sed -i "/^namespace probe/a int   probe_more=2;" include/probe/renamed.hpp
+case_ "17. renamed file with a non-conforming line" 1 bash "$script" --changed-since HEAD
+
+# 18. Started outside a git repository: refused, where the whole tree would read no file and pass.
+mkdir "$tmp/outside"
+case_ "18. started outside a git repository" 2 env GIT_CEILING_DIRECTORIES="$tmp" \
+  bash -c 'cd "$1" && exec bash "$2"' _ "$tmp/outside" "$repo/$script"
 
 echo "failed checks: $failed"
 exit "$failed"

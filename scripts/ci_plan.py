@@ -161,9 +161,10 @@ def make_plan(changed: list[str], *, event_name: str, output_dir: Path,
         "mpi_required": full or bool(mpi_imports) or bool(set(changed) & mpi_paths)
                         or any(row["mpi"] for row in impact.values()),
         "openmp_required": full,
-        # The bench of the format check runs when the check, its bench or a style file changes,
-        # and when the changed paths are unknown.
-        "format_bench_required": UNKNOWN_DIFF in changed
+        # The bench of the format check runs on every full plan (a change to its own job in ci.yml
+        # gives one, and so do the events that plan no diff: push, schedule, dispatch), when the
+        # changed paths are unknown, and when the check, its bench or a style file changes.
+        "format_bench_required": full or UNKNOWN_DIFF in changed
                                  or any(row["format_bench"] for row in impact.values()),
         "cpp_matrix": [i for i, shard in enumerate(cpp["target_shards"]) if shard] or [0],
         "python_matrix": [i for i, shard in enumerate(python_shards) if shard] or [0],

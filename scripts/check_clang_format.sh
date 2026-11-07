@@ -16,11 +16,14 @@
 # that conformed at <rev>, under the style and the ignore list of <rev>, must still conform. Both
 # modes share the version, the extensions and .clang-format-ignore (byte-pinned snapshots, never
 # checked). The diff to apply goes to format-diff.patch (ignored by git, removed when the check
-# passes; `git apply` takes it) and the script exits 1.
+# passes; `git apply` takes it) and the script exits 1. It exits 2 when it cannot check, for
+# instance outside a git repository or with an unknown <rev>.
 # Fix a file with `clang-format -i <file>`, or, for a file that did not conform at <rev>,
 # `git clang-format --binary "$(command -v clang-format)" <rev>` (its changed lines only).
 set -euo pipefail
-cd "$(git rev-parse --show-toplevel)"
+top=$(git rev-parse --show-toplevel) \
+  || { echo "::error::clang-format : lancer le script dans un depot git" >&2; exit 2; }
+cd "$top"
 
 version=$(clang-format --version)
 echo "$version"

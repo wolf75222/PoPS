@@ -132,15 +132,25 @@ def test_test_only_and_metadata_changes_do_not_run_unrelated_components(plans, n
         "full", "mpi_required", "openmp_required", "compile_cache_required", "cpp_prewarm_required"))
 
 
-def test_format_bench_runs_only_when_the_check_its_bench_or_a_style_file_changes(plans, tmp_path):
+def test_format_bench_runs_on_full_plans_and_when_the_check_its_bench_or_a_style_file_changes(
+        plans, tmp_path):
     assert plans["format-style"]["outputs"]["format_bench_required"]
     assert plans["format-nested-style"]["outputs"]["format_bench_required"]
     for name in ("docs", "docs-workflow", "python-test", "cpp-test", "architecture-test",
-                 "operator", "unknown-mixed"):
+                 "operator"):
         assert not plans[name]["outputs"]["format_bench_required"], name
-    unknown = planner.make_plan([planner.UNKNOWN_DIFF], event_name="pull_request",
-                                output_dir=tmp_path)
-    assert unknown["outputs"]["full"] and unknown["outputs"]["format_bench_required"]
+    # Every full plan requires the bench: a change to its own job in ci.yml gives one, and so do an
+    # event that plans no diff and unknown changed paths.
+    full_plans = {
+        "ci-workflow": planner.make_plan([".github/workflows/ci.yml"], event_name="pull_request",
+                                         output_dir=tmp_path / "ci-workflow"),
+        "push": planner.make_plan([], event_name="push", output_dir=tmp_path / "push"),
+        "unknown-diff": planner.make_plan([planner.UNKNOWN_DIFF], event_name="pull_request",
+                                          output_dir=tmp_path / "unknown-diff"),
+        "unknown-mixed": plans["unknown-mixed"],
+    }
+    for name, plan in full_plans.items():
+        assert plan["outputs"]["full"] and plan["outputs"]["format_bench_required"], name
 
 
 def test_leaf_operator_has_bounded_native_coverage_without_unrelated_lanes(plans):
