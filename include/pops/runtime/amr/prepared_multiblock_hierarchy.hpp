@@ -5,6 +5,7 @@
 
 #include <pops/coupling/source/coupling_operator.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
+#include <pops/parallel/collective_exception.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
@@ -542,9 +543,8 @@ class PreparedMultiBlockAmrHierarchy {
         if (created)
           interface_scheduler_.reset();
       }
-      if (lane_->size() == 1 && local_error)
-        std::rethrow_exception(local_error);
-      throw std::runtime_error("prepared AMR interface provider installation failed collectively");
+      collectively_rethrow_(local_error,
+                            "prepared AMR interface provider installation failed collectively");
     }
     const auto accepted_lower = interface_lower_;
     const auto accepted_upper = interface_upper_;
@@ -1308,11 +1308,7 @@ class PreparedMultiBlockAmrHierarchy {
 
   void collectively_rethrow_(const std::exception_ptr& local_error,
                              std::string_view collective_message) const {
-    if (all_reduce_max(local_error ? 1L : 0L, lane_->communicator()) == 0)
-      return;
-    if (lane_->size() == 1 && local_error)
-      std::rethrow_exception(local_error);
-    throw std::runtime_error(std::string(collective_message));
+    collectively_rethrow_exception(local_error, lane_->communicator(), collective_message);
   }
 
   void require_map_(const ProgramBlockMap& map) const {
