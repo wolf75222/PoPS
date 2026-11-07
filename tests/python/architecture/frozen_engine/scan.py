@@ -43,6 +43,7 @@ import tomllib
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 HERE = pathlib.Path(__file__).resolve().parent
 CF0_PATHS = HERE / "cf0_paths.toml"
+CF0_PLACEMENT = HERE / "cf0_native_placement.toml"
 
 PYTHON_SUFFIXES = {".py", ".pyi"}
 CPP_SUFFIXES = {".hpp", ".h", ".cpp", ".cc", ".cxx", ".inc", ".cu"}
@@ -87,6 +88,12 @@ def load_cf0(path: pathlib.Path = CF0_PATHS) -> FrozenEngine:
         core_exclude=tuple(data["core"].get("exclude", ())),
         native_tree=data["native_tree"]["path"],
     )
+
+
+def load_placement(path: pathlib.Path = CF0_PLACEMENT) -> tuple[dict, ...]:
+    """The [[native]] entries of the CF0 placement list (FC6, FC6b, IR24): each native of b6 that
+    still sits in a core path, with its files, issue, phase and FC6b interface."""
+    return tuple(tomllib.loads(path.read_text(encoding="utf-8"))["native"])
 
 
 def tracked_files(root: pathlib.Path = REPO_ROOT) -> list[str]:
