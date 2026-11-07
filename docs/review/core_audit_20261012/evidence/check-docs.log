@@ -1,6 +1,0 @@
-DOC-LINT : 4 avertissement(s)
-  README.md: doc suspect, depends_on modifie depuis la relecture (5bc75f2a5a31, 022f5acbb918, 8ae9097796a4)
-  docs/ARCHITECTURE.md: doc suspect, depends_on modifie depuis la relecture (7ddfb33dae5e, f91c142963e3, 67623c9508e8 (+59 autre(s)))
-  docs/ALGORITHMS.md: doc suspect, depends_on modifie depuis la relecture (10c75b24bf9b, 7ddfb33dae5e)
-  docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md: doc suspect, depends_on modifie depuis la relecture (7ddfb33dae5e, c97cfc6b6818, 9d4cdcca19ab (+30 autre(s)))
-DOC-LINT : OK (604 fichiers .md verifies, 9 entrees docmap)

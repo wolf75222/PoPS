@@ -8,7 +8,8 @@ import pytest
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
 from tests.python.integration.runtime.test_integral_state_public_restart import build_case
-from tests.python.support.integral_state_receipts import decode_exchange_image, ssprk_upwind_step
+from tests.python.support.integral_state_receipts import (
+    checkpoint_exchange_images, decode_exchange_image, split_history_field_envelope, ssprk_upwind_step)
 
 
 def _word(value):
@@ -24,13 +25,24 @@ def _double(value):
     return struct.pack("<d", value)
 
 
-def test_independent_popsex_reader_preserves_signed_incidence_and_consumption():
-    identities = ("operation", "occurrence", "context", "cell:7/axis:0/side:1")
-    image = b"POPSEX02" + _word(1) + b"".join(map(_text, identities))
+def _blob(value):
+    return _word(len(value)) + value
+
+
+_IDENTITIES = ("operation", "occurrence", "context", "cell:7/axis:0/side:1")
+
+
+def _exchange_image():
+    image = b"POPSEX02" + _word(1) + b"".join(map(_text, _IDENTITIES))
     image += _word(-1) + _double(1.) + _double(1.2) + _double(.005) + _word(1)
     image += _word(1) + _word(2) + _word(1) + _word(1) + _text("evaluation:4")
     image += _word(1) + _text("q") + _double(.7) + _double(.706)
-    image += _word(1) + b"".join(map(_text, identities))
+    return image + _word(1) + b"".join(map(_text, _IDENTITIES))
+
+
+def test_independent_popsex_reader_preserves_signed_incidence_and_consumption():
+    identities = _IDENTITIES
+    image = _exchange_image()
     actual = decode_exchange_image(image)
     record, = actual["records"]
     assert (record["axis"], record["side"], record["component"]) == (0, 1, 0)
@@ -42,6 +54,32 @@ def test_independent_popsex_reader_preserves_signed_incidence_and_consumption():
         decode_exchange_image(image + b"extra")
     with pytest.raises(AssertionError, match="POPSEX02"):
         decode_exchange_image(b"POPSEX01" + image[8:])
+
+
+def test_checkpoint_reader_opens_the_history_field_envelope_and_keeps_each_image_whole(tmp_path):
+    # With History, the plan default Field metadata budget wraps each rank's exchange image in
+    # POPSEX06: the image, one (ring, sample ledger) pair per ring, then the metadata table.
+    image = _exchange_image()
+    rings = _word(1) + _blob(b"retained_rhs") + _blob(b"ledger")
+    envelope = b"POPSEX06" + _blob(image) + rings + _blob(b"table")
+    raw = image + envelope
+    np.savez(tmp_path / "checkpoint.npz", program_exchange_state=np.frombuffer(raw, dtype=np.uint8),
+             program_exchange_offsets=np.array([0, len(image), len(raw)], dtype=np.int64))
+    images, ledgers = checkpoint_exchange_images(tmp_path / "checkpoint.npz")
+    assert images == (image, envelope)
+    assert ledgers[0] == ledgers[1] == decode_exchange_image(image)
+    assert split_history_field_envelope(envelope) == (image, {b"retained_rhs": b"ledger"}, b"table")
+    for damaged, message in ((envelope + b"x", "exact History Field envelope"),
+                             (envelope[:-1], "truncated History Field envelope"),
+                             (b"POPSEX06" + _blob(image) + _word(1 << 40), "ring count exceeds"),
+                             (b"POPSEX06" + _blob(image) + _word(2) + 2 * (_blob(b"r") + _blob(b"s"))
+                              + _blob(b""), "duplicate History ring"),
+                             (b"POPSEX05" + envelope[8:], "requires POPSEX06")):
+        with pytest.raises(AssertionError, match=message):
+            split_history_field_envelope(damaged)
+    nested = b"POPSEX06" + _blob(b"POPSEX01" + image[8:]) + _word(0) + _blob(b"")
+    with pytest.raises(AssertionError, match="POPSEX02"):
+        decode_exchange_image(split_history_field_envelope(nested)[0])
 
 
 def test_upwind_oracle_distinguishes_stages_and_conserves_mass_with_boundary_current():

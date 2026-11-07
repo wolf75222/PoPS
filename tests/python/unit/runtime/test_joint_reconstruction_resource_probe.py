@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT = (Path(__file__).resolve().parents[4] / "docs" / "development" / "api_040"
+SCRIPT = (Path(__file__).resolve().parents[4] / "benchmarks" / "joint_reconstruction"
           / "joint_reconstruction_resource_probe.py")
 
 

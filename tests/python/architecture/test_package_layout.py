@@ -8,7 +8,7 @@ PYTHON_CMAKE = REPO_ROOT / "python" / "CMakeLists.txt"
 
 def test_lib_wires_only_ordinary_implementation_families():
     src = (POPS / "lib" / "__init__.py").read_text()
-    for family in ("amr", "initial", "models", "time"):
+    for family in ("amr", "initial", "models", "numerics", "time"):
         assert "from . import %s" % family in src
         assert '"%s"' % family in src
     assert not (POPS / "lib" / "presets" / "__init__.py").exists()
