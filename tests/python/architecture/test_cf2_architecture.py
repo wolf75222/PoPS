@@ -124,8 +124,8 @@ def test_every_exception_names_the_issue_that_removes_it(listed):
 def test_owner_rules_read_the_placement_list():
     """The N9 path rule holds the files of the N9 entries of the CF0 placement list (or the solver
     directory that holds them), and the G06 path rule the files of the G06 entries, except those
-    that G11 takes over whole for their named interpolations (C43): a native's sites name the issue
-    that moves it (IR24)."""
+    that G11 takes over whole for their named interpolations (C43). The term rules before them keep
+    the field operators and boundary families of 18.4 with G10 and G04."""
     placement = scan.load_placement()
     path_rules = {issue: paths for issue, paths, terms, _ in cf2.OWNER_RULES
                   if paths is not None and terms is None}
