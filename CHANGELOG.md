@@ -356,7 +356,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   lookahead (native tag selection 2). The tag selection of API 0.2 (pops.amr.tag-selection@1)
   is chosen by name, `Buffer(cells=n, selection="refine-requests")` (provisional spelling for
   N15); the tests, examples and tutorials that API 0.2 added or changed name it, so their
-  results are unchanged (MG8, ROM-103).
+  results are unchanged. One exception: master's example
+  `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py`, which API 0.2 changed, keeps
+  master's `Buffer(cells=2)` and so takes master's selection again (MG8, ROM-103).
 - `ConservativeLinear()` prolongs new fine cells as master does again, at a regrid and at a
   bootstrap: a parent on a physical face takes the monotonized-central slope over both
   neighbours, the boundary ghost included (spec 0.3, section 2.6.9). The one-sided interior
