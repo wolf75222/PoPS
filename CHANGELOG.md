@@ -406,6 +406,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   embedded C++ of three `R"CPP(...)CPP"` test program sources (same tokens). Three line budgets of
   the architecture tests grow by the measured formatter delta, and the CF2 engine guard list takes
   the new line numbers.
+- `docs/gen_test_counts.py --check-matrix`, the blocking manifest step of `quality.yml`, applies the
+  disposition of `tests/python/unavailable_verification_tests.json`: the seven tests of
+  `tests/python/verification/` committed without their dependencies (`bcb73f4a`) are exempt while
+  their bytes match the catalogue, and a suite that claims one fails, as in the coverage fence of
+  `test_manifest_suite_coverage.py`. The step had failed on these seven files since 2026-08-17;
+  no test starts running.
+- The coverage fence keeps that catalogue shrink-only: a record added or rewritten, or a changed
+  header, fails even when the catalogue's SHA-256 pin is updated with it; a record may only be
+  dropped, and its test must then be claimed by a suite.
 
 ## [1.0.0] - 2026-07-16
 
