@@ -34,6 +34,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-90 (N9, lot 1): decide each Program reduction and its checks in one collective (spec 0.3
+  SV20, duties 2 and 3, and PF8). `dot_all` and the AMR composite pairing and integral send the
+  compensated rank summaries through one `MPI_Allreduce` with a non-commutative Neumaier join, the
+  other reductions on a uniform mesh carry a local failure as a second word, and `ConsensusWords`
+  decides the failure, agreement and maximum slots of a site in one max reduction; when a rank
+  carries a failure, every rank then runs the former failure vote, so the messages do not change.
+  Generated guards on a value that every rank computes identically from block reductions reject it
+  locally, and on a uniform mesh an `iterate` stop computed that way is no longer voted. The CG
+  written as a Program (T04) drops from 357 to 57 collectives per iteration at two ranks
+  (`benchmarks/n9_collectives/`). The `dot_all` contract states its rounding policy: every rank
+  receives the same bits, which can change with the rank count and the MPI reduction algorithm,
+  and `tests/cpp/unit/parallel/test_reduction_collectives.cpp` checks the transport at two, three
+  and four ranks.
 - Move the review material of the API 0.4.0 and API 0.2 work (`docs/development/api_040/`,
   `docs/review/`, `tests/review/`, `outputs/`, `docs/dev/`; 3,281 files) out of the code tree
   into an archive with a SHA-256 manifest, described in `docs/development/review_archive.md`.
