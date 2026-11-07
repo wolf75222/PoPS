@@ -332,6 +332,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `.clang-format-ignore`, which both checks honor. A change to `.clang-format`,
   `.clang-format-ignore` or the script alone is planned as metadata: it runs the `format` job and
   no build.
+- Reformat the 161 C++ files that the blocking `format` job of `quality.yml` refused, with the
+  pinned clang-format 19.1.7, in one mechanical commit listed in `.git-blame-ignore-revs`. Besides
+  whitespace, it splits six long literals, adds closing namespace comments, and re-indents the
+  embedded C++ of three `R"CPP(...)CPP"` test program sources (same tokens). Three line budgets of
+  the architecture tests grow by the measured formatter delta, and the CF2 engine guard list takes
+  the new line numbers.
 
 ## [1.0.0] - 2026-07-16
 
