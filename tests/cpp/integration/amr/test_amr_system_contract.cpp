@@ -517,8 +517,8 @@ void verify_restart_auxiliary_layout_replacement() {
   const pops::AmrPatch<Dim> expanded_patch{1, {lower, expanded_upper}};
   const auto initialize = [&](pops::AmrSystem<Dim>& system, const pops::AmrPatch<Dim>& patch,
                               double value) {
-    pops::test::install_amr_runtime_authority(
-        system, "test.amr-system-contract.restart-auxiliary-runtime");
+    pops::test::install_amr_runtime_authority(system,
+                                              "test.amr-system-contract.restart-auxiliary-runtime");
     const auto keys = install_magnetic_provider(system, {});
     constexpr const char* state_route = "tests.amr.system-contract/restart-auxiliary/state";
     system.install_block_state_route("tracer", state_route);
@@ -538,15 +538,14 @@ void verify_restart_auxiliary_layout_replacement() {
     install_direct_tracer(system, "tracer", "tests.amr.system-contract/restart-auxiliary/flux");
     const std::size_t cells = cell_count(config.shape);
     for (std::size_t component = 0; component < keys.size(); ++component)
-      system.stage_auxiliary_input(keys[component],
-                                   std::vector<double>(cells, value + component));
+      system.stage_auxiliary_input(keys[component], std::vector<double>(cells, value + component));
     system.set_conservative_state("tracer", std::vector<double>(cells, value));
     system.rebuild_hierarchy({patch}, {0});
     auto fine = system.block_level_state_global("tracer", 1);
     std::fill(fine.begin(), fine.end(), value + 4.0);
     system.set_block_level_state("tracer", 1, fine);
-    system.refresh_auxiliary({"tests.amr.system-contract/restart-auxiliary-clock", 0, 0, 0, 0, 0,
-                              0, AuxiliaryEvaluationEvent::initialization});
+    system.refresh_auxiliary({"tests.amr.system-contract/restart-auxiliary-clock", 0, 0, 0, 0, 0, 0,
+                              AuxiliaryEvaluationEvent::initialization});
   };
 
   pops::AmrSystem<Dim> source(config);
@@ -619,7 +618,9 @@ void verify_restart_auxiliary_layout_replacement() {
     system.set_block_level_state("tracer", level, source.block_level_state_global("tracer", level));
   ASSERT_NO_THROW(system.restore_restart_auxiliary_checkpoint_accepted_state_bytes(
       [&]() { return incoming_bytes.size(); },
-      [&](std::size_t level) -> std::span<const std::uint8_t> { return incoming_bytes.at(level); }));
+      [&](std::size_t level) -> std::span<const std::uint8_t> {
+        return incoming_bytes.at(level);
+      }));
   EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), incoming_auxiliary);
   EXPECT_EQ(auxiliary_manifest(system), incoming_auxiliary_manifest);
   // Program accepted-state restoration may requalify the graph after the auxiliary image is
@@ -635,7 +636,7 @@ void verify_restart_auxiliary_layout_replacement() {
   EXPECT_EQ(system.capture_auxiliary_checkpoint_accepted_state(), incoming_auxiliary);
   for (int level = 0; level < source.n_levels(); ++level)
     EXPECT_EQ(system.block_level_state_global("tracer", level),
-               source.block_level_state_global("tracer", level));
+              source.block_level_state_global("tracer", level));
 }
 
 template <int Dim>
@@ -872,17 +873,20 @@ std::vector<double> explicit_block_state_oracle(pops::AmrSystem<Dim>& system, in
   const std::size_t cells = static_cast<std::size_t>(domain.numPts());
   std::vector<double> result(cells * static_cast<std::size_t>(components), 0.0);
   std::vector<double> coverage(cells, 0.0);
-  for (const auto& piece : pops::output_local_pieces(carrier, level, carrier.distribution().replicated())) {
+  for (const auto& piece :
+       pops::output_local_pieces(carrier, level, carrier.distribution().replicated())) {
     if (piece.replicated && pops::my_rank() != 0)
       continue;
-    if (piece.ncomp < components || piece.values.size() !=
-          static_cast<std::size_t>(piece.box.numPts()) * static_cast<std::size_t>(piece.ncomp))
+    if (piece.ncomp < components ||
+        piece.values.size() !=
+            static_cast<std::size_t>(piece.box.numPts()) * static_cast<std::size_t>(piece.ncomp))
       throw std::runtime_error("sparse oracle patch has inconsistent component storage");
     for (std::int64_t ordinal = 0; ordinal < piece.box.numPts(); ++ordinal) {
       std::int64_t remainder = ordinal;
       std::size_t linear = 0, stride = 1;
       for (int axis = 0; axis < Dim; ++axis) {
-        const int coordinate = piece.box.lo[axis] + static_cast<int>(remainder % piece.box.length(axis));
+        const int coordinate =
+            piece.box.lo[axis] + static_cast<int>(remainder % piece.box.length(axis));
         remainder /= piece.box.length(axis);
         if (coordinate < domain.lo[axis] || coordinate > domain.hi[axis])
           throw std::runtime_error("sparse oracle patch lies outside its physical level domain");
@@ -892,15 +896,18 @@ std::vector<double> explicit_block_state_oracle(pops::AmrSystem<Dim>& system, in
       ++coverage[linear];
       for (int component = 0; component < components; ++component)
         result[static_cast<std::size_t>(component) * cells + linear] =
-            piece.values[static_cast<std::size_t>(component) * static_cast<std::size_t>(piece.box.numPts()) +
+            piece.values[static_cast<std::size_t>(component) *
+                             static_cast<std::size_t>(piece.box.numPts()) +
                          static_cast<std::size_t>(ordinal)];
     }
   }
   const auto& lane = pops::ExecutionLane::world();
   pops::all_reduce_sum_inplace(coverage.data(), coverage.size(), lane);
-  if (std::any_of(coverage.begin(), coverage.end(), [](double count) { return count < 0 || count > 1; }))
+  if (std::any_of(coverage.begin(), coverage.end(),
+                  [](double count) { return count < 0 || count > 1; }))
     throw std::runtime_error("sparse oracle has multiply owned valid cells");
-  pops::all_reduce_or_inplace(reinterpret_cast<char*>(result.data()), result.size() * sizeof(double), lane);
+  pops::all_reduce_or_inplace(reinterpret_cast<char*>(result.data()),
+                              result.size() * sizeof(double), lane);
   return result;
 }
 
@@ -994,9 +1001,10 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   const auto& first_coarse = system.prepared_amr_block_state(0, 0);
   const auto& second_coarse = system.prepared_amr_block_state(1, 0);
   // Replicated data has one complete copy per rank; a SUM would overcount.
-  const pops::Real block_difference = first_coarse.distribution().replicated()
-      ? pops::difference_sum_sq_all_local(first_coarse, second_coarse)
-      : pops::difference_sum_sq_all(first_coarse, second_coarse);
+  const pops::Real block_difference =
+      first_coarse.distribution().replicated()
+          ? pops::difference_sum_sq_all_local(first_coarse, second_coarse)
+          : pops::difference_sum_sq_all(first_coarse, second_coarse);
   EXPECT_GT(block_difference, pops::Real(0));
   std::array<std::vector<std::vector<double>>, 2> block_oracles;
   for (std::size_t block = 0; block < names.size(); ++block) {

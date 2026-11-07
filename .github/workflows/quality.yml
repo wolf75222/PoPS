@@ -21,7 +21,8 @@ name: Quality
 # franchement : le workflow ne doit jamais annoncer une analyse qu'il n'a pas produite.
 # EXCEPTION deja actee pour les findings eux-memes :
 #   - le check clang-format du job format est BLOQUANT (bascule ADC-219 : le tronc est conforme au
-#     style depuis le balayage ADC-118, tout nouvel ecart = regression). ruff (python/) reste informatif.
+#     style depuis le balayage N5 de ROM-84, qui reprend celui d'ADC-118 apres l'ecart apparu le 16/08 ;
+#     tout nouvel ecart = regression). ruff (python/) reste informatif.
 on:
   schedule:
     - cron: '0 4 * * 0'

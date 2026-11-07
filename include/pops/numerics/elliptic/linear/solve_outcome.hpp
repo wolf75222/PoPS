@@ -18,7 +18,8 @@
 
 namespace pops {
 
-template <int Dim> class System;
+template <int Dim>
+class System;
 
 /// Runtime-owned identity for the exact native attempt that produced a solve result.
 /// Outcomes retain this small control object, never the System or its buffers.
@@ -142,9 +143,9 @@ class [[nodiscard]] SolveOutcome final {
       throw std::logic_error("SolveOutcome has already been consumed");
 
     if (attempt_authority_) {
-      const bool external_alive = !hooks_.require_external_lifetimes ||
-                                  (!hooks_.workspace_lifetime.expired() &&
-                                   !hooks_.problem_lifetime.expired());
+      const bool external_alive =
+          !hooks_.require_external_lifetimes ||
+          (!hooks_.workspace_lifetime.expired() && !hooks_.problem_lifetime.expired());
       const bool current = external_alive && attempt_authority_->owner != nullptr &&
                            attempt_authority_->incarnation == attempt_incarnation_ &&
                            attempt_authority_->attempt == attempt_ordinal_;
@@ -237,7 +238,8 @@ class [[nodiscard]] SolveOutcome final {
   }
 
  private:
-  template <int Dim> friend class System;
+  template <int Dim>
+  friend class System;
 
   void bind_native_attempt_(std::shared_ptr<SolveOutcomeAttemptAuthority> authority,
                             std::shared_ptr<ExecutionLane> lane) noexcept {

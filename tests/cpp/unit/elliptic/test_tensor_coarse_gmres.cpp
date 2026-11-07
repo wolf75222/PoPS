@@ -41,8 +41,8 @@ struct RootProblem {
             RealVector<2>{geometry.spacing(0), geometry.spacing(1)}};
   }
 
-  static mesh::Distribution<2> ownership(const mesh::BoxArray<2>& boxes, int ranks,
-                                         bool replicated, bool empty_owner) {
+  static mesh::Distribution<2> ownership(const mesh::BoxArray<2>& boxes, int ranks, bool replicated,
+                                         bool empty_owner) {
     const mesh::RankSpace<2> space{Index<2>{0, 0}, Extent<2>{ranks, 1}};
     if (replicated)
       return mesh::Distribution<2>::replicated(boxes, space);
@@ -73,8 +73,8 @@ struct RootProblem {
                                                                           true),
             runtime::program::tensor_fac::detail::exact_boundary_budget<2>())) {
     for (auto& field : coefficients)
-      field = std::make_unique<Field>(layout, distribution, Index<2>{lane.rank(), 0},
-                                      1, Extent<2>{1, 1});
+      field = std::make_unique<Field>(layout, distribution, Index<2>{lane.rank(), 0}, 1,
+                                      Extent<2>{1, 1});
     if (all_reduce_max(halo.has_remote_jobs() ? 1L : 0L, lane) != 0) {
       HaloExchangeContext context{};
       context.context_generation = context.schedule_generation = 1;
@@ -136,15 +136,16 @@ struct RootProblem {
     }
     Kokkos::fence();
     gmres->prepare_coefficients({coefficients[0].get(), coefficients[1].get(),
-                                  coefficients[2].get(), coefficients[3].get()});
+                                 coefficients[2].get(), coefficients[3].get()});
   }
 
   Real error() const {
     Real local_error = 0;
     for (std::size_t local = 0; local < correction.local_size(); ++local) {
       const auto value = correction.fab(local).view(), expected = exact.fab(local).view();
-      local_error = std::max(local_error, for_each_cell_reduce_max(
-          correction.box(local), [=] POPS_HD(const Index<2>& index) {
+      local_error = std::max(
+          local_error,
+          for_each_cell_reduce_max(correction.box(local), [=] POPS_HD(const Index<2>& index) {
             return Kokkos::abs(value(index, 0) - expected(index, 0));
           }));
     }
@@ -261,12 +262,14 @@ TEST(TensorCoarseGMRES, TensorDiagonalMgRetainsFullTensorRefreshAndAllOwnershipK
 
 TEST(TensorCoarseGMRES, TensorDiagonalMgSelectionMustAgreeAcrossRanks) {
   RootProblem problem;
-  if (problem.lane.size() < 2) GTEST_SKIP() << "MPI consensus requires two owners";
+  if (problem.lane.size() < 2)
+    GTEST_SKIP() << "MPI consensus requires two owners";
   const auto kind = problem.lane.rank() == 0 ? CoarsePreconditionerKind::diagonal
-                                           : CoarsePreconditionerKind::tensor_diagonal_mg;
+                                             : CoarsePreconditionerKind::tensor_diagonal_mg;
   EXPECT_THROW((void)TensorCoarseGmres<2>(problem.correction, problem.geometry, problem.halo,
-      problem.physical, problem.options, problem.lane, "tests.tensor-coarse-gmres.MG-consensus", 64, kind),
-      std::exception);
+                                          problem.physical, problem.options, problem.lane,
+                                          "tests.tensor-coarse-gmres.MG-consensus", 64, kind),
+               std::exception);
 }
 
 TEST(TensorCoarseGMRES, PolarPreconditionerKeepsTheFullTensorAndRefreshesWithoutAllocation) {
@@ -339,8 +342,9 @@ TEST(TensorCoarseGMRES, IterationLimitAndInvalidDiagonalFailClosed) {
   for (auto& coefficient : problem.coefficients)
     coefficient->set_val(Real(0));
   EXPECT_THROW(problem.gmres->prepare_coefficients(
-      {problem.coefficients[0].get(), problem.coefficients[1].get(),
-       problem.coefficients[2].get(), problem.coefficients[3].get()}), std::invalid_argument);
+                   {problem.coefficients[0].get(), problem.coefficients[1].get(),
+                    problem.coefficients[2].get(), problem.coefficients[3].get()}),
+               std::invalid_argument);
   EXPECT_THROW(problem.gmres->solve(problem.correction, problem.rhs, Real(1e-10), 512),
                std::invalid_argument);
 }
@@ -373,28 +377,34 @@ TEST(TensorCoarseGMRES, SingularAndChangedPreparedMethodAreRefused) {
   const auto fine_geometry = root.geometry.refine(Extent<2>{2, 2});
   const mesh::BoxArray<2> fine_layout(std::vector<Box<2>>{fine_geometry.domain()});
   const mesh::RankSpace<2> ranks{Index<2>{0, 0}, Extent<2>{root.lane.size(), 1}};
-  const auto fine_distribution = mesh::Distribution<2>::partitioned(
-      fine_layout, ranks, std::vector<Index<2>>{Index<2>{0, 0}});
+  const auto fine_distribution =
+      mesh::Distribution<2>::partitioned(fine_layout, ranks, std::vector<Index<2>>{Index<2>{0, 0}});
   std::array<std::unique_ptr<Field>, 4> fine_coefficients;
   for (auto& coefficient : fine_coefficients)
     coefficient = std::make_unique<Field>(fine_layout, fine_distribution,
-        Index<2>{root.lane.rank(), 0}, 1, Extent<2>{1, 1});
+                                          Index<2>{root.lane.rank(), 0}, 1, Extent<2>{1, 1});
   Field fine_rhs(fine_layout, fine_distribution, Index<2>{root.lane.rank(), 0}, 1, Extent<2>{});
   Field fine_initial(fine_layout, fine_distribution, Index<2>{root.lane.rank(), 0}, 1,
                      Extent<2>{1, 1});
   Field fine_solution(fine_layout, fine_distribution, Index<2>{root.lane.rank(), 0}, 1,
                       Extent<2>{1, 1});
-  std::array<PhysicalBoundaryConditions<2>, 2> boundaries{
-      root.boundary, RootProblem::boundaries(fine_geometry)};
-  const std::array<LevelBinding<2, Field::memory_space>, 2> bindings{{
-      {&root.geometry, &boundaries[0],
-       {root.coefficients[0].get(), root.coefficients[1].get(),
-        root.coefficients[2].get(), root.coefficients[3].get()},
-       &root.rhs, &root.exact, &root.correction},
-      {&fine_geometry, &boundaries[1],
-       {fine_coefficients[0].get(), fine_coefficients[1].get(),
-        fine_coefficients[2].get(), fine_coefficients[3].get()},
-       &fine_rhs, &fine_initial, &fine_solution}}};
+  std::array<PhysicalBoundaryConditions<2>, 2> boundaries{root.boundary,
+                                                          RootProblem::boundaries(fine_geometry)};
+  const std::array<LevelBinding<2, Field::memory_space>, 2> bindings{
+      {{&root.geometry,
+        &boundaries[0],
+        {root.coefficients[0].get(), root.coefficients[1].get(), root.coefficients[2].get(),
+         root.coefficients[3].get()},
+        &root.rhs,
+        &root.exact,
+        &root.correction},
+       {&fine_geometry,
+        &boundaries[1],
+        {fine_coefficients[0].get(), fine_coefficients[1].get(), fine_coefficients[2].get(),
+         fine_coefficients[3].get()},
+        &fine_rhs,
+        &fine_initial,
+        &fine_solution}}};
   const std::array<amr::RefinementRatio<2>, 1> ratios{
       amr::RefinementRatio<2>{std::array<int, 2>{2, 2}}};
   {
@@ -403,8 +413,8 @@ TEST(TensorCoarseGMRES, SingularAndChangedPreparedMethodAreRefused) {
     Controls wrong_method;
     EXPECT_THROW(solver.solve(wrong_method, root.lane), std::invalid_argument);
     Controls asymmetric_method;
-    asymmetric_method.coarse_method = root.lane.rank() == 0
-        ? CoarseCorrectionMethod::gauss_seidel : CoarseCorrectionMethod::gmres;
+    asymmetric_method.coarse_method = root.lane.rank() == 0 ? CoarseCorrectionMethod::gauss_seidel
+                                                            : CoarseCorrectionMethod::gmres;
     EXPECT_THROW(solver.solve(asymmetric_method, root.lane), std::invalid_argument);
     Controls asymmetric_restart;
     asymmetric_restart.coarse_method = CoarseCorrectionMethod::gmres;
@@ -445,21 +455,23 @@ TEST(TensorCoarseGMRES, SingularAndChangedPreparedMethodAreRefused) {
     faces[0] = faces[1] = {PhysicalBoundaryKind::neumann, Real(0)};
     const auto& geometry = level == 0 ? root.geometry : fine_geometry;
     boundaries[level] = {root.boundary.topology(), faces,
-        RealVector<2>{geometry.spacing(0), geometry.spacing(1)}};
+                         RealVector<2>{geometry.spacing(0), geometry.spacing(1)}};
   }
   EXPECT_THROW((void)FullTensorCompositeFac<2>(bindings, ratios, root.lane, {3u, 0u, true},
-                                               CoarseCorrectionMethod::gmres), std::exception);
+                                               CoarseCorrectionMethod::gmres),
+               std::exception);
 }
 
 TEST(TensorCoarseGMRES, CompositeMappedDiskConvergesAndRejectsFailedInnerSolve) {
-  const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-coarse-gmres.composite");
-  const auto solved = pops::test::mapped_disk_fac_witness(
-      8, 48, false, lane, {1u, 2u, true}, 4, 64, 512, 200, Real(0.5), Real(2e-9),
-      CoarseCorrectionMethod::gmres);
+  const auto lane =
+      ExecutionLane::duplicate_world_collectively("tests.tensor-coarse-gmres.composite");
+  const auto solved =
+      pops::test::mapped_disk_fac_witness(8, 48, false, lane, {1u, 2u, true}, 4, 64, 512, 200,
+                                          Real(0.5), Real(2e-9), CoarseCorrectionMethod::gmres);
   ASSERT_TRUE(solved.report.solved()) << solved.report.reason;
-  const auto failed = pops::test::mapped_disk_fac_witness(
-      8, 48, false, lane, {1u, 2u, true}, 4, 64, 1, 200, Real(0.5), Real(2e-9),
-      CoarseCorrectionMethod::gmres);
+  const auto failed =
+      pops::test::mapped_disk_fac_witness(8, 48, false, lane, {1u, 2u, true}, 4, 64, 1, 200,
+                                          Real(0.5), Real(2e-9), CoarseCorrectionMethod::gmres);
   EXPECT_FALSE(failed.report.solved());
   EXPECT_EQ(failed.report.action, SolveAction::kFailRun);
   EXPECT_NE(failed.report.reason.find("coarse_correction"), std::string::npos);
@@ -641,30 +653,34 @@ TEST(TensorCoarseGMRES, PolarPreconditionerTraversesThreeActualMappedLevels) {
               std::max(Real(1e-12), Real(2e-9) * report.reference_residual_norm));
 }
 
-
 TEST(TensorCoarseGMRES, OptionalFailureCaptureRetainsCandidateAndExclusiveBytes) {
-  if constexpr (!kRealIsBinary64) GTEST_SKIP() << "Capture schema requires binary64";
+  if constexpr (!kRealIsBinary64)
+    GTEST_SKIP() << "Capture schema requires binary64";
   comm_init();
   ::pops::detail::ensure_kokkos_initialized();  // Empty owners still prepare halo buffers.
   struct RestoreCaptureEnvironment {
     std::optional<std::string> previous;
     RestoreCaptureEnvironment() {
-      if (const char* value = std::getenv("POPS_TENSOR_FAC_CAPTURE_DIR")) previous = value;
+      if (const char* value = std::getenv("POPS_TENSOR_FAC_CAPTURE_DIR"))
+        previous = value;
     }
     ~RestoreCaptureEnvironment() {
-      if (previous) ::setenv("POPS_TENSOR_FAC_CAPTURE_DIR", previous->c_str(), 1);
-      else ::unsetenv("POPS_TENSOR_FAC_CAPTURE_DIR");
+      if (previous)
+        ::setenv("POPS_TENSOR_FAC_CAPTURE_DIR", previous->c_str(), 1);
+      else
+        ::unsetenv("POPS_TENSOR_FAC_CAPTURE_DIR");
     }
   } restore;
   std::array<char, 128> directory{};
   if (my_rank() == 0) {
     std::snprintf(directory.data(), directory.size(), "/tmp/pops-fac-capture-XXXXXX");
-    if (::mkdtemp(directory.data()) == nullptr) directory[0] = '\0';
+    if (::mkdtemp(directory.data()) == nullptr)
+      directory[0] = '\0';
   }
   broadcast_bytes_inplace(directory.data(), directory.size());
   ASSERT_NE(directory[0], '\0');
-  const std::string path = std::string(directory.data()) + "/coarse-rank-" +
-                           std::to_string(my_rank()) + ".txt";
+  const std::string path =
+      std::string(directory.data()) + "/coarse-rank-" + std::to_string(my_rank()) + ".txt";
   const auto read_bytes = [&] {
     std::ifstream stream(path, std::ios::binary);
     return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
@@ -716,13 +732,16 @@ TEST(TensorCoarseGMRES, OptionalFailureCaptureRetainsCandidateAndExclusiveBytes)
     (void)all_reduce_max(0L);  // Finish per-rank cleanup before the next collective capture.
   }
   if (n_ranks() > 1) {
-    if (my_rank() == 0) ::setenv("POPS_TENSOR_FAC_CAPTURE_DIR", directory.data(), 1);
-    else ::unsetenv("POPS_TENSOR_FAC_CAPTURE_DIR");
+    if (my_rank() == 0)
+      ::setenv("POPS_TENSOR_FAC_CAPTURE_DIR", directory.data(), 1);
+    else
+      ::unsetenv("POPS_TENSOR_FAC_CAPTURE_DIR");
     EXPECT_THROW((RootProblem{false, false, CoarsePreconditionerKind::polar_poisson}),
                  std::invalid_argument);
   }
   (void)all_reduce_max(0L);
-  if (my_rank() == 0) EXPECT_EQ(::rmdir(directory.data()), 0);
+  if (my_rank() == 0)
+    EXPECT_EQ(::rmdir(directory.data()), 0);
 }
 
 }  // namespace

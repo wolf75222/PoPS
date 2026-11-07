@@ -4,7 +4,8 @@
 using namespace pops::runtime::checkpoint;
 
 namespace {
-template <int Dim> void check_empty_archive() {
+template <int Dim>
+void check_empty_archive() {
   const std::array<std::uint64_t, 1> levels{0};
   const std::vector<StateCarrierStorageCapacity<Dim>> blocks;
   const auto capacity = state_carriers_byte_capacity<Dim>(levels, blocks);
@@ -35,7 +36,7 @@ template <int Dim> void check_empty_archive() {
     EXPECT_EQ(encode_state_carriers(merged).size(), capacity);
   }
 }
-}
+}  // namespace
 
 TEST(StateCarriersZeroBlockV14, EmptyArchiveHasExactNativeWireCapacity) {
   check_empty_archive<1>();

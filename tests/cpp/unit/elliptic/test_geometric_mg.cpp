@@ -304,9 +304,9 @@ double maximum_periodic_mode_error(const Solver& solver) {
     for (std::size_t ordinal = 0; ordinal < static_cast<std::size_t>(fab.box().numPts());
          ++ordinal) {
       const auto index = index_from_ordinal(fab.box(), ordinal);
-      result = std::max(result, std::abs(static_cast<double>(
-                                    host(storage_ordinal(fab.grown_box(), index)) -
-                                    periodic_mode(solver.geom(), index))));
+      result = std::max(result,
+                        std::abs(static_cast<double>(host(storage_ordinal(fab.grown_box(), index)) -
+                                                     periodic_mode(solver.geom(), index))));
     }
   }
   return pops::all_reduce_max(result);

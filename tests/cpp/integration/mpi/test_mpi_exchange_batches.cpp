@@ -112,8 +112,8 @@ TEST(ExchangeBatches, UnequalPhysicalBoundaryOwnershipConservesAndFailuresRollba
   // The interior-only rank rejects a real carrier layout mismatch after the
   // common preparation. Boundary owners must reach the same refusal vote even
   // though their coverage lookup succeeded and they could stage face records.
-  const auto wrong_boxes = mesh::BoxArray<1>::from_domain(
-      Box<1>{Index<1>{0}, Index<1>{15}}, Extent<1>{4});
+  const auto wrong_boxes =
+      mesh::BoxArray<1>::from_domain(Box<1>{Index<1>{0}, Index<1>{15}}, Extent<1>{4});
   const auto wrong_distribution = mesh::Distribution<1>::partitioned(
       wrong_boxes, mesh::RankSpace<1>{Index<1>{0}, Extent<1>{3}},
       std::vector<Index<1>>{Index<1>{0}, Index<1>{1}, Index<1>{2}, Index<1>{0}});
