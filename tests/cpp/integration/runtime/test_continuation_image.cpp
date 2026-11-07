@@ -1934,11 +1934,27 @@ TEST(ContinuationImage, DeviceArrayHostCopiesAreExplicitAndCounted) {
   EXPECT_EQ(loop_copy(2), 6);
   EXPECT_EQ(residency.device_to_host_bytes.load(), 56u);
   EXPECT_EQ(residency.transfers.load(), 4u);
+  // A wrong element type or column count is refused before any copy. One process keeps the
+  // local std::logic_error; several ranks share rank 0's reason as a std::runtime_error
+  // (collectively_rethrow_exception), so the case holds on every lane size.
+  const auto expect_refused = [&](auto&& copy, const std::string& reason) {
+    try {
+      copy();
+      ADD_FAILURE() << "accepted: " << reason;
+    } catch (const std::logic_error& error) {
+      EXPECT_EQ(lane.size(), 1);
+      EXPECT_NE(std::string(error.what()).find(reason), std::string::npos) << error.what();
+    } catch (const std::runtime_error& error) {
+      EXPECT_GT(lane.size(), 1);
+      EXPECT_NE(std::string(error.what()).find(reason), std::string::npos) << error.what();
+    }
+  };
   fd::HostView<Real> other_type;
-  EXPECT_THROW(finite_collective::to_host(array, &residency, lane, other_type), std::logic_error);
+  expect_refused([&] { finite_collective::to_host(array, &residency, lane, other_type); },
+                 "column differs from its type or domain");
   fd::HostView<std::int64_t> extra;
-  EXPECT_THROW(finite_collective::to_host(array, &residency, lane, loop_copy, extra),
-               std::logic_error);
+  expect_refused([&] { finite_collective::to_host(array, &residency, lane, loop_copy, extra); },
+                 "differs from its element layout");
   EXPECT_EQ(residency.transfers.load(), 4u);
   // The first failing lane is one control scalar reduced on the device.
   finite_kokkos::View<unsigned char> flags("pops_finite_control:flags", 5);
