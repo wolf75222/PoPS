@@ -113,6 +113,27 @@ def test_patch_layout_requires_an_exact_bool(value):
         PatchLayout(distribute_coarse=value)
 
 
+def test_plan_choice_and_compile_refusal_read_one_interface_predicate():
+    from pops.amr._resolution import _planned_coarse_distribution, carries_cross_block_interface
+
+    authority = SimpleNamespace(interfaces=("between_blocks",), boundaries=())
+    composed = SimpleNamespace(
+        interfaces=(), boundaries=(SimpleNamespace(interfaces=("between_blocks",)),))
+    plain = SimpleNamespace(interfaces=(), boundaries=(SimpleNamespace(interfaces=()),))
+    assert carries_cross_block_interface(authority)
+    assert carries_cross_block_interface(composed)
+    assert not carries_cross_block_interface(plain)
+    assert not carries_cross_block_interface(None)
+    # An interface declared only on a boundary partitions the coarse level too, so the plan's
+    # own choice never meets the compile-time refusal (review of the N10 note, A3).
+    unconstrained = {"distribute_coarse": None}
+    for numerics, expected in ((authority, True), (composed, True), (plain, False)):
+        context = SimpleNamespace(numerics=(numerics,))
+        assert _planned_coarse_distribution(unconstrained, context) is expected
+    assert _planned_coarse_distribution({"distribute_coarse": False},
+                                        SimpleNamespace(numerics=(composed,))) is False
+
+
 def test_default_patch_layout_lets_the_plan_choose_a_replicated_coarse_level():
     # Spec 0.3 DM3 and gap C50: the plan chooses the distribution. With no cross-block interface
     # it keeps the replicated coarse level of b6; an explicit False stays a satisfied constraint.

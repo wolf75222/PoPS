@@ -618,18 +618,26 @@ def _planned_coarse_distribution(patch_layout_data: Any, context: AMRResolutionC
     """
     authored = patch_layout_data["distribute_coarse"]
     if authored is None:
-        return any(tuple(getattr(row, "interfaces", ()) or ()) for row in context.numerics)
+        return any(carries_cross_block_interface(row) for row in context.numerics)
     return authored
 
 
-def _block_carries_interface(block: Any) -> bool:
-    numerics = getattr(block, "numerics", None)
+def carries_cross_block_interface(numerics: Any) -> bool:
+    """Whether a block's resolved numerics carry a cross-block interface (the one predicate).
+
+    An interface reaches a block in one of two forms: an interface authority that composition
+    has not consumed yet (``numerics.interfaces``, a ``ConservativeInterface`` before
+    ``compose_shared_interfaces``), or a row of the ghost producer plan of one of its boundaries
+    (``boundary.interfaces``, which composition fills and which a boundary may also declare). The
+    plan's choice of the coarse distribution and the compile-time refusal read this one function,
+    before and after composition alike, so they never disagree on a case.
+    """
     if numerics is None:
         return False
     if tuple(getattr(numerics, "interfaces", ()) or ()):
         return True
     return any(tuple(getattr(boundary, "interfaces", ()) or ())
-               for boundary in getattr(numerics, "boundaries", ()))
+               for boundary in getattr(numerics, "boundaries", ()) or ())
 
 
 def check_coarse_distribution(plan: Any) -> None:
@@ -652,7 +660,8 @@ def check_coarse_distribution(plan: Any) -> None:
         options = row.authorities.hierarchy.plan.patch_generation.options.to_data()
         if options["distribute_coarse"] is not False:
             continue
-        if any(block_layouts.get(block.name) == layout_id and _block_carries_interface(block)
+        if any(block_layouts.get(block.name) == layout_id
+               and carries_cross_block_interface(block.numerics)
                for block in plan.blocks):
             from pops._ir.refusals import ScheduleIllegal
 
