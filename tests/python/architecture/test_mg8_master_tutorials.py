@@ -684,3 +684,38 @@ def test_a_stopped_probe_writes_its_python_stacks_then_dies_of_sigterm(tmp_path)
     assert process.returncode == -signal.SIGTERM
     text = stack.read_text(encoding="utf-8")
     assert "(most recent call first):" in text and " in waiting_for_the_watchdog" in text
+
+
+# A stand-in for PoPS that reads its JIT cache when it is imported, and a tutorial that prints it.
+FAKE_POPS = """
+import os
+CACHE = os.environ.get("POPS_CACHE_DIR")
+def run(*positional, **controls):
+    raise AssertionError("the tutorial does not run")
+"""
+CACHE_TUTORIAL = "import pops\nprint(pops.CACHE)\n"
+
+
+@pytest.mark.parametrize("rank", [0, 1])
+def test_each_rank_compiles_into_a_jit_cache_of_its_own(tmp_path, rank):
+    # Master compiles the same model on every rank into one file of a shared cache, without the
+    # cache lock: the probe gives each rank a directory of its own before PoPS is imported.
+    (tmp_path / "site" / "pops").mkdir(parents=True)
+    (tmp_path / "site" / "pops" / "__init__.py").write_text(FAKE_POPS)
+    tutorial = tmp_path / "tutorial" / "cache.py"
+    tutorial.parent.mkdir()
+    tutorial.write_text(CACHE_TUTORIAL)
+    record = tmp_path / "record"
+    record.mkdir()
+    cache = tmp_path / "cache" / "dsl"
+    environment = {name: value for name, value in os.environ.items()
+                   if name not in mg8.RANK_VARIABLES}
+    environment.update(PYTHONPATH=str(tmp_path / "site"), POPS_CACHE_DIR=str(cache),
+                       OMPI_COMM_WORLD_RANK=str(rank))
+    completed = subprocess.run([sys.executable, str(SCRIPT), "probe", "--tutorial", str(tutorial),
+                                "--record", str(record)], env=environment, capture_output=True,
+                               text=True, timeout=120, check=False)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    result = json.loads((record / ("rank%d.json" % rank)).read_text(encoding="utf-8"))
+    assert result["status"] == {"ok": True}
+    assert result["printed"] == [str(cache / ("rank%d" % rank)) + "\n"]

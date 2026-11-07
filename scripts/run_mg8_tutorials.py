@@ -8,9 +8,10 @@ reads the clock, the hierarchy and every state level through the public methods 
 tutorials themselves call, and saves the arrays with their SHA-256.  The tutorial's own printed
 lines, the console-monitor lines and every file that it writes are recorded as well.  The script
 of the tutorial is never edited and its return code is the verdict of its own assertions.  A
-tutorial runs with its standard input closed; when it outlives its watchdog, it is stopped with
-every process under it, MPI ranks included, each probe first writing its Python stacks, and a
-tutorial that fails prints its logs and those stacks.
+tutorial runs with its standard input closed and each of its ranks compiles into a JIT cache of its
+own; when it outlives its watchdog, it is stopped with every process under it, MPI ranks
+included, each probe first writing its Python stacks, and a tutorial that fails prints its logs
+and those stacks.
 
 ``compare`` checks a candidate run against a reference run of ``master`` made on the same
 machine: return codes, every observation bitwise, the printed and monitor lines exactly, and the
@@ -762,8 +763,24 @@ def _observe(instance: Any, report: Any, controls: Mapping[str, Any], index: int
     return observation
 
 
+def _rank_cache(rank: int) -> None:
+    """Give this rank a JIT cache of its own, under the tutorial's cache.
+
+    Master's facade passes the cache path to the compiler explicitly, which bypasses the cache
+    lock (b6 holds it since 3a0b04f5d7): its ranks compile the same model into one file of a shared
+    cache at the same time. A rank that hashed the file while the other rank's linker rewrote it
+    raised at bind and left the other waiting in a collective until the watchdog. In a directory
+    of its own, each rank compiles and reads its own copy of the same binary; nothing that the
+    tutorials compute, print or write changes.
+    """
+    cache = os.environ.get("POPS_CACHE_DIR")
+    if cache:
+        os.environ["POPS_CACHE_DIR"] = str(Path(cache) / ("rank%d" % rank))
+
+
 def probe(args: argparse.Namespace) -> int:
     rank = _launcher_rank()
+    _rank_cache(rank)  # before `import pops`
     record = Path(args.record)
     log = os.open(record / ("rank%d.log" % rank), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     sys.stdout.flush()

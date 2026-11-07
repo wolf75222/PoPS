@@ -2586,8 +2586,9 @@ jobs:
   # tutorial that its watchdog stops is stopped with every process under it (Open MPI starts each
   # rank in a process group of its own), each rank first writing its Python stacks, and a tutorial
   # that fails prints its logs and those stacks in the job log, which every reader has, unlike the
-  # published runs. The job's limit is the sum of the bounded steps
-  # (45 + 45 + 45 + 45 + 60 + 15 = 255 min) and of the setup.
+  # published runs. Each rank compiles into a JIT cache of its own: master compiles the same model
+  # on every rank into one file of a shared cache without the cache lock. The job's limit is the
+  # sum of the bounded steps (45 + 45 + 45 + 45 + 60 + 15 = 255 min) and of the setup.
   mg8-tutorials:
     name: ubuntu-24.04 / MG8 master tutorials (${{ matrix.lane }})
     runs-on: ubuntu-24.04
