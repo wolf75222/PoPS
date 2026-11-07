@@ -95,3 +95,62 @@ def test_authored_face_requires_numerical_stability_and_tracks_its_identity():
     with pytest.raises(TypeError, match="one scalar Expr"):
         riemann.User(body=body, state=U,
                      stability=lambda l, r, fl, fr, s: (s,))
+
+
+def test_named_face_inputs_reach_only_a_body_that_names_them():
+    """ROM-99: ``n`` and ``speeds`` are passed by name after the five face inputs (CF15)."""
+    from types import SimpleNamespace
+    from pops.codegen.user_riemann_lowering import emit_user_face_policy
+    from pops.numerics.riemann.user import reads_signed_wave_speeds
+
+    _, U = state(2)
+    stability = lambda l, r, fl, fr, s: s
+    normal = riemann.User(body=lambda l, r, fl, fr, s, *, n: tuple(n[0] * f for f in fl),
+                          state=U, stability=stability)
+    policy = emit_user_face_policy(SimpleNamespace(_user_face=normal))
+    assert "face.normal[0]" in policy and "face.normal[1]" not in policy
+    assert not reads_signed_wave_speeds(normal) and "signed_wave_speeds" not in policy
+    # A name of a named input on one of the five face inputs is refused, in a body or a bound:
+    # there it would receive the speed s or a trace, not the input of that name.
+    with pytest.raises(TypeError, match="face input 5 is the speed s, not the input 'n'"):
+        riemann.User(body=lambda l, r, fl, fr, n: tuple(n * f for f in fl), state=U,
+                     stability=stability)
+    with pytest.raises(TypeError,
+                       match="face input 1 is the left trace uL, not the input 'speeds'"):
+        riemann.User(body=lambda l, r, fl, fr, s: fl, state=U,
+                     stability=lambda speeds, r, fl, fr, s: s)
+    # An input named and not read changes neither the identity nor the policy.
+    unread = riemann.User(body=lambda l, r, fl, fr, s, n, speeds: fl, state=U,
+                          stability=stability)
+    plain = riemann.User(body=lambda l, r, fl, fr, s: fl, state=U, stability=stability)
+    assert unread.options["source_identity"] == plain.options["source_identity"]
+    assert unread.requirements == plain.requirements
+    assert emit_user_face_policy(SimpleNamespace(_user_face=unread)) == \
+        emit_user_face_policy(SimpleNamespace(_user_face=plain))
+
+
+def test_a_face_that_reads_the_signed_speeds_requires_their_declaration():
+    """ROM-99: reading ``speeds`` adds the model capability wave_speeds, kept authenticated."""
+    from copy import copy
+    from pops.numerics.riemann.user import (
+        authenticated_user_face, reads_signed_wave_speeds, require_declared_wave_speeds,
+    )
+
+    model, U = state(1)
+    face = riemann.User(
+        body=lambda l, r, fl, fr, s, *, speeds: (speeds[1] * fl[0] - speeds[0] * fr[0],),
+        state=U, stability=lambda l, r, fl, fr, s: s)
+    bound = riemann.User(body=lambda l, r, fl, fr, s: (fl[0],), state=U,
+                         stability=lambda l, r, fl, fr, s, *, speeds: speeds[1] - speeds[0])
+    for value in (face, bound):
+        assert reads_signed_wave_speeds(value)
+        assert value.requirements["capabilities"] == (
+            "physical_flux", "provider_pack", "stability_bound", "wave_speeds")
+        with pytest.raises(ValueError, match="here: .*reads the signed wave speeds.*declares none"):
+            require_declared_wave_speeds(value, model, where="here")
+        altered = copy(value)
+        object.__setattr__(altered, "requirements", {
+            "capabilities": ("physical_flux", "provider_pack", "stability_bound"),
+            "source_compiled": True})
+        with pytest.raises(ValueError, match="capabilities changed"):
+            authenticated_user_face(altered)
