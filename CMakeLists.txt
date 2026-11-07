@@ -306,6 +306,7 @@ if(NOT _pops_kokkos_include_dirs)
     "reproduce the host Kokkos contract.")
 endif()
 set(_pops_kokkos_normalized_includes "")
+set(_pops_kokkos_real_includes "")
 foreach(_pops_kokkos_include IN LISTS _pops_kokkos_include_dirs)
   if(_pops_kokkos_include MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
     set(_pops_kokkos_include "${CMAKE_MATCH_1}")
@@ -322,9 +323,18 @@ foreach(_pops_kokkos_include IN LISTS _pops_kokkos_include_dirs)
       "Kokkos::kokkos include is not an existing absolute directory: "
       "${_pops_kokkos_include_normalized}")
   endif()
-  list(APPEND _pops_kokkos_normalized_includes "${_pops_kokkos_include_normalized}")
+  # NORMAL_PATH keeps a trailing separator, and one directory can reach the target graph under
+  # two spellings: conda-forge's Kokkos gives its HWLOC TPL "<prefix>/include/" next to
+  # "${_IMPORT_PREFIX}/include", or a symlinked prefix names it twice. Keep the first spelling,
+  # without its trailing separator, once per real directory, so its headers count once below.
+  string(REGEX REPLACE "(.)/+$" "\\1"
+    _pops_kokkos_include_normalized "${_pops_kokkos_include_normalized}")
+  file(REAL_PATH "${_pops_kokkos_include_normalized}" _pops_kokkos_include_real)
+  if(NOT _pops_kokkos_include_real IN_LIST _pops_kokkos_real_includes)
+    list(APPEND _pops_kokkos_real_includes "${_pops_kokkos_include_real}")
+    list(APPEND _pops_kokkos_normalized_includes "${_pops_kokkos_include_normalized}")
+  endif()
 endforeach()
-list(REMOVE_DUPLICATES _pops_kokkos_normalized_includes)
 
 # Kokkos may share a prefix with a different CPU-only installation required by
 # MPI/HDF5/FFTW. Transitive imported includes come after pops' direct includes;

@@ -182,6 +182,31 @@ def test_cmake_cuda_usage_contract_hash_matches_the_exported_python_payload(tmp_
     assert (tmp_path / "abi.txt").read_text() == module.__kokkos_contract__["abi_sha256"]
 
 
+def test_cmake_counts_each_kokkos_include_directory_once_whatever_its_spelling(tmp_path):
+    """Replay the production include normalizer: conda-forge's Kokkos names its HWLOC TPL include
+    "<prefix>/include/", next to "<prefix>/include", and a symlinked prefix names it again."""
+    cmake = shutil.which("cmake")
+    assert cmake is not None
+    production = (Path(__file__).resolve().parents[4] / "CMakeLists.txt").read_text()
+    start = production.index('set(_pops_kokkos_normalized_includes "")')
+    end = production.index("# Kokkos may share a prefix", start)
+    include = _module(tmp_path / "prefix").__kokkos_contract__["include_dirs"][0]
+    linked = tmp_path / "linked"
+    linked.symlink_to(tmp_path / "prefix")
+    other = tmp_path / "other"
+    other.mkdir()
+    graph = [f"{include}/", include, f"{linked}/include", f"$<BUILD_INTERFACE:{include}//>", str(other)]
+    out = tmp_path / "includes.txt"
+    script = tmp_path / "normalize.cmake"
+    script.write_text(
+        "cmake_minimum_required(VERSION 3.21)\n"
+        f'set(_pops_kokkos_include_dirs "{";".join(graph)}")\n'
+        + production[start:end]
+        + f'file(WRITE "{out}" "${{_pops_kokkos_normalized_includes}}")\n')
+    subprocess.run([cmake, "-P", str(script)], check=True, capture_output=True, text=True)
+    assert out.read_text().split(";") == [include, str(other)]
+
+
 def test_relocated_openmp_flags_preserve_macos_single_runtime(monkeypatch, tmp_path):
     from pops.codegen import toolchain
 
