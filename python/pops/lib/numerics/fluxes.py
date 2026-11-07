@@ -89,6 +89,10 @@ def rusanov(F: Any, Uh: Any, smax: Callable[..., Any] | None = None, *,
     flux. ``smax(uL, uR, n)`` gives the face speed from the two traces and the normal (section
     4.4); ``smax=None`` takes the face input ``s``, the larger spectral radius of the two traces
     (R9), which gives master's Rusanov. ``reconstruction=None`` is first order.
+
+    ``smax=`` is the third parameter of the signature in section 4.4; the row ``rusanov`` of
+    2.6.9 does not list it, so it stands as gap C46 of the index (adjudication section 20, item
+    4). It goes when C46 closes, by a row of the index or by N15; ``hll(speeds=)`` is already gone.
     """
     if smax is not None and not callable(smax):
         raise TypeError("rusanov(smax=) requires a speed function smax(uL, uR, n)")
