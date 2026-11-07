@@ -24,7 +24,9 @@ The sub-packages form a directed acyclic dependency stack:
     params    -> (nothing)                       (typed parameter dependency sink)
     output    -> model, time                     (qualified selections and schedules)
     external  -> model                           (authenticated component manifests)
-    lib       -> identity, frames, time, physics, moments, fields, params, solvers
+    lib       -> identity, frames, time, physics, moments, fields, params, solvers, surface
+    surface   -> _ir, domain, frames, initial, layouts, mesh, numerics, params, physics,
+                 problem, projection, time   (the user surface of spec 0.3, section 2.6)
     codegen   -> _ir, model, physics, time, lib, solvers, params,
                  external, fields
     runtime   -> authoring/lowering contracts, including resolved fields
@@ -75,7 +77,12 @@ ALLOWED = {
     "external": {"identity", "model"},
     # Ready implementations may mint canonical semantic identities, but identity is a strict sink:
     # this edge cannot introduce a cycle or pull compiler/runtime authority into pops.lib.
-    "lib": {"fields", "frames", "identity", "moments", "params", "physics", "solvers", "time"},
+    "lib": {"fields", "frames", "identity", "moments", "params", "physics", "solvers", "surface",
+            "time"},
+    # The user surface of spec 0.3 (2.6, N15) elaborates a case into the b6 constructs and the
+    # traced methods of N8; pops.lib writes its words with it (A4). Nothing below imports it.
+    "surface": {"_ir", "domain", "frames", "initial", "layouts", "mesh", "numerics", "params",
+                "physics", "problem", "projection", "time"},
     "codegen": {"_ir", "fields", "identity", "model", "params", "solvers", "time"},
     "runtime": {"_ir", "codegen", "fields", "identity", "mesh", "model", "output", "time"},
 }
@@ -306,6 +313,8 @@ def _public_alias_route_errors(module, tree, aliases):
     if not registered and ast.dump(ast.Module(body=body, type_ignores=[])) == ast.dump(
             ast.Module(body=rejection, type_ignores=[])):
         return []
+    if not registered and _refusal_hook(hook, body):
+        return []
     expected = ast.parse(
         "from pops.public_api_exports import resolve_public_library_alias\n"
         "return resolve_public_library_alias(__name__, name)"
@@ -328,6 +337,21 @@ def _public_alias_route_errors(module, tree, aliases):
             exports = ast.literal_eval(node.value)
     return ["registered alias missing from __all__: " + alias.public_name
             for alias in registered if alias.public_name not in exports]
+
+
+def _refusal_hook(hook, body):
+    """A hook that refuses every name it is asked for, as the user surface refuses the names of
+    earlier texts and the words that it does not list (spec 0.3 SU3, SU13, section 21.7): its one
+    parameter is the name, it has no decorator, nothing in it returns, yields or imports, and its
+    body ends by raising. It exports nothing and adds no import edge."""
+    return (isinstance(hook, ast.FunctionDef) and not hook.decorator_list
+            and [argument.arg for argument in hook.args.args] == ["name"]
+            and not hook.args.posonlyargs and not hook.args.kwonlyargs
+            and not hook.args.vararg and not hook.args.kwarg and not hook.args.defaults
+            and bool(body) and isinstance(body[-1], ast.Raise)
+            and not any(isinstance(node, (ast.Return, ast.Yield, ast.YieldFrom, ast.Await,
+                                          ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal))
+                        for node in ast.walk(hook)))
 
 
 def _public_alias_contract():
@@ -376,6 +400,18 @@ def test_public_alias_fence_rejects_fake_unregistered_and_imperative_routes():
         assert _public_alias_route_errors("pops.numerics", fake, aliases)
     missing = ast.parse("__all__ = ['FanLi15RawMomentPath']")
     assert _public_alias_route_errors("pops.numerics", missing, aliases)
+    # A refusal hook (SU13) exports nothing; one that returns, imports or falls through does.
+    refusal = ("def __getattr__(name):\n    if name in _EARLIER:\n"
+               "        raise SymbolNotInSurface(_EARLIER[name])\n"
+               "    raise SymbolNotInSurface(name)\n")
+    assert not _public_alias_route_errors("pops.surface", ast.parse(refusal), aliases)
+    for body in (
+        "if name in _LATER:\n    return _LATER[name]\nraise SymbolNotInSurface(name)",
+        "from pops.runtime import Runtime\nraise SymbolNotInSurface(name)",
+        "if name in _EARLIER:\n    raise SymbolNotInSurface(name)",
+    ):
+        fake = ast.parse("def __getattr__(name):\n    " + body.replace("\n", "\n    "))
+        assert _public_alias_route_errors("pops.surface", fake, aliases)
     ordinary = ast.parse("from pops.moments.fan_li_path import FanLi15RawMomentPath")
     assert list(_intra_targets(ordinary)) == ["pops.moments.fan_li_path"]
     assert "moments" not in ALLOWED["numerics"]
