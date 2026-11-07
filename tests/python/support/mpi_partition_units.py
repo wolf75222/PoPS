@@ -6,6 +6,9 @@ renamed or duplicated case against the declared inventory, and only then runs it
 units. The partitions of one selection are disjoint and their union is the inventory, so no case
 can leave the MPI lane silently. Loaded with ``-p`` only by the MPI launchers, which always set
 the environment variable below.
+
+PYTEST_DONT_REWRITE: ``mpi_pytest_entrypoint.run`` imports this module before pytest loads it as
+a plugin, and the module holds no assertion to rewrite.
 """
 from __future__ import annotations
 

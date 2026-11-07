@@ -123,8 +123,12 @@ def test_partition_plugin_runs_only_declared_units_of_an_unchanged_real_collecti
         environment = {**os.environ, "PYTHONPATH": str(root),
                        mpi_partition_units.ENVIRONMENT: mpi_partition_units.encode("half", inventory, nodes[1:3])}
         environment.pop("PYTEST_ADDOPTS", None)
+        # As in mpi_pytest_entrypoint.run, the plugin module is imported before pytest loads it.
+        launcher = ("import sys, pytest, tests.python.support.mpi_partition_units; "
+                    "sys.exit(pytest.main(sys.argv[1:]))")
         return subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", str(tmp_path),
+            [sys.executable, "-c", launcher, "-q", "-p", "no:cacheprovider", "--rootdir", str(tmp_path),
+             "-W", "error::pytest.PytestAssertRewriteWarning",
              "-p", "tests.python.support.mpi_partition_units", "--junitxml", str(tmp_path / "rank0.xml"),
              "test_receiver.py"], cwd=tmp_path, env=environment, stdin=subprocess.DEVNULL,
             capture_output=True, text=True, timeout=300, check=False)
