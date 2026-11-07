@@ -604,6 +604,10 @@ class DiscretizationPlan(Descriptor):
                     validate_balance = getattr(method, "validate_balance_view", None)
                     if not callable(validate_balance) or validate_balance(view) is not True:
                         raise UnsupportedBalanceRealizationError(rate, reason)
+            # The Model is complete here (validation and resolution), unlike at Case.numerics.
+            validate_model = getattr(method, "validate_model", None)
+            if callable(validate_model) and validate_model(model) is not True:
+                raise TypeError("rate method validate_model(model) must return exact True")
             rates.append(ResolvedRateMethod(
                 case.resolve(rate, block=block), method.resolve_references(resolve_handle)))
         def resolve_pairs(rows: Any, family: str) -> tuple[ResolvedNumericalBinding, ...]:

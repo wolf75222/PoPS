@@ -4008,7 +4008,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 1,
-          "estimated_seconds": 900,
+          "estimated_seconds": 1940,
           "ci_ranks": [
             1,
             2
@@ -4020,7 +4020,7 @@
           ],
           "entrypoint": "tests/python/integration/mpi/test_finite_structural_depth_native_mpi2.py",
           "execution_lane": "serial_and_mpi",
-          "basis": "Unmeasured scheduling estimate including cold generated C++ compilation; not a native receipt. Existing launch watchdog and scientific thresholds remain unchanged."
+          "basis": "Whole-file wall time measured once the depth-160 case runs to completion (B03 F4, PR #703); see _meta.b03_f4_depth160_observation. Existing launch watchdog and scientific thresholds remain unchanged."
         },
         "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": {
           "basis": "Provisional unmeasured whole-file cold compilation allowance; unchanged 1200 s MPI launch watchdog. Replace with complete native timing receipts; split exact cases if the measured budget is exceeded.",
@@ -5703,6 +5703,16 @@
           "estimated_seconds": 10,
           "kind": "source_contract",
           "registration": "snapshot_protocols_20261016"
+        },
+        "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
+          "estimated_seconds": 1400,
+          "kind": "native_profile",
+          "native_dimension": 2
+        },
+        "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py": {
+          "estimated_seconds": 850,
+          "kind": "native_profile",
+          "native_dimension": 2
         }
       },
       "mpi_routing_20261014": {
@@ -6564,6 +6574,33 @@
         }
       ]
     },
+    "ci_20261029_n7a_faceflux_pilot": {
+      "basis": "Unmeasured CI scheduling estimates for the two N7a FaceFlux pilot modules (ROM-83), on the api_v02_20261013 tiers: 60 s for source-only resolution and C++ generation of the M05 and M10 programs without compilation, as the analogue test_typed_product_seed_history.py; 300 s for two Dim2 native profile cases with one cold C++ compilation each, as the analogue test_stencil_flux_v02_native.py (three cases, 300 s). The local receipts come from scripts/ci_pytest_timings.py on a 4-core container (unit from the source checkout, native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, shard count, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": "tests/python/integration/runtime/test_stencil_flux_v02_native.py",
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "tests/python/unit/codegen/test_typed_product_seed_history.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300,
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": 60
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": {
+          "cases": 2,
+          "phase_seconds": 103.65,
+          "session_seconds": 104.42
+        },
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": {
+          "cases": 19,
+          "phase_seconds": 24.99,
+          "session_seconds": 25.67
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": "fdf1566dcfb724e13377796c5340ad688cc54331d799503334d3b41804c005ae",
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "c1260647ccd3fcfa02a32f913bfda80573fc6168edb1603fda6d367f7a353a73"
+      }
+    },
     "declared_hardware_profiles": {
       "gpu": {
         "basis": "Existing 120-second CPU scheduling estimate retained as provenance only; authentic CUDA/HIP device/managed Field storage is mandatory. No GPU execution or timing received. CPU plans exclude this exact manifest-declared profile; scripts/ci_python_hardware.py --hardware gpu --execute fails closed on CPU.",
@@ -6576,7 +6613,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1127,
+    "estimated_count": 1133,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6727,6 +6764,8 @@
       "tests/python/integration/runtime/test_api_v02_original_field_typed_recovery_native.py",
       "tests/python/integration/runtime/test_api_v02_output_history_remap_native.py",
       "tests/python/integration/runtime/test_api_v02_path_hierarchy_native.py",
+      "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py",
+      "tests/python/integration/runtime/test_api_v02_python_faces_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_choices_native.py",
       "tests/python/integration/runtime/test_api_v02_realization_loops_native.py",
       "tests/python/integration/runtime/test_api_v02_regions_native.py",
@@ -6784,6 +6823,7 @@
       "tests/python/integration/runtime/test_exact_analytic_initial.py",
       "tests/python/integration/runtime/test_extension_closure_v14_native.py",
       "tests/python/integration/runtime/test_external_grid_frontier_runtime.py",
+      "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py",
       "tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py",
       "tests/python/integration/runtime/test_fan_li15_full_eight_storage_runtime.py",
       "tests/python/integration/runtime/test_fan_li15_public_composition_runtime.py",
@@ -6885,6 +6925,7 @@
       "tests/python/integration/runtime/test_public_spatial_interaction.py",
       "tests/python/integration/runtime/test_public_tensor_diffusion.py",
       "tests/python/integration/runtime/test_public_three_stage_screened_fields.py",
+      "tests/python/integration/runtime/test_qualification_receipt_native.py",
       "tests/python/integration/runtime/test_rank_one_owned_amr_invalid.py",
       "tests/python/integration/runtime/test_relations_v09_native.py",
       "tests/python/integration/runtime/test_scientific_spatial_gmres_v14_native.py",
@@ -7320,6 +7361,7 @@
       "tests/python/unit/numerics/test_discretization_plan.py",
       "tests/python/unit/numerics/test_drift_wetdry_oracles_v02.py",
       "tests/python/unit/numerics/test_external_reconstruction_contract.py",
+      "tests/python/unit/numerics/test_faceflux_pilot_n7a.py",
       "tests/python/unit/numerics/test_fan_li15_path_contract.py",
       "tests/python/unit/numerics/test_finite_linear_maps.py",
       "tests/python/unit/numerics/test_finite_linear_native_shapes.py",
@@ -7327,6 +7369,7 @@
       "tests/python/unit/numerics/test_flux_correction_v02.py",
       "tests/python/unit/numerics/test_hall_independent_oracle.py",
       "tests/python/unit/numerics/test_indicator_stencils.py",
+      "tests/python/unit/numerics/test_lib_numerics_faces.py",
       "tests/python/unit/numerics/test_m05_shear_independent_review.py",
       "tests/python/unit/numerics/test_m07_hydrostatic_public_gap.py",
       "tests/python/unit/numerics/test_m08_independent_receipt.py",
@@ -7906,7 +7949,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1192,
+    "total_files": 1198,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -7950,6 +7993,52 @@
         "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
         "tests/python/integration/runtime/test_amr_gather_object_bytes_runtime.py": 960,
         "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 1320
+      }
+    },
+    "n3a_20261029": {
+      "basis": "Scheduling estimates for the N3a pilot (ROM-82) and its face inputs (ROM-99), not CI receipts. The source unit file builds the M03 and M16 models without compiling (25 s locally on 4 cores, so 30 s). The parity file compiles five case pairs, ten artifacts, each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts): 1244 s locally on 4 cores with Kokkos Serial beside three other compiles, 1038 s beside one. It keeps the 1400 s set when it also held the M16 refusal, from 1186 s with the margin of N3a (900 s for 769 s), for which the Python shards went from 135 to 136. The face-input file compiles six artifacts, M01's native Rusanov and two faces that read the normal, the native and the derived HLL of M01 with an inverted signed pair, and the derived HLL on M16's oblique profile: 695 s locally beside three other compiles, so 850 s with the same margin. Refresh from complete CI timing artifacts.",
+      "files": {
+        "tests/python/unit/numerics/test_lib_numerics_faces.py": {
+          "estimated_seconds": 30,
+          "kind": "source_unit"
+        },
+        "tests/python/integration/runtime/test_api_v02_python_faces_native.py": {
+          "estimated_seconds": 1400,
+          "kind": "native_profile",
+          "analogue": "tests/python/integration/runtime/test_api_v02_models_M01_M14.py"
+        },
+        "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py": {
+          "estimated_seconds": 850,
+          "kind": "native_profile",
+          "analogue": "tests/python/integration/runtime/test_api_v02_python_faces_native.py"
+        }
+      }
+    },
+    "rom17_20261029_qualification_receipt": {
+      "basis": "Conservative 600-second scheduling estimate (native tier) for two native receivers: M01 in System (one program DSO and one model DSO, two SSPRK2 steps) and the finite AMR case in AmrSystem (two levels, temporal ratio 2, three steps), each compiled into an isolated cache, bound, run, recorded in one qualification receipt and admitted against the cohort of the installation, re-proved against its retained wheel. The complete local file run in a CI-identical installed Dim=2 Kokkos Serial prefix took 285.2 seconds (two tests) on a 4-core container; this is not a GitHub CI per-file timing. Existing weights, shards and watchdogs are unchanged; replace from a complete CI per-file receipt.",
+      "estimated_seconds": 600,
+      "files": [
+        "tests/python/integration/runtime/test_qualification_receipt_native.py"
+      ],
+      "source_sha256": "5972a3f0f749cc623130b8a48deb9525d7497e1f09d41b62cebbcd0f89ac36e6"
+    },
+    "b03_f4_depth160_observation": {
+      "pull_request": 703,
+      "source_sha": "f9d751ed9045aff40a667771b072d45360757702",
+      "review": "https://github.com/wolf75222/PoPS/pull/703#pullrequestreview-5710009090",
+      "ci_reference": {
+        "run": 38840872542,
+        "job": 116783025229,
+        "source_sha": "b6e64c1d23f5c0565c41674d262ca26b401e8339",
+        "seconds_to_banner_recursion_error": 1106.6
+      },
+      "basis": "Before #703 the file stopped at the debug-banner RecursionError, so its 900 s estimate never covered the whole case. The review's container ran the file to completion at f9d751e in 1936 s (one core, peak RSS 7.39 GB) and reached the same banner point at the base in 1242 s, against 1106.6 s on the b6 CI runner: that container is about 1.11 times slower, so the CI cost is about 1745 s. The weight takes the measured 1936 s, rounded up to 10 s, which also covers a runner up to 11 percent slower than the b6 one. It stays at or below the 2100 s ordinary budget, so selected_budget keeps 45 minutes. No deadline, watchdog, threshold or test selection changes; replace from a complete CI per-file timing artifact.",
+      "observed_seconds": {
+        "review_container_f9d751e": 1936,
+        "ci_estimate": 1745
+      },
+      "weights_seconds": {
+        "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940
       }
     }
   },
@@ -8168,7 +8257,7 @@
   "tests/python/integration/runtime/test_finite_iteration_ad_v14_native.py": 1200,
   "tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py": 600,
   "tests/python/integration/runtime/test_finite_m09_runtime.py": 600,
-  "tests/python/integration/runtime/test_finite_structural_depth_native.py": 900,
+  "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940,
   "tests/python/integration/runtime/test_generic_physical_maps.py": 600.0,
   "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": 600,
   "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": 1200,
@@ -9036,7 +9125,7 @@
   "tests/python/unit/time/test_ledger_compositions_v15.py": 120,
   "tests/python/unit/time/test_ledger_provenance_v15.py": 60,
   "tests/python/unit/time/test_lib_time_exact_coefficients.py": 1.0,
-  "tests/python/unit/time/test_local_transform.py": 30,
+  "tests/python/unit/time/test_local_transform.py": 40,
   "tests/python/unit/time/test_localized_event_v14.py": 120,
   "tests/python/unit/time/test_method_tableaux.py": 1.0,
   "tests/python/unit/time/test_mpi_restart_fixture_contracts.py": 5,
@@ -9144,5 +9233,11 @@
   "tests/python/integration/runtime/test_api_v02_computed_frontier_clipping_native.py": 1200,
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
-  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10
+  "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
+  "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": 60,
+  "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300,
+  "tests/python/unit/numerics/test_lib_numerics_faces.py": 30,
+  "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 1400,
+  "tests/python/integration/runtime/test_qualification_receipt_native.py": 600,
+  "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py": 850
 }

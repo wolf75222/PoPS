@@ -72,8 +72,9 @@ relabeling authored stage points. The source contracts and native fixtures for
 these routes exist; their reception must be pinned to matching installed native
 artifacts. This document no longer states the superseded one-rank/one-patch bound.
 
-The finite M19 witness and exact current pending/received boundary are tracked in
-[`api_040/m19_product_support_reception.md`](api_040/m19_product_support_reception.md).
+The finite M19 witness and its pending/received boundary were tracked in the reception
+record `api_040/m19_product_support_reception.md`, which left the code tree with the other
+review artifacts; it is kept under the same path in the [review archive](review_archive.md).
 
 ## Qualification ledger
 

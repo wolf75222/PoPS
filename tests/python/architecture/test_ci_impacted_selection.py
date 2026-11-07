@@ -2274,6 +2274,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 60" in native_build_step
     assert native_build_step.count('28m \\') == 3
     assert "POPS_HEAVY_TEST_TU_POOL" not in native_build_step
+    configure_step = mpi_block.split(
+        "- name: Configure + link Python module (MPI + Kokkos Serial)\n", 1
+    )[1].split("\n      - name: Build complete native MPI inventory in three phases\n", 1)[0]
+    # Two heavy -O0 test units at a time fit the runner; the isolated phase keeps one.
+    assert "-DPOPS_HEAVY_TEST_TU_POOL=2" in configure_step
     assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
     assert "ctest --preset ci-mpi -N --show-only=json-v1" in mpi_block
     assert "steps.mpi-test-plan.outputs.cpp_label_ctest_count" in mpi_block
@@ -2658,7 +2663,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
-    assert 'SHARD_TOTAL: "135"' in python_shards_block
+    assert 'SHARD_TOTAL: "137"' in python_shards_block
     assert "strategy.job-total" not in python_shards_block
     for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
         assert "name: ci-plan" in block
