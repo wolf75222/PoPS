@@ -5,10 +5,13 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
+import time
 import tomllib
 import zlib
 
@@ -561,7 +564,10 @@ def test_ci_runs_every_lane_against_master_on_python_plans_and_checks_the_ledger
     assert block.count("scripts/run_mg8_tutorials.py run") == 3
     assert "--phase reference" in block and "--phase candidate" in block
     assert "separate=(--exclude 14)" in block and "--tutorial 14" in block
-    assert "if: matrix.lane == 'mpi-dim2'" in block
+    # This tree's steps run after a step of master that fails or times out.
+    tree = [step for step in re.split(r"\n      - ", block) if "--phase candidate" in step]
+    assert len(tree) == 2 and all("\n        if: ${{ !cancelled()" in step for step in tree)
+    assert "if: ${{ !cancelled() && matrix.lane == 'mpi-dim2' }}" in block
     compare = block.split("- name: Compare with master", 1)[1].split("- name:", 1)[0]
     assert "if: ${{ !cancelled() }}" in compare and "run_mg8_tutorials.py compare" in compare
     # Each watchdog is under the budget of its step, and the job outlasts the sum of the steps.
@@ -585,3 +591,96 @@ def test_ci_runs_every_lane_against_master_on_python_plans_and_checks_the_ledger
     assert "fetch-depth: 0" in changes
     assert "run_mg8_tutorials.py check --source . --verify-commits" in changes
     assert '--check-base "$BASE_SHA"' in changes
+
+
+def _alive(pid: int) -> bool:
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True,
+                           check=False).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+# A launcher whose child runs in a process group of its own, as Open MPI 4 starts its ranks.
+LAUNCHER = """
+import subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], process_group=0)
+open(sys.argv[1], "w").write(str(child.pid))
+time.sleep(600)
+"""
+
+
+def test_the_watchdog_stops_the_launcher_and_every_process_under_it(tmp_path):
+    pid_file = tmp_path / "child.pid"
+    with (tmp_path / "launcher.log").open("w", encoding="utf-8") as stream:
+        result = mg8._launch([sys.executable, "-c", LAUNCHER, str(pid_file)], tmp_path,
+                             dict(os.environ), stream, watchdog=5)
+    assert result == (124, True, 2)
+    assert not _alive(int(pid_file.read_text()))
+
+
+def test_a_tutorial_keeps_its_exit_code_and_reads_a_closed_standard_input(tmp_path):
+    code = "import sys; sys.exit(3 if sys.stdin.read() == '' else 4)"
+    with (tmp_path / "launcher.log").open("w", encoding="utf-8") as stream:
+        assert mg8._launch([sys.executable, "-c", code], tmp_path, dict(os.environ), stream,
+                           watchdog=60) == (3, False, 0)
+
+
+def test_a_failed_tutorial_prints_its_logs_and_stacks_bounded_with_commands_paused(tmp_path,
+                                                                                  capsys):
+    record = tmp_path / "03" / "record"
+    record.mkdir(parents=True)
+    lines = "".join("launcher %d\n" % index for index in range(100))
+    (tmp_path / "03" / "launcher.log").write_text(lines + "::error::not a command\n")
+    mg8.write_json(record / "rank0.json", {
+        "rank": 0, "status": {"ok": False, "exception": "RuntimeError", "message": "boom"},
+        "observations": [], "printed": []})
+    (record / "rank0.log").write_text("rank 0 line\n")
+    (record / "rank1.stack").write_text("".join("frame %d\n" % index for index in range(300)))
+    entry = {
+        "id": "03", "script": "03_mpi_preset_ssprk2.py", "returncode": 124, "timeout": True,
+        "stopped": 3, "launcher_log": "03/launcher.log",
+        "ranks": [{"rank": 0, "record": "03/record/rank0.json", "log": "03/record/rank0.log",
+                   "stack": None},
+                  {"rank": 1, "record": None, "log": None, "stack": "03/record/rank1.stack"}],
+    }
+    mg8._print_failure(tmp_path, entry)
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "::group::03_mpi_preset_ssprk2.py: exit 124 (watchdog), 3 process(es) stopped"
+    assert out[-1] == "::endgroup::"
+    # Workflow commands are paused, with a token of this call, around everything in between.
+    assert re.fullmatch(r"::stop-commands::[0-9a-f]{32}", out[1])
+    assert out[-2] == "::%s::" % out[1].rsplit("::", 1)[1]
+    assert [line for line in out if line.startswith("::")] == [out[0], out[1], out[-2], out[-1]]
+    assert "rank 0: RuntimeError: boom" in out
+    assert "rank 1: no record: the probe did not finish" in out
+    # A log keeps its last lines, the stacks their first ones (the most recent call first).
+    assert "    launcher 61" in out and "    launcher 60" not in out
+    assert "    ::error::not a command" in out and "    rank 0 line" in out
+    assert "    frame 0" in out and "    frame 199" in out and "    frame 200" not in out
+
+
+# A probe stopped by the watchdog, waiting in a function whose name its stacks must show.
+STOPPED = """
+import importlib.util, pathlib, sys, time
+spec = importlib.util.spec_from_file_location("mg8", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module._dump_stacks_on_stop(pathlib.Path(sys.argv[2]))
+pathlib.Path(sys.argv[3]).write_text("ready")
+def waiting_for_the_watchdog():
+    time.sleep(600)
+waiting_for_the_watchdog()
+"""
+
+
+def test_a_stopped_probe_writes_its_python_stacks_then_dies_of_sigterm(tmp_path):
+    stack, ready = tmp_path / "rank0.stack", tmp_path / "ready"
+    process = subprocess.Popen([sys.executable, "-c", STOPPED, str(SCRIPT), str(stack),
+                                str(ready)])
+    deadline = time.monotonic() + 60
+    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert ready.exists()
+    assert mg8._stop(process) == 1
+    assert process.returncode == -signal.SIGTERM
+    text = stack.read_text(encoding="utf-8")
+    assert "(most recent call first):" in text and " in waiting_for_the_watchdog" in text

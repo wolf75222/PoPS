@@ -239,7 +239,15 @@ Each run step has a budget and each tutorial a watchdog under it (`--watchdog`),
 is written after every tutorial. Tutorial 14 runs to t = 8 on two ranks and this tree takes about
 four times master's time on it (ROM-105), so it runs in a step of its own (`--exclude 14`, then
 `--tutorial 14`). The comparison runs after a step that failed or timed out, so its summary names
-any tutorial that did not finish, and the job's limit covers the sum of its steps.
+any tutorial that did not finish, and the job's limit covers the sum of its steps. This tree's steps
+run after a step of master that failed or timed out too, so that a failure of master's run does not
+hide this tree's results. A tutorial runs with its standard input closed. When it outlives its
+watchdog, the runner sends SIGTERM, then SIGKILL, to its launcher and to every process under it:
+Open MPI 4 starts each rank in a process group of its own, and killing `mpiexec` alone would leave
+the ranks running on into the next tutorials. On SIGTERM, the probe of each rank first writes the
+Python stack of each of its threads (`faulthandler`). A tutorial that fails prints, in the job log,
+the verdict of each rank, those stacks and the end of its logs, with workflow commands paused: the
+job log is readable wherever the published run is not.
 
 String arrays of ParaView outputs are compared, except `pops_output_manifest`, a JSON manifest of
 versioned identities. The JIT flags differ between master (`-O3 -DNDEBUG`) and this tree

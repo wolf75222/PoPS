@@ -7,7 +7,10 @@ pinned environment.  A probe inside the tutorial process wraps ``pops.run``: aft
 reads the clock, the hierarchy and every state level through the public methods that the
 tutorials themselves call, and saves the arrays with their SHA-256.  The tutorial's own printed
 lines, the console-monitor lines and every file that it writes are recorded as well.  The script
-of the tutorial is never edited and its return code is the verdict of its own assertions.
+of the tutorial is never edited and its return code is the verdict of its own assertions.  A
+tutorial runs with its standard input closed; when it outlives its watchdog, it is stopped with
+every process under it, MPI ranks included, each probe first writing its Python stacks, and a
+tutorial that fails prints its logs and those stacks.
 
 ``compare`` checks a candidate run against a reference run of ``master`` made on the same
 machine: return codes, every observation bitwise, the printed and monitor lines exactly, and the
@@ -33,6 +36,7 @@ import argparse
 import base64
 import builtins
 from collections.abc import Iterable, Mapping, Sequence
+import faulthandler
 import fnmatch
 import hashlib
 import io
@@ -42,7 +46,9 @@ from pathlib import Path
 import platform
 import re
 import runpy
+import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -87,6 +93,12 @@ INHERITED_ENVIRONMENT = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "T
 INHERITED_PREFIXES = ("OMPI_", "OPAL_", "PRTE_", "PMIX_", "HYDRA_", "MPICH_", "I_MPI_")
 RANK_VARIABLES = ("OMPI_COMM_WORLD_RANK", "PMIX_RANK", "PMI_RANK", "SLURM_PROCID")
 MATPLOTLIBRC = "backend: Agg\nsvg.hashsalt: pops-mg8-master-tutorials\n"
+# Seconds between SIGTERM and SIGKILL for the processes of a tutorial that the runner stops.
+STOP_GRACE = 10.0
+# Lines of each log of a failed tutorial that the runner prints (its last ones), and of each
+# rank's Python stacks (their first ones: the most recent call comes first).
+FAILURE_LOG_LINES = 40
+STACK_LINES = 200
 
 
 class ContractError(RuntimeError):
@@ -429,6 +441,139 @@ def _native_identity(python: str, environment: Mapping[str, str], cwd: Path) -> 
     return {**json.loads(lines[-1]), "numpy_runtime": "\n".join(lines[:-1])}
 
 
+def _process_table() -> list[tuple[int, int, str]]:
+    """Every process as (pid, parent pid, state), from one POSIX ``ps`` listing."""
+    listing = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "stat="],
+                             capture_output=True, text=True, check=False).stdout
+    table = []
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[0].isdigit() and fields[1].isdigit():
+            table.append((int(fields[0]), int(fields[1]), fields[2]))
+    return table
+
+
+def _descendants(root: int) -> list[int]:
+    children: dict[int, list[int]] = {}
+    for pid, parent, _state in _process_table():
+        children.setdefault(parent, []).append(pid)
+    found, pending = [], [root]
+    while pending:
+        for child in children.get(pending.pop(), ()):
+            found.append(child)
+            pending.append(child)
+    return found
+
+
+def _running(pids: Iterable[int]) -> set[int]:
+    """The processes among ``pids`` that still run (a zombie has finished)."""
+    wanted = set(pids)
+    return {pid for pid, _parent, state in _process_table()
+            if pid in wanted and not state.startswith("Z")}
+
+
+def _stop(process: subprocess.Popen[Any]) -> int:
+    """Stop a tutorial's launcher and every process under it; return how many were running.
+
+    Open MPI 4 starts each rank in a process group of its own, and killing the launcher alone,
+    as ``subprocess.run`` does at its timeout, leaves the ranks running on into the next
+    tutorials.  The processes under the launcher are listed while it still runs; all of them get
+    SIGTERM, on which each probe writes its Python stacks (``_dump_stacks_on_stop``), then
+    SIGKILL after STOP_GRACE seconds.  The launcher is reaped last, so that its pid cannot be
+    reused while the others are signalled.
+    """
+    running = _running([process.pid, *_descendants(process.pid)])
+    count = len(running)
+    for signum in (signal.SIGTERM, signal.SIGKILL):
+        for pid in running:
+            try:
+                os.kill(pid, signum)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + STOP_GRACE
+        while running and time.monotonic() < deadline:
+            time.sleep(0.05)
+            running = _running(running)
+        if not running:
+            break
+    process.wait()
+    return count
+
+
+def _launch(command: Sequence[str], cwd: Path, environment: Mapping[str, str], stream: Any,
+            watchdog: float) -> tuple[int, bool, int]:
+    """Run one tutorial; return its exit code, whether its watchdog stopped it and how many
+    processes the runner stopped."""
+    process = subprocess.Popen(list(command), cwd=cwd, env=dict(environment),
+                               stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT)
+    try:
+        return process.wait(timeout=watchdog), False, 0
+    except subprocess.TimeoutExpired:
+        return 124, True, _stop(process)
+    except BaseException:
+        _stop(process)
+        raise
+
+
+def _dump_stacks_on_stop(path: Path) -> None:
+    """Write the stack of every Python thread to ``path`` on SIGTERM, then die of the signal.
+
+    The probe calls it first, so that a tutorial stopped by its watchdog says where each of its
+    processes was, even inside MPI or at the exit of the interpreter.  faulthandler keeps the
+    file open.
+    """
+    faulthandler.register(signal.SIGTERM, file=path.open("w", encoding="utf-8"),
+                          all_threads=True, chain=True)
+
+
+def _lines(path: Path, count: int, *, first: bool = False) -> list[str]:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        return ["(%s)" % error]
+    return lines[:count] if first else lines[-count:]
+
+
+def _print_failure(output: Path, entry: Mapping[str, Any]) -> None:
+    """Print what a failed tutorial left: the run is an artifact, the job log is always at hand.
+
+    Workflow commands are paused around it, since the runner reads one even in an indented line;
+    each line of a log is indented to set it apart.
+    """
+    token = secrets.token_hex(16)
+    print("::group::%s: exit %d%s, %d process(es) stopped" % (
+        entry["script"], entry["returncode"], " (watchdog)" if entry["timeout"] else "",
+        entry["stopped"]))
+    print("::stop-commands::%s" % token)
+    stacks = []
+    logs = [(entry["launcher_log"], "launcher")]
+    for rank in entry["ranks"]:
+        verdict = "no record: the probe did not finish"
+        if rank["record"]:
+            try:
+                status = read_json(output / rank["record"])["status"]
+            except (OSError, ValueError, KeyError) as error:
+                verdict = "unreadable record (%s)" % error
+            else:
+                verdict = "ok" if status["ok"] else "%s: %s" % (
+                    status.get("exception", "failure"), str(status.get("message", ""))[:300])
+        print("rank %d: %s" % (rank["rank"], verdict))
+        if rank.get("stack"):
+            stacks.append((rank["stack"], "rank %d" % rank["rank"]))
+        if rank["log"]:
+            logs.append((rank["log"], "rank %d" % rank["rank"]))
+    for stack, name in stacks:
+        print("%s Python stacks at SIGTERM, %s (first %d lines):" % (name, stack, STACK_LINES))
+        for line in _lines(output / stack, STACK_LINES, first=True):
+            print("    " + line)
+    for log, name in logs:
+        print("%s log, %s (last %d lines):" % (name, log, FAILURE_LOG_LINES))
+        for line in _lines(output / log, FAILURE_LOG_LINES):
+            print("    " + line)
+    print("::%s::" % token)
+    print("::endgroup::", flush=True)
+
+
 def run_tutorials(args: argparse.Namespace) -> int:
     contract = load_contract(Path(args.contract))
     source = Path(args.source).resolve()
@@ -487,15 +632,8 @@ def run_tutorials(args: argparse.Namespace) -> int:
             command = [args.mpiexec, "-n", str(lane["ranks"]), *args.mpiexec_arg, *command]
         launcher_log = work / "launcher.log"
         started = time.monotonic()
-        timeout = False
         with launcher_log.open("w", encoding="utf-8") as stream:
-            try:
-                completed = subprocess.run(command, cwd=copy, env=environment, stdout=stream,
-                                           stderr=subprocess.STDOUT, timeout=args.watchdog,
-                                           check=False)
-                code = completed.returncode
-            except subprocess.TimeoutExpired:
-                code, timeout = 124, True
+            code, timeout, stopped = _launch(command, copy, environment, stream, args.watchdog)
         seconds = time.monotonic() - started
         after = _inventory(copy)
         written = {path: meta for path, meta in after.items() if pristine.get(path) != meta}
@@ -504,18 +642,24 @@ def run_tutorials(args: argparse.Namespace) -> int:
         for rank in range(lane["ranks"]):
             rank_record = record / ("rank%d.json" % rank)
             rank_log = record / ("rank%d.log" % rank)
+            rank_stack = record / ("rank%d.stack" % rank)
+            if rank_stack.is_file() and not rank_stack.stat().st_size:
+                rank_stack.unlink()  # no SIGTERM came: nothing was written
             ranks.append({
                 "rank": rank,
                 "record": rank_record.relative_to(output).as_posix()
                 if rank_record.is_file() else None,
                 "log": rank_log.relative_to(output).as_posix() if rank_log.is_file() else None,
                 "log_sha256": sha256_file(rank_log) if rank_log.is_file() else None,
+                "stack": rank_stack.relative_to(output).as_posix()
+                if rank_stack.is_file() else None,
             })
         entry = {
             "id": row["id"], "script": row["script"],
             "script_sha256": sha256_file(tutorial_root / row["script"]),
             "command": command, "ranks": ranks, "returncode": code, "timeout": timeout,
-            "seconds": round(seconds, 3), "work": work.relative_to(output).as_posix(),
+            "stopped": stopped, "seconds": round(seconds, 3),
+            "work": work.relative_to(output).as_posix(),
             "launcher_log": launcher_log.relative_to(output).as_posix(),
             "launcher_log_sha256": sha256_file(launcher_log),
             "written": written, "removed": removed,
@@ -524,6 +668,8 @@ def run_tutorials(args: argparse.Namespace) -> int:
         write_json(report_path, report)
         print(json.dumps({key: entry[key] for key in ("id", "returncode", "timeout", "seconds")}),
               flush=True)
+        if code != 0:
+            _print_failure(output, entry)
         if not args.keep_caches:
             shutil.rmtree(work / "cache", ignore_errors=True)
     return int(any(entry["returncode"] for entry in report["tutorials"]))
@@ -625,6 +771,7 @@ def probe(args: argparse.Namespace) -> int:
     os.dup2(log, 1)
     os.dup2(log, 2)
     os.close(log)
+    _dump_stacks_on_stop(record / ("rank%d.stack" % rank))
     arrays = record / ("rank%d" % rank)
     arrays.mkdir(exist_ok=True)
     observations: list[dict[str, Any]] = []

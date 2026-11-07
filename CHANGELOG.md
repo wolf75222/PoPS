@@ -268,6 +268,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Run master's 17 scalar-advection tutorials in CI (`mg8-tutorials`): each runs from master
   bb9aea0c and from this tree on the same runner, and `scripts/run_mg8_tutorials.py` compares
   every result bitwise, on every plan that needs the Python lane.
+  A tutorial that outlives its watchdog is stopped with every process under it, MPI ranks
+  included, each rank first writing its Python stacks; a tutorial that fails prints them and the
+  end of its logs in the job log, and this tree's steps run even when master's step fails or
+  times out.
   `tests/gates/mg8_master_tutorials.toml` records each divergence by its exact checks, with its
   causes, their issues and commits and its attribution; only results can be recorded, a failure
   always fails the job, and `run_mg8_tutorials.py check --check-base` fails on every event when
