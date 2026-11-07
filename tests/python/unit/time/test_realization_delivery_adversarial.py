@@ -148,10 +148,10 @@ def test_independent_deliveries_are_counted_without_enumerating_alternatives():
                                 term='composed_use', missing='missing', duplicate='duplicate')
 
 
-def test_delivered_frontiers_lists_one_row_per_success_path_for_the_provenance_validators():
-    # MG7: the provenance validators (current dependencies, ledger provenance) compare these
-    # rows, so they follow the 2**k success paths of k independent choices, without a budget;
-    # N7 lot 3 (ROM-88) moves them onto the decision diagram. require_single_delivery does not.
+def test_delivered_frontiers_lists_one_row_per_success_path_for_tests_only():
+    # delivered_frontiers lists the 2**k success paths of k independent choices. Only tests
+    # read it: the provenance validators compare queries on DeliveryDiagrams (N7 lot 3, MG7),
+    # and coverage is require_single_delivery; neither enumerates.
     p, q, delivery, check = fixture()
     def tracked(b):
         return delivery(b, q.n)
@@ -159,6 +159,182 @@ def test_delivered_frontiers_lists_one_row_per_success_path_for_the_provenance_v
     rows = check(p.value('composed', sum(branches[1:], branches[0])), with_choices=True)
     assert len(rows) == len({choices for choices, _ in rows}) == 2**10
     assert all(len(frontier) == 10 for _, frontier in rows)
+
+
+def test_delivery_diagrams_compare_forty_independent_choices_without_listing_paths():
+    # MG7, B4: 2**40 success paths. Each value keeps its own diagram, a condition is a boolean
+    # diagram, and two queries are compared by walking their diagrams together.
+    from pops.codegen.typed_delivery import DeliveryDiagrams
+    p, q, delivery, check = fixture()
+    owned = []
+    def tracked(b):
+        owned.append(delivery(b, q.n))
+        return owned[-1]
+    branches = [p.branch(p.requested_dt() > float(i), tracked, tracked) for i in range(40)]
+    root = p.value('composed', sum(branches[1:], branches[0]))
+    matches = lambda node: any(node is x for x in owned)
+    session = DeliveryDiagrams()
+    left, right = session.frontier(root, matches), session.frontier(root, matches)
+    references = left.references()
+    assert left.success is session.always and len(references) == 80
+    assert session.same(session.always, left, right) is None
+    guards = {reference: left.guard_of(reference) for reference in references}
+    assert all(guard is not session.always and guard is not session.never for guard in guards.values())
+    first, last = sorted(references, key=lambda reference: reference.value_id)[::79]
+    assert session.meets(guards[first], guards[last])
+    # The two arms of one choice exclude each other.
+    arms = sorted(references, key=lambda reference: reference.value_id)[:2]
+    assert not session.meets(guards[arms[0]], guards[arms[1]])
+    # One choice that delivers another evaluation is found under its own condition only.
+    swapped = list(branches)
+    swapped[17] = p.branch(p.requested_dt() > 17., tracked, tracked)
+    other = session.frontier(p.value('swapped', sum(swapped[1:], swapped[0])), matches)
+    assert session.same(session.always, left, other) == 'evaluations'
+    unchanged = session.both(guards[arms[0]], session.always)
+    assert session.same(unchanged, left, left) is None
+
+
+def test_a_reduce_in_an_element_names_its_zero_iteration_fold():
+    # O5 of the N7 lot 2 review: a reduce is a fold over the size of its set, which may be
+    # zero, and its zero-iteration result delivers nothing. The refusal names that fold.
+    from pops._ir.refusals import CoverageNotExact
+    from pops.codegen.typed_delivery import require_single_delivery
+    p = Program('reduce_in_an_element')
+    d = p.range_set(4, capacity=8, ownership='replicated')
+    owned = []
+    def body(g, i):
+        owned.append(g.float64(g.index_value(i)) * 2.)
+        return owned[-1]
+    arr = p.map(d, body)
+    e = p.range_set(3, capacity=8, ownership='replicated')
+    root = p.map(d, lambda b, i: b.reduce(b.map(e, lambda c, j: c.at(arr, i)), b.float64(0.),
+                                          lambda c, s, x: s + x, order='ascending'))
+    with pytest.raises(CoverageNotExact) as refused:
+        require_single_delivery(root, lambda node: any(node is x for x in owned), term='T',
+                                missing='missing', duplicate='duplicate')
+    message = str(refused.value)
+    assert refused.value.count == 0 and 'term T is delivered 0 times' in message
+    assert 'structured_fold#' in message and 'may run zero times' in message
+    assert 'the size of a set, as in a reduce' in message and 'delivers nothing' in message
+    # A fold whose count is a literal has no zero-iteration alternative to name.
+    p = Program('literal_fold_missing')
+    q = typed_state(p, 'material', state_name='U')
+    q.n
+    with pytest.raises(CoverageNotExact) as refused:
+        require_single_delivery(p.fold(q.n, 3, lambda b, c, k: c), lambda node: False, term='T',
+                                missing='missing', duplicate='duplicate')
+    assert 'may run zero times' not in str(refused.value)
+
+
+def _parity_swaps(p, old, state, count, swap):
+    """``count`` independent conditions, each swapping the two records of ``state``.
+
+    The record at one position is chosen by the parity of the conditions that hold: its
+    decision diagram has 2*count nodes and 2**count success paths, the case where a validator
+    that lists paths and compares them pairwise (b6, N7 lot 2) runs in 4**count.
+    """
+    for stage in range(count):
+        state = p.branch(old['time'] > float(stage),
+                         lambda g, s=state, stage=stage: swap(g, s, stage),
+                         lambda g, s=state: g.product(**{key: s[key] for key in ('q1', 'z1', 'q2', 'z2')}))
+    return state
+
+
+def test_current_dependency_validates_forty_independent_swaps_without_listing_paths():
+    # MG7, B4: the current record and its dependency are chosen by the parity of forty
+    # independent conditions, 2**40 success paths; the validator compares them on the shared
+    # diagram. The lot 2 validator already took 17 s at ten conditions and 198 s at twelve.
+    from pops.continuations import Candidate, ContinuationSchema
+    from pops.current_dependencies import CurrentDependency
+    from pops.graph_functions import graph
+    from pops.ledger_provenance import validate_program_contracts
+    from pops.time.variant_types import Float64, Product
+
+    @graph(inputs=Product(q=Float64), output=Float64)
+    def twice(p, a):
+        return 2*a['q']
+
+    def build(crossed):
+        p = Program('forty_current_swaps')
+        initial = p.product(q=p.float64(1), z=p.float64(2), history=p.float64(1),
+                            time=p.float64(0), step=p.int64(0))
+        requirement = CurrentDependency(twice, target=('z',), inputs={'q': ('q',)})
+        schema = ContinuationSchema(initial, time=('time',), step=('step',),
+                                    current_dependencies=(requirement,))
+        base = p.continuation_open(initial, schema)
+        old = p.continuation_read(base)
+        a, b = old['q'] + 1., old['q'] + 2.
+        state = p.product(q1=a, z1=requirement.evaluate(p, current=p.product(q=a)),
+                          q2=b, z2=requirement.evaluate(p, current=p.product(q=b)))
+        def swap(g, s, stage):
+            # Crossed: one swap exchanges the records but not their dependencies.
+            z1, z2 = (s['z1'], s['z2']) if crossed and stage == 23 else (s['z2'], s['z1'])
+            return g.product(q1=s['q2'], z1=z1, q2=s['q1'], z2=z2)
+        state = _parity_swaps(p, old, state, 40, swap)
+        return p, lambda: Candidate(
+            p, base=base, proposal=p.product(h=p.float64(1)),
+            continuation=p.product(q=state['q1'], z=state['z1'], history=old['history'],
+                                   time=old['time']+1, step=old['step']+1),
+            increment=p.product(), observations=p.product(), checks=p.product())
+
+    p, freeze = build(False)
+    freeze()
+    validate_program_contracts(p)
+    p, freeze = build(True)
+    with pytest.raises(ValueError, match='current dependency input is stale'):
+        freeze()
+
+
+def test_ledger_provenance_validates_forty_independent_swaps_without_listing_paths():
+    # MG7, B4: the retained value and its packed ledger are chosen by the parity of forty
+    # independent conditions; the packet obligations and the recipient checks read the
+    # conditions as diagrams.
+    from pops.continuations import Candidate, ContinuationSchema
+    from pops.contributions import Contribution, Delivery, Increment
+    from pops.finite_contributions import FiniteInterval, LinearMap
+    from pops.graph_functions import graph
+    from pops.ledger_provenance import validate_program_contracts
+    from pops.time.variant_types import Product, type_of
+
+    def build(crossed):
+        p = Program('forty_ledger_swaps')
+        initial = p.product(q=p.float64(0), history=p.float64(0), time=p.float64(0), step=p.int64(0))
+        schema = ContinuationSchema(initial, time=('time',), step=('step',))
+        base = p.continuation_open(initial, schema)
+        old = p.continuation_read(base)
+        q = old['q']
+
+        @graph(inputs=Product(value=type_of(q)), output=type_of(q))
+        def identity(g, a):
+            return a['value']
+
+        def increment(delta):
+            action = LinearMap.differential(identity, at=p.product(value=q), wrt='value')
+            c = Contribution('J', p.float64(delta), FiniteInterval(old['time'], old['time']+1, 'clock'))
+            return Increment((c,), (Delivery(c, q, action),))
+
+        first, second = increment(1), increment(2)
+        state = p.product(q1=first.apply(p, q, name='first'), z1=first.pack(p),
+                          q2=second.apply(p, q, name='second'), z2=second.pack(p))
+        def swap(g, s, stage):
+            # Crossed: one swap exchanges the retained values but not their ledgers.
+            z1, z2 = (s['z1'], s['z2']) if crossed and stage == 23 else (s['z2'], s['z1'])
+            return g.product(q1=s['q2'], z1=z1, q2=s['q1'], z2=z2)
+        state = _parity_swaps(p, old, state, 40, swap)
+        proposal = p.product(h=p.float64(1))
+        return p, lambda: Candidate(
+            p, base=base, proposal=proposal,
+            continuation=p.product(q=state['q1'], history=old['history'],
+                                   time=old['time']+proposal['h'], step=old['step']+1),
+            increment=state['z1'], observations=p.product(), checks=p.product())
+
+    p, freeze = build(False)
+    candidate = freeze()
+    validate_program_contracts(p)
+    assert candidate.attrs['increment_proof_v15']['status'] == 'bound_ledger'
+    p, freeze = build(True)
+    with pytest.raises(ValueError, match='different ledger'):
+        freeze()
 
 
 def test_unreachable_variant_terminal_cannot_become_an_empty_success_by_pruning():
