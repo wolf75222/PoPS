@@ -166,7 +166,6 @@ struct PreparedAmrLevelEvaluation {
   MultiFab<Dim, MemorySpace> residual;
   std::vector<nd::FaceField<Dim, MemorySpace>> integrated_face_fluxes;
   std::vector<nd::FaceField<Dim, MemorySpace>> face_speed_bounds;
-  mutable MultiFab<Dim, MemorySpace> face_frequency_scratch;
   bool face_speeds_valid = false;
   std::optional<PreparedAmrPathFaceData<Dim, MemorySpace>> path_faces;
 };
@@ -1333,9 +1332,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
                 MultiFab<Dim>(prototype.layout(), prototype.distribution(), prototype.local_rank(),
                               prototype.ncomp(), prototype.ghosts()),
             .integrated_face_fluxes = nd::make_face_flux_workspace(prototype),
-            .face_speed_bounds = nd::make_face_flux_workspace(prototype, 1),
-            .face_frequency_scratch = MultiFab<Dim>(prototype.layout(), prototype.distribution(),
-                                                    prototype.local_rank(), 1, prototype.ghosts())};
+            .face_speed_bounds = nd::make_face_flux_workspace(prototype, 1)};
         if (!path_identity.empty())
           evaluation.path_faces.emplace(
               PreparedAmrPathFaceData<Dim>::prepare(prototype, path_identity));

@@ -922,43 +922,19 @@ class ProgramContext {
                                             field_type& rhs, int rate_id,
                                             std::vector<nd::FaceField<Dim>>& faces,
                                             Real* transport_frequency = nullptr) const {
-    require_rate_identity_(rate_id);
-    count_kernel_();
-    const auto point = boundary_evaluation_point(rate_id);
-    const auto& lane = prepared_execution_lane();
-    if (all_reduce_min(transport_frequency ? 1L : 0L, lane) !=
-        all_reduce_max(transport_frequency ? 1L : 0L, lane))
-      throw std::invalid_argument("transport face-frequency request differs across ranks");
-    auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
-    system_->block_neg_div_flux_into_at_prepared(
-        point, sys_block(program_block), state_value, rhs, boundary->system(),
-        boundary->runtime_block(), boundary->point(), boundary->lane(), boundary->transport());
-    // FaceField owns Fab values with deep-copy semantics: subsequent residual evaluations
-    // cannot overwrite a prior stage's accepted quadrature data.
-    Real local_frequency = Real(0);
-    std::exception_ptr error;
-    try {
-      boundary->transport().with_boundary_scratch(state_value, [&](auto& scratch) {
-        if (transport_frequency)
-          local_frequency = nd::maximum_incident_face_frequency(
-              state_value, scratch.cartesian_operator.face_speeds(), geometry(),
-              scratch.generated_face_frequency);
-        faces = scratch.generated_faces;
-      });
-    } catch (...) {
-      error = std::current_exception();
-    }
-    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && error)
-        std::rethrow_exception(error);
-      throw std::runtime_error("transport face observation failed collectively");
-    }
-    if (transport_frequency) {
-      const Real frequency = static_cast<Real>(all_reduce_max(local_frequency, lane));
-      if (!std::isfinite(frequency) || frequency < Real(0))
-        throw std::runtime_error("transport face frequency is nonfinite or negative");
-      *transport_frequency = frequency;
-    }
+    neg_div_flux_default_observed_into_(program_block, state_value, rhs, rate_id, &faces,
+                                        transport_frequency);
+  }
+
+  /// The same flux-only residual for a Program that reads only the incident-face frequency of its
+  /// exact faces (the stability guard of a riemann.User face): no face carrier is produced.
+  void neg_div_flux_default_with_frequency_into(int program_block, field_type& state_value,
+                                                field_type& rhs, int rate_id,
+                                                Real* transport_frequency) const {
+    if (transport_frequency == nullptr)
+      throw std::invalid_argument("face-frequency residual requires its frequency output");
+    neg_div_flux_default_observed_into_(program_block, state_value, rhs, rate_id, nullptr,
+                                        transport_frequency);
   }
 
   /// A partition guard may be emitted after grouped RHS evaluation, where no
@@ -980,10 +956,9 @@ class ProgramContext {
         std::rethrow_exception(error);
       throw std::runtime_error("transport frequency scratch allocation failed collectively");
     }
-    std::vector<nd::FaceField<Dim>> provisional_faces;
     Real frequency = Real(0);
-    neg_div_flux_default_with_faces_into(program_block, state_value, *provisional, rate_id,
-                                         provisional_faces, &frequency);
+    neg_div_flux_default_with_frequency_into(program_block, state_value, *provisional, rate_id,
+                                             &frequency);
     return frequency;
   }
 
@@ -2733,6 +2708,59 @@ class ProgramContext {
   static void require_rate_identity_(int rate_id) {
     if (rate_id < 0)
       throw std::invalid_argument("ProgramContext rate identity must be non-negative");
+  }
+
+  /// One flux-only residual whose faces are observed: copied into `faces` and/or reduced to their
+  /// incident-face frequency. Like neg_div_flux_default_into, a block that the bound prepared
+  /// group transport can evaluate goes through it, so its scratch, prepared once, is reused by
+  /// every evaluation; any other block prepares its own boundary session.
+  void neg_div_flux_default_observed_into_(int program_block, field_type& state_value,
+                                           field_type& rhs, int rate_id,
+                                           std::vector<nd::FaceField<Dim>>* faces,
+                                           Real* transport_frequency) const {
+    require_rate_identity_(rate_id);
+    count_kernel_();
+    const auto point = boundary_evaluation_point(rate_id);
+    const auto& lane = prepared_execution_lane();
+    if (all_reduce_min(transport_frequency ? 1L : 0L, lane) !=
+        all_reduce_max(transport_frequency ? 1L : 0L, lane))
+      throw std::invalid_argument("transport face-frequency request differs across ranks");
+    const int runtime_block = sys_block(program_block);
+    Real local_frequency = Real(0);
+    if (system_->has_prepared_group_face_observation(runtime_block)) {
+      // FaceField owns Fab values with deep-copy semantics: the retained faces are a detached
+      // copy, which later residual evaluations cannot overwrite.
+      system_->block_rhs_group(point, {runtime_block}, {&state_value}, {&rhs}, {1}, {faces},
+                               {transport_frequency ? &local_frequency : nullptr});
+    } else {
+      auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
+      system_->block_neg_div_flux_into_at_prepared(
+          point, runtime_block, state_value, rhs, boundary->system(), boundary->runtime_block(),
+          boundary->point(), boundary->lane(), boundary->transport());
+      std::exception_ptr error;
+      try {
+        boundary->transport().with_boundary_scratch(state_value, [&](auto& scratch) {
+          if (transport_frequency)
+            local_frequency = nd::maximum_incident_face_frequency(
+                state_value, scratch.cartesian_operator.face_speeds(), geometry());
+          if (faces)
+            *faces = scratch.generated_faces;
+        });
+      } catch (...) {
+        error = std::current_exception();
+      }
+      if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
+        if (lane.size() == 1 && error)
+          std::rethrow_exception(error);
+        throw std::runtime_error("transport face observation failed collectively");
+      }
+    }
+    if (transport_frequency) {
+      const Real frequency = static_cast<Real>(all_reduce_max(local_frequency, lane));
+      if (!std::isfinite(frequency) || frequency < Real(0))
+        throw std::runtime_error("transport face frequency is nonfinite or negative");
+      *transport_frequency = frequency;
+    }
   }
 
   void require_prepared_lane_(const ExecutionLane& lane, const char* operation) const {

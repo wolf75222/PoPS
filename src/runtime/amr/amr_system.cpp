@@ -1665,9 +1665,7 @@ PreparedAmrLevelEvaluation<Dim> make_prepared_level_evaluation_workspace(
       .residual = MultiFab<Dim>(prototype.layout(), prototype.distribution(),
                                 prototype.local_rank(), prototype.ncomp(), prototype.ghosts()),
       .integrated_face_fluxes = nd::make_face_flux_workspace(prototype),
-      .face_speed_bounds = nd::make_face_flux_workspace(prototype, 1),
-      .face_frequency_scratch = MultiFab<Dim>(prototype.layout(), prototype.distribution(),
-                                              prototype.local_rank(), 1, prototype.ghosts())};
+      .face_speed_bounds = nd::make_face_flux_workspace(prototype, 1)};
   evaluation.point.clock.reserve(kPreparedAmrClockIdentityCapacity);
   evaluation.residual.set_val(Real(0));
   for (auto& faces : evaluation.integrated_face_fluxes)
