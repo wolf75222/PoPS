@@ -6629,7 +6629,7 @@
       }
     },
     "ci_20261030_n8_compiled_control": {
-      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 2 compiled-control modules (ROM-89), on the api_v02_20261013 tiers: 30 s for the source-only module, which elaborates M01 a few times and generates its C++ without compiling, as the analogue test_authored_stability_admission.py; 600 s for the Dim2 native module, which compiles three M01 artifacts once per module (the traced route, the b6 reference and Retry(3)) and runs compiled and b6 runs of up to 80 steps, as the analogue test_traced_methods_n8_native.py; since the review of 5ded6fd it also compiles advance_run.hpp once with a fused multiply-add, a few seconds. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session on an otherwise idle machine (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Lot 2 also changes the bytes of the lot 1 unit module, whose receipt in the lot 1 section comes from the same container: back to back there, that module takes 245 s at ba9c86d and 253 s with lot 2, so the container, not lot 2, accounts for most of its gap to the earlier lot 1 receipt, and its 300 s estimate stays. On the integration head of N8 lot 1 (137 shards since #700) the full and partial packs with these two rows still hold 2100 s at most at 137 shards (136 would hold a multi-file shard of 2115 s), so the shard total stays 137. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 2 compiled-control modules (ROM-89), on the api_v02_20261013 tiers: 30 s for the source-only module, which elaborates M01 a few times and generates its C++ without compiling, as the analogue test_authored_stability_admission.py; 600 s for the Dim2 native module, which compiles four M01 artifacts once per module (the traced route and the b6 reference on M01's face, the traced route and Retry(3) on b6's native face, since the merge of #694 and #700) and runs compiled and b6 runs of up to 80 steps, as the analogue test_traced_methods_n8_native.py; since the review of 5ded6fd it also compiles advance_run.hpp once with a fused multiply-add, a few seconds. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session on an otherwise idle machine (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Lot 2 also changes the bytes of the lot 1 unit module, whose receipt in the lot 1 section comes from the same container: back to back there, that module takes 245 s at ba9c86d and 253 s with lot 2, so the container, not lot 2, accounts for most of its gap to the earlier lot 1 receipt, and its 300 s estimate stays. On the integration head of N8 lot 1 (137 shards since #700) the full and partial packs with these two rows still hold 2100 s at most at 137 shards (136 would hold a multi-file shard of 2115 s), so the shard total stays 137. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/integration/runtime/test_compiled_control_n8_native.py": "tests/python/integration/runtime/test_traced_methods_n8_native.py",
         "tests/python/unit/time/test_compiled_control_n8.py": "tests/python/unit/time/test_authored_stability_admission.py"
@@ -6641,8 +6641,8 @@
       "local_receipts": {
         "tests/python/integration/runtime/test_compiled_control_n8_native.py": {
           "cases": 9,
-          "phase_seconds": 133.46,
-          "session_seconds": 134.7
+          "phase_seconds": 226.21,
+          "session_seconds": 227.39
         },
         "tests/python/unit/time/test_compiled_control_n8.py": {
           "cases": 24,
@@ -6651,7 +6651,7 @@
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_compiled_control_n8_native.py": "e43df878ebbb0fc346db4b7b33829206e67f50d249cbda2d3ec05f61a8b470c4",
+        "tests/python/integration/runtime/test_compiled_control_n8_native.py": "23938764040aa52eeb64f7a0201a71d5e7cc233b3594defa2fe9a05b209e8bd5",
         "tests/python/unit/time/test_compiled_control_n8.py": "463329f2ed93ac72395c4326ae50abe37fc45da2f63d1b0214f7010a1fa77d83"
       }
     },

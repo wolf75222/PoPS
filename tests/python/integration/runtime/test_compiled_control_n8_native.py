@@ -7,9 +7,13 @@ frontier 0.25 that 80 steps of 0.05/16 reach only through the rounding that mast
 absorbs (a cap alone takes 81), and over two runs whose fixed-step segment continues. No Python
 runs during the native call (CF9). A budget ends a run with ``BudgetExhausted`` and the origin of
 the budget, and a candidate that ``finite()`` rejects is attempted again with the same proposal,
-the accepted state untouched, until ``Retry.max_attempts`` attempts are spent.
+the accepted state untouched, until ``Retry.max_attempts`` attempts are spent: those runs take
+M01 on b6's native Rusanov face, since M01's default face fails such a step in the trial, which
+leaves the run as its native error. The attempt duration is master's fixed step, also with the
+header compiled with a fused multiply-add.
 """
 import ctypes
+import functools
 import math
 import platform
 import random
@@ -47,11 +51,11 @@ def _retry(attempts):
     return route
 
 
-def _artifact(world, monkeypatch, route, label):
+def _artifact(world, monkeypatch, route, label, build=early.build_m01):
     with monkeypatch.context() as patch:
         if route is not None:
             patch.setattr(early, "_traced_ssprk2", route)
-        spec = collective_call(world, early.build_m01)
+        spec = collective_call(world, build)
     plan = collective_call(world, lambda: pops.resolve(pops.validate(spec.case),
                                                        layout=spec.layout))
     artifact = compile_profile_plan_once(world, plan, route="N8 lot 2 " + label,
@@ -129,10 +133,15 @@ def artifacts(tmp_path_factory, native_cxx, kokkos_root):
 
 
 @pytest.fixture(scope="module")
-def retried(artifacts):
-    """M01 elaborated with Retry(max_attempts=3), in the cache of the module."""
+def native_face(artifacts):
+    """M01 on b6's native Rusanov face, elaborated with the default Retry() and with
+    Retry(max_attempts=3), by attempt budget, in the cache of the module. That face bounds no step
+    by itself, unlike M01's default face pops.lib.numerics.rusanov, so an overflowing step reaches
+    the candidate."""
+    build = functools.partial(early.build_m01, scheme=early.native_rusanov)
     with pytest.MonkeyPatch.context() as patch:
-        return _artifact(artifacts[0], patch, _retry(3), "Retry(3)")
+        return {1: _artifact(artifacts[0], patch, None, "native face", build),
+                3: _artifact(artifacts[0], patch, _retry(3), "native face Retry(3)", build)}
 
 
 def test_the_compiled_run_lands_like_the_b6_run_loop(artifacts, record_property):
@@ -237,15 +246,16 @@ def test_max_steps_ends_the_run_with_the_budget_of_the_run(artifacts):
 
 @pytest.mark.parametrize("attempts", [1, 3])
 def test_a_rejected_candidate_keeps_its_proposal_and_the_accepted_state(
-        attempts, artifacts, request):
+        attempts, artifacts, native_face):
     world = artifacts[0]
-    spec, artifact = artifacts[1] if attempts == 1 else request.getfixturevalue("retried")
+    spec, artifact = native_face[attempts]
     runtime = _bind(world, spec, artifact)
     simulation = collective_call(world, lambda: Simulation(runtime))
     assert simulation.control.max_attempts == attempts
     before = _state(world, runtime)
-    # A step of 1e200 keeps both rates of SSPRK2 finite, which its physical core checks, and
-    # overflows the candidate, U1 + dt*k1 of about 1e400: finite() rejects every attempt.
+    # On the native face, a step of 1e200 keeps both rates of SSPRK2 finite, which its physical
+    # core checks, and overflows the candidate, U1 + dt*k1 of about 1e400: finite() rejects every
+    # attempt.
     huge = Proposal(1e200)
 
     def rejected():
@@ -282,9 +292,10 @@ def test_a_failed_trial_leaves_the_run_with_its_native_error(artifacts):
     runtime = _bind(world, spec, traced)
     simulation = collective_call(world, lambda: Simulation(runtime))
     before = _state(world, runtime)
-    # A step of 1e308 makes the second rate of SSPRK2 non-finite, which its physical core refuses.
+    # M01's face, pops.lib.numerics.rusanov, bounds the step by its Courant number: a step of 1e308
+    # fails the trial at the first stage that reads the face, before any candidate exists.
     with collective_check(world):
-        with pytest.raises(RuntimeError, match="non-finite all-component result"):
+        with pytest.raises(RuntimeError, match="user_face_numerical_stability"):
             simulation.run(1e308, proposal=Proposal(1e308))
         assert runtime.time() == 0.0 and runtime.macro_step() == 0
         assert simulation._continuation.proposal.dt == 1e308
