@@ -170,3 +170,45 @@ def test_parameter_partitions_share_one_inventory_and_count_cases_per_function()
                     {"first": ("m.py::test_f[1]",), "second": ()}):
         with pytest.raises(ValueError, match="nonempty and disjoint"):
             mpi_partition_units.parameter_partitions(invalid)
+
+
+@pytest.mark.parametrize("ranks", (1, 2))
+def test_ranked_partition_runs_only_its_units_and_refuses_a_foreign_receipt(tmp_path, monkeypatch, ranks):
+    import pops
+    import pytest as pytest_module
+    from tests.python.support import mpi_pytest_entrypoint as entrypoint
+
+    receiver = "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py"
+    inventory = [receiver + "::test_native_mprk22_network[0.0-False]",
+                 receiver + "::test_native_mprk22_network[1.5-True]"]
+    world = SimpleNamespace(size=ranks, rank=0, collective_prepare=lambda function: function(),
+                            allgather_bytes=lambda frame: [frame] * ranks,
+                            agree_control_bytes=lambda tag, frame: True)
+    native = SimpleNamespace(mpi_world=lambda: world)
+    monkeypatch.setitem(sys.modules, "pops._pops", native)
+    monkeypatch.setattr(pops, "_pops", native, raising=False)
+    monkeypatch.setenv("POPS_CI_MPI_ENTRYPOINT_RECEIPTS", str(tmp_path))
+    monkeypatch.setenv(mpi_partition_units.ENVIRONMENT,
+                       mpi_partition_units.encode("empty_circulating", inventory, inventory[1:]))
+    receipt = {"nodes": inventory[1:]}
+    calls = []
+
+    def main(arguments):
+        calls.append(arguments)
+        xml = Path(next(arg for arg in arguments if arg.startswith("--junitxml="))[len("--junitxml="):])
+        root = ET.Element("testsuite")
+        for node in receipt["nodes"]:
+            owner, name = node.split("::", 1)
+            ET.SubElement(root, "testcase", name=name, classname=owner.removesuffix(".py").replace("/", "."))
+        ET.ElementTree(root).write(xml)
+        return 0
+
+    monkeypatch.setattr(pytest_module, "main", main)
+    assert entrypoint.run(receiver, expected_cases=2, ranks=ranks) == 0
+    assert calls[-1][calls[-1].index("-p") + 1] == "tests.python.support.mpi_partition_units"
+    assert (tmp_path / ("test_api_v02_coupled_methods_native.empty_circulating.np%d" % ranks) / "rank0.xml").is_file()
+    # Same function and count, but the other partition's case: the receipt is not this partition's.
+    monkeypatch.setenv("POPS_CI_MPI_ENTRYPOINT_RECEIPTS", str(tmp_path / "foreign"))
+    receipt["nodes"] = inventory[:1]
+    with pytest.raises(RuntimeError, match="partition receipt differs"):
+        entrypoint.run(receiver, expected_cases=2, ranks=ranks)

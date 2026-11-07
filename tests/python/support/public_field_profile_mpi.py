@@ -1,8 +1,8 @@
 """Exact frozen Field fixture groups for independently bounded MPI1/MPI2 worlds.
 
 ``amr_original`` and ``spatial_interaction`` run as declared partitions sized by measured cost,
-so one 14-minute child watchdog covers one partition (CI run 41037321460: each whole group
-stopped at that watchdog).
+so one 14-minute child watchdog covers one partition (CI run 41037321460: the saved-restart
+partition of ``amr_original`` and the whole ``spatial_interaction`` group stopped there).
 """
 from tests.python.support.mpi_fixture_driver import run_fixture_world
 from tests.python.support.mpi_partition_units import parameter_partitions
