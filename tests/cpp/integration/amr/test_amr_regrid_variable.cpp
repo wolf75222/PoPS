@@ -89,13 +89,14 @@ std::vector<double> energy_bump(const pops::Extent<Dim>& shape) {
 }
 
 template <int Dim>
-std::unique_ptr<pops::AmrSystem<Dim>> make_selector(const std::string& variable,
-                                                    int tag_buffer = 0) {
+std::unique_ptr<pops::AmrSystem<Dim>> make_selector(const std::string& variable, int tag_buffer = 0,
+                                                    std::uint32_t tag_selection = 1) {
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 32;
   for (int axis = 0; axis < Dim; ++axis)
     config.tag_selection_buffer[axis] = tag_buffer;
+  config.tag_selection_contract_version = tag_selection;
   config.regrid_every = 1;
   auto system = std::make_unique<pops::AmrSystem<Dim>>(config);
   pops::test::install_amr_runtime_authority(*system, "test.amr-regrid-variable/runtime@1");
@@ -112,6 +113,19 @@ std::unique_ptr<pops::AmrSystem<Dim>> make_selector(const std::string& variable,
 template <int Dim>
 std::vector<pops::AmrPatch<Dim>> run_selector(const std::string& variable) {
   return make_selector<Dim>(variable)->patch_boxes();
+}
+
+template <int Dim>
+std::size_t fine_cells(const std::vector<pops::AmrPatch<Dim>>& patches) {
+  std::size_t result = 0;
+  for (const pops::AmrPatch<Dim>& patch : patches)
+    if (patch.level > 0) {
+      std::size_t cells = 1;
+      for (int axis = 0; axis < Dim; ++axis)
+        cells *= static_cast<std::size_t>(patch.box.hi[axis] - patch.box.lo[axis] + 1);
+      result += cells;
+    }
+  return result;
 }
 
 template <int Dim>
@@ -176,4 +190,24 @@ TEST(test_amr_regrid_variable, KeepRetainsPreviousBufferWithoutRedilatingIt) {
     system->regrid_from_prepared_tagging(0);
     EXPECT_EQ(system->patch_boxes(), initial) << "Keep changed coverage at tagging cycle " << cycle;
   }
+}
+
+TEST(test_amr_regrid_variable, TransitionReachGrowsRefineRequestsByBufferPlusLookahead) {
+  // Master's tag selection (MG8, ROM-103): before any fine level, the target coverage is the
+  // refine requests, grown by the transition buffer plus the lookahead (2 + 2 here).
+  constexpr int Dim = pops::kNativeDimension;
+  const auto reach = make_selector<Dim>("E", 0, 2)->patch_boxes();
+  ASSERT_FALSE(reach.empty());
+  EXPECT_EQ(reach, make_selector<Dim>("E", 4)->patch_boxes());
+}
+
+TEST(test_amr_regrid_variable, TransitionReachRegrowsRetainedCoverage) {
+  // Master's tag selection seeds the whole target coverage, cells kept by Keep included, so the
+  // same refine requests grow the refined coverage again at the next tagging cycle.
+  constexpr int Dim = pops::kNativeDimension;
+  auto system = make_selector<Dim>("E", 0, 2);
+  const std::size_t initial = fine_cells(system->patch_boxes());
+  ASSERT_GT(initial, 0u);
+  system->regrid_from_prepared_tagging(0);
+  EXPECT_GT(fine_cells(system->patch_boxes()), initial);
 }

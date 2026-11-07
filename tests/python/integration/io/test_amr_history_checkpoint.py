@@ -278,7 +278,7 @@ def _compile_checkpoint_program(model, authored, *, regrid_every, initials, prog
                            periodic=PeriodicAxes(model.frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=tuple(rules) + (Buffer(cells=1),),
+            rules=tuple(rules) + (Buffer(cells=1, selection="refine-requests"),),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),

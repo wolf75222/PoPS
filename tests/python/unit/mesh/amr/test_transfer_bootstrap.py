@@ -434,6 +434,34 @@ def test_conservative_injection_prolongation_resolves_parent_copy() -> None:
     ) == ("conservative_injection", 1, (0,))
 
 
+def test_one_sided_linear_prolongation_is_named_apart_from_masters() -> None:
+    # MG8, ROM-104: master's ConservativeLinear takes the MC slope with the boundary ghost; the
+    # one-sided slope of API 0.2 at physical faces is chosen by name, and lowers to the same
+    # native route with a mask of one-sided axes that the native transfer reads.
+    plan, layout, subjects = _ranked_face_layout(2, (2,))
+    for prolongation, options in (
+        (ConservativeLinear(), {"native_route": "conservative_linear"}),
+        (
+            ConservativeLinear(physical_faces="one-sided"),
+            {"native_route": "conservative_linear", "one_sided_axes": [1, 1]},
+        ),
+    ):
+        authored = AMRTransfer()
+        authored.state(subjects[0], StateTransfer(prolongation=prolongation), layout=layout)
+        action = authored.resolve(plan).for_subject(subjects[0], PROLONGATION).action
+        assert (
+            action.route.options.to_data(),
+            action.capabilities.order,
+            action.capabilities.ghost_depth,
+            action.capabilities.conservative,
+        ) == (options, 2, (1,), True)
+    assert ConservativeLinear() != ConservativeLinear(physical_faces="one-sided")
+    assert ConservativeLinear().one_sided_axes == (0,)
+    assert ConservativeLinear(physical_faces="one-sided").one_sided_axes == (1,)
+    with pytest.raises(ValueError, match="physical_faces"):
+        ConservativeLinear(physical_faces="interior")
+
+
 def test_coarse_fine_injection_resolves_parent_copy_ghosts() -> None:
     plan, layout, subjects = _ranked_face_layout(2, (2,))
     authored = AMRTransfer()

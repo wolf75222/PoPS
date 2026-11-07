@@ -75,9 +75,11 @@ struct Minmod {
 
 /// van Leer limiter: smooth, 2 ghosts, order 1 locally at extrema like Minmod.
 ///
-/// Harmonic average of the differences: 2ab/(a+b) if same sign, 0 otherwise. Evaluate via the
-/// smaller magnitude and a bounded ratio to avoid underflow/overflow in a*b and a+b. Non-finite
-/// inputs remain non-finite so the native flux guard can reject them.
+/// Harmonic average of the differences: 2ab/(a+b) if same sign, 0 otherwise. Where a*b and a+b
+/// stay normal and finite this is master's expression, so master's tutorials keep their bits
+/// (MG8); only beyond that range is it evaluated via the smaller magnitude and a bounded ratio,
+/// which avoids underflow/overflow in a*b and a+b. Non-finite inputs remain non-finite so the
+/// native flux guard can reject them.
 struct VanLeer {
   static constexpr int formal_order = 2;
   static constexpr int n_ghost = 2;
@@ -93,6 +95,11 @@ struct VanLeer {
     const bool negative = a < Real(0) && b < Real(0);
     if (!positive && !negative)
       return Real(0);
+    const Real product = a * b;
+    const Real sum = a + b;
+    if (product >= std::numeric_limits<Real>::min() && product <= Real(0.5) * largest &&
+        sum <= largest && sum >= -largest)
+      return Real(2) * product / sum;
     const Real aa = positive ? a : -a;
     const Real bb = positive ? b : -b;
     const Real smaller = aa < bb ? aa : bb;
@@ -106,6 +113,7 @@ struct VanLeer {
 ///
 /// For backward/forward differences a,b with the same sign this returns
 /// min((|a|+|b|)/2, 2|a|, 2|b|) with their common sign, and zero otherwise.
+/// The centred candidate is master's |a|/2 + |b|/2 wherever both halvings are exact (MG8).
 /// The comparisons are arranged so finite inputs cannot overflow while forming either the
 /// centred candidate or the doubled bound.  Stateless, branch-local and POPS_HD.
 struct MC {
@@ -126,8 +134,11 @@ struct MC {
     const Real b = positive ? forward : -forward;
     const Real smaller = a < b ? a : b;
     const Real larger = a < b ? b : a;
-    // Halving each operand first loses two equal subnormal differences.
-    const Real centred = smaller + Real(0.5) * (larger - smaller);
+    // Halving each operand first loses two equal subnormal differences: below twice the
+    // smallest normal value, centre on the smaller one instead.
+    const Real centred = smaller >= Real(2) * std::numeric_limits<Real>::min()
+                             ? Real(0.5) * a + Real(0.5) * b
+                             : smaller + Real(0.5) * (larger - smaller);
     // centred <= 2*smaller without forming the potentially overflowing doubled value.
     const Real magnitude = Real(0.5) * centred <= smaller ? centred : Real(2) * smaller;
     return positive ? magnitude : -magnitude;

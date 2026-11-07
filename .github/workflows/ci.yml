@@ -2592,8 +2592,14 @@ jobs:
   # every plan that needs the Python lane, so a change of a route that a tutorial uses runs it
   # (MG8-1). Each run step has a budget and each tutorial a watchdog under it; reports are written
   # after every tutorial and the comparison runs after a step that fails or times out, so its
-  # summary names the tutorial that did not finish. The job's limit is the sum of the bounded
-  # steps (45 + 45 + 45 + 45 + 60 + 15 = 255 min) and of the setup.
+  # summary names the tutorial that did not finish. This tree's steps run after a step of master
+  # that fails or times out too, so a failure of master's run never hides this tree's results. A
+  # tutorial that its watchdog stops is stopped with every process under it (Open MPI starts each
+  # rank in a process group of its own), each rank first writing its Python stacks, and a tutorial
+  # that fails prints its logs and those stacks in the job log, which every reader has, unlike the
+  # published runs. Each rank compiles into a JIT cache of its own: master compiles the same model
+  # on every rank into one file of a shared cache without the cache lock. The job's limit is the
+  # sum of the bounded steps (45 + 45 + 45 + 45 + 60 + 15 = 255 min) and of the setup.
   mg8-tutorials:
     name: ubuntu-24.04 / MG8 master tutorials (${{ matrix.lane }})
     runs-on: ubuntu-24.04
@@ -2762,6 +2768,7 @@ jobs:
       # Tutorial 14 runs to t = 8 on two ranks: this tree takes about four times master's time on
       # it (ROM-105), so it has a step and a budget of its own and cannot starve 03 to 08.
       - name: Run master's tutorials from this tree (${{ matrix.lane }})
+        if: ${{ !cancelled() }}
         timeout-minutes: 45
         run: |
           set +e
@@ -2777,7 +2784,7 @@ jobs:
           echo "candidate exit $?"
 
       - name: Run master's tutorial 14 from this tree (${{ matrix.lane }})
-        if: matrix.lane == 'mpi-dim2'
+        if: ${{ !cancelled() && matrix.lane == 'mpi-dim2' }}
         timeout-minutes: 60
         run: |
           set +e

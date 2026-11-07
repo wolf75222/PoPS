@@ -55,7 +55,7 @@ def build_interval_regions(*, amr=False, reject=False, dt=.03, cells=(8, 4)):
         layout = AMR(grid=CartesianGrid(frame=model.frame, cells=cells,
                                        periodic=PeriodicAxes(model.frame.axes)),
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-            tagging=AMRTagging(rules=(Tag(pm.ValueExpr(block[state]) > case.value(threshold)), Buffer(cells=0)),
+            tagging=AMRTagging(rules=(Tag(pm.ValueExpr(block[state]) > case.value(threshold)), Buffer(cells=0, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid.frozen(), transfer=transfer,

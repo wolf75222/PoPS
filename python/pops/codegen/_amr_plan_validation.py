@@ -426,6 +426,21 @@ def validate_amr_authorities(plan: Any) -> None:
                         "native AMR prolongation provider does not match the exact builtin "
                         "cell/face/node kernel contract"
                     )
+                # A mask of axes whose physical faces take one-sided slopes, set by the library.
+                one_sided_axes = native.options.to_data().get("one_sided_axes")
+                if one_sided_axes is not None and (
+                    axis_kind != "cell"
+                    or requirement.key.operation != PROLONGATION
+                    or capabilities.order != 2
+                    or not isinstance(one_sided_axes, list)
+                    or len(one_sided_axes) != dimension
+                    or any(type(axis) is not int or axis not in (0, 1) for axis in one_sided_axes)
+                    or not any(one_sided_axes)
+                ):
+                    raise NotImplementedError(
+                        "native AMR one-sided axes need the order-two cell prolongation and one "
+                        "0/1 mask over the native axes"
+                    )
             elif requirement.materialization == DERIVED_FIELD:
                 if native.materialization is not NativeAMRMaterializationKind.DERIVED_FIELD \
                         or native.native_route != "elliptic_solve":

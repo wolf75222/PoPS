@@ -87,8 +87,10 @@ class _InterfaceFaceExecutionAuthority:
         if face.get("type") in {"periodic", "external"}:
             raise ValueError("shared interface physical face is already consumed")
         # This face is now filled by the exact interface trace, not the former physical
-        # boundary value or primitive converter. All other face declarations stay intact.
+        # boundary value or primitive converter, which no longer prescribes the face's exterior
+        # trace either. All other face declarations stay intact.
         face.update(type="external", values=[], representation="conservative", converter=None)
+        face.pop("prescribed_trace", None)
         if "analytic_programs" in face:
             face["analytic_programs"] = []
         if "analytic_clock" in face:

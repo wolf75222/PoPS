@@ -58,7 +58,7 @@ def build(subcycled=False):
     threshold = case.param(RuntimeParam("tag-threshold", default=THRESHOLD))
     layout = AMR(grid=CartesianGrid(frame=FRAME, cells=shape, periodic=PeriodicAxes(FRAME.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[STATE])["marker"] > case.value(threshold)), Buffer(cells=tag_buffer)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(block[STATE])["marker"] > case.value(threshold)), Buffer(cells=tag_buffer, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,
         execution=(AMRExecution.subcycled((AMRClockRelation(0,1,Fraction(5,2),
