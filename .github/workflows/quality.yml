@@ -81,8 +81,8 @@ jobs:
         run: pipx install clang-format==19.1.7
       - name: clang-format --dry-run (bloquant)
         # Bascule ADC-219 (informatif -> bloquant). Meme script que le job format de ci.yml, qui
-        # controle les lignes que change chaque PR ; ici, tout l'arbre. Les fichiers fautifs sont en
-        # ::warning et dans l'artefact format-diff.patch.
+        # controle ce que chaque PR change aux fichiers C++ ; ici, tout l'arbre. Les fichiers
+        # fautifs sont en ::warning et dans l'artefact format-diff.patch.
         run: bash scripts/check_clang_format.sh
       - name: ruff (lint Python, non bloquant)
         if: always()  # le check clang-format precedent peut echouer (bloquant) ; ruff reste informatif

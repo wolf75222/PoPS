@@ -162,10 +162,13 @@ jobs:
           path: ci-plan/
           if-no-files-found: error
 
-  # Style C++ (N5, ROM-84) : les lignes C++ qu'apporte la PR (ou le push) suivent .clang-format,
+  # Style C++ (N5, ROM-84) : ce que la PR (ou le push) change aux fichiers C++ suit .clang-format,
   # avec la version epinglee et le script du job format de quality.yml. HEAD est le commit de fusion
-  # que CI extrait, HEAD^1 la base : seules les lignes changees comptent, si bien qu'une branche
-  # n'a jamais a reformater ce qu'elle ne touche pas. Environ une minute, sans build.
+  # que CI extrait, HEAD^1 la base. Cliquet : un fichier touche qui etait conforme a la base doit le
+  # rester en entier (une ligne changee peut desaligner ses voisines) ; un fichier qui ne l'etait
+  # pas n'est tenu qu'a ses lignes changees, si bien qu'une branche n'a jamais a reformater un
+  # fichier qu'elle a trouve non conforme ; si .clang-format ou .clang-format-ignore change, chaque
+  # fichier conforme a la base doit le rester. Environ une minute, sans build.
   format:
     name: clang-format (style)
     runs-on: ubuntu-latest
@@ -176,7 +179,7 @@ jobs:
           fetch-depth: 2
       - name: Install clang-format (version epinglee)
         run: pipx install clang-format==19.1.7
-      - name: git clang-format --diff HEAD^1
+      - name: check_clang_format.sh --changed-since HEAD^1
         run: bash scripts/check_clang_format.sh --changed-since HEAD^1
       - name: Upload diff de format
         if: failure()
