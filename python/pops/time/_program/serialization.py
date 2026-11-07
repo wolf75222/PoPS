@@ -44,16 +44,16 @@ _IR_IDENTITY_REUSE: ContextVar[_IdentityReuse | None] = ContextVar(
 def ir_identity_reuse(operation: str) -> Iterator[None]:
     """Project each frozen Program identity once within one synchronous public operation.
 
-    ``pops.resolve`` reads the Program it freezes for its snapshots and plan evidence, and
-    ``pops.compile`` re-verifies its plan, detaches the Program twice, converts and lowers the
-    clones and checks the artifact; each check hashed the whole IR again. Inside this scope the
-    first read of a frozen Program, authoring or detached, projects its IR and later reads reuse
-    that identity; a read made before a Program is frozen still projects. When ``operation``
-    succeeds every identity is projected again outside the scope, so a definition changed during
-    it, or an out-of-contract edit of a clone, still fails it with a RuntimeError naming
-    ``operation``. Nothing is retained on a Program, and a failed operation leaves no witness.
-    With or without an error, the graphs converted from the Programs read in the scope leave the
-    conversion cache when it ends (``_forget_scope_graphs``).
+    ``pops.resolve`` reads the identity of the Program that ``pops.validate`` froze for its
+    snapshots and plan evidence, and ``pops.compile`` re-verifies its plan, detaches the Program
+    twice, converts and lowers the clones and checks the artifact; each check hashed the whole IR
+    again. Inside this scope the first read of a frozen Program, authoring or detached, projects
+    its IR and later reads reuse that identity; a read of a mutable Program always projects. When
+    ``operation`` succeeds every identity is projected again outside the scope, so a definition
+    changed during it, or an out-of-contract edit of a clone, still fails it with a RuntimeError
+    naming ``operation``. Nothing is retained on a Program, and a failed operation leaves no
+    witness. With or without an error, the graphs converted from the Programs read in the scope
+    leave the conversion cache when it ends (``_forget_scope_graphs``).
     """
     inherited = _IR_IDENTITY_REUSE.get()
     if inherited is not None and inherited.applies():

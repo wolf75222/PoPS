@@ -411,6 +411,8 @@ def test_public_resolve_reads_identities_in_one_reuse_scope(monkeypatch):
     result = object()
 
     def resolve_phase(case, **options):
+        # Models a phase that also freezes a Program itself; the real resolve reads only Programs
+        # that pops.validate froze, so its first read projects and the next three reuse it.
         before_freeze = source._ir_hash()
         source.freeze()
         identities = [source._ir_hash() for _ in range(3)]
