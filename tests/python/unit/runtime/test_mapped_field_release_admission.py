@@ -105,7 +105,7 @@ class SourceEmissionComplete(Exception):
 @pytest.mark.parametrize("allowed", [False, True])
 def test_compiler_dispatch_reaches_actual_provider_source_only_after_admission(tmp_path, monkeypatch,
                                                                             adaptive, allowed):
-    from tests.review.test_sol61_mapped_field_route import route
+    from tests.python.support.sol61_mapped_field_route import route
     from pops.codegen import _compile_drivers as compiler
     from pops.codegen import program_graph_lowering as lowering
     from pops.codegen import toolchain

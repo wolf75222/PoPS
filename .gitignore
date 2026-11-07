@@ -24,6 +24,8 @@ __pycache__/
 # Generated documentation and tutorial output.
 docs/_build/
 docs/tutorials/**/results/
+# Default run directory of the examples; review material does not belong in the tree.
+/outputs/
 
 # Runtime receipts are generated; curated evidence already tracked remains versioned.
 docs/development/migration_evidence/representative_20260913/receipts/

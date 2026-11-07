@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-DOC = Path(__file__).resolve().parents[4] / "docs/development/api_040"
+DOC = Path(__file__).resolve().parents[4] / "benchmarks/joint_reconstruction"
 
 
 def load(version):

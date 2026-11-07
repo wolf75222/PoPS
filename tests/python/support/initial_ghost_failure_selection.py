@@ -2,7 +2,7 @@
 import hashlib
 import json
 import numpy as np
-from tests.review.sol61_amr_full_carrier_offline import decode
+from tests.python.support.sol61_amr_full_carrier_offline import decode
 
 def select_xmin_owner(blob,world_size):
     if type(blob) is not bytes or type(world_size) is not int or world_size<1:raise ValueError('selection requires canonical bytes and exact positive world size')
