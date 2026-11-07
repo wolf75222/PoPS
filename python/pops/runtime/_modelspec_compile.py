@@ -15,8 +15,13 @@ def compile_modelspec_package(
     *,
     name: str,
     target: str,
+    native_route: tuple[str, str, str] | None = None,
 ) -> Any:
-    """Return a detached production ``CompiledModel`` for one ModelSpec brick composition."""
+    """Return a detached production ``CompiledModel`` for one ModelSpec brick composition.
+
+    ``native_route`` is the catalogue ``(variables, limiter, Riemann)`` route that the package's
+    block installs: the package instantiates only that route. ``None`` keeps every catalogue route.
+    """
     from pops._bootstrap import ModelSpec
     from pops.codegen.loader import CompiledModel
     from pops.codegen.toolchain import loader_native_dimension
@@ -164,6 +169,7 @@ def compile_modelspec_package(
         target=target,
         name=name,
         consumer_owner_qid="pops.runtime.modelspec.%s" % name,
+        _native_route=native_route,
     )
     if type(compiled) is not CompiledModel:
         raise TypeError("ModelSpec compilation did not produce a CompiledModel")

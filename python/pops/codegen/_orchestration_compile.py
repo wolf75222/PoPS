@@ -75,6 +75,7 @@ def _resolved_native_amr_field_roles(plan: Any) -> dict[str, tuple[dict[str, Any
 
 def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
     from pops.codegen._resolved_operation_ownership import require_block_plan_owner
+    from pops.runtime._bricks_scheme import native_catalogue_route
 
     # Authenticate every Case block before the first native compilation can run.
     for block in plan.blocks:
@@ -104,6 +105,9 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             declare_auxiliary_providers=block.declares_auxiliary_providers,
             resolved_operations=block.resolved_operations,
             numerics=block.numerics,
+            # InstallPlan installs exactly this resolved spatial descriptor, so the block's
+            # package needs no other catalogue route.
+            native_route=native_catalogue_route(block.spatial),
         )
     return compiled
 
@@ -139,11 +143,13 @@ def compile_install_model(
     declare_auxiliary_providers: bool = True,
     resolved_operations: Any = None,
     numerics: Any = None,
+    native_route: Any = None,
 ) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
     from pops.codegen._compiled_model_identity import authenticate_compiled_model
     from pops.codegen._resolved_operation_ownership import require_block_plan_owner
+    from pops.codegen._compile_emit import normalize_native_route, selects_catalogue_routes
 
     require_block_plan_owner(
         resolved_operations, consumer_owner_qid, where="compiled block %r" % name)
@@ -156,6 +162,7 @@ def compile_install_model(
 
     expected_roles = _normalize_native_amr_field_roles(native_field_roles)
     has_field_role_contract = native_field_roles is not None
+    native_route = normalize_native_route(native_route)
     state_spaces = tuple(state_spaces)
     if len(state_spaces) != 1 or not isinstance(state_spaces[0], str) or not state_spaces[0]:
         raise TypeError("compiled block %r requires exactly one named state space" % name)
@@ -174,6 +181,11 @@ def compile_install_model(
                 raise ValueError(
                     "precompiled native block field roles differ from the resolved Case; recompile"
                 )
+        compiled_route = getattr(model, "_native_route", None)
+        if compiled_route is not None and tuple(compiled_route) != native_route:
+            raise ValueError(
+                "precompiled native block was compiled for another numerical route; recompile"
+            )
         from pops.codegen._plans import attest_precompiled_consumer_owner
 
         attest_precompiled_consumer_owner(
@@ -200,6 +212,9 @@ def compile_install_model(
         raise ValueError(
             "resolved block %r Module changed while its compile-frozen trace was captured" % name
         )
+    if native_route is not None and not selects_catalogue_routes(model):
+        # A Program state-storage or source-authored package has no catalogue route to specialize.
+        native_route = None
     compile_model = getattr(model, "compile", None)
     if not callable(compile_model):
         raise TypeError("resolved block %r has no total compile lowering" % name)
@@ -209,10 +224,13 @@ def compile_install_model(
         _native_field_roles=(expected_roles if has_field_role_contract else None),
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
+        **({"_native_route": native_route} if native_route is not None else {}),
         **compile_options,
     )
     if type(compiled) is not CompiledModel:
         raise TypeError("resolved block compiler must return exact CompiledModel")
+    if tuple(getattr(compiled, "_native_route", None) or ()) != (native_route or ()):
+        raise ValueError("compiled native block did not attest its resolved numerical route")
     if has_field_role_contract:
         observed_roles = getattr(compiled, "_native_field_roles", None)
         if (

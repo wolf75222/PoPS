@@ -117,13 +117,19 @@ def build_euler(name: str = "euler") -> Model:
     return model
 
 
-def compile_euler_artifact(
+def resolve_euler_case(
     model: Model,
     *,
     cells: int = 16,
     cxx: str | None = None,
+    face_reconstruction: Any = None,
+    riemann_solver: Any = None,
+    primitive_variables: bool = False,
 ) -> Any:
-    """Compile ``model`` through the final lifecycle and return the simulation artifact."""
+    """Validate and resolve the Euler Case of ``model`` and return the resolved plan.
+
+    The default numerics are MUSCL(Minmod), Rusanov and conservative variables.
+    """
     state = model.states["U"]
     flux = model.fluxes["transport"]
     rate = model.operators["transport"]
@@ -135,9 +141,11 @@ def compile_euler_artifact(
         rate,
         FiniteVolume(
             flux=flux,
-            variables=variables.Conservative(state),
-            reconstruction=reconstruction.MUSCL(limiters.Minmod()),
-            riemann=riemann.Rusanov(),
+            variables=(variables.Primitive(state) if primitive_variables
+                       else variables.Conservative(state)),
+            reconstruction=(reconstruction.MUSCL(limiters.Minmod())
+                            if face_reconstruction is None else face_reconstruction),
+            riemann=riemann.Rusanov() if riemann_solver is None else riemann_solver,
         ),
     )
     case.numerics(numerics, block=block)
@@ -154,25 +162,33 @@ def compile_euler_artifact(
     options: dict[str, Any] = {"include": str(ROOT / "include")}
     if cxx is not None:
         options["cxx"] = cxx
-    resolved = pops.resolve(
+    return pops.resolve(
         pops.validate(case),
         layout=layout,
         backend=Production(),
         compile_options=options,
     )
-    artifact = pops.compile(resolved)
+
+
+def compile_euler_artifact(model: Model, **options: Any) -> Any:
+    """Compile ``model`` through the final lifecycle and return the simulation artifact.
+
+    ``options`` are the keywords of ``resolve_euler_case``.  The compiled package serves only
+    the route its Case resolves, so a test installing another route compiles the artifact that
+    resolves it.
+    """
+    artifact = pops.compile(resolve_euler_case(model, **options))
     artifact.verify()
     return artifact
 
 
-def compile_euler_component(
-    model: Model,
-    *,
-    cells: int = 16,
-    cxx: str | None = None,
-) -> Any:
-    """Return the one detached component produced by :func:`compile_euler_artifact`."""
-    artifact = compile_euler_artifact(model, cells=cells, cxx=cxx)
+def compile_euler_component(model: Model, **options: Any) -> Any:
+    """Return the one detached component produced by :func:`compile_euler_artifact`.
+
+    ``options`` are the keywords of ``resolve_euler_case``; the component serves only the route
+    they resolve.
+    """
+    artifact = compile_euler_artifact(model, **options)
     if len(artifact.blocks) != 1:
         raise AssertionError("Euler fixture must compile exactly one block component")
     return artifact.blocks[0].model

@@ -1,11 +1,13 @@
-"""WENO5 parity for a final production component.
+"""WENO5 parity for final production components.
 
-The component is compiled through ``Case -> resolve -> compile`` and installed through the one
-remaining low-level ``System.add_equation`` seam.  Rusanov with first-order, Minmod and WENO5 is
-bit-identical to the equivalent native ModelSpec, including a multi-step WENO5 advance.  This
-proves that the production package derives its halo from the selected reconstruction.
+Each component is compiled through ``Case -> resolve -> compile`` for the one numerical route it
+installs, then installed through the one remaining low-level ``System.add_equation`` seam.
+Rusanov with first-order, Minmod and WENO5 is bit-identical to the equivalent native ModelSpec,
+including a multi-step WENO5 advance.  This proves that the production package derives its halo
+from the selected reconstruction.
 """
 from tests.python.support.requirements import require_native_or_skip
+from pops.numerics.reconstruction import FirstOrder, WENO5
 from pops.numerics.variables import Conservative
 from pops.numerics.riemann import Rusanov
 import os
@@ -102,8 +104,17 @@ def main():
     spec = _native_spec(float(U[0].mean()))
 
     def run_compiled_checks():
-        compiled_prod = compile_euler_component(model, cells=16, cxx=cxx)
-        assert compiled_prod.backend == "production"
+        # A package instantiates only the route its Case resolves: one component per limiter.
+        compiled_prod = {
+            limiter: compile_euler_component(model, cells=16, cxx=cxx, **options)
+            for limiter, options in (
+                ("none", dict(face_reconstruction=FirstOrder())),
+                ("minmod", {}),
+                ("weno5", dict(face_reconstruction=WENO5())),
+            )
+        }
+        for compiled in compiled_prod.values():
+            assert compiled.backend == "production"
 
         # --- native ModelSpec reference (numerical parity oracle) ---
         def ref(limiter):
@@ -125,7 +136,7 @@ def main():
             }[limiter]
             sys.add_equation(
                 "gas",
-                compiled_prod,
+                compiled_prod[limiter],
                 spatial=engine.Spatial(
                     flux=Rusanov(), recon=Conservative(), **lim
                 ),
@@ -150,7 +161,7 @@ def main():
             sys = System(n=n, L=L, periodicity=(True, True))
             sys.add_equation(
                 "gas",
-                compiled_prod,
+                compiled_prod["weno5"],
                 spatial=engine.Spatial(
                     weno5=True, flux=Rusanov(), recon=Conservative()
                 ),
