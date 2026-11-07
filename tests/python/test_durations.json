@@ -6643,7 +6643,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1139,
+    "estimated_count": 1140,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7779,6 +7779,7 @@
       "tests/python/unit/time/test_time_std_rk.py",
       "tests/python/unit/time/test_time_where.py",
       "tests/python/unit/time/test_typed_capture_outlining_v14.py",
+      "tests/python/unit/time/test_typed_delivery_cf7.py",
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py",
       "tests/python/unit/time/test_uniform_affine_expressions_v02.py",
@@ -7985,7 +7986,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1204,
+    "total_files": 1205,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8108,6 +8109,24 @@
       },
       "weights_seconds": {
         "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940
+      }
+    },
+    "ci_20261030_n7_typed_delivery": {
+      "basis": "Unmeasured CI scheduling estimate for the CF7 regression module of N7 lot 2 (ROM-88, typed delivery IR19), on the api_v02_20261013 tiers: 15 s, as the analogue test_delivery_case_graphs.py, which resolves the same ProgramRealization delivery cases without native compilation; this module resolves literal folds of 10**4 and 10 iterations and one refused accumulated fold of 10**4, emits six zero-block Continuations through emit_cpp_program (maps over the set read back and over a literal set, at 10**5 and 10 entries each, and two refused gathers at 10**5 entries), and analyses one literal map of 10**5 entries directly, with no native module. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/time/test_typed_delivery_cf7.py": "tests/python/unit/time/test_delivery_case_graphs.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/time/test_typed_delivery_cf7.py": 15
+      },
+      "local_receipts": {
+        "tests/python/unit/time/test_typed_delivery_cf7.py": {
+          "cases": 7,
+          "session_seconds": 11.2
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/time/test_typed_delivery_cf7.py": "de4646554623af66dc8c7b2a1d975c827ad039a28567926f7007d6a34f781927"
       }
     }
   },
@@ -9314,5 +9333,6 @@
   "tests/python/integration/runtime/test_qualification_receipt_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py": 850,
   "tests/python/unit/numerics/test_typed_index_maps_n7.py": 30,
-  "tests/python/unit/numerics/test_region_facts_n7.py": 60
+  "tests/python/unit/numerics/test_region_facts_n7.py": 60,
+  "tests/python/unit/time/test_typed_delivery_cf7.py": 15
 }

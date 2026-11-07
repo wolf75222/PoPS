@@ -4,7 +4,7 @@ import pops
 from pops.contributions import Contribution, Delivery, Increment, LinearMap, FiniteInterval
 from pops.graph_functions import graph
 from pops.time.variant_types import Product,type_of
-from pops.codegen.realization_delivery import delivered_frontiers
+from pops.codegen.typed_delivery import delivered_frontiers
 
 
 def fixture():
@@ -51,13 +51,16 @@ def test_action_is_generated_differential_not_user_supplied_linearity_claim():
 
 
 @pytest.mark.parametrize('count',(0,1,2))
-def test_map_internal_use_has_actual_evaluation_multiplicity(count):
+def test_map_internal_use_is_delivered_element_by_element(count):
+    # IR19: a map delivers its body element by element, as one element-wise
+    # evaluation whatever its extent; an empty extent covers its empty term (D5).
+    from pops.codegen.typed_delivery import EACH
     p=pops.Program('owned_map'); d=p.range_set(count,capacity=8,ownership='replicated'); owned=[]
     def body(g,i):
         value=g.float64(g.index_value(i)); owned.append(value); return value
     out=p.map(d,body)
     frontiers=delivered_frontiers(out,lambda node:node is owned[0])
-    assert len(frontiers)==1 and len(frontiers[0])==count
+    assert [[ref.invocation for ref in frontier] for frontier in frontiers]==[[((out.id,EACH,'map'),)]]
 
 
 def test_domain_diagnostic_cannot_consume_array_inventory():
