@@ -214,9 +214,9 @@ def test_delivery_diagrams_compare_success_on_every_assignment():
     assert session.same(session.never, left, right) is None
 
 
-def test_a_packet_retained_under_two_conditions_is_incomplete():
-    # Wherever one coordinate of a packed ledger is retained, every coordinate is: a packet
-    # whose last coordinate follows another condition is refused, on every assignment.
+def _packet_case(name):
+    # A program with two increments of one recipient, their packets, the leaf paths of a
+    # packet, and a builder of the candidate that retains `value` and `increment`.
     from pops.contributions import Contribution, Delivery, Increment
     from pops.continuations import Candidate, ContinuationSchema
     from pops.finite_contributions import FiniteInterval, LinearMap
@@ -224,7 +224,7 @@ def test_a_packet_retained_under_two_conditions_is_incomplete():
     from pops.ledger_provenance import _leaf_paths
     from pops.time._program.structured_control import value_signature
     from pops.time.variant_types import Product, type_of
-    p = Program('packet_under_two_conditions')
+    p = Program(name)
     initial = p.product(q=p.float64(0), history=p.float64(0), time=p.float64(0), step=p.int64(0))
     base = p.continuation_open(initial, ContinuationSchema(initial, time=('time',), step=('step',)))
     old = p.continuation_read(base)
@@ -240,24 +240,105 @@ def test_a_packet_retained_under_two_conditions_is_incomplete():
         return Increment((c,), (Delivery(c, q, action),))
 
     first, second = increment(1), increment(2)
-    one, two = first.pack(p), second.pack(p)
-    leaves = list(_leaf_paths(value_signature(one)))
+    leaves = list(_leaf_paths(value_signature(first.pack(p))))
     assert len(leaves) > 1
-    chosen, other = old['step'] > 0, old['time'] > 0.
-    def mixed(left, right, path=()):
+
+    def packet(left, right, choose, path=()):
+        # The packet whose leaf at `path` is choose(path, left leaf, right leaf).
         signature = value_signature(left)
         if signature['vtype'] == 'product':
-            return p.product(**{name: mixed(left[name], right[name], path + (name,))
-                                for name, _ in signature['members']})
-        return p.branch(other if path == leaves[-1] else chosen, lambda g: left, lambda g: right)
-    proposal = p.product(h=p.float64(1))
+            return p.product(**{member: packet(left[member], right[member], choose, path + (member,))
+                                for member, _ in signature['members']})
+        return choose(path, left, right)
+
+    def candidate(value, increment):
+        proposal = p.product(h=p.float64(1))
+        return Candidate(p, base=base, proposal=proposal,
+                         continuation=p.product(q=value, history=old['history'],
+                                                time=old['time']+proposal['h'], step=old['step']+1),
+                         increment=increment, observations=p.product(), checks=p.product())
+
+    return p, old, q, first, second, leaves, packet, candidate
+
+
+def test_a_packet_retained_under_two_conditions_is_incomplete():
+    # Wherever one coordinate of a packed ledger is retained, every coordinate is: a packet
+    # whose last coordinate follows another condition is refused, on every assignment.
+    p, old, q, first, second, leaves, packet, candidate = _packet_case('packet_under_two_conditions')
+    chosen, other = old['step'] > 0, old['time'] > 0.
+    increment = packet(first.pack(p), second.pack(p), lambda path, left, right:
+                       p.branch(other if path == leaves[-1] else chosen, lambda g: left, lambda g: right))
     value = p.branch(chosen, lambda g: first.apply(g, q, name='first'),
                      lambda g: second.apply(g, q, name='second'))
     with pytest.raises(ValueError, match='incomplete retained coordinates'):
-        Candidate(p, base=base, proposal=proposal,
-                  continuation=p.product(q=value, history=old['history'],
-                                         time=old['time']+proposal['h'], step=old['step']+1),
-                  increment=mixed(one, two), observations=p.product(), checks=p.product())
+        candidate(value, increment)
+
+
+def test_a_complete_packet_whose_choice_is_written_another_way_is_accepted():
+    # T1 of the #736 review: the last coordinate writes the same choice inside a branch whose
+    # two arms are equal. The packet is complete on every assignment, so it is accepted; the
+    # validators before lot 3 compared listed paths and refused it.
+    p, old, q, first, second, leaves, packet, candidate = _packet_case('packet_rewritten_choice')
+    c0, c1 = old['time'] > 0., old['time'] > 1.
+    def pick(g, left, right):
+        return g.branch(c0, lambda h: h.branch(c1, lambda k: left, lambda k: right), lambda h: right)
+    def choose(path, left, right):
+        if path == leaves[-1]:
+            return p.branch(c1, lambda g: pick(g, left, right), lambda g: pick(g, left, right))
+        return pick(p, left, right)
+    increment = packet(first.pack(p), second.pack(p), choose)
+    value = pick(p, first.apply(p, q, name='first'), second.apply(p, q, name='second'))
+    assert candidate(value, increment).attrs['increment_proof_v15']['status'] == 'bound_ledger'
+
+
+def test_delivery_diagrams_tell_a_different_variant_from_a_stale_value():
+    # The comparison names the variant when one side delivers on the other variant's case.
+    from pops.codegen.typed_delivery import DeliveryDiagrams
+    from pops.time.variant_types import Variant, type_of
+    p, q, delivery, _ = fixture()
+    owned = delivery(p, q.n)
+    session = DeliveryDiagrams()
+    value = p.variant(Variant(one=type_of(q.n), two=type_of(q.n)), 'one', owned)
+    match = lambda node: node is owned
+    one = session.frontier(value, match, path=('one',))
+    two = session.frontier(value, match, path=('two',))
+    assert one.success is session.always and two.success is session.never
+    assert session.same(session.always, one, two) == 'variant'
+    assert session.same(session.always, one, one) is None
+
+
+def test_delivery_diagrams_refuse_to_identify_several_alternatives_of_one_value():
+    # A fold that may stop after one or two steps leaves several alternatives for its
+    # delivered value: two equal queries are then not the same evaluation.
+    from pops.codegen.typed_delivery import DeliveryDiagrams
+    p, q, delivery, _ = fixture()
+    outputs = []
+    def body(b, state):
+        outputs.append(b.value('delivery', state))
+        return outputs[-1]
+    loop = p.fold(q.n, p.int64(p.requested_dt()), lambda b, state, i: body(b, state), max_steps=2)
+    session = DeliveryDiagrams()
+    match = lambda node: any(node is x for x in outputs)
+    left, right = session.frontier(loop, match), session.frontier(loop, match)
+    leaves = session._exact.leaves_within(left.restricted(outputs[0].id), session.always)
+    assert [len(leaf.alternatives) for leaf in leaves] == [3]
+    assert session.same(session.always, left, right) == 'evaluations'
+
+
+def test_a_summarized_loop_iteration_has_no_evaluation_identity():
+    # IR13: a delivery inside a summarized fold has no evaluation identity to compare.
+    from pops._ir.refusals import PropertyNotDerived
+    from pops.codegen.typed_delivery import DeliveryDiagrams
+    p, q, _, _ = fixture()
+    outputs = []
+    def body(b, state):
+        outputs.append(b.value('delivery', q.n))
+        return b.value('summed', state + outputs[-1])
+    loop = p.fold(q.n, 10, lambda b, state, i: body(b, state))
+    session = DeliveryDiagrams()
+    frontier = session.frontier(loop, lambda node: any(node is x for x in outputs))
+    with pytest.raises(PropertyNotDerived, match='no evaluation identity'):
+        frontier.require_identified(session.always, 'probe')
 
 
 def test_a_reduce_in_an_element_names_its_zero_iteration_fold():
