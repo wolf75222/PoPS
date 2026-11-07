@@ -492,6 +492,8 @@ def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
     declare ``mpi_entrypoints`` for script-style contracts whose ``__main__`` path turns internal
     check failures into a non-zero process status.  Keeping ranks and paths beside the owning suite
     makes the manifest -- not workflow YAML -- the single authority for distributed Python tests.
+    An entrypoint that runs one pytest receiver may split its cases into ``partitions`` sized by
+    measured cost; see ``_mpi_entrypoint_partitions``.
     """
     entries: list[dict] = []
     seen_paths: set[str] = set()
@@ -517,7 +519,7 @@ def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
             path = normalize(str(raw.get("path", "")))
             nproc = raw.get("nproc")
             dimension = raw.get("native_dimension", 2)
-            if set(raw) - {"path", "nproc", "native_dimension"}:
+            if set(raw) - {"path", "nproc", "native_dimension", "partitions"}:
                 raise SystemExit("Python MPI entrypoint contains unknown contract fields")
             if type(dimension) is not int or dimension not in (1, 2, 3):
                 raise SystemExit("Python MPI entrypoint needs an exact native_dimension 1, 2 or 3")
@@ -549,20 +551,100 @@ def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
             entry = {"suite": name, "path": path, "nproc": nproc}
             if "native_dimension" in raw:
                 entry["native_dimension"] = dimension
+            if "partitions" in raw:
+                entry["receiver"], entry["partitions"] = _mpi_entrypoint_partitions(
+                    path, nproc, raw["partitions"])
             entries.append(entry)
     return sorted(entries, key=lambda item: (item["path"], item["nproc"]))
+
+
+MPI_PARTITION_ID = re.compile(r"[a-z][a-z0-9_]*")
+MPI_PARTITION_NODE = re.compile(r"test_[A-Za-z0-9_]+(?:\[[A-Za-z0-9_.+-]+\])?")
+
+
+def _mpi_entrypoint_partitions(path: str, nproc: int, partitions: object) -> tuple[str, list[dict]]:
+    """Return the receiver and the exact disjoint cover of its declared case count.
+
+    The entrypoint must invoke exactly ``run(<receiver>, expected_cases=N, ranks=<nproc>)``; the
+    partitions name every one of those N cases exactly once, by its pytest node within the
+    receiver. Each launch then collects the whole receiver and refuses any case missing from,
+    or added to, this inventory before running its own units (``mpi_partition_units``).
+    """
+    tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name) and node.func.id == "run"]
+    try:
+        call, = calls
+        receiver_node, = call.args
+        receiver = ast.literal_eval(receiver_node)
+        options = {item.arg: ast.literal_eval(item.value) for item in call.keywords}
+        valid = (type(receiver) is str and set(options) == {"expected_cases", "ranks"}
+                 and type(options["expected_cases"]) is int and options["expected_cases"] > 0
+                 and options["ranks"] == nproc)
+    except (ValueError, TypeError, SyntaxError):
+        valid = False
+    if not valid:
+        raise SystemExit("MPI entrypoint partitions require one exact receiver run call: " + path)
+    candidate = Path(receiver)
+    if (candidate.is_absolute() or ".." in candidate.parts or candidate.suffix != ".py"
+            or not receiver.startswith("tests/python/") or not (ROOT / receiver).is_file()):
+        raise SystemExit("MPI entrypoint partitions name an invalid receiver: " + path)
+    if not isinstance(partitions, list) or len(partitions) < 2:
+        raise SystemExit("MPI entrypoint partitions must be an array of at least two: " + path)
+    source = (ROOT / receiver).read_text(encoding="utf-8")
+    ids, nodes, normalized = set(), set(), []
+    for partition in partitions:
+        if not isinstance(partition, dict) or set(partition) != {"id", "nodes"}:
+            raise SystemExit("MPI entrypoint partition requires exactly id and nodes: " + path)
+        identity, members = partition["id"], partition["nodes"]
+        if (not isinstance(identity, str) or not MPI_PARTITION_ID.fullmatch(identity)
+                or identity in ids or not isinstance(members, list) or not members
+                or any(not isinstance(node, str) or not MPI_PARTITION_NODE.fullmatch(node)
+                       or node in nodes for node in members)
+                or len(set(members)) != len(members)):
+            raise SystemExit("MPI entrypoint partition has an invalid or duplicate identity: " + path)
+        if any(not re.search(r"^def " + re.escape(node.split("[", 1)[0]) + r"\(", source, re.MULTILINE)
+               for node in members):
+            raise SystemExit("MPI entrypoint partition names a case outside its receiver: " + path)
+        ids.add(identity)
+        nodes.update(members)
+        normalized.append({"id": identity, "nodes": [receiver + "::" + node for node in members]})
+    if len(nodes) != options["expected_cases"]:
+        raise SystemExit("MPI entrypoint partitions do not cover its exact receiver cases: " + path)
+    return receiver, normalized
 
 
 MPI_ORCHESTRATOR_PARTITION_CONTRACTS = {
     "tests/python/integration/mpi/test_public_amr_profile_mpi%d.py" % world:
         ("test_public_amr_fixtures_on_authenticated_mpi%d_world" % world,
-         ("tag_selection", "stationary_regrids", "evolving_halo", "evolved_spatial", "evolved_spatial_v4"))
+         ("tag_selection_linear", "tag_selection_injection", "stationary_regrids_buffer",
+          "stationary_regrids_cadence_levels", "evolving_halo", "evolved_spatial",
+          "evolved_spatial_v4"))
     for world in (1, 2)
 }
 MPI_ORCHESTRATOR_PARTITION_CONTRACTS.update({
     "tests/python/integration/mpi/test_public_amr_original_field_mpi%d.py" % world:
         ("test_public_amr_original_on_authenticated_mpi%d_world" % world,
-         ("saved_restart", "parent_rollback_retry"))
+         ("saved_restart_16_implicit_zero", "saved_restart_16_declared_zero",
+          "saved_restart_32_declared_zero", "parent_rollback_retry"))
+    for world in (1, 2)
+})
+MPI_ORCHESTRATOR_PARTITION_CONTRACTS.update({
+    "tests/python/integration/mpi/test_public_captured_diffusion_mpi%d.py" % world:
+        ("test_public_captured_and_candidate_diffusion_on_authenticated_mpi%d_world" % world,
+         ("captured_width1", "captured_width3", "candidate_width1", "candidate_width3"))
+    for world in (1, 2)
+})
+MPI_ORCHESTRATOR_PARTITION_CONTRACTS.update({
+    "tests/python/integration/mpi/test_public_evolved_original_stage_mpi%d.py" % world:
+        ("test_public_evolved_original_stage_on_authenticated_mpi%d_world" % world,
+         ("width1_dt001", "width1_dt002", "width2_dt001", "width2_dt002"))
+    for world in (1, 2)
+})
+MPI_ORCHESTRATOR_PARTITION_CONTRACTS.update({
+    "tests/python/integration/mpi/test_public_spatial_interaction_mpi%d.py" % world:
+        ("test_public_spatial_interaction_on_authenticated_mpi%d_world" % world,
+         ("saved_history", "refusals", "pole_and_bind"))
     for world in (1, 2)
 })
 

@@ -1,5 +1,11 @@
-"""Exact frozen Field fixture groups for independently bounded MPI1/MPI2 worlds."""
+"""Exact frozen Field fixture groups for independently bounded MPI1/MPI2 worlds.
+
+``amr_original`` and ``spatial_interaction`` run as declared partitions sized by measured cost,
+so one 14-minute child watchdog covers one partition (CI run 41037321460: the saved-restart
+partition of ``amr_original`` and the whole ``spatial_interaction`` group stopped there).
+"""
 from tests.python.support.mpi_fixture_driver import run_fixture_world
+from tests.python.support.mpi_partition_units import parameter_partitions
 
 
 CHILD_TIMEOUT_SECONDS = 14 * 60
@@ -44,31 +50,53 @@ GROUPS = {
     ),
 }
 
+_SAVED_RESTART = GROUPS["amr_original"][0][0]
 AMR_ORIGINAL_PARTITIONS = {
-    "saved_restart": (
-        (GROUPS["amr_original"][0][0],),
-        {"test_public_original_amr_saved_reaction_and_exact_restart": 3},
-    ),
+    **parameter_partitions({
+        "saved_restart_16_implicit_zero": (_SAVED_RESTART + "[16-order0-implicit_zero]",),
+        "saved_restart_16_declared_zero": (_SAVED_RESTART + "[16-order1-declared_zero]",),
+        "saved_restart_32_declared_zero": (_SAVED_RESTART + "[32-order2-declared_zero]",),
+    }),
     "parent_rollback_retry": (
         (GROUPS["amr_original"][0][1],),
         {"test_public_original_amr_published_fields_parent_rollback_and_retry": 1},
+        None,
     ),
 }
+_SPATIAL = GROUPS["spatial_interaction"]
+SPATIAL_INTERACTION_PARTITIONS = {
+    "saved_history": (
+        (_SPATIAL[0][0],), {"test_public_spatial_interaction_saved_history_and_exact_replay": 3}, None,
+    ),
+    "refusals": (
+        (_SPATIAL[0][1],), {"test_public_spatial_interaction_refuses_without_publication": 3}, None,
+    ),
+    "pole_and_bind": (
+        (_SPATIAL[0][2], _SPATIAL[0][3]),
+        {"test_public_spatial_interaction_ignores_inactive_source_pole": 1,
+         "test_public_spatial_interaction_nonperiodic_amr_refuses_at_bind": 1},
+        None,
+    ),
+}
+PARTITIONED_GROUPS = {"amr_original": AMR_ORIGINAL_PARTITIONS,
+                      "spatial_interaction": SPATIAL_INTERACTION_PARTITIONS}
 
 
 def run_public_field_profile_world(*, group, ranks, directory, partition=None):
     if type(ranks) is not int or ranks not in (1, 2):
         raise ValueError("public Field profile requires an explicit MPI1 or MPI2 world")
-    if group == "amr_original":
-        if type(partition) is not str or partition not in AMR_ORIGINAL_PARTITIONS:
-            raise ValueError("public original AMR Field profile requires an exact declared partition")
-        tests, expected_cases = AMR_ORIGINAL_PARTITIONS[partition]
+    units = None
+    if group in PARTITIONED_GROUPS:
+        partitions = PARTITIONED_GROUPS[group]
+        if type(partition) is not str or partition not in partitions:
+            raise ValueError("public Field " + group + " profile requires an exact declared partition")
+        tests, expected_cases, units = partitions[partition]
     else:
         if partition is not None:
-            raise ValueError("only the original AMR Field profile declares partitions")
+            raise ValueError("only the original AMR and spatial interaction Field profiles declare partitions")
         tests, expected_cases = GROUPS[group]
     run_fixture_world(ranks=ranks, directory=directory, tests=tests,
                       expected_cases=expected_cases,
                       expected_rank_env="POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS",
                       purpose="public Field " + group + (" " + partition if partition is not None else "") + " profile",
-                      timeout_seconds=CHILD_TIMEOUT_SECONDS)
+                      timeout_seconds=CHILD_TIMEOUT_SECONDS, partition_units=units)

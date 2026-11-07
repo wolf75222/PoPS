@@ -802,6 +802,18 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
         "System::install_program: Program declares a dt bound but pops_program_dt_bound is "
         "missing; regenerate the System artifact");
   }
+  // A Program elaborated from an Advance exports its attempt budget (spec 0.3 T38); System::run_advance
+  // runs only such a Program. A Program without the entry keeps the facade step routes alone.
+  using advance_attempts_t = int (*)();
+  auto advance_attempts = reinterpret_cast<advance_attempts_t>(
+      pops::dynlib::sym(h, "pops_program_advance_max_attempts"));
+  const int advance_max_attempts = advance_attempts ? advance_attempts() : 0;
+  if (advance_attempts && advance_max_attempts < 1) {
+    pops::dynlib::close(h);
+    throw std::runtime_error(
+        "System::install_program: Program declares an Advance with no attempt; regenerate the "
+        "System artifact");
+  }
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
   const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
   auto install_boundaries = reinterpret_cast<void (*)(System<Dim>*)>(
@@ -1164,6 +1176,7 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
       System<Dim>* self = this;
       p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real { return dt_bound(self, cfl); };
     }
+    p_->program_.advance_max_attempts_ = advance_max_attempts;
     p_->program_.artifact_backed_ = true;
 
     if (!p_->program_.artifact_field_boundary_baseline_)

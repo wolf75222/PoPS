@@ -172,6 +172,94 @@ void System<Dim>::advance(double dt, int nsteps) {
 }
 
 template <int Dim>
+runtime::program::AdvanceRunReport System<Dim>::run_advance(double until, double proposal,
+                                                            std::int64_t max_steps) {
+  using runtime::program::AdvanceRunStop;
+  p_->program_.require_step_installed("System::run_advance");
+  const auto communicator = prepared_boundary_execution_lane_
+                                ? prepared_boundary_execution_lane_->communicator()
+                                : world_communicator_view();
+  const int max_attempts = p_->program_.advance_max_attempts_;
+  auto& segment = p_->program_.advance_segment_;
+  ExactContractBuilder arguments;
+  arguments.text("pops.system-run-advance.v1")
+      .scalar(until)
+      .scalar(proposal)
+      .scalar(max_steps)
+      .scalar(max_attempts)
+      .scalar(p_->t)
+      .scalar(static_cast<std::int64_t>(p_->macro_step_))
+      .scalar(segment.proposal)
+      .scalar(segment.origin)
+      .scalar(segment.steps)
+      .scalar(segment.time)
+      .scalar(segment.macro_step);
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{"system-run-advance", std::move(arguments).release()}}, communicator))
+    throw std::runtime_error("System::run_advance arguments differ between ranks");
+  if (max_attempts < 1)
+    throw std::logic_error("System::run_advance requires a Program elaborated from an Advance");
+  if (step_transaction_depth() != 0)
+    throw std::logic_error("System::run_advance cannot run inside a step transaction");
+  if (!std::isfinite(until) || !std::isfinite(proposal) || !(proposal > 0.0) || max_steps < 0)
+    throw std::invalid_argument(
+        "System::run_advance requires a finite frontier, a finite positive proposal and a "
+        "non-negative step budget");
+  if (until < p_->t)
+    throw std::invalid_argument("System::run_advance frontier precedes the accepted time");
+  // A run continues the segment that the last compiled run left at this cursor with this
+  // proposal; any other run starts one, as master's FixedDt grid does.
+  if (segment.macro_step != static_cast<std::int64_t>(p_->macro_step_) || segment.time != p_->t ||
+      segment.proposal != proposal)
+    segment = {proposal, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
+  runtime::program::AdvanceRunReport report;
+  const auto finish = [&](AdvanceRunStop stop) {
+    report.stop = stop;
+    report.segment = segment;
+    return report;
+  };
+  while (p_->t < until) {
+    if (report.steps == max_steps)
+      return finish(AdvanceRunStop::kStepBudget);
+    const auto duration = runtime::program::advance_attempt_duration(p_->t, proposal, until,
+                                                                     segment.origin, segment.steps);
+    for (std::int64_t attempt = 1;; ++attempt) {
+      try {
+        step(duration.dt);
+        break;
+      } catch (const runtime::program::StepAttemptRejected& rejected) {
+        // step() restored the accepted state on every rank before the rejection left it.
+        if (rejected.phase() != runtime::program::kAssessmentRejectionPhase)
+          throw;
+        ++report.rejections;
+        report.rejection = rejected.what();
+        if (attempt >= max_attempts) {
+          report.attempts = attempt;
+          return finish(AdvanceRunStop::kAttemptBudget);
+        }
+      }
+    }
+    ++report.steps;
+    if (duration.continuous) {
+      ++segment.steps;
+    } else {
+      segment.origin = p_->t;
+      segment.steps = 0;
+    }
+    segment.time = p_->t;
+    segment.macro_step = static_cast<std::int64_t>(p_->macro_step_);
+    if (duration.lands && p_->t != until)
+      throw std::logic_error("System::run_advance did not publish its frontier exactly");
+  }
+  return finish(AdvanceRunStop::kReached);
+}
+
+template <int Dim>
+int System<Dim>::advance_max_attempts() const noexcept {
+  return p_->program_.advance_max_attempts_;
+}
+
+template <int Dim>
 void System<Dim>::begin_step_transaction() {
   const auto& lane = prepared_boundary_execution_lane();
   runtime::program::require_step_transaction_control(
@@ -1314,6 +1402,9 @@ template SolveOutcome System<kNativeDimension>::track_solve_outcome(SolveOutcome
 template void System<kNativeDimension>::require_solve_outcome_creation_(long) const;
 template void System<kNativeDimension>::step(double);
 template void System<kNativeDimension>::advance(double, int);
+template runtime::program::AdvanceRunReport System<kNativeDimension>::run_advance(double, double,
+                                                                                  std::int64_t);
+template int System<kNativeDimension>::advance_max_attempts() const noexcept;
 template std::string System<kNativeDimension>::advance_program_region(double);
 template void System<kNativeDimension>::begin_step_transaction();
 template void System<kNativeDimension>::begin_nested_step_transaction();
