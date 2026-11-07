@@ -18,6 +18,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-87 (N3): reconstructions and slope limiters written in Python in `pops.lib.numerics`.
+  `Reconstruct(rep, value)` builds a per-axis reconstruction from `value(c, a)` (spec 0.3
+  sec. 4.3), `muscl(rep, limiter)` is the MUSCL face value of the catalogue, and `minmod`,
+  `vanleer`, `mc` and `superbee` are plain limiter functions passed uncalled. The body becomes
+  the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
+  native `MUSCL(<Limiter>())` state bit for bit for the four limiters.
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
   SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
