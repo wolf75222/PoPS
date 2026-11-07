@@ -6067,6 +6067,17 @@
         "ordinary_budget_seconds": 2100
       }
     },
+    "b03_f5_hyqmom15_final_example_weight": {
+      "basis": "CI pytest timestamps of the single collected case, which passed both times. The 285-second row put the file beside test_api_v02_implicit_derivatives_native.py in shard 26 of run 41003081117, which then reached its 45-minute step limit with no failed test. The planning weight rounds the larger observation up by about ten percent, as ci430d_shard114_observation does. No deadline, test selection or assertion changes.",
+      "observed_seconds": {
+        "run 41003081117 job 124023859839 (99e04e1, shard 26, collection end to PASSED)": 1117.74,
+        "run 41037321460 job 124311227312 (cf2f510, shard 25, pytest call duration)": 918.35
+      },
+      "previous_weight_seconds": 285,
+      "weights_seconds": {
+        "tests/python/examples/final/test_hyqmom15_final_example.py": 1230
+      }
+    },
     "ci_20260913_additions": {
       "basis": "Scheduling estimates only: 600 s for the native composition module, 5 s for source-only contracts; 30 s for tensor codegen based on its five reported CI call durations totalling 22.42 s in run 34760671991. These are not complete per-file timing measurements.",
       "files": [
@@ -6697,7 +6708,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1144,
+    "estimated_count": 1145,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6747,6 +6758,7 @@
       "tests/python/integration/io/test_io_multirank.py",
       "tests/python/integration/io/test_scheduler_cache_checkpoint.py",
       "tests/python/integration/io/test_time_history_checkpoint.py",
+      "tests/python/integration/io/test_time_history_checkpoint_identity.py",
       "tests/python/integration/io/test_uniform_selective_history_checkpoint.py",
       "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py",
       "tests/python/integration/mpi/test_compile_stale_and_debug.py",
@@ -8044,7 +8056,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1209,
+    "total_files": 1210,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8186,9 +8198,27 @@
       "source_sha256": {
         "tests/python/unit/time/test_typed_delivery_cf7.py": "de4646554623af66dc8c7b2a1d975c827ad039a28567926f7007d6a34f781927"
       }
+    },
+    "b03_f5_time_history_checkpoint_split": {
+      "basis": "The whole file ran its eight checks in one process under the 300-second process limit: 240.97 s (run 40998658393, attempt 1, shard 98) and 264 s (run 41027375127) on ordinary runners, then the limit at 300.09 s on a runner 1.23 to 1.27 times slower (same run, attempt 4). Section C, three of the file's five cold compiles, moves unchanged to its own process file, which keeps the same 300-second limit; every check still runs once. The weights split the larger observation by the shares of one local per-function timing and round up by about ten percent. No deadline, watchdog, threshold or test selection changes; replace from per-file CI timings.",
+      "observed_seconds": {
+        "run_40998658393_attempt1": 240.97,
+        "run_41027375127": 264,
+        "run_40998658393_attempt4_limit": 300.09
+      },
+      "local_contended_seconds": {
+        "section_A": 0.2,
+        "section_B": 91.0,
+        "section_C": 196.3,
+        "variable_dt_stride": 85.2
+      },
+      "weights_seconds": {
+        "tests/python/integration/io/test_time_history_checkpoint.py": 140.0,
+        "tests/python/integration/io/test_time_history_checkpoint_identity.py": 155.0
+      }
     }
   },
-  "tests/python/examples/final/test_hyqmom15_final_example.py": 285,
+  "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
   "tests/python/examples/final/test_imex_amr_final_example.py": 260,
   "tests/python/examples/final/test_multiphysics_core_example.py": 215,
   "tests/python/examples/final/test_scalar_advection_final_example.py": 2.0,
@@ -8233,7 +8263,7 @@
   "tests/python/integration/io/test_io_checkpoint.py": 365.0,
   "tests/python/integration/io/test_io_multirank.py": 80.0,
   "tests/python/integration/io/test_scheduler_cache_checkpoint.py": 5,
-  "tests/python/integration/io/test_time_history_checkpoint.py": 245.0,
+  "tests/python/integration/io/test_time_history_checkpoint.py": 140.0,
   "tests/python/integration/io/test_uniform_selective_history_checkpoint.py": 120.0,
   "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py": 270,
   "tests/python/integration/mpi/test_compile_stale_and_debug.py": 120.0,
@@ -9396,5 +9426,6 @@
   "tests/python/integration/runtime/test_traced_methods_n8_native.py": 600,
   "tests/python/unit/time/test_traced_methods_n8.py": 300,
   "tests/python/integration/runtime/test_compiled_control_n8_native.py": 600,
-  "tests/python/unit/time/test_compiled_control_n8.py": 30
+  "tests/python/unit/time/test_compiled_control_n8.py": 30,
+  "tests/python/integration/io/test_time_history_checkpoint_identity.py": 155.0
 }
