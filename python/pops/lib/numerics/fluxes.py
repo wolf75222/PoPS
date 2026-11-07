@@ -1,10 +1,12 @@
-"""Rusanov, upwind and HLL face fluxes written in Python (spec 0.3 section 4.4, P11, A4; N3a).
+"""Rusanov, upwind and HLL face fluxes written in Python (spec 0.3 section 4.4, 2.6.9, P11, A4).
 
 :func:`rusanov`, :func:`upwind` and :func:`hll` return the finite-volume realization of one
 physical flux ``F`` of the state ``Uh``: a :class:`pops.numerics.spatial.FiniteVolume` whose face is
 a :func:`riemann.User` body. The body runs once, now, and its expressions become the generated C++
 face policy; no native numerical flux is named, and the native ``riemann.Rusanov()`` /
-``riemann.HLL()`` routes are not called.
+``riemann.HLL()`` routes are not called. The native face loop that runs the body is the same for
+every flux: it holds no formula, which the body-swap parity of CF4 checks with the L1 upwind body
+and the L5 Scharfetter-Gummel body (tests/python/integration/runtime/test_lib_face_body_swap_native.py).
 
 A face body reads, for one face and its canonical positive normal ``n``:
 
@@ -18,10 +20,15 @@ A face body reads, for one face and its canonical positive normal ``n``:
   ``wave_speeds_from_jacobian``, R9), united over the two traces. The face evaluates these two
   only where an expression reads them (CF15, ROM-99).
 
-The speed functions given as options take the arguments of section 4.4: ``smax(uL, uR, n)`` for
-:func:`rusanov`, ``speed(face)`` for :func:`upwind`, and ``speeds(uL, uR, n)`` for :func:`hll`.
-The ``spectral_radius(F, u, n)`` of section 4.3 belongs to this module but is not written yet;
-the face reads its larger value over the two traces as the input ``s``.
+Each flux records the speed that its row of 2.6.9 states (SD44; adjudication section 20):
+:func:`rusanov` the speed it dissipates with, :func:`upwind` with ``speed=f`` the magnitude of
+f(face), :func:`hll` max(|sL|, |sR|) of the pair it uses.
+
+The speed function given as an option takes the arguments of section 4.4: ``smax(uL, uR, n)`` for
+:func:`rusanov` (the third parameter of section 4.4's ``rusanov(F, Uh, smax)``) and
+``speed(face)`` for :func:`upwind`. The ``spectral_radius(F, u, n)`` of section 4.3 belongs to this
+module but is not written yet; the face reads its larger value over the two traces as the input
+``s``.
 """
 from __future__ import annotations
 
@@ -45,12 +52,6 @@ def _face(body: Callable[..., tuple], Uh: Any, stability: Callable[..., Any]) ->
     from pops.numerics import riemann
 
     return riemann.User(body=body, state=Uh, stability=stability)
-
-
-def _face_spectral_radius(uL: Any, uR: Any, fL: Any, fR: Any, s: Any) -> Any:
-    # The face input s: the larger spectral radius of the flux at the two traces along n (R9).
-    del uL, uR, fL, fR
-    return s
 
 
 class _Face:
@@ -106,48 +107,56 @@ def rusanov(F: Any, Uh: Any, smax: Callable[..., Any] | None = None, *,
 
 def upwind(F: Any, Uh: Any, speed: Callable[..., Any] | None = None, *,
            reconstruction: Any = None) -> Any:
-    """Upwind flux of ``F`` on ``Uh``: F(uL).n where the normal speed is positive, else F(uR).n.
+    """Upwind flux of ``F`` on ``Uh`` (row ``upwind`` of 2.6.9, section 4.4).
 
-    ``speed=None`` is :func:`rusanov` with the spectral radius of R9, which is the upwind flux of a
-    scalar flux linear in u (section 4.4). A given ``speed(face)`` returns the signed normal speed
-    at the face (section 4.4), for example the velocity of the case dotted with ``face.normal``;
-    ``face.left(Uh)`` and ``face.right(Uh)`` are the two traces. The recorded speed is the spectral
-    radius ``s``.
+    With ``speed=f``, s = f(face) is the signed normal speed at the face, for example the velocity
+    of the case dotted with ``face.normal``; ``face.left(Uh)`` and ``face.right(Uh)`` are the two
+    traces. F* = s uL where s > 0, else s uR, component by component, and the flux records |s| as
+    its speed (SD44; adjudication section 20). Nothing is checked against ``F``: the stated speed
+    is the case's.
+
+    ``speed=None`` is section 4.4's form: :func:`rusanov` with the larger spectral radius of R9,
+    which is the upwind flux of a scalar flux linear in u. The row of 2.6.9 instead takes
+    s = F(1).n and refuses a flux that is not F(1) u (``RealizationMismatch``, naming ``rusanov()``
+    and ``hll()``); that needs the scheme to read the form of its key (``term.expect``) and a face
+    input F(1).n, which the face of ``riemann.User`` does not have (CF15, ROM-87 handoff).
     """
     if speed is None:
         return rusanov(F, Uh, reconstruction=reconstruction)
     if not callable(speed):
         raise TypeError("upwind(speed=) requires a speed function speed(face)")
 
+    def stated(uL, uR, n):
+        return speed(_Face(Uh, uL, uR, n))
+
     def body(uL, uR, fL, fR, s, *, n):
-        sign = speed(_Face(Uh, uL, uR, n))
-        return tuple(pm.where(sign > 0, lambda fl=fl: fl, lambda fr=fr: fr)
-                     for fl, fr in zip(fL, fR, strict=True))
+        del fL, fR, s
+        sign = stated(uL, uR, n)
+        return tuple(pm.where(sign > 0, lambda ul=ul: sign*ul, lambda ur=ur: sign*ur)
+                     for ul, ur in zip(uL, uR, strict=True))
 
-    return _realization(F, Uh, _face(body, Uh, _face_spectral_radius), reconstruction)
+    def recorded(uL, uR, fL, fR, s, *, n):
+        del fL, fR, s
+        return abs(stated(uL, uR, n))
+
+    return _realization(F, Uh, _face(body, Uh, recorded), reconstruction)
 
 
-def hll(F: Any, Uh: Any, speeds: Callable[..., tuple] | None = None, *,
-        reconstruction: Any = None) -> Any:
-    """Harten-Lax-van Leer flux of ``F`` on ``Uh``.
+def hll(F: Any, Uh: Any, *, reconstruction: Any = None) -> Any:
+    """Harten-Lax-van Leer flux of ``F`` on ``Uh`` (row ``hll`` of 2.6.9).
 
     F* = F(uL).n where sL >= 0, F(uR).n where sR <= 0, and otherwise
-    (sR F(uL).n - sL F(uR).n + sL sR (uR - uL)) / (sR - sL). With ``speeds=None``, (sL, sR) is the
-    face input ``speeds``: the slowest and the fastest wave speeds that the model declares along
-    the face normal (``Model.wave_speeds`` or ``wave_speeds_from_jacobian``, R9), united over the
-    two traces, as the native ``riemann.HLL()`` takes them. A case whose model declares none is
-    refused when it is validated. ``speeds(uL, uR, n)`` returns the pair from the case's own
-    physics instead. The recorded speed of the flux is the spectral radius ``s``.
+    (sR F(uL).n - sL F(uR).n + sL sR (uR - uL)) / (sR - sL). (sL, sR) is the face input
+    ``speeds``: the slowest and the fastest wave speeds that the model declares along the face
+    normal (``Model.wave_speeds`` or ``wave_speeds_from_jacobian``, R9), united over the two
+    traces, as the native ``riemann.HLL()`` takes them. A case whose model declares none is
+    refused when it is validated. The flux records max(|sL|, |sR|) as its speed, the larger
+    spectral radius of the two traces (adjudication section 20). The row states no other way to
+    give the pair, so the pilot's ``speeds=`` option is gone (I22, CF16).
     """
-    if speeds is not None and not callable(speeds):
-        raise TypeError("hll(speeds=) requires a function speeds(uL, uR, n) -> (sL, sR)")
-    stated = speeds
-
-    def body(uL, uR, fL, fR, s, *, n, speeds):
-        pair = speeds if stated is None else stated(uL, uR, n)
-        if not isinstance(pair, tuple) or len(pair) != 2:
-            raise TypeError("hll(speeds=) must return the pair (sL, sR)")
-        lower, upper = pair
+    def body(uL, uR, fL, fR, s, *, speeds):
+        del s
+        lower, upper = speeds
 
         def component(ul, ur, fl, fr):
             # The two-wave state exists only where sL < 0 < sR, so sR - sL > 0 there.
@@ -158,7 +167,12 @@ def hll(F: Any, Uh: Any, speeds: Callable[..., tuple] | None = None, *,
 
         return tuple(component(*row) for row in zip(uL, uR, fL, fR, strict=True))
 
-    return _realization(F, Uh, _face(body, Uh, _face_spectral_radius), reconstruction)
+    def recorded(uL, uR, fL, fR, s, *, speeds):
+        del uL, uR, fL, fR, s
+        lower, upper = speeds
+        return pm.maximum(abs(lower), abs(upper))
+
+    return _realization(F, Uh, _face(body, Uh, recorded), reconstruction)
 
 
 __all__ = ["rusanov", "upwind", "hll"]
