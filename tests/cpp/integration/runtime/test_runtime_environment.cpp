@@ -9,13 +9,12 @@ using namespace pops;
 
 TEST(RuntimeEnvironment, ReportsActualFabMemoryResidence) {
   using FieldMemorySpace = typename Fab<kNativeDimension>::memory_space;
-  static_assert(std::is_same_v<FieldMemorySpace,
-                              Kokkos::DefaultExecutionSpace::memory_space>);
+  static_assert(std::is_same_v<FieldMemorySpace, Kokkos::DefaultExecutionSpace::memory_space>);
   const RuntimeEnvironmentReport report = runtime_environment_report();
   if constexpr (std::is_same_v<FieldMemorySpace, Kokkos::HostSpace>) {
     EXPECT_EQ(report.field_memory_space, "host");
   } else if constexpr (Kokkos::SpaceAccessibility<Kokkos::DefaultHostExecutionSpace,
-                                                 FieldMemorySpace>::accessible) {
+                                                  FieldMemorySpace>::accessible) {
     EXPECT_EQ(report.field_memory_space, "managed");
   } else {
     EXPECT_EQ(report.field_memory_space, "device");

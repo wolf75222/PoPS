@@ -227,7 +227,7 @@ def _resolved(
         tagging=AMRTagging(
             rules=(
                 Tag(ValueExpr(state_instances[0]) > case.value(threshold)),
-                Buffer(cells=1),
+                Buffer(cells=1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,

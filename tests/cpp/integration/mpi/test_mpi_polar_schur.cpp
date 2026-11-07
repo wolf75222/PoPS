@@ -20,27 +20,25 @@ constexpr pops::Real kPi = pops::Real(3.141592653589793238462643383279502884L);
 
 std::size_t offset(const pops::Box<kDim>& storage, int i, int j) {
   return static_cast<std::size_t>(i - storage.lo[0]) +
-         static_cast<std::size_t>(j - storage.lo[1]) *
-             static_cast<std::size_t>(storage.length(0));
+         static_cast<std::size_t>(j - storage.lo[1]) * static_cast<std::size_t>(storage.length(0));
 }
 
 pops::PolarEllipticBuildRequest<kDim> request() {
   const int ranks = pops::n_ranks();
   if (kTheta % ranks != 0)
     throw std::invalid_argument("MPI polar test requires theta divisible by communicator size");
-  const pops::Box<kDim> domain{pops::Index<kDim>{0, 0},
-                              pops::Index<kDim>{kRadial - 1, kTheta - 1}};
+  const pops::Box<kDim> domain{pops::Index<kDim>{0, 0}, pops::Index<kDim>{kRadial - 1, kTheta - 1}};
   const auto geometry = pops::PolarGeometry<kDim>::annulus(domain, kRmin, kRmax);
-  const auto boxes = pops::mesh::BoxArray<kDim>::from_domain(
-      domain, pops::Extent<kDim>{kRadial, kTheta / ranks});
+  const auto boxes =
+      pops::mesh::BoxArray<kDim>::from_domain(domain, pops::Extent<kDim>{kRadial, kTheta / ranks});
   const pops::mesh::RankSpace<kDim> rank_space{pops::Index<kDim>{0, 0},
-                                              pops::Extent<kDim>{1, ranks}};
+                                               pops::Extent<kDim>{1, ranks}};
   std::vector<pops::Index<kDim>> owners;
   owners.reserve(boxes.size());
   for (int rank = 0; rank < ranks; ++rank)
     owners.push_back(pops::Index<kDim>{0, rank});
-  const auto distribution = pops::mesh::Distribution<kDim>::partitioned(
-      boxes, rank_space, std::move(owners));
+  const auto distribution =
+      pops::mesh::Distribution<kDim>::partitioned(boxes, rank_space, std::move(owners));
   std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
   faces[0] = {pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)};
   faces[1] = {pops::PhysicalBoundaryKind::dirichlet, pops::Real(0)};
@@ -58,8 +56,7 @@ pops::Real forcing(pops::Real radius, pops::Real theta) {
   const pops::Real radial_wave = kPi / (kRmax - kRmin);
   const pops::Real phase = radial_wave * (radius - kRmin);
   const pops::Real radial = std::sin(phase);
-  return (-radial_wave * radial_wave * radial +
-          radial_wave * std::cos(phase) / radius -
+  return (-radial_wave * radial_wave * radial + radial_wave * std::cos(phase) / radius -
           pops::Real(9) * radial / (radius * radius)) *
          std::cos(pops::Real(3) * theta);
 }
@@ -73,8 +70,7 @@ void fill_local_rhs(pops::PolarTensorKrylovSolver<kDim>& solver) {
   const auto& storage = fab.grown_box();
   for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
     for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
-      host(offset(storage, i, j)) =
-          forcing(solver.geom().r_cell(i), solver.geom().theta_cell(j));
+      host(offset(storage, i, j)) = forcing(solver.geom().r_cell(i), solver.geom().theta_cell(j));
   fab.copy_from_host(host);
 }
 

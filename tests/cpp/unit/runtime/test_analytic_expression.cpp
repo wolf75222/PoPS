@@ -402,8 +402,8 @@ void check_expression_constant_and_polynomial_averages() {
   const auto geometry = unit_geometry(box);
   const auto c = [](Real value) { return AnalyticNode::constant(value); };
   const auto x = AnalyticNode::x();
-  const std::array constants{Real(.1), Real(-.7), Real(1), Real(3.25),
-                            std::numeric_limits<Real>::min(), Real(1e20)};
+  const std::array constants{
+      Real(.1), Real(-.7), Real(1), Real(3.25), std::numeric_limits<Real>::min(), Real(1e20)};
   for (Real value : constants) {
     // Equivalent public expressions in opposite operand orders, not literals.
     for (bool reverse : {false, true}) {
@@ -421,15 +421,20 @@ void check_expression_constant_and_polynomial_averages() {
   // Finite opposite-sign samples must not overflow an affine reference
   // difference. The odd function has independently known mean zero.
   pops::RealVector<Dim> lower{}, upper{};
-  for (int axis = 0; axis < Dim; ++axis) { lower[axis] = Real(-1); upper[axis] = Real(1); }
+  for (int axis = 0; axis < Dim; ++axis) {
+    lower[axis] = Real(-1);
+    upper[axis] = Real(1);
+  }
   const auto wide_geometry = pops::Geometry<Dim>::from_bounds(
       pops::Box<Dim>::from_extents(uniform_extent<Dim>(1)), lower, upper);
   const Real amplitude = std::numeric_limits<Real>::max() * Real(.8);
   for (bool reordered : {false, true}) {
-    const auto expression = reordered
-        ? binary(AnalyticOp::Sub, binary(AnalyticOp::Mul, c(amplitude),
-                     binary(AnalyticOp::Add, x, c(.25))), c(amplitude * Real(.25)))
-        : binary(AnalyticOp::Mul, c(amplitude), x);
+    const auto expression =
+        reordered
+            ? binary(AnalyticOp::Sub,
+                     binary(AnalyticOp::Mul, c(amplitude), binary(AnalyticOp::Add, x, c(.25))),
+                     c(amplitude * Real(.25)))
+            : binary(AnalyticOp::Mul, c(amplitude), x);
     const auto program = compile_analytic_expression(expression);
     const pops::analytic::detail::AnalyticCellAverage<Dim> average{program.view(), wide_geometry};
     const Real actual = average(pops::Index<Dim>{});
@@ -440,8 +445,8 @@ void check_expression_constant_and_polynomial_averages() {
   // exact through degree seven. Reordering addition must preserve that accuracy.
   for (bool reverse : {false, true}) {
     const auto power = binary(AnalyticOp::Pow, x, c(6));
-    const auto expression = reverse ? binary(AnalyticOp::Add, power, c(.3))
-                                    : binary(AnalyticOp::Add, c(.3), power);
+    const auto expression =
+        reverse ? binary(AnalyticOp::Add, power, c(.3)) : binary(AnalyticOp::Add, c(.3), power);
     const auto program = compile_analytic_expression(expression);
     const pops::analytic::detail::AnalyticCellAverage<Dim> average{program.view(), geometry};
     for_each_host_index(box, [&](const pops::Index<Dim>& index) {
@@ -718,15 +723,14 @@ TEST(AnalyticExpression, InitialDerivativeHandlesEmptyRanksAndRefusesSparseCover
 
 TEST(AnalyticExpression, PreparedInitialDerivativeUsesSolvedHaloAtSparseInterfacesAndGlobalEdges) {
   constexpr int Dim = 2;
-  const auto lane = pops::ExecutionLane::duplicate_world_collectively(
-      "test.prepared-initial-derivative-sparse");
+  const auto lane =
+      pops::ExecutionLane::duplicate_world_collectively("test.prepared-initial-derivative-sparse");
   const auto domain = pops::Box<Dim>::from_extents(pops::Extent<Dim>{16, 16});
-  const auto geometry = pops::Geometry<Dim>::from_bounds(
-      domain, pops::RealVector<Dim>{-8, -8}, pops::RealVector<Dim>{8, 8});
-  const std::vector<pops::Box<Dim>> boxes{
-      {pops::Index<Dim>{0, 0}, pops::Index<Dim>{3, 3}},
-      {pops::Index<Dim>{6, 6}, pops::Index<Dim>{9, 9}},
-      {pops::Index<Dim>{12, 12}, pops::Index<Dim>{15, 15}}};
+  const auto geometry = pops::Geometry<Dim>::from_bounds(domain, pops::RealVector<Dim>{-8, -8},
+                                                         pops::RealVector<Dim>{8, 8});
+  const std::vector<pops::Box<Dim>> boxes{{pops::Index<Dim>{0, 0}, pops::Index<Dim>{3, 3}},
+                                          {pops::Index<Dim>{6, 6}, pops::Index<Dim>{9, 9}},
+                                          {pops::Index<Dim>{12, 12}, pops::Index<Dim>{15, 15}}};
   const pops::mesh::BoxArray<Dim> layout(boxes);
   const pops::mesh::RankSpace<Dim> ranks(pops::Index<Dim>{}, pops::Extent<Dim>{lane.size(), 1});
   std::vector<pops::Index<Dim>> owners;
@@ -739,8 +743,9 @@ TEST(AnalyticExpression, PreparedInitialDerivativeUsesSolvedHaloAtSparseInterfac
     auto host = phi.fab(local).create_host_mirror();
     for_each_host_index(phi.fab(local).grown_box(), [&](const auto& index) {
       const auto position = geometry.cell_center(index);
-      host(host_offset(phi.fab(local).grown_box(), index)) =
-          position[0]*position[0] + Real(3)*position[1]*position[1] + position[0]*position[1];
+      host(host_offset(phi.fab(local).grown_box(), index)) = position[0] * position[0] +
+                                                             Real(3) * position[1] * position[1] +
+                                                             position[0] * position[1];
     });
     phi.fab(local).copy_from_host(host);
   }
@@ -754,8 +759,8 @@ TEST(AnalyticExpression, PreparedInitialDerivativeUsesSolvedHaloAtSparseInterfac
       result->fab(local).copy_to_host(host);
       for_each_host_index(result->box(local), [&](const auto& index) {
         const auto position = geometry.cell_center(index);
-        const Real expected = axis == 0 ? Real(2)*position[0]+position[1]
-                                       : position[0]+Real(6)*position[1];
+        const Real expected =
+            axis == 0 ? Real(2) * position[0] + position[1] : position[0] + Real(6) * position[1];
         EXPECT_EQ(host(host_offset(result->fab(local).grown_box(), index)), expected);
       });
     }
@@ -763,8 +768,8 @@ TEST(AnalyticExpression, PreparedInitialDerivativeUsesSolvedHaloAtSparseInterfac
   EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative_from_prepared_halo(
       phi, geometry, lane.rank() == 0 ? -1 : 0, lane));
   phi.set_val(std::numeric_limits<Real>::quiet_NaN());
-  EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative_from_prepared_halo(
-      phi, geometry, 0, lane));
+  EXPECT_ANY_THROW(
+      pops::analytic::materialize_initial_derivative_from_prepared_halo(phi, geometry, 0, lane));
 }
 
 TEST(AnalyticExpression, PreparedInitialDerivativeRefusesMissingHaloAndUndersizedGlobalPatch) {
@@ -774,15 +779,15 @@ TEST(AnalyticExpression, PreparedInitialDerivativeRefusesMissingHaloAndUndersize
   const auto domain = pops::Box<Dim>::from_extents(pops::Extent<Dim>{8, 8});
   const auto geometry = unit_geometry(domain);
   const pops::mesh::RankSpace<Dim> ranks(pops::Index<Dim>{}, pops::Extent<Dim>{lane.size(), 1});
-  const pops::mesh::BoxArray<Dim> layout(std::vector<pops::Box<Dim>>{
-      {pops::Index<Dim>{0, 0}, pops::Index<Dim>{1, 7}}});
-  const auto distribution = pops::mesh::Distribution<Dim>::partitioned(
-      layout, ranks, {ranks.coordinate(0)});
+  const pops::mesh::BoxArray<Dim> layout(
+      std::vector<pops::Box<Dim>>{{pops::Index<Dim>{0, 0}, pops::Index<Dim>{1, 7}}});
+  const auto distribution =
+      pops::mesh::Distribution<Dim>::partitioned(layout, ranks, {ranks.coordinate(0)});
   pops::MultiFab<Dim> phi(layout, distribution, ranks.coordinate(lane.rank()), 1,
                           pops::Extent<Dim>{1, 1});
   phi.set_val(Real(0));
-  EXPECT_ANY_THROW(pops::analytic::materialize_initial_derivative_from_prepared_halo(
-      phi, geometry, 0, lane));
+  EXPECT_ANY_THROW(
+      pops::analytic::materialize_initial_derivative_from_prepared_halo(phi, geometry, 0, lane));
   pops::MultiFab<Dim> no_halo(layout, distribution, ranks.coordinate(lane.rank()), 1,
                               pops::Extent<Dim>{});
   no_halo.set_val(Real(0));

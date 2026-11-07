@@ -351,7 +351,10 @@ PROGRAM_CONTRACT_EXTENSIONS = {
          "/// Rank-local structured-control copy.",
          "void axpy(field_type& destination, Real factor, const field_type& source) const"),
         ("amr_program_context_flux_expression_runtime.inc",
-         "            std::set<std::string> fine_families, coarse_families;",
+         "      // The temporal families of the fine faces of each coarse face, over every flux basis.",
+         "      const std::vector<const incoming_entry_type*> no_entries;"),
+        ("amr_program_context_flux_expression_runtime.inc",
+         "            std::set<std::string> coarse_families;",
          "          if (!exact_operator_pack)"),
     )),
     "spatial_implicit": (48, (
@@ -492,6 +495,10 @@ SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET = 112
 # owner and seven in its runtime caller. Count all 34 in both aggregate closures;
 # retain every responsibility, scaffolding and resource allowance unchanged.
 TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET = 34
+# The clang-format 19.1.7 sweep of N5 adds 22 lines to the program fragments, and so to the
+# program closure, with the same tokens (18230 to 18252 lines at 6e0a3ef5): both margins stay
+# what they were before the sweep.
+N5_SWEEP_PROGRAM_FRAGMENT_LINES = 22
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
@@ -499,6 +506,7 @@ PROGRAM_FRAGMENT_BUDGET = (
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
     + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
+    + N5_SWEEP_PROGRAM_FRAGMENT_LINES
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -541,6 +549,7 @@ PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
     + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
+    + N5_SWEEP_PROGRAM_FRAGMENT_LINES
 )
 PROGRAM_SEMANTIC_HELPER_PATHS = frozenset({
     "pops/runtime/program/prepared_program_field_stages.hpp",
@@ -861,11 +870,15 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
         "pops/numerics/spatial/nd/face_frequency.hpp":
             (80, "maximum_incident_face_frequency"),
         "pops/runtime/program/prepared_amr_field_residual.hpp":
-            (900, "class PreparedAmrFieldResidual"),
+            # The clang-format 19.1.7 sweep of N5 takes this file from 874 to 979
+            # lines (+105) with the same tokens; the margin stays 26 lines.
+            (900 + 105, "class PreparedAmrFieldResidual"),
         "pops/runtime/program/prepared_integral_capture.hpp":
-            (128, "class PreparedIntegralCapture"),
+            # Same sweep: 109 to 134 lines (+25), margin 19.
+            (128 + 25, "class PreparedIntegralCapture"),
         "pops/runtime/program/program_value_authority.hpp":
-            (480, "class ProgramValueAuthority"),
+            # Same sweep: 471 to 531 lines (+60), margin 9.
+            (480 + 60, "class ProgramValueAuthority"),
         "pops/runtime/program/prepared_program_field_stages.hpp":
             (240, "class PreparedProgramFieldStages"),
         "pops/runtime/program/prepared_hierarchy_barrier.hpp":

@@ -19,9 +19,11 @@
 #include <vector>
 
 namespace pops {
-template <int Dim> class System;
-template <int Dim> class AmrSystem;
-}
+template <int Dim>
+class System;
+template <int Dim>
+class AmrSystem;
+}  // namespace pops
 
 namespace pops::runtime::system {
 
@@ -31,19 +33,37 @@ template <int Dim>
 class NativeAcceptedFieldSource {
  public:
   void validate() const {
-    if (!validate_) throw std::logic_error("native accepted Field source is empty");
+    if (!validate_)
+      throw std::logic_error("native accepted Field source is empty");
     validate_();
   }
-  [[nodiscard]] const MultiFab<Dim>& state() const { validate(); return *state_; }
-  [[nodiscard]] const multiblock::BoundaryEvaluationPoint& birth_point() const { validate(); return point_; }
-  [[nodiscard]] int runtime_block() const { validate(); return block_; }
-  [[nodiscard]] int level() const { validate(); return point_.level; }
+  [[nodiscard]] const MultiFab<Dim>& state() const {
+    validate();
+    return *state_;
+  }
+  [[nodiscard]] const multiblock::BoundaryEvaluationPoint& birth_point() const {
+    validate();
+    return point_;
+  }
+  [[nodiscard]] int runtime_block() const {
+    validate();
+    return block_;
+  }
+  [[nodiscard]] int level() const {
+    validate();
+    return point_.level;
+  }
+
  private:
   friend class ::pops::System<Dim>;
   friend class ::pops::AmrSystem<Dim>;
   NativeAcceptedFieldSource(std::shared_ptr<const MultiFab<Dim>> state,
-      multiblock::BoundaryEvaluationPoint point, int block, std::function<void()> validate)
-      : state_(std::move(state)), point_(std::move(point)), block_(block), validate_(std::move(validate)) {
+                            multiblock::BoundaryEvaluationPoint point, int block,
+                            std::function<void()> validate)
+      : state_(std::move(state)),
+        point_(std::move(point)),
+        block_(block),
+        validate_(std::move(validate)) {
     if (!state_ || block_ < 0 || point_.level < 0)
       throw std::invalid_argument("native accepted Field source lacks its actual carrier");
     this->validate();
@@ -62,7 +82,8 @@ class FieldSolveRequest {
   using authority_type = program::ProgramValueAuthority<Dim>;
   struct Source {
     std::variant<typename authority_type::Value, typename authority_type::AcceptedValue,
-                 NativeAcceptedFieldSource<Dim>> proof;
+                 NativeAcceptedFieldSource<Dim>>
+        proof;
     std::function<void()> validate_field_edge;
     void validate() const {
       std::visit([](const auto& value) { value.validate(); }, proof);
@@ -72,13 +93,16 @@ class FieldSolveRequest {
     }
     [[nodiscard]] const MultiFab<Dim>& state() const {
       validate();
-      return std::visit([](const auto& value) -> const MultiFab<Dim>& { return value.state(); }, proof);
+      return std::visit([](const auto& value) -> const MultiFab<Dim>& { return value.state(); },
+                        proof);
     }
     [[nodiscard]] int block() const {
-      validate(); return std::visit([](const auto& value) { return value.runtime_block(); }, proof);
+      validate();
+      return std::visit([](const auto& value) { return value.runtime_block(); }, proof);
     }
     [[nodiscard]] int level() const {
-      validate(); return std::visit([](const auto& value) { return value.level(); }, proof);
+      validate();
+      return std::visit([](const auto& value) { return value.level(); }, proof);
     }
     [[nodiscard]] std::string source_identity() const {
       validate();
@@ -105,7 +129,8 @@ class FieldSolveRequest {
   }
   [[nodiscard]] const MultiFab<Dim>& selected_state(int block, int level) const {
     for (const auto& source : sources_)
-      if (source.block() == block && source.level() == level) return source.state();
+      if (source.block() == block && source.level() == level)
+        return source.state();
     const MultiFab<Dim>* selected = nullptr;
     for (const auto& source : legacy_sources_)
       if (source.block == block && source.level == level) {
@@ -113,7 +138,8 @@ class FieldSolveRequest {
           throw std::invalid_argument("legacy Field source is empty or duplicated");
         selected = source.state.get();
       }
-    if (!selected) throw std::invalid_argument("Field request lacks a selected source image");
+    if (!selected)
+      throw std::invalid_argument("Field request lacks a selected source image");
     return *selected;
   }
   [[nodiscard]] const std::string& field() const noexcept { return field_; }
@@ -123,23 +149,31 @@ class FieldSolveRequest {
     const Source* selected = nullptr;
     for (const auto& source : sources_)
       if (source.block() == block && source.level() == level) {
-        if (selected) throw std::invalid_argument("Field request contains duplicate native sources");
+        if (selected)
+          throw std::invalid_argument("Field request contains duplicate native sources");
         selected = &source;
       }
-    if (!selected) throw std::invalid_argument("Field request lacks its actual native source level");
+    if (!selected)
+      throw std::invalid_argument("Field request lacks its actual native source level");
     return *selected;
   }
+
  private:
   friend class ::pops::System<Dim>;
   friend class ::pops::AmrSystem<Dim>;
   friend class program::ProgramContext<Dim>;
-  template <int, class> friend class program::AmrProgramContext;
+  template <int, class>
+  friend class program::AmrProgramContext;
   FieldSolveRequest(std::string field, multiblock::BoundaryEvaluationPoint point,
                     std::vector<Source> sources, std::vector<LegacySource> legacy_sources = {})
-      : field_(std::move(field)), point_(std::move(point)), sources_(std::move(sources)), legacy_sources_(std::move(legacy_sources)) {
+      : field_(std::move(field)),
+        point_(std::move(point)),
+        sources_(std::move(sources)),
+        legacy_sources_(std::move(legacy_sources)) {
     if (field_.empty() || sources_.empty())
       throw std::invalid_argument("native FieldSolveRequest@2 is incomplete");
-    for (const auto& source : sources_) source.validate();
+    for (const auto& source : sources_)
+      source.validate();
   }
   std::string field_;
   multiblock::BoundaryEvaluationPoint point_;
@@ -170,20 +204,28 @@ class FieldRhsExecutionRecovery {
   }
   void drain() {
     Kokkos::fence();
-    for (const auto& owner : owners_) if (owner.complete) owner.complete();
+    for (const auto& owner : owners_)
+      if (owner.complete)
+        owner.complete();
     owners_.clear();
   }
   ~FieldRhsExecutionRecovery() noexcept {
-    if (owners_.empty()) return;
-    try { drain(); }
-    catch (...) {
+    if (owners_.empty())
+      return;
+    try {
+      drain();
+    } catch (...) {
       // The backend could not prove completion even during runtime destruction. Preserve
       // allocations for backend teardown instead of releasing them under pending work.
       (void)new decltype(owners_)(std::move(owners_));
     }
   }
+
  private:
-  struct Retained { std::shared_ptr<void> owner; std::function<void()> complete; };
+  struct Retained {
+    std::shared_ptr<void> owner;
+    std::function<void()> complete;
+  };
   std::vector<Retained> owners_;
 };
 
@@ -197,28 +239,61 @@ class PreparedFieldRhsInputs {
   using execution_space = Kokkos::DefaultExecutionSpace;
   static constexpr unsigned input_contract_version = 2;
 
-  [[nodiscard]] const field_type& state() const { require_live_(); return *state_; }
-  [[nodiscard]] const Geometry<Dim>& frame() const { require_live_(); return frame_; }
-  [[nodiscard]] const FieldLogicalTimePoint& point() const { require_live_(); return point_; }
+  [[nodiscard]] const field_type& state() const {
+    require_live_();
+    return *state_;
+  }
+  [[nodiscard]] const Geometry<Dim>& frame() const {
+    require_live_();
+    return frame_;
+  }
+  [[nodiscard]] const FieldLogicalTimePoint& point() const {
+    require_live_();
+    return point_;
+  }
   [[nodiscard]] const multiblock::BoundaryEvaluationPoint& boundary_point() const {
-    require_live_(); return boundary_point_;
+    require_live_();
+    return boundary_point_;
   }
-  [[nodiscard]] int level() const { require_live_(); return point_.level; }
-  [[nodiscard]] const std::string& binding_identity() const { require_live_(); return binding_; }
-  [[nodiscard]] const std::string& source_identity() const { require_live_(); return source_; }
-  [[nodiscard]] const std::string& consumer_qid() const { require_live_(); return consumer_; }
-  [[nodiscard]] std::uint64_t topology_epoch() const { require_live_(); return topology_; }
+  [[nodiscard]] int level() const {
+    require_live_();
+    return point_.level;
+  }
+  [[nodiscard]] const std::string& binding_identity() const {
+    require_live_();
+    return binding_;
+  }
+  [[nodiscard]] const std::string& source_identity() const {
+    require_live_();
+    return source_;
+  }
+  [[nodiscard]] const std::string& consumer_qid() const {
+    require_live_();
+    return consumer_;
+  }
+  [[nodiscard]] std::uint64_t topology_epoch() const {
+    require_live_();
+    return topology_;
+  }
   [[nodiscard]] std::uint64_t materialization_generation() const {
-    require_live_(); return generation_;
+    require_live_();
+    return generation_;
   }
-  [[nodiscard]] execution_space execution() const { require_live_(); return execution_; }
-  [[nodiscard]] const ExecutionLane& lane() const { require_live_(); return *lane_; }
+  [[nodiscard]] execution_space execution() const {
+    require_live_();
+    return execution_;
+  }
+  [[nodiscard]] const ExecutionLane& lane() const {
+    require_live_();
+    return *lane_;
+  }
   /// The retained immutable lane is available for the refusal vote even if this input is stale.
   [[nodiscard]] const ExecutionLane& consensus_lane() const noexcept { return *lane_; }
 
   /// Register scratch/model/view owners before launching; the runtime releases them after drain.
   void retain_execution_owner(std::shared_ptr<void> owner) const {
-    require_live_(); recovery_->retain(std::move(owner));
+    require_live_();
+    recovery_->retain(std::move(owner));
   }
 
   template <int Count>
@@ -227,7 +302,7 @@ class PreparedFieldRhsInputs {
     if (count_ != static_cast<std::size_t>(Count))
       throw std::invalid_argument("Field RHS provider count differs from its qualified input");
     require_pointwise_provider_groups<Dim, Count>(*state_, groups_.get(), plan_.get(),
-                                                 "prepared Field RHS");
+                                                  "prepared Field RHS");
     for (std::size_t local = 0; local < state_->local_size(); ++local)
       (void)bind_provider_storage_view<Dim, Count>(plan_.get(), groups_.get(), local);
   }
@@ -249,27 +324,39 @@ class PreparedFieldRhsInputs {
     std::atomic<bool> revoked{false};
   };
 
-  PreparedFieldRhsInputs(
-      std::shared_ptr<const field_type> state,
-      std::shared_ptr<const AuxiliaryStorageGroups<Dim>> groups,
-      std::shared_ptr<const ResolvedAuxiliaryConsumerPlan<Dim>> plan,
-      Geometry<Dim> frame, FieldLogicalTimePoint point,
-      multiblock::BoundaryEvaluationPoint boundary_point,
-      std::string binding, std::string source, std::string consumer, std::size_t count,
-      std::uint64_t topology, std::uint64_t generation, execution_space execution,
-      std::shared_ptr<const ExecutionLane> lane, const std::shared_ptr<InvocationLease>& lease,
-      std::function<void()> validate,
-      std::shared_ptr<FieldRhsExecutionRecovery> recovery)
-      : state_(std::move(state)), groups_(std::move(groups)), plan_(std::move(plan)),
-        frame_(std::move(frame)), point_(point), boundary_point_(std::move(boundary_point)),
-        binding_(std::move(binding)), source_(std::move(source)), consumer_(std::move(consumer)),
-        count_(count), topology_(topology), generation_(generation), execution_(execution),
-        lane_(std::move(lane)), lane_borrow_(std::make_shared<ExecutionLane::ImmutableBorrow>(lane_->borrow_immutably())),
-        lease_(lease), validate_(std::move(validate)), recovery_(std::move(recovery)) {
+  PreparedFieldRhsInputs(std::shared_ptr<const field_type> state,
+                         std::shared_ptr<const AuxiliaryStorageGroups<Dim>> groups,
+                         std::shared_ptr<const ResolvedAuxiliaryConsumerPlan<Dim>> plan,
+                         Geometry<Dim> frame, FieldLogicalTimePoint point,
+                         multiblock::BoundaryEvaluationPoint boundary_point, std::string binding,
+                         std::string source, std::string consumer, std::size_t count,
+                         std::uint64_t topology, std::uint64_t generation,
+                         execution_space execution, std::shared_ptr<const ExecutionLane> lane,
+                         const std::shared_ptr<InvocationLease>& lease,
+                         std::function<void()> validate,
+                         std::shared_ptr<FieldRhsExecutionRecovery> recovery)
+      : state_(std::move(state)),
+        groups_(std::move(groups)),
+        plan_(std::move(plan)),
+        frame_(std::move(frame)),
+        point_(point),
+        boundary_point_(std::move(boundary_point)),
+        binding_(std::move(binding)),
+        source_(std::move(source)),
+        consumer_(std::move(consumer)),
+        count_(count),
+        topology_(topology),
+        generation_(generation),
+        execution_(execution),
+        lane_(std::move(lane)),
+        lane_borrow_(std::make_shared<ExecutionLane::ImmutableBorrow>(lane_->borrow_immutably())),
+        lease_(lease),
+        validate_(std::move(validate)),
+        recovery_(std::move(recovery)) {
     if (!state_ || !lease || !validate_ || !recovery_ || binding_.empty() || source_.empty() ||
         point_.level < 0 || point_.level != boundary_point_.level ||
         (count_ != 0 && (!groups_ || !plan_ || consumer_.empty() ||
-                        plan_->consumer_qid != consumer_ || plan_->value_count() != count_)))
+                         plan_->consumer_qid != consumer_ || plan_->value_count() != count_)))
       throw std::invalid_argument("Field RHS input lacks its exact native issuer contract");
     require_live_();
   }

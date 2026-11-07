@@ -18,7 +18,6 @@ import tomllib
 from tests.python.architecture.frozen_engine import ratchet, scan
 
 INTERFACES = scan.HERE / "cf2_interfaces.toml"
-PLACEMENT = scan.HERE / "cf0_native_placement.toml"
 CATALOG = scan.REPO_ROOT / "schemas" / "component_catalog.v2.json"
 GENERATED = scan.REPO_ROOT / "python" / "pops" / "_generated_component_interfaces.py"
 
@@ -125,7 +124,7 @@ def test_generated_interfaces_match_the_catalog():
 
 
 def test_placement_entries_bind_through_the_closed_list():
-    natives = tomllib.loads(PLACEMENT.read_text(encoding="utf-8"))["native"]
+    natives = scan.load_placement()
     wrong = [(row["id"], row["interface"]) for row in natives
              if row["interface"] not in FC6B_CLOSED_LIST + ("none",)]
     assert not wrong, "CF0 placement entries must name an FC6b interface (or none): %s" % wrong

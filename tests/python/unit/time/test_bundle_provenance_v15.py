@@ -9,7 +9,7 @@ from pops.ledger_provenance import InventoryBinding,validate_program_contracts
 from pops.current_dependencies import CurrentDependency
 from pops.graph_functions import graph,GraphFunction
 from pops.time.variant_types import Float64,Product,Result,Failure,type_of
-from pops.codegen.realization_delivery import delivered_frontiers
+from pops.codegen.typed_delivery import delivered_frontiers
 
 
 def raw(p,d,q,r,z,history,source=None):
@@ -221,7 +221,7 @@ def test_bundle_inventory_native_profile_elaborates_complete_real_program():
 
 
 def test_plain_product_skips_inventory_delivery_but_keeps_current_equations(monkeypatch):
-    import pops.codegen.realization_delivery as delivery
+    import pops.codegen.typed_delivery as delivery
     p,bs,schema,base,old,_=setup()
     def forbidden(*args,**kwargs):raise AssertionError('uncertified product invoked delivery analysis')
     with monkeypatch.context() as m:

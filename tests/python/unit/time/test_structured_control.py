@@ -20,7 +20,9 @@ def _fixture(name="structured"):
 
 def _commit(program, temporal, value):
     endpoint = temporal.next
-    program.commit(endpoint, program.value("accepted", value, at=endpoint.point))
+    accepted = program.value("accepted", value, at=endpoint.point)
+    program.commit(endpoint, accepted)
+    return accepted
 
 
 def test_nested_product_fold_preserves_two_blocks_and_simultaneous_swaps():
@@ -57,17 +59,24 @@ def test_swap_same_authority_stages_uses_two_phase_copy():
     p, a, _ = _fixture("swap")
     initial = p.product(x=a.n, y=p.value("twice", 2 * a.n))
     result = p.fold(initial, 1, lambda t, x, i: t.product(x=x["y"], y=x["x"]))
-    _commit(p, a, result["x"])
+    accepted = _commit(p, a, result["x"])
     source = emit_cpp_program(p)
     line = source.index("for (; iteration_")
     tail = source[line:]
+    # The unit-coefficient commit value then binds its identity alias, which owns a copy
+    # only when its source carries a pending Field representation.
+    alias = tail.index("bool identity_%d_pending = false;" % accepted.id)
+    loop, after = tail[:alias], tail[alias:]
     # Both next fields prepare before either holder is replaced; the carry
     # copies only start once the complete next product is owned.
     vote = tail.index('"structured control owned copy"')
-    assert tail.count("ctx.own_structural_field") == 4
+    assert loop.count("ctx.own_structural_field") == 4
     assert tail.index("next_") < tail.index("carry_", tail.index("next_"))
     assert tail.index("_owner = std::move") > vote
     assert "is_nothrow_move_assignable_v" not in tail  # This product contains only Fields.
+    assert after.count("ctx.own_structural_field") == 1
+    assert after.index("if (identity_%d_pending) {" % accepted.id) < after.index(
+        "identity_owner_%d = ctx.own_structural_field(" % accepted.id)
 
 
 def test_iterate_requires_guarded_projection_and_preserves_budget_in_graph():

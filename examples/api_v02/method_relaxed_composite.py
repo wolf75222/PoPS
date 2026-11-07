@@ -128,7 +128,7 @@ def build_t10_composite(*, cells=(32, 16), temporal_ratio=1, relaxed=True,
                  AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)))
     layout = AMR(grid=CartesianGrid(frame=frame, cells=cells, periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(pm.ValueExpr(block[state])["z"] > case.value(threshold)), Buffer(cells=1)),
+        tagging=AMRTagging(rules=(Tag(pm.ValueExpr(block[state])["z"] > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid.frozen(), transfer=transfer, execution=execution)
     x, y = np.meshgrid((np.arange(cells[0])+.5)/cells[0], (np.arange(cells[1])+.5)/cells[1])

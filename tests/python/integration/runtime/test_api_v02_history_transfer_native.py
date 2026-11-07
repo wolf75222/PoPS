@@ -142,8 +142,10 @@ def test_native_temporal_matrix_is_consumed_by_all_lag_bdf_and_survives_restart(
         collective_call(world,lambda active=active:pops.run(active,t_end=.18,max_steps=1,console=False))
         rows=profile_gather_value(world,collective_call(world,lambda active=active:spec.invariants(active)))
         with collective_check(world):
+            # block_level_state_global gathers the level into every rank, so every rank
+            # evaluates the same metrics from the same image.
             owners=[row for row in rows if row.get("metrics_owner",True)]
-            assert len(owners)==1
+            assert len(owners)==len(rows) and all(row==owners[0] for row in owners),rows
             assert owners[0]["passed"] is (not linear_control),owners
             if linear_control:
                 assert owners[0]["quadratic_error"]>1.e-5

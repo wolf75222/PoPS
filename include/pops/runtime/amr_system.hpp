@@ -188,8 +188,12 @@ struct AmrSystemConfig : RuntimeSpatialDomain<Dim> {
   std::vector<Extent<Dim>> transition_ratios{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_buffers{runtime_config_detail::filled_extent<Dim>(2)};
   std::vector<Extent<Dim>> transition_lookaheads{runtime_config_detail::filled_extent<Dim>(2)};
-  /// pops.amr.tag-selection@1: only this authored ranked buffer dilates candidates.
-  /// Transition buffers/lookaheads are separate parent-coverage requirements.
+  /// Tag selection contract (MG8, ROM-103).
+  /// 1, pops.amr.tag-selection@1 (API 0.2): only accepted Refine requests seed the dilation, by
+  ///    tag_selection_buffer alone; transition buffers plus lookaheads nest the parents.
+  /// 2, master's transition reach: every cell of the target coverage, cells kept by hysteresis
+  ///    included, seeds the dilation, by the transition buffer plus the lookahead; the transition
+  ///    buffer alone nests the parents, and tag_selection_buffer stays zero.
   std::uint32_t tag_selection_contract_version = 1;
   Extent<Dim> tag_selection_buffer{};
   /// Explicit optional AcceptedHaloPreparation@1, never inferred from allocated ghosts.
@@ -678,6 +682,25 @@ class AmrSystem {
       const std::vector<std::int32_t>& coarsen_ops, const std::vector<std::int32_t>& coarsen_args,
       int min_cycles, const std::string& equality_policy, const std::string& conflict_policy,
       const std::string& clock_identity, const std::string& provider_identity);
+  /// Install a refinement criterion generated into the compiled Program (DM13b) in place of the
+  /// bytecode: its identity, its field table (the qualified state of each field, its block, the
+  /// variables read in it with their component indices, the reach of the reads per axis) and the
+  /// bound values of its runtime parameters. install_program then requires the Program to export
+  /// this criterion. Hysteresis and the buffer stay downstream, as for the bytecode.
+  void set_generated_tagging(const std::string& identity,
+                             const std::vector<std::string>& field_identities,
+                             const std::vector<std::string>& field_blocks,
+                             const std::vector<std::vector<std::string>>& field_variables,
+                             const std::vector<std::vector<int>>& field_components,
+                             const std::vector<std::vector<std::size_t>>& field_reach,
+                             const std::vector<double>& parameters, int min_cycles,
+                             const std::string& clock_identity,
+                             const std::string& provider_identity);
+  /// The requests that the tagging authority makes on one live parent level after its equality
+  /// and conflict policies, before hysteresis and the buffer: one byte per cell of the parent
+  /// domain, axis 0 fastest (1 refine, 2 coarsen, 0 keep). An inspection route: it publishes
+  /// nothing.
+  POPS_EXPORT std::vector<std::uint8_t> tagging_requests(int parent_level);
   /// Install one authenticated native Tagger component. This private runtime seam selects the
   /// candidate evaluator only; all policy and hierarchy publication remain in AmrSystem.
   void install_tagger_component(
@@ -917,7 +940,7 @@ class AmrSystem {
       const std::string& provider_identity, const std::string& space, const std::string& centering,
       const std::string& representation, const std::string& storage, const std::string& operation,
       const std::string& kernel, int order, const Extent<Dim>& ghost_depth,
-      const Extent<Dim>& refinement_ratio);
+      const Extent<Dim>& refinement_ratio, const std::array<bool, Dim>& one_sided_axes = {});
   void register_bootstrap_oriented_face_subjects(const std::vector<std::string>& oriented_subjects);
 
   /// Register immutable owner-qualified auxiliary producers and native consumer views.  The graph

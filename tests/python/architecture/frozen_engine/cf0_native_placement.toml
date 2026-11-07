@@ -8,8 +8,11 @@
 #
 # The list only shrinks (MG6): test_cf0_frozen_engine_paths.py fails on an entry that b6 did not
 # have, and on an entry whose files are no longer in core paths (moved or deleted), which must then
-# be removed.
+# be removed. The PR that drops an entry, or a file of one, declares where its native went in
+# placement_departures.txt.
 # It holds only Phase 2 entries at the exit of Phase 1 and is empty at the freeze (G01, FC8).
+# Read by scan.load_placement for the CF0 test, CF1 (which names the native that a case touches) and
+# CF2 (the N9 path rule of cf2.py, and the closed interface list of test_native_interfaces_closed.py).
 
 [[native]]
 id = "face-loop-stencil-flux"

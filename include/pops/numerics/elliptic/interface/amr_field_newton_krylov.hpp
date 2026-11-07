@@ -115,7 +115,9 @@ class AmrFieldNewtonKrylovWorkspace final {
   SolveReport solve(std::span<field_type* const> destination, ResidualProvider&& evaluate_residual,
                     JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge, const ExecutionLane& lane,
                     bool collective_local_phases = false) {
-    auto identity = [&](const hierarchy_type& input, hierarchy_type& output) { copy_(input, output); };
+    auto identity = [&](const hierarchy_type& input, hierarchy_type& output) {
+      copy_(input, output);
+    };
     return solve_preconditioned(destination, std::forward<ResidualProvider>(evaluate_residual),
                                 std::forward<JvpProvider>(apply_jvp),
                                 std::forward<GaugeProvider>(apply_gauge), identity, lane,
@@ -127,13 +129,15 @@ class AmrFieldNewtonKrylovWorkspace final {
   template <class ResidualProvider, class JvpProvider, class GaugeProvider,
             class RightPreconditioner>
   SolveReport solve_preconditioned(std::span<field_type* const> destination,
-                                  ResidualProvider&& evaluate_residual, JvpProvider&& apply_jvp,
-                                  GaugeProvider&& apply_gauge, RightPreconditioner&& apply_right,
-                                  const ExecutionLane& lane, bool collective_local_phases = false) {
-    return solve_rebuilt_preconditioned(destination, std::forward<ResidualProvider>(evaluate_residual),
+                                   ResidualProvider&& evaluate_residual, JvpProvider&& apply_jvp,
+                                   GaugeProvider&& apply_gauge, RightPreconditioner&& apply_right,
+                                   const ExecutionLane& lane,
+                                   bool collective_local_phases = false) {
+    return solve_rebuilt_preconditioned(
+        destination, std::forward<ResidualProvider>(evaluate_residual),
         std::forward<JvpProvider>(apply_jvp), std::forward<GaugeProvider>(apply_gauge),
-        std::forward<RightPreconditioner>(apply_right), [](const auto&, auto&, int) {},
-        lane, collective_local_phases);
+        std::forward<RightPreconditioner>(apply_right), [](const auto&, auto&, int) {}, lane,
+        collective_local_phases);
   }
 
   /// Rebuild once at each nonlinear iterate, then keep the right factor stationary
@@ -141,10 +145,11 @@ class AmrFieldNewtonKrylovWorkspace final {
   template <class ResidualProvider, class JvpProvider, class GaugeProvider,
             class RightPreconditioner, class PrepareRight>
   SolveReport solve_rebuilt_preconditioned(std::span<field_type* const> destination,
-      ResidualProvider&& evaluate_residual, JvpProvider&& apply_jvp,
-      GaugeProvider&& apply_gauge, RightPreconditioner&& apply_right,
-      PrepareRight&& prepare_right, const ExecutionLane& lane,
-      bool collective_local_phases = false) {
+                                           ResidualProvider&& evaluate_residual,
+                                           JvpProvider&& apply_jvp, GaugeProvider&& apply_gauge,
+                                           RightPreconditioner&& apply_right,
+                                           PrepareRight&& prepare_right, const ExecutionLane& lane,
+                                           bool collective_local_phases = false) {
     const auto* previous_lane = local_lane_;
     local_lane_ = collective_local_phases ? &lane : nullptr;
     struct ResetLane {
@@ -187,8 +192,8 @@ class AmrFieldNewtonKrylovWorkspace final {
       prepare_right(iterate_, jvp_provider, iteration);
       set_zero_(correction_);
       const Real linear_stop = options_.linear_tolerance * report.residual_norm;
-      const LinearResult linear =
-          solve_linear_(iterate_, residual_, linear_stop, jvp_provider, iteration, lane, apply_right);
+      const LinearResult linear = solve_linear_(iterate_, residual_, linear_stop, jvp_provider,
+                                                iteration, lane, apply_right);
       report.evaluations += linear.evaluations;
       if (!linear.converged) {
         report.iters = iteration;
@@ -198,8 +203,7 @@ class AmrFieldNewtonKrylovWorkspace final {
                    << ":evaluations=" << linear.evaluations << std::hexfloat
                    << ":stop=" << linear_stop << ":beta=" << linear.residual_norm
                    << ":projected=" << linear.projected_norm << ":pivot=" << linear.pivot;
-        report.mark_failed(SolveStatus::kBreakdown, SolveAction::kRejectAttempt,
-                           diagnostic.str());
+        report.mark_failed(SolveStatus::kBreakdown, SolveAction::kRejectAttempt, diagnostic.str());
         return report;
       }
 
@@ -259,20 +263,33 @@ class AmrFieldNewtonKrylovWorkspace final {
 
  private:
   enum class LinearFailure {
-    kIterationLimit, kNonfiniteInitialNorm, kZeroArnoldiColumn, kNonfiniteArnoldiColumn,
-    kZeroTriangularPivot, kNonfiniteTriangularPivot, kNonfiniteTriangularCoefficient,
+    kIterationLimit,
+    kNonfiniteInitialNorm,
+    kZeroArnoldiColumn,
+    kNonfiniteArnoldiColumn,
+    kZeroTriangularPivot,
+    kNonfiniteTriangularPivot,
+    kNonfiniteTriangularCoefficient,
     kNonfiniteRecomputedNorm
   };
   static const char* linear_failure_name_(LinearFailure failure) noexcept {
     switch (failure) {
-      case LinearFailure::kIterationLimit: return "iteration_limit";
-      case LinearFailure::kNonfiniteInitialNorm: return "nonfinite_initial_norm";
-      case LinearFailure::kZeroArnoldiColumn: return "zero_arnoldi_column";
-      case LinearFailure::kNonfiniteArnoldiColumn: return "nonfinite_arnoldi_column";
-      case LinearFailure::kZeroTriangularPivot: return "zero_triangular_pivot";
-      case LinearFailure::kNonfiniteTriangularPivot: return "nonfinite_triangular_pivot";
-      case LinearFailure::kNonfiniteTriangularCoefficient: return "nonfinite_triangular_coefficient";
-      case LinearFailure::kNonfiniteRecomputedNorm: return "nonfinite_recomputed_norm";
+      case LinearFailure::kIterationLimit:
+        return "iteration_limit";
+      case LinearFailure::kNonfiniteInitialNorm:
+        return "nonfinite_initial_norm";
+      case LinearFailure::kZeroArnoldiColumn:
+        return "zero_arnoldi_column";
+      case LinearFailure::kNonfiniteArnoldiColumn:
+        return "nonfinite_arnoldi_column";
+      case LinearFailure::kZeroTriangularPivot:
+        return "zero_triangular_pivot";
+      case LinearFailure::kNonfiniteTriangularPivot:
+        return "nonfinite_triangular_pivot";
+      case LinearFailure::kNonfiniteTriangularCoefficient:
+        return "nonfinite_triangular_coefficient";
+      case LinearFailure::kNonfiniteRecomputedNorm:
+        return "nonfinite_recomputed_norm";
     }
     return "invalid_failure";
   }
@@ -374,7 +391,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       }
       if (used == 0) {
         result.failure = finite_(result.pivot) ? LinearFailure::kZeroArnoldiColumn
-                                             : LinearFailure::kNonfiniteArnoldiColumn;
+                                               : LinearFailure::kNonfiniteArnoldiColumn;
         return result;
       }
       if (!update_correction_(used, result, apply_right))
@@ -412,7 +429,7 @@ class AmrFieldNewtonKrylovWorkspace final {
       if (!finite_(diagonal) || diagonal == Real(0)) {
         result.pivot = diagonal;
         result.failure = finite_(diagonal) ? LinearFailure::kZeroTriangularPivot
-                                         : LinearFailure::kNonfiniteTriangularPivot;
+                                           : LinearFailure::kNonfiniteTriangularPivot;
         return false;
       }
       coefficients_[static_cast<std::size_t>(row)] = value / diagonal;

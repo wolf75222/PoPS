@@ -8,7 +8,8 @@ to be those of the integration head: ``git diff <base>..<case> -- <core paths> <
 empty. The controls show that a case that brings a core file, a native file, a change to a core
 file or the deletion of one fails, and that a case that brings files of the library, of
 ``examples/`` or of ``tests/`` passes. A case branch is checked the same way with
-``python -m tests.python.architecture.frozen_engine.cf1 --ref <commit>``.
+``python -m tests.python.architecture.frozen_engine.cf1 --ref <commit>``. The natives of the CF0
+placement list sit in the core tree that CF1 hashes, and a case that touches one is told which.
 
 Trees are written to a temporary object directory that borrows the repository's objects (git
 plumbing only), so the test writes nothing into the repository. It does not import ``pops``.
@@ -82,6 +83,12 @@ def test_core_hash_is_the_tree_of_exactly_the_core_files(store, head_hashes):
     assert all(core[rel] == head[rel] for rel in core)
 
 
+def test_every_placed_native_is_in_the_core_tree(store, head_hashes):
+    core = store.entries(head_hashes.core)
+    outside = sorted(rel for rel in cf1.placed_natives() if rel not in core)
+    assert not outside, "CF0 placement files outside the core tree that CF1 hashes: %s" % outside
+
+
 # ---------------------------------------------------------------------------------------------
 # Controls: a case that touches the frozen engine fails; one that stays outside passes.
 # ---------------------------------------------------------------------------------------------
@@ -103,6 +110,15 @@ def test_a_case_that_touches_the_frozen_engine_fails(store, head_hashes, changes
     assert getattr(check.with_case, frozen_part) != getattr(head_hashes, frozen_part)
     frozen = sorted(rel for rel in changes if rel != "examples/cf1/case.py")
     assert check.frozen_paths == tuple(frozen)
+
+
+def test_a_case_that_touches_a_placed_native_names_it(store):
+    native = next(row for row in scan.load_placement() if row["issue"] == "N9")
+    rel = native["files"][0]
+    check = _probe(store, {"examples/cf1/case.py": "add", rel: "change"})
+    assert not check.unchanged and check.frozen_paths == (rel,)
+    report = check.describe("native")
+    assert "%s (CF0 placement: %s, N9, Phase 2)" % (rel, native["id"]) in report, report
 
 
 def test_a_case_that_deletes_a_core_file_fails(store):

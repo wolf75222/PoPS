@@ -147,13 +147,17 @@ manifest-owned MPI entrypoint or MPI orchestrator. The lane then uses the manife
 rank launches, Python MPI entrypoints, serial orchestrators that create their own rank worlds, and
 collective I/O checks. An unrelated mapped change does not create a partial MPI fragment.
 
-The MPI native build runs two sequential phases with separate 28-minute watchdogs inside a
+The MPI native build runs three sequential phases with separate 28-minute watchdogs inside a
 60-minute native-build cap; the complete job remains capped at 180 minutes. The manifest projection puts
 `test_program_runtime`, `test_amr_synthetic_program_loader_transaction`,
-`test_mpi_system_gather_scatter`, and `test_mpi_system_io_gather` in a strictly sequential compiler
-phase. The second phase builds the exact complement with parallelism four and the preset's
-unchanged single-slot heavy-TU pool. New manifest targets enter the complement automatically;
-missing anchors or a non-disjoint/incomplete partition fail planning. Python module linking and
+`test_mpi_system_gather_scatter`, and `test_mpi_system_io_gather` in an isolated phase. That phase
+first compiles the seven synthetic loader fixture DSOs of the loader test
+(`pops_synthetic_loader_fixtures`) two at a time, then its four targets with one compiler, under
+its single watchdog. Two further phases split the exact complement by the build costs of
+`tests/cpp/mpi_build_durations.json` and build it with parallelism four. The MPI job configures the
+heavy-TU pool with two slots (`-DPOPS_HEAVY_TEST_TU_POOL=2`; the presets keep one): every test that
+links the System or AMR runtime compiles at `-O0` in that pool. New manifest targets enter the
+complement automatically; missing anchors or a non-disjoint/incomplete partition fail planning. Python module linking and
 M4 compilation retain their separate 14-minute and 10-minute watchdogs. Their enclosing steps have
 20-minute and 12-minute caps, so the three build steps together permit at most 92 minutes within
 the unchanged job cap; previously all build commands shared one 60-minute step.
@@ -168,6 +172,34 @@ MPI completion window; it is not a measured duration. The earlier run benefited 
 caches, and completion windows can overlap. These estimates do not establish cold-build safety or
 CI success: the complete build and unchanged 121-launch MPI test inventory still need an actual
 GitHub receipt.
+
+The two-slot pool addresses the PR #688 `a3a03d2` run (job 123904651562). That PR changed two
+AMR History metadata headers, so ccache served 17 of 126 compiles. The isolated phase took 25.7
+minutes and the first complement phase 15.4 minutes; the second complement phase was stopped by
+the 60-minute step cap after 18.9 minutes, with two heavy units still to compile. In both
+complement phases the last heavy units compiled one at a time (load average near 1.1 on four
+cores) while 8.5 to 14.5 GiB stayed available. Compiled alone with their exact `ci-mpi` commands
+(GCC 13.3, `-O0`), the 38 heavy units of the complement phases peak at 0.4 to 3.9 GiB, except
+`test_generated_amr_system_block` at 6.3 GiB; the largest pair within one phase needs about 10.2
+GiB, and the 56 other units of these phases peak at 1.2 GiB or less. Two heavy and two other
+units together therefore stay near 12.2 GiB, against the 14.5 GiB available with no compiler
+running. The isolated phase keeps one compiler: `test_program_runtime` alone left 82 MiB
+available in that run.
+
+The fixture order addresses the PR #704 `c494c61` run (job 124154515435), whose isolated phase
+used 1509 of its 1680 seconds: `test_program_runtime` compiled alone for 600 seconds, with 88 MiB
+available at worst, then the seven fixtures one at a time for 813 seconds while 11.7 to 14.2 GiB
+stayed available. Each fixture is one `-O2` compile and link of a generated Program by
+`tests/cpp/support/native_dso_compiler.hpp`, which calls the compiler directly, without ccache, so
+every build compiles all seven. Compiled alone with their exact commands (GCC 13.3, Xeon 2.1 GHz),
+they peak at 3.6 to 3.7 GiB and take 134 to 165 seconds of compiler CPU each, 1025 seconds in
+series. The isolated-phase command replayed on that machine compiled them two at a time in 586
+seconds, each fixture within 6 percent of its time alone, with a sampled peak of 7.3 GiB for the
+two compilers; the runner has 14.5 GiB available with no compiler running. The fixture rules are
+in the heavy-TU pool, whose two slots bound them at any parallelism, and `test_program_runtime`
+still compiles only after them, alone. At that ratio the fixtures of the #704 run take about 480
+instead of 813 seconds, which brings its isolated phase near 1170 seconds, 70 instead of 90
+percent of the watchdog. No watchdog, step cap or job cap changes.
 
 The `collective-field-protocols` policy covers the elliptic `interface`, `linear`, and `amr`
 header families and requests MPI for their collective contracts. The isolated
@@ -184,6 +216,107 @@ The `gate` aggregate is fail-closed: `changes` and `set-mode` must succeed, ever
 succeed, and an optional job may be skipped only as the result of that successful routing decision.
 The presence of a plan, an empty shard, a cache hit, or a local selector output never claims that
 tests ran or that GitHub CI is green.
+
+## Master's tutorials (MG8)
+
+`mg8-tutorials` runs on every plan that needs the Python lane, complete plans included, and is
+required then: a change of a route that a tutorial uses runs it (MG8-1). Its three lanes, `serial-dim2`,
+`mpi-dim2` (two ranks) and `serial-dim3`, each hold one installed PoPS: master's MPI module compiles
+`MPI_COMM_WORLD` artifacts only, and tutorial 16 needs Dim3. A lane builds master `bb9aea0c`
+(cached by commit) and this tree, then `scripts/run_mg8_tutorials.py run` executes each of the 17
+tutorials of `docs/tutorials/scalar_advection` from a copy of the directory, once with master's
+text against master and once with this tree's text against this tree, on the same runner. A probe in the tutorial process
+records, after every `pops.run` call, the clock, the hierarchy and every state level, through the
+public methods that the tutorials call. `compare` then checks the return codes, those states
+bitwise, the printed and console-monitor lines, and the outputs (NumPy archives, ParaView series,
+figures), under `tests/gates/mg8_master_tutorials.toml`. Only identity digests and the run
+directory are not compared. The reference is rebuilt on each runner because NumPy's and glibc's
+elementary functions dispatch on CPU features: arrays stored on another machine would compare two
+machines, not two trees.
+
+A difference of a result is recorded in the contract, by its exact name. Each `[[cause]]` names
+one change of this tree, the commits that introduced it, the issue that owns it and the evidence
+that attributes it; each `[[divergence]]` lists, for one tutorial, the exact checks that differ,
+the causes they come from and its attribution: `reproduced`, with the verdict of a build of this
+tree with master's semantics for those causes that gives master's bits, or `inferred`. Only results
+can be recorded: a state, the clock, the hierarchy or the report after a `pops.run` call, a printed
+or monitor line, an output file or series. A failure never is: a tutorial that fails, a missing
+run, an observation that the probe could not make, a different number of `pops.run` calls or
+printed lines, and a missing, different or unlisted set of output files always fail the job, and no
+tutorial is skipped (CF14).
+
+The list only shrinks (MG6). `compare` fails on a difference that no divergence lists and on a
+listed check that no longer differs. On every event, the `changes` job runs `run_mg8_tutorials.py
+check --check-base <base> --verify-commits`: it fails when the ledger records a check, a cause or a
+pair of tutorial and cause that the base does not, when a cause changes its issue, when an output
+stops being compared, when identity lines grow or when anything outside the ledger changes, and
+when a cited commit is not in the history or changes no code that the tutorials execute
+(`include/`, `src/`, `python/`, `cmake/`, `CMakeLists.txt`; the full history is checked out there;
+a shallow clone's boundary commit is refused, its changes are unknown). The commits of a cause may
+be corrected, since they admit no difference: each one is checked the same way. A slice that
+changes a result that the ledger does not record restores master's result or does not land; it
+never records it. A slice that changes a route that a tutorial uses keeps the old spelling until
+the route is removed (MG1).
+
+A recorded check is a limit of MG8, not a guard. An entry names a check, not its value: the value
+depends on the runner's CPU, the reason the reference is rebuilt on each runner, so it cannot be
+pinned in the contract. A recorded check therefore explains every later value of that check: while
+the ledger records a state, a slice that changes that state again passes MG8 unseen, unless it also
+changes something that is not recorded (the number of steps, the hierarchy, a printed or monitor
+line). MG8 guards a result only once its cause is fixed and its entry removed. The fixes of ROM-101
+to ROM-104, which empty the ledger, therefore land before any slice that changes a route that a
+tutorial uses (landing plan of N5, section 6.2).
+
+Each run step has a budget and each tutorial a watchdog under it (`--watchdog`), and the run report
+is written after every tutorial. Tutorial 14 runs to t = 8 on two ranks and this tree takes about
+four times master's time on it (ROM-105), so it runs in a step of its own (`--exclude 14`, then
+`--tutorial 14`). The comparison runs after a step that failed or timed out, so its summary names
+any tutorial that did not finish, and the job's limit covers the sum of its steps. This tree's steps
+run after a step of master that failed or timed out too, so that a failure of master's run does not
+hide this tree's results. A tutorial runs with its standard input closed, and each of its ranks
+compiles into a JIT cache of its own (`POPS_CACHE_DIR/rankN`, set by the probe before
+`import pops`): master's facade passes the cache path to the compiler explicitly, which bypasses the
+cache lock that b6 holds since `3a0b04f5d7`, so master's two ranks compiled the same model into one
+file at the same time; a rank that hashed the file while the other rank's linker rewrote it raised
+at bind ("compiled binary differs from the authenticated facade artifact") and the other rank waited
+in a collective until the watchdog, the stall of master's run on #706. When a tutorial outlives its
+watchdog, the runner sends SIGTERM, then SIGKILL, to its launcher and to every process under it:
+Open MPI 4 starts each rank in a process group of its own, and killing `mpiexec` alone would leave
+the ranks running on into the next tutorials. On SIGTERM, the probe of each rank first writes the
+Python stack of each of its threads (`faulthandler`). A tutorial that fails prints, in the job log,
+the verdict of each rank, those stacks and the end of its logs, with workflow commands paused: the
+job log is readable wherever the published run is not.
+
+String arrays of ParaView outputs are compared, except `pops_output_manifest`, a JSON manifest of
+versioned identities. The JIT flags differ between master (`-O3 -DNDEBUG`) and this tree
+(`-fno-fast-math -ffp-contract=off` in addition); neither the JIT nor the native modules pass
+`-march`, so GCC targets the x86-64 baseline, which has no FMA: `-ffp-contract=off` has nothing to
+contract, and a build of this tree with master's semantics gives master's bits (CC7). Each run
+report records the CPU model and features, NumPy's runtime (SIMD extensions) and the versions of
+NumPy and Matplotlib, so that a change of runner shows in the summary.
+
+The reference of MG8-0 (master's runs in a container, three lanes) is archived outside the code
+tree: `/mnt/project-files/landing/mg8/mg8-master-bb9aea0c.tar.xz` (SHA-256 `8528f7d842a1bbb9...`),
+with the manifest of every state and output. CI never reads it: it rebuilds the reference on each
+runner.
+
+Run one lane locally with two packages built from the presets (copy each build tree's
+`python/pops` with `cp -rL`):
+
+```sh
+python3 scripts/run_mg8_tutorials.py run --phase reference --lane serial-dim2 \
+  --source <master checkout> --python "$(command -v python3)" --pythonpath <master package> \
+  --include <master checkout>/include --kokkos-root <Kokkos prefix> --output /tmp/mg8/reference
+python3 scripts/run_mg8_tutorials.py run --phase candidate --lane serial-dim2 \
+  --source . --python "$(command -v python3)" --pythonpath <package of this tree> \
+  --include include --kokkos-root <Kokkos prefix> --output /tmp/mg8/candidate
+python3 scripts/run_mg8_tutorials.py compare --lane serial-dim2 \
+  --reference /tmp/mg8/reference --candidate /tmp/mg8/candidate
+```
+
+The `mpi-dim2` lane also needs `--mpiexec "$(command -v mpiexec)"`. Before pushing a change of the
+contract, `python3 scripts/run_mg8_tutorials.py check --check-base <base> --verify-commits` runs the
+check of the `changes` job (it needs the history back to the cited commits).
 
 ## Reproduce a plan locally
 

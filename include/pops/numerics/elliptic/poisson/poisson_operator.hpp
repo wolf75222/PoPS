@@ -108,8 +108,7 @@ struct DampedJacobiKernel {
 
 template <int Dim, class LeftSpace, class RightSpace>
 void require_same_scalar_layout(const MultiFab<Dim, LeftSpace>& left,
-                                const MultiFab<Dim, RightSpace>& right,
-                                const char* operation) {
+                                const MultiFab<Dim, RightSpace>& right, const char* operation) {
   if (left.layout() != right.layout() || left.distribution() != right.distribution() ||
       left.local_rank() != right.local_rank() || left.ncomp() != 1 || right.ncomp() != 1)
     throw std::invalid_argument(std::string(operation) +
@@ -272,8 +271,8 @@ void copy_scalar_valid(const MultiFab<Dim, SourceSpace>& source,
                        MultiFab<Dim, DestinationSpace>& destination) {
   detail::require_same_scalar_layout(source, destination, "copy_scalar_valid");
   for (std::size_t local = 0; local < source.local_size(); ++local)
-    for_each_cell(source.box(local), detail::CopyScalarKernel<Dim>{
-                                         destination.fab(local).view(), source.fab(local).view()});
+    for_each_cell(source.box(local), detail::CopyScalarKernel<Dim>{destination.fab(local).view(),
+                                                                   source.fab(local).view()});
   Kokkos::fence();
 }
 
@@ -291,8 +290,7 @@ void add_scalar_valid(MultiFab<Dim, MemorySpace>& values, Real increment) {
 /// Apply ``A u = -laplacian(u) + reaction*u`` after the caller has filled input ghosts.
 template <int Dim, class InputSpace, class OutputSpace>
 void apply_poisson_operator_valid(const MultiFab<Dim, InputSpace>& input,
-                                  const Geometry<Dim>& geometry,
-                                  MultiFab<Dim, OutputSpace>& output,
+                                  const Geometry<Dim>& geometry, MultiFab<Dim, OutputSpace>& output,
                                   Real reaction = Real(0)) {
   detail::require_same_scalar_layout(input, output, "apply_poisson_operator_valid");
   detail::require_unit_halo(input, "apply_poisson_operator_valid");
@@ -301,8 +299,8 @@ void apply_poisson_operator_valid(const MultiFab<Dim, InputSpace>& input,
   Real inverse_spacing_squared[Dim]{};
   detail::inverse_spacing_squared(geometry, inverse_spacing_squared);
   for (std::size_t local = 0; local < output.local_size(); ++local) {
-    detail::NegativeLaplacianKernel<Dim> kernel{output.fab(local).view(),
-                                                input.fab(local).view(), {}, reaction};
+    detail::NegativeLaplacianKernel<Dim> kernel{
+        output.fab(local).view(), input.fab(local).view(), {}, reaction};
     for (int axis = 0; axis < Dim; ++axis)
       kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
     for_each_cell(output.box(local), kernel);
@@ -314,8 +312,7 @@ void apply_poisson_operator_valid(const MultiFab<Dim, InputSpace>& input,
 template <int Dim, class IterateSpace, class RhsSpace, class ResidualSpace>
 void poisson_residual_valid(const MultiFab<Dim, IterateSpace>& iterate,
                             const MultiFab<Dim, RhsSpace>& right_hand_side,
-                            const Geometry<Dim>& geometry,
-                            MultiFab<Dim, ResidualSpace>& residual,
+                            const Geometry<Dim>& geometry, MultiFab<Dim, ResidualSpace>& residual,
                             Real reaction = Real(0)) {
   detail::require_same_scalar_layout(iterate, right_hand_side, "poisson_residual_valid");
   detail::require_same_scalar_layout(iterate, residual, "poisson_residual_valid");
@@ -327,7 +324,9 @@ void poisson_residual_valid(const MultiFab<Dim, IterateSpace>& iterate,
   for (std::size_t local = 0; local < residual.local_size(); ++local) {
     detail::ResidualKernel<Dim> kernel{residual.fab(local).view(),
                                        iterate.fab(local).view(),
-                                       right_hand_side.fab(local).view(), {}, reaction};
+                                       right_hand_side.fab(local).view(),
+                                       {},
+                                       reaction};
     for (int axis = 0; axis < Dim; ++axis)
       kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
     for_each_cell(residual.box(local), kernel);
@@ -341,8 +340,7 @@ void damped_jacobi_update_valid(const MultiFab<Dim, IterateSpace>& iterate,
                                 const MultiFab<Dim, RhsSpace>& right_hand_side,
                                 const Geometry<Dim>& geometry,
                                 MultiFab<Dim, DestinationSpace>& destination,
-                                Real relaxation = Real(2) / Real(3),
-                                Real reaction = Real(0)) {
+                                Real relaxation = Real(2) / Real(3), Real reaction = Real(0)) {
   detail::require_same_scalar_layout(iterate, right_hand_side, "damped_jacobi_update_valid");
   detail::require_same_scalar_layout(iterate, destination, "damped_jacobi_update_valid");
   detail::require_unit_halo(iterate, "damped_jacobi_update_valid");
@@ -357,9 +355,13 @@ void damped_jacobi_update_valid(const MultiFab<Dim, IterateSpace>& iterate,
     diagonal += Real(2) * inverse_spacing_squared[axis];
   const Real inverse_diagonal = Real(1) / diagonal;
   for (std::size_t local = 0; local < destination.local_size(); ++local) {
-    detail::DampedJacobiKernel<Dim> kernel{
-        destination.fab(local).view(), iterate.fab(local).view(),
-        right_hand_side.fab(local).view(), {}, inverse_diagonal, relaxation, reaction};
+    detail::DampedJacobiKernel<Dim> kernel{destination.fab(local).view(),
+                                           iterate.fab(local).view(),
+                                           right_hand_side.fab(local).view(),
+                                           {},
+                                           inverse_diagonal,
+                                           relaxation,
+                                           reaction};
     for (int axis = 0; axis < Dim; ++axis)
       kernel.inverse_spacing_squared[axis] = inverse_spacing_squared[axis];
     for_each_cell(destination.box(local), kernel);
@@ -368,10 +370,10 @@ void damped_jacobi_update_valid(const MultiFab<Dim, IterateSpace>& iterate,
 }
 
 template <int Dim, class MemorySpace>
-void apply_weighted_poisson_operator_valid(
-    const MultiFab<Dim, MemorySpace>& input, const Geometry<Dim>& geometry,
-    MultiFab<Dim, MemorySpace>& output, Real reaction,
-    const WeightedPoissonFields<Dim, MemorySpace>& fields) {
+void apply_weighted_poisson_operator_valid(const MultiFab<Dim, MemorySpace>& input,
+                                           const Geometry<Dim>& geometry,
+                                           MultiFab<Dim, MemorySpace>& output, Real reaction,
+                                           const WeightedPoissonFields<Dim, MemorySpace>& fields) {
   detail::require_same_scalar_layout(input, output, "apply_weighted_poisson_operator_valid");
   detail::require_unit_halo(input, "apply_weighted_poisson_operator_valid");
   validate_weighted_poisson_fields(input, fields, "apply_weighted_poisson_operator_valid");
@@ -447,10 +449,11 @@ template <int Dim, class MemorySpace>
 void damped_jacobi_weighted_update_valid(const MultiFab<Dim, MemorySpace>& iterate,
                                          const MultiFab<Dim, MemorySpace>& right_hand_side,
                                          const Geometry<Dim>& geometry,
-                                         MultiFab<Dim, MemorySpace>& destination,
-                                         Real relaxation, Real reaction,
+                                         MultiFab<Dim, MemorySpace>& destination, Real relaxation,
+                                         Real reaction,
                                          const WeightedPoissonFields<Dim, MemorySpace>& fields) {
-  detail::require_same_scalar_layout(iterate, right_hand_side, "damped_jacobi_weighted_update_valid");
+  detail::require_same_scalar_layout(iterate, right_hand_side,
+                                     "damped_jacobi_weighted_update_valid");
   detail::require_same_scalar_layout(iterate, destination, "damped_jacobi_weighted_update_valid");
   detail::require_unit_halo(iterate, "damped_jacobi_weighted_update_valid");
   validate_weighted_poisson_fields(iterate, fields, "damped_jacobi_weighted_update_valid");

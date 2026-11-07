@@ -265,8 +265,7 @@ struct MaskResidualKernel {
   FieldView<const Real, Dim> covered{};
   FieldView<const Real, Dim> active{};
   POPS_HD void operator()(const Index<Dim>& index) const {
-    if (covered(index, 0) >= Real(0.5) ||
-        (active.data != nullptr && active(index, 0) < Real(0.5)))
+    if (covered(index, 0) >= Real(0.5) || (active.data != nullptr && active(index, 0) < Real(0.5)))
       residual(index, 0) = Real(0);
   }
 };
@@ -563,30 +562,36 @@ class CompositeFacPoisson {
   using nonlinear_workspace_type = AmrFieldNewtonKrylovWorkspace<Dim, MemorySpace>;
   using nonlinear_hierarchy_type = typename nonlinear_workspace_type::hierarchy_type;
 
-  CompositeFacPoisson(request_type request, CompositeFacOptions options = {},
-                      Real reaction = Real(0), const ExecutionLane* prepared_lane = nullptr,
-                      bool operator_only = false, bool guard_local_setup = false,
-                      std::optional<::pops::elliptic::mg::GeometricMultigridOptions> geometric_controls = {})
-      : options_(options), reaction_(reaction), operator_only_(operator_only),
+  CompositeFacPoisson(
+      request_type request, CompositeFacOptions options = {}, Real reaction = Real(0),
+      const ExecutionLane* prepared_lane = nullptr, bool operator_only = false,
+      bool guard_local_setup = false,
+      std::optional<::pops::elliptic::mg::GeometricMultigridOptions> geometric_controls = {})
+      : options_(options),
+        reaction_(reaction),
+        operator_only_(operator_only),
         geometric_controls_(std::move(geometric_controls)) {
     if (guard_local_setup) {
-      if (!prepared_lane) throw std::invalid_argument("guarded FAC setup requires its prepared lane");
+      if (!prepared_lane)
+        throw std::invalid_argument("guarded FAC setup requires its prepared lane");
       lane_ = prepared_lane;
       std::exception_ptr error;
       try {
         lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
         lane_borrow_.emplace(prepared_lane->borrow_immutably());
-      } catch (...) { error = std::current_exception(); }
+      } catch (...) {
+        error = std::current_exception();
+      }
       collectively_rethrow_exception(error, *lane_, "candidate FAC local setup");
     } else {
-    lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
-    if (prepared_lane != nullptr) {
-      lane_ = prepared_lane;
-      lane_borrow_.emplace(prepared_lane->borrow_immutably());
-    } else {
-      owned_lane_.emplace(ExecutionLane::duplicate_world_collectively(lane_identity_));
-      lane_ = &*owned_lane_;
-    }
+      lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
+      if (prepared_lane != nullptr) {
+        lane_ = prepared_lane;
+        lane_borrow_.emplace(prepared_lane->borrow_immutably());
+      } else {
+        owned_lane_.emplace(ExecutionLane::duplicate_world_collectively(lane_identity_));
+        lane_ = &*owned_lane_;
+      }
     }
     std::exception_ptr local_error;
     try {
@@ -597,7 +602,8 @@ class CompositeFacPoisson {
       if (geometric_controls_) {
         ::pops::elliptic::mg::detail::validate_options<Dim>(*geometric_controls_);
         if (operator_only_ || reaction_ != Real(0))
-          throw std::invalid_argument("explicit geometric FAC controls require a static Poisson solve authority");
+          throw std::invalid_argument(
+              "explicit geometric FAC controls require a static Poisson solve authority");
         for (const auto& level : request.levels)
           for (int axis = 0; axis < Dim; ++axis)
             for (const BoundarySide side : {BoundarySide::lower, BoundarySide::upper}) {
@@ -605,21 +611,24 @@ class CompositeFacPoisson {
               if (level.boundary.topology().is_periodic(face) ||
                   level.boundary.at(face).kind != PhysicalBoundaryKind::dirichlet ||
                   level.boundary.at(face).value != Real(0))
-                throw std::invalid_argument("explicit geometric FAC requires zero Dirichlet physical faces");
+                throw std::invalid_argument(
+                    "explicit geometric FAC requires zero Dirichlet physical faces");
             }
       }
       lane_identity_ = "pops.elliptic.amr.composite-fac.nd" + std::to_string(Dim);
       exact_contract_ = fac_detail::exact_contract(request, options_, reaction_);
       exact_contract_ += operator_only_ ? "/operator-only@1" : "/fac-solver@1";
       if (geometric_controls_)
-        exact_contract_ += ::pops::elliptic::mg::detail::options_contract<Dim>(*geometric_controls_);
+        exact_contract_ +=
+            ::pops::elliptic::mg::detail::options_contract<Dim>(*geometric_controls_);
       build_levels_(request);
       build_connections_(request);
       if (field_domain_())
         for (auto& level : levels_)
           for (std::size_t local = 0; local < level->active.local_size(); ++local)
-            for_each_cell(level->active.box(local), ::pops::elliptic::mg::IntersectCellCentreBallKernel<Dim>{
-                level->active.fab(local).view(), level->geometry, *field_domain_()});
+            for_each_cell(level->active.box(local),
+                          ::pops::elliptic::mg::IntersectCellCentreBallKernel<Dim>{
+                              level->active.fab(local).view(), level->geometry, *field_domain_()});
       if (operator_only_) {
         for (auto& level : levels_)
           level->coefficient.emplace(level->phi.layout(), level->phi.distribution(),
@@ -632,7 +641,12 @@ class CompositeFacPoisson {
       local_error = std::current_exception();
     }
     if (guard_local_setup) {
-      try { Kokkos::fence(); } catch (...) { if (!local_error) local_error = std::current_exception(); }
+      try {
+        Kokkos::fence();
+      } catch (...) {
+        if (!local_error)
+          local_error = std::current_exception();
+      }
     }
     if (all_reduce_max(local_error ? 1L : 0L, *lane_) != 0) {
       if (lane_->size() == 1 && local_error)
@@ -640,20 +654,19 @@ class CompositeFacPoisson {
       throw std::runtime_error(
           "partitioned FAC metadata, budget, or reusable allocation failed collectively");
     }
-    const std::array<ExactOrderedBytePair, 1> hierarchy_contracts{{
-        {std::string_view("pops-partitioned-composite-fac"),
-         std::string_view(exact_contract_)}}};
+    const std::array<ExactOrderedBytePair, 1> hierarchy_contracts{
+        {{std::string_view("pops-partitioned-composite-fac"), std::string_view(exact_contract_)}}};
     if (!all_ranks_agree_exact_ordered_byte_pairs(hierarchy_contracts, *lane_))
       throw std::invalid_argument(
           "partitioned FAC exact hierarchy contract differs between MPI ranks");
     for (std::size_t connection = 0; connection < connections_.size(); ++connection) {
-      const std::array<ExactOrderedBytePair, 3> connection_contracts{{
-          {std::string_view("pops-fac-parent-gather"),
-           std::string_view(connections_[connection]->gather_contract)},
-          {std::string_view("pops-fac-fine-restriction"),
-           std::string_view(connections_[connection]->restriction_contract)},
-          {std::string_view("pops-fac-flux-mismatch"),
-           std::string_view(connections_[connection]->flux_contract)}}};
+      const std::array<ExactOrderedBytePair, 3> connection_contracts{
+          {{std::string_view("pops-fac-parent-gather"),
+            std::string_view(connections_[connection]->gather_contract)},
+           {std::string_view("pops-fac-fine-restriction"),
+            std::string_view(connections_[connection]->restriction_contract)},
+           {std::string_view("pops-fac-flux-mismatch"),
+            std::string_view(connections_[connection]->flux_contract)}}};
       if (!all_ranks_agree_exact_ordered_byte_pairs(connection_contracts, *lane_))
         throw std::invalid_argument(
             "partitioned FAC coarse/fine transfer plan differs between MPI ranks");
@@ -735,7 +748,8 @@ class CompositeFacPoisson {
   }
 
   void install_newton(FieldNewtonOptions options) {
-    if (geometric_controls_) throw std::invalid_argument("explicit geometric FAC has no nonlinear authority");
+    if (geometric_controls_)
+      throw std::invalid_argument("explicit geometric FAC has no nonlinear authority");
     if (newton_workspace_)
       throw std::logic_error("partitioned FAC Newton authority is already installed");
     validate_field_newton_options(options);
@@ -748,7 +762,8 @@ class CompositeFacPoisson {
   }
 
   void install_boundary_kernel(CompiledFieldBoundaryKernel<Dim> kernel) {
-    if (geometric_controls_) throw std::invalid_argument("explicit geometric FAC has no dynamic boundary authority");
+    if (geometric_controls_)
+      throw std::invalid_argument("explicit geometric FAC has no dynamic boundary authority");
     if (boundary_kernel_)
       throw std::logic_error("partitioned FAC boundary kernel is already installed");
     kernel.validate();
@@ -843,8 +858,7 @@ class CompositeFacPoisson {
     if (restrict_covered)
       for (std::size_t child = levels_.size(); child-- > 1;)
         connections_[child - 1]->restrict_into(*levels_[child]->coefficient,
-                                               *levels_[child - 1]->coefficient,
-                                               local_phase_lane);
+                                               *levels_[child - 1]->coefficient, local_phase_lane);
     for (auto& storage : levels_) {
       auto& level = *storage;
       // Extrapolate before peer exchange: owned same-level/periodic ghosts must win.
@@ -918,7 +932,8 @@ class CompositeFacPoisson {
   void install_embedded_boundary(int level, const field_type& active,
                                  const field_type& inverse_volume, const field_type& aperture_lower,
                                  const field_type& aperture_upper) {
-    if (field_domain_()) throw std::invalid_argument("field-domain conductor cannot replace transport cut metrics");
+    if (field_domain_())
+      throw std::invalid_argument("field-domain conductor cannot replace transport cut metrics");
     Level& target = *levels_.at(static_cast<std::size_t>(level));
     ::pops::elliptic::mg::WeightedPoissonFields<Dim, MemorySpace> probe;
     probe.inverse_volume = &inverse_volume;
@@ -958,8 +973,10 @@ class CompositeFacPoisson {
   SolveReport solve() {
     if (roundoff_enabled_())
       for (const auto& level : levels_)
-        if (level->coefficient || level->inverse_volume || level->aperture_lower || level->aperture_upper)
-          throw std::invalid_argument("FAC roundoff residual policy has no weighted/cut-metric authority");
+        if (level->coefficient || level->inverse_volume || level->aperture_lower ||
+            level->aperture_upper)
+          throw std::invalid_argument(
+              "FAC roundoff residual policy has no weighted/cut-metric authority");
     if (operator_only_)
       throw std::logic_error("prepared composite operator has no solve authority");
     if (newton_workspace_ || boundary_kernel_)
@@ -997,7 +1014,8 @@ class CompositeFacPoisson {
     }
     compute_composite_residual_();
     const Real initial = composite_residual_norm_();
-    if (geometric_controls_) reference = initial;
+    if (geometric_controls_)
+      reference = initial;
     ++report.evaluations;
     if (!std::isfinite(static_cast<double>(initial))) {
       report.mark_failed(SolveStatus::kInvalidEvaluation, SolveAction::kFailRun,
@@ -1015,11 +1033,13 @@ class CompositeFacPoisson {
       last_report_ = report;
       return last_report_;
     }
-    Real stop = report.residual_evaluation ? report.residual_evaluation->applied_threshold : requested_stop;
+    Real stop =
+        report.residual_evaluation ? report.residual_evaluation->applied_threshold : requested_stop;
     if (initial <= stop) {
       fill_all_solution_ghosts_();
       report.mark_solved(report.residual_evaluation && report.residual_evaluation->roundoff_limited
-                            ? "partitioned_fac_roundoff_evaluation_limited" : "partitioned_fac_initial_residual");
+                             ? "partitioned_fac_roundoff_evaluation_limited"
+                             : "partitioned_fac_initial_residual");
       last_report_ = report;
       return last_report_;
     }
@@ -1073,11 +1093,14 @@ class CompositeFacPoisson {
         last_report_ = report;
         return last_report_;
       }
-      stop = report.residual_evaluation ? report.residual_evaluation->applied_threshold : requested_stop;
+      stop = report.residual_evaluation ? report.residual_evaluation->applied_threshold
+                                        : requested_stop;
       if (report.residual_norm <= stop) {
         fill_all_solution_ghosts_();
-        report.mark_solved(report.residual_evaluation && report.residual_evaluation->roundoff_limited
-                              ? "partitioned_fac_roundoff_evaluation_limited" : "partitioned_fac_converged");
+        report.mark_solved(report.residual_evaluation &&
+                                   report.residual_evaluation->roundoff_limited
+                               ? "partitioned_fac_roundoff_evaluation_limited"
+                               : "partitioned_fac_converged");
         last_report_ = report;
         return last_report_;
       }
@@ -1085,8 +1108,8 @@ class CompositeFacPoisson {
     std::ostringstream failure;
     failure.precision(std::numeric_limits<Real>::max_digits10);
     failure << "partitioned_fac_iteration_limit residual=" << report.residual_norm
-            << " reference=" << report.reference_residual_norm
-            << " requested=" << requested_stop << " applied=" << stop;
+            << " reference=" << report.reference_residual_norm << " requested=" << requested_stop
+            << " applied=" << stop;
     if (report.residual_evaluation)
       failure << " evaluation_bound=" << report.residual_evaluation->evaluation_bound;
     report.mark_failed(SolveStatus::kIterationLimit, SolveAction::kFailRun, failure.str());
@@ -1631,11 +1654,11 @@ class CompositeFacPoisson {
                                          std::as_const(parent_scratch).fab(local).view()});
           // Flux replacement belongs to the active composite equations. Covered
           // parents and field-domain conductor rows have no residual authority.
-          for_each_cell(parent_residual.box(local),
-                        fac_detail::MaskResidualKernel<Dim>{
-                            parent_residual.fab(local).view(),
-                            std::as_const(parent->covered).fab(local).view(),
-                            std::as_const(parent->active).fab(local).view()});
+          for_each_cell(
+              parent_residual.box(local),
+              fac_detail::MaskResidualKernel<Dim>{parent_residual.fab(local).view(),
+                                                  std::as_const(parent->covered).fab(local).view(),
+                                                  std::as_const(parent->active).fab(local).view()});
         }
         Kokkos::fence();
       });
@@ -1797,7 +1820,8 @@ class CompositeFacPoisson {
     try {
       Kokkos::fence();
     } catch (...) {
-      if (!error) error = std::current_exception();
+      if (!error)
+        error = std::current_exception();
     }
     collectively_rethrow_exception(error, *lane, "composite FAC original field local phase");
   }
@@ -1851,8 +1875,7 @@ class CompositeFacPoisson {
       const auto in = source.fab(local).view();
       const auto out = destination.fab(local).view();
       const int components = source.ncomp();
-      for_each_cell(source.box(local),
-                    fac_detail::CopyVectorValidKernel<Dim>{in, out, components});
+      for_each_cell(source.box(local), fac_detail::CopyVectorValidKernel<Dim>{in, out, components});
     }
     Kokkos::fence();
   }
@@ -1982,7 +2005,8 @@ class CompositeFacPoisson {
   void build_coarse_solver_(const EllipticBuildRequest<Dim>& coarse_request,
                             bool allow_coarsening = true) {
     coarse_request_ = coarse_request;
-    ::pops::elliptic::mg::GeometricMultigridOptions controls = geometric_controls_.value_or(::pops::elliptic::mg::GeometricMultigridOptions{});
+    ::pops::elliptic::mg::GeometricMultigridOptions controls =
+        geometric_controls_.value_or(::pops::elliptic::mg::GeometricMultigridOptions{});
     controls.relative_tolerance = options_.coarse_rel_tol;
     controls.absolute_tolerance = options_.coarse_abs_tol;
     controls.maximum_cycles = options_.coarse_cycles;
@@ -2008,7 +2032,8 @@ class CompositeFacPoisson {
   void try_prepare_fft_coarse_() {
     fft_coarse_.reset();
     used_fft_coarse_ = false;
-    if (geometric_controls_) return;
+    if (geometric_controls_)
+      return;
     if (!coarse_request_ || !lane_)
       return;
     const Level& coarse = *levels_.front();
@@ -2109,7 +2134,8 @@ class CompositeFacPoisson {
     for (std::size_t child = levels_.size(); child-- > 1;)
       connections_[child - 1]->restrict_into(levels_[child]->phi, levels_[child - 1]->phi);
     if (field_domain_())
-      for (auto& level : levels_) project_field_domain_(*level, level->phi);
+      for (auto& level : levels_)
+        project_field_domain_(*level, level->phi);
   }
 
   const std::optional<::pops::elliptic::mg::CellCentreBallDomain>& field_domain_() const {
@@ -2122,26 +2148,39 @@ class CompositeFacPoisson {
   }
 
   bool update_roundoff_evidence_(SolveReport& report, Real requested, bool initial) const {
-    if (!roundoff_enabled_()) return true;
+    if (!roundoff_enabled_())
+      return true;
     using Scaled = ::pops::detail::ScaledScalar;
     Real rhs_local = Real(0), phi_local = Real(0), stencil_local = Real(0);
     for (const auto& level : levels_)
       for (std::size_t local = 0; local < level->phi.local_size(); ++local) {
         const auto active = std::as_const(level->active).fab(local).view();
-        rhs_local = std::max(rhs_local, for_each_cell_reduce_max(level->rhs.box(local),
-            ::pops::elliptic::mg::roundoff::AbsoluteMagnitudeKernel<Dim>{std::as_const(level->rhs).fab(local).view(), active}));
-        phi_local = std::max(phi_local, for_each_cell_reduce_max(level->phi.box(local),
-            ::pops::elliptic::mg::roundoff::AbsoluteMagnitudeKernel<Dim>{std::as_const(level->phi).fab(local).view(), {}}));
+        rhs_local = std::max(
+            rhs_local,
+            for_each_cell_reduce_max(level->rhs.box(local),
+                                     ::pops::elliptic::mg::roundoff::AbsoluteMagnitudeKernel<Dim>{
+                                         std::as_const(level->rhs).fab(local).view(), active}));
+        phi_local = std::max(
+            phi_local,
+            for_each_cell_reduce_max(level->phi.box(local),
+                                     ::pops::elliptic::mg::roundoff::AbsoluteMagnitudeKernel<Dim>{
+                                         std::as_const(level->phi).fab(local).view(), {}}));
         ::pops::elliptic::mg::roundoff::FivePointBoundKernel<Dim> kernel{
-            std::as_const(level->phi).fab(local).view(), std::as_const(level->rhs).fab(local).view(), active, {},
+            std::as_const(level->phi).fab(local).view(),
+            std::as_const(level->rhs).fab(local).view(),
+            active,
+            {},
             ::pops::elliptic::mg::roundoff::stencil_gamma<Dim>()};
         for (int axis = 0; axis < Dim; ++axis) {
           const Real h = level->geometry.spacing(axis);
-          const Real square = h*h;
-          kernel.inverse_spacing_squared[axis] = ::pops::elliptic::mg::roundoff::normal_or_zero(square) && square > Real(0)
-              ? Real(1)/square : std::numeric_limits<Real>::infinity();
+          const Real square = h * h;
+          kernel.inverse_spacing_squared[axis] =
+              ::pops::elliptic::mg::roundoff::normal_or_zero(square) && square > Real(0)
+                  ? Real(1) / square
+                  : std::numeric_limits<Real>::infinity();
         }
-        stencil_local = std::max(stencil_local, for_each_cell_reduce_max(level->phi.box(local), kernel));
+        stencil_local =
+            std::max(stencil_local, for_each_cell_reduce_max(level->phi.box(local), kernel));
       }
     const Real rhs_norm = static_cast<Real>(all_reduce_max(static_cast<double>(rhs_local), *lane_));
     const Real phi_norm = static_cast<Real>(all_reduce_max(static_cast<double>(phi_local), *lane_));
@@ -2150,7 +2189,7 @@ class CompositeFacPoisson {
       // Quadratic cell-centre interpolation has l1 weight sum <=5/4 per axis. Bound
       // chained CF extension, fine-face averaging, and flux replacement explicitly;
       // the absolute-term sum is kept binary-scaled until gamma has been applied.
-      const std::uint64_t depth = levels_.size()-1;
+      const std::uint64_t depth = levels_.size() - 1;
       Scaled amplification = Scaled::from(Real(1));
       for (std::uint64_t factor = 0; factor < depth * Dim; ++factor)
         amplification = Scaled::product(amplification, Scaled::from(Real(1.25)));
@@ -2161,51 +2200,69 @@ class CompositeFacPoisson {
         Real sum = Real(0);
         for (int axis = 0; axis < Dim; ++axis) {
           const Real h = level->geometry.spacing(axis);
-          sum += Real(1)/(h*h);
+          sum += Real(1) / (h * h);
         }
         largest_inverse_sum = std::max(largest_inverse_sum, sum);
       }
-      absolute_terms = Scaled::sum(absolute_terms, Scaled::product(extended_phi,
-          Scaled::product(Scaled::from(Real(4)), Scaled::from(largest_inverse_sum))));
+      absolute_terms = Scaled::sum(
+          absolute_terms,
+          Scaled::product(extended_phi, Scaled::product(Scaled::from(Real(4)),
+                                                        Scaled::from(largest_inverse_sum))));
       std::uint64_t maximum_tangential = 1;
       for (const auto& connection : connections_)
         for (int axis = 0; axis < Dim; ++axis) {
           std::uint64_t tangential = 1;
           for (int other = 0; other < Dim; ++other)
-            if (other != axis) tangential *= static_cast<std::uint64_t>(connection->ratio[other]);
+            if (other != axis)
+              tangential *= static_cast<std::uint64_t>(connection->ratio[other]);
           maximum_tangential = std::max(maximum_tangential, tangential);
           const Real h = connection->parent->geometry.spacing(axis);
-          const Scaled coefficient = Scaled::product(Scaled::from(Real(4)),
-              Scaled::product(Scaled::from(Real(1) + Real(connection->ratio[axis])), Scaled::from(Real(1)/(h*h))));
+          const Scaled coefficient =
+              Scaled::product(Scaled::from(Real(4)),
+                              Scaled::product(Scaled::from(Real(1) + Real(connection->ratio[axis])),
+                                              Scaled::from(Real(1) / (h * h))));
           absolute_terms = Scaled::sum(absolute_terms, Scaled::product(extended_phi, coefficient));
         }
       constexpr std::uint64_t points = Dim == 1 ? 3 : Dim == 2 ? 9 : 27;
-      const auto fixed = std::uint64_t{1 + 8*Dim} + depth*(12*Dim+2*points*(Dim+1)) + 32*Dim;
-      if (maximum_tangential > (std::numeric_limits<std::uint64_t>::max()-fixed)/(10*Dim)) return false;
-      const std::uint64_t evaluations = 1 + 8*Dim + 2*Dim*(16+5*maximum_tangential) +
-          depth*(12*Dim+2*points*(Dim+1));
-      const Real gamma = ::pops::elliptic::mg::roundoff::gamma_for_operations(evaluations, 3+12*Dim*(depth+1));
+      const auto fixed =
+          std::uint64_t{1 + 8 * Dim} + depth * (12 * Dim + 2 * points * (Dim + 1)) + 32 * Dim;
+      if (maximum_tangential > (std::numeric_limits<std::uint64_t>::max() - fixed) / (10 * Dim))
+        return false;
+      const std::uint64_t evaluations = 1 + 8 * Dim + 2 * Dim * (16 + 5 * maximum_tangential) +
+                                        depth * (12 * Dim + 2 * points * (Dim + 1));
+      const Real gamma = ::pops::elliptic::mg::roundoff::gamma_for_operations(
+          evaluations, 3 + 12 * Dim * (depth + 1));
       bound = std::max(bound, ::pops::elliptic::mg::roundoff::upward_materialize(
-          Scaled::product(absolute_terms, Scaled::from(gamma))));
+                                  Scaled::product(absolute_terms, Scaled::from(gamma))));
     }
-    if (!std::isfinite(static_cast<double>(rhs_norm)) || !std::isfinite(static_cast<double>(phi_norm)) ||
-        !std::isfinite(static_cast<double>(bound)) || !std::isfinite(static_cast<double>(requested))) return false;
-    if (initial) report.residual_evaluation = ResidualEvaluationEvidence{
-        report.residual_norm, rhs_norm, bound, bound, requested, std::max(requested, bound), false};
+    if (!std::isfinite(static_cast<double>(rhs_norm)) ||
+        !std::isfinite(static_cast<double>(phi_norm)) ||
+        !std::isfinite(static_cast<double>(bound)) ||
+        !std::isfinite(static_cast<double>(requested)))
+      return false;
+    if (initial)
+      report.residual_evaluation =
+          ResidualEvaluationEvidence{report.residual_norm,       rhs_norm, bound, bound, requested,
+                                     std::max(requested, bound), false};
     auto& evidence = *report.residual_evaluation;
     evidence.evaluation_bound = bound;
     evidence.applied_threshold = std::max(requested, bound);
-    evidence.roundoff_limited = report.residual_norm > requested && report.residual_norm <= evidence.applied_threshold;
-    evidence.relative_to_rhs_upper = ::pops::elliptic::mg::roundoff::relative_physical_residual_upper(report.residual_norm, bound, evidence.rhs_norm);
+    evidence.roundoff_limited =
+        report.residual_norm > requested && report.residual_norm <= evidence.applied_threshold;
+    evidence.relative_to_rhs_upper =
+        ::pops::elliptic::mg::roundoff::relative_physical_residual_upper(report.residual_norm,
+                                                                         bound, evidence.rhs_norm);
     return evidence.valid();
   }
 
   void project_field_domain_(Level& level, field_type& field) const {
-    if (!field_domain_()) return;
+    if (!field_domain_())
+      return;
     // CF ghosts are domain cells. Physical ghosts keep their independent face extension.
     for (std::size_t local = 0; local < field.local_size(); ++local)
-      for_each_cell(field.fab(local).grown_box().intersect(level.geometry.domain()), ::pops::elliptic::mg::ProjectCellCentreBallKernel<Dim>{
-          field.fab(local).view(), level.geometry, *field_domain_()});
+      for_each_cell(field.fab(local).grown_box().intersect(level.geometry.domain()),
+                    ::pops::elliptic::mg::ProjectCellCentreBallKernel<Dim>{
+                        field.fab(local).view(), level.geometry, *field_domain_()});
     Kokkos::fence();
   }
 

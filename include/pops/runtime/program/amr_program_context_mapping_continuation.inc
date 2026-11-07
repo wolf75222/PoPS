@@ -22,9 +22,10 @@ void suspend_map(std::string identity, bool target, field_type& field,
   port.next = std::move(continuation);
 }
 
+// A composite implicit stage leaves its subcycling refusal to the engine's typed window check.
 template <class Body, class Completed>
 void advance_mapping_hierarchy(double dt, Body&& body, std::shared_ptr<AmrProgramContext> owner,
-                               Completed&& completed) const {
+                               Completed&& completed, bool composite = false) const {
   if (!std::isfinite(dt) || !(dt > 0) || !owner || owner.get() != this)
     throw std::invalid_argument("AMR mapping hierarchy requires its exact context and positive dt");
   if (mapping_continuation_ || !active_attempt_states_.empty())
@@ -35,7 +36,7 @@ void advance_mapping_hierarchy(double dt, Body&& body, std::shared_ptr<AmrProgra
   std::exception_ptr error;
   try {
     for (const auto& relation : facade_->prepared_program_temporal_relations())
-      if (relation.temporal_ratio() != ::pops::amr::Rational(1, 1))
+      if (!composite && relation.temporal_ratio() != ::pops::amr::Rational(1, 1))
         throw std::logic_error(
             "AMR stage mapping requires common-time continuation for recursive subcycling");
     pending = std::make_unique<MappingContinuation>();
@@ -57,6 +58,7 @@ void advance_mapping_hierarchy(double dt, Body&& body, std::shared_ptr<AmrProgra
   mapping_continuation_ = std::move(pending);
   swap_level_attempt_envelope_(mapping_continuation_->prior);
   try {
+    spatial_consumed_flux_.clear();
     interface_flux_commit_guard_.reset();
     begin_step(dt);
     prepare_multiblock_subcycling_engine_();
@@ -124,6 +126,7 @@ void cancel_mapping_hierarchy_() const noexcept {
   program_values_.revoke_();
   staged_path_rhs_.clear();
   rhs_input_traces_.clear();
+  spatial_consumed_flux_.clear();
   if (multiblock_subcycling_)
     multiblock_subcycling_->abort_synchronized();
   if (interface_flux_ledger_ && interface_flux_ledger_->in_transaction())

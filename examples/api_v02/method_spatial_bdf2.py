@@ -66,7 +66,7 @@ def build_spatial_bdf2(cells=(12, 12), *, dt=.01, steps=8, hierarchy="uniform",
         threshold = case.param(RuntimeParam("refinement_threshold",
             default=.5 if hierarchy == "full" else 1.18))
         layout = AMR(grid=grid, hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-            tagging=AMRTagging(rules=(Tag(pm.ValueExpr(block[U]) > case.value(threshold)), Buffer(cells=1)),
+            tagging=AMRTagging(rules=(Tag(pm.ValueExpr(block[U]) > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
                 hysteresis=Hysteresis(0,EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid.frozen(), transfer=transfer, execution=AMRExecution.synchronous())
     x,y = np.meshgrid((np.arange(cells[0])+.5)/cells[0], (np.arange(cells[1])+.5)/cells[1])

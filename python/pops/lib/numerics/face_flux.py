@@ -8,17 +8,19 @@ component name. The author writes no stencil radius, no halo depth and no
 dimension (CF8, B2, B3): every read is recorded as a typed map
 ``Compose(Shift(o), Incidence(face(a), cell, side))``, and the builder derives
 
-* the halo of each input with the b6 face formulas of IR14,
+* the halo of each input: the exact widths of IR14 by box arithmetic, and the
+  b6 bound that its face formula stores, which IR-T1 compares,
 * the face identities of IR17: orientation and cell-face incidence come from
   the incidence maps, the signs from the D6 delivery that the builder fixes,
-* the lowering class, face incidence, which the face vocabulary reaches by
-  construction (IR20, IR21).
+* the lowering class, face incidence, which classification of the normal
+  forms of the reads reaches (IR20, IR21).
 
 The realization is the b6 native face loop, a qualified substitution (IR24):
 the builder lowers to one ``StencilFlux`` whose radius is derived from the reads.
 
-Pilot limits, each owned by a later issue. The typed maps are records kept in
-``pops.lib``; N7 replaces them with the core constructors of IR9. ``FaceFlux``
+The typed maps are the core constructors of IR9, from ``pops.regions``, and the
+facts come from the core analyses of the regions that the realization builds
+(``StencilFlux.regions``). Pilot limits, each owned by a later issue: ``FaceFlux``
 carries the b6 incident ``frequency`` where spec 0.3 has a ``reduce(max)`` of
 the step control (sec. 6.9, N8), and no ``covers=``, since M05 and M10 declare no
 balance terms at b6 (C31). The frame stands for the configuration kappa. Nothing
@@ -27,41 +29,16 @@ here changes the core (CF0).
 from dataclasses import dataclass
 
 from pops.math import Var
-
-
-@dataclass(frozen=True, slots=True)
-class Shift:
-    """``Shift(o)``: translation of a cell lattice by the integer vector o (IR9)."""
-    offset: tuple
-
-
-@dataclass(frozen=True, slots=True)
-class Incidence:
-    """``Incidence(face(a), cell, side)``: the left or right cell of a face normal to a."""
-    axis: int
-    side: str
-
-    def offset(self, dimension):
-        # The face of index i along a lies between cell i - e_a (left) and
-        # cell i (right); offsets count from the right cell, as at b6.
-        return tuple(-int(d == self.axis and self.side == "left") for d in range(dimension))
-
-
-@dataclass(frozen=True, slots=True)
-class Compose:
-    """``Compose(Shift(o), Incidence(...))``: a cell reached from a face (IR9)."""
-    shift: Shift
-    incidence: Incidence
-
-    def offset(self, dimension):
-        base = self.incidence.offset(dimension)
-        return tuple(b + o for b, o in zip(base, self.shift.offset, strict=True))
+from pops.regions import Compose, Incidence, Shift, cell, face
 
 
 @dataclass(frozen=True, slots=True)
 class _Read:
     target: tuple      # ("state", component index) or ("field", field slot)
-    map: Compose
+    map: Compose       # Compose(Shift(o), Incidence(face(a), cell, side))
+
+    def offset(self, dimension):
+        return self.map.offset(dimension)
 
 
 class FaceFlux:
@@ -89,18 +66,20 @@ def _require_axis(axis, dimension):
 
 
 class _Cell:
-    __slots__ = ("_face", "_map")
+    __slots__ = ("_face", "_side", "_offset", "_map")
 
-    def __init__(self, face, side, offset):
-        self._face = face
-        self._map = Compose(Shift(offset), Incidence(face.axis, side))
+    def __init__(self, face_, side, offset):
+        self._face = face_
+        self._side = side
+        self._offset = offset
+        self._map = Compose(Shift(offset), Incidence(face(face_.axis), cell, side))
 
     def shift(self, axis, k=1):
         _require_axis(axis, self._face._dimension)
         if type(k) is not int:
             raise TypeError("cell.shift needs an integer constant offset (StructuredOffsetNotConstant)")
-        offset = tuple(o + k*int(d == axis) for d, o in enumerate(self._map.shift.offset))
-        return _Cell(self._face, self._map.incidence.side, offset)
+        offset = tuple(o + k*int(d == axis) for d, o in enumerate(self._offset))
+        return _Cell(self._face, self._side, offset)
 
     def value(self, quantity):
         return self._face._reader(quantity, self._map)
@@ -109,15 +88,12 @@ class _Cell:
         _require_axis(axis, self._face._dimension)
         return self._face._spacing[axis]
 
-    # Two paths to one cell are one entity: compare the normal forms (IR9).
-    def _key(self):
-        return self._face.axis, self._map.offset(self._face._dimension)
-
+    # Two paths to one cell are one entity: typed maps compare by their normal forms (IR9).
     def __eq__(self, other):
-        return type(other) is _Cell and other._face is self._face and other._key() == self._key()
+        return type(other) is _Cell and other._face is self._face and other._map == self._map
 
     def __hash__(self):
-        return hash(self._key())
+        return hash(self._map)
 
 
 class _Face:
@@ -217,7 +193,7 @@ class RealizedFaceFlux:
         self.stencil_flux = stencil_flux
 
     def _offsets(self, kind, slot=None):
-        return tuple(read.map.offset(self.dimension)
+        return tuple(read.offset(self.dimension)
                      for axis_reads in self.reads.values() for read in axis_reads
                      if read.target[0] == kind and (slot is None or read.target[1] == slot))
 
@@ -228,15 +204,44 @@ class RealizedFaceFlux:
         raise KeyError("the scheme does not read the field %r" % (field.name,))
 
     def halo(self, field=None):
-        """``(low, high)`` widths per axis, of the state or of one solved field (IR14).
+        """``(low, high)`` b6 widths per axis, of the state or of one solved field (IR14).
 
-        These are the b6 bounds. On a tangent axis the high side carries the +1
-        of the normal axis, so it can exceed what the reads need: M05 reads one
-        cell on each side, and the bound is ``((1, 1), (2, 2))``.
+        These are the bounds of the b6 face formula, which IR-T1 compares. On a
+        tangent axis the high side carries the +1 of the normal axis, so it can
+        exceed what the reads need: M05 reads one cell on each side, and the
+        bound is ``((1, 1), (2, 2))`` where ``exact_halo`` is ``((1, 1), (1, 1))``.
         """
         offsets = self._offsets("state") if field is None else self._offsets("field", self._slot(field))
         low, high, _ = _halo(offsets, self.dimension)
         return low, high
+
+    def regions(self):
+        """The face region of each axis, built by the realization (``StencilFlux.regions``)."""
+        return self.stencil_flux.regions("face flux of %s" % self.state.name)
+
+    def exact_halo(self, field=None):
+        """``(low, high)`` widths per axis by the box arithmetic of IR14, over every axis.
+
+        The faces of the owned cells along a are one more than the cells, so a
+        read at offset o needs o_a + 1 cells above along a and o_b along a
+        tangent axis b. The analysis is the core's, on the normal forms of the
+        reads; it answers for the state, or for one solved field.
+        """
+        if field is None:
+            def where(array):
+                return array[0] == "state"
+        else:
+            slot = self._slot(field)
+
+            def where(array):
+                return array[:2] == ("field", slot)
+        low, high = [0]*self.dimension, [0]*self.dimension
+        for region in self.regions():
+            fact = region.halo(where)
+            for axis in range(self.dimension):
+                low[axis] = max(low[axis], fact.value[0][axis])
+                high[axis] = max(high[axis], fact.value[1][axis])
+        return tuple(low), tuple(high)
 
     @property
     def ghost_extent(self):
@@ -258,50 +263,53 @@ class RealizedFaceFlux:
         The normal and the cell offsets follow from the incidence maps of a
         face (IR9). The deliveries are the builder's own (D6, IR25), whatever
         the scheme writes: the face value J goes to ``Incidence(face(a), cell,
-        left)`` with weight -1 and to ``Incidence(face(a), cell, right)`` with
-        weight +1, so ``conservation`` (sum_k w_k = 0) holds by construction.
-        The executed evidence of conservation is the b6 ``mass_defect``
+        side="left")`` with weight -1 and to ``Incidence(face(a), cell,
+        side="right")`` with weight +1, and the core analysis proves
+        ``conservation`` (sum_k w_k = 0) on the region that the realization
+        builds. The executed evidence of conservation is the b6 ``mass_defect``
         invariant of each case. ``reads`` lists the distinct cells that the
         scheme reads on that axis, as offsets from the right cell (the normal
         forms of IR9).
         """
         out = []
-        for axis in range(self.dimension):
-            left, right = Incidence(axis, "left"), Incidence(axis, "right")
+        for region in self.regions():
+            axis = region.domain.axis
+            (left, wl), (right, wr) = region.targets
             lo, ro = left.offset(self.dimension), right.offset(self.dimension)
-            targets = ((left, -1), (right, +1))
+            fact = region.conservation()
             out.append({
                 "axis": axis,
                 "normal": tuple(r - l for r, l in zip(ro, lo)),
                 "left_offset": lo,
                 "right_offset": ro,
-                "targets": targets,
-                "conservation": sum(w for _, w in targets) == 0,
+                "targets": ((left, wl), (right, wr)),
+                "conservation": fact.truth.value == "proved",
                 "components": self.components,
-                "reads": tuple(sorted({read.map.offset(self.dimension)
-                                       for read in self.reads[axis]})),
+                "reads": tuple(sorted({read.offset(self.dimension) for read in self.reads[axis]})),
             })
         return tuple(out)
 
     def lowering_class(self):
-        """The class the builder expects, face incidence, reached by construction (IR20, IR21).
+        """The class the builder expects, face incidence, and the class reached (IR20, IR21).
 
-        The face vocabulary can only read a cell of the face,
-        ``Incidence(face(a), cell, side)``, composed with an integer shift
-        (``cell.shift`` refuses any other), so no classification can fail here.
-        The report lists the composed shifts that the scheme reads.
+        The core classifies each region from the normal forms of its maps and
+        raises ``ClassNotReached`` when a region does not reach face incidence.
+        The face vocabulary only reads a cell of the face,
+        ``Incidence(face(a), cell, side)`` composed with an integer shift, so the
+        report lists the composed shifts that the scheme reads.
         """
-        shifts = sorted({read.map.shift.offset for axis_reads in self.reads.values()
-                         for read in axis_reads if any(read.map.shift.offset)})
+        reached = {region.check_expected_class() for region in self.regions()}
+        shifts = sorted({read.map.outer.vector for axis_reads in self.reads.values()
+                         for read in axis_reads if any(read.map.outer.vector)})
         return {"expected": "face_incidence",
-                "reached": "face_incidence",
-                "reached_by": "construction of the face vocabulary",
+                "reached": reached.pop() if len(reached) == 1 else tuple(sorted(reached)),
+                "reached_by": "classification of the normal forms of the reads (IR20)",
                 "composed_shifts": tuple(shifts),
                 "substitution": "StencilFlux (include/pops/numerics/fv/stencil_flux.hpp@b6, IR24)"}
 
 
 def _read_set(reads, dimension):
-    return {(read.map.offset(dimension), *read.target)
+    return {(read.offset(dimension), *read.target)
             for axis_reads in reads.values() for read in axis_reads}
 
 
@@ -363,4 +371,4 @@ def realize_face_flux(scheme, state, *, frame):
                             reads=reads, stencil_flux=native)
 
 
-__all__ = ["Compose", "FaceFlux", "Incidence", "RealizedFaceFlux", "Shift", "realize_face_flux"]
+__all__ = ["FaceFlux", "RealizedFaceFlux", "realize_face_flux"]

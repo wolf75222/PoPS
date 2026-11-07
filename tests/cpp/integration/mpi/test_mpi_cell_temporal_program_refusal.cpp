@@ -212,7 +212,8 @@ int run_collective_history_remap_refusal() {
   for (const double dt : {0.1, 0.2, 0.3}) {
     context->begin_step(dt);
     context->for_each_program_resource_level([&](int) {
-      MultiFab<Dim> sample = context->scratch_state_like(context->state(0));
+      // Retain the exact Context-owned SSA allocation; a shape-only copy is not a producer.
+      auto& sample = context->scratch_state(940100, 0, context->state(0));
       sample.set_val(Real(dt));
       context->store_history("tracer.rate", sample, 0);
     });
@@ -272,8 +273,7 @@ int run_collective_history_remap_refusal() {
   } catch (const std::runtime_error& error) {
     refusal_reason = error.what();
     refused = refusal_reason.rfind(
-                  "AMR Program hierarchy-state publication failed collectively; rank 0:", 0) ==
-                  0 &&
+                  "AMR Program hierarchy-state publication failed collectively; rank 0:", 0) == 0 &&
               refusal_reason.find("AMR Program accepted history remap has invalid ring metadata") !=
                   std::string::npos;
   }

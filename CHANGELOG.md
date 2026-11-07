@@ -26,11 +26,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   R is read only from the SDK's own native leaf, runtime and report, S from a committed oracle
   that the receipt calls itself, and the process entry, the driver and every imported module are
   judged: a receiver starts from a committed file or `python -m pytest`, under that entry, and
-  the interpreter drives it only through its standard library and pytest, so CI starts pytest
-  from the committed `scripts/ci_pytest_bootstrap.py` instead of `python -c`. Only
-  `build_python.sh` attests a leaf, with its build environment, here and beside the retained
-  wheel; the cohort says whether that environment is official, and `sdk_cohort.py prefix`
-  installs the wheel into a fresh qualification prefix.
+  the interpreter drives it only through its standard library and pytest, from files that the
+  environment's manifests (`RECORD`, `conda-meta`) record with their bytes, so CI starts pytest
+  from the committed `scripts/ci_pytest_bootstrap.py` instead of `python -c`, and
+  `qualification_receipt.py judge-interpreter` judges that way, before a receiver runs, every
+  file of an interpreter that an import reaches. Only `build_python.sh` attests a leaf, with its
+  build environment, here and beside the retained wheel; the cohort says whether that
+  environment is official, and `sdk_cohort.py prefix` installs the wheel into a fresh
+  qualification prefix.
 
 ### Changed
 
@@ -79,6 +82,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   derived `hll(F, Uh)` reads them and matches `riemann.HLL()` on M03 and M16; `rusanov` takes
   `smax(uL, uR, n)` and `upwind` takes `speed(face)`, both matching `riemann.Rusanov()` on M01
   when they read the normal (spec 0.3 section 4.4, ROM-99).
+- Evaluate a `riemann.User` face residual on the transport prepared at bind, like the native face:
+  no field is allocated per evaluation, the face carrier is copied only when a Program reads it,
+  and the stability frequency is read from the recorded face speeds, on the prepared transport in
+  the pass that validates the residual, elsewhere in one pass. The generated face policy tests its
+  outputs and the operands that could conceal a non-finite value, and refuses the same faces with
+  the same cause (ROM-100, core ledger entry).
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.
@@ -125,6 +134,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   execution, and forward CI cancellation to monitored commands.
 - Finalize newly installed Darwin native variants before repeat-install hash checks while
   preserving authenticated sibling dimensions; first and incremental builds use the same path.
+- Write an AMR refinement criterion in Python: a `Tag` or `Coarsen` predicate may be a function of
+  `cell` (`cell.value(q)`, `cell.shift(axis, k)`, `cell.width(axis)`, runtime parameters), traced
+  once and generated into the compiled Program. The native tagging plan calls it on each patch in
+  place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` and
+  clustering. A criterion requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, and its
+  rules decide as those of the tag graph do. The comparisons that `~`, `&` and `|` join are a
+  strict `<` or `>` (`<=`, `>=` and `==` are refused at the line of the rule) and follow Kleene's
+  three-valued logic, so one at exact equality decides nothing and neither does its negation under
+  `~`. Each of them is evaluated, so a non-finite sample rejects the level on both routes, even
+  where the left operand of `&` or `|` already decides the rule. A `where` inside an operand, which
+  the tag graph cannot write, is the `cond` of IR4: its test is two-valued and may compare with
+  `<=`, `>=` or `==`, and only the branch that it selects is evaluated, so a non-finite sample read
+  only in the other branch does not reject the level.
+  `pops.lib.amr.gradient_norm` keeps the arithmetic of the gradient leaves under the stencil the
+  method declares (`amr_indicator_stencil`). Tag-graph expressions are unchanged and are not mixed
+  with functions of `cell` in one `AMRTagging`; external Tagger components and multi-layout plans
+  refuse a criterion.
 
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.
@@ -320,6 +346,107 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Generated dense spectral witnesses now distinguish a converged complex spectrum from an invalid
   eigensolve. Checked extrema return NaN on non-convergence/non-finite diagnostics, and the tri-state
   real-spectrum witness propagates the same failure into native pointwise transforms before commit.
+- Run master's 17 scalar-advection tutorials in CI (`mg8-tutorials`): each runs from master
+  bb9aea0c and from this tree on the same runner, and `scripts/run_mg8_tutorials.py` compares
+  every result bitwise, on every plan that needs the Python lane.
+  A tutorial that outlives its watchdog is stopped with every process under it, MPI ranks
+  included, each rank first writing its Python stacks; a tutorial that fails prints them and the
+  end of its logs in the job log, and this tree's steps run even when master's step fails or
+  times out. Each rank compiles into a JIT cache of its own: master's ranks compiled the same
+  model into one file of a shared cache without its lock, and one of them could raise at bind
+  while the other waited in a collective.
+  `tests/gates/mg8_master_tutorials.toml` records each divergence by its exact checks, with its
+  causes, their issues and commits and its attribution; only results can be recorded, a failure
+  always fails the job, and `run_mg8_tutorials.py check --check-base` fails on every event when
+  the ledger grows. Tutorial 11 binds its runtime parameters as master writes them again: the
+  block-qualified spelling raised DoubleOwnershipError.
+- Evaluate van Leer and MC's centred slope with master's expressions wherever they stay normal
+  and finite, keeping the overflow-safe forms beyond that range, so master's tutorials keep
+  their bits (MG8, ROM-102).
+- Realize `Inflow` as master does: the mirrored ghost 2g - u, whose reconstruction is also the
+  exterior trace of the numerical flux (D9). The prescribed exterior trace of API 0.2 is chosen by
+  name, `Inflow(..., trace="prescribed")` (provisional spelling for N15), as M14 and the
+  two-block receipt now do: its face keeps the fixed-state law and carries a per-face flag,
+  `prescribed_trace`, that the engine reads (`with_prescribed_trace_faces`) (MG8, ROM-101).
+- `Buffer(cells=n)` dilates AMR tags as master does again: every cell of the target coverage,
+  cells kept by hysteresis included, grows by the transition buffer, max(n, derived), plus the
+  lookahead (native tag selection 2). The tag selection of API 0.2 (pops.amr.tag-selection@1)
+  is chosen by name, `Buffer(cells=n, selection="refine-requests")` (provisional spelling for
+  N15); the tests, examples and tutorials that API 0.2 added or changed name it, so their
+  results are unchanged. One exception: master's example
+  `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py`, which API 0.2 changed, keeps
+  master's `Buffer(cells=2)` and so takes master's selection again (MG8, ROM-103).
+- `ConservativeLinear()` prolongs new fine cells as master does again, at a regrid and at a
+  bootstrap: a parent on a physical face takes the monotonized-central slope over both
+  neighbours, the boundary ghost included (spec 0.3, section 2.6.9). The one-sided interior
+  slope of API 0.2 is chosen by name, `ConservativeLinear(physical_faces="one-sided")`
+  (provisional spelling for N15), as the AMR diffusion receipts and the other files of API 0.2
+  with a physical face now do: its route keeps the native kernel and carries a mask of one-sided
+  axes, `one_sided_axes`, that the native transfer applies on the non-periodic axes. Master's
+  17 tutorials reproduce master bit for bit, and the MG8 ledger is empty (MG8, ROM-104).
+- Compile each block package of a Case for the one catalogue numerical route its block resolves
+  (variables, limiter, Riemann solver) instead of every catalogue route: a generated Euler
+  package compiles in about 22 s instead of about 150 s. The generated loader names that route
+  by the native types that the route catalogue records for it; the block selectors instantiate
+  only those types and add no route name to the engine. The route enters the package identity,
+  and the package refuses, in Python and in C++, to be installed with another route; compile the
+  Case with the numerics it installs. The private ModelSpec package that `add_equation` compiles
+  is compiled for the route of the block it installs. A package without a catalogue route (state
+  storage, source-authored or coordinated faces, external Riemann bricks) and a direct
+  `model.compile()` keep their current route set.
+
+### Fixed
+
+- Divide and reduce exact weights without copying the remainder for each quotient bit:
+  `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
+  and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step
+  validates its face-flux fragments with these weights; over the first 35 accepted steps of the
+  scalar advection final example (to t = 0.03), run side by side on one 4-core container, the
+  step rate rises from 4.75 to 9.04 per minute.
+- Read the face-flux fragments of one coarse face instead of every fragment of its axis. Before
+  face-flux publication and in multiblock reflux, an AMR Program step compared each interface
+  face with all pending or published fragments of the axis, a cost that grew with the square of
+  the coarse/fine interface. Fragments are now grouped by coarse face in ledger order
+  (`PublishedCoarseFaceIndex` for the published ones), so accumulation order, corrections and
+  refusals are unchanged. On one 4-core container, the first segment of the same example (to
+  t = 0.2, 226 accepted steps) runs in 11 minutes instead of 28.
+- Project the IR identity of each frozen Program once per `pops.compile`. Every identity check
+  of the compile reprojected the whole IR (`_ir_hash()`, the canonical JSON of the serialized
+  Program), whose size grows with the square of a nested structure's depth: 19 projections per
+  compile of the depth-160 structural test. A scope opened by `pops.compile` and bound to its
+  thread now reuses the identity of a frozen Program already read in the same compile, then
+  projects every reused identity again when the compile ends: a change raises `Program IR
+  identity changed during pops.compile` and no artifact is returned. IR, plan and artifact
+  identities are unchanged (identical hashes for 116 example builders and for the depth test at
+  depths 20, 40, 80 and 160). On one 4-core container, `compile` of the depth-160 test takes
+  740 s instead of 1147 s.
+- `ci.yml` checks, with the pinned clang-format 19.1.7, what each pull request changes in the C++
+  files, in a `format` job that the required gate aggregates (against the first parent of the
+  merge commit, about a minute, no build). It works as a ratchet: a touched file that conformed at
+  the base must still conform as a whole file, since a changed line can misalign its aligned
+  neighbours; a file that did not conform is held to its changed lines only, so a branch never
+  has to reformat a file that it found unformatted; after a change to `.clang-format` or
+  `.clang-format-ignore`, every file that conformed at the base must still conform. `quality.yml`
+  keeps its whole-tree check through the same script, `scripts/check_clang_format.sh`. The
+  historical SDK header snapshots that tests pin by SHA-256 are listed in the new
+  `.clang-format-ignore`, which both checks honor. A change to `.clang-format`,
+  `.clang-format-ignore` or the script alone is planned as metadata: it runs the `format` job and
+  no build.
+- Reformat the 161 C++ files that the blocking `format` job of `quality.yml` refused, with the
+  pinned clang-format 19.1.7, in one mechanical commit listed in `.git-blame-ignore-revs`. Besides
+  whitespace, it splits six long literals, adds closing namespace comments, and re-indents the
+  embedded C++ of three `R"CPP(...)CPP"` test program sources (same tokens). Three line budgets of
+  the architecture tests grow by the measured formatter delta, and the CF2 engine guard list takes
+  the new line numbers.
+- `docs/gen_test_counts.py --check-matrix`, the blocking manifest step of `quality.yml`, applies the
+  disposition of `tests/python/unavailable_verification_tests.json`: the seven tests of
+  `tests/python/verification/` committed without their dependencies (`bcb73f4a`) are exempt while
+  their bytes match the catalogue, and a suite that claims one fails, as in the coverage fence of
+  `test_manifest_suite_coverage.py`. The step had failed on these seven files since 2026-08-17;
+  no test starts running.
+- The coverage fence keeps that catalogue shrink-only: a record added or rewritten, or a changed
+  header, fails even when the catalogue's SHA-256 pin is updated with it; a record may only be
+  dropped, and its test must then be claimed by a suite.
 
 ## [1.0.0] - 2026-07-16
 
