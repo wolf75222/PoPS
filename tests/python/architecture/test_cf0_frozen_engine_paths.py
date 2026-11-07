@@ -4,15 +4,13 @@ the CF0 placement list.
 ``frozen_engine/cf0_paths.toml`` is the one CF0 list that every engine guard reads (CF0b, CF1, CF2,
 CF7, CF8). ``frozen_engine/cf0_native_placement.toml`` names each native of IR24 that still sits in
 a core path, with its issue, phase and interface; it only shrinks (MG6), keeps only Phase 2 entries
-at the exit of Phase 1 and is empty at the freeze (FC6, FC8).
+at the exit of Phase 1 and is empty at the freeze (FC6, FC8). Every guard reads it through
+``scan.load_placement``: this test, CF1 (``cf1.placed_natives``) and CF2 (the N9 path rule of
+``cf2.py`` and the closed interface list).
 
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
-import tomllib
-
 from tests.python.architecture.frozen_engine import scan
-
-PLACEMENT = scan.HERE / "cf0_native_placement.toml"
 
 # CF0 at b6e64c1d, verbatim: include/, src/, python/bindings/, python/pops/ except python/pops/lib/,
 # cmake/, schemas/, the root CMakeLists.txt, python/CMakeLists.txt, src/CMakeLists.txt and
@@ -35,7 +33,7 @@ IR24_ISSUE_PHASE = {"N3": 1, "N9": 2, "G05": 2, "G06": 2}
 
 
 def _natives():
-    return tomllib.loads(PLACEMENT.read_text(encoding="utf-8"))["native"]
+    return scan.load_placement()
 
 
 def _line_numbers(spec):

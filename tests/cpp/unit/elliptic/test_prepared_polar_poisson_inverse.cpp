@@ -51,14 +51,13 @@ struct DiskProblem {
     return mesh::BoxArray<2>(std::vector<Box<2>>{first, second});
   }
 
-  static mesh::Distribution<2> ownership(const mesh::BoxArray<2>& layout,
-                                         const ExecutionLane& lane, bool replicated,
-                                         bool empty_owner) {
+  static mesh::Distribution<2> ownership(const mesh::BoxArray<2>& layout, const ExecutionLane& lane,
+                                         bool replicated, bool empty_owner) {
     const mesh::RankSpace<2> space{Index<2>{0, 0}, Extent<2>{lane.size(), 1}};
     if (replicated)
       return mesh::Distribution<2>::replicated(layout, space);
-    return mesh::Distribution<2>::partitioned(layout, space,
-        {Index<2>{0, 0}, Index<2>{empty_owner ? 0 : lane.size() - 1, 0}});
+    return mesh::Distribution<2>::partitioned(
+        layout, space, {Index<2>{0, 0}, Index<2>{empty_owner ? 0 : lane.size() - 1, 0}});
   }
 
   static HaloScheduleBudget halo_budget(const Geometry<2>& geometry) {
@@ -66,25 +65,25 @@ struct DiskProblem {
     return {{2, 1}, 36, 144, 9, 4, elements, elements, elements};
   }
 
-  DiskProblem(int nr = 7, int nt = 16, Real radius = Real(1.7),
-              Index<2> origin = Index<2>{0, 0}, bool replicated = false,
-              bool empty_owner = false)
+  DiskProblem(int nr = 7, int nt = 16, Real radius = Real(1.7), Index<2> origin = Index<2>{0, 0},
+              bool replicated = false, bool empty_owner = false)
       : geometry(Geometry<2>::from_bounds(
-            Box<2>{origin, Index<2>{origin[0] + nr - 1, origin[1] + nt - 1}},
-            RealVector<2>{0, 0}, RealVector<2>{radius, 2 * pi})),
-        boundary(disk_boundaries(geometry)), layout(boxes(geometry)),
+            Box<2>{origin, Index<2>{origin[0] + nr - 1, origin[1] + nt - 1}}, RealVector<2>{0, 0},
+            RealVector<2>{radius, 2 * pi})),
+        boundary(disk_boundaries(geometry)),
+        layout(boxes(geometry)),
         distribution(ownership(layout, lane, replicated, empty_owner)),
         exact(layout, distribution, Index<2>{lane.rank(), 0}, 1, Extent<2>{1, 1}),
         rhs(layout, distribution, Index<2>{lane.rank(), 0}, 1, Extent<2>{}),
         solution(layout, distribution, Index<2>{lane.rank(), 0}, 1, Extent<2>{1, 1}),
         residual(layout, distribution, Index<2>{lane.rank(), 0}, 1, Extent<2>{}),
         halo(prepare_halo_schedule(exact, geometry.domain(), boundary.topology(),
-                                  HaloLayoutCoverage::full_domain, halo_budget(geometry))),
+                                   HaloLayoutCoverage::full_domain, halo_budget(geometry))),
         physical(prepare_physical_boundary(geometry.domain(), Extent<2>{1, 1}, boundary, {8})),
         inverse(solution, geometry, physical, {1u, 2u, true}, lane) {
     for (auto& coefficient : coefficients)
-      coefficient = std::make_unique<Field>(layout, distribution, Index<2>{lane.rank(), 0},
-                                            1, Extent<2>{1, 1});
+      coefficient = std::make_unique<Field>(layout, distribution, Index<2>{lane.rank(), 0}, 1,
+                                            Extent<2>{1, 1});
     for (std::size_t local = 0; local < exact.local_size(); ++local) {
       std::array<FieldView<Real, 2>, 4> values{};
       for (std::size_t slot = 0; slot < 4; ++slot)
@@ -158,8 +157,10 @@ struct DiskProblem {
     Real maximum = 0;
     for (std::size_t local = 0; local < first.local_size(); ++local) {
       const auto a = first.fab(local).view(), b = second.fab(local).view();
-      maximum = std::max(maximum, for_each_cell_reduce_max(first.box(local),
-          [=] POPS_HD(const Index<2>& index) { return Kokkos::abs(a(index, 0) - b(index, 0)); }));
+      maximum = std::max(
+          maximum, for_each_cell_reduce_max(first.box(local), [=] POPS_HD(const Index<2>& index) {
+            return Kokkos::abs(a(index, 0) - b(index, 0));
+          }));
     }
     return all_reduce_max(maximum, lane);
   }
@@ -168,8 +169,10 @@ struct DiskProblem {
     Real maximum = 0;
     for (std::size_t local = 0; local < field.local_size(); ++local) {
       const auto values = field.fab(local).view();
-      maximum = std::max(maximum, for_each_cell_reduce_max(field.box(local),
-          [=] POPS_HD(const Index<2>& index) { return Kokkos::abs(values(index, 0)); }));
+      maximum = std::max(
+          maximum, for_each_cell_reduce_max(field.box(local), [=] POPS_HD(const Index<2>& index) {
+            return Kokkos::abs(values(index, 0));
+          }));
     }
     return all_reduce_max(maximum, lane);
   }
@@ -221,7 +224,8 @@ TEST(PreparedPolarPoissonInverse, FixedLinearityZeroResponseAndTwoPersistentSess
   DiskProblem problem;
   Field a(problem.layout, problem.distribution, problem.rhs.local_rank(), 1, Extent<2>{});
   Field b(a), combined(a), image_a(a), image_b(a), image_combined(a), expected(a), saved_a(a);
-  Inverse second(problem.solution, problem.geometry, problem.physical, {1u, 2u, true}, problem.lane);
+  Inverse second(problem.solution, problem.geometry, problem.physical, {1u, 2u, true},
+                 problem.lane);
   problem.inverse.prepare();
   second.prepare();
   EXPECT_EQ(problem.inverse.allocation_count(), 7u);
@@ -243,7 +247,8 @@ TEST(PreparedPolarPoissonInverse, FixedLinearityZeroResponseAndTwoPersistentSess
   ASSERT_TRUE(second.apply(image_b, b).succeeded());
   ASSERT_TRUE(problem.inverse.apply(image_combined, combined).succeeded());
   for (std::size_t local = 0; local < a.local_size(); ++local) {
-    const auto va = std::as_const(image_a.fab(local)).view(), vb = std::as_const(image_b.fab(local)).view();
+    const auto va = std::as_const(image_a.fab(local)).view(),
+               vb = std::as_const(image_b.fab(local)).view();
     const auto target = expected.fab(local).view();
     for_each_cell(a.box(local), [=] POPS_HD(const Index<2>& index) {
       target(index, 0) = Real(2) * va(index, 0) - Real(0.75) * vb(index, 0);
@@ -272,16 +277,19 @@ TEST(PreparedPolarPoissonInverse, UnsupportedBoundaryAndAsymmetricOptionsRefuseC
   auto bad_options = elliptic::nd::CartesianTensorStencilOptions{1u, 2u, true};
   if (problem.lane.rank() == 0)
     bad_options.arithmetic_diagonal = false;
-  Inverse asymmetric(problem.solution, problem.geometry, problem.physical, bad_options, problem.lane);
+  Inverse asymmetric(problem.solution, problem.geometry, problem.physical, bad_options,
+                     problem.lane);
   EXPECT_THROW(asymmetric.prepare(), std::invalid_argument);
   for (const bool nonzero : {false, true}) {
     std::array<PhysicalBoundaryFace, 4> faces{};
     faces[0] = {PhysicalBoundaryKind::neumann, Real(0)};
-    faces[1] = nonzero ? PhysicalBoundaryFace{PhysicalBoundaryKind::dirichlet, Real(1)} :
-                        PhysicalBoundaryFace{PhysicalBoundaryKind::neumann, Real(0)};
-    const PhysicalBoundaryConditions<2> laws{problem.boundary.topology(), faces,
+    faces[1] = nonzero ? PhysicalBoundaryFace{PhysicalBoundaryKind::dirichlet, Real(1)}
+                       : PhysicalBoundaryFace{PhysicalBoundaryKind::neumann, Real(0)};
+    const PhysicalBoundaryConditions<2> laws{
+        problem.boundary.topology(), faces,
         RealVector<2>{problem.geometry.spacing(0), problem.geometry.spacing(1)}};
-    const auto boundary = prepare_physical_boundary(problem.geometry.domain(), Extent<2>{1, 1}, laws, {8});
+    const auto boundary =
+        prepare_physical_boundary(problem.geometry.domain(), Extent<2>{1, 1}, laws, {8});
     Inverse invalid(problem.solution, problem.geometry, boundary, {1u, 2u, true}, problem.lane);
     EXPECT_THROW(invalid.prepare(), std::invalid_argument);
   }
@@ -293,10 +301,11 @@ TEST(PreparedPolarPoissonInverse, LocallyValidDifferentGeometryFailsExactCollect
   DiskProblem problem;
   if (problem.lane.size() < 2)
     GTEST_SKIP() << "requires two ranks for distinct locally valid geometries";
-  const auto geometry = Geometry<2>::from_bounds(problem.geometry.domain(), RealVector<2>{0, 0},
+  const auto geometry = Geometry<2>::from_bounds(
+      problem.geometry.domain(), RealVector<2>{0, 0},
       RealVector<2>{problem.lane.rank() == 0 ? Real(1.7) : Real(2.3), 2 * pi});
-  const auto boundary = prepare_physical_boundary(geometry.domain(), Extent<2>{1, 1},
-                                                  disk_boundaries(geometry), {8});
+  const auto boundary =
+      prepare_physical_boundary(geometry.domain(), Extent<2>{1, 1}, disk_boundaries(geometry), {8});
   Inverse inconsistent(problem.solution, geometry, boundary, {1u, 2u, true}, problem.lane);
   EXPECT_THROW(inconsistent.prepare(), std::invalid_argument);
   problem.inverse.prepare();
@@ -327,16 +336,16 @@ TEST(PreparedPolarPoissonInverse, MissingCoverageOverlapAndWrongRankSpaceRefuse)
 TEST(PreparedPolarPoissonInverse, BoundsAndNonDiskGeometryRefuseBeforeWorkspaceAllocation) {
   DiskProblem problem;
   const mesh::BoxArray<2> empty_layout;
-  const auto empty_distribution = mesh::Distribution<2>::replicated(empty_layout,
-                                                                   problem.rhs.rank_space());
+  const auto empty_distribution =
+      mesh::Distribution<2>::replicated(empty_layout, problem.rhs.rank_space());
   Field empty(empty_layout, empty_distribution, problem.rhs.local_rank(), 1, Extent<2>{});
-  for (const auto extent : {Index<2>{1, 16}, Index<2>{2, 1}, Index<2>{2, 1025},
-                            Index<2>{4097, 2}, Index<2>{129, 1024}, Index<2>{263, 1024}}) {
-    const auto geometry = Geometry<2>::from_bounds(
-        Box<2>{Index<2>{0, 0}, Index<2>{extent[0] - 1, extent[1] - 1}},
-        RealVector<2>{0, 0}, RealVector<2>{Real(1.7), 2 * pi});
-    const auto boundary = prepare_physical_boundary(geometry.domain(), Extent<2>{},
-                                                    disk_boundaries(geometry), {8});
+  for (const auto extent : {Index<2>{1, 16}, Index<2>{2, 1}, Index<2>{2, 1025}, Index<2>{4097, 2},
+                            Index<2>{129, 1024}, Index<2>{263, 1024}}) {
+    const auto geometry =
+        Geometry<2>::from_bounds(Box<2>{Index<2>{0, 0}, Index<2>{extent[0] - 1, extent[1] - 1}},
+                                 RealVector<2>{0, 0}, RealVector<2>{Real(1.7), 2 * pi});
+    const auto boundary =
+        prepare_physical_boundary(geometry.domain(), Extent<2>{}, disk_boundaries(geometry), {8});
     Inverse invalid(empty, geometry, boundary, {1u, 2u, true}, problem.lane);
     const auto allocations = allocation_event_stats();
     EXPECT_THROW(invalid.prepare(), std::invalid_argument);
@@ -344,8 +353,9 @@ TEST(PreparedPolarPoissonInverse, BoundsAndNonDiskGeometryRefuseBeforeWorkspaceA
     EXPECT_EQ(invalid.allocation_count(), 0u);
   }
   for (const auto bounds : {RealVector<2>{Real(0.1), 2 * pi}, RealVector<2>{Real(0), pi}}) {
-    const auto geometry = Geometry<2>::from_bounds(problem.geometry.domain(),
-        RealVector<2>{bounds[0], 0}, RealVector<2>{Real(1.7), bounds[1]});
+    const auto geometry =
+        Geometry<2>::from_bounds(problem.geometry.domain(), RealVector<2>{bounds[0], 0},
+                                 RealVector<2>{Real(1.7), bounds[1]});
     const auto boundary = prepare_physical_boundary(geometry.domain(), Extent<2>{1, 1},
                                                     disk_boundaries(geometry), {8});
     Inverse invalid(problem.solution, geometry, boundary, {1u, 2u, true}, problem.lane);
@@ -370,8 +380,9 @@ TEST(PreparedPolarPoissonInverse, OneUlpReplicaDifferenceRefusesWithoutTolerance
   if (problem.lane.size() < 2)
     GTEST_SKIP() << "requires two physically replicated rank copies";
   problem.inverse.prepare();
-  problem.rhs.set_val(problem.lane.rank() == 0 ? Real(1) :
-                       std::nextafter(Real(1), std::numeric_limits<Real>::infinity()));
+  problem.rhs.set_val(problem.lane.rank() == 0
+                          ? Real(1)
+                          : std::nextafter(Real(1), std::numeric_limits<Real>::infinity()));
   const auto failed = problem.inverse.apply(problem.solution, problem.rhs);
   EXPECT_FALSE(failed.succeeded());
   EXPECT_EQ(failed.action, PreparedApplyFailureAction::kFailRun);
@@ -380,7 +391,8 @@ TEST(PreparedPolarPoissonInverse, OneUlpReplicaDifferenceRefusesWithoutTolerance
 }
 
 TEST(PreparedPolarPoissonInverse, OtherNativeDimensionsCompileAndRefuseCollectively) {
-  const auto lane = ExecutionLane::duplicate_world_collectively("tests.polar-inverse.other-dimensions");
+  const auto lane =
+      ExecutionLane::duplicate_world_collectively("tests.polar-inverse.other-dimensions");
   auto refuse = [&]<int Dim>() {
     using OtherField = MultiFab<Dim>;
     using OtherInverse = elliptic::polar::PreparedPolarPoissonInverse<Dim>;
@@ -398,8 +410,8 @@ TEST(PreparedPolarPoissonInverse, OtherNativeDimensionsCompileAndRefuseCollectiv
     const Box<Dim> domain{origin, high};
     const auto geometry = Geometry<Dim>::from_bounds(domain, lower, upper);
     const mesh::BoxArray<Dim> layout(std::vector<Box<Dim>>{domain});
-    const auto distribution = mesh::Distribution<Dim>::replicated(layout,
-        mesh::RankSpace<Dim>{origin, ranks});
+    const auto distribution =
+        mesh::Distribution<Dim>::replicated(layout, mesh::RankSpace<Dim>{origin, ranks});
     OtherField prototype(layout, distribution, local, 1, Extent<Dim>{});
     std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
     const PhysicalBoundaryConditions<Dim> laws{

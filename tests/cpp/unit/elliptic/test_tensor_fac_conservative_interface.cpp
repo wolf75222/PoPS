@@ -50,41 +50,50 @@ struct InterfaceProblem {
 
   InterfaceProblem(const ExecutionLane& execution_lane, InterfaceCoupling coupling,
                    Configuration config = {})
-      : lane(execution_lane), configuration(config),
-        layout(config.levels), distribution(config.levels), initial(config.levels),
-        rhs(config.levels), solution(config.levels), coefficient(config.levels), bindings(config.levels),
-        ratios(config.levels - 1, amr::RefinementRatio<2>{std::array<int, 2>{
-            static_cast<int>(config.ratio[0]), static_cast<int>(config.ratio[1])}}),
+      : lane(execution_lane),
+        configuration(config),
+        layout(config.levels),
+        distribution(config.levels),
+        initial(config.levels),
+        rhs(config.levels),
+        solution(config.levels),
+        coefficient(config.levels),
+        bindings(config.levels),
+        ratios(config.levels - 1,
+               amr::RefinementRatio<2>{std::array<int, 2>{static_cast<int>(config.ratio[0]),
+                                                          static_cast<int>(config.ratio[1])}}),
         options{config.conducting ? 1u : 3u, config.conducting ? 2u : 0u, true} {
     const mesh::RankSpace<2> ranks{Index<2>{2, -3}, Extent<2>{lane.size(), 1}};
     const Index<2> local_rank = ranks.coordinate(static_cast<std::size_t>(lane.rank()));
     const Box<2> domain{config.origin, Index<2>{config.origin[0] + 7, config.origin[1] + 3}};
-    geometry.push_back(Geometry<2>::from_bounds(domain, RealVector<2>{0, 0},
+    geometry.push_back(Geometry<2>::from_bounds(
+        domain, RealVector<2>{0, 0},
         RealVector<2>{1, config.mapped ? Real(2) * std::acos(Real(-1)) : Real(1)}));
     for (int level = 1; level < config.levels; ++level)
       geometry.push_back(geometry.back().refine(config.ratio));
     for (int level = 0; level < config.levels; ++level) {
       std::array<PhysicalBoundaryFace, 4> faces{};
       faces[0] = {PhysicalBoundaryKind::neumann, Real(0)};
-      faces[1] = {config.conducting ? PhysicalBoundaryKind::dirichlet
-                                  : PhysicalBoundaryKind::neumann, Real(0)};
-      boundary.emplace_back(
-          BoundaryTopology<2>::axis_periodic(std::array<bool, 2>{false, true}), faces,
-          RealVector<2>{geometry[level].spacing(0), geometry[level].spacing(1)});
+      faces[1] = {
+          config.conducting ? PhysicalBoundaryKind::dirichlet : PhysicalBoundaryKind::neumann,
+          Real(0)};
+      boundary.emplace_back(BoundaryTopology<2>::axis_periodic(std::array<bool, 2>{false, true}),
+                            faces,
+                            RealVector<2>{geometry[level].spacing(0), geometry[level].spacing(1)});
     }
     std::vector<Box<2>> coarse_boxes;
     std::vector<Index<2>> owners;
     const int partitions = config.replicated ? 1 : lane.size();
     for (int rank = 0; rank < partitions; ++rank) {
-      coarse_boxes.push_back({Index<2>{domain.lo[0] + rank * 8 / partitions, domain.lo[1]},
-                             Index<2>{domain.lo[0] + (rank + 1) * 8 / partitions - 1,
-                                      domain.hi[1]}});
+      coarse_boxes.push_back(
+          {Index<2>{domain.lo[0] + rank * 8 / partitions, domain.lo[1]},
+           Index<2>{domain.lo[0] + (rank + 1) * 8 / partitions - 1, domain.hi[1]}});
       owners.push_back(ranks.coordinate(static_cast<std::size_t>(rank)));
     }
     layout[0] = mesh::BoxArray<2>(std::move(coarse_boxes));
     distribution[0] = config.replicated
-        ? mesh::Distribution<2>::replicated(layout[0], ranks)
-        : mesh::Distribution<2>::partitioned(layout[0], ranks, std::move(owners));
+                          ? mesh::Distribution<2>::replicated(layout[0], ranks)
+                          : mesh::Distribution<2>::partitioned(layout[0], ranks, std::move(owners));
     Box<2> footprint = domain;
     if (config.periodic_seam) {
       footprint.hi[1] = footprint.lo[1];
@@ -102,7 +111,8 @@ struct InterfaceProblem {
       // Divide at a coarse face: this is an actual same-level fine interface.
       const int tangent = config.periodic_seam ? 0 : 1;
       Box<2> first = footprint, second = footprint;
-      first.hi[tangent] = footprint.lo[tangent] + static_cast<int>(footprint.length(tangent) / 2) - 1;
+      first.hi[tangent] =
+          footprint.lo[tangent] + static_cast<int>(footprint.length(tangent) / 2) - 1;
       second.lo[tangent] = first.hi[tangent] + 1;
       fine_boxes = {refine(first, config.ratio), refine(second, config.ratio)};
       owners = {ranks.coordinate(0), ranks.coordinate(static_cast<std::size_t>(lane.size() - 1))};
@@ -117,24 +127,28 @@ struct InterfaceProblem {
       inner.lo[0] += 2;
       inner.hi[0] -= 2;
       layout[2] = mesh::BoxArray<2>(std::vector<Box<2>>{refine(inner, config.ratio)});
-      distribution[2] = mesh::Distribution<2>::partitioned(layout[2], ranks,
-          std::vector<Index<2>>{ranks.coordinate(0)});
+      distribution[2] = mesh::Distribution<2>::partitioned(
+          layout[2], ranks, std::vector<Index<2>>{ranks.coordinate(0)});
     }
     for (int level = 0; level < config.levels; ++level) {
-      initial[level] = std::make_unique<Field>(layout[level], distribution[level], local_rank,
-                                              1, Extent<2>{1, 1});
-      rhs[level] = std::make_unique<Field>(layout[level], distribution[level], local_rank, 1, Extent<2>{});
-      solution[level] = std::make_unique<Field>(layout[level], distribution[level], local_rank,
-                                               1, Extent<2>{1, 1});
+      initial[level] = std::make_unique<Field>(layout[level], distribution[level], local_rank, 1,
+                                               Extent<2>{1, 1});
+      rhs[level] =
+          std::make_unique<Field>(layout[level], distribution[level], local_rank, 1, Extent<2>{});
+      solution[level] = std::make_unique<Field>(layout[level], distribution[level], local_rank, 1,
+                                                Extent<2>{1, 1});
       for (int entry = 0; entry < 4; ++entry) {
         coefficient[level][entry] = std::make_unique<Field>(layout[level], distribution[level],
                                                             local_rank, 1, Extent<2>{1, 1});
         coefficient[level][entry]->set_val(entry == 0 || entry == 3 ? Real(1) : Real(0));
       }
-      bindings[level] = {&geometry[level], &boundary[level],
-          {coefficient[level][0].get(), coefficient[level][1].get(),
-           coefficient[level][2].get(), coefficient[level][3].get()},
-          rhs[level].get(), initial[level].get(), solution[level].get()};
+      bindings[level] = {&geometry[level],
+                         &boundary[level],
+                         {coefficient[level][0].get(), coefficient[level][1].get(),
+                          coefficient[level][2].get(), coefficient[level][3].get()},
+                         rhs[level].get(),
+                         initial[level].get(),
+                         solution[level].get()};
     }
     solver = std::make_unique<FullTensorCompositeFac<2>>(
         bindings, ratios, lane, options, config.coarse_method, 64,
@@ -143,7 +157,7 @@ struct InterfaceProblem {
 
   static std::size_t offset(const Box<2>& box, int i, int j) {
     return static_cast<std::size_t>(i - box.lo[0]) +
-        static_cast<std::size_t>(j - box.lo[1]) * static_cast<std::size_t>(box.length(0));
+           static_cast<std::size_t>(j - box.lo[1]) * static_cast<std::size_t>(box.length(0));
   }
 
   template <class Function>
@@ -155,8 +169,10 @@ struct InterfaceProblem {
       const auto box = fab.grown_box();
       for (int j = fab.box().lo[1]; j <= fab.box().hi[1]; ++j)
         for (int i = fab.box().lo[0]; i <= fab.box().hi[0]; ++i) {
-          const Real x = geom.lower()[0] + (Real(i - geom.domain().lo[0]) + Real(0.5)) * geom.spacing(0);
-          const Real y = geom.lower()[1] + (Real(j - geom.domain().lo[1]) + Real(0.5)) * geom.spacing(1);
+          const Real x =
+              geom.lower()[0] + (Real(i - geom.domain().lo[0]) + Real(0.5)) * geom.spacing(0);
+          const Real y =
+              geom.lower()[1] + (Real(j - geom.domain().lo[1]) + Real(0.5)) * geom.spacing(1);
           values(offset(box, i, j)) = function(x, y);
         }
       fab.copy_from_host(values);
@@ -166,15 +182,19 @@ struct InterfaceProblem {
   void set_state(int state, Real alpha = Real(1), Real beta = Real(0)) {
     for (int level = 0; level < configuration.levels; ++level)
       fill(*solution[level], geometry[level], [&](Real x, Real y) {
-        if (state == 0) return level == 0 ? Real(0) : Real(1);
-        if (state == 1) return Real(1);
-        if (state == 4) return x * y;
+        if (state == 0)
+          return level == 0 ? Real(0) : Real(1);
+        if (state == 1)
+          return Real(1);
+        if (state == 4)
+          return x * y;
         const Real theta = Real(2) * std::acos(Real(-1)) * y / geometry[level].upper()[1];
-        if (state == 5) return (Real(1) - x * x) * std::cos(theta);
+        if (state == 5)
+          return (Real(1) - x * x) * std::cos(theta);
         const Real a = (Real(1) + Real(0.2) * level) *
-            (x * x * std::cos(theta) + Real(0.4) * x * std::sin(Real(2) * theta));
-        const Real b = (Real(1) - Real(0.1) * level) *
-            (std::cos(Real(3) * theta) + x * std::sin(theta));
+                       (x * x * std::cos(theta) + Real(0.4) * x * std::sin(Real(2) * theta));
+        const Real b =
+            (Real(1) - Real(0.1) * level) * (std::cos(Real(3) * theta) + x * std::sin(theta));
         return alpha * a + beta * b;
       });
   }
@@ -184,19 +204,25 @@ struct InterfaceProblem {
       for (int entry = 0; entry < 4; ++entry)
         fill(*coefficient[level][entry], geometry[level], [&](Real x, Real y) {
           if (configuration.mapped) {
-            if (entry == 0) return x;
-            if (entry == 3) return Real(1) / x;
-            return cross_terms ? (entry == 1 ? Real(0.125) : Real(-0.05)) * x * std::cos(y) : Real(0);
+            if (entry == 0)
+              return x;
+            if (entry == 3)
+              return Real(1) / x;
+            return cross_terms ? (entry == 1 ? Real(0.125) : Real(-0.05)) * x * std::cos(y)
+                               : Real(0);
           }
-          if (entry == 0 || entry == 3) return Real(1);
+          if (entry == 0 || entry == 3)
+            return Real(1);
           return cross_terms ? (entry == 1 ? Real(0.3) : Real(-0.2)) : Real(0);
         });
   }
 
   bool covered(int level, const Index<2>& cell) const {
-    if (level + 1 == configuration.levels) return false;
+    if (level + 1 == configuration.levels)
+      return false;
     for (const Box<2>& fine : layout[level + 1].boxes())
-      if (coarsen(fine, configuration.ratio).contains(cell)) return true;
+      if (coarsen(fine, configuration.ratio).contains(cell))
+        return true;
     return false;
   }
 
@@ -210,7 +236,8 @@ struct InterfaceProblem {
         fab.copy_to_host(values);
         for (int j = fab.box().lo[1]; j <= fab.box().hi[1]; ++j)
           for (int i = fab.box().lo[0]; i <= fab.box().hi[0]; ++i) {
-            if (covered(level, Index<2>{i, j})) continue;
+            if (covered(level, Index<2>{i, j}))
+              continue;
             result[offset(geometry[level].domain(), i, j)] = -values(offset(fab.grown_box(), i, j));
           }
       }
@@ -238,9 +265,9 @@ struct InterfaceProblem {
       for (std::size_t local = 0; local < rhs[level]->local_size(); ++local) {
         const auto input = std::as_const(residual.fab(local)).view();
         const auto output = rhs[level]->fab(local).view();
-        for_each_cell(rhs[level]->box(local), KOKKOS_LAMBDA(const Index<2>& cell) {
-          output(cell, 0) = -input(cell, 0);
-        });
+        for_each_cell(
+            rhs[level]->box(local),
+            KOKKOS_LAMBDA(const Index<2>& cell) { output(cell, 0) = -input(cell, 0); });
       }
       runtime::program::tensor_fac::detail::copy_valid<2>(*initial[level], *solution[level]);
     }
@@ -250,13 +277,15 @@ struct InterfaceProblem {
 
 TEST(TensorFacConservativeInterface, ClosedJumpHasTwelveLegacyImbalanceAndZeroFineFluxBalance) {
   const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-jump");
-  if (lane.size() != 1 && lane.size() != 2) GTEST_SKIP();
+  if (lane.size() != 1 && lane.size() != 2)
+    GTEST_SKIP();
   for (const bool replicated : {false, true}) {
     Configuration config;
     config.replicated = replicated;
     InterfaceProblem legacy(lane, InterfaceCoupling::level_stencil, config);
     InterfaceProblem conservative(lane, InterfaceCoupling::fine_flux, config);
-    EXPECT_NE(legacy.solver->exact_prepared_contract(), conservative.solver->exact_prepared_contract());
+    EXPECT_NE(legacy.solver->exact_prepared_contract(),
+              conservative.solver->exact_prepared_contract());
     legacy.set_state(0);
     conservative.set_state(0);
     legacy.solver->evaluate_current_residual(lane);
@@ -276,9 +305,11 @@ TEST(TensorFacConservativeInterface, ClosedJumpHasTwelveLegacyImbalanceAndZeroFi
   }
 }
 
-TEST(TensorFacConservativeInterface, PeriodicOriginsAnisotropicChildrenAndMappedCrossTermsConserve) {
+TEST(TensorFacConservativeInterface,
+     PeriodicOriginsAnisotropicChildrenAndMappedCrossTermsConserve) {
   const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-geometry");
-  if (lane.size() != 1 && lane.size() != 2) GTEST_SKIP();
+  if (lane.size() != 1 && lane.size() != 2)
+    GTEST_SKIP();
   for (int shape = 0; shape < 3; ++shape)
     for (const bool replicated : {false, true}) {
       Configuration config;
@@ -302,7 +333,8 @@ TEST(TensorFacConservativeInterface, PeriodicOriginsAnisotropicChildrenAndMapped
 
 TEST(TensorFacConservativeInterface, RetainsNonsymmetricCrossDerivativeAndIsLinear) {
   const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-linearity");
-  if (lane.size() != 1 && lane.size() != 2) GTEST_SKIP();
+  if (lane.size() != 1 && lane.size() != 2)
+    GTEST_SKIP();
   InterfaceProblem problem(lane, InterfaceCoupling::fine_flux);
   problem.set_state(4);
   problem.set_tensor(true);
@@ -329,15 +361,17 @@ TEST(TensorFacConservativeInterface, RetainsNonsymmetricCrossDerivativeAndIsLine
     for (std::size_t cell = 0; cell < combined.size(); ++cell) {
       const Real expected = Real(0.75) * a[level][cell] - Real(0.25) * b[level][cell];
       EXPECT_NEAR(combined[cell], expected,
-          Real(512) * std::numeric_limits<Real>::epsilon() *
-              (Real(1) + std::abs(a[level][cell]) + std::abs(b[level][cell])));
+                  Real(512) * std::numeric_limits<Real>::epsilon() *
+                      (Real(1) + std::abs(a[level][cell]) + std::abs(b[level][cell])));
     }
   }
 }
 
 TEST(TensorFacConservativeInterface, ManufacturedSelectedImageIsTheSolveFixedPoint) {
-  const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-fixed-point");
-  if (lane.size() != 1 && lane.size() != 2) GTEST_SKIP();
+  const auto lane =
+      ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-fixed-point");
+  if (lane.size() != 1 && lane.size() != 2)
+    GTEST_SKIP();
   Configuration config;
   config.conducting = true;
   InterfaceProblem problem(lane, InterfaceCoupling::fine_flux, config);
@@ -356,8 +390,10 @@ TEST(TensorFacConservativeInterface, ManufacturedSelectedImageIsTheSolveFixedPoi
 }
 
 TEST(TensorFacConservativeInterface, ThreeLevelsConvergeToTheirSelectedConservativeImage) {
-  const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-three-level");
-  if (lane.size() != 1 && lane.size() != 2) GTEST_SKIP();
+  const auto lane =
+      ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-three-level");
+  if (lane.size() != 1 && lane.size() != 2)
+    GTEST_SKIP();
   Configuration config;
   config.levels = 3;
   config.conducting = true;
@@ -366,7 +402,8 @@ TEST(TensorFacConservativeInterface, ThreeLevelsConvergeToTheirSelectedConservat
   problem.set_tensor(true);
   problem.set_state(5);
   problem.manufacture_rhs();
-  for (auto& initial : problem.initial) initial->set_val(Real(0));
+  for (auto& initial : problem.initial)
+    initial->set_val(Real(0));
   // These outer controls match the authored Hoffart case. The small Cartesian root uses the
   // ordinary fixed diagonal GMRES preconditioner, with its unchanged true-stencil verifier.
   Controls controls;
@@ -380,10 +417,11 @@ TEST(TensorFacConservativeInterface, ThreeLevelsConvergeToTheirSelectedConservat
   controls.correction_damping = Real(0.5);
   const auto report = problem.solver->solve(controls, lane);
   ASSERT_TRUE(report.solved()) << report.reason << " residual=" << report.residual_norm
-                              << " iterations=" << report.iters;
+                               << " iterations=" << report.iters;
   EXPECT_GT(report.iters, 0);
-  const Real stop = std::max(controls.absolute_tolerance,
-      controls.relative_tolerance * static_cast<Real>(report.reference_residual_norm));
+  const Real stop =
+      std::max(controls.absolute_tolerance,
+               controls.relative_tolerance * static_cast<Real>(report.reference_residual_norm));
   problem.solver->evaluate_current_residual(lane);
   for (int level = 0; level < config.levels; ++level)
     for (const Real residual : problem.image(level))
@@ -391,30 +429,34 @@ TEST(TensorFacConservativeInterface, ThreeLevelsConvergeToTheirSelectedConservat
 }
 
 TEST(TensorFacConservativeInterface, ConstructionAuthenticatesCouplingAcrossRanks) {
-  const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-construction");
-  if (lane.size() != 1 && lane.size() != 2) GTEST_SKIP();
-  const auto invalid = lane.rank() == 0 ? static_cast<InterfaceCoupling>(2)
-                                      : InterfaceCoupling::fine_flux;
+  const auto lane =
+      ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-construction");
+  if (lane.size() != 1 && lane.size() != 2)
+    GTEST_SKIP();
+  const auto invalid =
+      lane.rank() == 0 ? static_cast<InterfaceCoupling>(2) : InterfaceCoupling::fine_flux;
   EXPECT_ANY_THROW(InterfaceProblem(lane, invalid));
   if (lane.size() == 2) {
-    const auto asymmetric = lane.rank() == 0 ? InterfaceCoupling::level_stencil
-                                           : InterfaceCoupling::fine_flux;
+    const auto asymmetric =
+        lane.rank() == 0 ? InterfaceCoupling::level_stencil : InterfaceCoupling::fine_flux;
     EXPECT_THROW(InterfaceProblem(lane, asymmetric), std::invalid_argument);
   }
   EXPECT_NO_THROW(InterfaceProblem(lane, InterfaceCoupling::fine_flux));
 }
 
-TEST(TensorFacConservativeInterface, RejectsAsymmetricControlsReplicasAndInvalidCoefficientsCollectively) {
+TEST(TensorFacConservativeInterface,
+     RejectsAsymmetricControlsReplicasAndInvalidCoefficientsCollectively) {
   const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-refusal");
-  if (lane.size() != 1 && lane.size() != 2) GTEST_SKIP();
+  if (lane.size() != 1 && lane.size() != 2)
+    GTEST_SKIP();
   Configuration config;
   config.replicated = true;
   InterfaceProblem problem(lane, InterfaceCoupling::fine_flux, config);
   problem.set_state(1);
   EXPECT_NO_THROW(problem.solver->evaluate_current_residual(lane));
   Controls controls;
-  controls.interface_coupling = lane.rank() == 0 ? InterfaceCoupling::level_stencil
-                                              : InterfaceCoupling::fine_flux;
+  controls.interface_coupling =
+      lane.rank() == 0 ? InterfaceCoupling::level_stencil : InterfaceCoupling::fine_flux;
   EXPECT_THROW(problem.solver->solve(controls, lane), std::invalid_argument);
   controls.interface_coupling = InterfaceCoupling::fine_flux;
   controls.fine_sweeps = lane.rank() == 0 ? 0 : 4;
@@ -422,7 +464,8 @@ TEST(TensorFacConservativeInterface, RejectsAsymmetricControlsReplicasAndInvalid
   if (lane.size() == 2) {
     controls.fine_sweeps = lane.rank() == 0 ? 4 : 6;
     EXPECT_THROW(problem.solver->solve(controls, lane), std::invalid_argument);
-    for (Field* field : {problem.solution[0].get(), problem.rhs[0].get(), problem.coefficient[0][1].get()}) {
+    for (Field* field :
+         {problem.solution[0].get(), problem.rhs[0].get(), problem.coefficient[0][1].get()}) {
       field->set_val(lane.rank() == 0 ? Real(0) : Real(0.125));
       EXPECT_THROW(problem.solver->evaluate_current_residual(lane), std::runtime_error);
       field->set_val(Real(0));
@@ -450,7 +493,8 @@ Kokkos::Tools::allocateDataFunction previous_allocate = nullptr;
 void count_allocation(Kokkos::Tools::SpaceHandle space, const char* label, const void* pointer,
                       const std::uint64_t size) {
   ++data_allocations;
-  if (previous_allocate) previous_allocate(space, label, pointer, size);
+  if (previous_allocate)
+    previous_allocate(space, label, pointer, size);
 }
 
 struct AllocationObserver {
@@ -467,7 +511,8 @@ struct AllocationObserver {
 
 TEST(TensorFacConservativeInterface, RepeatedResidualApplicationsReusePreparedDeviceStorage) {
   const auto lane = ExecutionLane::duplicate_world_collectively("tests.tensor-fac.flux-storage");
-  if (lane.size() != 1 && lane.size() != 2) GTEST_SKIP();
+  if (lane.size() != 1 && lane.size() != 2)
+    GTEST_SKIP();
   Configuration config;
   config.replicated = true;
   InterfaceProblem problem(lane, InterfaceCoupling::fine_flux, config);

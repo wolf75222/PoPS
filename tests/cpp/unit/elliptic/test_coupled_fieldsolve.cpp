@@ -718,7 +718,6 @@ TEST(test_coupled_fieldsolve,
     check_package_interface_mask_consensus(true);
 }
 
-
 namespace {
 NativeSystem m2_named_stage_system(int cells, const std::vector<double>& first,
                                    const std::vector<double>& second) {

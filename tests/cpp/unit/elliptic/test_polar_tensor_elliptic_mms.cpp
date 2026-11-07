@@ -17,17 +17,14 @@ constexpr pops::Real kPi = pops::Real(3.141592653589793238462643383279502884L);
 
 std::size_t offset(const pops::Box<kDim>& storage, int i, int j) {
   return static_cast<std::size_t>(i - storage.lo[0]) +
-         static_cast<std::size_t>(j - storage.lo[1]) *
-             static_cast<std::size_t>(storage.length(0));
+         static_cast<std::size_t>(j - storage.lo[1]) * static_cast<std::size_t>(storage.length(0));
 }
 
 pops::PolarEllipticBuildRequest<kDim> request(int cells = 24) {
-  const pops::Box<kDim> domain{pops::Index<kDim>{0, 0},
-                              pops::Index<kDim>{cells - 1, cells - 1}};
+  const pops::Box<kDim> domain{pops::Index<kDim>{0, 0}, pops::Index<kDim>{cells - 1, cells - 1}};
   const auto geometry = pops::PolarGeometry<kDim>::annulus(domain, kRmin, kRmax);
   const pops::mesh::BoxArray<kDim> boxes(std::vector<pops::Box<kDim>>{domain});
-  const pops::mesh::RankSpace<kDim> ranks{pops::Index<kDim>{0, 0},
-                                         pops::Extent<kDim>{1, 1}};
+  const pops::mesh::RankSpace<kDim> ranks{pops::Index<kDim>{0, 0}, pops::Extent<kDim>{1, 1}};
   const auto distribution = pops::mesh::Distribution<kDim>::partitioned(
       boxes, ranks, std::vector<pops::Index<kDim>>{pops::Index<kDim>{0, 0}});
   std::array<pops::PhysicalBoundaryFace, 2 * kDim> faces{};
@@ -75,8 +72,7 @@ pops::Real error_l2(const pops::PolarTensorKrylovSolver<kDim>& solver) {
   pops::Real count = 0;
   for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
     for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
-      const pops::Real difference =
-          host(offset(storage, i, j)) - exact(solver.geom().r_cell(i));
+      const pops::Real difference = host(offset(storage, i, j)) - exact(solver.geom().r_cell(i));
       sum += difference * difference;
       count += pops::Real(1);
     }

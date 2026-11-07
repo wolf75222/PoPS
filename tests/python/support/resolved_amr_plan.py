@@ -156,7 +156,7 @@ def resolved_amr_plan(
         ),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=(Tag(ValueExpr(rows[0][2]) > ValueExpr(threshold)), Buffer(cells=1)),
+            rules=(Tag(ValueExpr(rows[0][2]) > ValueExpr(threshold)), Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),

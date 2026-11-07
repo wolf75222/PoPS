@@ -104,7 +104,7 @@ inline std::string native_field_memory_space_identity() {
   if constexpr (std::is_same_v<FieldMemorySpace, Kokkos::HostSpace>)
     return "host";
   if constexpr (Kokkos::SpaceAccessibility<Kokkos::DefaultHostExecutionSpace,
-                                         FieldMemorySpace>::accessible)
+                                           FieldMemorySpace>::accessible)
     return "managed";
   return "device";
 #else

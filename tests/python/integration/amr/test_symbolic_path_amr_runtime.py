@@ -70,7 +70,7 @@ def _resolved(levels, *, hot_stage=False):
                            periodic=PeriodicAxes(path.frame.axes)),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,) * (levels - 1)),
         tagging=AMRTagging(
-            rules=(Tag(ValueExpr(instance)["u"] > case.value(threshold)), Buffer(cells=0)),
+            rules=(Tag(ValueExpr(instance)["u"] > case.value(threshold)), Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid.frozen(), transfer=transfer, execution=AMRExecution.synchronous())

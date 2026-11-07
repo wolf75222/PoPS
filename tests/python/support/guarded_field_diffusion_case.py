@@ -161,7 +161,7 @@ def author_case(
         tagging=AMRTagging(
             rules=(
                 Tag(math.ValueExpr(right[density])["density"] > case.value(threshold)),
-                Buffer(cells=0),
+                Buffer(cells=0, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,

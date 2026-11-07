@@ -371,9 +371,8 @@ class IdealGasEuler {
       return;
     }
     const Real velocity = primitive.value[Schema::template velocity<Axis>];
-    const Real sound_speed =
-        conservation_law_detail::sqrt_real(gamma * primitive.value[Schema::pressure] /
-                                           primitive.value[Schema::density]);
+    const Real sound_speed = conservation_law_detail::sqrt_real(
+        gamma * primitive.value[Schema::pressure] / primitive.value[Schema::density]);
     lower = velocity - sound_speed;
     upper = velocity + sound_speed;
   }

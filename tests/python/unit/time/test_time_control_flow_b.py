@@ -235,7 +235,9 @@ def _run_section_b(t):
     def run(handle):
         s = System(n=n, L=1.0, periodicity=(True, True))
         try:
-            cm = _passive_model("blk_" + handle.program_name).compile(backend="production")
+            # The package instantiates only the conservative/none/Rusanov route its block installs.
+            cm = _passive_model("blk_" + handle.program_name).compile(
+                backend="production", _native_route=("conservative", "none", "rusanov"))
         except RuntimeError as exc:
             require_native_or_skip(
                 "test_time_control_flow_b model compile failed: %s" % str(exc)[:140]

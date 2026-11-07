@@ -62,8 +62,7 @@ struct ModuleCapabilities {
   bool supports_gpu;           ///< real GPU device backend (Kokkos AND a CUDA/HIP token).
   bool supports_stride;        ///< the route carries a cell stride (production: yes; aot: no).
   bool supports_named_fields;  ///< named aux-field transport (named_aux, aux_field; always built).
-  bool
-      supports_partial_imex_mask;  ///< partial IMEX mask -- TRUE: Program implicit_source runs it.
+  bool supports_partial_imex_mask;  ///< partial IMEX mask -- TRUE: Program implicit_source runs it.
   bool mapped_consumed_field_output_amr;
   bool mapped_consumed_field_output;  ///< Versioned consumed Field mapping and candidate transfer.
 };
@@ -212,24 +211,27 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "GPU device backend requires a Kokkos CUDA/HIP build", kLayoutRouteTokensCsv,
                        "production", "gpu", mpi, gpu, "platform=GPU", "host CPU platform",
                        "use KokkosOpenMP/KokkosSerial or a CUDA/HIP build"),
-      capability_route("supports_stride", status_from_bool(caps.supports_stride),
-                       "production ABI stores stride; Explicit(stride=M) lowers to Program hold-then-catch-up",
-                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu, "strided cell access",
-                       "backend='production'", "compile with backend='production'"),
-      capability_route("mapped_consumed_field_output_amr", status_from_bool(caps.mapped_consumed_field_output_amr),
+      capability_route(
+          "supports_stride", status_from_bool(caps.supports_stride),
+          "production ABI stores stride; Explicit(stride=M) lowers to Program hold-then-catch-up",
+          kLayoutRouteTokensCsv, "production", "host", mpi, gpu, "strided cell access",
+          "backend='production'", "compile with backend='production'"),
+      capability_route("mapped_consumed_field_output_amr",
+                       status_from_bool(caps.mapped_consumed_field_output_amr),
                        "pops.amr.scalar-field-endpoint@1", "amr", "production", "host", mpi, false),
-      capability_route("mapped_consumed_field_output", status_from_bool(caps.mapped_consumed_field_output),
-                       "mapped-consumed-output@1 scalar Field candidate transfer; released Native ABI since 9",
-                       "uniform", "production", "host", mpi, gpu),
+      capability_route(
+          "mapped_consumed_field_output", status_from_bool(caps.mapped_consumed_field_output),
+          "mapped-consumed-output@1 scalar Field candidate transfer; released Native ABI since 9",
+          "uniform", "production", "host", mpi, gpu),
       capability_route("supports_named_fields", status_from_bool(caps.supports_named_fields),
                        "named aux-field transport", kLayoutRouteTokensCsv, "production", "host",
                        mpi, gpu, "named aux fields", "native named-field transport"),
-      capability_route(
-          "supports_partial_imex_mask", status_from_bool(caps.supports_partial_imex_mask),
-          "Program implicit_source applies source_default_into then apply_source_mask",
-          kLayoutRouteTokensCsv, "production", "host", mpi, gpu, "partial IMEX mask",
-          "Program.implicit_source / explicit_source",
-          "author Explicit/IMEX(implicit_vars=...) or Program.implicit_source"),
+      capability_route("supports_partial_imex_mask",
+                       status_from_bool(caps.supports_partial_imex_mask),
+                       "Program implicit_source applies source_default_into then apply_source_mask",
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu, "partial IMEX mask",
+                       "Program.implicit_source / explicit_source",
+                       "author Explicit/IMEX(implicit_vars=...) or Program.implicit_source"),
       capability_route(
           "supports_custom_communicator", status_from_bool(env.supports_custom_communicator),
           "no C++ route accepts a caller-provided MPI_Comm", kLayoutRouteTokensCsv, "none", "mpi",
@@ -316,8 +318,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "uniform coarse rewritten onto those slabs; variable-k, EB, reaction, and "
                        "non-slab multi-box coarse levels keep Jacobi/MG",
                        "amr", "none", "host", mpi, gpu, "solver=FFT() with layout=AMR",
-                       "GeometricMG() on AMR",
-                       "use pops.solvers.elliptic.GeometricMG()"),
+                       "GeometricMG() on AMR", "use pops.solvers.elliptic.GeometricMG()"),
       capability_route(
           "eb:cartesian_cut_cell", "partial",
           "PreparedEmbeddedBoundaryMetric<Dim> and cut_cell_fractions_from_samples<Dim> "
@@ -392,8 +393,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
           "GPU uses the existing Kokkos DefaultExecutionSpace launch already used in serial; "
           "dynamic hierarchy mutation, additional interfaces, and mixed apply operators remain "
           "unavailable",
-          "amr", "production", "host", mpi, gpu,
-          "generated shared-interface implicit JVP solve",
+          "amr", "production", "host", mpi, gpu, "generated shared-interface implicit JVP solve",
           "level_rhs_jacvec_pair plus the prepared ExecutionLane communicator",
           "use the proved frozen two-level pair, or add proof for dynamic hierarchies or mixed "
           "apply operators"),

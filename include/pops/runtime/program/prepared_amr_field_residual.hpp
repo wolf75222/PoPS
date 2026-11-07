@@ -43,13 +43,17 @@ class PreparedAmrFieldResidual final {
   static constexpr std::string_view identity = "pops.prepared-amr-original-field-residual@1";
   static constexpr std::string_view preconditioned_identity =
       "pops.prepared-amr-original-field-residual@2";
-  static constexpr std::string_view candidate_identity = "pops.prepared-amr-original-field-residual@3";
-  static constexpr std::string_view full_lu_identity = "pops.prepared-amr-original-field-residual@4";
+  static constexpr std::string_view candidate_identity =
+      "pops.prepared-amr-original-field-residual@3";
+  static constexpr std::string_view full_lu_identity =
+      "pops.prepared-amr-original-field-residual@4";
   std::string_view invocation_identity() const noexcept {
-    if (preconditioner_ == AmrFieldRightPreconditioner::kFullResidualBasisLU) return full_lu_identity;
-    if (coefficient_evaluation_ == AmrFieldCoefficientEvaluation::kPerCandidate) return candidate_identity;
-    return preconditioner_ == AmrFieldRightPreconditioner::kIdentity
-               ? identity : preconditioned_identity;
+    if (preconditioner_ == AmrFieldRightPreconditioner::kFullResidualBasisLU)
+      return full_lu_identity;
+    if (coefficient_evaluation_ == AmrFieldCoefficientEvaluation::kPerCandidate)
+      return candidate_identity;
+    return preconditioner_ == AmrFieldRightPreconditioner::kIdentity ? identity
+                                                                     : preconditioned_identity;
   }
 
   static std::shared_ptr<PreparedAmrFieldResidual> prepare(
@@ -61,7 +65,8 @@ class PreparedAmrFieldResidual final {
       std::uint64_t max_dense_bytes = 0) {
     std::shared_ptr<PreparedAmrFieldResidual> result;
     const auto* known_operator = dynamic_cast<PreparedHierarchyFieldOperator<Dim>*>(provider.get());
-    const auto& preparation_lane = known_operator ? known_operator->original_field_execution_lane() : lane;
+    const auto& preparation_lane =
+        known_operator ? known_operator->original_field_execution_lane() : lane;
     local_phase_(preparation_lane, [&] {
       if (&preparation_lane != &lane)
         throw std::invalid_argument("original field preparation received a foreign lane");
@@ -69,14 +74,17 @@ class PreparedAmrFieldResidual final {
         throw std::invalid_argument(
             "original AMR field residual requires a provider and positive FD step");
       validate_field_newton_options(options);
-      if ((preconditioner == AmrFieldRightPreconditioner::kFullResidualBasisLU) != (max_dense_bytes > 0))
-        throw std::invalid_argument("FullResidualBasisLU@1 requires its explicit positive max_dense_bytes budget only");
+      if ((preconditioner == AmrFieldRightPreconditioner::kFullResidualBasisLU) !=
+          (max_dense_bytes > 0))
+        throw std::invalid_argument(
+            "FullResidualBasisLU@1 requires its explicit positive max_dense_bytes budget only");
       if (coefficient_evaluation != AmrFieldCoefficientEvaluation::kFrozen &&
           coefficient_evaluation != AmrFieldCoefficientEvaluation::kPerCandidate)
         throw std::invalid_argument("unknown coefficient evaluation realization");
       if (coefficient_evaluation == AmrFieldCoefficientEvaluation::kPerCandidate &&
           preconditioner == AmrFieldRightPreconditioner::kSpatialBasisJacobi)
-        throw std::invalid_argument("SpatialBasisJacobi@1 requires a frozen linear spatial operator");
+        throw std::invalid_argument(
+            "SpatialBasisJacobi@1 requires a frozen linear spatial operator");
       if (preconditioner != AmrFieldRightPreconditioner::kIdentity &&
           preconditioner != AmrFieldRightPreconditioner::kSpatialBasisJacobi &&
           preconditioner != AmrFieldRightPreconditioner::kFullResidualBasisLU)
@@ -85,7 +93,8 @@ class PreparedAmrFieldResidual final {
     auto& op = require_original_field_operator(*provider, lane);
     local_phase_(lane, [&] {
       result.reset(new PreparedAmrFieldResidual(std::move(provider), op, std::move(authority),
-                                                captures, options, difference_step, preconditioner, coefficient_evaluation, max_dense_bytes));
+                                                captures, options, difference_step, preconditioner,
+                                                coefficient_evaluation, max_dense_bytes));
     });
     if (coefficient_evaluation == AmrFieldCoefficientEvaluation::kPerCandidate)
       result->coefficient_generation_ = op.original_field_preparation_generation();
@@ -97,19 +106,24 @@ class PreparedAmrFieldResidual final {
     } else {
       PreparedHierarchyCandidateFieldOperator<Dim>* capability = nullptr;
       local_phase_(lane, [&] {
-        capability = dynamic_cast<PreparedHierarchyCandidateFieldOperator<Dim>*>(result->provider_.get());
-        if (!capability) throw std::invalid_argument("provider has no per-candidate apply capability");
+        capability =
+            dynamic_cast<PreparedHierarchyCandidateFieldOperator<Dim>*>(result->provider_.get());
+        if (!capability)
+          throw std::invalid_argument("provider has no per-candidate apply capability");
       });
       result->candidate_evaluation_ = capability->make_candidate_evaluation();
       local_phase_(lane, [&] {
         if (!result->candidate_evaluation_ ||
             &result->candidate_evaluation_->original_field_execution_lane() != &lane ||
-            result->candidate_evaluation_->original_field_contract() != op.original_field_contract() ||
+            result->candidate_evaluation_->original_field_contract() !=
+                op.original_field_contract() ||
             result->candidate_evaluation_->original_field_levels() != op.original_field_levels())
-          throw std::invalid_argument("candidate evaluation resource has foreign provider authority");
+          throw std::invalid_argument(
+              "candidate evaluation resource has foreign provider authority");
         result->coefficient_fields_.reserve(result->candidate_.size());
         for (int level = 0; level < op.original_field_levels(); ++level)
-          result->coefficient_fields_.push_back(&result->candidate_evaluation_->candidate_coefficient_field(level));
+          result->coefficient_fields_.push_back(
+              &result->candidate_evaluation_->candidate_coefficient_field(level));
         result->authenticate_coefficients_();
       });
     }
@@ -125,8 +139,8 @@ class PreparedAmrFieldResidual final {
     const auto& authority_lane = op_->original_field_execution_lane();
     std::string contract;
     local_phase_(authority_lane, [&] {
-      if (&lane != &op_->original_field_execution_lane() ||
-          !current.owner || current.owner != authority_.owner || !authority_.attempt.visible() ||
+      if (&lane != &op_->original_field_execution_lane() || !current.owner ||
+          current.owner != authority_.owner || !authority_.attempt.visible() ||
           !current.attempt.visible() || !authority_.attempt.same_attempt(current.attempt) ||
           current.topology_epoch != authority_.topology_epoch ||
           current.materialization_generation != authority_.materialization_generation ||
@@ -134,14 +148,16 @@ class PreparedAmrFieldResidual final {
           current.capture_identities != authority_.capture_identities ||
           current.capture_components != authority_.capture_components ||
           current.points != authority_.points ||
-          ((coefficient_generation_ != 0 || coefficient_evaluation_ == AmrFieldCoefficientEvaluation::kPerCandidate) &&
+          ((coefficient_generation_ != 0 ||
+            coefficient_evaluation_ == AmrFieldCoefficientEvaluation::kPerCandidate) &&
            op_->original_field_preparation_generation() != coefficient_generation_))
         throw std::logic_error(
             "original AMR field residual has stale owner/attempt/point/capture authority");
       if (candidate_evaluation_) {
         if (&candidate_evaluation_->original_field_execution_lane() != &authority_lane ||
             candidate_evaluation_->original_field_contract() != op_->original_field_contract() ||
-            candidate_evaluation_->original_field_preparation_generation() != evaluation_generation_)
+            candidate_evaluation_->original_field_preparation_generation() !=
+                evaluation_generation_)
           throw std::logic_error("candidate coefficient resource generation/lane changed");
         authenticate_coefficients_();
       }
@@ -173,7 +189,8 @@ class PreparedAmrFieldResidual final {
       if (options_.convergence.kind != FieldNewtonConvergenceKind::kLegacy)
         exact.text("pops.newton.original-residual-convergence@1")
             .scalar(static_cast<int>(options_.convergence.kind))
-            .scalar(options_.convergence.relative).scalar(options_.convergence.absolute);
+            .scalar(options_.convergence.relative)
+            .scalar(options_.convergence.absolute);
       if (candidate_evaluation_)
         exact.text(PreparedHierarchyCandidateFieldOperator<Dim>::identity)
             .text("pops.field.linear.true-correction-residual@1")
@@ -182,7 +199,8 @@ class PreparedAmrFieldResidual final {
       if (preconditioner_ == AmrFieldRightPreconditioner::kSpatialBasisJacobi)
         exact.text("pops.amr.original-spatial-jacobi.basis-response@1");
       if (preconditioner_ == AmrFieldRightPreconditioner::kFullResidualBasisLU)
-        exact.text(FullResidualBasisLU::identity).scalar(max_dense_bytes_)
+        exact.text(FullResidualBasisLU::identity)
+            .scalar(max_dense_bytes_)
             .scalar(static_cast<int>(coefficient_evaluation_));
       exact.sequence(current.capture_components,
                      [](ExactContractBuilder& out, int value) { out.scalar(value); });
@@ -203,7 +221,8 @@ class PreparedAmrFieldResidual final {
             .text(p.application_identity);
       contract = std::move(exact).release();
     });
-    if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string(invocation_identity()), contract}}, authority_lane))
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{std::string(invocation_identity()), contract}},
+                                                  authority_lane))
       throw std::logic_error(
           "original AMR field residual invocation differs across execution ranks");
   }
@@ -220,9 +239,9 @@ class PreparedAmrFieldResidual final {
         throw std::logic_error("PerCandidate@1 requires its actual coefficient body");
       });
     }
-    return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
-                       [](const auto&, const auto&, auto&, int) {},
-                       [](const auto&, int) {}, false, lane);
+    return solve_impl_(
+        current, seed, std::forward<LocalBody>(add_local),
+        [](const auto&, const auto&, auto&, int) {}, [](const auto&, int) {}, false, lane);
   }
   template <class LocalBody, class CoefficientBody>
   SolveReport solve_candidate(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
@@ -230,12 +249,13 @@ class PreparedAmrFieldResidual final {
                               const ExecutionLane& lane) {
     require_authority(current, lane);
     local_phase_(op_->original_field_execution_lane(), [&] {
-      if (coefficient_evaluation_ != AmrFieldCoefficientEvaluation::kPerCandidate || !candidate_evaluation_)
+      if (coefficient_evaluation_ != AmrFieldCoefficientEvaluation::kPerCandidate ||
+          !candidate_evaluation_)
         throw std::logic_error("candidate coefficient body requires explicit PerCandidate@1");
     });
-    return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
-                       std::forward<CoefficientBody>(coefficient_body),
-                       [](const auto&, int) {}, false, lane);
+    return solve_impl_(
+        current, seed, std::forward<LocalBody>(add_local),
+        std::forward<CoefficientBody>(coefficient_body), [](const auto&, int) {}, false, lane);
   }
   /// Exact lease for the producer phase of F. A same-layout accepted/foreign
   /// tower is insufficient, and the lease is revoked before add_local or on refusal.
@@ -255,8 +275,9 @@ class PreparedAmrFieldResidual final {
   /// every F, including central JVP perturbations and the original recheck. Its
   /// detached outputs may be read by add_local; it must never publish accepted state.
   template <class LocalBody, class Producer>
-  SolveReport solve_interaction(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
-                               LocalBody&& add_local, Producer&& producer, const ExecutionLane& lane) {
+  SolveReport solve_interaction(const AmrFieldResidualAuthority& current,
+                                const hierarchy_type* seed, LocalBody&& add_local,
+                                Producer&& producer, const ExecutionLane& lane) {
     require_authority(current, lane);
     local_phase_(lane, [&] {
       if (coefficient_evaluation_ != AmrFieldCoefficientEvaluation::kFrozen)
@@ -268,33 +289,40 @@ class PreparedAmrFieldResidual final {
         evaluation_q_ = allocate_(layouts);
       }
     });
-    return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
-                       [](const auto&, const auto&, auto&, int) {},
-                       std::forward<Producer>(producer), true, lane);
+    return solve_impl_(
+        current, seed, std::forward<LocalBody>(add_local),
+        [](const auto&, const auto&, auto&, int) {}, std::forward<Producer>(producer), true, lane);
   }
   template <class LocalBody, class CoefficientBody, class Producer>
-  SolveReport solve_candidate_interaction(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
-      LocalBody&& add_local, CoefficientBody&& coefficient_body, Producer&& producer, const ExecutionLane& lane) {
+  SolveReport solve_candidate_interaction(const AmrFieldResidualAuthority& current,
+                                          const hierarchy_type* seed, LocalBody&& add_local,
+                                          CoefficientBody&& coefficient_body, Producer&& producer,
+                                          const ExecutionLane& lane) {
     require_authority(current, lane);
     local_phase_(lane, [&] {
-      if (coefficient_evaluation_ != AmrFieldCoefficientEvaluation::kPerCandidate || !candidate_evaluation_)
+      if (coefficient_evaluation_ != AmrFieldCoefficientEvaluation::kPerCandidate ||
+          !candidate_evaluation_)
         throw std::logic_error("candidate interaction requires explicit PerCandidate@1");
     });
     return solve_impl_(current, seed, std::forward<LocalBody>(add_local),
                        std::forward<CoefficientBody>(coefficient_body),
                        std::forward<Producer>(producer), true, lane);
   }
+
  private:
   template <class LocalBody, class CoefficientBody, class Producer>
   SolveReport solve_impl_(const AmrFieldResidualAuthority& current, const hierarchy_type* seed,
-                         LocalBody&& add_local, CoefficientBody&& coefficient_body,
-                         Producer&& producer, bool synchronized_interaction, const ExecutionLane& lane) {
+                          LocalBody&& add_local, CoefficientBody&& coefficient_body,
+                          Producer&& producer, bool synchronized_interaction,
+                          const ExecutionLane& lane) {
     local_phase_(lane, [&] {
-      if (active_evaluation_ != nullptr) throw std::logic_error("original solve reentered an active F evaluation");
+      if (active_evaluation_ != nullptr)
+        throw std::logic_error("original solve reentered an active F evaluation");
     });
     candidate_visible_ = false;
     evaluations_ = derivatives_ = 0;
-    lu_ready_ = false; lu_columns_ = lu_factorizations_ = 0;
+    lu_ready_ = false;
+    lu_columns_ = lu_factorizations_ = 0;
     require_authority(current, lane);
     local_phase_(lane, [&] {
       if (seed) {
@@ -308,13 +336,17 @@ class PreparedAmrFieldResidual final {
       require_authority(current, lane);
       const hierarchy_type* physical_q = &q;
       if (candidate_evaluation_) {
-        local_phase_(lane, [&] { authenticate_(q); copy_(q, evaluation_q_); });
+        local_phase_(lane, [&] {
+          authenticate_(q);
+          copy_(q, evaluation_q_);
+        });
         // Order is part of @3: restrict/synchronize q first, then evaluate D on
         // every stored cell, then restrict/synchronize D via the actual FAC provider.
         candidate_evaluation_->synchronize_original_field_candidate(evaluation_q_);
         local_phase_(lane, [&] {
           authenticate_coefficients_();
-          coefficient_body(std::as_const(evaluation_q_), std::as_const(captures_), coefficient_fields_, evaluation);
+          coefficient_body(std::as_const(evaluation_q_), std::as_const(captures_),
+                           coefficient_fields_, evaluation);
           authenticate_coefficients_();
         });
         candidate_evaluation_->prepare_original_field_operator();
@@ -323,7 +355,10 @@ class PreparedAmrFieldResidual final {
         candidate_evaluation_->apply_original_field_operator(evaluation_q_, result);
         physical_q = &evaluation_q_;
       } else if (synchronized_interaction) {
-        local_phase_(lane, [&] { authenticate_(q); copy_(q, evaluation_q_); });
+        local_phase_(lane, [&] {
+          authenticate_(q);
+          copy_(q, evaluation_q_);
+        });
         op_->synchronize_original_field_candidate(evaluation_q_);
         op_->apply_original_field_operator(evaluation_q_, result);
         physical_q = &evaluation_q_;
@@ -353,7 +388,8 @@ class PreparedAmrFieldResidual final {
         Kokkos::fence();
         if (preconditioner_ == AmrFieldRightPreconditioner::kFullResidualBasisLU &&
             evaluations_ == std::numeric_limits<int>::max())
-          throw std::overflow_error("FullResidualBasisLU@1 original evaluation count exceeds SolveReport encoding");
+          throw std::overflow_error(
+              "FullResidualBasisLU@1 original evaluation count exceeds SolveReport encoding");
       });
       ++evaluations_;
     };
@@ -392,7 +428,8 @@ class PreparedAmrFieldResidual final {
       if (preconditioner_ == AmrFieldRightPreconditioner::kFullResidualBasisLU)
         local_phase_(lane, [&] {
           if (derivatives_ == std::numeric_limits<int>::max())
-            throw std::overflow_error("FullResidualBasisLU@1 derivative count exceeds report encoding");
+            throw std::overflow_error(
+                "FullResidualBasisLU@1 derivative count exceeds report encoding");
         });
       ++derivatives_;
     };
@@ -428,12 +465,14 @@ class PreparedAmrFieldResidual final {
       prepare_full_lu_(current, q, jvp, evaluation, lane);
     };
     auto report = preconditioner_ == AmrFieldRightPreconditioner::kFullResidualBasisLU
-        ? newton_->solve_rebuilt_preconditioned(destinations, residual, derivative, [](auto&) {},
-                                                right, rebuild_right, lane, true)
-        : preconditioner_ == AmrFieldRightPreconditioner::kIdentity
-        ? newton_->solve(destinations, residual, derivative, [](auto&) {}, lane, true)
-        : newton_->solve_preconditioned(destinations, residual, derivative, [](auto&) {},
-                                        right, lane, true);
+                      ? newton_->solve_rebuilt_preconditioned(
+                            destinations, residual, derivative, [](auto&) {}, right, rebuild_right,
+                            lane, true)
+                  : preconditioner_ == AmrFieldRightPreconditioner::kIdentity
+                      ? newton_->solve(
+                            destinations, residual, derivative, [](auto&) {}, lane, true)
+                      : newton_->solve_preconditioned(
+                            destinations, residual, derivative, [](auto&) {}, right, lane, true);
     if (report.solved_value_available()) {
       op_->synchronize_original_field_candidate(candidate_);
       evaluate(candidate_, recheck_, 0);
@@ -454,6 +493,7 @@ class PreparedAmrFieldResidual final {
     candidate_visible_ = report.solved_value_available();
     return report;
   }
+
  public:
   const hierarchy_type& candidate(const AmrFieldResidualAuthority& current,
                                   const ExecutionLane& lane) const {
@@ -489,7 +529,8 @@ class PreparedAmrFieldResidual final {
       local_phase_(lane, [&] {
         if (mask.layout() != shape.layout() || mask.distribution() != shape.distribution() ||
             mask.local_rank() != shape.local_rank() || mask.ncomp() != 1)
-          throw std::invalid_argument("FullResidualBasisLU@1 active mask has foreign topology/ownership");
+          throw std::invalid_argument(
+              "FullResidualBasisLU@1 active mask has foreign topology/ownership");
       });
       for (std::size_t global = 0; global < shape.layout().size(); ++global) {
         const auto box = shape.layout()[global];
@@ -500,37 +541,44 @@ class PreparedAmrFieldResidual final {
           for (int axis = 0; axis < Dim; ++axis) {
             const auto extent = static_cast<std::size_t>(box.length(axis));
             index[axis] = static_cast<int>(static_cast<std::int64_t>(box.lo[axis]) +
-                                         static_cast<std::int64_t>(remainder % extent));
+                                           static_cast<std::int64_t>(remainder % extent));
             remainder /= extent;
           }
           Real active = 0, owners = 0;
           local_phase_(lane, [&] {
-            if (!contributes_(shape, global, lane)) return;
+            if (!contributes_(shape, global, lane))
+              return;
             owners = 1;
             const auto values = mask.fab_global(global).view();
-            active = for_each_cell_reduce_max(Box<Dim>(index, index),
-                [=] POPS_HD(const Index<Dim>& cell) {
+            active = for_each_cell_reduce_max(
+                Box<Dim>(index, index), [=] POPS_HD(const Index<Dim>& cell) {
                   const Real value = values(cell, 0);
                   return std::isfinite(value) ? (value >= Real(.5) ? Real(1) : Real(0)) : Real(2);
                 });
-            if (active == Real(2)) throw std::invalid_argument("FullResidualBasisLU@1 nonfinite active mask");
+            if (active == Real(2))
+              throw std::invalid_argument("FullResidualBasisLU@1 nonfinite active mask");
           });
           owners = all_reduce_sum(owners, lane);
           active = all_reduce_sum(active, lane);
           local_phase_(lane, [&] {
             if (owners != Real(1) || (active != Real(0) && active != Real(1)))
-              throw std::invalid_argument("FullResidualBasisLU@1 active quotient has missing/duplicate physical owner");
-            if (active == Real(1)) visit(level, global, index, shape.ncomp());
+              throw std::invalid_argument(
+                  "FullResidualBasisLU@1 active quotient has missing/duplicate physical owner");
+            if (active == Real(1))
+              visit(level, global, index, shape.ncomp());
           });
         }
       }
     }
   }
   template <class Jvp>
-  void prepare_full_lu_(const AmrFieldResidualAuthority& current, const hierarchy_type& q,
-                        Jvp& jvp, int evaluation, const ExecutionLane& lane) {
+  void prepare_full_lu_(const AmrFieldResidualAuthority& current, const hierarchy_type& q, Jvp& jvp,
+                        int evaluation, const ExecutionLane& lane) {
     require_authority(current, lane);
-    local_phase_(lane, [&] { authenticate_(q); lu_ready_ = false; });
+    local_phase_(lane, [&] {
+      authenticate_(q);
+      lu_ready_ = false;
+    });
     std::size_t count = 0;
     visit_active_cells_(lane, [&](auto, auto, const auto&, int width) {
       count = FullResidualBasisLU::checked_add(count, static_cast<std::size_t>(width));
@@ -540,111 +588,149 @@ class PreparedAmrFieldResidual final {
       for (const auto& field : candidate_)
         for (std::size_t patch = 0; patch < field.local_size(); ++patch) {
           // Three valid-cell towers: active basis, full JVP image and owning iterate snapshot.
-          external = FullResidualBasisLU::checked_add(external,
+          external = FullResidualBasisLU::checked_add(
+              external,
               FullResidualBasisLU::checked_product(field.fab(patch).size(), 3 * sizeof(Real)));
         }
       const auto required = FullResidualBasisLU::required_bytes(count, external);
       if (required > max_dense_bytes_)
-        throw std::length_error("FullResidualBasisLU@1 max_dense_bytes resource budget exceeded:required=" +
-            std::to_string(required) + ":limit=" + std::to_string(max_dense_bytes_) + ":active_dofs=" + std::to_string(count));
+        throw std::length_error(
+            "FullResidualBasisLU@1 max_dense_bytes resource budget exceeded:required=" +
+            std::to_string(required) + ":limit=" + std::to_string(max_dense_bytes_) +
+            ":active_dofs=" + std::to_string(count));
     });
     local_phase_(lane, [&] {
-      std::vector<ActiveDof>().swap(lu_rows_); lu_rows_.reserve(count);
+      std::vector<ActiveDof>().swap(lu_rows_);
+      lu_rows_.reserve(count);
       // Release old storage before replacing, avoiding an unaccounted transient second matrix.
       lu_ = FullResidualBasisLU{};
-      lu_rhs_.clear(); lu_rhs_.shrink_to_fit(); lu_solution_.clear(); lu_solution_.shrink_to_fit();
-      lu_basis_.clear(); lu_image_.clear(); lu_iterate_.clear();
-      lu_.allocate(count); lu_rhs_.resize(count); lu_solution_.resize(count);
+      lu_rhs_.clear();
+      lu_rhs_.shrink_to_fit();
+      lu_solution_.clear();
+      lu_solution_.shrink_to_fit();
+      lu_basis_.clear();
+      lu_image_.clear();
+      lu_iterate_.clear();
+      lu_.allocate(count);
+      lu_rhs_.resize(count);
+      lu_solution_.resize(count);
       std::vector<const field_type*> layouts;
-      for (const auto& field : candidate_) layouts.push_back(&field);
-      lu_basis_ = allocate_(layouts); lu_image_ = allocate_(layouts); lu_iterate_ = allocate_(layouts);
+      for (const auto& field : candidate_)
+        layouts.push_back(&field);
+      lu_basis_ = allocate_(layouts);
+      lu_image_ = allocate_(layouts);
+      lu_iterate_ = allocate_(layouts);
       copy_(q, lu_iterate_);
     });
     visit_active_cells_(lane, [&](auto level, auto global, const auto& cell, int width) {
       for (int component = 0; component < width; ++component) {
-        if (lu_rows_.size() >= count) throw std::logic_error("FullResidualBasisLU@1 active quotient changed during preparation");
+        if (lu_rows_.size() >= count)
+          throw std::logic_error(
+              "FullResidualBasisLU@1 active quotient changed during preparation");
         lu_rows_.push_back({level, global, cell, component});
       }
     });
     local_phase_(lane, [&] {
-      if (lu_rows_.size() != count) throw std::logic_error("FullResidualBasisLU@1 active quotient changed during preparation");
+      if (lu_rows_.size() != count)
+        throw std::logic_error("FullResidualBasisLU@1 active quotient changed during preparation");
     });
     for (std::size_t column = 0; column < count; ++column) {
       require_authority(current, lane);
       local_phase_(lane, [&] {
-        for (auto& field : lu_basis_) field.set_val(Real(0));
+        for (auto& field : lu_basis_)
+          field.set_val(Real(0));
         const auto& dof = lu_rows_[column];
         auto& field = lu_basis_[dof.level];
         if (field.contains_local(dof.global)) {
           const auto values = field.fab_global(dof.global).view();
           const auto component = dof.component;
-          for_each_cell(Box<Dim>(dof.cell, dof.cell), [=] POPS_HD(const Index<Dim>& cell) { values(cell, component) = Real(1); });
+          for_each_cell(Box<Dim>(dof.cell, dof.cell),
+                        [=] POPS_HD(const Index<Dim>& cell) { values(cell, component) = Real(1); });
         }
       });
       // The actual full central F(q +/- h e_j) provider owns its MPI protocol.
       jvp(lu_iterate_, lu_basis_, lu_image_, evaluation);
       gather_active_(lu_image_, lu_rhs_, lane);
       local_phase_(lane, [&] {
-        for (std::size_t row = 0; row < count; ++row) lu_.entry(row, column) = lu_rhs_[row];
+        for (std::size_t row = 0; row < count; ++row)
+          lu_.entry(row, column) = lu_rhs_[row];
       });
       ++lu_columns_;
     }
-    local_phase_(lane, [&] { lu_.factor(); lu_ready_ = true; ++lu_factorizations_; });
+    local_phase_(lane, [&] {
+      lu_.factor();
+      lu_ready_ = true;
+      ++lu_factorizations_;
+    });
     require_authority(current, lane);
   }
   void gather_active_(const hierarchy_type& input, std::vector<Real>& result,
                       const ExecutionLane& lane) const {
     local_phase_(lane, [&] {
       authenticate_(input);
-      if (result.size() != lu_rows_.size()) throw std::logic_error("FullResidualBasisLU@1 active vector shape drift");
+      if (result.size() != lu_rows_.size())
+        throw std::logic_error("FullResidualBasisLU@1 active vector shape drift");
       std::fill(result.begin(), result.end(), Real(0));
       for (std::size_t row = 0; row < lu_rows_.size(); ++row) {
         const auto& dof = lu_rows_[row];
         const auto& field = input[dof.level];
-        if (!contributes_(field, dof.global, lane)) continue;
+        if (!contributes_(field, dof.global, lane))
+          continue;
         const auto values = field.fab_global(dof.global).view();
         const auto component = dof.component;
-        result[row] = for_each_cell_reduce_sum(Box<Dim>(dof.cell, dof.cell),
+        result[row] = for_each_cell_reduce_sum(
+            Box<Dim>(dof.cell, dof.cell),
             [=] POPS_HD(const Index<Dim>& cell) { return values(cell, component); });
-        if (!std::isfinite(result[row])) throw std::invalid_argument("FullResidualBasisLU@1 nonfinite active original vector");
+        if (!std::isfinite(result[row]))
+          throw std::invalid_argument("FullResidualBasisLU@1 nonfinite active original vector");
       }
     });
     all_reduce_sum_inplace(result.data(), result.size(), lane);
     local_phase_(lane, [&] {
-      for (Real value : result) if (!std::isfinite(value)) throw std::invalid_argument("FullResidualBasisLU@1 nonfinite gathered original vector");
+      for (Real value : result)
+        if (!std::isfinite(value))
+          throw std::invalid_argument("FullResidualBasisLU@1 nonfinite gathered original vector");
     });
   }
   void apply_full_lu_(const hierarchy_type& input, hierarchy_type& output,
                       const ExecutionLane& lane) {
     local_phase_(lane, [&] {
-      if (!lu_ready_) throw std::logic_error("FullResidualBasisLU@1 factor is not available at this Newton iterate");
+      if (!lu_ready_)
+        throw std::logic_error(
+            "FullResidualBasisLU@1 factor is not available at this Newton iterate");
       authenticate_(output);
     });
     // Re-authenticate the exact active quotient before using a retained factor.
     std::size_t row = 0;
     visit_active_cells_(lane, [&](auto level, auto global, const auto& cell, int width) {
       for (int component = 0; component < width; ++component) {
-        if (row >= lu_rows_.size()) throw std::logic_error("FullResidualBasisLU@1 active quotient changed");
+        if (row >= lu_rows_.size())
+          throw std::logic_error("FullResidualBasisLU@1 active quotient changed");
         const auto& expected = lu_rows_[row++];
-        if (expected.level != level || expected.global != global || expected.cell != cell || expected.component != component)
+        if (expected.level != level || expected.global != global || expected.cell != cell ||
+            expected.component != component)
           throw std::logic_error("FullResidualBasisLU@1 active quotient changed");
       }
     });
     local_phase_(lane, [&] {
-      if (row != lu_rows_.size()) throw std::logic_error("FullResidualBasisLU@1 active quotient changed");
+      if (row != lu_rows_.size())
+        throw std::logic_error("FullResidualBasisLU@1 active quotient changed");
     });
     gather_active_(input, lu_rhs_, lane);
     local_phase_(lane, [&] {
       lu_.apply(lu_rhs_, lu_solution_);
-      for (auto& field : output) field.set_val(Real(0));
+      for (auto& field : output)
+        field.set_val(Real(0));
       for (std::size_t row = 0; row < lu_rows_.size(); ++row) {
         const auto& dof = lu_rows_[row];
         auto& field = output[dof.level];
-        if (!field.contains_local(dof.global)) continue;
+        if (!field.contains_local(dof.global))
+          continue;
         const auto values = field.fab_global(dof.global).view();
         const auto component = dof.component;
         const Real value = lu_solution_[row];
-        for_each_cell(Box<Dim>(dof.cell, dof.cell), [=] POPS_HD(const Index<Dim>& cell) { values(cell, component) = value; });
+        for_each_cell(Box<Dim>(dof.cell, dof.cell),
+                      [=] POPS_HD(const Index<Dim>& cell) { values(cell, component) = value; });
       }
     });
   }
@@ -653,8 +739,10 @@ class PreparedAmrFieldResidual final {
   void prepare_spatial_jacobi_(const ExecutionLane& lane) {
     require_authority(authority_, lane);
     local_phase_(lane, [&] {
-      for (auto& field : candidate_) field.set_val(Real(0));
-      for (auto& field : inverse_diagonal_) field.set_val(Real(0));
+      for (auto& field : candidate_)
+        field.set_val(Real(0));
+      for (auto& field : inverse_diagonal_)
+        field.set_val(Real(0));
       // Validate the complete host traversal before any rank enters its first apply.
       std::size_t applications = 1;
       for (const auto& field : candidate_)
@@ -685,7 +773,8 @@ class PreparedAmrFieldResidual final {
           for (int component = 0; component < candidate_[level].ncomp(); ++component) {
             require_authority(authority_, lane);
             local_phase_(lane, [&] {
-              for (auto& field : candidate_) field.set_val(Real(0));
+              for (auto& field : candidate_)
+                field.set_val(Real(0));
               if (candidate_[level].contains_local(global)) {
                 const auto values = candidate_[level].fab_global(global).view();
                 for_each_cell(singleton, [=] POPS_HD(const Index<Dim>& cell) {
@@ -696,30 +785,39 @@ class PreparedAmrFieldResidual final {
             op_->apply_original_field_operator(candidate_, plus_);
             ++jacobi_applications_;
             local_phase_(lane, [&] {
-              if (!candidate_[level].contains_local(global)) return;
+              if (!candidate_[level].contains_local(global))
+                return;
               const auto value = std::as_const(plus_[level]).fab_global(global).view();
               const auto zero = std::as_const(minus_[level]).fab_global(global).view();
               const auto active = op_->original_field_active_cells(static_cast<int>(level))
-                                      .fab_global(global).view();
+                                      .fab_global(global)
+                                      .view();
               const auto inverse = inverse_diagonal_[level].fab_global(global).view();
-              const Real invalid = for_each_cell_reduce_max(singleton,
-                  [=] POPS_HD(const Index<Dim>& cell) {
-                    if (active(cell, 0) < Real(.5)) return Real(0);
+              const Real invalid =
+                  for_each_cell_reduce_max(singleton, [=] POPS_HD(const Index<Dim>& cell) {
+                    if (active(cell, 0) < Real(.5))
+                      return Real(0);
                     const Real diagonal = value(cell, component) - zero(cell, component);
-                    if (!std::isfinite(diagonal) || diagonal == Real(0)) return Real(1);
+                    if (!std::isfinite(diagonal) || diagonal == Real(0))
+                      return Real(1);
                     const Real reciprocal = Real(1) / diagonal;
-                    if (!std::isfinite(reciprocal)) return Real(1);
+                    if (!std::isfinite(reciprocal))
+                      return Real(1);
                     inverse(cell, component) = reciprocal;
                     return Real(0);
                   });
               if (invalid != Real(0))
                 throw std::invalid_argument(
-                    "spatial-basis Jacobi requires a finite nonzero actual active spatial diagonal");
+                    "spatial-basis Jacobi requires a finite nonzero actual active spatial "
+                    "diagonal");
             });
           }
         }
       }
-    local_phase_(lane, [&] { for (auto& field : candidate_) field.set_val(Real(0)); });
+    local_phase_(lane, [&] {
+      for (auto& field : candidate_)
+        field.set_val(Real(0));
+    });
     require_authority(authority_, lane);
   }
   template <class Operation>
@@ -730,22 +828,26 @@ class PreparedAmrFieldResidual final {
     } catch (...) {
       error = std::current_exception();
     }
-    try { Kokkos::fence(); } catch (...) { if (!error) error = std::current_exception(); }
+    try {
+      Kokkos::fence();
+    } catch (...) {
+      if (!error)
+        error = std::current_exception();
+    }
     collectively_rethrow_exception(error, lane, "original AMR field local preparation/evaluation");
   }
-  PreparedAmrFieldResidual(std::shared_ptr<provider_type> provider,
-                           PreparedHierarchyFieldOperator<Dim>& op,
-                           AmrFieldResidualAuthority authority,
-                           std::span<const hierarchy_type* const> captures,
-                           FieldNewtonOptions options, Real step,
-                           AmrFieldRightPreconditioner preconditioner, AmrFieldCoefficientEvaluation coefficient_evaluation,
-                           std::uint64_t max_dense_bytes)
+  PreparedAmrFieldResidual(
+      std::shared_ptr<provider_type> provider, PreparedHierarchyFieldOperator<Dim>& op,
+      AmrFieldResidualAuthority authority, std::span<const hierarchy_type* const> captures,
+      FieldNewtonOptions options, Real step, AmrFieldRightPreconditioner preconditioner,
+      AmrFieldCoefficientEvaluation coefficient_evaluation, std::uint64_t max_dense_bytes)
       : provider_(std::move(provider)),
         op_(&op),
         authority_(std::move(authority)),
         options_(options),
         step_(step),
-        preconditioner_(preconditioner), coefficient_evaluation_(coefficient_evaluation),
+        preconditioner_(preconditioner),
+        coefficient_evaluation_(coefficient_evaluation),
         max_dense_bytes_(max_dense_bytes) {
     const int levels = op.original_field_levels();
     if (levels < 1 || authority_.original_equation_identity.empty() ||
@@ -811,11 +913,14 @@ class PreparedAmrFieldResidual final {
       throw std::invalid_argument("candidate coefficient tower count changed");
     for (std::size_t level = 0; level < candidate_.size(); ++level) {
       const auto* field = coefficient_fields_[level];
-      if (!field || field != &candidate_evaluation_->candidate_coefficient_field(static_cast<int>(level)) ||
+      if (!field ||
+          field != &candidate_evaluation_->candidate_coefficient_field(static_cast<int>(level)) ||
           field->layout() != candidate_[level].layout() ||
           field->distribution() != candidate_[level].distribution() ||
           field->local_rank() != candidate_[level].local_rank() ||
-          static_cast<std::uint64_t>(field->ncomp()) != static_cast<std::uint64_t>(candidate_[level].ncomp()) * static_cast<std::uint64_t>(candidate_[level].ncomp()))
+          static_cast<std::uint64_t>(field->ncomp()) !=
+              static_cast<std::uint64_t>(candidate_[level].ncomp()) *
+                  static_cast<std::uint64_t>(candidate_[level].ncomp()))
         throw std::invalid_argument("candidate coefficient storage/shape authority changed");
     }
   }

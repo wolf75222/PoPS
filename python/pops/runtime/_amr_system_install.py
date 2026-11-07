@@ -535,6 +535,20 @@ class _AmrSystemInstall(_AmrSystem):
                 raise ValueError(
                     "pops.bind: one native transfer route requires exact-ranked ghost depth"
                 )
+            # The axes whose physical faces take one-sided slopes, a mask that the library sets;
+            # the native route validates it against its kernel (none when absent).
+            one_sided_axes = options.get("one_sided_axes", [])
+            if not isinstance(one_sided_axes, list) or (
+                one_sided_axes
+                and (
+                    len(one_sided_axes) != dimension
+                    or any(type(axis) is not int or axis not in (0, 1) for axis in one_sided_axes)
+                )
+            ):
+                raise ValueError(
+                    "pops.bind: one native transfer route requires one exact-ranked 0/1 mask of "
+                    "one-sided axes"
+                )
             self._s._register_bootstrap_transfer_route(
                 entry.identity.token,
                 [row.subject.qualified_id for row in entry.requirements],
@@ -548,6 +562,7 @@ class _AmrSystemInstall(_AmrSystem):
                 order,
                 ghost_depth,
                 next(iter(ratios)),
+                one_sided_axes,
             )
         for group in sorted(oriented_face_groups):
             self._s._register_bootstrap_oriented_face_subjects(group)

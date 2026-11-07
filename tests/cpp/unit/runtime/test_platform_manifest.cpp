@@ -31,8 +31,7 @@ ExecutionContext context() {
 FieldViewDescriptor field() {
   std::vector<std::size_t> extents(static_cast<std::size_t>(pops::kNativeDimension));
   std::vector<std::ptrdiff_t> strides(static_cast<std::size_t>(pops::kNativeDimension));
-  std::vector<std::pair<int, int>> ghosts(static_cast<std::size_t>(pops::kNativeDimension),
-                                          {0, 0});
+  std::vector<std::pair<int, int>> ghosts(static_cast<std::size_t>(pops::kNativeDimension), {0, 0});
   std::size_t stride = 1;
   for (int axis = pops::kNativeDimension - 1; axis >= 0; --axis) {
     const std::size_t slot = static_cast<std::size_t>(axis);
@@ -40,9 +39,17 @@ FieldViewDescriptor field() {
     strides[slot] = static_cast<std::ptrdiff_t>(stride);
     stride *= extents[slot];
   }
-  return {"state", pops::kNativeDimension, std::move(extents), std::move(strides),
-          "cell",  std::move(ghosts),      "float64",        "host",
-          "patch-0", "right",             "borrowed"};
+  return {"state",
+          pops::kNativeDimension,
+          std::move(extents),
+          std::move(strides),
+          "cell",
+          std::move(ghosts),
+          "float64",
+          "host",
+          "patch-0",
+          "right",
+          "borrowed"};
 }
 
 }  // namespace

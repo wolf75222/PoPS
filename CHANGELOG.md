@@ -326,6 +326,52 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Generated dense spectral witnesses now distinguish a converged complex spectrum from an invalid
   eigensolve. Checked extrema return NaN on non-convergence/non-finite diagnostics, and the tri-state
   real-spectrum witness propagates the same failure into native pointwise transforms before commit.
+- Run master's 17 scalar-advection tutorials in CI (`mg8-tutorials`): each runs from master
+  bb9aea0c and from this tree on the same runner, and `scripts/run_mg8_tutorials.py` compares
+  every result bitwise, on every plan that needs the Python lane.
+  A tutorial that outlives its watchdog is stopped with every process under it, MPI ranks
+  included, each rank first writing its Python stacks; a tutorial that fails prints them and the
+  end of its logs in the job log, and this tree's steps run even when master's step fails or
+  times out. Each rank compiles into a JIT cache of its own: master's ranks compiled the same
+  model into one file of a shared cache without its lock, and one of them could raise at bind
+  while the other waited in a collective.
+  `tests/gates/mg8_master_tutorials.toml` records each divergence by its exact checks, with its
+  causes, their issues and commits and its attribution; only results can be recorded, a failure
+  always fails the job, and `run_mg8_tutorials.py check --check-base` fails on every event when
+  the ledger grows. Tutorial 11 binds its runtime parameters as master writes them again: the
+  block-qualified spelling raised DoubleOwnershipError.
+- Evaluate van Leer and MC's centred slope with master's expressions wherever they stay normal
+  and finite, keeping the overflow-safe forms beyond that range, so master's tutorials keep
+  their bits (MG8, ROM-102).
+- Realize `Inflow` as master does: the mirrored ghost 2g - u, whose reconstruction is also the
+  exterior trace of the numerical flux (D9). The prescribed exterior trace of API 0.2 is chosen by
+  name, `Inflow(..., trace="prescribed")` (provisional spelling for N15), as M14 and the
+  two-block receipt now do: its face keeps the fixed-state law and carries a per-face flag,
+  `prescribed_trace`, that the engine reads (`with_prescribed_trace_faces`) (MG8, ROM-101).
+- `Buffer(cells=n)` dilates AMR tags as master does again: every cell of the target coverage,
+  cells kept by hysteresis included, grows by the transition buffer, max(n, derived), plus the
+  lookahead (native tag selection 2). The tag selection of API 0.2 (pops.amr.tag-selection@1)
+  is chosen by name, `Buffer(cells=n, selection="refine-requests")` (provisional spelling for
+  N15); the tests, examples and tutorials that API 0.2 added or changed name it, so their
+  results are unchanged (MG8, ROM-103).
+- `ConservativeLinear()` prolongs new fine cells as master does again, at a regrid and at a
+  bootstrap: a parent on a physical face takes the monotonized-central slope over both
+  neighbours, the boundary ghost included (spec 0.3, section 2.6.9). The one-sided interior
+  slope of API 0.2 is chosen by name, `ConservativeLinear(physical_faces="one-sided")`
+  (provisional spelling for N15), as the AMR diffusion receipts and the other files of API 0.2
+  with a physical face now do: its route keeps the native kernel and carries a mask of one-sided
+  axes, `one_sided_axes`, that the native transfer applies on the non-periodic axes. Master's
+  17 tutorials reproduce master bit for bit, and the MG8 ledger is empty (MG8, ROM-104).
+- Compile each block package of a Case for the one catalogue numerical route its block resolves
+  (variables, limiter, Riemann solver) instead of every catalogue route: a generated Euler
+  package compiles in about 22 s instead of about 150 s. The generated loader names that route
+  by the native types that the route catalogue records for it; the block selectors instantiate
+  only those types and add no route name to the engine. The route enters the package identity,
+  and the package refuses, in Python and in C++, to be installed with another route; compile the
+  Case with the numerics it installs. The private ModelSpec package that `add_equation` compiles
+  is compiled for the route of the block it installs. A package without a catalogue route (state
+  storage, source-authored or coordinated faces, external Riemann bricks) and a direct
+  `model.compile()` keep their current route set.
 
 ### Fixed
 
@@ -352,6 +398,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   identities are unchanged (identical hashes for 116 example builders and for the depth test at
   depths 20, 40, 80 and 160). On one 4-core container, `compile` of the depth-160 test takes
   740 s instead of 1147 s.
+- `ci.yml` checks, with the pinned clang-format 19.1.7, what each pull request changes in the C++
+  files, in a `format` job that the required gate aggregates (against the first parent of the
+  merge commit, about a minute, no build). It works as a ratchet: a touched file that conformed at
+  the base must still conform as a whole file, since a changed line can misalign its aligned
+  neighbours; a file that did not conform is held to its changed lines only, so a branch never
+  has to reformat a file that it found unformatted; after a change to `.clang-format` or
+  `.clang-format-ignore`, every file that conformed at the base must still conform. `quality.yml`
+  keeps its whole-tree check through the same script, `scripts/check_clang_format.sh`. The
+  historical SDK header snapshots that tests pin by SHA-256 are listed in the new
+  `.clang-format-ignore`, which both checks honor. A change to `.clang-format`,
+  `.clang-format-ignore` or the script alone is planned as metadata: it runs the `format` job and
+  no build.
+- Reformat the 161 C++ files that the blocking `format` job of `quality.yml` refused, with the
+  pinned clang-format 19.1.7, in one mechanical commit listed in `.git-blame-ignore-revs`. Besides
+  whitespace, it splits six long literals, adds closing namespace comments, and re-indents the
+  embedded C++ of three `R"CPP(...)CPP"` test program sources (same tokens). Three line budgets of
+  the architecture tests grow by the measured formatter delta, and the CF2 engine guard list takes
+  the new line numbers.
+- `docs/gen_test_counts.py --check-matrix`, the blocking manifest step of `quality.yml`, applies the
+  disposition of `tests/python/unavailable_verification_tests.json`: the seven tests of
+  `tests/python/verification/` committed without their dependencies (`bcb73f4a`) are exempt while
+  their bytes match the catalogue, and a suite that claims one fails, as in the coverage fence of
+  `test_manifest_suite_coverage.py`. The step had failed on these seven files since 2026-08-17;
+  no test starts running.
+- The coverage fence keeps that catalogue shrink-only: a record added or rewritten, or a changed
+  header, fails even when the catalogue's SHA-256 pin is updated with it; a record may only be
+  dropped, and its test must then be claimed by a suite.
 
 ## [1.0.0] - 2026-07-16
 

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import tomllib
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "test_manifest.toml"
+UNAVAILABLE = ROOT / "tests" / "python" / "unavailable_verification_tests.json"
 
 
 def load_manifest() -> dict:
@@ -34,6 +37,25 @@ def manifest_python_files(manifest: dict) -> set[str]:
     return files
 
 
+def historically_unavailable_python_files() -> set[str]:
+    """Test files that the historical catalogue records as unavailable, byte for byte.
+
+    Seven tests were committed without their dependencies before M0 (bcb73f4a). The catalogue
+    records them as unavailable, never run; the coverage fence of
+    tests/python/architecture/test_manifest_suite_coverage.py pins it and refuses that a suite
+    claims them. A file whose bytes no longer match its record is not exempted.
+    """
+    if not UNAVAILABLE.exists():
+        return set()
+    catalog = json.loads(UNAVAILABLE.read_text(encoding="utf-8"))
+    files: set[str] = set()
+    for record in catalog.get("tests", []):
+        path = ROOT / record["path"]
+        if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == record["sha256"]:
+            files.add(str(record["path"]))
+    return files
+
+
 def actual_cpp_sources() -> set[str]:
     return set(str(p.relative_to(ROOT)) for p in (ROOT / "tests/cpp").rglob("test_*.cpp"))
 
@@ -48,18 +70,24 @@ def check_manifest() -> int:
     expected_py = actual_python_files()
     manifest_cpp = manifest_cpp_sources(manifest)
     manifest_py = manifest_python_files(manifest)
+    historical = historically_unavailable_python_files()
 
-    missing = sorted((expected_cpp - manifest_cpp) | (expected_py - manifest_py))
+    missing = sorted((expected_cpp - manifest_cpp) | (expected_py - manifest_py - historical))
     stale = sorted((manifest_cpp - expected_cpp) | (manifest_py - expected_py))
+    claimed = sorted(historical & manifest_py)
 
     print(f"C++ tests: {len(expected_cpp)} files")
     print(f"Python tests: {len(expected_py)} files")
     print(f"Manifest entries: {len(manifest_cpp)} C++ sources, {len(manifest_py)} Python files")
+    print(f"Historically unavailable, never run: {len(historical)} Python files "
+          f"({UNAVAILABLE.relative_to(ROOT)})")
     for path in missing:
         print(f"MISSING {path}")
     for path in stale:
         print(f"STALE {path}")
-    return 1 if missing or stale else 0
+    for path in claimed:
+        print(f"CLAIMED {path} (historically unavailable, yet under a suite path)")
+    return 1 if missing or stale or claimed else 0
 
 
 def main() -> int:

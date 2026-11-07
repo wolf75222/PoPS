@@ -76,8 +76,8 @@ pops::EllipticBuildRequest<Dim> request(const pops::Geometry<Dim>& geometry,
           std::move(boxes),
           distribution,
           local_rank,
-          pops::PhysicalBoundaryConditions<Dim>{pops::BoundaryTopology<Dim>::axis_periodic(periodic_axes),
-                                                faces, spacing},
+          pops::PhysicalBoundaryConditions<Dim>{
+              pops::BoundaryTopology<Dim>::axis_periodic(periodic_axes), faces, spacing},
           pops::Extent<Dim>{},
           ranked<pops::Extent<Dim>, Dim>(std::int64_t{1}),
           {distribution.box_count(), pairs}};
@@ -119,7 +119,8 @@ void expect_replicated_periodic_fft_coarse() {
   }
   pops::elliptic::mg::CompositeFacBuildRequest<Dim> hierarchy{
       {request<Dim>(coarse, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{domain})),
-       request<Dim>(fine, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{{fine_lo, fine_hi}}))},
+       request<Dim>(fine,
+                    pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{{fine_lo, fine_hi}}))},
       {pops::amr::RefinementRatio<Dim>{filled<Dim>(2)}}};
   pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane);
   EXPECT_TRUE(solver.fft_coarse_prepared());
@@ -127,8 +128,8 @@ void expect_replicated_periodic_fft_coarse() {
             pops::elliptic::PoissonFftBottomKind::replicated_slab_rewrite);
   const pops::Real coarse_measure = coarse.spacing(0) * coarse.spacing(1);
   const pops::Real fine_measure = fine.spacing(0) * fine.spacing(1);
-  pops::FieldNullspacePlan<Dim> plan = pops::constant_mean_zero_nullspace<Dim>(
-      "periodic-fft-fac-mpi", "unit-test", coarse_measure);
+  pops::FieldNullspacePlan<Dim> plan =
+      pops::constant_mean_zero_nullspace<Dim>("periodic-fft-fac-mpi", "unit-test", coarse_measure);
   plan.bases.front().cell_measure = {coarse_measure, fine_measure};
   solver.install_nullspace(std::move(plan), {pops::PreparedVectorDistribution<Dim>::replicated(),
                                              pops::PreparedVectorDistribution<Dim>::replicated()});
