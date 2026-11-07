@@ -430,7 +430,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `include/` with a trailing separator next to Kokkos' own `include`, so the include contract kept
   both spellings and counted four defining headers instead of two, and configuration stopped.
   Each include directory is now kept once per real directory, under its first spelling without
-  a trailing separator; the recorded Kokkos ABI is unchanged where no directory was named twice.
+  a trailing separator. The recorded Kokkos ABI and include list are unchanged where every include
+  directory is named once and without a trailing separator.
   `environment.yml` lists pytest, which the receivers of a qualification prefix need.
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,

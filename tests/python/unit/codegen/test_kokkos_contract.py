@@ -195,7 +195,9 @@ def test_cmake_counts_each_kokkos_include_directory_once_whatever_its_spelling(t
     linked.symlink_to(tmp_path / "prefix")
     other = tmp_path / "other"
     other.mkdir()
-    graph = [f"{include}/", include, f"{linked}/include", f"$<BUILD_INTERFACE:{include}//>", str(other)]
+    # The first spelling is kept, here a symlinked one with a trailing separator; the others name
+    # the same real directory and add nothing.
+    graph = [f"{linked}/include/", include, f"{include}/", f"$<BUILD_INTERFACE:{include}//>", str(other)]
     out = tmp_path / "includes.txt"
     script = tmp_path / "normalize.cmake"
     script.write_text(
@@ -204,7 +206,7 @@ def test_cmake_counts_each_kokkos_include_directory_once_whatever_its_spelling(t
         + production[start:end]
         + f'file(WRITE "{out}" "${{_pops_kokkos_normalized_includes}}")\n')
     subprocess.run([cmake, "-P", str(script)], check=True, capture_output=True, text=True)
-    assert out.read_text().split(";") == [include, str(other)]
+    assert out.read_text().split(";") == [f"{linked}/include", str(other)]
 
 
 def test_relocated_openmp_flags_preserve_macos_single_runtime(monkeypatch, tmp_path):
