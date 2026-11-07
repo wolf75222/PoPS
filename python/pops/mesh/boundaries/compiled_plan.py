@@ -196,6 +196,9 @@ class CompiledBoundaryPlan:
                     "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall",
                     "external", "characteristic_no_inflow"}:
                 raise ValueError("compiled boundary face has no executable producer type")
+            prescribed_trace = face.get("prescribed_trace", False)
+            if type(prescribed_trace) is not bool:
+                raise TypeError("compiled boundary face prescribed_trace must be a bool")
             if "value_protocol" in face or "value_delegate" in face:
                 delegate=face.get("value_delegate")
                 if face.get("value_protocol")!="native-boundary-component-values@1" or face["type"]!="external" or face.get("values")!=[] or not isinstance(delegate,dict):
@@ -226,6 +229,9 @@ class CompiledBoundaryPlan:
                     "compiled primitive boundary face requires one exact fixed-state converter")
             if face["type"] in {
                     "periodic", "foextrap", "no_flux", "slip_wall", "external"}:
+                if prescribed_trace:
+                    raise ValueError(
+                        "compiled boundary face prescribes an exterior trace without a fixed state")
                 values = [0.0] * ncomp
                 analytic_programs = []
                 analytic_clock = None
@@ -292,6 +298,7 @@ class CompiledBoundaryPlan:
                 "values": values,
                 "analytic_programs": analytic_programs,
                 "analytic_clock": analytic_clock,
+                **({"prescribed_trace": True} if prescribed_trace else {}),
             })
         faces.sort(key=lambda row: row["ordinal"])
 

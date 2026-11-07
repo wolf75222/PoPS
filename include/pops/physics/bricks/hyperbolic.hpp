@@ -173,13 +173,13 @@ struct CartesianExBDriftND {
   /// used by generated Cartesian blocks; they contain no separate conversion algorithm.
   POPS_HD nd::StateConversion<Primitive> recover(const State& state) const {
     return {state, nd::conservation_law_detail::finite(state[0])
-                      ? nd::StateConversionStatus::Success
-                      : nd::StateConversionStatus::NonFiniteState};
+                       ? nd::StateConversionStatus::Success
+                       : nd::StateConversionStatus::NonFiniteState};
   }
   POPS_HD nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
     return {primitive, nd::conservation_law_detail::finite(primitive[0])
-                          ? nd::StateConversionStatus::Success
-                          : nd::StateConversionStatus::NonFiniteState};
+                           ? nd::StateConversionStatus::Success
+                           : nd::StateConversionStatus::NonFiniteState};
   }
   POPS_HD nd::StateConversionStatus admissibility(const State& state) const {
     return recover(state).status;

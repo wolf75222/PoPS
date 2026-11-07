@@ -110,7 +110,7 @@ def affine_amr_case(*, levels=1, case_name="affine_amr_public_body",
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,)*(levels-1)),
         tagging=AMRTagging(
             rules=(Tag((indicator > case.value(lower)) & ~(indicator > case.value(upper))),
-                   Buffer(cells=0)),
+                   Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),

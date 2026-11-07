@@ -3,7 +3,7 @@ import pytest
 
 from pops.time import Program
 from typed_program_support import typed_state
-from pops.codegen.realization_delivery import delivered_frontiers
+from pops.codegen.typed_delivery import delivered_frontiers
 
 
 def fixture():
@@ -90,8 +90,13 @@ def test_iterate_dynamic_stop_checks_all_possible_successful_iterations():
     assert sorted(map(len, frontiers(result['state']))) == [0, 1, 1]
 
 
-def test_analysis_capacity_fails_closed():
+def test_loop_count_beyond_the_carried_period_keeps_its_last_delivery():
+    # CF7: no analysis budget exists; ten iterations are not unrolled, the
+    # carried state repeats after its structural transient.
     p, q, delivery, frontiers = fixture()
     result = p.fold(q.n, 10, lambda b, state, i: delivery(b, state))
-    with pytest.raises(ValueError, match='analysis budget'):
+    values = frontiers(result)
+    assert len(values) == 1 and len(values[0]) == 1
+    assert next(iter(values[0])).invocation[-1][1] == 10
+    with pytest.raises(TypeError):
         frontiers(result, max_iterations=2)

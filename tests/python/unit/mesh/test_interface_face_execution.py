@@ -71,7 +71,24 @@ def test_only_the_exact_owned_face_is_reserved_without_mutating_physical_authori
     assert authority.base.data == before
 
 
-@pytest.mark.parametrize("fault", ["foreign-provider", "wrong-face", "duplicate", "periodic",
+@pytest.mark.parametrize("runtime", [False, True])
+def test_the_interface_trace_replaces_a_prescribed_physical_trace(runtime):
+    # Inflow(trace="prescribed") flags its face; the interface that consumes the face replaces
+    # that trace with its own, so the flag leaves the owned face alone.
+    authority = _authority()
+    for face in authority.base.data["faces"][1:3]:
+        face["prescribed_trace"] = True
+    before = deepcopy(authority.base.data)
+    result = (authority.runtime_boundary_data({"bound": 2.0}) if runtime
+              else authority.compile_boundary_data())
+    assert [face.get("prescribed_trace", False) for face in result["faces"]] == [
+        False, False, True, False]
+    assert result["faces"][1]["type"] == "external"
+    assert result["faces"][2] == before["faces"][2]
+    assert authority.base.data == before
+
+
+@pytest.mark.parametrize("fault",["foreign-provider", "wrong-face", "duplicate", "periodic",
                                   "already-external"])
 def test_interface_face_requires_unique_exact_physical_ownership(fault):
     authority = _authority()

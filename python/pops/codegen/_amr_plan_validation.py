@@ -270,14 +270,19 @@ def validate_amr_authorities(plan: Any) -> None:
         NativeAMRMaterializationKind,
     )
 
-    tagging_provider = getattr(plan.bootstrap_plan.tagging, "runtime_tagging_data", None)
-    if not callable(tagging_provider):
-        raise TypeError("resolved AMR tagging must implement runtime_tagging_data(params)")
-    tagging_manifest = tagging_provider()
-    if type(tagging_manifest) is not dict \
-            or tagging_manifest.get("graph_type") != "amr_tagging_runtime" \
-            or not tagging_manifest.get("lowerings"):
-        raise TypeError("resolved AMR tagging returned an incomplete runtime provider manifest")
+    from pops.mesh._amr import ResolvedRefinementCriterion
+
+    # A refinement criterion is complete by construction: compile generates it into the Program.
+    if type(plan.bootstrap_plan.tagging) is not ResolvedRefinementCriterion:
+        tagging_provider = getattr(plan.bootstrap_plan.tagging, "runtime_tagging_data", None)
+        if not callable(tagging_provider):
+            raise TypeError("resolved AMR tagging must implement runtime_tagging_data(params)")
+        tagging_manifest = tagging_provider()
+        if type(tagging_manifest) is not dict \
+                or tagging_manifest.get("graph_type") != "amr_tagging_runtime" \
+                or not tagging_manifest.get("lowerings"):
+            raise TypeError(
+                "resolved AMR tagging returned an incomplete runtime provider manifest")
     initial_ids = {row.subject.qualified_id for row in plan.initial_condition_plan.bindings}
     for constraint in plan.bootstrap_plan.constraints:
         options = constraint.options.to_data()
@@ -425,6 +430,21 @@ def validate_amr_authorities(plan: Any) -> None:
                     raise NotImplementedError(
                         "native AMR prolongation provider does not match the exact builtin "
                         "cell/face/node kernel contract"
+                    )
+                # A mask of axes whose physical faces take one-sided slopes, set by the library.
+                one_sided_axes = native.options.to_data().get("one_sided_axes")
+                if one_sided_axes is not None and (
+                    axis_kind != "cell"
+                    or requirement.key.operation != PROLONGATION
+                    or capabilities.order != 2
+                    or not isinstance(one_sided_axes, list)
+                    or len(one_sided_axes) != dimension
+                    or any(type(axis) is not int or axis not in (0, 1) for axis in one_sided_axes)
+                    or not any(one_sided_axes)
+                ):
+                    raise NotImplementedError(
+                        "native AMR one-sided axes need the order-two cell prolongation and one "
+                        "0/1 mask over the native axes"
                     )
             elif requirement.materialization == DERIVED_FIELD:
                 if native.materialization is not NativeAMRMaterializationKind.DERIVED_FIELD \

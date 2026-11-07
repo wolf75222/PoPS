@@ -186,9 +186,8 @@ struct RegionUnpackKernel {
     execution_index_type cell = element % job.cells;
     Index<Dim> index{};
     for (int axis = 0; axis < Dim; ++axis) {
-      index[axis] =
-          static_cast<int>(static_cast<execution_index_type>(job.destination_lower[axis]) +
-                           cell % job.extent[axis]);
+      index[axis] = static_cast<int>(
+          static_cast<execution_index_type>(job.destination_lower[axis]) + cell % job.extent[axis]);
       cell /= job.extent[axis];
     }
     destination(index, component) = buffer(job.offset + element);
@@ -594,8 +593,9 @@ class RegionTransport {
       if (peer.receive != nullptr) {
         if (code == MPI_SUCCESS)
           code = MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive->elements),
-                           pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                           lane_->native_handle(), &receive_requests_[receive_index]);
+                           pops::mpi_real_datatype(), peer.mpi_rank,
+                           ExecutionLane::parallel_copy_message_tag, lane_->native_handle(),
+                           &receive_requests_[receive_index]);
         ++receive_index;
       }
     if (!gate_(code == MPI_SUCCESS ? 0L : 1L))
@@ -606,9 +606,10 @@ class RegionTransport {
     for (PeerStorage& peer : peers_)
       if (peer.send != nullptr) {
         if (code == MPI_SUCCESS)
-          code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), pops::mpi_real_datatype(),
-                           peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                           lane_->native_handle(), &send_requests_[send_index]);
+          code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements),
+                           pops::mpi_real_datatype(), peer.mpi_rank,
+                           ExecutionLane::parallel_copy_message_tag, lane_->native_handle(),
+                           &send_requests_[send_index]);
         ++send_index;
       }
     if (!gate_(code == MPI_SUCCESS ? 0L : 1L))

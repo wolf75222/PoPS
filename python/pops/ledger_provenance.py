@@ -341,7 +341,7 @@ def _validate_packet_delivery(envelope, values):
     Check every retained coordinate against the original packed coordinate. Merely
     using an old packet in a new expression is not an application certificate.
     """
-    from pops.codegen.realization_delivery import DeliveryReference,delivered_frontiers
+    from pops.codegen.typed_delivery import DeliveryReference,delivered_frontiers,require_identified
     signature=dict(value_signature(envelope)['members'])['increment']
     def is_ledger(v):return v.op==OP and v.attrs.get('contract_kind')=='inventory_ledger'
     def terminal(v):return is_ledger(v) or v.op=='continuation_consume_increment' or (v.op not in _TRANSPORT and v.op!=OP)
@@ -383,6 +383,7 @@ def _validate_packet_delivery(envelope, values):
                     if any(any(is_ledger(values[r.value_id]) for r in row) for row in ancestry):
                         raise ValueError('declared ledger packet was numerically modified or stripped')
                     continue
+                require_identified((reference,),'declared ledger packet')
                 ledger_rows.add((choices,DeliveryReference(reference.value_id,reference.invocation)))
                 projection=reference.projection
                 if len(output_path)<len(projection) or (projection and output_path[-len(projection):]!=projection):
@@ -398,10 +399,10 @@ def _validate_packet_delivery(envelope, values):
 
 
 def _is_exact_transport(value, target):
-    from pops.codegen.realization_delivery import delivered_frontiers
+    from pops.codegen.typed_delivery import delivered_count, delivered_frontiers
     def stop(node):return node is target or (node.op not in _TRANSPORT and node.op!=OP)
     rows=delivered_frontiers(value,stop)
-    return bool(rows) and all(len(row)==1 and next(iter(row)).value_id==target.id for row in rows)
+    return bool(rows) and all(delivered_count(row)==1 and next(iter(row)).value_id==target.id for row in rows)
 
 
 def _identity_action(action):
@@ -427,7 +428,7 @@ def _recipient_ledger(ledger, recipient, *, omit=()):
 
 def _context_rows(envelope, *, path, replacements, choices):
     """Follow explicit contract refs in their owner's actual region/loop frame."""
-    from pops.codegen.realization_delivery import delivered_frontiers
+    from pops.codegen.typed_delivery import delivered_frontiers, require_identified
     def terminal(value):return value.op in (OP,'continuation_read') or value.op not in _TRANSPORT
     def expand(value, projection):
         item=replacements.get(value.id)
@@ -436,8 +437,8 @@ def _context_rows(envelope, *, path, replacements, choices):
     rows=delivered_frontiers(envelope,terminal,path=path,with_choices=True,with_projection=True,expand_match=expand)
     # Other complete ledger packets in a Product are independent obligations.
     # They are not data dependencies of the specific contract reference expanded here.
-    return [(c,frozenset(r for r in refs if not (values[r.value_id].op==OP and
-             values[r.value_id].attrs.get('contract_kind')=='inventory_ledger')))
+    return [(c,frozenset(r for r in require_identified(refs,'inventory contract reference') if not (
+             values[r.value_id].op==OP and values[r.value_id].attrs.get('contract_kind')=='inventory_ledger')))
             for c,refs in rows if _compatible(choices,c)]
 
 
@@ -461,8 +462,6 @@ def _conversion_obligation(applied, binding, ledger, recipient, base, path, *, e
         raise ValueError('inventory conversion binding belongs to another native invocation')
     if data['recipient'] is not recipient or _projection(data['base_value'],base)!=path:
         raise ValueError('inventory conversion targets another base value or continuation path')
-    from pops.codegen.realization_delivery import delivered_frontiers
-    def terminal(v):return v.op==OP or v.op not in _TRANSPORT
     application_rows=_context_rows(envelope,path=('continuation',*path),
         replacements={applied.id:data['application']},choices=choices)
     applications=[refs for selected,refs in application_rows]
@@ -510,7 +509,7 @@ def _conversion_obligation(applied, binding, ledger, recipient, base, path, *, e
 
 def validate_candidate(candidate):
     """Require each declared ledger's application at its exact retained recipient path."""
-    from pops.codegen.realization_delivery import delivered_frontiers
+    from pops.codegen.typed_delivery import delivered_count, delivered_frontiers, require_identified
     if candidate.op!='continuation_freeze':raise TypeError('candidate validation requires its exact freeze')
     base,proposal,envelope=candidate.inputs
     values={v.id:candidate.prog._canonical_value(v) for v in candidate.prog._issued_values.values()}
@@ -536,8 +535,9 @@ def validate_candidate(candidate):
                 applicable=[(c,r) for c,r in deliveries if _compatible(choices,c)]
                 if not applicable:raise ValueError('ledger recipient has no retained successful value')
                 for selected,frontier in applicable:
-                    if len(frontier)!=1:raise ValueError('retained inventory has no unique terminal application proof')
+                    if delivered_count(frontier)!=1:raise ValueError('retained inventory has no unique terminal application proof')
                     applied_ref=next(iter(frontier));applied=values[applied_ref.value_id]
+                    require_identified((applied_ref,reference),'ledger/application invocation')
                     if applied.op!=OP:raise ValueError('retained inventory is not the declared ledger application')
                     validate_contract_operation(applied.inputs,applied.attrs,value_signature(applied))
                     if applied_ref.invocation!=reference.invocation:

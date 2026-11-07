@@ -186,8 +186,7 @@ EllipticBuildRequest<Dim> unique_last_axis_slab_request(const EllipticBuildReque
     owners.push_back(rank_space.coordinate(static_cast<std::size_t>(rank)));
   const mesh::Distribution<Dim> distribution =
       mesh::Distribution<Dim>::partitioned(layout, rank_space, std::move(owners));
-  const std::size_t pairs =
-      layout.size() < 2 ? 0 : layout.size() * (layout.size() - 1) / 2;
+  const std::size_t pairs = layout.size() < 2 ? 0 : layout.size() * (layout.size() - 1) / 2;
   EllipticBuildRequest<Dim> request = with_fft_ghosts(source);
   request.boxes = std::move(layout);
   request.distribution = distribution;
@@ -280,8 +279,8 @@ class PoissonFftMultiFabAdapter {
     if (!fft_)
       throw std::logic_error("Poisson FFT MultiFab adapter has no prepared plan");
     SolveReport report;
-    const Real reference = static_cast<Real>(
-        all_reduce_max(static_cast<double>(::pops::norm_inf(rhs)), *lane_));
+    const Real reference =
+        static_cast<Real>(all_reduce_max(static_cast<double>(::pops::norm_inf(rhs)), *lane_));
     report.reference_residual_norm = reference;
     const Real mean = rhs_mean_(rhs);
     const Real envelope = fft_solver_detail::kDirectResidualSafetyFactor *

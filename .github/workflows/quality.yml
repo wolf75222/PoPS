@@ -21,7 +21,8 @@ name: Quality
 # franchement : le workflow ne doit jamais annoncer une analyse qu'il n'a pas produite.
 # EXCEPTION deja actee pour les findings eux-memes :
 #   - le check clang-format du job format est BLOQUANT (bascule ADC-219 : le tronc est conforme au
-#     style depuis le balayage ADC-118, tout nouvel ecart = regression). ruff (python/) reste informatif.
+#     style depuis le balayage N5 de ROM-84, qui reprend celui d'ADC-118 apres l'ecart apparu le 16/08 ;
+#     tout nouvel ecart = regression). ruff (python/) reste informatif.
 on:
   schedule:
     - cron: '0 4 * * 0'
@@ -80,37 +81,10 @@ jobs:
         # (cf. .clang-format et CONTRIBUTING.md).
         run: pipx install clang-format==19.1.7
       - name: clang-format --dry-run (bloquant)
-        run: |
-          echo "$(clang-format --version)"
-          # Track all native source directories, including src/runtime and benchmarks.
-          # Git excludes generated build trees; NUL delimiters preserve paths with spaces.
-          mapfile -d '' -t files < <(git ls-files -z -- \
-            '*.hpp' '*.h' '*.cpp' '*.cc' '*.cxx' '*.c')
-          bad=0
-          : > format-diff.patch
-          for f in "${files[@]}"; do
-            if ! diff -u "$f" <(clang-format --style=file "$f") >> format-diff.patch; then
-              echo "::warning file=$f::clang-format : non conforme au style (.clang-format)"
-              bad=$((bad+1))
-            fi
-          done
-          {
-            echo "### clang-format"
-            echo ""
-            echo "- Fichiers analyses : ${#files[@]}"
-            echo "- Non conformes : **$bad**"
-            echo ""
-            echo "_Corriger localement avec_ \`clang-format -i <fichier>\` _ou_ \`git clang-format\`."
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "Non conformes : $bad / ${#files[@]}"
-          # Bascule ADC-219 (informatif -> bloquant). Le tronc est conforme au style .clang-format
-          # depuis le balayage ADC-118, donc tout nouvel ecart est une regression : le job echoue.
-          # Les fichiers fautifs sont en ::warning ci-dessus et dans l'artefact format-diff.patch ;
-          # corriger avec 'clang-format -i <fichier>' ou 'git clang-format'.
-          if [ "$bad" -ne 0 ]; then
-            echo "::error::clang-format : $bad fichier(s) non conforme(s) au style (.clang-format) -- job BLOQUANT (bascule ADC-219)"
-            exit 1
-          fi
+        # Bascule ADC-219 (informatif -> bloquant). Meme script que le job format de ci.yml, qui
+        # controle ce que chaque PR change aux fichiers C++ ; ici, tout l'arbre. Les fichiers
+        # fautifs sont en ::warning et dans l'artefact format-diff.patch.
+        run: bash scripts/check_clang_format.sh
       - name: ruff (lint Python, non bloquant)
         if: always()  # le check clang-format precedent peut echouer (bloquant) ; ruff reste informatif
         run: |
@@ -149,6 +123,9 @@ jobs:
         run: |
           # gen_test_counts.py --check-matrix liste les tests disque absents de tests/test_manifest.toml.
           # Le manifest est complet : toute nouvelle entree disque non declaree est une regression.
+          # Seuls les sept tests de tests/python/unavailable_verification_tests.json (sans leurs
+          # dependances depuis bcb73f4a) en sont exemptes, tant que leurs octets restent ceux du
+          # catalogue ; une suite qui en reclame un echoue (meme regle que la garde d'architecture).
           # Capturer le statut permet de publier le detail avant d'echouer explicitement.
           set +e
           out=$(python3 docs/gen_test_counts.py --check-matrix)

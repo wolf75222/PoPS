@@ -161,9 +161,9 @@ TEST(ProgramRuntimeStateCadence, PrematureResumeRevokesSuspendedPortAndRetryStar
   state.install_unverified_step([&](double dt) {
     ++started;
     EXPECT_DOUBLE_EQ(dt, 0.25);
-    state.suspend_program_map("mapped-half-stage", false,
-                              {retry ? &retry_stage : &rejected_stage},
-                              [&] { ++finished; }, started);
+    state.suspend_program_map(
+        "mapped-half-stage", false, {retry ? &retry_stage : &rejected_stage}, [&] { ++finished; },
+        started);
   });
   ASSERT_EQ(state.advance_cadence_region(time, step, 0.5, "Regions"), "mapped-half-stage");
   state.release_program_map("mapped-half-stage", false);

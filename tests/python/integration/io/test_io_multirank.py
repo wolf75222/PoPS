@@ -29,7 +29,6 @@ import pytest
 
 import pops
 import pops.runtime._engine_descriptors as engine
-from pops.numerics.reconstruction.limiters import Minmod
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 from tests.python.integration._final_field_program import (
@@ -98,7 +97,8 @@ def _build(n=16):
     sim.add_equation(
         "ions",
         artifact.blocks[0].model,
-        spatial=engine.Spatial(limiter=Minmod()),
+        # The package instantiates only the route its Case resolves.
+        spatial=artifact.blocks[0].spatial.runtime_spatial(),
         time=engine.Explicit(),
     )
     if sim._pending_native_packages:

@@ -864,55 +864,74 @@ void verifies_lazy_checkpoint_invalidations() {
   const auto clean = capture_auxiliary_checkpoint_state(registry);
   const auto clean_bytes = serialize_auxiliary_checkpoint_state(clean);
   EXPECT_EQ(clean_bytes[7], '2');
-  EXPECT_EQ(serialize_auxiliary_checkpoint_state(deserialize_auxiliary_checkpoint_state<Dim>(clean_bytes)), clean_bytes);
+  EXPECT_EQ(serialize_auxiliary_checkpoint_state(
+                deserialize_auxiliary_checkpoint_state<Dim>(clean_bytes)),
+            clean_bytes);
   const auto stale = capture_auxiliary_checkpoint_state(registry, {"checkpoint/derived"});
   const auto stale_bytes = serialize_auxiliary_checkpoint_state(stale);
   EXPECT_EQ(stale_bytes[7], '3');
   const auto decoded = deserialize_auxiliary_checkpoint_state<Dim>(stale_bytes);
   EXPECT_EQ(decoded, stale);
   EXPECT_EQ(decoded.providers, clean.providers);
-  EXPECT_EQ(calls->size(), initial_launches); // capture/codec never evaluates a lazy provider
+  EXPECT_EQ(calls->size(), initial_launches);  // capture/codec never evaluates a lazy provider
   auto restored = registry;
   restore_auxiliary_checkpoint_state(decoded, restored);
   EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, decoded.invalidated_providers), stale);
   EXPECT_EQ(calls->size(), initial_launches);
   {
-    auto rejected = restored.begin_publication(point("checkpoint-clock", 2, AuxiliaryEvaluationEvent::before_residual), decoded.invalidated_providers);
+    auto rejected = restored.begin_publication(
+        point("checkpoint-clock", 2, AuxiliaryEvaluationEvent::before_residual),
+        decoded.invalidated_providers);
     rejected.launch_ready_native();
     rejected.reject();
   }
   EXPECT_EQ(capture_auxiliary_checkpoint_state(restored, decoded.invalidated_providers), stale);
   {
-    auto retry = restored.begin_publication(point("checkpoint-clock", 2, AuxiliaryEvaluationEvent::before_residual), decoded.invalidated_providers);
-    retry.launch_ready_native(); retry.accept();
+    auto retry = restored.begin_publication(
+        point("checkpoint-clock", 2, AuxiliaryEvaluationEvent::before_residual),
+        decoded.invalidated_providers);
+    retry.launch_ready_native();
+    retry.accept();
   }
   EXPECT_EQ(calls->size(), initial_launches + 2);
   EXPECT_EQ(capture_auxiliary_checkpoint_state(restored).invalidated_providers.size(), 0U);
-  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"checkpoint/input"}), std::invalid_argument);
-  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"foreign"}), std::invalid_argument);
-  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"checkpoint/derived", "checkpoint/derived"}), std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"checkpoint/input"}),
+               std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(registry, {"foreign"}),
+               std::invalid_argument);
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(
+                   registry, {"checkpoint/derived", "checkpoint/derived"}),
+               std::invalid_argument);
   auto bad = stale;
   for (auto& provider : bad.providers)
-    if (provider.identity == "checkpoint/derived") provider.accepted_point.reset();
+    if (provider.identity == "checkpoint/derived")
+      provider.accepted_point.reset();
   EXPECT_THROW((void)serialize_auxiliary_checkpoint_state(bad), std::invalid_argument);
   auto empty_extension = clean_bytes;
-  empty_extension[7] = '3'; empty_extension.insert(empty_extension.end(), 8, 0);
-  EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(empty_extension), std::runtime_error);
-  auto unsupported = clean_bytes; unsupported[7] = '4';
+  empty_extension[7] = '3';
+  empty_extension.insert(empty_extension.end(), 8, 0);
+  EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(empty_extension),
+               std::runtime_error);
+  auto unsupported = clean_bytes;
+  unsupported[7] = '4';
   EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(unsupported), std::runtime_error);
   ExactAuxiliaryRegistry<Dim> initial;
   auto unaccepted_output = output<Dim>("initial/owner", "gain", "value", 0);
   initial.add(derived<Dim>("initial/derived", unaccepted_output, {}, calls));
   initial.seal();
-  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(initial, {"initial/derived"}), std::invalid_argument);
-  auto truncated = stale_bytes; truncated.pop_back();
+  EXPECT_THROW((void)capture_auxiliary_checkpoint_state(initial, {"initial/derived"}),
+               std::invalid_argument);
+  auto truncated = stale_bytes;
+  truncated.pop_back();
   EXPECT_THROW((void)deserialize_auxiliary_checkpoint_state<Dim>(truncated), std::runtime_error);
-  auto foreign = stale; foreign.registry_contract += "foreign";
+  auto foreign = stale;
+  foreign.registry_contract += "foreign";
   const auto before = capture_auxiliary_checkpoint_state(restored);
   EXPECT_THROW(restore_auxiliary_checkpoint_state(foreign, restored), std::invalid_argument);
   EXPECT_EQ(capture_auxiliary_checkpoint_state(restored), before);
 }
-TEST(ExactAuxiliaryRegistryNd, LazyInvalidationsRoundTripWithoutPublishingAndRefreshOnlyOnConsumer) {
+TEST(ExactAuxiliaryRegistryNd,
+     LazyInvalidationsRoundTripWithoutPublishingAndRefreshOnlyOnConsumer) {
   verifies_lazy_checkpoint_invalidations<1>();
   verifies_lazy_checkpoint_invalidations<2>();
   verifies_lazy_checkpoint_invalidations<3>();
@@ -927,9 +946,9 @@ void verifies_unpublished_dependents_are_due_without_stale_publication() {
   const auto dormant = output<Dim>("arbitrary/dormant-owner", "derived", "dormant", 2);
   ExactAuxiliaryRegistry<Dim> registry;
   const AuxiliaryEvaluationPolicy once{AuxiliaryEvaluationEvent::before_residual,
-                                      AuxiliaryFreshness::once};
-  registry.add(PreparedAuxiliaryProvider<Dim>{"root", AuxiliaryProviderKind::field_output,
-                                            once, {source}, {}});
+                                       AuxiliaryFreshness::once};
+  registry.add(PreparedAuxiliaryProvider<Dim>{
+      "root", AuxiliaryProviderKind::field_output, once, {source}, {}});
   registry.add(derived<Dim>("used", used, {dependency(source)}, calls, once));
   registry.add(derived<Dim>("dormant", dormant, {dependency(source)}, calls, once));
   registry.add_consumer_plan({"read-used", {{dependency(used), 0}}});
@@ -993,9 +1012,7 @@ struct DrainPhysicalNativeLaunch {
   [[nodiscard]] static constexpr PreparedProviderIdentity provider_identity() noexcept {
     return {"test.exact-aux.drain-physical-launch", 1};
   }
-  void serialize_exact_parameters(ExactContractBuilder& exact) const {
-    exact.text(expected_clock);
-  }
+  void serialize_exact_parameters(ExactContractBuilder& exact) const { exact.text(expected_clock); }
   void operator()(const pops::runtime::system::AuxiliaryKernelLaunchContext<Dim>& context) const {
     calls->push_back(context.point);
     (void)context.point.require_physical_time(expected_clock);
@@ -1003,20 +1020,24 @@ struct DrainPhysicalNativeLaunch {
 };
 
 AuxiliaryEvaluationPoint drain_physical_point(int stage, pops::amr::Rational fraction,
-                                             double time) {
+                                              double time) {
   auto requested = point("counterexample.physical-clock", 0,
                          AuxiliaryEvaluationEvent::before_field_solve, 0, 0, 0, stage);
   pops::runtime::multiblock::BoundaryEvaluationPoint actual;
-  actual.clock = requested.clock; actual.tick = 0; actual.level = 0;
-  actual.substep = 0; actual.stage = stage;
-  actual.stage_fraction = fraction; actual.dt = 1.; actual.physical_time = time;
+  actual.clock = requested.clock;
+  actual.tick = 0;
+  actual.level = 0;
+  actual.substep = 0;
+  actual.stage = stage;
+  actual.stage_fraction = fraction;
+  actual.dt = 1.;
+  actual.physical_time = time;
   requested.qualify_physical_evaluation(actual);
   return requested;
 }
 
 AuxiliaryEvaluationPoint drain_diagnostic_point() {
-  return point("counterexample.legacy-topology", 0,
-               AuxiliaryEvaluationEvent::after_regrid, 7);
+  return point("counterexample.legacy-topology", 0, AuxiliaryEvaluationEvent::after_regrid, 7);
 }
 
 template <int Dim>
@@ -1032,24 +1053,30 @@ struct DrainRegistryFixture {
     using Launcher = typename Provider::launcher_type;
     const auto physical = output<Dim>("physical-owner", "aux", "physical", 0);
     const auto legacy = output<Dim>("legacy-owner", "aux", "legacy", 1);
-    registry.add(Provider{"physical", AuxiliaryProviderKind::derived,
-      AuxiliaryEvaluationPolicy{std::vector<AuxiliaryEvaluationEvent>{
-        AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryEvaluationEvent::after_regrid},
-        AuxiliaryFreshness::evaluation}, {physical}, {},
-      Launcher(DrainPhysicalNativeLaunch<Dim>{
-        physical_calls, "counterexample.physical-clock"})});
+    registry.add(Provider{
+        "physical",
+        AuxiliaryProviderKind::derived,
+        AuxiliaryEvaluationPolicy{
+            std::vector<AuxiliaryEvaluationEvent>{AuxiliaryEvaluationEvent::before_field_solve,
+                                                  AuxiliaryEvaluationEvent::after_regrid},
+            AuxiliaryFreshness::evaluation},
+        {physical},
+        {},
+        Launcher(DrainPhysicalNativeLaunch<Dim>{physical_calls, "counterexample.physical-clock"})});
     std::vector<AuxiliaryDependency<Dim>> dependencies;
-    if (legacy_depends_on_physical) dependencies.push_back(dependency(physical));
-    registry.add(derived<Dim>("legacy", legacy, std::move(dependencies), legacy_calls,
-      {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::once}));
+    if (legacy_depends_on_physical)
+      dependencies.push_back(dependency(physical));
+    registry.add(
+        derived<Dim>("legacy", legacy, std::move(dependencies), legacy_calls,
+                     {AuxiliaryEvaluationEvent::before_field_solve, AuxiliaryFreshness::once}));
     registry.add_consumer_plan({"read-physical", {{dependency(physical), 0}}});
     registry.add_consumer_plan({"read-legacy", {{dependency(legacy), 0}}});
     registry.seal();
   }
 
   void publish_initial() {
-    auto publication = registry.begin_publication(
-        drain_physical_point(1, {1, 4}, .25), {}, {"read-physical", "read-legacy"});
+    auto publication = registry.begin_publication(drain_physical_point(1, {1, 4}, .25), {},
+                                                  {"read-physical", "read-legacy"});
     publication.launch_ready_native();
     publication.accept();
   }
@@ -1107,7 +1134,8 @@ void verifies_drain_uses_clean_accepted_physical_prerequisite() {
   EXPECT_EQ(*fixture.registry.last_accepted_point("legacy"), diagnostic);
 }
 
-TEST(ExactAuxiliaryRegistryNd, InvalidationDrainBorrowsCleanPhysicalPrerequisiteAtAcceptedProvenance) {
+TEST(ExactAuxiliaryRegistryNd,
+     InvalidationDrainBorrowsCleanPhysicalPrerequisiteAtAcceptedProvenance) {
   verifies_drain_uses_clean_accepted_physical_prerequisite<1>();
   verifies_drain_uses_clean_accepted_physical_prerequisite<2>();
   verifies_drain_uses_clean_accepted_physical_prerequisite<3>();
@@ -1121,8 +1149,8 @@ void verifies_dirty_physical_provider_refuses_unqualified_drain() {
   const auto generation = fixture.registry.accepted_generation();
   auto same_clock_without_payload = drain_diagnostic_point();
   same_clock_without_payload.clock = "counterexample.physical-clock";
-  for (const auto& requested : std::vector<AuxiliaryEvaluationPoint>{
-         drain_diagnostic_point(), same_clock_without_payload}) {
+  for (const auto& requested : std::vector<AuxiliaryEvaluationPoint>{drain_diagnostic_point(),
+                                                                     same_clock_without_payload}) {
     auto drain = fixture.registry.begin_invalidated_publication(requested, {"physical", "legacy"});
     EXPECT_TRUE(drain.requires_staging("physical"));
     EXPECT_THROW(drain.launch_ready_native(), std::invalid_argument);
@@ -1132,7 +1160,8 @@ void verifies_dirty_physical_provider_refuses_unqualified_drain() {
     EXPECT_EQ(fixture.registry.accepted_generation(), generation);
   }
   EXPECT_EQ(fixture.physical_calls->size(), 3U) << "both absent-payload paths must reach the guard";
-  EXPECT_EQ(fixture.legacy_calls->size(), 1U) << "a dependent cannot run after its prerequisite fails";
+  EXPECT_EQ(fixture.legacy_calls->size(), 1U)
+      << "a dependent cannot run after its prerequisite fails";
   EXPECT_EQ(fixture.registry.accepted_points(), accepted);
   EXPECT_EQ(fixture.registry.accepted_generation(), generation);
 }
@@ -1150,8 +1179,8 @@ void verifies_normal_exact_consumer_rechecks_physical_freshness() {
   ASSERT_EQ(fixture.physical_calls->size(), 1U);
   auto after_regrid = drain_physical_point(3, {7, 8}, .875);
   after_regrid.event = AuxiliaryEvaluationEvent::after_regrid;
-  for (const auto& next : std::vector<AuxiliaryEvaluationPoint>{
-         drain_physical_point(2, {3, 4}, .75), after_regrid}) {
+  for (const auto& next :
+       std::vector<AuxiliaryEvaluationPoint>{drain_physical_point(2, {3, 4}, .75), after_regrid}) {
     auto consumer = fixture.registry.begin_publication(next, {}, {"read-legacy"});
     EXPECT_TRUE(consumer.requires_staging("physical"));
     EXPECT_TRUE(consumer.requires_staging("legacy")) << "due dependency propagation remains active";
@@ -1174,8 +1203,9 @@ TEST(ExactAuxiliaryRegistryNd, NormalExactConsumerStillReevaluatesCleanPhysicalP
 template <int Dim>
 void verifies_drain_cannot_invent_accepted_prerequisite() {
   DrainRegistryFixture<Dim> fixture(true);
-  EXPECT_THROW((void)fixture.registry.begin_invalidated_publication(
-      drain_diagnostic_point(), {"legacy"}), std::logic_error);
+  EXPECT_THROW(
+      (void)fixture.registry.begin_invalidated_publication(drain_diagnostic_point(), {"legacy"}),
+      std::logic_error);
   EXPECT_TRUE(fixture.physical_calls->empty());
   EXPECT_TRUE(fixture.legacy_calls->empty());
   EXPECT_EQ(fixture.registry.accepted_generation(), 0U);
@@ -1227,7 +1257,7 @@ TEST(ExactAuxiliaryRegistryNd, RejectedInvalidationDrainDoesNotPublishOrConsumeR
   verifies_rejected_drain_preserves_accepted_provenance_and_retry<2>();
   verifies_rejected_drain_preserves_accepted_provenance_and_retry<3>();
 }
-} // namespace
+}  // namespace
 
 #include <pops/runtime/system/auxiliary_checkpoint_capacity.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>

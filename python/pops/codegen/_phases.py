@@ -519,6 +519,14 @@ def compile(plan: Any) -> Any:
     else:
         from pathlib import Path
         from pops.codegen.program_slicing import slice_program
+        from pops.mesh._amr import ResolvedRefinementCriterion
+
+        if any(type(row.authorities.bootstrap.tagging) is ResolvedRefinementCriterion
+               for row in plan.layout_amr_authorities.values()):
+            raise NotImplementedError(
+                "a criterion written as functions of cell is generated into the Program of one "
+                "adaptive layout; a plan with several layouts compiles one Program slice per "
+                "layout, which does not carry it yet")
         from pops.codegen.program_models import ProgramModelGraph
         from pops.codegen.program_balance_due import validate_balance_due_contract
         from pops._balance_due_contract import BalanceDueContract

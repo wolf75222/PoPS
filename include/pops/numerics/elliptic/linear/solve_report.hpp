@@ -130,13 +130,15 @@ struct ResidualEvaluationEvidence {
   std::optional<Real> relative_to_rhs_upper{};
 
   bool valid() const noexcept {
-    const auto finite_nonnegative = [](Real value) { return std::isfinite(value) && value >= Real(0); };
+    const auto finite_nonnegative = [](Real value) {
+      return std::isfinite(value) && value >= Real(0);
+    };
     return finite_nonnegative(initial_residual_norm) && finite_nonnegative(rhs_norm) &&
-        finite_nonnegative(initial_evaluation_bound) && finite_nonnegative(evaluation_bound) &&
-        finite_nonnegative(requested_threshold) && finite_nonnegative(applied_threshold) &&
-        applied_threshold >= requested_threshold && applied_threshold >= evaluation_bound &&
-        (!relative_to_rhs_upper || finite_nonnegative(*relative_to_rhs_upper)) &&
-        (!roundoff_limited || applied_threshold > requested_threshold);
+           finite_nonnegative(initial_evaluation_bound) && finite_nonnegative(evaluation_bound) &&
+           finite_nonnegative(requested_threshold) && finite_nonnegative(applied_threshold) &&
+           applied_threshold >= requested_threshold && applied_threshold >= evaluation_bound &&
+           (!relative_to_rhs_upper || finite_nonnegative(*relative_to_rhs_upper)) &&
+           (!roundoff_limited || applied_threshold > requested_threshold);
   }
 };
 
@@ -198,7 +200,8 @@ struct SolveReport {
       residual_norm = canonical_evidence(residual_norm);
       step_norm = canonical_evidence(step_norm);
       condition_evidence = canonical_evidence(condition_evidence);
-      if (residual_evaluation && !residual_evaluation->valid()) residual_evaluation.reset();
+      if (residual_evaluation && !residual_evaluation->valid())
+        residual_evaluation.reset();
     }
     status = failed_status;
     action = failed_action;

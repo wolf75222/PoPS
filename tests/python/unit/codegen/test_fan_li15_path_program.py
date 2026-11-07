@@ -142,7 +142,7 @@ def test_public_path_amr_requires_parent_injection(reconstructed):
     layout = AMR(grid=CartesianGrid(frame=FRAME, cells=(8, 8),
                                    periodic=PeriodicAxes(FRAME.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["M00"] > case.value(threshold)), Buffer(2)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["M00"] > case.value(threshold)), Buffer(2, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(always(clock=program.clock)), transfer=transfer,
         execution=AMRExecution.synchronous())

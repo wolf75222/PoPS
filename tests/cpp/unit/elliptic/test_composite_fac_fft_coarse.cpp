@@ -97,8 +97,7 @@ pops::EllipticBuildRequest<Dim> request(const pops::Geometry<Dim>& geometry,
 
 template <int Dim>
 pops::elliptic::mg::CompositeFacBuildRequest<Dim> two_level_periodic(int coarse_cells) {
-  const pops::Box<Dim> domain{pops::Index<Dim>{},
-                              ranked<pops::Index<Dim>, Dim>(coarse_cells - 1)};
+  const pops::Box<Dim> domain{pops::Index<Dim>{}, ranked<pops::Index<Dim>, Dim>(coarse_cells - 1)};
   const auto coarse = pops::Geometry<Dim>::from_bounds(
       domain, pops::RealVector<Dim>{}, ranked<pops::RealVector<Dim>, Dim>(pops::Real(1)));
   const auto fine = coarse.refine(ranked<pops::Extent<Dim>, Dim>(std::int64_t{2}));
@@ -108,11 +107,11 @@ pops::elliptic::mg::CompositeFacBuildRequest<Dim> two_level_periodic(int coarse_
     fine_lo[axis] = coarse_cells / 2;
     fine_hi[axis] = 3 * coarse_cells / 2 - 1;
   }
-  return {{request<Dim>(coarse, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{domain}),
-                        true),
-           request<Dim>(fine, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{{fine_lo, fine_hi}}),
-                        true)},
-          {pops::amr::RefinementRatio<Dim>{filled<Dim>(2)}}};
+  return {
+      {request<Dim>(coarse, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{domain}), true),
+       request<Dim>(
+           fine, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{{fine_lo, fine_hi}}), true)},
+      {pops::amr::RefinementRatio<Dim>{filled<Dim>(2)}}};
 }
 
 template <int Dim>
@@ -147,21 +146,21 @@ TEST(test_composite_fac_fft_coarse, dirichlet_and_variable_k_stay_ineligible) {
       domain, pops::RealVector<Dim>{}, ranked<pops::RealVector<Dim>, Dim>(pops::Real(1)));
   const auto boxes = pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{domain});
   const auto dirichlet = request<Dim>(geometry, boxes, false);
-  EXPECT_FALSE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(dirichlet, lane, pops::Real(0),
-                                                                       false, false)
+  EXPECT_FALSE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(dirichlet, lane,
+                                                                        pops::Real(0), false, false)
                    .eligible());
   const auto periodic = request<Dim>(geometry, boxes, true);
-  EXPECT_TRUE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(periodic, lane, pops::Real(0),
-                                                                      false, false)
+  EXPECT_TRUE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(periodic, lane,
+                                                                       pops::Real(0), false, false)
                   .eligible());
-  EXPECT_FALSE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(periodic, lane, pops::Real(1),
-                                                                       false, false)
+  EXPECT_FALSE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(periodic, lane,
+                                                                        pops::Real(1), false, false)
                    .eligible());
-  EXPECT_FALSE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(periodic, lane, pops::Real(0),
-                                                                       true, false)
+  EXPECT_FALSE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(periodic, lane,
+                                                                        pops::Real(0), true, false)
                    .eligible());
-  EXPECT_FALSE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(periodic, lane, pops::Real(0),
-                                                                       false, true)
+  EXPECT_FALSE(pops::elliptic::PoissonFftMultiFabAdapter<Dim>::classify(periodic, lane,
+                                                                        pops::Real(0), false, true)
                    .eligible());
 }
 
@@ -175,10 +174,9 @@ TEST(test_composite_fac_fft_coarse, geometric_mg_periodic_uses_fft_bottom) {
       domain, pops::RealVector<Dim>{}, ranked<pops::RealVector<Dim>, Dim>(pops::Real(1)));
   pops::elliptic::mg::GeometricMultigridOptions options;
   options.allow_coarsening = false;
-  pops::elliptic::mg::GeometricMG<Dim> solver(request<Dim>(geometry, pops::mesh::BoxArray<Dim>(
-                                                                        std::vector<pops::Box<Dim>>{domain}),
-                                                            true),
-                                              lane, options);
+  pops::elliptic::mg::GeometricMG<Dim> solver(
+      request<Dim>(geometry, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{domain}), true),
+      lane, options);
   EXPECT_TRUE(solver.fft_coarse_prepared());
   EXPECT_EQ(solver.fft_coarse_kind(), pops::elliptic::PoissonFftBottomKind::native_solver);
   const pops::Real measure = geometry.spacing(0) * geometry.spacing(1);
@@ -206,8 +204,8 @@ TEST(test_composite_fac_fft_coarse, two_level_periodic_fac_uses_fft_on_coarse) {
   pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane);
   EXPECT_TRUE(solver.fft_coarse_prepared());
   EXPECT_EQ(solver.fft_coarse_kind(), pops::elliptic::PoissonFftBottomKind::native_solver);
-  pops::FieldNullspacePlan<Dim> plan = pops::constant_mean_zero_nullspace<Dim>(
-      "periodic-fft-fac", "unit-test", coarse_measure);
+  pops::FieldNullspacePlan<Dim> plan =
+      pops::constant_mean_zero_nullspace<Dim>("periodic-fft-fac", "unit-test", coarse_measure);
   plan.bases.front().cell_measure = {coarse_measure, fine_measure};
   solver.install_nullspace(std::move(plan), {pops::PreparedVectorDistribution<Dim>::replicated(),
                                              pops::PreparedVectorDistribution<Dim>::replicated()});
@@ -238,7 +236,8 @@ TEST(test_composite_fac_fft_coarse, dirichlet_fac_does_not_prepare_fft) {
   }
   pops::elliptic::mg::CompositeFacBuildRequest<Dim> hierarchy{
       {request<Dim>(coarse, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{domain}), false),
-       request<Dim>(fine, pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{{fine_lo, fine_hi}}),
+       request<Dim>(fine,
+                    pops::mesh::BoxArray<Dim>(std::vector<pops::Box<Dim>>{{fine_lo, fine_hi}}),
                     false)},
       {pops::amr::RefinementRatio<Dim>{filled<Dim>(2)}}};
   pops::elliptic::mg::CompositeFacPoisson<Dim> solver(std::move(hierarchy), lane);

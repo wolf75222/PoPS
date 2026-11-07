@@ -568,7 +568,8 @@ struct System<Dim>::Impl {
     if (plan.newton && plan.newton->convergence.kind != FieldNewtonConvergenceKind::kLegacy)
       contract.text("pops.newton.original-residual-convergence@1")
           .scalar(static_cast<int>(plan.newton->convergence.kind))
-          .scalar(plan.newton->convergence.relative).scalar(plan.newton->convergence.absolute);
+          .scalar(plan.newton->convergence.relative)
+          .scalar(plan.newton->convergence.absolute);
     return std::move(contract).release();
   }
 
@@ -848,10 +849,12 @@ struct System<Dim>::Impl {
 
   Species& find(const std::string& name) { return blocks_.find(name); }
   bool has_pending_field_warm_start() const noexcept {
-    if (default_field_ && default_field_->warm_start_pending()) return true;
+    if (default_field_ && default_field_->warm_start_pending())
+      return true;
     for (const auto& [slot, field] : named_fields_) {
       (void)slot;
-      if (field && field->warm_start_pending()) return true;
+      if (field && field->warm_start_pending())
+        return true;
     }
     return false;
   }

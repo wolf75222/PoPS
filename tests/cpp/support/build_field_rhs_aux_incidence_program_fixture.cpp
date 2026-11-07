@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
       output << pops::test::aux_incidence_value_program::source();
     }
     const auto result = pops::test::native_dso::compile_shared(
-      argv[1], argv[2], "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
+        argv[1], argv[2], "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
     if (!result.ok) {
       pops::test::native_dso::report_compile_failure("AMR two-field Aux incidence fixture", result);
       return 1;

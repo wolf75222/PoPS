@@ -113,14 +113,11 @@ std::size_t output_linear_offset(const Index<Dim>& index,
 /// RuntimeOutputSnapshot retains them by (layout, level, topology epoch), and the generated Writer
 /// marshaller borrows their buffers without another allocation.
 template <int Dim>
-py::dict native_output_geometry_snapshot(int level, std::uint64_t topology_epoch,
-                                         const std::array<double, Dim>& origin,
-                                         const std::array<double, Dim>& spacing,
-                                         const std::array<std::int64_t, Dim>& cell_shape,
-                                         const std::string& cell_measure,
-                                         const std::vector<OutputGeometryPatch<Dim>>& patches,
-                                         const std::array<int, Dim>& next_refinement_ratio,
-                                         bool adaptive) {
+py::dict native_output_geometry_snapshot(
+    int level, std::uint64_t topology_epoch, const std::array<double, Dim>& origin,
+    const std::array<double, Dim>& spacing, const std::array<std::int64_t, Dim>& cell_shape,
+    const std::string& cell_measure, const std::vector<OutputGeometryPatch<Dim>>& patches,
+    const std::array<int, Dim>& next_refinement_ratio, bool adaptive) {
   static_assert(Dim >= 1 && Dim <= 3, "output geometry only supports dimensions 1, 2, and 3");
   if (level < 0)
     throw std::invalid_argument("native output geometry level must be nonnegative");

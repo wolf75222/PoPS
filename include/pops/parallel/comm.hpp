@@ -76,7 +76,9 @@ inline MPI_Datatype mpi_real_datatype_for() {
     static_assert(!sizeof(Scalar), "pops::Real must be float or double for MPI reductions");
 }
 
-inline MPI_Datatype mpi_real_datatype() { return mpi_real_datatype_for<Real>(); }
+inline MPI_Datatype mpi_real_datatype() {
+  return mpi_real_datatype_for<Real>();
+}
 #endif
 
 #ifdef POPS_HAS_MPI
@@ -231,8 +233,9 @@ inline Real all_reduce_sum(Real x) {
   if (!detail::comm_active_unlocked())
     return x;
   Real r = x;
-  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, mpi_real_datatype(), MPI_SUM, MPI_COMM_WORLD),
-                              "MPI_Allreduce(Real sum)");
+  detail::require_mpi_success(
+      MPI_Allreduce(&x, &r, 1, mpi_real_datatype(), MPI_SUM, MPI_COMM_WORLD),
+      "MPI_Allreduce(Real sum)");
   return r;
 }
 
@@ -240,8 +243,9 @@ inline Real all_reduce_max(Real x) {
   if (!detail::comm_active_unlocked())
     return x;
   Real r = x;
-  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, mpi_real_datatype(), MPI_MAX, MPI_COMM_WORLD),
-                              "MPI_Allreduce(Real max)");
+  detail::require_mpi_success(
+      MPI_Allreduce(&x, &r, 1, mpi_real_datatype(), MPI_MAX, MPI_COMM_WORLD),
+      "MPI_Allreduce(Real max)");
   return r;
 }
 
@@ -264,8 +268,9 @@ inline Real all_reduce_min(Real x) {
   if (!detail::comm_active_unlocked())
     return x;
   Real r = x;
-  detail::require_mpi_success(MPI_Allreduce(&x, &r, 1, mpi_real_datatype(), MPI_MIN, MPI_COMM_WORLD),
-                              "MPI_Allreduce(Real min)");
+  detail::require_mpi_success(
+      MPI_Allreduce(&x, &r, 1, mpi_real_datatype(), MPI_MIN, MPI_COMM_WORLD),
+      "MPI_Allreduce(Real min)");
   return r;
 }
 
@@ -658,8 +663,7 @@ inline long all_reduce_min(long value, const CommunicatorView& communicator) {
 #endif
 }
 
-inline void all_reduce_sum_inplace(Real* buffer, int count,
-                                   const CommunicatorView& communicator) {
+inline void all_reduce_sum_inplace(Real* buffer, int count, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (communicator.active() && count > 0)
     detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, mpi_real_datatype(),
@@ -683,8 +687,7 @@ inline void all_reduce_sum_inplace(Real* buffer, std::size_t count,
   }
 }
 
-inline void all_reduce_max_inplace(Real* buffer, int count,
-                                   const CommunicatorView& communicator) {
+inline void all_reduce_max_inplace(Real* buffer, int count, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (communicator.active() && count > 0)
     detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, mpi_real_datatype(),
