@@ -25,6 +25,7 @@ api pops/amr/transfer/temporal_interpolation_provider.hpp
 api pops/amr/transfer/transfer_provider.hpp
 api pops/core/foundation/allocator.hpp
 api pops/core/foundation/cold.hpp
+api pops/core/foundation/host_phase_stats.hpp
 api pops/core/foundation/kokkos_env.hpp
 api pops/core/foundation/native_dimension.hpp
 api pops/core/foundation/types.hpp

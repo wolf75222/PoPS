@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pops/core/foundation/host_phase_stats.hpp>
 #include <pops/mesh/boundary/halo_schedule.hpp>
 #include <pops/mesh/storage/field_view.hpp>
 #include <pops/parallel/execution_lane.hpp>
@@ -18,16 +19,54 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace pops {
+
+/// How a halo transport hands its remote payload to MPI (spec 0.3 PF2, gap C42).
+///
+/// `device_direct` posts MPI on the pack and unpack buffers, which live in the memory space of the
+/// fields: no byte reaches the host when that space is the host, and on a device space the caller
+/// states that the MPI library is device-aware and that the cluster allows device IPC.
+/// `host_staged` copies each payload through pinned host buffers around MPI: the admissible host
+/// phase of PF2, counted in `host_phase_stats()` and labelled "pops_host_staging:" for Kokkos Tools.
+/// `automatic` resolves to `device_direct` when the fields live in `Kokkos::HostSpace` (staging
+/// would copy host memory to host memory) and to `host_staged` otherwise, the safe default when
+/// GPU isolation forbids device IPC (see `comm_allocator` in allocator.hpp).
+enum class HaloStaging : unsigned char {
+  automatic,
+  device_direct,
+  host_staged,
+};
+
+template <class MemorySpace>
+[[nodiscard]] constexpr HaloStaging resolve_halo_staging(HaloStaging requested) noexcept {
+  if (requested != HaloStaging::automatic)
+    return requested;
+  return std::is_same_v<MemorySpace, Kokkos::HostSpace> ? HaloStaging::device_direct
+                                                        : HaloStaging::host_staged;
+}
+
+[[nodiscard]] constexpr std::string_view halo_staging_name(HaloStaging staging) noexcept {
+  switch (staging) {
+    case HaloStaging::automatic:
+      return "automatic";
+    case HaloStaging::device_direct:
+      return "device_direct";
+    case HaloStaging::host_staged:
+      return "host_staged";
+  }
+  return "invalid";
+}
 
 /// Immutable identity and private failure seams for one prepared halo transport.
 struct HaloExchangeContext {
   std::uint64_t context_generation = 0;
   std::uint64_t schedule_generation = 0;
   int tag = ExecutionLane::halo_message_tag;
+  HaloStaging staging = HaloStaging::automatic;
   int fail_allocation_rank = -1;
   int fail_receive_post_rank = -1;
   int fail_send_post_rank = -1;
@@ -53,7 +92,9 @@ enum class HaloExchangeDiagnosticStage : unsigned char {
 /// `begin` only packs and posts communication.  Neither local nor remote ghosts are published
 /// until `complete` has authenticated every receive and reached collective staging consensus.
 /// The borrowed schedule and lane must outlive this object.  Independent concurrent exchanges
-/// require independent ExecutionLane communicators.
+/// require independent ExecutionLane communicators.  The staging choice (`HaloStaging`) is
+/// resolved once, enters the collective contract, and fixes whether remote payloads are staged
+/// through pinned host buffers; staged bytes are counted per exchange in `host_phase_stats()`.
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class HaloExchange {
   static_assert(Dim >= 1 && Dim <= 3, "pops::HaloExchange supports dimensions 1, 2, and 3");
@@ -80,7 +121,8 @@ class HaloExchange {
       : schedule_(&schedule),
         lane_(&lane),
         lane_borrow_(lane.borrow_immutably()),
-        context_(context) {
+        context_(context),
+        staging_(resolve_halo_staging<MemorySpace>(context.staging)) {
 #ifdef POPS_HAS_MPI
     validate_and_prepare_collectively_();
 #else
@@ -116,6 +158,15 @@ class HaloExchange {
   }
   [[nodiscard]] std::size_t receive_buffer_elements() const noexcept {
     return schedule_->receive_elements();
+  }
+  /// The resolved staging choice: never `automatic`.
+  [[nodiscard]] HaloStaging staging() const noexcept { return staging_; }
+  /// Bytes that one complete exchange stages through the host: the remote send payload on the way
+  /// out and the remote receive payload on the way in; zero with `device_direct`.
+  [[nodiscard]] std::size_t host_staging_bytes_per_exchange() const noexcept {
+    if (staging_ != HaloStaging::host_staged)
+      return 0;
+    return (schedule_->send_elements() + schedule_->receive_elements()) * sizeof(Real);
   }
   [[nodiscard]] std::size_t live_request_count() const noexcept {
 #ifdef POPS_HAS_MPI
@@ -154,7 +205,10 @@ class HaloExchange {
       for (PeerStorage& peer : peers_)
         if (peer.send_plan != nullptr) {
           pack_plan_(fields, *peer.send_plan, peer.device_send);
-          Kokkos::deep_copy(peer.host_send, peer.device_send);
+          if (staged_()) {
+            Kokkos::deep_copy(peer.host_send, peer.device_send);
+            detail::record_staging_to_host(peer.send_plan->elements * sizeof(Real));
+          }
         }
       Kokkos::fence();
     } catch (...) {
@@ -176,9 +230,10 @@ class HaloExchange {
         break;
       }
       receive_requests_.push_back(MPI_REQUEST_NULL);
-      receive_post_code = MPI_Irecv(
-          peer.host_receive.data(), static_cast<int>(peer.receive_plan->elements), mpi_real_datatype(),
-          peer.mpi_rank, context_.tag, lane_->native_handle(), &receive_requests_.back());
+      receive_post_code =
+          MPI_Irecv(staged_() ? peer.host_receive.data() : peer.device_receive.data(),
+                    static_cast<int>(peer.receive_plan->elements), mpi_real_datatype(),
+                    peer.mpi_rank, context_.tag, lane_->native_handle(), &receive_requests_.back());
       if (receive_post_code != MPI_SUCCESS)
         receive_requests_.pop_back();
     }
@@ -200,8 +255,9 @@ class HaloExchange {
       }
       send_requests_.push_back(MPI_REQUEST_NULL);
       send_post_code =
-          MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_plan->elements), mpi_real_datatype(),
-                    peer.mpi_rank, context_.tag, lane_->native_handle(), &send_requests_.back());
+          MPI_Isend(staged_() ? peer.host_send.data() : peer.device_send.data(),
+                    static_cast<int>(peer.send_plan->elements), mpi_real_datatype(), peer.mpi_rank,
+                    context_.tag, lane_->native_handle(), &send_requests_.back());
       if (send_post_code != MPI_SUCCESS)
         send_requests_.pop_back();
     }
@@ -256,8 +312,10 @@ class HaloExchange {
     long staging_failure = 0;
     try {
       for (PeerStorage& peer : peers_)
-        if (peer.receive_plan != nullptr)
+        if (peer.receive_plan != nullptr && staged_()) {
           Kokkos::deep_copy(peer.device_receive, peer.host_receive);
+          detail::record_staging_from_host(peer.receive_plan->elements * sizeof(Real));
+        }
       Kokkos::fence();
       if (context_.fail_staging_rank == lane_->rank())
         throw std::runtime_error("pops::HaloExchange injected receive staging failure");
@@ -442,6 +500,8 @@ class HaloExchange {
     }
   }
 
+  [[nodiscard]] bool staged_() const noexcept { return staging_ == HaloStaging::host_staged; }
+
   static void append_u64_(std::string& bytes, std::uint64_t value) {
     for (int shift = 56; shift >= 0; shift -= 8)
       bytes.push_back(static_cast<char>((value >> shift) & 0xffu));
@@ -473,8 +533,9 @@ class HaloExchange {
 
   std::string canonical_contract_() const {
     std::string bytes;
-    append_string_(bytes, "pops-halo-exchange-v1");
+    append_string_(bytes, "pops-halo-exchange-v2");
     append_i64_(bytes, Dim);
+    append_string_(bytes, halo_staging_name(staging_));
     append_string_(bytes, lane_->identity());
     append_u64_(bytes, context_.context_generation);
     append_u64_(bytes, context_.schedule_generation);
@@ -552,7 +613,7 @@ class HaloExchange {
       throw std::runtime_error(
           "pops::HaloExchange canonical contract serialization failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
-            {{std::string_view("pops-halo-exchange-v1"), std::string_view(contract)}},
+            {{std::string_view("pops-halo-exchange-v2"), std::string_view(contract)}},
             lane_->communicator()))
       throw std::invalid_argument(
           "pops::HaloExchange canonical schedule contract differs between ranks");
@@ -615,7 +676,7 @@ class HaloExchange {
   }
 
   void allocate_peer_storage_() {
-    local_buffer_ = device_buffer_type("pops_halo_local_staging", schedule_->local_elements());
+    local_buffer_ = device_buffer_type("pops_halo_device:local", schedule_->local_elements());
     std::size_t local_fabs = 0;
     for (std::size_t box = 0; box < schedule_->layout().size(); ++box)
       if (schedule_->distribution().is_local(box, schedule_->local_rank()))
@@ -625,10 +686,12 @@ class HaloExchange {
       const std::size_t send_elements = peer.send_plan == nullptr ? 0 : peer.send_plan->elements;
       const std::size_t receive_elements =
           peer.receive_plan == nullptr ? 0 : peer.receive_plan->elements;
-      peer.device_send = device_buffer_type("pops_halo_device_send", send_elements);
-      peer.device_receive = device_buffer_type("pops_halo_device_receive", receive_elements);
-      peer.host_send = pinned_buffer_type("pops_halo_host_send", send_elements);
-      peer.host_receive = pinned_buffer_type("pops_halo_host_receive", receive_elements);
+      peer.device_send = device_buffer_type("pops_halo_device:send", send_elements);
+      peer.device_receive = device_buffer_type("pops_halo_device:receive", receive_elements);
+      if (staged_()) {
+        peer.host_send = pinned_buffer_type("pops_host_staging:halo_send", send_elements);
+        peer.host_receive = pinned_buffer_type("pops_host_staging:halo_receive", receive_elements);
+      }
     }
     receive_requests_.reserve(schedule_->receive_plans().size());
     send_requests_.reserve(schedule_->send_plans().size());
@@ -755,6 +818,7 @@ class HaloExchange {
   const ExecutionLane* lane_ = nullptr;
   ExecutionLane::ImmutableBorrow lane_borrow_;
   HaloExchangeContext context_{};
+  HaloStaging staging_ = HaloStaging::host_staged;
   std::vector<PeerStorage> peers_{};
   device_buffer_type local_buffer_{};
   std::vector<const Real*> active_storage_{};

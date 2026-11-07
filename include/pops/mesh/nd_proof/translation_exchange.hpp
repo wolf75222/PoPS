@@ -147,8 +147,9 @@ class TranslationExchange {
         }
         MPI_Request request = MPI_REQUEST_NULL;
         receive_post_code =
-            MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive_elements), pops::mpi_real_datatype(),
-                      peer.mpi_rank, context_.tag, lane_->native_handle(), &request);
+            MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive_elements),
+                      pops::mpi_real_datatype(), peer.mpi_rank, context_.tag,
+                      lane_->native_handle(), &request);
         if (receive_post_code == MPI_SUCCESS)
           receive_requests_.push_back(request);
       }
@@ -168,9 +169,9 @@ class TranslationExchange {
           break;
         }
         MPI_Request request = MPI_REQUEST_NULL;
-        send_post_code =
-            MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_elements), pops::mpi_real_datatype(),
-                      peer.mpi_rank, context_.tag, lane_->native_handle(), &request);
+        send_post_code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_elements),
+                                   pops::mpi_real_datatype(), peer.mpi_rank, context_.tag,
+                                   lane_->native_handle(), &request);
         if (send_post_code == MPI_SUCCESS)
           send_requests_.push_back(request);
       }
@@ -436,9 +437,10 @@ class TranslationExchange {
       peer.device_send = device_buffer_type("pops_nd_translation_send", peer.send_elements);
       peer.device_receive =
           device_buffer_type("pops_nd_translation_receive", peer.receive_elements);
-      peer.host_send = pinned_buffer_type("pops_nd_translation_host_send", peer.send_elements);
+      peer.host_send =
+          pinned_buffer_type("pops_host_staging:nd_translation_send", peer.send_elements);
       peer.host_receive =
-          pinned_buffer_type("pops_nd_translation_host_receive", peer.receive_elements);
+          pinned_buffer_type("pops_host_staging:nd_translation_receive", peer.receive_elements);
     }
     receive_requests_.reserve(schedule_->receive_plan_count());
     send_requests_.reserve(schedule_->send_plan_count());
