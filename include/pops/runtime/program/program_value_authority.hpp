@@ -21,11 +21,18 @@
 #include <vector>
 
 namespace pops::runtime::program {
-template <int Dim> class ProgramContext;
-template <int Dim, class MemorySpace> class AmrProgramContext;
+template <int Dim>
+class ProgramContext;
+template <int Dim, class MemorySpace>
+class AmrProgramContext;
 
 enum class ProgramValueStorage : std::uint8_t {
-  State, RhsScratch, StateScratch, ScalarScratch, History, Alias
+  State,
+  RhsScratch,
+  StateScratch,
+  ScalarScratch,
+  History,
+  Alias
 };
 
 struct ProgramValueProducer {
@@ -57,19 +64,29 @@ struct ProgramValuePlan {
     proof.text("pops.ProgramValuePlan@1").text(program_identity);
     proof.scalar(producers.size());
     for (const auto& producer : producers) {
-      proof.scalar(producer.ssa).scalar(producer.program_block).scalar(producer.storage)
-          .scalar(producer.storage_id).scalar(producer.subslot).text(producer.history)
-          .scalar(producer.lag).scalar(producer.inputs.size());
-      for (auto input : producer.inputs) proof.scalar(input);
+      proof.scalar(producer.ssa)
+          .scalar(producer.program_block)
+          .scalar(producer.storage)
+          .scalar(producer.storage_id)
+          .scalar(producer.subslot)
+          .text(producer.history)
+          .scalar(producer.lag)
+          .scalar(producer.inputs.size());
+      for (auto input : producer.inputs)
+        proof.scalar(input);
       proof.scalar(producer.input_branches.size());
       for (const auto& branch : producer.input_branches) {
         proof.scalar(branch.size());
-        for (auto input : branch) proof.scalar(input);
+        for (auto input : branch)
+          proof.scalar(input);
       }
     }
     proof.scalar(fields.size());
     for (const auto& edge : fields)
-      proof.scalar(edge.field_node).scalar(edge.program_block).scalar(edge.source).scalar(edge.accepted_only);
+      proof.scalar(edge.field_node)
+          .scalar(edge.program_block)
+          .scalar(edge.source)
+          .scalar(edge.accepted_only);
     return std::move(proof).release();
   }
 };
@@ -90,8 +107,8 @@ class ProgramValueAuthority {
     int lag;
     friend bool operator==(const Slot&, const Slot&) = default;
     friend bool operator<(const Slot& a, const Slot& b) {
-      return std::tie(a.kind,a.level,a.owner,a.storage_id,a.subslot,a.history,a.lag) <
-             std::tie(b.kind,b.level,b.owner,b.storage_id,b.subslot,b.history,b.lag);
+      return std::tie(a.kind, a.level, a.owner, a.storage_id, a.subslot, a.history, a.lag) <
+             std::tie(b.kind, b.level, b.owner, b.storage_id, b.subslot, b.history, b.lag);
     }
   };
   struct Entry {
@@ -115,10 +132,10 @@ class ProgramValueAuthority {
     bool installed = false;
     std::uint64_t next_incarnation = 0, generation = 0;
     std::map<std::int64_t, ProgramValueProducer> producers;
-    std::map<std::pair<std::int64_t,int>, std::int64_t> edges;
+    std::map<std::pair<std::int64_t, int>, std::int64_t> edges;
     std::map<Slot, Entry> slots;
-    std::map<std::pair<std::int64_t,int>, std::shared_ptr<Record>> values;
-    std::map<std::pair<std::int64_t,int>, std::shared_ptr<Record>> quarantined;
+    std::map<std::pair<std::int64_t, int>, std::shared_ptr<Record>> values;
+    std::map<std::pair<std::int64_t, int>, std::shared_ptr<Record>> quarantined;
     // A failed completion fence must retain allocation owners even if the context unwinds.
     // Only a subsequent successful drain releases this exceptional self-retention.
     std::shared_ptr<State> failed_fence_owner;
@@ -135,6 +152,7 @@ class ProgramValueAuthority {
     int level() const { return require_().slot.level; }
     int runtime_block() const { return require_().slot.owner; }
     std::int64_t source_ssa() const { return require_().ssa; }
+
    private:
     friend class ProgramValueAuthority;
     Value(std::weak_ptr<State> owner, std::shared_ptr<const Record> record)
@@ -145,7 +163,7 @@ class ProgramValueAuthority {
           record_->generation != owner->generation)
         throw std::logic_error("Program SSA value has expired native production authority");
       const auto slot = owner->slots.find(record_->slot);
-      const auto value = owner->values.find({record_->ssa,record_->slot.level});
+      const auto value = owner->values.find({record_->ssa, record_->slot.level});
       if (slot == owner->slots.end() || slot->second.buffer != record_->buffer ||
           slot->second.incarnation != record_->incarnation || value == owner->values.end() ||
           value->second.get() != record_.get())
@@ -166,6 +184,7 @@ class ProgramValueAuthority {
     const Point& birth_point() const { return require_().birth; }
     int level() const { return require_().slot.level; }
     int runtime_block() const { return require_().slot.owner; }
+
    private:
     friend class ProgramValueAuthority;
     AcceptedValue(std::weak_ptr<State> owner, std::shared_ptr<const Record> record,
@@ -194,6 +213,7 @@ class ProgramValueAuthority {
     WriteTicket& operator=(const WriteTicket&) = delete;
     WriteTicket(WriteTicket&&) noexcept = default;
     WriteTicket& operator=(WriteTicket&&) noexcept = default;
+
    private:
     friend class ProgramValueAuthority;
     WriteTicket(std::weak_ptr<State> owner, std::shared_ptr<Record> record)
@@ -204,7 +224,8 @@ class ProgramValueAuthority {
 
  private:
   friend class ProgramContext<Dim>;
-  template <int, class> friend class AmrProgramContext;
+  template <int, class>
+  friend class AmrProgramContext;
   ProgramValueAuthority() : state_(std::make_shared<State>()) {}
   ProgramValueAuthority(const ProgramValueAuthority&) = delete;
   ProgramValueAuthority& operator=(const ProgramValueAuthority&) = delete;
@@ -226,45 +247,54 @@ class ProgramValueAuthority {
     }
     if (plan.program_identity.empty() || plan.fields.empty())
       throw std::invalid_argument("Program value plan requires Program identity and Field edges");
-    std::map<std::int64_t,ProgramValueProducer> producers;
+    std::map<std::int64_t, ProgramValueProducer> producers;
     for (const auto& p : plan.producers) {
       if (p.ssa < 0 || p.program_block < 0 || p.subslot < 0 || p.lag < 0 ||
           static_cast<unsigned>(p.storage) > static_cast<unsigned>(ProgramValueStorage::Alias) ||
-          !producers.emplace(p.ssa,p).second ||
+          !producers.emplace(p.ssa, p).second ||
           (p.storage == ProgramValueStorage::Alias && p.inputs.size() != 1) ||
           ((p.storage == ProgramValueStorage::State || p.storage == ProgramValueStorage::History) &&
-           (!p.inputs.empty() || !p.input_branches.empty() || p.storage_id != -1 || p.subslot != 0)) ||
+           (!p.inputs.empty() || !p.input_branches.empty() || p.storage_id != -1 ||
+            p.subslot != 0)) ||
           (p.storage == ProgramValueStorage::History && p.history.empty()) ||
-          ((p.storage == ProgramValueStorage::RhsScratch || p.storage == ProgramValueStorage::StateScratch ||
-            p.storage == ProgramValueStorage::ScalarScratch) && p.storage_id < 0))
+          ((p.storage == ProgramValueStorage::RhsScratch ||
+            p.storage == ProgramValueStorage::StateScratch ||
+            p.storage == ProgramValueStorage::ScalarScratch) &&
+           p.storage_id < 0))
         throw std::invalid_argument("Program value plan contains an invalid producer");
     }
-    std::map<std::pair<std::int64_t,int>,std::int64_t> edges;
+    std::map<std::pair<std::int64_t, int>, std::int64_t> edges;
     std::set<std::int64_t> visiting, closure;
     const auto visit = [&](auto&& self, std::int64_t id, int block) -> void {
       const auto found = producers.find(id);
       if (found == producers.end() || found->second.program_block != block)
         throw std::invalid_argument("Program value plan has a foreign or missing input");
-      if (closure.contains(id)) return;
+      if (closure.contains(id))
+        return;
       if (!visiting.insert(id).second)
         throw std::invalid_argument("Program value plan has a foreign, missing or cyclic input");
-      for (const auto input : found->second.inputs) self(self,input,block);
+      for (const auto input : found->second.inputs)
+        self(self, input, block);
       for (const auto& branch : found->second.input_branches)
-        for (const auto input : branch) self(self,input,block);
+        for (const auto input : branch)
+          self(self, input, block);
       visiting.erase(id);
       closure.insert(id);
     };
     for (const auto& edge : plan.fields) {
       if (edge.field_node < 0 || edge.program_block < 0 ||
-          !edges.emplace(std::make_pair(edge.field_node,edge.program_block),edge.source).second)
-        throw std::invalid_argument("Program value plan contains a duplicate or invalid Field edge");
+          !edges.emplace(std::make_pair(edge.field_node, edge.program_block), edge.source).second)
+        throw std::invalid_argument(
+            "Program value plan contains a duplicate or invalid Field edge");
       if (edge.accepted_only) {
         if (edge.source != -1)
           throw std::invalid_argument("accepted Field edge cannot claim a stage SSA");
-      } else visit(visit,edge.source,edge.program_block);
+      } else
+        visit(visit, edge.source, edge.program_block);
     }
     if (closure.size() != producers.size())
-      throw std::invalid_argument("Program value plan must contain exactly the Field-source closure");
+      throw std::invalid_argument(
+          "Program value plan must contain exactly the Field-source closure");
     state_->plan = std::move(plan);
     state_->producers = std::move(producers);
     state_->edges = std::move(edges);
@@ -278,23 +308,31 @@ class ProgramValueAuthority {
   }
   void revoke_buffer_(const field_type& field) const noexcept {
     for (auto it = state_->slots.begin(); it != state_->slots.end();) {
-      if (it->second.buffer == &field) it = state_->slots.erase(it); else ++it;
+      if (it->second.buffer == &field)
+        it = state_->slots.erase(it);
+      else
+        ++it;
     }
     for (auto it = state_->values.begin(); it != state_->values.end();) {
-      if (it->second->buffer == &field) it = state_->values.erase(it); else ++it;
+      if (it->second->buffer == &field)
+        it = state_->values.erase(it);
+      else
+        ++it;
     }
   }
   void quarantine_(WriteTicket& ticket) const noexcept {
-    if (ticket.owner_.lock() != state_ || !ticket.record_) return;
+    if (ticket.owner_.lock() != state_ || !ticket.record_)
+      return;
     state_->failed_fence_owner = state_;
-    auto node = state_->values.extract({ticket.record_->ssa,ticket.record_->slot.level});
+    auto node = state_->values.extract({ticket.record_->ssa, ticket.record_->slot.level});
     if (!node.empty()) {
       node.key().first = static_cast<std::int64_t>(ticket.record_->incarnation);
       state_->quarantined.insert(std::move(node));
     }
   }
   void drain_failed_() const {
-    if (!state_->failed_fence_owner) return;
+    if (!state_->failed_fence_owner)
+      return;
     device_fence();
     state_->quarantined.clear();
     state_->failed_fence_owner.reset();
@@ -319,17 +357,19 @@ class ProgramValueAuthority {
   }
   const ProgramValueProducer& producer_(std::int64_t ssa, int block) const {
     const auto found = state_->producers.find(ssa);
-    if (!state_->installed || found == state_->producers.end() || found->second.program_block != block)
+    if (!state_->installed || found == state_->producers.end() ||
+        found->second.program_block != block)
       throw std::invalid_argument("SSA producer is outside the installed Field-source plan");
     return found->second;
   }
   std::uint64_t admit_(const Slot& slot, const field_type& field) const {
     auto found = state_->slots.find(slot);
-    if (found != state_->slots.end() && found->second.buffer == &field) return found->second.incarnation;
+    if (found != state_->slots.end() && found->second.buffer == &field)
+      return found->second.incarnation;
     if (state_->next_incarnation == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("Program value slot incarnation exhausted");
     const auto ordinal = ++state_->next_incarnation;
-    state_->slots[slot] = Entry{&field,ordinal};
+    state_->slots[slot] = Entry{&field, ordinal};
     return ordinal;
   }
   void require_slot_(const ProgramValueProducer& p, const Slot& slot) const {
@@ -340,20 +380,25 @@ class ProgramValueAuthority {
   WriteTicket begin_(std::int64_t ssa, int block, const Slot& slot, const field_type& field,
                      const PreparedResourceAttempt& attempt, Point birth,
                      const std::vector<Value>& inputs, bool capture) const {
-    const auto& p = producer_(ssa,block);
-    if (p.storage != ProgramValueStorage::Alias) require_slot_(p,slot);
-    const bool root = p.storage == ProgramValueStorage::State || p.storage == ProgramValueStorage::History;
+    const auto& p = producer_(ssa, block);
+    if (p.storage != ProgramValueStorage::Alias)
+      require_slot_(p, slot);
+    const bool root =
+        p.storage == ProgramValueStorage::State || p.storage == ProgramValueStorage::History;
     std::vector<std::int64_t> ids;
-    for (const auto& value : inputs) ids.push_back(value.require_().ssa);
+    for (const auto& value : inputs)
+      ids.push_back(value.require_().ssa);
     if (!attempt.visible() || capture != root ||
-        (ids != p.inputs && std::find(p.input_branches.begin(),p.input_branches.end(),ids) == p.input_branches.end()))
-      throw std::invalid_argument("SSA production lacks its planned exact inputs or active attempt");
+        (ids != p.inputs && std::find(p.input_branches.begin(), p.input_branches.end(), ids) ==
+                                p.input_branches.end()))
+      throw std::invalid_argument(
+          "SSA production lacks its planned exact inputs or active attempt");
     for (std::size_t i = 0; i < inputs.size(); ++i) {
       const auto& source = inputs[i].require_();
-      if (inputs[i].owner_.lock() != state_ ||
-          source.program_block != block || source.slot.level != slot.level ||
-          !source.attempt.same_attempt(attempt))
-        throw std::invalid_argument("SSA production input differs from the installed dependency edge");
+      if (inputs[i].owner_.lock() != state_ || source.program_block != block ||
+          source.slot.level != slot.level || !source.attempt.same_attempt(attempt))
+        throw std::invalid_argument(
+            "SSA production input differs from the installed dependency edge");
     }
     if (p.storage == ProgramValueStorage::Alias &&
         (inputs.size() != 1 || inputs.front().record_->buffer != &field ||
@@ -361,22 +406,31 @@ class ProgramValueAuthority {
       throw std::invalid_argument("in-place SSA alias does not inherit its exact input storage");
     // Two planned read roots may bind the same unchanged state/history slot. Reading that slot
     // does not mint a new storage incarnation or revoke an earlier independent read capture.
-    if (!capture) revoke_buffer_(field);
-    const auto incarnation = admit_(slot,field);
-    auto record = std::make_shared<Record>(Record{slot,&field,{},
-        incarnation,state_->generation,ssa,block,attempt,std::move(birth),false});
+    if (!capture)
+      revoke_buffer_(field);
+    const auto incarnation = admit_(slot, field);
+    auto record = std::make_shared<Record>(Record{slot,
+                                                  &field,
+                                                  {},
+                                                  incarnation,
+                                                  state_->generation,
+                                                  ssa,
+                                                  block,
+                                                  attempt,
+                                                  std::move(birth),
+                                                  false});
     record->allocation_owners.reserve(field.local_size());
     for (std::size_t local = 0; local < field.local_size(); ++local)
       record->allocation_owners.push_back(field.fab(local).storage());
-    state_->values[{ssa,slot.level}] = record;
-    return WriteTicket(state_,std::move(record));
+    state_->values[{ssa, slot.level}] = record;
+    return WriteTicket(state_, std::move(record));
   }
   void prepare_complete_(WriteTicket& ticket) const {
     if (ticket.owner_.lock() != state_ || !ticket.record_ || !ticket.record_->attempt.visible())
       throw std::logic_error("SSA snapshot preparation has no live write ticket");
     const auto& record = *ticket.record_;
     const auto slot = state_->slots.find(record.slot);
-    const auto found = state_->values.find({record.ssa,record.slot.level});
+    const auto found = state_->values.find({record.ssa, record.slot.level});
     if (record.generation != state_->generation || slot == state_->slots.end() ||
         slot->second.buffer != record.buffer || slot->second.incarnation != record.incarnation ||
         found == state_->values.end() || found->second != ticket.record_)
@@ -391,78 +445,84 @@ class ProgramValueAuthority {
     device_fence();
   }
   Value complete_(WriteTicket&& ticket) const {
-    auto record = std::exchange(ticket.record_,{});
-    if (ticket.owner_.lock() != state_ || !record || !record->retained || !record->attempt.visible() ||
-        record->generation != state_->generation)
+    auto record = std::exchange(ticket.record_, {});
+    if (ticket.owner_.lock() != state_ || !record || !record->retained ||
+        !record->attempt.visible() || record->generation != state_->generation)
       throw std::logic_error("SSA write ticket is foreign, failed or expired");
-    const auto found = state_->values.find({record->ssa,record->slot.level});
+    const auto found = state_->values.find({record->ssa, record->slot.level});
     const auto slot = state_->slots.find(record->slot);
     if (found == state_->values.end() || found->second != record || slot == state_->slots.end() ||
         slot->second.buffer != record->buffer || slot->second.incarnation != record->incarnation)
       throw std::logic_error("SSA write ticket was superseded before successful completion");
     record->complete = true;
-    return Value(state_,std::move(record));
+    return Value(state_, std::move(record));
   }
   Value alias_(std::int64_t ssa, const Value& input) const {
     const auto& source = input.require_();
-    const auto& p = producer_(ssa,source.program_block);
+    const auto& p = producer_(ssa, source.program_block);
     if (input.owner_.lock() != state_ || p.storage != ProgramValueStorage::Alias ||
         p.inputs != std::vector<std::int64_t>{source.ssa})
       throw std::invalid_argument("SSA alias differs from its installed native edge");
     auto record = std::make_shared<Record>(source);
     record->ssa = ssa;
-    state_->values[{ssa,source.slot.level}] = record;
-    return Value(state_,std::move(record));
+    state_->values[{ssa, source.slot.level}] = record;
+    return Value(state_, std::move(record));
   }
   Value value_(std::int64_t ssa, int block, int level, const field_type& field,
                const PreparedResourceAttempt& attempt) const {
-    (void)producer_(ssa,block);
-    const auto found = state_->values.find({ssa,level});
+    (void)producer_(ssa, block);
+    const auto found = state_->values.find({ssa, level});
     if (found == state_->values.end() || found->second->buffer != &field ||
         !found->second->attempt.same_attempt(attempt)) {
-      const auto cause = found == state_->values.end() ? "missing record" :
-          found->second->buffer != &field ? "different native buffer" : "different attempt";
+      const auto cause = found == state_->values.end()     ? "missing record"
+                         : found->second->buffer != &field ? "different native buffer"
+                                                           : "different attempt";
       throw std::invalid_argument("Field source has no successful exact SSA producer (ssa=" +
-          std::to_string(ssa) + ", block=" + std::to_string(block) + ", level=" +
-          std::to_string(level) + ", " + cause + ")");
+                                  std::to_string(ssa) + ", block=" + std::to_string(block) +
+                                  ", level=" + std::to_string(level) + ", " + cause + ")");
     }
-    Value value(state_,found->second);
+    Value value(state_, found->second);
     value.validate();
     return value;
   }
-  std::function<void()> require_field_(const Value& value, std::int64_t node, int block,
-      int level, const field_type& field, const PreparedResourceAttempt& attempt) const {
+  std::function<void()> require_field_(const Value& value, std::int64_t node, int block, int level,
+                                       const field_type& field,
+                                       const PreparedResourceAttempt& attempt) const {
     const auto& record = value.require_();
-    const auto edge = state_->edges.find({node,block});
-    if (value.owner_.lock() != state_ || edge == state_->edges.end() || edge->second != record.ssa ||
-        record.program_block != block || record.slot.level != level || record.buffer != &field ||
-        !record.attempt.same_attempt(attempt))
+    const auto edge = state_->edges.find({node, block});
+    if (value.owner_.lock() != state_ || edge == state_->edges.end() ||
+        edge->second != record.ssa || record.program_block != block || record.slot.level != level ||
+        record.buffer != &field || !record.attempt.same_attempt(attempt))
       throw std::invalid_argument("Field solve does not consume its planned native SSA source");
     return [value] { value.validate(); };
   }
   void require_accepted_edge_(std::int64_t node, int block, const char* message) const {
-    const auto planned = std::find_if(state_->plan.fields.begin(),state_->plan.fields.end(),
+    const auto planned = std::find_if(
+        state_->plan.fields.begin(), state_->plan.fields.end(),
         [&](const auto& edge) { return edge.field_node == node && edge.program_block == block; });
     if (planned == state_->plan.fields.end() || !planned->accepted_only)
       throw std::invalid_argument(message);
   }
-  AcceptedValue accepted_(std::int64_t node, int block, const Slot& slot,
-      const field_type& field, const PreparedResourceAttempt& attempt, Point birth) const {
-    if (!state_->installed || !state_->edges.contains({node,block}) || !attempt.visible())
+  AcceptedValue accepted_(std::int64_t node, int block, const Slot& slot, const field_type& field,
+                          const PreparedResourceAttempt& attempt, Point birth) const {
+    if (!state_->installed || !state_->edges.contains({node, block}) || !attempt.visible())
       throw std::invalid_argument("accepted Field source is outside the installed Field plan");
-    const auto incarnation = admit_(slot,field);
-    auto record = std::make_shared<Record>(Record{slot,&field,std::make_shared<field_type>(field),
-        incarnation,state_->generation,-1,block,attempt,std::move(birth),true});
+    const auto incarnation = admit_(slot, field);
+    auto record = std::make_shared<Record>(Record{slot, &field, std::make_shared<field_type>(field),
+                                                  incarnation, state_->generation, -1, block,
+                                                  attempt, std::move(birth), true});
     record->allocation_owners.reserve(field.local_size());
     for (std::size_t local = 0; local < field.local_size(); ++local)
       record->allocation_owners.push_back(field.fab(local).storage());
-    return AcceptedValue(state_,std::move(record),node);
+    return AcceptedValue(state_, std::move(record), node);
   }
   std::function<void()> require_accepted_field_(const AcceptedValue& value, std::int64_t node,
-      int block, int level, const field_type& field, const PreparedResourceAttempt& attempt) const {
+                                                int block, int level, const field_type& field,
+                                                const PreparedResourceAttempt& attempt) const {
     const auto& record = value.require_();
-    if (value.owner_.lock() != state_ || value.field_node_ != node || record.program_block != block ||
-        record.slot.level != level || record.buffer != &field || !record.attempt.same_attempt(attempt))
+    if (value.owner_.lock() != state_ || value.field_node_ != node ||
+        record.program_block != block || record.slot.level != level || record.buffer != &field ||
+        !record.attempt.same_attempt(attempt))
       throw std::invalid_argument("accepted Field source differs from its exact hierarchy binding");
     return [value] { value.validate(); };
   }

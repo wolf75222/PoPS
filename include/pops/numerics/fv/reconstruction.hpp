@@ -191,7 +191,7 @@ POPS_HD constexpr Scalar weno5z_ratio_limit() {
 }
 
 POPS_HD inline Real weno5z_core(Real vm2, Real vm1, Real v0, Real vp1, Real vp2, Real eps,
-                                 bool force_bounded_weights) {
+                                bool force_bounded_weights) {
   // three third-order reconstructions of the +x face of v0
   const Real q0 = (Real(2) * vm2 - Real(7) * vm1 + Real(11) * v0) / Real(6);
   const Real q1 = (-vm1 + Real(5) * v0 + Real(2) * vp1) / Real(6);
@@ -228,12 +228,9 @@ POPS_HD inline Real weno5z_core(Real vm2, Real vm1, Real v0, Real vp1, Real vp2,
       return (a0 * q0 + a1 * q1 + a2 * q2) / (a0 + a1 + a2);
     }
     const Real common = smallest / tau5;
-    const Real a0 = Real(0.1) * (common * common +
-                                 (smallest / d0) * (smallest / d0));
-    const Real a1 = Real(0.6) * (common * common +
-                                 (smallest / d1) * (smallest / d1));
-    const Real a2 = Real(0.3) * (common * common +
-                                 (smallest / d2) * (smallest / d2));
+    const Real a0 = Real(0.1) * (common * common + (smallest / d0) * (smallest / d0));
+    const Real a1 = Real(0.6) * (common * common + (smallest / d1) * (smallest / d1));
+    const Real a2 = Real(0.3) * (common * common + (smallest / d2) * (smallest / d2));
     return (a0 * q0 + a1 * q1 + a2 * q2) / (a0 + a1 + a2);
   }
   const Real a0 = (Real(1) / Real(10)) * (Real(1) + (tau5 / (eps + b0)) * (tau5 / (eps + b0)));
@@ -256,8 +253,8 @@ POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2,
   if (vm2 == vm1 && vm1 == v0 && v0 == vp1 && vp1 == vp2)
     return v0;
   const Real limit = detail::weno5z_scale_limit<Real>();
-  if (vm2 > limit || vm2 < -limit || vm1 > limit || vm1 < -limit || v0 > limit ||
-      v0 < -limit || vp1 > limit || vp1 < -limit || vp2 > limit || vp2 < -limit) {
+  if (vm2 > limit || vm2 < -limit || vm1 > limit || vm1 < -limit || v0 > limit || v0 < -limit ||
+      vp1 > limit || vp1 < -limit || vp2 > limit || vp2 < -limit) {
     const Real values[5] = {vm2, vm1, v0, vp1, vp2};
     Real scale = Real(0);
     for (const Real value : values) {
@@ -268,8 +265,8 @@ POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2,
     if (!(scale <= largest))
       return scale;
     const Real scaled_eps = (eps / scale) / scale;
-    return scale * detail::weno5z_core(vm2 / scale, vm1 / scale, v0 / scale,
-                                        vp1 / scale, vp2 / scale, scaled_eps, true);
+    return scale * detail::weno5z_core(vm2 / scale, vm1 / scale, v0 / scale, vp1 / scale,
+                                       vp2 / scale, scaled_eps, true);
   }
   return detail::weno5z_core(vm2, vm1, v0, vp1, vp2, eps, false);
 }

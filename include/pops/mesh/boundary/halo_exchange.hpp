@@ -176,9 +176,10 @@ class HaloExchange {
         break;
       }
       receive_requests_.push_back(MPI_REQUEST_NULL);
-      receive_post_code = MPI_Irecv(
-          peer.host_receive.data(), static_cast<int>(peer.receive_plan->elements), mpi_real_datatype(),
-          peer.mpi_rank, context_.tag, lane_->native_handle(), &receive_requests_.back());
+      receive_post_code =
+          MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive_plan->elements),
+                    mpi_real_datatype(), peer.mpi_rank, context_.tag, lane_->native_handle(),
+                    &receive_requests_.back());
       if (receive_post_code != MPI_SUCCESS)
         receive_requests_.pop_back();
     }
@@ -199,9 +200,9 @@ class HaloExchange {
         break;
       }
       send_requests_.push_back(MPI_REQUEST_NULL);
-      send_post_code =
-          MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_plan->elements), mpi_real_datatype(),
-                    peer.mpi_rank, context_.tag, lane_->native_handle(), &send_requests_.back());
+      send_post_code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send_plan->elements),
+                                 mpi_real_datatype(), peer.mpi_rank, context_.tag,
+                                 lane_->native_handle(), &send_requests_.back());
       if (send_post_code != MPI_SUCCESS)
         send_requests_.pop_back();
     }

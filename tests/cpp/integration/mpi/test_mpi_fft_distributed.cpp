@@ -116,12 +116,13 @@ bool verify_device_product_of_sines(const pops::ExecutionLane& lane) {
   pops::Real lambda = pops::Real(0);
   for (int axis = 0; axis < Dim; ++axis) {
     const pops::Real h = static_cast<pops::Real>(lengths[axis]) / extents[axis];
-    lambda += (pops::Real(2) * std::cos(pops::Real(2) * kPi / extents[axis]) - pops::Real(2)) /
-              (h * h);
+    lambda +=
+        (pops::Real(2) * std::cos(pops::Real(2) * kPi / extents[axis]) - pops::Real(2)) / (h * h);
   }
   pops::Real local_error = 0;
   for (std::size_t ordinal = 0; ordinal < fft.local_cell_count(); ++ordinal)
-    local_error = std::max(local_error, std::abs(host_phi[ordinal].real() - host_rhs[ordinal].real() / lambda));
+    local_error = std::max(local_error,
+                           std::abs(host_phi[ordinal].real() - host_rhs[ordinal].real() / lambda));
   return pops::all_reduce_max(static_cast<double>(local_error), lane) < 1e-11;
 }
 

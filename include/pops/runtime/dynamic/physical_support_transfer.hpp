@@ -45,15 +45,19 @@ class OwnedWeights {
  public:
   using View = Kokkos::View<double*, typename ExecutionSpace::memory_space>;
   OwnedWeights(const ExecutionSpace& execution, const double* source, std::size_t count)
-      : execution_(execution), values_(Kokkos::view_alloc(Kokkos::WithoutInitializing, "pops_physical_weights"), count) {
+      : execution_(execution),
+        values_(Kokkos::view_alloc(Kokkos::WithoutInitializing, "pops_physical_weights"), count) {
     if (count) {
-      using Host = Kokkos::View<const double*, Kokkos::HostSpace,
-                                Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+      using Host =
+          Kokkos::View<const double*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
       try {
         Kokkos::deep_copy(execution, values_, Host(source, count));
         execution.fence();
       } catch (...) {
-        try { execution.fence(); } catch (...) {}
+        try {
+          execution.fence();
+        } catch (...) {
+        }
         throw;
       }
     }
@@ -61,9 +65,13 @@ class OwnedWeights {
   ~OwnedWeights() noexcept {
     // Fence before releasing backend allocation, including exception unwinding. Normal apply
     // already completed both kernel fences; an execution error is then reported by its caller.
-    try { execution_.fence(); } catch (...) {}
+    try {
+      execution_.fence();
+    } catch (...) {
+    }
   }
   const double* data() const noexcept { return values_.data(); }
+
  private:
   ExecutionSpace execution_;
   View values_;
@@ -72,10 +80,10 @@ class OwnedWeights {
 template <class ExecutionSpace>
 inline constexpr bool borrows_native_stream = false
 #if defined(KOKKOS_ENABLE_CUDA)
-    || std::is_same_v<ExecutionSpace, Kokkos::Cuda>
+                                              || std::is_same_v<ExecutionSpace, Kokkos::Cuda>
 #endif
 #if defined(KOKKOS_ENABLE_HIP)
-    || std::is_same_v<ExecutionSpace, Kokkos::HIP>
+                                              || std::is_same_v<ExecutionSpace, Kokkos::HIP>
 #endif
     ;
 
@@ -88,16 +96,20 @@ inline bool supports_device_context(const PopsExecutionContextV1& context,
   if constexpr (std::is_same_v<typename Kokkos::DefaultExecutionSpace::memory_space,
                                Kokkos::HostSpace>)
     return false;
-  if (context.memory_space != memory ||
-      context.compute_precision != POPS_PRECISION_FLOAT64_V1 ||
+  if (context.memory_space != memory || context.compute_precision != POPS_PRECISION_FLOAT64_V1 ||
       context.accumulation_precision != POPS_PRECISION_FLOAT64_V1 ||
       context.reduction_precision != POPS_PRECISION_FLOAT64_V1)
     return false;
-  try { validate_execution_context(context); } catch (...) { return false; }
+  try {
+    validate_execution_context(context);
+  } catch (...) {
+    return false;
+  }
   // CUDA/HIP wrap the exact borrowed native stream. Other backends use their authenticated
   // default instance only; an opaque foreign stream cannot silently become the default queue.
   if constexpr (!borrows_native_stream<Kokkos::DefaultExecutionSpace>)
-    if (context.stream_handle != 0) return false;
+    if (context.stream_handle != 0)
+      return false;
   return true;
 }
 
@@ -124,10 +136,10 @@ int apply_kernel(const PhysicalSupportTransfer& map, const PopsConstFieldViewV1&
   const std::size_t count = cells * d.component_count;
   *status = {sizeof(PopsComponentStatusV1), 4, POPS_COMPONENT_ABORT_RUN_V1,
              "physical transfer produced a non-finite value"};
-  using Policy =
-      Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::size_t>>;
+  using Policy = Kokkos::RangePolicy<ExecutionSpace, Kokkos::IndexType<std::size_t>>;
   Kokkos::parallel_for(
-      "pops_explicit_physical_map", Policy(execution, 0, count), KOKKOS_LAMBDA(const std::size_t linear) {
+      "pops_explicit_physical_map", Policy(execution, 0, count),
+      KOKKOS_LAMBDA(const std::size_t linear) {
         std::size_t coordinates[3] = {0, 0, 0};
         std::size_t index = linear % cells;
         const std::size_t component = linear / cells;
@@ -198,7 +210,8 @@ inline int apply_physical_support_transfer(const PhysicalSupportTransfer& map,
   if (s.struct_size < sizeof(PopsConstFieldViewV1) || d.struct_size < sizeof(PopsFieldViewV1) ||
       s.dimension != map.dimension || d.dimension != map.dimension || !s.data || !d.data ||
       s.memory_space != d.memory_space ||
-      (s.memory_space != POPS_MEMORY_SPACE_HOST_V1 && s.memory_space != POPS_MEMORY_SPACE_DEVICE_V1 &&
+      (s.memory_space != POPS_MEMORY_SPACE_HOST_V1 &&
+       s.memory_space != POPS_MEMORY_SPACE_DEVICE_V1 &&
        s.memory_space != POPS_MEMORY_SPACE_MANAGED_V1) ||
       s.scalar_type != POPS_SCALAR_FLOAT64_V1 || d.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
       !s.component_count || s.component_count != d.component_count || s.component_stride <= 0 ||
@@ -276,8 +289,8 @@ inline int apply_physical_support_transfer(const PhysicalSupportTransfer& map,
   }
   if (!changes_support || cells > std::numeric_limits<std::size_t>::max() / d.component_count)
     return 3;
-  if (map.weight_count > static_cast<std::size_t>(
-          std::numeric_limits<std::ptrdiff_t>::max()) / sizeof(double))
+  if (map.weight_count >
+      static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) / sizeof(double))
     return 3;
   for (std::size_t i = 0; i < map.weight_count; ++i)
     if (!map.weights || !std::isfinite(map.weights[i]))
@@ -285,16 +298,18 @@ inline int apply_physical_support_transfer(const PhysicalSupportTransfer& map,
   if (s.memory_space == POPS_MEMORY_SPACE_HOST_V1) {
     // Historical Host callback accepts the original zero execution projection too.
     return physical_transfer_detail::apply_kernel(map, s, d, cells, reductions,
-                                                   Kokkos::DefaultHostExecutionSpace{}, status);
+                                                  Kokkos::DefaultHostExecutionSpace{}, status);
   }
   try {
     using ExecutionSpace = Kokkos::DefaultExecutionSpace;
-    const auto execution = physical_transfer_detail::execution_instance<ExecutionSpace>(request->execution);
-    physical_transfer_detail::OwnedWeights<ExecutionSpace> weights(execution, map.weights, map.weight_count);
+    const auto execution =
+        physical_transfer_detail::execution_instance<ExecutionSpace>(request->execution);
+    physical_transfer_detail::OwnedWeights<ExecutionSpace> weights(execution, map.weights,
+                                                                   map.weight_count);
     auto owned_map = map;
     owned_map.weights = weights.data();
-    return physical_transfer_detail::apply_kernel(owned_map, s, d, cells, reductions,
-                                                   execution, status);
+    return physical_transfer_detail::apply_kernel(owned_map, s, d, cells, reductions, execution,
+                                                  status);
   } catch (...) {
     // No exception crosses the component callback. Existing native caller performs the matching
     // failure vote and rejects its candidate; no new collective occurs in this patch-local hook.
@@ -349,7 +364,8 @@ inline int apply_physical_support_integral(const PhysicalSupportIntegral& integr
   request.refinement_ratio = identity_ratios;
   request.dimension = integral.dimension;
   request.operation = POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1;
-  if (execution) request.execution = *execution;
+  if (execution)
+    request.execution = *execution;
   return apply_physical_support_transfer(reduction, &request, status);
 }
 

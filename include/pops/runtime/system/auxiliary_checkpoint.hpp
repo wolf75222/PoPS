@@ -107,7 +107,8 @@ namespace auxiliary_checkpoint_detail {
 
 inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'U', 'X', '2'};
 
-inline constexpr std::array<std::uint8_t, 8> kInvalidatedMagic{'P', 'O', 'P', 'S', 'A', 'U', 'X', '3'};
+inline constexpr std::array<std::uint8_t, 8> kInvalidatedMagic{'P', 'O', 'P', 'S',
+                                                               'A', 'U', 'X', '3'};
 
 class Writer final {
  public:
@@ -383,7 +384,8 @@ template <int Dim>
     state.invalidated_providers.resize(in.size(sizeof(std::uint64_t)));
     if (state.invalidated_providers.empty())
       throw std::runtime_error("invalid exact auxiliary checkpoint: empty invalidation extension");
-    for (auto& identity : state.invalidated_providers) identity = in.string();
+    for (auto& identity : state.invalidated_providers)
+      identity = in.string();
   }
   in.finish();
   return state;
@@ -428,9 +430,11 @@ void validate_state(const AuxiliaryCheckpointAcceptedState<Dim>& state) {
     const auto provider = providers.find(identity);
     if (provider == providers.end() || provider->second->kind == AuxiliaryProviderKind::input ||
         !provider->second->accepted_point)
-      throw std::invalid_argument("auxiliary checkpoint invalidation requires an accepted non-input provider");
+      throw std::invalid_argument(
+          "auxiliary checkpoint invalidation requires an accepted non-input provider");
     if (!previous.empty() && identity <= previous)
-      throw std::invalid_argument("auxiliary checkpoint invalidations are not unique canonical identities");
+      throw std::invalid_argument(
+          "auxiliary checkpoint invalidations are not unique canonical identities");
     previous = identity;
   }
 
@@ -469,8 +473,7 @@ void validate_state(const AuxiliaryCheckpointAcceptedState<Dim>& state) {
 /// its rank-local checkpoint path after this exact metadata image has been captured.
 template <int Dim>
 [[nodiscard]] AuxiliaryCheckpointAcceptedState<Dim> capture_auxiliary_checkpoint_state(
-    const ExactAuxiliaryRegistry<Dim>& registry,
-    const std::vector<std::string>& invalidated = {}) {
+    const ExactAuxiliaryRegistry<Dim>& registry, const std::vector<std::string>& invalidated = {}) {
   AuxiliaryCheckpointAcceptedState<Dim> state;
   state.invalidated_providers = invalidated;
   std::sort(state.invalidated_providers.begin(), state.invalidated_providers.end());
@@ -485,7 +488,8 @@ template <int Dim>
     auto durable_point = accepted_points[index];
     // Checkpoints carry discrete accepted provenance, not a live Program stage lease.
     // Runtime rollback snapshots copy the complete registry instead.
-    if (durable_point) durable_point->physical_evaluation.reset();
+    if (durable_point)
+      durable_point->physical_evaluation.reset();
     state.providers.push_back({provider.identity(), provider.kind(), std::move(durable_point)});
     for (const auto& output : provider.outputs())
       state.components.push_back({provider.identity(), provider.kind(), output.key, output.contract,
@@ -535,7 +539,8 @@ template <int Dim>
   }
   if (!state.invalidated_providers.empty()) {
     out.size(state.invalidated_providers.size());
-    for (const auto& identity : state.invalidated_providers) out.string(identity);
+    for (const auto& identity : state.invalidated_providers)
+      out.string(identity);
   }
   return std::move(out).take();
 }

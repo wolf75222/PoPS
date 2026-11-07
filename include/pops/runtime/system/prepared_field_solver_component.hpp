@@ -48,7 +48,7 @@ constexpr PopsMemorySpaceV1 memory_kind() noexcept {
   if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>)
     return POPS_MEMORY_SPACE_HOST_V1;
   if constexpr (Kokkos::SpaceAccessibility<Kokkos::DefaultHostExecutionSpace,
-                                          MemorySpace>::accessible)
+                                           MemorySpace>::accessible)
     return POPS_MEMORY_SPACE_MANAGED_V1;
   return POPS_MEMORY_SPACE_DEVICE_V1;
 }
@@ -56,23 +56,26 @@ constexpr PopsMemorySpaceV1 memory_kind() noexcept {
 template <class ExecutionSpace>
 inline constexpr bool borrows_native_stream = false
 #if defined(KOKKOS_ENABLE_CUDA)
-    || std::is_same_v<ExecutionSpace, Kokkos::Cuda>
+                                              || std::is_same_v<ExecutionSpace, Kokkos::Cuda>
 #endif
 #if defined(KOKKOS_ENABLE_HIP)
-    || std::is_same_v<ExecutionSpace, Kokkos::HIP>
+                                              || std::is_same_v<ExecutionSpace, Kokkos::HIP>
 #endif
     ;
 
 template <class ExecutionSpace>
 constexpr std::string_view execution_device() noexcept {
 #if defined(KOKKOS_ENABLE_CUDA)
-  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Cuda>) return "cuda";
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Cuda>)
+    return "cuda";
 #endif
 #if defined(KOKKOS_ENABLE_HIP)
-  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::HIP>) return "hip";
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::HIP>)
+    return "hip";
 #endif
 #if defined(KOKKOS_ENABLE_SYCL)
-  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Experimental::SYCL>) return "sycl";
+  if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Experimental::SYCL>)
+    return "sycl";
 #endif
 #if defined(KOKKOS_ENABLE_OPENMPTARGET)
   if constexpr (std::is_same_v<ExecutionSpace, Kokkos::Experimental::OpenMPTarget>)
@@ -101,7 +104,8 @@ void validate_storage_execution(const PopsExecutionContextV1& execution) {
         execution.compute_precision != POPS_PRECISION_FLOAT64_V1 ||
         execution.accumulation_precision != POPS_PRECISION_FLOAT64_V1 ||
         execution.reduction_precision != POPS_PRECISION_FLOAT64_V1)
-      throw std::invalid_argument("external FieldSolver device storage requires binary64 backend authority");
+      throw std::invalid_argument(
+          "external FieldSolver device storage requires binary64 backend authority");
     if constexpr (!borrows_native_stream<ExecutionSpace>)
       if (execution.stream_handle != 0)
         throw std::invalid_argument("external FieldSolver cannot ignore a foreign native stream");
@@ -133,13 +137,17 @@ class CallbackCompletion final {
   CallbackCompletion& operator=(const CallbackCompletion&) = delete;
   ~CallbackCompletion() noexcept {
     if (!completed_)
-      try { wait(); } catch (...) {}
+      try {
+        wait();
+      } catch (...) {
+      }
   }
   void wait() {
     instance_.fence();
     Kokkos::fence();
     completed_ = true;
   }
+
  private:
   ExecutionSpace instance_;
   bool completed_ = false;
@@ -149,8 +157,7 @@ class CallbackCompletion final {
 /// the callback fence; masks remain the immutable prepared topology evidence. No candidate
 /// value is changed and no pointer into this temporary is retained in a component request.
 template <int Dim, class MemorySpace, class View>
-bool active_patch_is_finite(const View& view,
-                            const std::vector<std::uint8_t>& mask) {
+bool active_patch_is_finite(const View& view, const std::vector<std::uint8_t>& mask) {
   component::validate_field_view(view, "external FieldSolver finite check");
   if (view.dimension != Dim || view.component_count != 1 ||
       view.scalar_type != POPS_SCALAR_FLOAT64_V1 ||
@@ -161,7 +168,8 @@ bool active_patch_is_finite(const View& view,
   std::size_t last_offset = 0;
   for (int axis = 0; axis < Dim; ++axis) {
     if (view.ghost_lower[axis] || view.ghost_upper[axis] || view.axis_strides[axis] <= 0)
-      throw std::invalid_argument("external FieldSolver finite check requires valid positive-stride storage");
+      throw std::invalid_argument(
+          "external FieldSolver finite check requires valid positive-stride storage");
     const auto stride = static_cast<std::size_t>(view.axis_strides[axis]);
     const auto extent = view.extents[axis] - 1;
     if (extent > (std::numeric_limits<std::size_t>::max() - last_offset) / stride)
@@ -174,8 +182,8 @@ bool active_patch_is_finite(const View& view,
     for (std::size_t ordinal = 0; ordinal < mask.size(); ++ordinal) {
       std::size_t remainder = ordinal, offset = 0;
       for (int axis = 0; axis < Dim; ++axis) {
-        offset += (remainder % view.extents[axis]) *
-                  static_cast<std::size_t>(view.axis_strides[axis]);
+        offset +=
+            (remainder % view.extents[axis]) * static_cast<std::size_t>(view.axis_strides[axis]);
         remainder /= view.extents[axis];
       }
       if (mask[ordinal] > 1 || (mask[ordinal] == 1 && !std::isfinite(values[offset])))
@@ -186,13 +194,12 @@ bool active_patch_is_finite(const View& view,
   if constexpr (std::is_same_v<MemorySpace, Kokkos::HostSpace>) {
     return check(static_cast<const double*>(view.data));
   } else {
-    using Borrowed = Kokkos::View<const double*, MemorySpace,
-                                 Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    using Borrowed =
+        Kokkos::View<const double*, MemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     const Borrowed borrowed(static_cast<const double*>(view.data), last_offset + 1);
     // This synchronous copy follows a global callback fence and completes before its mirror
     // dies. A failure is caught and voted by execute_bound_solve_, before any publication.
-    Kokkos::View<double*, Kokkos::HostSpace> host("external_field_finite_mirror",
-                                               last_offset + 1);
+    Kokkos::View<double*, Kokkos::HostSpace> host("external_field_finite_mirror", last_offset + 1);
     Kokkos::deep_copy(host, borrowed);
     return check(host.data());
   }
@@ -397,7 +404,7 @@ class PreparedFieldSolverComponent final {
       for (std::size_t p = 0; p < local.size(); ++p)
         if (!field_solver_component_detail::active_patch_is_finite<
                 Dim, typename field_type::memory_space>(patches[p].solution,
-                                                       local[p].material_mask))
+                                                        local[p].material_mask))
           return false;
       return true;
     });
@@ -437,11 +444,13 @@ class PreparedFieldSolverComponent final {
     const PopsFieldSolverApiV2* api = nullptr;
     // Stream wrapping may allocate/throw. Every rank must admit its instance and table before
     // any peer enters a provider callback that may itself perform MPI collectives.
-    collective_preflight_([&] {
-      completion.emplace(spec_.execution->view());
-      api = &solver_component_->table<PopsFieldSolverApiV2>(
-          POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, spec_.solver_interface_version);
-    }, "external FieldSolver callback preparation failed collectively");
+    collective_preflight_(
+        [&] {
+          completion.emplace(spec_.execution->view());
+          api = &solver_component_->table<PopsFieldSolverApiV2>(
+              POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, spec_.solver_interface_version);
+        },
+        "external FieldSolver callback preparation failed collectively");
     std::exception_ptr solve_error;
     try {
       native.struct_size = sizeof(PopsSolveReportV2);
@@ -451,7 +460,10 @@ class PreparedFieldSolverComponent final {
       solve_error = std::current_exception();
       // A callback may enqueue native work before reporting failure. Join that work before
       // the existing failure vote lets the outer transaction restore its candidate storage.
-      try { Kokkos::fence(); } catch (...) {}
+      try {
+        Kokkos::fence();
+      } catch (...) {
+      }
     }
     // The optional lives outside the callback try. Destroy/join it before the failure vote;
     // retaining it until function exit would permit peers to begin rollback too early.
@@ -460,19 +472,21 @@ class PreparedFieldSolverComponent final {
                                    "external FieldSolver execution failed collectively");
 
     std::string exact_report;
-    collective_preflight_([&] {
-      ExactContractBuilder report_contract;
-      report_contract.text("pops.runtime.external-field-solver-report")
-        .scalar(std::uint32_t{1})
-        .scalar(native.status)
-        .scalar(native.action)
-        .scalar(native.iterations)
-        .scalar(native.relative_residual)
-        .scalar(native.reference_residual_norm)
-        .scalar(native.residual_norm)
-        .text(native.reason);
-      exact_report = std::move(report_contract).release();
-    }, "external FieldSolver report preparation failed collectively");
+    collective_preflight_(
+        [&] {
+          ExactContractBuilder report_contract;
+          report_contract.text("pops.runtime.external-field-solver-report")
+              .scalar(std::uint32_t{1})
+              .scalar(native.status)
+              .scalar(native.action)
+              .scalar(native.iterations)
+              .scalar(native.relative_residual)
+              .scalar(native.reference_residual_norm)
+              .scalar(native.residual_norm)
+              .text(native.reason);
+          exact_report = std::move(report_contract).release();
+        },
+        "external FieldSolver report preparation failed collectively");
     if (!all_ranks_agree_exact_ordered_byte_pairs(
             {{"external-field-solver-report", std::string_view(exact_report)}}))
       throw std::runtime_error("external FieldSolver returned rank-divergent solve reports");
@@ -615,10 +629,11 @@ class PreparedFieldSolverComponent final {
       if (!metadata_matches ||
           patch.material_mask.size() != static_cast<std::size_t>(valid.numPts()))
         return false;
-      const auto view = const_view_(solution.fab(local), valid,
-                                    global.layout_identity, global.patch_identity);
-      if (!field_solver_component_detail::active_patch_is_finite<
-              Dim, typename field_type::memory_space>(view, patch.material_mask))
+      const auto view =
+          const_view_(solution.fab(local), valid, global.layout_identity, global.patch_identity);
+      if (!field_solver_component_detail::active_patch_is_finite<Dim,
+                                                                 typename field_type::memory_space>(
+              view, patch.material_mask))
         return false;
     }
     return true;
@@ -988,8 +1003,8 @@ class PreparedFieldSolverComponent final {
       throw std::invalid_argument("prepared external field solver specification is incomplete");
     const auto execution = spec_.execution->view();
     component::validate_execution_context(execution);
-    field_solver_component_detail::validate_storage_execution<
-        typename field_type::memory_space>(execution);
+    field_solver_component_detail::validate_storage_execution<typename field_type::memory_space>(
+        execution);
     const std::string communicator_identity(execution.communicator_identity);
     if (communicator_identity == "serial") {
       if (n_ranks() != 1)

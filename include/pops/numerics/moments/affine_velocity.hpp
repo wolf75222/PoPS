@@ -11,12 +11,14 @@ namespace pops::moments {
 template <int Order>
 struct CartesianMomentBasis {
   static_assert(Order >= 1, "affine moments require a positive total degree");
-  static constexpr std::int64_t cardinality = (std::int64_t(Order) + 1) * (std::int64_t(Order) + 2) / 2;
+  static constexpr std::int64_t cardinality =
+      (std::int64_t(Order) + 1) * (std::int64_t(Order) + 2) / 2;
   static_assert(cardinality <= std::numeric_limits<int>::max(),
                 "affine moment cardinality exceeds native component index representation");
   static constexpr int size = static_cast<int>(cardinality);
   POPS_HD static constexpr int index(int p, int q) {
-    return static_cast<int>(std::int64_t(q) * (std::int64_t(Order) + 1) - std::int64_t(q) * (q - 1) / 2 + p);
+    return static_cast<int>(std::int64_t(q) * (std::int64_t(Order) + 1) -
+                            std::int64_t(q) * (q - 1) / 2 + p);
   }
 };
 
@@ -37,8 +39,8 @@ POPS_HD inline bool cayley_rotation(Real omega, Real theta_dt, Real& c, Real& s)
     c = (Real(1) - a * a) / denominator;
     s = Real(2) * a / denominator;
   } else {
-    const Real inverse = std::fabs(omega) >= theta_dt
-        ? (Real(1) / omega) / theta_dt : (Real(1) / theta_dt) / omega;
+    const Real inverse =
+        std::fabs(omega) >= theta_dt ? (Real(1) / omega) / theta_dt : (Real(1) / theta_dt) / omega;
     const Real denominator = Real(1) + inverse * inverse;
     c = (inverse * inverse - Real(1)) / denominator;
     s = Real(2) * inverse / denominator;
@@ -86,12 +88,11 @@ POPS_HD inline bool exponential_rotation(Real omega, Real theta_dt, Real& c, Rea
 template <int Order, AffineVelocityRotation Rotation = AffineVelocityRotation::cayley>
 POPS_HD inline bool affine_velocity_push_forward(
     const Real (&old)[CartesianMomentBasis<Order>::size],
-    const Real (&endpoint)[CartesianMomentBasis<Order>::size],
-    Real omega, Real theta_dt,
+    const Real (&endpoint)[CartesianMomentBasis<Order>::size], Real omega, Real theta_dt,
     Real (&output)[CartesianMomentBasis<Order>::size]) {
-  static_assert(Rotation == AffineVelocityRotation::cayley ||
-                Rotation == AffineVelocityRotation::exponential,
-                "unsupported affine velocity rotation");
+  static_assert(
+      Rotation == AffineVelocityRotation::cayley || Rotation == AffineVelocityRotation::exponential,
+      "unsupported affine velocity rotation");
   using Basis = CartesianMomentBasis<Order>;
   constexpr int N = Basis::size;
   constexpr int X = Basis::index(1, 0);
