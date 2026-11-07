@@ -130,8 +130,8 @@ def test_native_finite_array_collective_fault(kind, monkeypatch, isolated_native
     def inject(*args,**kwargs):
         source = original(*args,**kwargs)
         if kind == "allocation":
-            # Domain allocation remains valid; target precisely the first vector allocation.
-            # The map's values are one device column; allocate_view runs its allocation in
+            # Domain allocation remains valid; target precisely the allocation of the map's values,
+            # one device column (not its pops_finite_control: flags). allocate_view runs it in
             # allocation_phase (bad_alloc and length_error vote exhaustion, any other exception is
             # rethrown collectively). Run that phase with the fault first: rank 1 fails inside
             # the allocation, rank 0 allocates, and both must reject the attempt together.
