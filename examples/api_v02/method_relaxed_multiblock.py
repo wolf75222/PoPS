@@ -12,7 +12,7 @@ import pops
 from pops import math as pm
 from pops.amr import (AMRClockRelation, AMRExecution, AMRHierarchy, AMRRegrid,
                      AMRTagging, AMRTransfer, Buffer, ConflictPolicy,
-                     EqualityPolicy, Hysteresis, Tag)
+                     EqualityPolicy, Hysteresis, PatchLayout, Tag)
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow
 from pops.layouts import AMR
@@ -107,7 +107,10 @@ def build_t10_multiblock(numerical_flux, *, cells=(32, 16), temporal_ratio=2,
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(rules=(*tags, Buffer(cells=1)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
-        regrid=AMRRegrid.frozen(), transfer=transfer, execution=execution)
+        regrid=AMRRegrid.frozen(), transfer=transfer, execution=execution,
+        # A distributed multi-block interface needs one owner per patch: the default
+        # layout would replicate the coarse level on every MPI rank.
+        patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=16))
     x, y = np.meshgrid((np.arange(cells[0])+.5)/cells[0], (np.arange(cells[1])+.5)/cells[1])
     initial = {}
     for i, subject in enumerate(subjects):
