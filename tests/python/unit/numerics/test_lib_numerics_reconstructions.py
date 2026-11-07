@@ -114,8 +114,9 @@ def test_builders_refuse_values_that_are_not_functions():
 
 
 # Differences and values met by a face trace: zeros of both signs, subnormal, tiny, ordinary,
-# huge and non-finite.
-_VALUES = (0., -0., 5e-324, -3e-310, 1e-160, -2e-158, 0.3, -0.7, 1., 2.5, -4.,
+# huge and non-finite. The cells (0, 1e-323, 2.5e-323) give subnormal differences of 2 and 3
+# units, whose halves |a|/2 + |b|/2 round up where mc's centring on the smaller one is exact.
+_VALUES = (0., -0., 5e-324, 1e-323, 2.5e-323, -3e-310, 1e-160, -2e-158, 0.3, -0.7, 1., 2.5, -4.,
            1e150, -3e153, 1e200, -1e300, 1.7e308, -1.7e308, math.inf, -math.inf, math.nan)
 
 
@@ -156,7 +157,8 @@ def _program(name):
         "      const double got = generated.stencil_face_value(Sampler{cells + 1, orientation});",
         "      if (std::isfinite(expected)) {",
         "        if (bits(got) == bits(expected)) { ++equal; continue; }",
-        "        if (got == 0. && expected == 0. && centre == 0. && std::signbit(centre)) {",
+        "        if (orientation == -1 && got == 0. && expected == 0. && centre == 0. &&",
+        "            std::signbit(centre)) {",
         "          ++signed_zeros; continue; }",
         "        const double a = centre - cells[0], b = cells[2] - centre;",
         "        if (std::isnan(got) && std::isfinite(a) && std::isfinite(b) &&",

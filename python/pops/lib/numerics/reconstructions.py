@@ -112,7 +112,8 @@ def Reconstruct(rep: Any, value: Callable[..., Any], *, formal_order: int | None
         # The span of the stencil is known once the body has run: author it once to read the
         # offsets, then with the order that they bound.
         offsets = reconstruction.User(body, formal_order=1).options["sample_offsets"]
-        formal_order = max(offsets, default=0) - min(offsets, default=0) + 1
+        return reconstruction.User(
+            body, formal_order=int(max(offsets, default=0) - min(offsets, default=0) + 1))
     return reconstruction.User(body, formal_order=formal_order)
 
 
