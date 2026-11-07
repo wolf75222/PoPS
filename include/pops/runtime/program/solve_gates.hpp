@@ -59,8 +59,8 @@ struct OriginalResidualGate {
       return {};
     std::ostringstream text;
     text.precision(17);
-    text << "SV8 gate " << cause << ": ||R(u)||=" << norm << " bound=" << limit
-         << " (atol=" << atol << " rtol=" << rtol << " scale=" << scale << ")";
+    text << "SV8 gate " << cause << ": ||R(u)||=" << norm << " bound=" << limit << " (atol=" << atol
+         << " rtol=" << rtol << " scale=" << scale << ")";
     return text.str();
   }
 };
@@ -74,9 +74,9 @@ inline bool apply_original_residual_gate(SolveReport& report, const OriginalResi
   std::string refusal = gate.refusal();
   if (refusal.empty())
     return true;
-  report.mark_failed(SolveStatus::kSafeguardFailure, refusal_action,
-                     std::string(label) + " " + std::move(refusal) + "; realization reported " +
-                         report.reason);
+  report.mark_failed(
+      SolveStatus::kSafeguardFailure, refusal_action,
+      std::string(label) + " " + std::move(refusal) + "; realization reported " + report.reason);
   return false;
 }
 
@@ -153,7 +153,7 @@ struct PreparedKrylovResidual {
              .succeeded())
       return std::numeric_limits<Real>::quiet_NaN();
     return ::pops::detail::workspace_physical_residual_norm(problem, workspace, value,
-                                                           physical_norm);
+                                                            physical_norm);
   }
 };
 

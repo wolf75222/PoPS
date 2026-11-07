@@ -7,7 +7,7 @@ the same generated operator and rtol = 1e-10, on ROMEO, from 1 to 64 CPU ranks a
 
 * ``native``: the M08 field problem -Δφ = q, periodic, mean-zero gauge, realized by the native
   ``CG(max_iter, rel_tol=rtol, abs_tol=0)`` of the field route (the prepared affine problem over
-  the generated field operator, ``solve_cg`` with its SV8 gate);
+  the generated field operator, the prepared Krylov CG, then its SV8 gate);
 * ``program``: the same equation solved by the CG that ``examples/api_v02/method_krylov.py``
   writes as a Program (``iterate`` and ``dot_all``), stopped at ||r|| <= rtol ||b|| as the native
   request is, with x0 = 0.
@@ -15,8 +15,9 @@ the same generated operator and rtol = 1e-10, on ROMEO, from 1 to 64 CPU ranks a
 Each accepted step solves once from the unchanged state q, so a step times one solve. Both routes
 are compiled and bound first, warmed up, then advanced in interleaved A B B A blocks of fixed
 accepted steps. The JSON output holds the median time per solve, the throughput of ``program``
-against ``native`` (OD9: 0.9), the CG iterations of each route, and the difference of the two
-potentials (both mean-zero). No time threshold is asserted.
+against ``native`` (OD9: 0.9) and the difference of the two potentials (both mean-zero). The
+CG iteration counts are not read back; both routes stop at rtol ||b||, the native one on its true
+residual and the Program one on its recursive residual. No time threshold is asserted.
 
 Limits at this tree, which the output states in ``limits`` and which keep SV-T1 open:
 
@@ -80,12 +81,12 @@ def _load(cells):
     return (q - q.mean())[None]
 
 
-def _model(name, cells):
+def _model(name, cells, **state_options):
     import pops
     from examples.api_v02 import models_M01_M14 as cases
     frame, layout = cases._domain(name + "_periodic", cells, lengths=(2*3.141592653589793,)*2)
     model = pops.Model(name + "_model", frame=frame)
-    U = model.state("density", components=("q",))
+    U = model.state("density", components=("q",), **state_options)
     case = pops.Case(name)
     block = case.block("fluid", model)
     return pops, cases, frame, layout, model, U, case, block
@@ -120,7 +121,9 @@ def build_native(cells, rtol, max_iterations, dt=1.):
 
 def build_program(cells, rtol, max_iterations, dt=1.):
     import numpy as np
-    pops, cases, frame, layout, model, U, case, block = _model("N9_M08_program", cells)
+    # The Program Laplacian samples cell midpoints, which needs a cell_average state (T04 global).
+    pops, cases, frame, layout, model, U, case, block = _model("N9_M08_program", cells,
+                                                               sampling="cell_average")
     from examples.api_v02.method_krylov import conjugate_gradient, laplacian
     from pops.time import FixedDt
     load = _load(cells)
@@ -148,6 +151,7 @@ def main():
     args = _arguments()
     import numpy as np
     import pops
+    from tests.python.support.native_execution_context import artifact_execution_context
     cells = tuple(int(count) for count in args.cells.split("x"))
     builders = {"native": build_native, "program": build_program}
     runtimes, dts, compile_seconds, communicator = {}, {}, {}, None
@@ -158,7 +162,8 @@ def main():
         artifact = pops.compile(plan)
         compile_seconds[route] = time.perf_counter() - start
         communicator = artifact.platform_manifest.communicator.require("N9 M08 communicator")
-        runtimes[route] = pops.bind(artifact, initial_values=dict(initial))
+        runtimes[route] = pops.bind(artifact, initial_values=dict(initial), resources={
+            "execution_context": artifact_execution_context(artifact)})
         dts[route] = dt
 
     def advance(route, steps):
