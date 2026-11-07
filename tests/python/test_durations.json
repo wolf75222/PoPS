@@ -8043,7 +8043,7 @@
       }
     },
     "b03_f7_20261107": {
-      "basis": "Scheduling estimate for the B03 family F7 unit file (ROM-18, gap C49), not a CI receipt: it emits the nested and bounds distributed Kokkos Programs twice each (shared and inline forms) without compiling them and checks the shared translation-unit definitions on literal inputs. The analogue test_distributed_kokkos_codegen.py emits fourteen Programs of the same builder at 30 s, so 15 s. The local receipt comes from scripts/ci_pytest_timings.py on a 4-core container beside other work; it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace from a complete CI per-file receipt.",
+      "basis": "Scheduling estimate for the B03 family F7 unit file (ROM-18, gap C49), not a CI receipt: it emits the nested, bounds and import distributed Kokkos Programs twice each (shared and inline forms) without compiling them and checks the shared translation-unit definitions on literal inputs. The analogue test_distributed_kokkos_codegen.py emits fourteen Programs of the same builder at 30 s, so 15 s. The local receipt comes from scripts/ci_pytest_timings.py on a 4-core container beside other work; it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace from a complete CI per-file receipt.",
       "files": {
         "tests/python/unit/codegen/test_program_code_volume_f7.py": {
           "estimated_seconds": 15,
@@ -8053,12 +8053,12 @@
       },
       "local_receipts": {
         "tests/python/unit/codegen/test_program_code_volume_f7.py": {
-          "cases": 10,
-          "phase_seconds": 0.75,
-          "session_seconds": 1.39
+          "cases": 12,
+          "phase_seconds": 0.89,
+          "session_seconds": 1.6
         }
       },
-      "source_sha256": "e99df0688e32f6aba42a2e279dfb3b1adc65c5cef60cde056c3f56a79d58379e"
+      "source_sha256": "68fef40a86300a8afe9b7886827ec7496ed08b4324254dc0ec561140673b1523"
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 285,

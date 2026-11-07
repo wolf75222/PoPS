@@ -11,12 +11,15 @@ parsed and optimized again; the Hall MHD CT Program spent most of its compiler m
 - each distinct schema construction as one accessor returning a copy of a constant built once
   from that same construction text;
 - each distinct terminal failure of a distributed map outcome as one routine over the context and
-  the outcome, whose body is the statement the exit emitted inline.
+  the outcome, whose body is the statement the exit emitted inline;
+- each distinct staging of a distributed Array captured by a device map as one routine over the
+  lane, the registry, the Array, the earlier domains of the map and the variables the staging
+  writes, whose body is the staging statements of that capture.
 
 The emitted values are unchanged: an accessor returns a schema equal to the one its construction
 builds, chosen by the exact construction text, so no schema identity changes (G07, CC2). A routine
-runs the same statements on the same context and outcome objects. Outside a translation-unit
-scope, for instance in a unit test of one emitter, the inline forms are returned.
+runs the same statements on the same objects. Outside a translation-unit scope, for instance in a
+unit test of one emitter, the inline forms are returned.
 """
 
 from __future__ import annotations
@@ -69,7 +72,8 @@ def shared_scope(function):
 
     @wraps(function)
     def emit(*args, **kwargs):
-        token = _ACTIVE.set({"callbacks": False, "schemas": {}, "routines": {}, "sealed": False})
+        token = _ACTIVE.set({"callbacks": False, "schemas": {}, "routines": {}, "staging": {},
+                             "sealed": False})
         try:
             return function(*args, **kwargs)
         finally:
@@ -125,6 +129,21 @@ def terminal_failure_routine(lines: list[str]) -> str | None:
     return name
 
 
+def staging_routine(parameters: list[str], lines: list[str]) -> str | None:
+    """Return the routine running @p lines over @p parameters, or None outside a scope."""
+    registry = _open_registry()
+    if registry is None:
+        return None
+    signature = ", ".join(parameters)
+    body = "\n".join(lines)
+    digest = hashlib.sha256((signature + "\n" + body).encode()).hexdigest()[:24]
+    name = "pops_stage_array_" + digest
+    known = registry["staging"].setdefault(name, (signature, body))
+    if known != (signature, body):
+        raise ValueError("array staging routine identity collision")
+    return name
+
+
 def shared_definitions() -> str:
     """Render the definitions used so far; call after every region has been emitted."""
     registry = _open_registry()
@@ -147,5 +166,16 @@ def shared_definitions() -> str:
                 "[[noreturn]] void %s(Context& ctx, const pops::runtime::program::distributed::"
                 "Outcome<pops::kNativeDimension>& %s) {\n%s\n}\n"
                 % (name, OUTCOME_PARAMETER, body))
+        parts.append("}  // namespace\n")
+    if registry["staging"]:
+        # Not inlined back: each routine is compiled once however many captures call it.
+        parts.append("// Captured Array staging shared by every device map capture with the same statements.\n"
+                     "namespace {\n")
+        for name, (signature, body) in registry["staging"].items():
+            parts.append(
+                "#if defined(__GNUC__) || defined(__clang__)\n"
+                "__attribute__((noinline))\n"
+                "#endif\n"
+                "void %s(%s) {\n%s\n}\n" % (name, signature, body))
         parts.append("}  // namespace\n")
     return "".join(parts)

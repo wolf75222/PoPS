@@ -22,6 +22,123 @@ _DN = "pops::runtime::program::distributed::"
 _CV = "pops::runtime::program::ContinuationValue<pops::kNativeDimension>"
 
 
+_DESCRIPTOR = ("identity", "size", "begin", "end")
+
+
+def _identity(pointer, earlier):
+    """The index of the first of the @p earlier domains equal to @p pointer, else their count."""
+    identity = str(len(earlier))
+    for n, old in reversed(list(enumerate(earlier))):
+        identity = "((%s)==(%s) ? %d : %s)" % (pointer, old, n, identity)
+    return identity
+
+
+def _array_staging(element, capacity, *, lane, registry, source, earlier, descriptor, columns,
+                   labels, index, declare):
+    """Return the statements that stage one captured distributed Array after its null check.
+
+    In order: authenticate its domain; compute the descriptor the kernel reads (identity among the
+    @p earlier domains of the map, size, begin, end); check the local value count; allocate one
+    device column per element leaf, then its host mirror; unpack every local value into the
+    mirrors; copy each mirror to its column. @p columns lists ``(type, name)`` per leaf. With
+    @p declare, each descriptor value and view is declared where it is first written (the inline
+    form); without, the statements assign variables its caller declared (a shared routine body).
+    """
+    from .program_emit_distributed_arrays import unpack
+
+    statements = []
+
+    def phase(statement):
+        statements.append(_DN + "phase(" + lane + ",[&]{ " + statement + " });")
+
+    pointer = "(%s)->domain" % source
+    phase("%s.authenticate(%s);" % (registry, pointer))
+    values = (_identity(pointer, earlier),) + tuple(
+        "(%s)->%s()" % (pointer, member) for member in _DESCRIPTOR[1:]
+    )
+    for member, expression in zip(_DESCRIPTOR, values, strict=True):
+        form = "const std::int64_t %s = %s;" if declare else "%s = %s;"
+        statements.append(form % (descriptor[member], expression))
+    length = "(%s)->domain->local_size()" % source
+    phase(
+        "%slocal_require((%s)->values.size()==std::size_t(%s),%sCode::domain);"
+        % (_DN, source, length, _DN)
+    )
+    for (dtype, column), label in zip(columns, labels, strict=True):
+        if declare:
+            statements.append("%sView<%s> %s;" % (_NS, dtype, column))
+        phase("%s = %sallocate<%s>(%s,%s);" % (column, _NS, dtype, length, label))
+        if declare:
+            statements.append("decltype(%s)::host_mirror_type %s_host;" % (column, column))
+    for _, column in columns:
+        phase("%s_host = Kokkos::create_mirror_view(%s);" % (column, column))
+    statements.append(_DN + "phase(" + lane + ",[&]{")
+    statements.append("for(std::int64_t %s=0;%s<%s;++%s) {" % (index, index, length, index))
+    decoded = unpack(element, "(%s)->values[std::size_t(%s)]" % (source, index), capacity=capacity)
+    for (_, column), (_, scalar) in zip(columns, _leaves(element, decoded), strict=True):
+        statements.append("  %s_host(%s) = %s;" % (column, index, scalar))
+    statements.append("} });")
+    for _, column in columns:
+        phase("Kokkos::deep_copy(%s,%s_host);" % (column, column))
+    return statements
+
+
+def _shared_array_staging(element, capacity, *, lane, registry, source, earlier, descriptor,
+                          columns):
+    """Return the call of the shared routine staging one captured Array, or None outside a scope.
+
+    The routine body is what `_array_staging` emits for the routine parameters. The call site
+    declares the descriptor values and the views first; none of these declarations is an
+    operation (a default View holds no allocation), so the operations, their order and their
+    operands are those of the inline form. The Array and the earlier domains are passed by
+    reference after the inline null check: each names an object every inline spelling reads.
+    """
+    from .program_shared_definitions import staging_routine
+
+    parameters = [
+        "const pops::ExecutionLane& pops_lane",
+        _DN + "Registry& pops_registry",
+        "const %sArrayRef<pops::kNativeDimension>& pops_source" % _DN,
+    ]
+    parameters += ["const %sDomainRef& pops_domain_%d" % (_DN, n) for n in range(len(earlier))]
+    parameters += ["std::int64_t& pops_%s" % member for member in _DESCRIPTOR]
+    routine_columns = []
+    for n, (dtype, _) in enumerate(columns):
+        view = "%sView<%s>" % (_NS, dtype)
+        parameters += [
+            "%s& pops_column_%d" % (view, n),
+            "%s::host_mirror_type& pops_column_%d_host" % (view, n),
+            "const char* pops_label_%d" % n,
+        ]
+        routine_columns.append((dtype, "pops_column_%d" % n))
+    body = _array_staging(
+        element,
+        capacity,
+        lane="pops_lane",
+        registry="pops_registry",
+        source="pops_source",
+        earlier=["pops_domain_%d" % n for n in range(len(earlier))],
+        descriptor={member: "pops_" + member for member in _DESCRIPTOR},
+        columns=routine_columns,
+        labels=["pops_label_%d" % n for n in range(len(columns))],
+        index="pops_index",
+        declare=False,
+    )
+    name = staging_routine(parameters, ["  " + line for line in body])
+    if name is None:
+        return None
+    statements = [
+        "std::int64_t %s;" % ", ".join("%s = 0" % descriptor[member] for member in _DESCRIPTOR)
+    ]
+    arguments = [lane, registry, source, *earlier] + [descriptor[member] for member in _DESCRIPTOR]
+    for dtype, column in columns:
+        statements.append("%sView<%s> %s;" % (_NS, dtype, column))
+        statements.append("decltype(%s)::host_mirror_type %s_host;" % (column, column))
+        arguments += [column, column + "_host", '"%s"' % column]
+    statements.append("%s(%s);" % (name, ",".join(arguments)))
+    return statements
+
+
 def admission(value):
     result = value.attrs["body"]
     if (
@@ -83,7 +200,7 @@ def emit(value, var, lines, *, token, registry, session, lane):
     if reason:
         return False
     assert plan is not None
-    from .program_emit_distributed_arrays import unpack, schema, _runtime_error
+    from .program_emit_distributed_arrays import schema, _runtime_error
     from .program_emit_versioned import _local_storage, _limits
     from .program_source_map import operation
 
@@ -118,19 +235,26 @@ def emit(value, var, lines, *, token, registry, session, lane):
     def descriptor(pointer):
         name = token + "_domain_" + str(len(domains))
         phase("%s.authenticate(%s);" % (registry, pointer))
-        identity = str(len(domains))
-        for n, old in reversed(list(enumerate(domains))):
-            identity = "((%s)==(%s) ? %d : %s)" % (pointer, old, n, identity)
+        identity = _identity(pointer, domains)
         domains.append(pointer)
         body.append("const std::int64_t %s_identity = %s;" % (name, identity))
         for member in ("size", "begin", "end"):
             body.append("const std::int64_t %s_%s = (%s)->%s();" % (name, member, pointer, member))
         return {member: name + "_" + member for member in ("identity", "size", "begin", "end")}
 
+    def column_name(prefix):
+        name = prefix + "_" + str(serial[0])
+        serial[0] += 1
+        columns_all.append(name)
+        return name
+
+    def column_type(sig):
+        return "unsigned char" if sig["vtype"] == "bool" else _TYPES[sig["vtype"]]
+
     def column(sig, path, prefix, length):
         name = prefix + "_" + str(serial[0])
         serial[0] += 1
-        dtype = "unsigned char" if sig["vtype"] == "bool" else _TYPES[sig["vtype"]]
+        dtype = column_type(sig)
         body.append("%sView<%s> %s;" % (_NS, dtype, name))
         allocate('%sallocate<%s>(%s,"%s")' % (_NS, dtype, length, name), name)
         body.append("decltype(%s)::host_mirror_type %s_host;" % (name, name))
@@ -163,33 +287,26 @@ def emit(value, var, lines, *, token, registry, session, lane):
                 "%slocal_require(bool(%s)&&bool((%s)->domain),%sCode::domain);"
                 % (_DN, source, source, _DN)
             )
-            desc = descriptor("(%s)->domain" % source)
-            length = "(%s)->domain->local_size()" % source
-            phase(
-                "%slocal_require((%s)->values.size()==std::size_t(%s),%sCode::domain);"
-                % (_DN, source, length, _DN)
-            )
-            columns = _tree(
-                sig["element"],
-                lambda s, path, name=name, length=length: column(s, path, name, length),
-            )
-            for _, col in _leaves(sig["element"], columns):
-                allocate("Kokkos::create_mirror_view(%s)" % col, col + "_host")
-            body.append(_DN + "phase(" + lane + ",[&]{")
-            k = name + "_i"
-            body.append("for(std::int64_t %s=0;%s<%s;++%s) {" % (k, k, length, k))
-            decoded = unpack(
-                sig["element"],
-                "(%s)->values[std::size_t(%s)]" % (source, k),
-                capacity=value.attrs["byte_capacity"],
-            )
-            for (_, col), (_, scalar) in zip(
-                _leaves(sig["element"], columns), _leaves(sig["element"], decoded), strict=True
-            ):
-                body.append("  %s_host(%s) = %s;" % (col, k, scalar))
-            body.append("} });")
-            for _, col in _leaves(sig["element"], columns):
-                phase("Kokkos::deep_copy(%s,%s_host);" % (col, col))
+            prefix = token + "_domain_" + str(len(domains))
+            desc = {member: prefix + "_" + member for member in _DESCRIPTOR}
+            earlier = list(domains)
+            domains.append("(%s)->domain" % source)
+            columns = _tree(sig["element"], lambda _s, _path, name=name: column_name(name))
+            typed = [
+                (column_type(leaf_sig), col)
+                for (leaf_sig, _), (_, col) in zip(
+                    _leaves(sig["element"], None), _leaves(sig["element"], columns), strict=True
+                )
+            ]
+            staging = dict(lane=lane, registry=registry, source=source, earlier=earlier,
+                           descriptor=desc, columns=typed)
+            shared = _shared_array_staging(sig["element"], value.attrs["byte_capacity"], **staging)
+            if shared is None:
+                shared = _array_staging(
+                    sig["element"], value.attrs["byte_capacity"], **staging,
+                    labels=['"%s"' % col for _, col in typed], index=name + "_i", declare=True,
+                )
+            body.extend(shared)
             env[item.id] = {"domain": desc, "columns": columns}
     for node in _walk(block):
         if node.op == "finite_real" and not node.inputs:

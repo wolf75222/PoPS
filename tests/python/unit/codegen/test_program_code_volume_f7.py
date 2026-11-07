@@ -1,8 +1,9 @@
 """Generated Program code volume (B03 family F7, gap C49): what each emission change keeps.
 
 The step body may continue in nested native functions (D9), the continuation schemas and field
-callbacks are defined once per translation unit (D1, D3), and the terminal exits of distributed
-map outcomes share one routine per distinct statement (D5). None of these changes an operation:
+callbacks are defined once per translation unit (D1, D3), the terminal exits of distributed map
+outcomes share one routine per distinct statement (D5), and the captured Arrays of device maps
+share one staging routine per distinct staging text (D10). None of these changes an operation:
 the tests below rebuild the inline form from the shared one and compare it byte for byte.
 """
 import re
@@ -117,6 +118,8 @@ def test_nothing_registers_after_the_definitions_are_rendered():
             shared.field_callbacks()
         with pytest.raises(RuntimeError, match="already rendered"):
             shared.terminal_failure_routine(["  throw 1;"])
+        with pytest.raises(RuntimeError, match="already rendered"):
+            shared.staging_routine(["int pops_a"], ["  use(pops_a);"])
 
     unit()
 
@@ -134,6 +137,20 @@ def test_terminal_routines_are_keyed_by_statement_text():
     assert definitions.count("[[noreturn]] void pops_terminal_failure_") == 2
 
 
+def test_staging_routines_are_keyed_by_signature_and_statements():
+    assert shared.staging_routine(["int pops_a"], ["  use(pops_a);"]) is None  # outside a unit
+
+    @shared.shared_scope
+    def unit():
+        names = [shared.staging_routine(parameters, ["  use(pops_a);"])
+                 for parameters in (["int pops_a"], ["int pops_a"], ["long pops_a"])]
+        return names, shared.shared_definitions()
+
+    (first, again, other), definitions = unit()
+    assert first == again != other
+    assert definitions.count("__attribute__((noinline))\n#endif\nvoid pops_stage_array_") == 2
+
+
 def _distributed_program(kind):
     from tests.python.integration.runtime.test_api_v02_distributed_kokkos_native import _build
     return _build(kind, 1).case._time
@@ -145,6 +162,7 @@ def _inline_source(program, monkeypatch):
         context.setattr(shared, "field_callbacks", lambda: (shared._FIELD_COPY, shared._FIELD_PREFLIGHT))
         context.setattr(shared, "schema_reference", lambda construction: construction)
         context.setattr(shared, "terminal_failure_routine", lambda lines: None)
+        context.setattr(shared, "staging_routine", lambda parameters, lines: None)
         return emit_cpp_program(program)
 
 
@@ -157,18 +175,85 @@ _ROUTINE = re.compile(
     re.S)
 
 
+_STAGING = re.compile(
+    r"#if defined\(__GNUC__\) \|\| defined\(__clang__\)\n__attribute__\(\(noinline\)\)\n#endif\n"
+    r"void (pops_stage_array_[0-9a-f]{24})\((.*?)\) \{\n(.*?)\n\}\n", re.S)
+_STAGING_CALL = re.compile(r"^( *)(pops_stage_array_[0-9a-f]{24})\((.*)\);$", re.M)
+_NS = "pops::runtime::program::finite_kokkos::"
+
+
+def _arguments(text):
+    """Split call arguments at top-level commas (the generated arguments hold no string comma)."""
+    parts, depth, start = [], 0, 0
+    for index, character in enumerate(text.replace("->", "-.")):
+        depth += character in "(<[{"
+        depth -= character in ")>]}"
+        if character == "," and depth == 0:
+            parts.append(text[start:index])
+            start = index + 1
+    return parts + [text[start:]]
+
+
+def _expand_staging(source, routines):
+    """Spell each staging call inline again: declarations where the inline form writes first."""
+    count = 0
+    while True:
+        match = _STAGING_CALL.search(source)
+        if match is None:
+            return source, count
+        indent, name, text = match.groups()
+        signature, body = routines[name]
+        parameters = [parameter.split()[-1] for parameter in signature.split(", ")]
+        mapping = dict(zip(parameters, _arguments(text), strict=True))
+        columns = [mapping[p] for p in parameters if re.fullmatch(r"pops_column_\d+", p)]
+        descriptor = [mapping["pops_" + member] for member in ("identity", "size", "begin", "end")]
+        mapping["pops_index"] = re.sub(r"_\d+$", "", columns[0]) + "_i"
+        # The declarations the call site placed before the call, removed with it.
+        declared = ["std::int64_t %s;" % ", ".join("%s = 0" % d for d in descriptor)]
+        types = {}
+        start = match.start()
+        lines = source[:start].split("\n")[:-1]
+        for column in reversed(columns):
+            host = lines.pop()
+            view = lines.pop()
+            assert host == indent + "decltype(%s)::host_mirror_type %s_host;" % (column, column)
+            prefix = indent + _NS + "View<"
+            assert view.startswith(prefix) and view.endswith("> %s;" % column)
+            types[column] = view[len(prefix):-len("> %s;" % column)]
+        assert lines.pop() == indent + declared[0]
+        def rename(match, table=mapping):
+            return table.get(match.group(0), match.group(0))
+
+        expanded = []
+        for line in body.split("\n"):
+            line = indent + re.sub(r"\bpops_[A-Za-z0-9_]+\b", rename, line[2:])
+            if any(line.startswith(indent + d + " = ") for d in descriptor):
+                line = indent + "const std::int64_t " + line[len(indent):]
+            allocated = [c for c in columns if (" %s = %sallocate<" % (c, _NS)) in line]
+            if allocated:
+                expanded.append(indent + "%sView<%s> %s;" % (_NS, types[allocated[0]], allocated[0]))
+                expanded.append(line)
+                line = indent + "decltype(%s)::host_mirror_type %s_host;" % (allocated[0], allocated[0])
+            expanded.append(line)
+        head = "\n".join(lines) + "\n"
+        source = head + "\n".join(expanded) + source[match.end():]
+        count += 1
+
+
 def _expand(source):
     """Spell each shared form inline again and drop the shared definitions."""
     schemas = dict(_ACCESSOR.findall(source))
     routines = dict(_ROUTINE.findall(source))
+    staging = {name: (signature, body) for name, signature, body in _STAGING.findall(source)}
     markers = [source.index(m) for m in ("// Continuation field callbacks:",
                                          "static pops::runtime::program::ContinuationType pops_continuation_schema_",
-                                         "// Terminal failures shared by")
+                                         "// Terminal failures shared by",
+                                         "// Captured Array staging shared by")
                if m in source]
     if markers:
         first = min(markers)
         last = first
-        for pattern in (_ACCESSOR, _ROUTINE):
+        for pattern in (_ACCESSOR, _ROUTINE, _STAGING):
             for match in pattern.finditer(source, first):
                 last = max(last, match.end())
         if "// Continuation field callbacks:" in source:
@@ -177,7 +262,11 @@ def _expand(source):
         if routines:
             last = max(last, source.index("}  // namespace\n", source.index("// Terminal failures shared by"))
                        + len("}  // namespace\n"))
+        if staging:
+            last = max(last, source.index("}  // namespace\n", source.index("// Captured Array staging shared by"))
+                       + len("}  // namespace\n"))
         source = source[:first] + source[last:]
+    source, staged = _expand_staging(source, staging)
     calls = re.findall(r"^( *)(pops_terminal_failure_[0-9a-f]{24})\(ctx, ([A-Za-z0-9_]+)\);$", source, re.M)
     for indent, name, token in calls:
         statement = "\n".join(indent + line[2:] for line in routines[name].split("\n"))
@@ -187,15 +276,17 @@ def _expand(source):
     source = source.replace("pops_continuation_field_preflight{ctx}", shared._FIELD_PREFLIGHT)
     for name, construction in schemas.items():
         source = source.replace(name + "()", construction)
-    return source, len(calls), len(routines), len(schemas)
+    return source, len(calls), len(routines), len(schemas), staged, len(staging)
 
 
-@pytest.mark.parametrize("kind", ["nested", "bounds"])
+@pytest.mark.parametrize("kind", ["nested", "bounds", "import"])
 def test_shared_forms_expand_to_the_inline_program(kind, monkeypatch):
     program = _distributed_program(kind)
     after = emit_cpp_program(program)
     before = _inline_source(program, monkeypatch)
-    expanded, calls, routines, schemas = _expand(after)
-    assert routines == 1 and calls == {"nested": 2, "bounds": 1}[kind] and schemas
-    assert "pops_continuation_field_copy" not in before and "pops_terminal_failure_" not in before
+    expanded, calls, routines, schemas, staged, staging = _expand(after)
+    assert routines == 1 and calls == {"nested": 2, "bounds": 1, "import": 2}[kind] and schemas
+    assert staged == staging == 1
+    for shared_form in ("pops_continuation_field_copy", "pops_terminal_failure_", "pops_stage_array_"):
+        assert shared_form not in before
     assert expanded == before
