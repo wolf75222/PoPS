@@ -6057,6 +6057,17 @@
         "ordinary_budget_seconds": 2100
       }
     },
+    "b03_f5_hyqmom15_final_example_weight": {
+      "basis": "CI pytest timestamps of the single collected case, which passed both times. The 285-second row put the file beside test_api_v02_implicit_derivatives_native.py in shard 26 of run 41003081117, which then reached its 45-minute step limit with no failed test. The planning weight rounds the larger observation up by about ten percent, as ci430d_shard114_observation does. No deadline, test selection or assertion changes.",
+      "observed_seconds": {
+        "run 41003081117 job 124023859839 (99e04e1, shard 26, collection end to PASSED)": 1117.74,
+        "run 41037321460 job 124311227312 (cf2f510, shard 25, pytest call duration)": 918.35
+      },
+      "previous_weight_seconds": 285,
+      "weights_seconds": {
+        "tests/python/examples/final/test_hyqmom15_final_example.py": 1230
+      }
+    },
     "ci_20260913_additions": {
       "basis": "Scheduling estimates only: 600 s for the native composition module, 5 s for source-only contracts; 30 s for tensor codegen based on its five reported CI call durations totalling 22.42 s in run 34760671991. These are not complete per-file timing measurements.",
       "files": [
@@ -7953,7 +7964,7 @@
       }
     }
   },
-  "tests/python/examples/final/test_hyqmom15_final_example.py": 285,
+  "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
   "tests/python/examples/final/test_imex_amr_final_example.py": 260,
   "tests/python/examples/final/test_multiphysics_core_example.py": 215,
   "tests/python/examples/final/test_scalar_advection_final_example.py": 2.0,

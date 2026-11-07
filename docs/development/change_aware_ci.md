@@ -169,6 +169,44 @@ caches, and completion windows can overlap. These estimates do not establish col
 CI success: the complete build and unchanged 121-launch MPI test inventory still need an actual
 GitHub receipt.
 
+The MPI Python matrix gives each ranked entrypoint one 1200-second launch and each pair of
+independent worlds two 900-second orchestrator launches whose child keeps its 840-second
+watchdog. These limits do not change. A group whose measured cost exceeds its budget is split by
+cost into declared partitions instead, each its own matrix group. A ranked entrypoint lists
+`partitions = [{ id, nodes }]`, naming every case of its pytest receiver exactly once; a world
+pair lists one parent node per partition, closed by `MPI_ORCHESTRATOR_PARTITION_CONTRACTS` and
+the support module that owns the fixture inventory. Every partition launch still collects the
+whole receiver, or every function of its world inventory, and
+[`mpi_partition_units.py`](../../tests/python/support/mpi_partition_units.py) refuses any missing,
+added, renamed or duplicated case against the declared inventory before it runs the partition's
+units only. The receipts must then name exactly those units. The partitions of one selection are
+disjoint and their union is the inventory, so the lane still runs every case.
+
+Run 41037321460 of PR #705 (`cf2f510`) stopped eight ranked groups at 1200 seconds and four world
+groups at their 840-second child watchdog. Its serial shards give each case's cost; the cases each
+MPI group finished before its limit bound the ratio R of MPI to serial cost. Partitions aim at 60%
+of the budget at the upper bound of R. A single case cannot be split further.
+
+| MPI group | Cases | R | Partitions | Largest partition, predicted |
+| --- | --- | --- | --- | --- |
+| `implicit_derivatives` (ranked) | 10 | 0.97 to 1.05 | 2 | 650 s (54%) |
+| `v14_distributed_derivatives` (ranked) | 10 | 1.03 to 1.09 | 2 | 673 s (56%) |
+| `coupled_methods_native` (ranked) | 7 | 0.81 to 1.53 | 4 | `mprk22_network[1.5-True]` alone, 796 to 1504 s |
+| `original_field_recovery_native` (ranked) | 7 | 1.38 to 1.72 | 4 | 602 s (50%) |
+| `original_field_typed_recovery_native` (ranked) | 4 | 1.29 to 1.72 | 4 | 400 s (33%) |
+| `amr_original_field`, saved restart (worlds) | 3 | at most 1.43 | 3 | 553 s (66%) |
+| `captured_diffusion` (worlds) | 4 | 1.38 to 1.88 | 4 | about 300 s (36%) |
+| `evolved_original_stage` (worlds) | 8 | at most 1.35 | 4 | 422 s (50%) |
+| `spatial_interaction` (worlds) | 8 | 1.58 to 1.90 | 3 | 405 s (48%) |
+| `amr_profile`, tag selection (worlds) | 8 | MPI2 launch 828 s | 2 | about 414 s (49%) |
+| `amr_profile`, stationary regrids (worlds) | 5 | MPI2 launch 761 s | 2 | 464 s (55%) |
+
+Partitioning cannot fix a single case that costs more than its budget: `gyrokinetic_nd` (two
+cases, 1547 and 1866 seconds serial), `v14_decision_assess_nested_reject` (one case, 1340 seconds
+serial) and the depth-160 case of `finite_structural_depth_native` need their cost reduced, and so
+does `mprk22_network[1.5-True]` if R exceeds about 1.2. These predictions are scheduling estimates;
+the matrix receipts of the partitioned groups decide.
+
 The `collective-field-protocols` policy covers the elliptic `interface`, `linear`, and `amr`
 header families and requests MPI for their collective contracts. The isolated
 `include/pops/numerics/elliptic/polar/polar_tensor_operator.hpp` path is intentionally outside
