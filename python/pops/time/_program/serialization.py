@@ -339,9 +339,23 @@ class _ProgramSerialization(_ProgramBase):
         # integral captures; it takes precedence over vector pairing's version 7.
         if self._integral_units:
             result["version"] = 8
+        advance_outputs = getattr(self, "_advance_outputs", ())
+        if advance_outputs:
+            # Version 31: the Outputs of an elaborated Advance (spec 0.3 CC14), each a read-only
+            # region that the compiled run evaluates between steps, and its record.
+            result["advance_outputs"] = [
+                {"nodes": [self._serialize_node(node, include_provenance=include_provenance)
+                           for node in region.sub],
+                 "record": [{"name": name, "array": item} if kind == "array"
+                            else {"name": name, "scalar": item.id}
+                            for name, kind, item in region.record]}
+                for region in advance_outputs]
+            _raise_ir_version(result, 31)
         pending = list(self._values)
         if self._dt_bound is not None:
             pending.extend(self._dt_bound[0])
+        for region in advance_outputs:
+            pending.extend(region.sub)
         seen = set()
         trace_rates = {row[1] for row in self._integral_transfers}
         while pending:

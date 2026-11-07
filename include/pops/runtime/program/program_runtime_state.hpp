@@ -637,6 +637,11 @@ struct ProgramRuntimeState {
   int advance_max_attempts_ = 0;
   /// Fixed-proposal segment that the next System::run_advance continues (advance_run.hpp).
   AdvanceSegment advance_segment_{};
+  /// Scalar counts of the Outputs of the elaborated Advance (CC14), one per Output, and the
+  /// generated entry that evaluates the scalars of one Output on the accepted state; empty when
+  /// the Program declares no Output. Read only by System::run_advance, between steps.
+  std::vector<int> advance_output_scalar_counts_;
+  std::function<void(int, Real*)> advance_output_scalars_;
   /// GLOBAL macro-step cadence (ADC-411): substeps n partitions one representable accepted window;
   /// stride M runs the program once per M macro-steps (hold-then-catch-up). The accepted dt arguments
   /// are retained as reproducible left-folded provenance, while one prepared facade endpoint owns the
@@ -814,6 +819,8 @@ struct ProgramRuntimeState {
     std::function<Real(Real)> dt_bound;
     int advance_max_attempts = 0;
     AdvanceSegment advance_segment{};
+    std::vector<int> advance_output_scalar_counts;
+    std::function<void(int, Real*)> advance_output_scalars;
     std::uint64_t generation = 0;
     std::string installed_hash;
     std::vector<std::array<std::uint64_t, 4>> operator_authorities;
@@ -1006,6 +1013,8 @@ struct ProgramRuntimeState {
     dt_bound_ = nullptr;
     advance_max_attempts_ = 0;
     advance_segment_ = {};
+    advance_output_scalar_counts_.clear();
+    advance_output_scalars_ = nullptr;
     installed_hash_.clear();
     operator_authorities_.clear();
     history_replay_authorities_.clear();
@@ -1039,6 +1048,8 @@ struct ProgramRuntimeState {
                                        dt_bound_,
                                        advance_max_attempts_,
                                        advance_segment_,
+                                       advance_output_scalar_counts_,
+                                       advance_output_scalars_,
                                        step_install_generation_,
                                        installed_hash_,
                                        operator_authorities_,
@@ -1093,6 +1104,8 @@ struct ProgramRuntimeState {
     dt_bound_ = std::move(snapshot.dt_bound);
     advance_max_attempts_ = snapshot.advance_max_attempts;
     advance_segment_ = snapshot.advance_segment;
+    advance_output_scalar_counts_ = std::move(snapshot.advance_output_scalar_counts);
+    advance_output_scalars_ = std::move(snapshot.advance_output_scalars);
     step_install_generation_ = snapshot.generation;
     installed_hash_ = std::move(snapshot.installed_hash);
     operator_authorities_ = std::move(snapshot.operator_authorities);

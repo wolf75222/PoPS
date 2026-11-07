@@ -11,8 +11,15 @@ The run returns a ``RunResult``; a run whose result holds a failure raises its T
 subclass of ``RunFailed`` whose ``result`` is that ``RunResult``, on every rank after the same
 step.
 
-This lot runs a Uniform artifact of one layout to the frontier ``until``. Outputs and their times,
-assessments other than ``finite()``, transforms, the T38 classification of trial failures (a
+The Outputs of the Advance (``pops.time._program.outputs``, CC14) are evaluated by the same native
+call: once at the start of the run, on the state from which it starts, then after each publication
+they are due on, with its achieved time. Each time of their ``at`` that lies ahead of the run, up
+to ``until``, is a frontier that the run lands on; a time within four units in the last place below
+``until`` is ``until``, as master merges a consumer deadline into the end of its run. Their values
+come back in ``RunResult.outputs``, one ``Publication`` per evaluation.
+
+This lot runs a Uniform artifact of one layout to the frontier ``until``. Writers and callbacks of
+Outputs, assessments other than ``finite()``, transforms, the T38 classification of trial failures (a
 trial failure still leaves the run as the native error that raised it, the accepted state
 restored), the continuation codec and the AMR and multi-layout routes are later lots of N8.
 """
@@ -25,6 +32,7 @@ from typing import Any
 
 from pops.time._program.control import AdvanceControl
 from pops.time._program.elaboration import Proposal
+from pops.time._program.outputs import EveryDt, OutputRegion, Product
 
 DEFAULT_MAX_STEPS = 1_000_000
 """``max_steps`` when a run leaves it out: master's (``_runtime_instance.py:1598@bb9``), CC14."""
@@ -102,6 +110,46 @@ class Continuation:
             self.time, self.macro_step, self.proposal.dt)
 
 
+class Publication:
+    """One evaluation of an Output: the achieved time and the macro step of the publication it
+    followed (or of the start of the run) and the values of its record (CC14)."""
+
+    __slots__ = ("time", "macro_step", "values")
+
+    def __init__(self, time: float, macro_step: int, values: Product) -> None:
+        object.__setattr__(self, "time", time)
+        object.__setattr__(self, "macro_step", macro_step)
+        object.__setattr__(self, "values", values)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("Publication is immutable")
+
+    def __getitem__(self, name: str) -> Any:
+        return self.values[name]
+
+    def __repr__(self) -> str:
+        return "Publication(time=%r, macro_step=%d, values=%s)" % (
+            self.time, self.macro_step, ", ".join(self.values))
+
+
+def _ahead(times: tuple, start: float, until: float) -> list:
+    """The output times that are frontiers of a run from ``start`` to ``until``.
+
+    A time within four units in the last place below ``until`` is ``until`` itself, as master
+    merges a consumer deadline into the end of its run (``_runtime_instance.py@bb9``); a time
+    after ``until`` stays ahead for a later run.
+    """
+    frontiers = []
+    for time in times:
+        if not time > start or time > until:
+            continue
+        if until - time <= 4.0 * max(math.ulp(time), math.ulp(until)):
+            time = until
+        if not frontiers or time > frontiers[-1]:
+            frontiers.append(time)
+    return frontiers
+
+
 class RunState(Mapping):
     """The accepted state at the time of a result, block by block, in the layout of Q3.
 
@@ -142,11 +190,11 @@ class RunResult:
 
     def __init__(self, *, state: RunState, time: float, steps: int, rejections: int,
                  diagnostics: Mapping[str, Any], continuation: Continuation,
-                 failure: Failure | None) -> None:
+                 failure: Failure | None, outputs: Mapping[Any, tuple] | None = None) -> None:
         values = {
             "state": state, "time": time, "steps": steps, "rejections": rejections,
-            # pops.Output is a later lot of N8: a run of this lot publishes no output.
-            "outputs": MappingProxyType({}),
+            # Each Output of the Advance maps to its Publications in run order (CC14).
+            "outputs": MappingProxyType(dict(outputs or {})),
             "diagnostics": MappingProxyType(dict(diagnostics)),
             "continuation": continuation, "failure": failure,
         }
@@ -173,7 +221,8 @@ def _binary64(value: Any, where: str) -> float:
 class Simulation:
     """A bound artifact whose Program elaborates an Advance, run by ``System::run_advance``."""
 
-    __slots__ = ("_runtime", "_control", "_continuation", "_run_native")
+    __slots__ = ("_runtime", "_control", "_continuation", "_run_native", "_outputs")
+    _outputs: tuple[OutputRegion, ...]
 
     def __init__(self, runtime: Any) -> None:
         from pops.runtime._runtime_instance import RuntimeInstance
@@ -190,8 +239,11 @@ class Simulation:
                 "(pops.time._program.elaboration.elaborate); this one has no compiled control")
         if runtime._consumer_graph.nodes:
             raise NotImplementedError(
-                "the compiled run publishes no output yet (pops.Output is a later lot of N8); "
-                "this artifact declares consumers")
+                "the compiled run publishes the Outputs of its Advance (CC14), not the b6 "
+                "ConsumerGraph; this artifact declares consumers")
+        regions: tuple[OutputRegion, ...] = tuple(getattr(program, "_advance_outputs", ()))
+        if len(regions) != len(control.outputs):
+            raise RuntimeError("the Program and its compiled control list different Outputs")
         native = getattr(runtime._executor, "_s", None)
         if native is None or not callable(getattr(native, "_run_advance", None)):
             raise NotImplementedError(
@@ -204,6 +256,7 @@ class Simulation:
         self._control = control
         self._continuation: Continuation | None = None
         self._run_native = native._run_advance
+        self._outputs = regions
 
     @property
     def control(self) -> AdvanceControl:
@@ -240,14 +293,31 @@ class Simulation:
         last = self._continuation
         if last is not None and (last.time, last.macro_step) != (start, start_step):
             raise RuntimeError("the runtime advanced outside this Simulation since its last run")
+        schedule = []
+        for region in self._outputs:
+            output = region.output
+            at = output.at
+            times = () if at is None else at.times(start, until) if type(at) is EveryDt else at
+            schedule.append((0 if output.when is None else output.when.steps,
+                             _ahead(times, start, until),
+                             [item for _, kind, item in region.record if kind == "array"]))
         try:
-            report = self._run_native(until, dt, max_steps)
+            report = self._run_native(until, dt, max_steps, schedule)
         finally:
             # A failure of a trial leaves the accepted state of its step; the next proposal is
             # the one of this run (T28, next=None).
             self._continuation = Continuation(runtime.time(), runtime.macro_step(),
                                               Proposal(dt))
         time = runtime.time()
+        report = dict(report)
+        published: dict[Any, list] = {region.output: [] for region in self._outputs}
+        for sample in report.pop("outputs"):
+            region = self._outputs[sample["output"]]
+            scalars, arrays = iter(sample["scalars"]), iter(sample["arrays"])
+            values = Product(**{name: next(arrays) if kind == "array" else float(next(scalars))
+                                for name, kind, _ in region.record})
+            published[region.output].append(
+                Publication(sample["time"], sample["macro_step"], values))
         stop = report["stop"]
         failure = None
         if stop == _STEP_BUDGET:
@@ -267,13 +337,15 @@ class Simulation:
                 "control": self._control.to_data(),
                 "run": {"start": start.hex(), "until": until.hex(), "proposal": dt.hex(),
                         "max_steps": max_steps},
-                "native": dict(report),
+                "native": report,
+                "outputs": [len(rows) for rows in published.values()],
             },
-            continuation=self._continuation, failure=failure)
+            continuation=self._continuation, failure=failure,
+            outputs={output: tuple(rows) for output, rows in published.items()})
         if failure is not None:
             raise failure.variant(result)
         return result
 
 
-__all__ = ["BudgetExhausted", "Continuation", "DEFAULT_MAX_STEPS", "Failure", "RunFailed",
-           "RunResult", "RunState", "Simulation"]
+__all__ = ["BudgetExhausted", "Continuation", "DEFAULT_MAX_STEPS", "Failure", "Publication",
+           "RunFailed", "RunResult", "RunState", "Simulation"]

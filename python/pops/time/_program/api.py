@@ -199,6 +199,9 @@ class Program(
         # The compiled control of the Advance this Program elaborates (control.AdvanceControl), or
         # None for a Program authored on the builder; it enters the Program identity.
         self._advance_control = None
+        # The Outputs of that Advance (outputs.OutputRegion), each a read-only region of the builder
+        # evaluated by the compiled run between steps (spec 0.3 CC14); they enter the identity.
+        self._advance_outputs = ()
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
         # freeze, adding an IR node (via _new) RAISES -- a compiled artifact is frozen to exactly the
         # program it was compiled from. Emission / hashing are pure reads and stay allowed.
@@ -313,6 +316,18 @@ class Program(
         if self._advance_control is not None:
             raise ValueError("Program already elaborates an Advance")
         self._advance_control = control
+
+    def _set_advance_outputs(self, regions: Any) -> None:
+        """Record, once, the traced Outputs of the Advance that this Program elaborates."""
+        from .outputs import OutputRegion
+
+        self._guard_mutable("set the Advance outputs")
+        regions = tuple(regions)
+        if not regions or any(type(region) is not OutputRegion for region in regions):
+            raise TypeError("Program._set_advance_outputs takes OutputRegion values")
+        if self._advance_outputs:
+            raise ValueError("Program already elaborates the Outputs of an Advance")
+        self._advance_outputs = regions
 
     def cadence(self, *, substeps: Any = 1, stride: Any = 1) -> Any:
         """Declare the global Program cadence once, before compile.

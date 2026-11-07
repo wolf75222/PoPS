@@ -5,6 +5,9 @@ parameters and ``Retry`` its budgets. ``elaborate`` traces the method once again
 (``pops.time.Program``), commits the candidate at the endpoint of the state it evolves and attaches
 the builder to the case: the builder is the elaborator, and the case never calls it.
 
+Lot 3 adds the Outputs of the Advance (``outputs.py``, CC14), which the compiled run evaluates after
+publication, and whose times it lands on.
+
 This lot elaborates the trial of a method whose candidate reaches ``B.time + p.dt``, with the
 default acceptance and a budget of attempts. The default acceptance ``finite()``, written
 ``accept=None``, accepts a candidate whose every value is finite: the candidate passes, before its
@@ -26,6 +29,7 @@ from typing import Any
 
 from pops.time._program.api import Program as _Builder
 from pops.time._program.control import AdvanceControl
+from pops.time._program.outputs import trace_output
 from pops.time._program.traced_method import (
     MethodTrace, NotYetElaborated, SpecializedMethod, _fraction,
 )
@@ -122,8 +126,11 @@ class Elaboration:
 
 
 def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
-              name: str | None = None) -> Elaboration:
+              name: str | None = None, outputs: Any = ()) -> Elaboration:
     """Elaborate ``advance`` for the block-qualified ``state`` of ``case``, from ``proposal``.
+
+    ``outputs`` is a tuple of ``Output`` (``outputs.py``, CC14): each body is traced once into a
+    read-only region of the builder, and the compiled control lists its schedule and record.
 
     The builder is named ``name``, by default after the method; that name and the value and stage
     names are presentation (CC2), though b6 hashes them into the program identity (C47).
@@ -140,12 +147,20 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
     candidate = program._assess_candidate(
         "finite", trace.candidate, program.isfinite(program.norm_inf_all(trace.candidate)))
     program.commit(temporal.next, candidate)
+    if isinstance(outputs, (str, bytes)) or not isinstance(outputs, (tuple, list)):
+        raise TypeError("elaborate(outputs=...) is a tuple of Output, got %r" % (outputs,))
+    if len({id(output) for output in outputs}) != len(outputs):
+        raise ValueError("elaborate(outputs=...) names each Output once")
+    regions = tuple(trace_output(program, temporal, output) for output in outputs)
+    if regions:
+        program._set_advance_outputs(regions)
     dt = proposal.dt
     strategy = FixedDt(float(dt) if isinstance(dt, (Fraction, Decimal)) else dt)
     program.step_strategy(strategy)
     control = AdvanceControl(assessments=(("finite", "default"),),
                              max_attempts=advance.retry.max_attempts,
-                             max_transforms=advance.retry.max_transforms, first_dt=strategy.dt)
+                             max_transforms=advance.retry.max_transforms, first_dt=strategy.dt,
+                             outputs=tuple(region.schedule_data() for region in regions))
     program._set_advance_control(control)
     case.program(program)
     return Elaboration(advance, proposal, program, trace, control)

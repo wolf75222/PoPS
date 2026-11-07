@@ -12,14 +12,24 @@
 /// frontier is within it, within four units in the last place of it, or the rounded endpoint of
 /// its uninterrupted fixed-proposal segment, and the attempt that lands publishes the frontier
 /// itself.
+///
+/// The Outputs of the Advance (CC14) are evaluated once at the start of the run, on the state from
+/// which it starts, and after each publication whose macro step is a multiple of their step
+/// cadence (when=every(k)) or whose time reaches one or more of their times (at) that no earlier
+/// publication reached. Each of those times is a frontier: the attempt before it is capped at its
+/// distance and lands on it exactly. An Output is evaluated after publication, outside every step:
+/// its scalars by the generated entry of the artifact, its arrays by the gather of the accepted
+/// state, a copy of core machinery (CF3).
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace pops::runtime::program {
 
@@ -51,6 +61,25 @@ struct AdvanceSegment {
   std::int64_t macro_step = -1;  ///< -1 before the first compiled run
 };
 
+/// One Output of the elaborated Advance as a compiled run schedules it (CC14).
+struct AdvanceOutputSchedule {
+  /// when=every(k): due after each publication whose macro step is a multiple of k; 0 for none.
+  std::int64_t every_steps = 0;
+  /// The times of at= that lie ahead of the run, strictly increasing; each one is a frontier.
+  std::vector<double> at;
+  /// The blocks whose accepted state the record publishes as arrays, gathered from every rank.
+  std::vector<std::string> arrays;
+};
+
+/// One evaluation of an Output after a publication, or at the start of the run.
+struct AdvanceOutputSample {
+  int output = 0;               ///< index of the Output in the schedule of the run
+  double time = 0.0;            ///< the achieved time of the publication
+  std::int64_t macro_step = 0;  ///< its accepted macro step
+  std::vector<double> scalars;  ///< the scalars of the record, in the order of the artifact
+  std::vector<std::vector<double>> arrays;  ///< the gathered states, in the order of `arrays`
+};
+
 /// Native counters of one compiled run. Nothing of the run goes through the host interpreter.
 struct AdvanceRunReport {
   std::int64_t steps = 0;       ///< accepted steps of the run
@@ -59,6 +88,7 @@ struct AdvanceRunReport {
   std::int64_t attempts = 0;  ///< attempts of the step that spent the attempt budget
   std::string rejection;      ///< diagnostic of the last rejected attempt, empty when none
   AdvanceSegment segment;     ///< the segment that the next run continues
+  std::vector<AdvanceOutputSample> outputs;  ///< the evaluations of the Outputs, in run order
 };
 
 /// Duration of the next attempt, whether it publishes the frontier, and whether it keeps the
@@ -91,6 +121,57 @@ inline double segment_endpoint(double origin, std::int64_t steps, double proposa
 }
 
 }  // namespace advance_run_detail
+
+/// The frontier of the next attempt from @p time: @p until, or the first time of an Output ahead
+/// of it when that time comes first. @p cursors holds, per Output, the index of its first time
+/// that no publication has reached.
+inline double advance_next_frontier(double time, double until,
+                                    const std::vector<AdvanceOutputSchedule>& schedule,
+                                    const std::vector<std::size_t>& cursors) {
+  double frontier = until;
+  for (std::size_t output = 0; output < schedule.size(); ++output) {
+    const auto& at = schedule[output].at;
+    if (cursors[output] < at.size()) {
+      const double next = at[cursors[output]];
+      if (!(next > time))
+        throw std::logic_error("Advance output time was reached without its evaluation");
+      frontier = std::min(frontier, next);
+    }
+  }
+  return frontier;
+}
+
+/// Whether Output @p output is due after the publication at (@p time, @p macro_step), and moves
+/// its cursor past every time of it that the publication reached or passed: an Output whose
+/// times a publication passes is evaluated once for that publication (CC14).
+inline bool advance_output_due(std::size_t output, double time, std::int64_t macro_step,
+                               const std::vector<AdvanceOutputSchedule>& schedule,
+                               std::vector<std::size_t>& cursors) {
+  const auto& entry = schedule[output];
+  bool due = entry.every_steps > 0 && macro_step % entry.every_steps == 0;
+  while (cursors[output] < entry.at.size() && time >= entry.at[cursors[output]]) {
+    ++cursors[output];
+    due = true;
+  }
+  return due;
+}
+
+/// Checks a schedule against the accepted time @p time from which a run starts.
+inline void validate_advance_output_schedule(double time,
+                                             const std::vector<AdvanceOutputSchedule>& schedule) {
+  for (const auto& entry : schedule) {
+    if (entry.every_steps < 0)
+      throw std::invalid_argument("Advance output step cadence must be non-negative");
+    double previous = time;
+    for (const double at : entry.at) {
+      if (!std::isfinite(at) || !(at > previous))
+        throw std::invalid_argument(
+            "Advance output times must be finite, strictly increasing and after the accepted "
+            "time from which the run starts");
+      previous = at;
+    }
+  }
+}
 
 /// Duration of the attempt from @p time toward @p frontier, in the segment of @p proposal that
 /// started at @p origin and holds @p steps accepted steps.

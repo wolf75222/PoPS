@@ -172,8 +172,9 @@ void System<Dim>::advance(double dt, int nsteps) {
 }
 
 template <int Dim>
-runtime::program::AdvanceRunReport System<Dim>::run_advance(double until, double proposal,
-                                                            std::int64_t max_steps) {
+runtime::program::AdvanceRunReport System<Dim>::run_advance(
+    double until, double proposal, std::int64_t max_steps,
+    const std::vector<runtime::program::AdvanceOutputSchedule>& outputs) {
   using runtime::program::AdvanceRunStop;
   p_->program_.require_step_installed("System::run_advance");
   const auto communicator = prepared_boundary_execution_lane_
@@ -193,7 +194,16 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(double until, double
       .scalar(segment.origin)
       .scalar(segment.steps)
       .scalar(segment.time)
-      .scalar(segment.macro_step);
+      .scalar(segment.macro_step)
+      .scalar(static_cast<std::int64_t>(outputs.size()));
+  for (const auto& output : outputs) {
+    arguments.scalar(output.every_steps).scalar(static_cast<std::int64_t>(output.at.size()));
+    for (const double at : output.at)
+      arguments.scalar(at);
+    arguments.scalar(static_cast<std::int64_t>(output.arrays.size()));
+    for (const auto& block : output.arrays)
+      arguments.text(block);
+  }
   if (!all_ranks_agree_exact_ordered_byte_pairs(
           {{"system-run-advance", std::move(arguments).release()}}, communicator))
     throw std::runtime_error("System::run_advance arguments differ between ranks");
@@ -207,6 +217,14 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(double until, double
         "non-negative step budget");
   if (until < p_->t)
     throw std::invalid_argument("System::run_advance frontier precedes the accepted time");
+  const auto& output_scalar_counts = p_->program_.advance_output_scalar_counts_;
+  if (outputs.size() != output_scalar_counts.size())
+    throw std::invalid_argument(
+        "System::run_advance needs one schedule per Output of the installed Advance");
+  runtime::program::validate_advance_output_schedule(p_->t, outputs);
+  for (const auto& output : outputs)
+    for (const auto& block : output.arrays)
+      (void)p_->find(block);  // an unknown block fails before the first evaluation
   // A run continues the segment that the last compiled run left at this cursor with this
   // proposal; any other run starts one, as master's FixedDt grid does.
   if (segment.macro_step != static_cast<std::int64_t>(p_->macro_step_) || segment.time != p_->t ||
@@ -218,11 +236,33 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(double until, double
     report.segment = segment;
     return report;
   };
+  // An Output is evaluated after publication, outside every step (CC14, PF1): its scalars by the
+  // generated entry of the artifact, its arrays by the gather of the accepted state.
+  const auto evaluate = [&](std::size_t output) {
+    runtime::program::AdvanceOutputSample sample;
+    sample.output = static_cast<int>(output);
+    sample.time = p_->t;
+    sample.macro_step = static_cast<std::int64_t>(p_->macro_step_);
+    const int scalars = output_scalar_counts[output];
+    if (scalars > 0) {
+      std::vector<Real> values(static_cast<std::size_t>(scalars), Real(0));
+      p_->program_.advance_output_scalars_(static_cast<int>(output), values.data());
+      sample.scalars.assign(values.begin(), values.end());
+    }
+    for (const auto& block : outputs[output].arrays)
+      sample.arrays.push_back(state_global(block));
+    report.outputs.push_back(std::move(sample));
+  };
+  std::vector<std::size_t> cursors(outputs.size(), 0);
+  // A run evaluates every Output once at its start, on the state from which it starts.
+  for (std::size_t output = 0; output < outputs.size(); ++output)
+    evaluate(output);
   while (p_->t < until) {
     if (report.steps == max_steps)
       return finish(AdvanceRunStop::kStepBudget);
-    const auto duration = runtime::program::advance_attempt_duration(p_->t, proposal, until,
-                                                                     segment.origin, segment.steps);
+    const double frontier = runtime::program::advance_next_frontier(p_->t, until, outputs, cursors);
+    const auto duration = runtime::program::advance_attempt_duration(
+        p_->t, proposal, frontier, segment.origin, segment.steps);
     for (std::int64_t attempt = 1;; ++attempt) {
       try {
         step(duration.dt);
@@ -248,8 +288,13 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(double until, double
     }
     segment.time = p_->t;
     segment.macro_step = static_cast<std::int64_t>(p_->macro_step_);
-    if (duration.lands && p_->t != until)
+    if (duration.lands && p_->t != frontier)
       throw std::logic_error("System::run_advance did not publish its frontier exactly");
+    for (std::size_t output = 0; output < outputs.size(); ++output)
+      if (runtime::program::advance_output_due(output, p_->t,
+                                               static_cast<std::int64_t>(p_->macro_step_),
+                                               outputs, cursors))
+        evaluate(output);
   }
   return finish(AdvanceRunStop::kReached);
 }
@@ -1402,8 +1447,8 @@ template SolveOutcome System<kNativeDimension>::track_solve_outcome(SolveOutcome
 template void System<kNativeDimension>::require_solve_outcome_creation_(long) const;
 template void System<kNativeDimension>::step(double);
 template void System<kNativeDimension>::advance(double, int);
-template runtime::program::AdvanceRunReport System<kNativeDimension>::run_advance(double, double,
-                                                                                  std::int64_t);
+template runtime::program::AdvanceRunReport System<kNativeDimension>::run_advance(
+    double, double, std::int64_t, const std::vector<runtime::program::AdvanceOutputSchedule>&);
 template int System<kNativeDimension>::advance_max_attempts() const noexcept;
 template std::string System<kNativeDimension>::advance_program_region(double);
 template void System<kNativeDimension>::begin_step_transaction();

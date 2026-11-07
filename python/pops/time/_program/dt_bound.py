@@ -26,13 +26,22 @@ def readonly_dt_bound_nodes(program: Any, sub: Any = None) -> list[Any]:
         if program._dt_bound is None:
             return []
         sub = program._dt_bound[0]
+    return readonly_query_nodes(program, sub, where="set_dt_bound", ops=_READONLY_OPS)
+
+
+def readonly_query_nodes(program: Any, sub: Any, *, where: str, ops: Any) -> list[Any]:
+    """The read-only region @p sub and its transitive captures in DAG order, each of @p ops.
+
+    The dt bound and the Outputs of an elaborated Advance (spec 0.3 CC14) are such regions: they
+    read the accepted state between steps and compute scalars, and no node of theirs updates it.
+    """
     ordered, complete, visiting = [], set(), set()
 
     for root in sub:
         pending = [(root, False)]
         while pending:
             value, exiting = pending.pop()
-            require_owned(program, value, "set_dt_bound capture")
+            require_owned(program, value, "%s capture" % where)
             key = id(value)
             if exiting:
                 visiting.remove(key)
@@ -42,11 +51,11 @@ def readonly_dt_bound_nodes(program: Any, sub: Any = None) -> list[Any]:
             if key in complete:
                 continue
             if key in visiting:
-                raise ValueError("set_dt_bound: cyclic read-only capture dependencies")
-            if value.op not in _READONLY_OPS:
+                raise ValueError("%s: cyclic read-only capture dependencies" % where)
+            if value.op not in ops:
                 raise ValueError(
-                    "set_dt_bound: body and captures may only read state/fields and compute "
-                    "scalars; op %r is not allowed" % value.op)
+                    "%s: body and captures may only read state/fields and compute "
+                    "scalars; op %r is not allowed" % (where, value.op))
             visiting.add(key)
             pending.append((value, True))
             pending.extend((dependency, False) for dependency in reversed(value.inputs))
@@ -97,4 +106,4 @@ class _ProgramDtBound(_ProgramBase):
         return self._dt_bound is not None
 
 
-__all__ = ["_ProgramDtBound", "readonly_dt_bound_nodes"]
+__all__ = ["_ProgramDtBound", "readonly_dt_bound_nodes", "readonly_query_nodes"]
