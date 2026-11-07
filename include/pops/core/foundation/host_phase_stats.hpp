@@ -13,8 +13,9 @@
 ///
 /// The staging counters cover the halo exchange (`HaloExchange`) and the AMR parent ghost
 /// transport only. The other transports that stage through pinned host memory (`RegionTransport`,
-/// `TranslationExchange`, the traces of the multiblock interface, `comm_allocator` buffers) are
-/// seen only by their Kokkos label "pops_host_staging:"; these counters are not the total staging.
+/// `TranslationExchange`, the traces of a distributed multiblock interface, `comm_allocator`
+/// buffers) are seen only by their Kokkos label "pops_host_staging:"; these counters are not the
+/// total staging. The traces of a one-rank interface move no MPI data: "pops_host_phase:".
 ///
 /// Like `allocation_event_stats`, each independently loaded hidden-visibility image owns its own
 /// counters; a probe that spans images reads the Kokkos Tools labels instead
