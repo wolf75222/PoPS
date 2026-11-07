@@ -193,7 +193,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   writing the regrid in both places is refused). The body reads `B.steps % k == 0`
   (`pops.lib.time.every(k)`), `B.time`, runtime parameters and indicators of the accepted state,
   `pops.amr.largest_cells(f)` and `smallest_cells(f)`, the largest or the smallest value of a
-  function of `cell` over the valid cells of every level; it is two-valued, as the `cond` of IR4.
+  function of `cell` over the valid cells of every level (covered coarse cells included, so for a
+  nonlinear `f` it is not the composite extremum); it is two-valued, as the `cond` of IR4.
   The decision is generated into the compiled Program with the criterion; after each accepted step
   the core reduces each indicator over the patches and the ranks, calls the generated decision and
   regrids when it is true, with no Python in the step. An indicator that is not finite fails the
