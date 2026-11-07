@@ -194,7 +194,7 @@ _GUARDED_TABLES = (
     "_time_history_values", "_time_history_configs", "_time_history_stores",
     "_history_contracts", "_global_field_history_issuance", "_integral_states",
     "_integral_units", "_integral_transfers", "_acceptance_guards", "_transaction_stores",
-    "_step_strategy", "_dt_bound", "_cadence", "_cell_local_time",
+    "_step_strategy", "_dt_bound", "_cadence", "_cell_local_time", "_advance_outputs",
 )
 _ABSENT = object()
 

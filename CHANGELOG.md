@@ -18,6 +18,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-87 (N3): reconstructions and slope limiters written in Python in `pops.lib.numerics`.
+  `Reconstruct(rep, value)` builds a per-axis reconstruction from `value(c, a)` (spec 0.3
+  sec. 4.3), `muscl(rep, limiter)` is the MUSCL face value of the catalogue, and `minmod`,
+  `vanleer`, `mc` and `superbee` are plain limiter functions passed uncalled. The body becomes
+  the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
+  native `MUSCL(<Limiter>())` state bit for bit for the four limiters.
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
   SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
@@ -490,6 +496,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - The coverage fence keeps that catalogue shrink-only: a record added or rewritten, or a changed
   header, fails even when the catalogue's SHA-256 pin is updated with it; a record may only be
   dropped, and its test must then be claimed by a suite.
+- Emit less C++ per generated Program, so that the Hall MHD CT Program compiles. Each translation
+  unit now defines once its continuation field callbacks, each distinct schema construction, each
+  distinct terminal exit of a distributed map and each distinct staging of an Array captured by a
+  device map; the collective entry points receive their callable through a non-owning view; and
+  the step body continues in nested functions at top-level operation boundaries. Operations, their
+  order, their values and schema identities are unchanged. On one 4-core container the Hall source
+  goes from 30.0 to 17.7 MB and compiles in 357 s within 4.8 GiB, where it did not fit in 12 GiB
+  before.
 
 ## [1.0.0] - 2026-07-16
 

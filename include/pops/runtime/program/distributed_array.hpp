@@ -142,10 +142,12 @@ struct Outcome {
 };
 // Callback returns a declared two-arm Result: arm 0=err, arm 1=ok (canonical sorted tags).
 // It MUST contain only local operations. The frontend and lowering enforce that finite effect set.
-template <int Dim, class F>
-Outcome<Dim> map(Registry& registry, DomainRef domain, const ContinuationType& element,
-                 const ContinuationType& error, std::uint64_t byte_capacity, F&& body,
-                 ContinuationTransportSession<Dim>* transport = nullptr) {
+template <int Dim>
+using MapBody = FunctionRef<ContinuationValueRef<Dim>(Index)>;
+template <int Dim>
+Outcome<Dim> map_erased(Registry& registry, DomainRef domain, const ContinuationType& element,
+                        const ContinuationType& error, std::uint64_t byte_capacity,
+                        MapBody<Dim> body, ContinuationTransportSession<Dim>* transport) {
   const auto& lane = registry.lane();
   Outcome<Dim> result;
   try {
@@ -232,6 +234,13 @@ Outcome<Dim> map(Registry& registry, DomainRef domain, const ContinuationType& e
     result.gid = f.gid;
     return result;
   }
+}
+template <int Dim, class F>
+Outcome<Dim> map(Registry& registry, DomainRef domain, const ContinuationType& element,
+                 const ContinuationType& error, std::uint64_t byte_capacity, F&& body,
+                 ContinuationTransportSession<Dim>* transport = nullptr) {
+  return map_erased<Dim>(registry, std::move(domain), element, error, byte_capacity,
+                         MapBody<Dim>(body), transport);
 }
 // Rank-indexed byte buckets. The common count exchange precedes all payload allocations.
 inline std::vector<Bytes> exchange(const ExecutionLane& lane, const std::vector<Bytes>& send,
@@ -350,8 +359,8 @@ void publish_requests(Registry& registry, Requests& requests, std::uint64_t capa
   requests.value = publish_array<Dim>(registry, std::move(pending), capacity, transport);
   requests.dimension = Dim;
 }
-template <class F>
-Requests requests(Registry& registry, DomainRef domain, DomainRef target, F&& body) {
+inline Requests requests_erased(Registry& registry, DomainRef domain, DomainRef target,
+                                FunctionRef<Index(Index)> body) {
   registry.common(domain);
   registry.common(target);
   Requests result{domain, target, {}};
@@ -364,6 +373,11 @@ Requests requests(Registry& registry, DomainRef domain, DomainRef target, F&& bo
     }
   });
   return result;
+}
+template <class F>
+Requests requests(Registry& registry, DomainRef domain, DomainRef target, F&& body) {
+  return requests_erased(registry, std::move(domain), std::move(target),
+                         FunctionRef<Index(Index)>(body));
 }
 // Duplicates retain distinct request positions; empty owners/requesters participate in both exchanges.
 template <int Dim>
@@ -558,11 +572,16 @@ std::vector<ContinuationValueRef<Dim>> ordered_values(
 }
 
 // Ordered fold: every rank consumes the same global sequence, never MPI_SUM.
-template <int Dim, class F>
-ContinuationValueRef<Dim> reduce(Registry& registry, const ArrayRef<Dim>& source,
-                                 const ContinuationType& state, ContinuationValueRef<Dim> initial,
-                                 const ContinuationType& error, std::uint64_t capacity, F&& body,
-                                 ContinuationTransportSession<Dim>* transport = nullptr) {
+template <int Dim>
+using ReduceBody = FunctionRef<ContinuationValueRef<Dim>(const ContinuationValueRef<Dim>&,
+                                                         const ContinuationValueRef<Dim>&)>;
+template <int Dim>
+ContinuationValueRef<Dim> reduce_erased(Registry& registry, const ArrayRef<Dim>& source,
+                                        const ContinuationType& state,
+                                        ContinuationValueRef<Dim> initial,
+                                        const ContinuationType& error, std::uint64_t capacity,
+                                        ReduceBody<Dim> body,
+                                        ContinuationTransportSession<Dim>* transport) {
   const auto& lane = registry.lane();
   common_initial<Dim>(state, initial, capacity, lane, transport);
   auto ordered = ordered_values<Dim>(registry, source, capacity, transport);
@@ -582,6 +601,14 @@ ContinuationValueRef<Dim> reduce(Registry& registry, const ArrayRef<Dim>& source
   converge_payload_failure<Dim>(lane, std::move(local_error), error, capacity, transport);
   common_initial<Dim>(state, result, capacity, lane, transport);
   return result;
+}
+template <int Dim, class F>
+ContinuationValueRef<Dim> reduce(Registry& registry, const ArrayRef<Dim>& source,
+                                 const ContinuationType& state, ContinuationValueRef<Dim> initial,
+                                 const ContinuationType& error, std::uint64_t capacity, F&& body,
+                                 ContinuationTransportSession<Dim>* transport = nullptr) {
+  return reduce_erased<Dim>(registry, source, state, std::move(initial), error, capacity,
+                            ReduceBody<Dim>(body), transport);
 }
 
 template <int Dim>
