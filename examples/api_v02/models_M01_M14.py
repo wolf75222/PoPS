@@ -20,7 +20,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
-from pops.lib.numerics import hll, rusanov
+from pops.lib.numerics import rusanov
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import (CoordinatedFace, CoordinatedFiniteVolume, Diffusion,
                            DiscretizationPlan, FaceBalance,
@@ -119,20 +119,11 @@ def _periodic_metrics(initial, *, block="fluid", components=(0,), tolerance=2.e-
     return check
 
 
-def m01_hll(flux, state):
-    """HLL on M01 with the wave-speed bounds that the case states (R9).
-
-    Each axis has one constant positive wave (.7 and .3), so along a face normal the slowest and
-    fastest speeds of both traces equal the spectral radius s: (sL, sR) = (s, s).
-    """
-    return hll(flux, state, speeds=lambda uL, uR, fL, fR, s: (s, s))
-
-
 def build_m01(cells=(16, 8), *, scheme=rusanov, signed_wave_speeds=False):
     """``scheme(flux, state)`` realizes the transport; the default is pops.lib.numerics.rusanov.
 
     ``signed_wave_speeds=True`` also declares the signed pair of each axis (R9), which the native
-    ``riemann.HLL()`` route requires.
+    ``riemann.HLL()`` route and pops.lib.numerics.hll require.
     """
     frame, layout = _domain("M01_periodic", cells)
     model = pops.Model("M01_authored_transport", frame=frame)
@@ -235,32 +226,12 @@ def _euler(model, frame, *, gamma, pressure_offset=0., electromagnetic=False,
     return U,flux,rate,phi
 
 
-def m03_hll(flux, state, *, gamma=1.4, pressure_offset=.2):
-    """HLL on M03 with the signed wave-speed interval that the case states (R9).
-
-    Along a face normal n the slowest and fastest waves of a trace are v.n - c and v.n + c. The
-    body reads v.n as the normal mass flux over the density, fL[0]/uL[0], and c from the formula
-    of the model's waves; (sL, sR) is their union over the two traces, as the native
-    ``riemann.HLL()`` takes it from the declared signed pair. ``gamma`` and ``pressure_offset``
-    must be those of the case; the defaults are those of :func:`build_m03`.
-    """
-    def speeds(uL, uR, fL, fR, s):
-        vL, vR = fL[0]/uL[0], fR[0]/uR[0]
-        cL = _stiffened_gas(uL, gamma=gamma, pressure_offset=pressure_offset)[1]
-        cR = _stiffened_gas(uR, gamma=gamma, pressure_offset=pressure_offset)[1]
-        lowL, lowR, highL, highR = vL-cL, vR-cR, vL+cL, vR+cR
-        return (pm.where(lowL < lowR, lambda: lowL, lambda: lowR),
-                pm.where(highL > highR, lambda: highL, lambda: highR))
-
-    return hll(flux, state, speeds=speeds)
-
-
 def build_m03(cells=(16,8), *, gamma=1.4, pressure_offset=.2, scheme=rusanov,
               signed_wave_speeds=False):
     """``scheme(flux, state)`` realizes the transport; the default is pops.lib.numerics.rusanov.
 
     ``signed_wave_speeds=True`` also declares the signed pair of each axis (R9), which the native
-    ``riemann.HLL()`` route requires.
+    ``riemann.HLL()`` route and pops.lib.numerics.hll require.
     """
     if gamma <= 1 or pressure_offset < 0:
         raise ValueError("the selected gas domain requires gamma>1,p_inf>=0")

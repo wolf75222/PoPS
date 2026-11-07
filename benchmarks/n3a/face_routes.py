@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ROUTES = ("native_rusanov", "python_rusanov", "native_hll", "python_hll_m01", "python_hll_m03")
+ROUTES = ("native_rusanov", "python_rusanov", "native_hll", "python_hll")
 
 
 def _arguments():
@@ -37,7 +37,7 @@ def _arguments():
     parser.add_argument("--blocks", type=int, default=3, help="A B B A repetitions")
     parser.add_argument("--warmup", type=int, default=2, help="steps per route before timing")
     parser.add_argument("--signed", action="store_true",
-                        help="declare the signed wave speeds that the native HLL requires")
+                        help="declare the signed wave speeds that both HLL routes require")
     parser.add_argument("--out", required=True, type=Path)
     return parser.parse_args()
 
@@ -71,13 +71,14 @@ def main():
     import numpy as np
     import pops
     from examples.api_v02 import models_M01_M14 as cases
+    from pops.lib.numerics import hll
 
     timer = None
     if os.environ.get("KOKKOS_TOOLS_LIBS"):
         timer = ctypes.CDLL(os.environ["KOKKOS_TOOLS_LIBS"])
+    # python_hll is the derived hll(F, Uh): its face reads the signed speeds (ROM-99).
     schemes = {"native_rusanov": cases.native_rusanov, "python_rusanov": cases.rusanov,
-               "native_hll": cases.native_hll, "python_hll_m01": cases.m01_hll,
-               "python_hll_m03": cases.m03_hll}
+               "native_hll": cases.native_hll, "python_hll": hll}
     builder = {"M01": cases.build_m01, "M03": cases.build_m03}[args.case]
     cells = tuple(int(count) for count in args.cells.split("x"))
 

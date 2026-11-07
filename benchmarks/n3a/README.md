@@ -8,6 +8,8 @@ It is not routine CI. It records times; it asserts no time threshold.
   up, then advances the routes in interleaved `A B B A` blocks of fixed accepted steps. It reports
   the median time per step, the throughput ratio against the first route (PF10 (1), OD9: 0.9),
   and whether the final states are bitwise equal, with their L1 and L-infinity differences.
+  The `python_hll` route is the derived `hll(F, Uh)`, whose face reads the signed wave speeds
+  that the model declares (ROM-99); like `native_hll`, it needs `--signed`.
 - `kernel_timer.cpp`: a Kokkos Tools library for host backends. Kernels are keyed by label and
   launch stack, so the many `pops_for_each_cell` kernels are told apart.
 - `stream.cpp`: copy, scale, add and triad bandwidth with the same OpenMP threads.
@@ -27,9 +29,9 @@ export PYTHONPATH=$PWD KOKKOS_TOOLS_LIBS=$PWD/build/n3a/libn3a_kernel_timer.so
 OMP_NUM_THREADS=1 python benchmarks/n3a/face_routes.py M01 4096x4096 --steps 3 --out m01.json
 OMP_NUM_THREADS=1 python benchmarks/n3a/face_routes.py M03 2048x2048 --steps 2 --out m03.json
 OMP_NUM_THREADS=1 python benchmarks/n3a/face_routes.py M01 4096x4096 --signed \
-    --routes native_hll,python_hll_m01 --steps 3 --out m01_hll.json
+    --routes native_hll,python_hll --steps 3 --out m01_hll.json
 OMP_NUM_THREADS=1 python benchmarks/n3a/face_routes.py M03 2048x2048 --signed \
-    --routes native_hll,python_hll_m03 --steps 2 --out m03_hll.json
+    --routes native_hll,python_hll --steps 2 --out m03_hll.json
 OMP_NUM_THREADS=1 build/n3a/stream 200000000 10 >> stream.jsonl
 python benchmarks/n3a/roofline.py stream.jsonl m01.json m03.json
 ```
