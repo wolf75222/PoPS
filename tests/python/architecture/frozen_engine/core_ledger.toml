@@ -15,11 +15,19 @@ rule = "IR26"
 pre_freeze = true
 what = """
 A flux-only residual whose faces a Program observes, through the face carrier or through the
-incident-face frequency of its stability guard, takes the route of the residual it observes: a
-block that the transport prepared at bind can evaluate goes through it, so no field is allocated
-per evaluation. The face carrier is produced only when the Program reads it; otherwise the face
-gives only its frequency, read from the face speeds that the evaluation recorded: on the prepared
-transport in the traversal that already validates the evaluated residual, elsewhere in one pass.
+incident-face frequency of its stability guard, goes through the transport prepared at bind
+whenever that transport can observe the block's faces: a periodic block, or a bounded block whose
+physical faces it evaluates at the point with no omitted interface face (the native residual of a
+Program that observes no face still prepares a boundary session per evaluation there). No boundary
+session is then allocated per evaluation: a Program that reads only the frequency allocates per
+accepted step what the native face allocates, and a Program that reads the faces still allocates,
+per evaluation, the candidate and backup residuals of the capture path and copies the faces. The
+face carrier is produced only when the Program reads it; otherwise the face gives only its
+frequency, read from the face speeds that the evaluation recorded: on the prepared transport in the
+traversal that already validates the evaluated residual, elsewhere in one pass. A partition
+stability guard, emitted for a transport beside an independent diffusion, re-evaluates the residual
+through evaluated_transport_frequency into a provisional field that it still allocates per call;
+M01 and M03 emit none.
 The generated face policy tests the finiteness of its outputs and of the operands whose non-finite
 value an operation could conceal (comparison, fmin, fmax, sign, exp, expm1, pow, divisor); every
 other operation carries a non-finite operand to an output, so the faces it refuses, and the cause
@@ -35,7 +43,11 @@ benchmarks/n3a/face_routes.py at b6e64c1d (N3a, ROM-82): the riemann.User route 
 unread copy of the faces and a two-pass frequency. After this mechanism, same script and machine
 (ABBA, medians of six samples; 0.23 to 0.49 at the base 9b9bf65): 0.946 to 0.998 of native on M01
 2048^2 and 4096^2 and on M03 1024^2 and 2048^2, at 1 and 4 threads, final states bitwise equal;
-when the cells quadruple, the time per step grows x4.19 to x4.47 (native x4.23 to x4.41)."""
+when the cells quadruple, the time per step grows x4.19 to x4.47 (native x4.23 to x4.41).
+Kokkos allocations per accepted step (Kokkos Tools callbacks, independent review of #697 at
+48d5dfe): on M01 and M03 at 64^2, 59 to 3 for the riemann.User route, the native count; on a block
+with Outflow x faces (64x1 cells), 59 to 3 when the Program reads only the frequency and 63 to 15
+when it reads the faces, where the native face of a Program that observes no face allocates 53."""
 refusal_set = "unchanged: kUserNonFiniteFlux refuses the same faces with the same cause"
 paths = [
   "include/pops/numerics/spatial/nd/face_frequency.hpp",

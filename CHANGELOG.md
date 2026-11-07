@@ -79,12 +79,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   derived `hll(F, Uh)` reads them and matches `riemann.HLL()` on M03 and M16; `rusanov` takes
   `smax(uL, uR, n)` and `upwind` takes `speed(face)`, both matching `riemann.Rusanov()` on M01
   when they read the normal (spec 0.3 section 4.4, ROM-99).
-- Evaluate a `riemann.User` face residual on the transport prepared at bind, like the native face:
-  no field is allocated per evaluation, the face carrier is copied only when a Program reads it,
-  and the stability frequency is read from the recorded face speeds, on the prepared transport in
-  the pass that validates the residual, elsewhere in one pass. The generated face policy tests its
-  outputs and the operands that could conceal a non-finite value, and refuses the same faces with
-  the same cause (ROM-100, core ledger entry).
+- Evaluate a `riemann.User` face residual on the transport prepared at bind whenever that
+  transport can observe the block's faces, periodic or bounded: no boundary session is allocated
+  per evaluation. A Program that reads only the stability frequency allocates what the native face
+  allocates; a Program that reads the faces still allocates the capture path's candidate and backup
+  residuals per evaluation, and the face carrier is copied only when a Program reads it. The
+  stability frequency is read from the recorded face speeds, on the prepared transport in the pass
+  that validates the residual, elsewhere in one pass. The generated face policy tests its outputs
+  and the operands that could conceal a non-finite value, and refuses the same faces with the same
+  cause (ROM-100, core ledger entry).
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.
