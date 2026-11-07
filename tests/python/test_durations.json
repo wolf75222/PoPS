@@ -8317,12 +8317,12 @@
       "source_sha256": "68fef40a86300a8afe9b7886827ec7496ed08b4324254dc0ec561140673b1523"
     },
     "n3_20261107_flux_family": {
-      "basis": "Scheduling estimate for the flux family of Linear N3 (ROM-87, lot 1), not a CI receipt. The file compiles six artifacts: the CF4 body swap (the L1 upwind body and the L5 Scharfetter-Gummel body on one periodic 24 x 8 case, two SSPRK2 steps each) and master's scalar-advection tutorial 02 three times (native ScalarUpwind under AdaptiveCFL and under FixedDt, upwind(speed=) under FixedDt, 64 x 64, MUSCL(VanLeer), to t = 0.2) and once more as written with upwind(speed=), refused at its first step (ROM-107). Analogue: test_api_v02_python_face_inputs_native.py, six artifacts, 695 s locally, estimate 850 s. Local run of the file on 479e872 with this lot: 377 s for its four tests and six artifacts (the ROM-107 test alone: 79 s), one cloud container, 4 cores, Kokkos Serial Dim2, cold isolated cache.",
+      "basis": "Scheduling estimate for the flux family of Linear N3 (ROM-87, lot 1) and ROM-107, not a CI receipt. The file compiles seven artifacts: the CF4 body swap (the L1 upwind body and the L5 Scharfetter-Gummel body on one periodic 24 x 8 case, two SSPRK2 steps each) and master's scalar-advection tutorial 02 five times (native ScalarUpwind under AdaptiveCFL and under FixedDt, upwind(speed=) under FixedDt, then the tutorial as written under AdaptiveCFL with each face, ROM-107), 64 x 64, MUSCL(VanLeer), to t = 0.2. Analogue: test_api_v02_python_face_inputs_native.py, six artifacts, 695 s locally, estimate 850 s. Local run of the file with ROM-107: 402 s for its four tests and seven artifacts (the as-written parity: 118 s), one cloud container, 4 cores, Kokkos Serial Dim2, cold isolated cache.",
       "files": {
         "tests/python/integration/runtime/test_lib_face_body_swap_native.py": {
           "analogue": "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py",
           "estimated_seconds": 600,
-          "source_sha256": "f0d99c43bac09b459d6c0829b8a521298b6cd332b688e7c79a81041078bcc75d"
+          "source_sha256": "cbc80cede3fd8a46f7bf0d9b8c0b303d9d269859575cc2fa288ec0a1347f1043"
         }
       }
     }

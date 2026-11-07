@@ -439,6 +439,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-107: a `riemann.User` face (every `pops.lib.numerics` flux) is no longer refused at its
+  first step under `AdaptiveCFL`. `System::step_cfl` proposes master's cfl min_a h_a / max_a s_a,
+  while the face's guard checked dt sum_a s_a / h_a against cfl, so the proposed step failed in
+  two dimensions (reason 503). The step strategy now names the face frequency its guard reads
+  (`StepStrategy.face_frequency_rule`): `AdaptiveCFL` checks max_a s_a / min_a h_a, the native
+  observation computes it from the same recorded speeds (`nd::FaceFrequencyRule`), and FixedDt
+  and the combined transport-diffusion certificate keep the incident sum. Tutorial 02 as written
+  takes the native face's steps with `upwind(speed=)` (core ledger entry).
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
   and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step

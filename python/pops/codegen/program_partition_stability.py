@@ -332,6 +332,24 @@ def emit_partition_stability(value, var, lines, *, block_index, include_transpor
             rate.id for rate, _ in rates if rate.op == "diffusive_rhs")
 
 
+def user_face_frequency_rule(program):
+    """The trailing argument that selects the face frequency a riemann.User guard checks.
+
+    The step strategy of the Program names it (``StepStrategy.face_frequency_rule``): the
+    guard checks dt times that frequency against the budget of the step it consumes, so that
+    a step the strategy proposes from the speeds of the faces is the step the guard admits,
+    whether the face is native or written in Python (ROM-107). The incident-face sum is the
+    native default and emits no argument.
+    """
+    strategy = getattr(program, "_step_strategy", None)
+    rule = getattr(strategy, "face_frequency_rule", "incident_sum")
+    if rule == "incident_sum":
+        return ""
+    if rule == "largest_axis":
+        return ",pops::nd::FaceFrequencyRule::largest_axis"
+    raise ValueError("unknown face frequency rule %r of the step strategy" % (rule,))
+
+
 def emit_user_face_stability(value, var, lines, *, block_index):
     """Check explicit consumers of numerical faces with one shared convex budget."""
     if value.id in var.get(("authored_stability_updates",), ()):
