@@ -13,7 +13,9 @@
 // on a host build the mirror aliases the storage (same source and destination pointer); both
 // count in "mesh_host". Other mesh copies stay in the target memory space ("mesh_device"). Halo
 // transports that stage through pinned host memory label those buffers "pops_host_staging:":
-// their copies are the reported host phase of PF2 ("host_staging"). Allocations labelled
+// their copies are the reported host phase of PF2 ("host_staging"). Host buffers that also carry
+// host work label themselves "pops_host_phase:": their copies are no admissible phase of PF2 and
+// count apart ("host_phase"). Allocations labelled
 // "pops_unified:" live in unified memory (SharedSpace): each window reports how many are alive
 // when it opens and how many it makes, the arrays whose page migrations DM8 requires to stay at
 // zero on a GPU target. When KOKKOS_TOOLS_LIBS names this library and
@@ -42,7 +44,7 @@ struct Tally {
 
 struct Window {
   std::string region;
-  Tally array_data, control, other, mesh_host, mesh_device, host_staging;
+  Tally array_data, control, other, mesh_host, mesh_device, host_staging, host_phase;
   Tally unified_live, unified_allocations;
   std::set<std::string> array_labels;
   // Allocations of finite array columns made in the window, by memory space name.
@@ -112,6 +114,7 @@ void write_window() {
       ", \"mesh_host\": " + tally(current.mesh_host) +
       ", \"mesh_device\": " + tally(current.mesh_device) +
       ", \"host_staging\": " + tally(current.host_staging) +
+      ", \"host_phase\": " + tally(current.host_phase) +
       ", \"unified_live\": " + tally(current.unified_live) +
       ", \"unified_allocations\": " + tally(current.unified_allocations) + ", \"array_labels\": [";
   bool first = true;
@@ -184,8 +187,11 @@ extern "C" void kokkosp_begin_deep_copy(SpaceHandle, const char* destination,
     const bool host = ends_with(destination, "_mirror") || ends_with(source, "_mirror") ||
                       (destination_pointer != nullptr && destination_pointer == source_pointer);
     target = host ? &current.mesh_host : &current.mesh_device;
-  } else if (starts_with(destination, "pops_host_staging:") ||
-             starts_with(source, "pops_host_staging:"))
+  } else if (starts_with(destination, "pops_host_phase:") ||
+             starts_with(source, "pops_host_phase:"))
+    target = &current.host_phase;
+  else if (starts_with(destination, "pops_host_staging:") ||
+           starts_with(source, "pops_host_staging:"))
     target = &current.host_staging;
   else if (array_label(destination) || array_label(source)) {
     target = &current.array_data;

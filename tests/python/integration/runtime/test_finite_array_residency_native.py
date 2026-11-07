@@ -84,6 +84,7 @@ def test_device_lowered_arrays_move_no_array_byte_inside_a_step(
     assert all(window["mesh_host"] == {"count": 1, "bytes": STATE_FAB_BYTES}
                for window in windows), windows
     assert all(window["host_staging"] == {"count": 0, "bytes": 0} for window in windows), windows
+    assert all(window["host_phase"] == {"count": 0, "bytes": 0} for window in windows), windows
     record_property("unified_live", json.dumps([window["unified_live"] for window in windows]))
     assert report["pops_finite_host_map_count"] == 0
     assert report["pops_finite_kokkos_launch_count"] > 0

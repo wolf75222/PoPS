@@ -11,9 +11,15 @@
 ///     buffers because its route is `host_staged` (MPI not device-aware, or GPU isolation that
 ///     forbids device IPC). This is the admissible host phase of PF2, reported with its bytes.
 ///
+/// The staging counters cover the halo exchange (`HaloExchange`) and the AMR parent ghost
+/// transport only. The other transports that stage through pinned host memory (`RegionTransport`,
+/// `TranslationExchange`, the traces of the multiblock interface, `comm_allocator` buffers) are
+/// seen only by their Kokkos label "pops_host_staging:"; these counters are not the total staging.
+///
 /// Like `allocation_event_stats`, each independently loaded hidden-visibility image owns its own
 /// counters; a probe that spans images reads the Kokkos Tools labels instead
-/// ("pops_mesh_array:" and "pops_host_staging:").
+/// ("pops_mesh_array:", "pops_host_staging:", and "pops_host_phase:" for host buffers that carry
+/// host work and are no admissible phase of PF2).
 
 #pragma once
 
