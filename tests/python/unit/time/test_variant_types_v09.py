@@ -253,7 +253,9 @@ def test_typed_failure_in_finite_region_exits_before_publication(operation):
                                                 runtime=lambda q,x:q.value("wrong", 2*u.n))))
     source = emit_cpp_program(p)
     if operation != "fold":
-        assert source.index("goto typed_capture_done_") < source.index("_array{", source.index("goto typed_capture_done_"))
+        # The host-placed region publishes its columns after the failure exit (DM7).
+        exit_ = source.index("goto typed_capture_done_")
+        assert exit_ < source.index("finite_collective::publish_host(", exit_)
     assert p._ir_hash() == detach_compiled_program(p)._ir_hash()
 
 

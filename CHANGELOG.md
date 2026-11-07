@@ -18,6 +18,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-87 (N3): reconstructions and slope limiters written in Python in `pops.lib.numerics`.
+  `Reconstruct(rep, value)` builds a per-axis reconstruction from `value(c, a)` (spec 0.3
+  sec. 4.3), `muscl(rep, limiter)` is the MUSCL face value of the catalogue, and `minmod`,
+  `vanleer`, `mc` and `superbee` are plain limiter functions passed uncalled. The body becomes
+  the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
+  native `MUSCL(<Limiter>())` state bit for bit for the four limiters.
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
   SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
@@ -75,6 +81,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the schedule cache restores numbers without their Field description.
 - Capture the recovery admissibility provider of a model with bound runtime parameters:
   `ModelRecoveryAdmissibilityProvider` declares its model as its only device-capture member.
+- Keep replicated finite Arrays of scalar and Product elements on the device (spec 0.3 DM7,
+  DM8): each leaf is one labelled Kokkos column, maps and ordered fold, scan and reduce regions
+  read and write the columns in place, replication is checked by a device fingerprint with O(1)
+  collectives, and only control scalars reach the host inside a step. A host-placed map or scan
+  and a fold sequenced on the host copy each device Array that they read without redefining it
+  once per entry, at its first read, instead of one element per iteration. Host-placed regions,
+  element reads and continuation images are counted per Program
+  (`pops_finite_device_to_host_bytes`, `pops_finite_host_to_device_bytes`,
+  `pops_finite_host_transfer_count`), and System and AmrSystem steps open the Kokkos Tools
+  regions `pops::step` and `pops::program_region`. Structural, Variant and distributed Arrays
+  keep their host storage.
+- Compile a typed terminal failure in a Program without finite operations: its payload packs
+  through finite structural storage, so Program emission now adds the finite helpers whenever
+  the generated code names one of their declarations, not only for finite, versioned or
+  distributed operations.
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
   complete continuations and child advances, spatial composition, distributed
   operators, and graph/implicit derivatives lower from Python into native Program C++.
@@ -150,8 +171,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Write an AMR refinement criterion in Python: a `Tag` or `Coarsen` predicate may be a function of
   `cell` (`cell.value(q)`, `cell.shift(axis, k)`, `cell.width(axis)`, runtime parameters), traced
   once and generated into the compiled Program. The native tagging plan calls it on each patch in
-  place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` and
-  clustering. A criterion requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, and its
+  place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` with the
+  selection it names (master's, or `selection="refine-requests"`) and clustering. A criterion
+  requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, and its
   rules decide as those of the tag graph do. The comparisons that `~`, `&` and `|` join are a
   strict `<` or `>` (`<=`, `>=` and `==` are refused at the line of the rule) and follow Kleene's
   three-valued logic, so one at exact equality decides nothing and neither does its negation under
@@ -460,6 +482,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - The coverage fence keeps that catalogue shrink-only: a record added or rewritten, or a changed
   header, fails even when the catalogue's SHA-256 pin is updated with it; a record may only be
   dropped, and its test must then be claimed by a suite.
+- Emit less C++ per generated Program, so that the Hall MHD CT Program compiles. Each translation
+  unit now defines once its continuation field callbacks, each distinct schema construction, each
+  distinct terminal exit of a distributed map and each distinct staging of an Array captured by a
+  device map; the collective entry points receive their callable through a non-owning view; and
+  the step body continues in nested functions at top-level operation boundaries. Operations, their
+  order, their values and schema identities are unchanged. On one 4-core container the Hall source
+  goes from 30.0 to 17.7 MB and compiles in 357 s within 4.8 GiB, where it did not fit in 12 GiB
+  before.
 
 ## [1.0.0] - 2026-07-16
 

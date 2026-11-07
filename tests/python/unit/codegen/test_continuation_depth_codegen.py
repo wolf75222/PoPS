@@ -70,7 +70,7 @@ def test_marshalling_and_distributed_projection_keep_deep_values_out_of_cpp_nest
     restored = _unpack(signature, "source", lines, "restored", capacity=8388608)
     cpp = "\n".join([*lines, packed, restored])
     assert "finite_structural::pack<" in cpp and "finite_structural::unpack<" in cpp
-    assert "Limits{8388608,8388608,8388608}" in cpp
+    assert "Limits{8388608,8388608,8388608,&pops_finite_residency}" in cpp
     assert "std::tuple<" not in cpp and "std::variant<" not in cpp
     nesting = maximum = 0
     for character in cpp:
@@ -93,7 +93,7 @@ def test_requests_ingress_borrows_the_token_without_a_prebudget_vector_copy():
     source = pack_local(signature, "requests_token", lines, "borrow", {}, capacity=4096)
     assert "finite_structural::source_cell(requests_token)" in source
     assert "Requests(requests_token)" not in source
-    assert "Limits{4096,4096,4096}" in source
+    assert "Limits{4096,4096,4096,&pops_finite_residency}" in source
 
 
 def test_distributed_capture_discovery_is_iterative_for_deep_products():

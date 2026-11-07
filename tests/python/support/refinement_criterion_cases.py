@@ -52,6 +52,7 @@ def advection_case(
     thresholds: dict[str, float] | None = None,
     hysteresis: Hysteresis | None = None,
     conflict_policy: ConflictPolicy = ConflictPolicy.REFINE_WINS,
+    buffer: Buffer | None = None,
     name: str = "refinement_criterion_case",
 ) -> tuple[Any, Any, SimpleNamespace]:
     """(case, layout, names); ``rules(names)`` returns the Tag and Coarsen rules of the case.
@@ -59,7 +60,8 @@ def advection_case(
     Each threshold is a RuntimeParam of the Case: ``names.params[key]`` is its Handle and
     ``names.value(key)`` its value in an expression. ``refine`` and ``coarsen`` default to the
     thresholds of tutorial 09. ``names.gradient`` is the discrete gradient of the finite-volume
-    method, the stencil the tag graph reads for ``grad(...)``.
+    method, the stencil the tag graph reads for ``grad(...)``. ``buffer`` replaces the
+    ``Buffer(cells=2)`` of tutorial 09.
     """
     domain = Rectangle("unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).tag("fluid")
     frame = domain.frame(Cartesian2D())
@@ -107,7 +109,7 @@ def advection_case(
         value=lambda key: case.value(params[key]),
         gradient=method.amr_indicator_stencil(dimension=len(frame.axes)))
     tagging = AMRTagging(
-        rules=tuple(rules(names)) + (Buffer(cells=2),),
+        rules=tuple(rules(names)) + (Buffer(cells=2) if buffer is None else buffer,),
         hysteresis=hysteresis or Hysteresis(0, EqualityPolicy.HOLD),
         conflict_policy=conflict_policy)
     transfer = AMRTransfer()

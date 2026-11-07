@@ -1257,8 +1257,8 @@ void bind_system_stepping(py::class_<System>& cls) {
             return result;
           },
           py::arg("until"), py::arg("proposal"), py::arg("max_steps"),
-          py::arg("outputs") = std::vector<std::tuple<std::int64_t, std::vector<double>,
-                                                      std::vector<std::string>>>{})
+          py::arg("outputs") = std::vector<
+              std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>{})
       .def("_advance_max_attempts", &System::advance_max_attempts)
       .def_static(
           "_advance_attempt_duration",

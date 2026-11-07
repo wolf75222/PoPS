@@ -369,6 +369,110 @@ def _emit_commit_group(commits: Any, bases: Any, var: Any, *, phase: int) -> lis
     return lines
 
 
+# Statement characters of one native function of the step body. One flat step function makes
+# GCC's points-to analysis superlinear in its size (B03 family F7, gap C49).
+_STEP_CHUNK_CHARACTERS = 128 * 1024
+_STEP_CHUNK_OPEN = ("#if defined(__GNUC__) || defined(__clang__)",
+                    "[&]() __attribute__((noinline)) {", "#else", "[&]() {", "#endif")
+_FUNCTION_SCAFFOLD = frozenset(("[&]() __attribute__((noinline)) {", "[&]() {", "}();"))
+
+
+def _statement_characters(entry):
+    """Count the statement characters of one entry, whitespace excluded.
+
+    Comments, preprocessor lines and bare function scaffolds do not count, so the measure is the
+    same with or without the typed-capture outlining or the indentation of a region.
+    """
+    count = 0
+    for physical in entry.split("\n"):
+        stripped = physical.strip()
+        if stripped and not stripped.startswith(("//", "#")) and stripped not in _FUNCTION_SCAFFOLD:
+            count += len("".join(stripped.split()))
+    return count
+
+
+def _brace_depths(entries):
+    """Effective brace depth before each entry and after the last; ``None`` where unscannable.
+
+    Comments, string and character literals, and the alternative branches of preprocessor
+    conditionals are skipped. A position inside a comment, a literal or a conditional has no depth.
+    """
+    depths, depth, conditionals, state = [], 0, [], None
+    for entry in entries:
+        depths.append(depth if state is None and not conditionals else None)
+        for physical in entry.split("\n"):
+            stripped = physical.lstrip()
+            if state is None and stripped.startswith("#"):
+                directive = stripped[1:].split()
+                word = directive[0] if directive else ""
+                if word.startswith("if"):
+                    conditionals.append(False)
+                elif word in ("else", "elif") and conditionals:
+                    conditionals[-1] = True
+                elif word == "endif" and conditionals:
+                    conditionals.pop()
+                continue
+            index = 0
+            while index < len(physical):
+                char = physical[index]
+                if state == "/*":
+                    if physical.startswith("*/", index):
+                        state = None
+                        index += 1
+                elif state is not None:
+                    if char == "\\":
+                        index += 1
+                    elif char == state:
+                        state = None
+                elif physical.startswith("//", index):
+                    break
+                elif physical.startswith("/*", index):
+                    state = "/*"
+                    index += 1
+                elif char == '"' or (char == "'" and not (index and physical[index - 1].isalnum())):
+                    state = char
+                elif not any(conditionals):
+                    depth += (char == "{") - (char == "}")
+                index += 1
+            if state in ('"', "'"):
+                return None
+    depths.append(depth if state is None and not conditionals else None)
+    return depths
+
+
+def _chunk_step_body(lines, boundaries):
+    """Split the step body into nested noinline functions at top-level operation boundaries.
+
+    Each function runs its statements and then, as its last statement, calls the function holding
+    the rest of the step. Every declaration therefore stays in scope for the rest of the step,
+    statements run in the same order, locals are destroyed in the same reverse order, exceptions
+    propagate unchanged and a return still ends the step, because every install entry places the
+    step body at the end of its native function. Only boundaries outside every brace qualify; a
+    body that cannot be scanned stays one function. The labels of a typed capture stay inside its
+    operation, so no split separates a ``goto`` from its label.
+    """
+    depths = _brace_depths(lines)
+    if depths is None or depths[-1] != 0:
+        return lines
+    selected, size, cursor = [], 0, 0
+    for boundary in boundaries:
+        size += sum(_statement_characters(entry) for entry in lines[cursor:boundary])
+        cursor = boundary
+        if size >= _STEP_CHUNK_CHARACTERS and boundary < len(lines) and depths[boundary] == 0:
+            selected.append(boundary)
+            size = 0
+    if not selected:
+        return lines
+    chunked, start = [], 0
+    for boundary in selected:
+        chunked.extend(lines[start:boundary])
+        chunked.extend(_STEP_CHUNK_OPEN)
+        start = boundary
+    chunked.extend(lines[start:])
+    chunked.extend(["}();"] * len(selected))
+    return chunked
+
+
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None, balance_due_contract: Any = None,
                has_shared_interface_implicit_jacvec: bool = False,
@@ -536,7 +640,11 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     rhs_plan = plan_rhs_coherence(program, values, model=model)
     rhs_schedule = rhs_plan.schedule
     rhs_grouped = rhs_plan.grouped_ids
+    # Top-level operation boundaries where the step body may continue in a new native function.
+    chunk_boundaries = []
     while index < len(values):
+        if not continuation_closers and not legacy_path_prefix:
+            chunk_boundaries.append(len(lines))
         if index in rhs_schedule:
             group = rhs_schedule[index]
             unavailable = sorted(
@@ -638,6 +746,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             open_map_continuation(v, values[:index + 1], var, lines)
             continuation_closers.append(_normal_close)
         index += 1
+    if not continuation_closers and not legacy_path_prefix:
+        chunk_boundaries.append(len(lines))
     from pops.codegen.program_lowerability import all_ops
     if any(value.op in {"reached_duration", "accept_increment"} for value in all_ops(program)):
         from pops.codegen.program_computed_frontier import require_computed_frontier_support
@@ -668,6 +778,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         lines.append("ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
     for close in reversed(continuation_closers):
         close(lines)
+    lines = _chunk_step_body(lines, chunk_boundaries)
     if legacy_path_prefix:
         lines.append("});")
     post_sync_lines = _emit_post_synchronization_phase(

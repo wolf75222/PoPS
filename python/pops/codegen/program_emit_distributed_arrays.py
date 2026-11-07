@@ -1028,21 +1028,26 @@ def emit_distributed_op(program, v, var, model, lines, prelude, block_idx, field
                 % (registry, token, v.attrs.get("storage_bytes", 64 * 1024 * 1024), session)
             )
         if v.op == "distributed_map":
-            err = {
-                "rank": token + ".rank",
-                "gid": token + ".gid",
-                "reason": {
-                    "tag": "(%s.code==%s::Code::user?std::int64_t(1):std::int64_t(0))"
-                    % (token, DN),
-                    "payloads": {
-                        "runtime": {
-                            "code": "std::int64_t(%s.code)" % token,
-                            "origin": "std::int64_t(3)",
+            def outcome_error(outcome):
+                return {
+                    "rank": outcome + ".rank",
+                    "gid": outcome + ".gid",
+                    "reason": {
+                        "tag": "(%s.code==%s::Code::user?std::int64_t(1):std::int64_t(0))"
+                        % (outcome, DN),
+                        "payloads": {
+                            "runtime": {
+                                "code": "std::int64_t(%s.code)" % outcome,
+                                "origin": "std::int64_t(3)",
+                            },
+                            "user": unpack(v.attrs["error"], outcome + ".payload", capacity=capacity),
                         },
-                        "user": unpack(v.attrs["error"], token + ".payload", capacity=capacity),
                     },
-                },
-            }
+                }
+
+            err = outcome_error(token)
+            # A terminal exit of exactly these tokens may share one routine over the outcome.
+            var[("distributed_outcome_error", id(err))] = (err, token, outcome_error)
             ok = _array_public(
                 dict(signature(v)["members"])["ok"],
                 token + ".value",

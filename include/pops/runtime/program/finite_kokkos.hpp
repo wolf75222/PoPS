@@ -9,8 +9,9 @@
 
 namespace pops::runtime::program::finite_kokkos {
 
-// Device storage is a staging representation of existing immutable Program values.
-// Ownership, collectives, failure publication and continuations stay on the host.
+// Device storage of immutable Program values: the columns of replicated finite Arrays
+// (finite_device_array.hpp) and the O(1) control views of their regions. Ownership,
+// collectives, failure publication and continuation images stay on the host.
 template <class T>
 using View = Kokkos::View<T*>;
 template <class T>

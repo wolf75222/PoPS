@@ -76,8 +76,10 @@ def test_repeated_child_types_keep_distinct_record_cells_and_variant_arms():
     choice = registry.nodes[product_node["children"][2]]
     assert choice["children"][0] == choice["children"][1]
     assert choice["width"] == 3 and choice["offsets"] == [1, 2]
-    assert depth == 5
+    # The shared child is a device Array of Float64 (DM7), a leaf of the record walk.
+    assert depth == 4
     definitions, _ = lower(array(product), ("values",))
+    assert definitions.count("finite_collective::uniform_device(") == 1
     assert definitions.index("replicated Variant tag differs") < definitions.index(
         "switch (*tag)"
     )
@@ -122,22 +124,23 @@ def test_distributed_payload_schema_and_ownership_are_never_merged():
 
 
 def test_scope_restores_on_failure_and_definition_sealing_refuses_late_registration():
+    # Arrays of Arrays register a structural schema; a flat device Array registers none (DM7).
     @uniform_scope
     def bad():
-        uniform_element(array({"vtype": "scalar"}), "discarded", [])
+        uniform_element(array(array({"vtype": "scalar"})), "discarded", [])
         raise ValueError("abort")
 
     with pytest.raises(ValueError, match="abort"):
         bad()
     with pytest.raises(RuntimeError, match="emission scope"):
         uniform_definitions()
-    expected = lower(array({"vtype": "int64"}), ("value",))
-    assert expected == lower(array({"vtype": "int64"}), ("value",))
+    expected = lower(array(array({"vtype": "int64"})), ("value",))
+    assert expected == lower(array(array({"vtype": "int64"})), ("value",))
 
     @uniform_scope
     def late():
         uniform_definitions()
-        uniform_element(array({"vtype": "int64"}), "value", [])
+        uniform_element(array(array({"vtype": "int64"})), "value", [])
 
     with pytest.raises(RuntimeError, match="after its definitions"):
         late()
