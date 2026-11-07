@@ -1451,6 +1451,50 @@ def test_judge_interpreter_leaves_out_the_sdk_and_what_no_import_reaches(tmp_pat
         {"path": str(conda_site / "shared.py"), "verdict": "unrecorded", "library": "site"}]
 
 
+def test_judge_interpreter_lists_a_masked_package_once_under_its_directory(tmp_path, monkeypatch,
+                                                                            capsys):
+    """The review of 60e30da (O4): a package that an earlier entry of the import path masks, as
+    the prefix's pip masks the base's, is left out whole and listed once, under its directory.
+    None of its files is judged, so the base's copy, which no manifest lists, refuses nothing
+    until the import reaches it."""
+    base, roots, recorded, beside = _venv_over_conda(tmp_path, monkeypatch)
+    beside.unlink()
+    venv_site, standard, conda_site = roots
+    monkeypatch.setattr(receipts, "_interpreter_roots", lambda: roots)
+    monkeypatch.setattr(receipts, "_import_path",  # sys.path's order
+                        lambda interpreter: (standard, venv_site, conda_site))
+    package, copy = venv_site / "rom17pkg", conda_site / "rom17pkg"
+    installed = ("__init__.py", "core.py")
+    for directory, names, data in ((package, installed, "PACKAGE = 1\n"),
+                                   (copy, (*installed, "extra.py"), "UNLISTED_COPY = 1\n")):
+        directory.mkdir()
+        for name in names:
+            (directory / name).write_text(data)
+    _distribution(venv_site, "rom17pkg",
+                  [(f"rom17pkg/{name}", _record_hash(package / name)) for name in installed])
+
+    def judge():
+        code = receipts.main(["judge-interpreter"])
+        return code, json.loads(capsys.readouterr().out)
+    code, report = judge()
+    assert code == 0, report["refused"]
+    assert report["left_out"] == {"sdk": [], "masked": {str(copy): os.path.realpath(package)},
+                                  "not_importable": []}
+    assert report["files_judged"] == 3  # the standard library's module and the prefix's package
+    assert report["counts"] == {"recorded": 3, "listed": 0, "unmanaged": 0, "believed": 0,
+                                "altered": 0, "unrecorded": 0}
+    # Without the prefix's package, the import reaches the base's copy, whose files are refused.
+    for name in installed:
+        (package / name).unlink()
+    package.rmdir()
+    code, report = judge()
+    assert code == 1
+    assert report["left_out"]["masked"] == {}
+    assert report["refused"] == [
+        {"path": str(copy / name), "verdict": "unrecorded", "library": "site"}
+        for name in ("__init__.py", "core.py", "extra.py")]
+
+
 def test_the_import_path_is_sys_path_within_the_interpreter_in_its_order(tmp_path, monkeypatch):
     standard, site_dir = tmp_path / "lib" / "python3", tmp_path / "site"
     with monkeypatch.context() as patch:  # sys.path itself only for the call

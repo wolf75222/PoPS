@@ -212,8 +212,8 @@ the cohort lives in a fresh qualification prefix made from the retained wheel.
    refuse and exits 1 when there is one. It leaves out, and lists, the SDK, which `verify` judges,
    every copy that the import of its name does not reach, such as the build environment's `pops`
    and the sibling leaves restored there after pip, behind the prefix's own, and every file that
-   no import names, such as a module built for another Python. It takes seconds, where a refused
-   receipt shows only once its receiver has run.
+   no import names, such as a module built for another Python. Two layouts escape it (see
+   Limits). It takes seconds, where a refused receipt shows only once its receiver has run.
 6. Run the receivers of the lot with that interpreter and `env -u PYTHONPATH`, writing their
    receipts; for the reference receivers:
    `env -u PYTHONPATH PYTHONNOUSERSITE=1 POPS_NATIVE_DIM=2 POPS_CI_PYTEST_TIMINGS_DIR="$OUT" "$PY"
@@ -257,6 +257,15 @@ the cohort lives in a fresh qualification prefix made from the retained wheel.
   manifest records in the site directory they make, and it runs at startup. A receiver therefore
   runs where pip or conda installed what it loads, in a venv made by `python -m venv`, as
   `prefix` makes it; `judge-interpreter` shows such files before a receiver runs.
+- `judge-interpreter` resolves each top-level name as `PathFinder` does, so two layouts escape
+  it. In a legacy namespace package, whose `__init__.py` calls `pkgutil.extend_path` or
+  `pkg_resources.declare_namespace`, with a portion in each of two site directories, the finder
+  stops at the first portion and the other is listed as masked, although `extend_path` adds it
+  to the package's `__path__` and an import of one of its submodules loads it. A file that the
+  walk meets under two names, through a link, is taken under the first: when that name is masked
+  or names no module, the file is listed and not judged, even if an import reaches it under the
+  other. A receipt still judges such a file, and refuses it if no manifest records it, when a
+  receiver loads it.
 - The MPI and hardware lanes of CI still start their processes with `python -c`; a receiver run
   there is refused at E until they start from a committed file, as `ci_python_dimensions.py`
   does. The MPI lane also installs its Python stack with apt (`python3-packaging`,
