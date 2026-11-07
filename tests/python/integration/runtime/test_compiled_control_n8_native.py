@@ -9,8 +9,11 @@ runs during the native call (CF9). A budget ends a run with ``BudgetExhausted`` 
 the budget, and a candidate that ``finite()`` rejects is attempted again with the same proposal,
 the accepted state untouched, until ``Retry.max_attempts`` attempts are spent.
 """
+import ctypes
 import math
+import platform
 import random
+import subprocess
 import sys
 from fractions import Fraction
 from pathlib import Path
@@ -326,10 +329,13 @@ def _master_fixed_dt(time, proposal, frontier, origin, steps):
     return dt
 
 
-def test_the_attempt_duration_is_master_fixed_step_with_an_exact_landing(artifacts):
-    world, (spec, traced), _ = artifacts
-    runtime = _bind(world, spec, traced)
-    duration = type(runtime._executor._s)._advance_attempt_duration
+def _master_duration(time, proposal, frontier, origin, steps):
+    dt = _master_fixed_dt(time, proposal, frontier, origin, steps)
+    return dt, time + dt == frontier, dt == proposal
+
+
+def _assert_master_durations(duration):
+    """``duration(time, proposal, frontier, origin, steps)``: master's fixed step, exact landing."""
     # 79 accumulated steps of 0.05/16 stop short of 0.25 by a rounding: the segment absorbs it.
     time = 0.0
     for _ in range(79):
@@ -368,3 +374,130 @@ def test_the_attempt_duration_is_master_fixed_step_with_an_exact_landing(artifac
         keeps = master == proposal != frontier - time and time + proposal < frontier
         if keeps or time + master == frontier:
             assert (dt, lands) == (master, not keeps)
+
+
+def test_the_attempt_duration_is_master_fixed_step_with_an_exact_landing(artifacts):
+    world, (spec, traced), _ = artifacts
+    runtime = _bind(world, spec, traced)
+    _assert_master_durations(type(runtime._executor._s)._advance_attempt_duration)
+
+
+FMA_SHIM = r"""
+#include <pops/runtime/program/advance_run.hpp>
+
+#include <cstdint>
+#include <stdexcept>
+
+namespace program = pops::runtime::program;
+
+extern "C" int duration(double time, double proposal, double frontier, double origin,
+                        std::int64_t steps, double* dt, int* lands, int* continuous) {
+  try {
+    const auto attempt = program::advance_attempt_duration(time, proposal, frontier, origin, steps);
+    *dt = attempt.dt;
+    *lands = attempt.lands;
+    *continuous = attempt.continuous;
+    return 0;
+  } catch (const std::invalid_argument&) {
+    return 1;
+  } catch (const std::overflow_error&) {
+    return 2;
+  }
+}
+
+extern "C" double segment_endpoint(double origin, std::int64_t steps, double proposal) {
+  return program::advance_run_detail::segment_endpoint(origin, steps, proposal);
+}
+
+// The segment endpoint written as one expression, which the flags of the test fuse.
+extern "C" double one_expression_endpoint(double origin, std::int64_t steps, double proposal) {
+  return origin + static_cast<double>(steps + 1) * proposal;
+}
+"""
+
+
+def _fused_multiply_add_flags():
+    """The flags that give the compiler a fused multiply-add on this processor, or a skip."""
+    machine = platform.machine().lower()
+    if machine in {"aarch64", "arm64"}:
+        return []  # AArch64 has the fused multiply-add in its base instruction set
+    if machine not in {"x86_64", "amd64"}:
+        pytest.skip("no fused multiply-add instruction set is known for " + machine)
+    if sys.platform == "darwin":
+        features = subprocess.run(["sysctl", "-n", "machdep.cpu.features"], capture_output=True,
+                                  text=True, check=False).stdout.split()
+        fused = "FMA" in features
+    else:
+        cpuinfo = Path("/proc/cpuinfo")
+        fused = cpuinfo.exists() and any(line.startswith("flags") and "fma" in line.split()
+                                         for line in cpuinfo.read_text().splitlines())
+    if not fused:
+        pytest.skip("this x86-64 processor has no fused multiply-add")
+    return ["-mfma"]
+
+
+def _shim_duration(shim):
+    function = shim.duration
+    function.argtypes = [ctypes.c_double]*4 + [
+        ctypes.c_int64, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_int)]
+    function.restype = ctypes.c_int
+
+    def duration(time, proposal, frontier, origin, steps):
+        dt, lands, continuous = ctypes.c_double(), ctypes.c_int(), ctypes.c_int()
+        status = function(time, proposal, frontier, origin, steps, ctypes.byref(dt),
+                          ctypes.byref(lands), ctypes.byref(continuous))
+        if status:
+            raise (ValueError if status == 1 else OverflowError)(
+                "advance_attempt_duration refused its arguments")
+        return dt.value, bool(lands.value), bool(continuous.value)
+    return duration
+
+
+def _segment_run(duration, origin, proposal, until):
+    """The time and the steps of a run from a new segment at ``origin``, as System::run_advance
+    loops it."""
+    time, start, steps, count = origin, origin, 0, 0
+    while time < until:
+        dt, _, continuous = duration(time, proposal, until, start, count)
+        time += dt
+        steps += 1
+        start, count = (start, count + 1) if continuous else (time, 0)
+    return time, steps
+
+
+def test_the_attempt_duration_keeps_master_roundings_where_a_multiply_add_fuses(native_cxx,
+                                                                              tmp_path):
+    """Master rounds the product of the segment endpoint, then its sum. GCC and Clang fuse the two
+    into one rounding wherever the instruction set has a fused multiply-add (AArch64, x86-64 with
+    FMA), and the native module is not compiled with -ffp-contract=off. The header compiled with
+    the fused multiply-add and -ffp-contract=fast still gives master's durations; the same
+    endpoint written as one expression shows that these flags fuse it.
+    """
+    source, library = tmp_path/"advance_run_fma.cpp", tmp_path/"advance_run_fma.so"
+    source.write_text(FMA_SHIM)
+    compiled = subprocess.run([
+        native_cxx, "-std=c++20", "-O3", "-ffp-contract=fast", *_fused_multiply_add_flags(),
+        "-shared", "-fPIC", "-I" + str(REPO_ROOT/"include"), str(source), "-o", str(library)],
+        capture_output=True, text=True, check=False)
+    assert compiled.returncode == 0, compiled.stderr
+    shim = ctypes.CDLL(str(library))
+    for name in ("segment_endpoint", "one_expression_endpoint"):
+        getattr(shim, name).argtypes = [ctypes.c_double, ctypes.c_int64, ctypes.c_double]
+        getattr(shim, name).restype = ctypes.c_double
+    generator = random.Random(20261107)
+    segments = [(generator.choice((0.1, 0.25, generator.uniform(0.0, 4.0))),
+                 generator.randint(0, 400), generator.choice((STEP, 0.1, 1/3, 0.0123)))
+                for _ in range(20000)]
+    master = [origin + (steps + 1)*proposal for origin, steps, proposal in segments]
+    assert [shim.one_expression_endpoint(*segment) for segment in segments] != master
+    assert [shim.segment_endpoint(*segment) for segment in segments] == master
+    duration = _shim_duration(shim)
+    _assert_master_durations(duration)
+    # A segment that starts at 0.1 reaches 0.1 + 50 STEP in 50 steps, as master does; a fused
+    # endpoint keeps the proposal once more and lands with a 51st step of seven ulps.
+    assert _segment_run(duration, 0.1, STEP, 0.1 + 50*STEP) == (0.1 + 50*STEP, 50)
+    for k in range(1, 161):
+        until = 0.1 + k*STEP
+        assert _segment_run(duration, 0.1, STEP, until) == \
+            _segment_run(_master_duration, 0.1, STEP, until), k

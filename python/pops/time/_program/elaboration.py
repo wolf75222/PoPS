@@ -51,8 +51,9 @@ class Proposal:
             raise NotYetElaborated("Proposal(request=...): solve requests (5.5, SV3) are "
                                    "elaborated with the implicit relations of a later lot of N8")
         if choices:
-            raise NotYetElaborated("Proposal(%s): attempt choices are elaborated by the compiled "
-                                   "control of N8" % ", ".join(sorted(choices)))
+            raise NotYetElaborated("Proposal(%s): attempt choices (T28), which Accept and Reject "
+                                   "carry, are lowered with the assessments of N8 phase 1"
+                                   % ", ".join(sorted(choices)))
         self.dt: Any = dt
         self.request = request
         self.choices = dict(choices)

@@ -37,6 +37,12 @@ enum class AdvanceRunStop : std::uint8_t {
 /// The uninterrupted segment of accepted steps of one proposal that a compiled run continues:
 /// its origin and its step count, left at the accepted cursor (time, macro_step). A run at
 /// another cursor or of another proposal starts a new segment at its accepted time.
+///
+/// The segment is controller memory, held natively only. Master keeps its fixed-step grid in the
+/// temporal resume state (controller_state["fixed_dt_grid"], _step_strategy.py@bb9): the
+/// continuation codec must carry the segment, since a run resumed without it can land otherwise
+/// than an uninterrupted one. From 0 to 0.25 in steps of 0.05/16, a segment lost after k steps
+/// gives 81 steps instead of 80 for 53 of the 79 values of k.
 struct AdvanceSegment {
   double proposal = 0.0;
   double origin = 0.0;
@@ -73,19 +79,30 @@ inline double ulp(double value) {
   return std::isfinite(above) ? above - magnitude : magnitude - std::nextafter(magnitude, 0.0);
 }
 
+/// The rounded endpoint origin + (steps + 1) * proposal of a fixed-proposal segment, with the
+/// two roundings of master, whose Python binary64 rounds the product and then the sum. A target
+/// with a fused multiply-add contracts the expression into one rounding by default (GCC
+/// -ffp-contract=fast, Clang -ffp-contract=on; AArch64 has it in its base instruction set), and
+/// the native module is not compiled with -ffp-contract=off as generated code is. The product
+/// is stored and read back as a volatile, so that no compiler fuses it with the sum.
+inline double segment_endpoint(double origin, std::int64_t steps, double proposal) {
+  const volatile double product = static_cast<double>(steps + 1) * proposal;
+  return origin + product;
+}
+
 }  // namespace advance_run_detail
 
 /// Duration of the attempt from @p time toward @p frontier, in the segment of @p proposal that
 /// started at @p origin and holds @p steps accepted steps.
 ///
 /// The proposal is kept while its rounded endpoint precedes the frontier by more than four units
-/// in the last place, and while the segment endpoint origin + (steps + 1) * proposal, rounded,
-/// is not the frontier; a proposal whose endpoint is the frontier lands with it. These are the
-/// rules of master's FixedDt (python/pops/runtime/_step_strategy.py@bb9), which absorb the
-/// rounding that repeated additions accumulate. A landing attempt takes the binary64 distance
-/// whose rounded sum with @p time is the frontier: the nearest rounding first, then the other
-/// faithful one. When neither publishes the frontier, which happens only for an odd frontier
-/// above a time with a half-unit bit in a lower binade, the attempt ends at the last
+/// in the last place, and while the segment endpoint origin + (steps + 1) * proposal, its product
+/// and its sum each rounded, is not the frontier; a proposal whose endpoint is the frontier lands
+/// with it. These are the rules of master's FixedDt (python/pops/runtime/_step_strategy.py@bb9),
+/// which absorb the rounding that repeated additions accumulate. A landing attempt takes the
+/// binary64 distance whose rounded sum with @p time is the frontier: the nearest rounding first,
+/// then the other faithful one. When neither publishes the frontier, which happens only for an
+/// odd frontier above a time with a half-unit bit in a lower binade, the attempt ends at the last
 /// representable time below the frontier; the next attempt then starts within a factor two of
 /// the frontier, where the distance is exact (Sterbenz) and lands.
 inline AdvanceAttemptDuration advance_attempt_duration(double time, double proposal,
@@ -104,7 +121,7 @@ inline AdvanceAttemptDuration advance_attempt_duration(double time, double propo
   const double reached = time + std::min(proposal, remaining);
   const bool absorbs =
       end > frontier || !(proposal < remaining) ||
-      origin + static_cast<double>(steps + 1) * proposal == frontier ||
+      advance_run_detail::segment_endpoint(origin, steps, proposal) == frontier ||
       std::abs(reached - frontier) <=
           4.0 * std::max(advance_run_detail::ulp(reached), advance_run_detail::ulp(frontier));
   if (!absorbs) {
