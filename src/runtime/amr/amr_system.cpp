@@ -11231,14 +11231,14 @@ struct AmrSystem<Dim>::Impl {
     const long changed_word = changed ? 1L : 0L;
     if (all_reduce_min(changed_word, lane) != all_reduce_max(changed_word, lane))
       throw std::logic_error("Continuation regrid topology verdict differs across ranks");
-    std::exception_ptr error;
-    try {
-      program.continuation_regrid_finish_(changed);
-    } catch (...) {
-      error = std::current_exception();
-    }
-    runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-        error, &lane, "Continuation regrid candidate preparation failed collectively");
+    // The candidate's assessment may reject the attempt: keep that control typed on every rank,
+    // so the enclosing completion phase still hands it to the step strategy.
+    runtime::program::collective_step_rejection_phase(
+        lane.communicator(),
+        {"pops.continuation-regrid-candidate.v1", "pops.continuation-regrid-candidate", false,
+         false},
+        "Continuation regrid candidate preparation failed collectively",
+        [&] { program.continuation_regrid_finish_(changed); });
   }
 
   bool regrid_parent(int parent_level,
