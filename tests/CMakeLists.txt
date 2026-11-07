@@ -463,6 +463,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_runtime_environment
   test_step_attempt_rejected_header_only
   test_world_communicator
+  test_reduction_collectives
   test_residual_operator
   test_prepared_spatial_residual
   test_prepared_resource_cache
@@ -1059,6 +1060,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_world_communicator 1 2)
+  set(POPS_MPI_RANKS_test_reduction_collectives 2 3 4)
 
   set(POPS_MPI_RANKS_test_continuation_image 2)
   set(POPS_MPI_RANKS_test_continuation_field_migration 2 3)
@@ -1281,6 +1283,8 @@ if(POPS_HAS_MPI)
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_world_communicator
+    # Compensated transport and ConsensusWords: one collective per Program reduction.
+    test_reduction_collectives
   )
   string(CONCAT POPS_GENERIC_KRYLOV_MPI_FILTER
     "GenericKrylov.footprint_authenticates_layout_and_preconditioner_presence:"
@@ -1414,6 +1418,18 @@ if(POPS_HAS_MPI)
     TIMEOUT 30)
   set_tests_properties(test_program_runtime_np2 test_generated_amr_system_block_np2 PROPERTIES
     ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  foreach(_np IN ITEMS 2 4)
+    set_tests_properties(test_reduction_collectives_np${_np} PROPERTIES
+      ENVIRONMENT "POPS_TEST_EXPECT_RANKS=${_np};OMP_NUM_THREADS=1"
+      TIMEOUT 30)
+  endforeach()
+  # np3 forces Open MPI's reduce-then-broadcast allreduce (other MPI libraries ignore these
+  # variables). For this two-word payload at three and four ranks, Open MPI 4.1.6's other
+  # allreduce algorithms join in rank order even for an operator registered as commutative; this
+  # one swaps its operands, so np3 checks how the compensated-summary operator is registered.
+  set_tests_properties(test_reduction_collectives_np3 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=3;OMP_NUM_THREADS=1;OMPI_MCA_coll_tuned_use_dynamic_rules=1;OMPI_MCA_coll_tuned_allreduce_algorithm=2"
     TIMEOUT 30)
 endif()
 

@@ -152,6 +152,7 @@
   "test_program_context_contract": 25.49,
   "test_program_runtime": 25.87,
   "test_pure_field_algebra_extreme_dot": 2.0,
+  "test_reduction_collectives": 2.0,
   "test_system_interface_core_session": 300.0,
   "test_tensor_coarse_gmres": 2.0,
   "test_tensor_diagonal_mg_preconditioner": 300.0,

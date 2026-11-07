@@ -379,6 +379,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_program_context_contract": (2,),
         "test_program_runtime": (2,),
         "test_pure_field_algebra_extreme_dot": (2,),
+        "test_reduction_collectives": (2, 3, 4),
         "test_system_interface_core_session": (2,),
         "test_tensor_coarse_gmres": (2,),
         "test_tensor_diagonal_mg_preconditioner": (2,),
@@ -400,7 +401,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         for suite in all_suites
     )
     ctest_plan = sel.cpp_mpi_ctest_plan(manifest)
-    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 145
+    assert len(ctest_plan) == sel.cpp_mpi_ctest_count(manifest) == expected_count == 148
     assert ctest_plan["test_mpi_external_lifecycle_np1"] == 1
     assert ctest_plan["test_mpi_hdf5_collective_np2"] == 2
     assert ctest_plan["test_mpi_amr_compiled_parity_rank_parity"] == 4
@@ -411,6 +412,8 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     assert ctest_plan["test_distributed_array_np2"] == 2
     assert ctest_plan["test_distributed_array_np3"] == 3
     assert ctest_plan["test_world_communicator_np2"] == 2
+    assert ctest_plan["test_reduction_collectives_np3"] == 3
+    assert ctest_plan["test_reduction_collectives_np4"] == 4
     assert ctest_plan["test_amr_history_remap_collective_np2"] == 2
     assert ctest_plan["test_amr_interaction_history_snapshot_np2"] == 2
     assert ctest_plan["test_tensor_diagonal_mg_preconditioner_np2"] == 2

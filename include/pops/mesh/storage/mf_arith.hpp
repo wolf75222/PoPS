@@ -744,6 +744,23 @@ inline void join_compensated_words(const Real* left, Real* right) noexcept {
   right[1] = joined.low;
 }
 
+/// The two words a rank sends: an invalid summary for a local failure of the caller or for a
+/// nonfinite local summary, the failure first, else the summary itself. The first rank enters as
+/// the running sum started at zero, as the sequential merge in rank order starts.
+inline std::array<Real, 2> compensated_summary_words(const FiniteCompensatedSum& local,
+                                                     bool local_failed, bool first_rank) noexcept {
+  if (local_failed)
+    return {std::numeric_limits<Real>::quiet_NaN(), kCompensatedLocalFailure};
+  if (!local.finite())
+    return {std::numeric_limits<Real>::quiet_NaN(), kCompensatedLocalNonfinite};
+  if (!first_rank)
+    return {local.high, local.low};
+  FiniteCompensatedSum running;
+  running.add(local.high);
+  running.add(local.low);
+  return {running.high, running.low};
+}
+
 #ifdef POPS_HAS_MPI
 inline void join_compensated_summaries(void* in, void* inout, int* length, MPI_Datatype*) {
   const Real* left = static_cast<const Real*>(in);
@@ -793,42 +810,50 @@ struct CollectiveCompensatedSum {
   }
 };
 
+namespace mf_arith_detail {
+
+/// The reduced words, read back on every rank: the sum, `failed` for a carried local failure, or
+/// the overflow error of a nonfinite local summary or of a join that overflowed.
+inline CollectiveCompensatedSum compensated_summary_result(const std::array<Real, 2>& words) {
+  if (std::isnan(words[0])) {
+    if (words[1] == kCompensatedLocalFailure)
+      return {Real{0}, true};
+    if (words[1] == kCompensatedLocalNonfinite)
+      throw std::overflow_error("Program dot_all local summary is nonfinite");
+    throw std::overflow_error("Program dot_all collective sum is nonfinite");
+  }
+  return {words[0] + words[1], false};
+}
+
+}  // namespace mf_arith_detail
+
 /// dot-all@1 transports the two-word summaries, never fields or finalized rank scalars.
 /// One collective, whose payload is the two-word summary (spec 0.3 SV20, duties 2 and 3): a local
 /// failure of the caller (@p local_failed) and a nonfinite local summary ride on it as an invalid
 /// summary instead of separate votes, with the precedence of those votes (local failure, then
-/// nonfinite local summary, then nonfinite sum). Rounding policy: compensated (Neumaier) joins in
-/// rank order over the MPI reduction tree; rank 0 enters as the running sum started at zero, so a
-/// left-to-right tree reproduces the sequential merge of every summary. A local failure makes
-/// every rank return `failed`, on a single rank too, so the caller's own failure report (the
-/// vote that preceded this reduction before SV20) runs only on the failure path.
+/// nonfinite local summary, then nonfinite sum). A local failure makes every rank return `failed`,
+/// on a single rank too, so the caller's own failure report (the vote that preceded this reduction
+/// before SV20) runs only on the failure path.
+///
+/// Rounding policy: compensated (Neumaier) joins of the rank summaries in ascending rank order,
+/// rank 0 entering as the running sum started at zero, under the bracketing that the MPI library
+/// chooses for its reduction tree. Every rank receives the same bits. A left-to-right bracketing
+/// gives the sequential merge in rank order bit for bit, and at two ranks it is the only one;
+/// another bracketing can differ from it in the last bits, so the result can change with the rank
+/// count and with the library's reduction algorithm. A join that overflows refuses the sum as
+/// nonfinite even when another bracketing stays finite, so the refused sums depend on the
+/// bracketing too. A single rank returns its own summary's value.
 inline CollectiveCompensatedSum collective_finite_compensated_sum_or_failure(
     const FiniteCompensatedSum& local, bool local_failed, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (communicator.active() && communicator.size() > 1) {
-    std::array<Real, 2> words{local.high, local.low};
-    if (local_failed) {
-      words = {std::numeric_limits<Real>::quiet_NaN(), mf_arith_detail::kCompensatedLocalFailure};
-    } else if (!local.finite()) {
-      words = {std::numeric_limits<Real>::quiet_NaN(), mf_arith_detail::kCompensatedLocalNonfinite};
-    } else if (communicator.rank() == 0) {
-      FiniteCompensatedSum running;
-      running.add(local.high);
-      running.add(local.low);
-      words = {running.high, running.low};
-    }
+    std::array<Real, 2> words =
+        mf_arith_detail::compensated_summary_words(local, local_failed, communicator.rank() == 0);
     const auto& reduction = mf_arith_detail::compensated_summary_reduction();
     detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, words.data(), 1, reduction.pair,
                                               reduction.join, communicator.native_handle()),
                                 "MPI_Allreduce(Program dot_all compensated summaries)");
-    if (std::isnan(words[0])) {
-      if (words[1] == mf_arith_detail::kCompensatedLocalFailure)
-        return {Real{0}, true};
-      if (words[1] == mf_arith_detail::kCompensatedLocalNonfinite)
-        throw std::overflow_error("Program dot_all local summary is nonfinite");
-      throw std::overflow_error("Program dot_all collective sum is nonfinite");
-    }
-    return {words[0] + words[1], false};
+    return mf_arith_detail::compensated_summary_result(words);
   }
 #endif
   if (local_failed)

@@ -323,7 +323,12 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         """Pair all components on the owned active domain, collectively.
 
         Contract ``pops.program.dot-all@1``: raw cell algebra, without physical
-        volume/kappa weights; one Scalar reduction shared by every rank.
+        volume/kappa weights; one Scalar reduction shared by every rank. Each rank
+        sums its cells with compensation, and one collective joins the rank sums in
+        rank order, in the bracketing that the MPI library chooses: every rank gets
+        the same bits, which can change in the last bits with the rank count and the
+        library's reduction algorithm, and a partial join that overflows refuses the
+        sum as nonfinite even when another order would stay finite.
         """
         return self._dot_reduction(a, b, all_components=True)
 
