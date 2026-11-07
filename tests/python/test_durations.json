@@ -8025,7 +8025,7 @@
       "source_sha256": "5972a3f0f749cc623130b8a48deb9525d7497e1f09d41b62cebbcd0f89ac36e6"
     },
     "g13_20261030_finite_array_residency": {
-      "basis": "Unmeasured scheduling estimate including two cold generated C++ compilations (one probe subprocess per Program) and the build of the Kokkos Tools library; not a native receipt. Refresh from complete CI timing artifacts.",
+      "basis": "Unmeasured scheduling estimate including three cold generated C++ compilations (one probe subprocess per Program) and the build of the Kokkos Tools library; not a native receipt. Refresh from complete CI timing artifacts.",
       "files": {
         "tests/python/integration/runtime/test_finite_array_residency_native.py": {
           "analogue": "tests/python/integration/runtime/test_api_v02_finite_kokkos_native.py",
@@ -8035,8 +8035,8 @@
             "pytest.mark.kokkos",
             "pytest.mark.native_loader"
           ],
-          "reason": "DM8 residency of finite arrays (G13, ROM-31): two native Program runs under a Kokkos Tools library",
-          "source_sha256": "f7fc0a81eb49dd88a93ffbf7544b5d5d2c9c15768e8df13682d838cda7e50a5c"
+          "reason": "DM8 residency of finite arrays (G13, ROM-31): three native Program runs (device, host-placed map, host fold) under a Kokkos Tools library",
+          "source_sha256": "f78efa81d5576f1604b0b6c7c44aea69ce789e8a8cc0c4e1fde43c737e3695b7"
         }
       }
     },
