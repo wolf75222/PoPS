@@ -1737,7 +1737,7 @@ jobs:
           fi
           # Two heavy -O0 test units at a time (the presets keep one): one at a time, the two
           # remaining native test phases of a cold build passed the 60-minute step. Their measured
-          # peak memory is in docs/development/change_aware_ci.md; the isolated phase keeps one.
+          # peak memory is in docs/development/change_aware_ci.md; test_program_runtime keeps one.
           cmake --preset ci-mpi \
             -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -DPOPS_BUILD_PYTHON=ON \
@@ -1776,9 +1776,13 @@ jobs:
           test "$(( ${#isolated_targets[@]} + ${#remaining0_targets[@]} + ${#remaining1_targets[@]} ))" \
             -eq "${{ steps.mpi-test-plan.outputs.cpp_label_count }}"
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
-          # The program runtime and loader DSOs remain isolated for peak memory.
+          # One 28-minute watchdog covers the isolated phase. The loader fixture DSOs compile
+          # first, two at a time in the heavy-TU pool; then test_program_runtime and the other
+          # isolated targets compile with one compiler, so no other compiler runs beside
+          # test_program_runtime. Measured peak memory is in docs/development/change_aware_ci.md.
           run_with_heartbeat "MPI isolated native test build" 28m \
-            cmake --build --preset ci-mpi --parallel 1 --target "${isolated_targets[@]}"
+            bash -c 'cmake --build --preset ci-mpi --parallel 2 --target pops_synthetic_loader_fixtures &&
+              cmake --build --preset ci-mpi --parallel 1 --target "$@"' isolated "${isolated_targets[@]}"
           run_with_heartbeat "MPI remaining native test build0" 28m \
             cmake --build --preset ci-mpi --parallel 4 --target "${remaining0_targets[@]}"
           run_with_heartbeat "MPI remaining native test build1" 28m \

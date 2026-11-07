@@ -150,8 +150,10 @@ collective I/O checks. An unrelated mapped change does not create a partial MPI 
 The MPI native build runs three sequential phases with separate 28-minute watchdogs inside a
 60-minute native-build cap; the complete job remains capped at 180 minutes. The manifest projection puts
 `test_program_runtime`, `test_amr_synthetic_program_loader_transaction`,
-`test_mpi_system_gather_scatter`, and `test_mpi_system_io_gather` in a strictly sequential compiler
-phase. Two further phases split the exact complement by the build costs of
+`test_mpi_system_gather_scatter`, and `test_mpi_system_io_gather` in an isolated phase. That phase
+first compiles the seven synthetic loader fixture DSOs of the loader test
+(`pops_synthetic_loader_fixtures`) two at a time, then its four targets with one compiler, under
+its single watchdog. Two further phases split the exact complement by the build costs of
 `tests/cpp/mpi_build_durations.json` and build it with parallelism four. The MPI job configures the
 heavy-TU pool with two slots (`-DPOPS_HEAVY_TEST_TU_POOL=2`; the presets keep one): every test that
 links the System or AMR runtime compiles at `-O0` in that pool. New manifest targets enter the
@@ -183,6 +185,21 @@ GiB, and the 56 other units of these phases peak at 1.2 GiB or less. Two heavy a
 units together therefore stay near 12.2 GiB, against the 14.5 GiB available with no compiler
 running. The isolated phase keeps one compiler: `test_program_runtime` alone left 82 MiB
 available in that run.
+
+The fixture order addresses the PR #704 `c494c61` run (job 124154515435), whose isolated phase
+used 1509 of its 1680 seconds: `test_program_runtime` compiled alone for 600 seconds, with 88 MiB
+available at worst, then the seven fixtures one at a time for 813 seconds while 11.7 to 14.2 GiB
+stayed available. Each fixture is one `-O2` compile and link of a generated Program by
+`tests/cpp/support/native_dso_compiler.hpp`, which calls the compiler directly, without ccache, so
+every build compiles all seven. Compiled alone with their exact commands (GCC 13.3, Xeon 2.1 GHz),
+they peak at 3.6 to 3.7 GiB and take 134 to 165 seconds of compiler CPU each, 1025 seconds in
+series. The isolated-phase command replayed on that machine compiled them two at a time in 586
+seconds, each fixture within 6 percent of its time alone, with a sampled peak of 7.3 GiB for the
+two compilers; the runner has 14.5 GiB available with no compiler running. The fixture rules are
+in the heavy-TU pool, whose two slots bound them at any parallelism, and `test_program_runtime`
+still compiles only after them, alone. At that ratio the fixtures of the #704 run take about 480
+instead of 813 seconds, which brings its isolated phase near 1170 seconds, 70 instead of 90
+percent of the watchdog. No watchdog, step cap or job cap changes.
 
 The `collective-field-protocols` policy covers the elliptic `interface`, `linear`, and `amr`
 header families and requests MPI for their collective contracts. The isolated

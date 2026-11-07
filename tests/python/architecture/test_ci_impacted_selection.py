@@ -2257,7 +2257,6 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "build-mpi/python-mpi-plan.tsv" in mpi_block
     assert "--orchestrator-plan-file build-mpi/python-mpi-orchestrators.txt" in mpi_block
     assert "--parallel 1 --target _pops" in mpi_block
-    assert '--parallel 1 --target "${isolated_targets[@]}"' in mpi_block
     assert '--parallel 4 --target "${remaining0_targets[@]}"' in mpi_block
     assert 'test "${{ steps.mpi-test-plan.outputs.cpp_label_build_phase_count }}" -eq 3' in mpi_block
     assert "steps.mpi-test-plan.outputs.cpp_label_build_isolated_targets" in mpi_block
@@ -2271,10 +2270,30 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 60" in native_build_step
     assert native_build_step.count('28m \\') == 3
     assert "POPS_HEAVY_TEST_TU_POOL" not in native_build_step
+    # One watchdog: the loader fixture DSOs two at a time, then the isolated targets with one
+    # compiler, so test_program_runtime never shares the runner with another compiler.
+    isolated_phase = native_build_step.split(
+        'run_with_heartbeat "MPI isolated native test build" 28m \\\n', 1
+    )[1].split('run_with_heartbeat "MPI remaining native test build0" 28m', 1)[0]
+    fixture_build = (
+        "cmake --build --preset ci-mpi --parallel 2 --target pops_synthetic_loader_fixtures &&"
+    )
+    isolated_build = 'cmake --build --preset ci-mpi --parallel 1 --target "$@"\''
+    assert isolated_phase.count("cmake --build") == 2
+    assert 0 <= isolated_phase.find(fixture_build) < isolated_phase.find(isolated_build)
+    assert isolated_phase.rstrip().endswith(' isolated "${isolated_targets[@]}"')
+    tests_cmake = (REPO_ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    fixture_rules = tests_cmake.split("foreach(_variant ", 1)[1].split("endforeach()", 1)[0]
+    # The heavy-TU pool bounds the fixtures by its two slots whatever the parallelism.
+    assert "JOB_POOL pops_heavy_test_tu" in fixture_rules
+    assert (
+        "add_dependencies(test_amr_synthetic_program_loader_transaction "
+        "pops_synthetic_loader_fixtures)"
+    ) in tests_cmake
     configure_step = mpi_block.split(
         "- name: Configure + link Python module (MPI + Kokkos Serial)\n", 1
     )[1].split("\n      - name: Build complete native MPI inventory in three phases\n", 1)[0]
-    # Two heavy -O0 test units at a time fit the runner; the isolated phase keeps one.
+    # Two heavy -O0 test units at a time fit the runner; test_program_runtime keeps one.
     assert "-DPOPS_HEAVY_TEST_TU_POOL=2" in configure_step
     assert "scripts/ci_select_tests.py verify-cpp-mpi-ctests" in mpi_block
     assert "ctest --preset ci-mpi -N --show-only=json-v1" in mpi_block
