@@ -596,6 +596,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/numerics/elliptic/interface/field_nullspace.hpp",
         "pops/numerics/elliptic/linear/generic_krylov.hpp",
         "pops/numerics/elliptic/linear/solve_outcome.hpp",
+        "pops/runtime/program/solve_gates.hpp",
         "pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp",
         "pops/numerics/spatial/nd/face_frequency.hpp",
         "pops/numerics/time/amr/levels/amr_patch_range.hpp",
