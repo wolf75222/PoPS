@@ -685,8 +685,9 @@ class RegionTransport {
       if (peer.receive != nullptr) {
         if (code == MPI_SUCCESS)
           code = MPI_Irecv(peer.host_receive.data(), static_cast<int>(peer.receive->elements),
-                           pops::mpi_real_datatype(), peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                           lane_->native_handle(), &storage_->receive_requests[receive_index]);
+                           pops::mpi_real_datatype(), peer.mpi_rank,
+                           ExecutionLane::parallel_copy_message_tag, lane_->native_handle(),
+                           &storage_->receive_requests[receive_index]);
         ++receive_index;
       }
     if (request_phase_consensus_(code == MPI_SUCCESS ? 0L : 1L) == RequestPhaseConsensus::rejected)
@@ -697,9 +698,10 @@ class RegionTransport {
     for (PeerStorage& peer : storage_->peers)
       if (peer.send != nullptr) {
         if (code == MPI_SUCCESS)
-          code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements), pops::mpi_real_datatype(),
-                           peer.mpi_rank, ExecutionLane::parallel_copy_message_tag,
-                           lane_->native_handle(), &storage_->send_requests[send_index]);
+          code = MPI_Isend(peer.host_send.data(), static_cast<int>(peer.send->elements),
+                           pops::mpi_real_datatype(), peer.mpi_rank,
+                           ExecutionLane::parallel_copy_message_tag, lane_->native_handle(),
+                           &storage_->send_requests[send_index]);
         ++send_index;
       }
     if (request_phase_consensus_(code == MPI_SUCCESS ? 0L : 1L) == RequestPhaseConsensus::rejected)

@@ -28,13 +28,14 @@ _APPROXIMATION = _labels("approximation")
 _FIELD_OPERATORS = frozenset({"laplacian", "curl", "poisson", "gradient", "divergence"})
 _NAMED_DIFFERENCES = frozenset({"gradient", "divergence"})
 
-# The native solvers that IR24 moves under N9 (the files of the solver entries of
-# cf0_native_placement.toml, by directory where a directory holds only solvers).
-_NATIVE_SOLVERS = ("include/pops/numerics/elliptic/", "python/pops/solvers/",
-                   "include/pops/runtime/amr/amr_tensor_elliptic.hpp",
-                   "include/pops/runtime/amr/hierarchy_tensor_solver_provider.hpp",
-                   "include/pops/runtime/amr/tensor_coarse_gmres.hpp",
-                   "include/pops/runtime/amr/tensor_composite_fac.hpp")
+# The native solvers that IR24 moves under N9: the files of the N9 entries of the CF0 placement list
+# (cf0_native_placement.toml), with the directories that hold only solvers and their helpers in
+# place of their files. python/pops/solvers/ is the Python side of those solvers (their
+# descriptors), which the placement list, a list of natives, does not name.
+_SOLVER_DIRECTORIES = ("include/pops/numerics/elliptic/", "python/pops/solvers/")
+_NATIVE_SOLVERS = _SOLVER_DIRECTORIES + tuple(sorted(
+    {rel for native in scan.load_placement() if native["issue"] == "N9"
+     for rel in native["files"] if not scan.covered(rel, _SOLVER_DIRECTORIES)}))
 # The closures of the moment hierarchies, where gaussian is a closure (C29).
 _MOMENTS = ("python/pops/moments/", "include/pops/numerics/moments/")
 # The refinement criteria outside the tag-graph VM itself (C36).

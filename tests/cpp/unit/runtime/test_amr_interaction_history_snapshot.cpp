@@ -17,7 +17,7 @@ TEST(AmrInteractionHistorySnapshot, ColdAndWarmCoarseRotationPreservesFineOracle
   for (double dt : intervals) {
     calls = {};
     const auto integral = fixture.composite_integral(selected);
-    ASSERT_EQ(integral, selected); // The partial fine level replaces, never duplicates, volume.
+    ASSERT_EQ(integral, selected);  // The partial fine level replaces, never duplicates, volume.
     fixture.body = [&](double local_dt) {
       auto& context = *fixture.context;
       const auto image = Access::require(context);
@@ -71,13 +71,15 @@ TEST(AmrInteractionHistorySnapshot, FullRingsAndDeclaredGhostsAreDeepCopiedAndDe
   for (int level = 0; level < 2; ++level) {
     const auto key = Access::key(context, level);
     ASSERT_EQ(image->history.histories.at(key).size(), 3u);
-    for (auto& slot : live.histories.at(key)) slot.set_val(pops::Real(-99));
+    for (auto& slot : live.histories.at(key))
+      slot.set_val(pops::Real(-99));
     std::swap(live.histories.at(key)[0], live.histories.at(key)[2]);
     live.slot_sample.at(key)[1].ordinal += 10;
     live.slot_dt.at(key)[1] = 123;
     for (std::size_t slot = 0; slot < 3; ++slot) {
       const auto& frozen = image->history.histories.at(key)[slot];
-      for (int axis = 0; axis < Dim; ++axis) EXPECT_EQ(frozen.ghosts()[axis], 1);
+      for (int axis = 0; axis < Dim; ++axis)
+        EXPECT_EQ(frozen.ghosts()[axis], 1);
       expect_constant(frozen, pops::Real(20 + slot), true);
     }
   }
@@ -103,21 +105,37 @@ TEST(AmrInteractionHistorySnapshot, ColdAcceptedSeedIsAlsoDeepCopied) {
 TEST(AmrInteractionHistorySnapshot, ExactDeclarationsAreIdempotentAndRegistrySeals) {
   Fixture fixture;
   fixture.declaration(100, 1);
-  const auto issue = [&](int owner, const char* name, int lag, const char* state,
-                         const char* space, const char* clock, const char* interpolation,
-                         std::uint64_t budget, const char* identity) {
-    fixture.context->declare_spatial_interaction_history_source(100, owner, name, lag,
-        state, space, clock, interpolation, budget, identity);
+  const auto issue = [&](int owner, const char* name, int lag, const char* state, const char* space,
+                         const char* clock, const char* interpolation, std::uint64_t budget,
+                         const char* identity) {
+    fixture.context->declare_spatial_interaction_history_source(
+        100, owner, name, lag, state, space, clock, interpolation, budget, identity);
   };
-  EXPECT_THROW(issue(1, kName, 1, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget, kIdentity), std::exception);
-  EXPECT_THROW(issue(0, "foreign", 1, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget, kIdentity), std::exception);
-  EXPECT_THROW(issue(0, kName, 2, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget, kIdentity), std::exception);
-  EXPECT_THROW(issue(0, kName, 1, "foreign", "cell.scalar", "clock.macro", "none", kBudget, kIdentity), std::exception);
-  EXPECT_THROW(issue(0, kName, 1, "tracer.U", "foreign", "clock.macro", "none", kBudget, kIdentity), std::exception);
-  EXPECT_THROW(issue(0, kName, 1, "tracer.U", "cell.scalar", "foreign", "none", kBudget, kIdentity), std::exception);
-  EXPECT_THROW(issue(0, kName, 1, "tracer.U", "cell.scalar", "clock.macro", "foreign", kBudget, kIdentity), std::exception);
-  EXPECT_THROW(issue(0, kName, 1, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget - 1, kIdentity), std::exception);
-  EXPECT_THROW(issue(0, kName, 1, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget, "foreign"), std::exception);
+  EXPECT_THROW(
+      issue(1, kName, 1, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget, kIdentity),
+      std::exception);
+  EXPECT_THROW(
+      issue(0, "foreign", 1, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget, kIdentity),
+      std::exception);
+  EXPECT_THROW(
+      issue(0, kName, 2, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget, kIdentity),
+      std::exception);
+  EXPECT_THROW(
+      issue(0, kName, 1, "foreign", "cell.scalar", "clock.macro", "none", kBudget, kIdentity),
+      std::exception);
+  EXPECT_THROW(issue(0, kName, 1, "tracer.U", "foreign", "clock.macro", "none", kBudget, kIdentity),
+               std::exception);
+  EXPECT_THROW(issue(0, kName, 1, "tracer.U", "cell.scalar", "foreign", "none", kBudget, kIdentity),
+               std::exception);
+  EXPECT_THROW(
+      issue(0, kName, 1, "tracer.U", "cell.scalar", "clock.macro", "foreign", kBudget, kIdentity),
+      std::exception);
+  EXPECT_THROW(
+      issue(0, kName, 1, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget - 1, kIdentity),
+      std::exception);
+  EXPECT_THROW(
+      issue(0, kName, 1, "tracer.U", "cell.scalar", "clock.macro", "none", kBudget, "foreign"),
+      std::exception);
   fixture.context->begin_step(.125);
   EXPECT_NO_THROW(fixture.declaration(100, 1));
   EXPECT_THROW(fixture.declaration(102, 1), std::logic_error);
@@ -139,23 +157,48 @@ TEST(AmrInteractionHistorySnapshot, RankLocalMetadataCorruptionsRefuseCaptureCol
           history.slot_sample.at(key).assign(3, program::HistorySampleIdentity::zero_start());
           history.slot_dt.at(key).assign(3, pops::Real(0));
           break;
-        case 1: ++history.slot_sample.at(key)[1].ordinal; break;
-        case 2: history.slot_dt.at(key)[1] = std::nextafter(history.slot_dt.at(key)[1], pops::Real(1)); break;
-        case 3: Access::pending_remap(context, 1); break;
-        case 4: history.owner.at(key) = 1; break;
-        case 5: history.state_identity.at(key) = "foreign"; break;
-        case 6: history.space_identity.at(key) = "foreign"; break;
-        case 7: history.clock_identity.at(key) = "foreign"; break;
-        case 8: history.interpolation_identity.at(key) = "foreign"; break;
-        case 9: history.fill_count.at(key) = -1; break;
-        case 10: history.initialized.at(key) = false; break;
-        case 11: history.slot_sample.at(key)[1].kind = program::HistorySampleKind::UnknownLegacy; break;
-        case 12: history.ghost_depth.at(key) = history.histories.at(key).front().ghosts()[0] + 1; break;
+        case 1:
+          ++history.slot_sample.at(key)[1].ordinal;
+          break;
+        case 2:
+          history.slot_dt.at(key)[1] = std::nextafter(history.slot_dt.at(key)[1], pops::Real(1));
+          break;
+        case 3:
+          Access::pending_remap(context, 1);
+          break;
+        case 4:
+          history.owner.at(key) = 1;
+          break;
+        case 5:
+          history.state_identity.at(key) = "foreign";
+          break;
+        case 6:
+          history.space_identity.at(key) = "foreign";
+          break;
+        case 7:
+          history.clock_identity.at(key) = "foreign";
+          break;
+        case 8:
+          history.interpolation_identity.at(key) = "foreign";
+          break;
+        case 9:
+          history.fill_count.at(key) = -1;
+          break;
+        case 10:
+          history.initialized.at(key) = false;
+          break;
+        case 11:
+          history.slot_sample.at(key)[1].kind = program::HistorySampleKind::UnknownLegacy;
+          break;
+        case 12:
+          history.ghost_depth.at(key) = history.histories.at(key).front().ghosts()[0] + 1;
+          break;
       }
     }
     EXPECT_THROW(context.begin_step(.25), std::exception);
     EXPECT_EQ(Access::image_count(context), 0u);
-    context.for_each_program_resource_level([&](int) { expect_constant(context.state(0), pops::Real(2)); });
+    context.for_each_program_resource_level(
+        [&](int) { expect_constant(context.state(0), pops::Real(2)); });
   }
 }
 
@@ -172,10 +215,14 @@ TEST(AmrInteractionHistorySnapshot, AttemptAndExactMacroTagsRefuseStaleImages) {
   for (int tag = 0; tag < 4; ++tag) {
     context.begin_step(.125);
     auto& image = Access::corrupt_image(context);
-    if (tag == 0) ++image.epoch;
-    if (tag == 1) ++image.generation;
-    if (tag == 2) ++image.macro_step;
-    if (tag == 3) image.time = std::nextafter(image.time, 1.);
+    if (tag == 0)
+      ++image.epoch;
+    if (tag == 1)
+      ++image.generation;
+    if (tag == 2)
+      ++image.macro_step;
+    if (tag == 3)
+      image.time = std::nextafter(image.time, 1.);
     EXPECT_THROW((void)Access::require(context), std::logic_error);
   }
   context.begin_step(.125);
@@ -198,7 +245,8 @@ TEST(AmrInteractionHistorySnapshot, ColdAndWarmRatioTwoRefuseWithoutAcceptedPubl
     const auto history = Access::manager(*fixture.context);
     int fine_calls = 0;
     fixture.body = [&](double) {
-      if (fixture.context->level() == 1) ++fine_calls;
+      if (fixture.context->level() == 1)
+        ++fine_calls;
       fixture.context->store_history(kName, fixture.context->state(0), 0);
       (void)fixture.interaction();
     };
@@ -207,7 +255,8 @@ TEST(AmrInteractionHistorySnapshot, ColdAndWarmRatioTwoRefuseWithoutAcceptedPubl
     EXPECT_EQ(fixture.system.program_accepted_state(), accepted);
     EXPECT_EQ(Access::manager(*fixture.context).slot_sample, history.slot_sample);
     EXPECT_EQ(Access::manager(*fixture.context).slot_dt, history.slot_dt);
-    fixture.context->for_each_program_resource_level([&](int) { expect_constant(fixture.context->state(0), pops::Real(2)); });
+    fixture.context->for_each_program_resource_level(
+        [&](int) { expect_constant(fixture.context->state(0), pops::Real(2)); });
     EXPECT_EQ(Access::image_count(*fixture.context), 0u);
   }
 }
@@ -234,7 +283,11 @@ TEST(AmrInteractionHistorySnapshot, SourceAndWorkspaceBudgetsFailBeforePublicati
     (void)limited.interaction();
   };
   std::string refusal;
-  try { limited.system.step(.125); } catch (const std::exception& error) { refusal = error.what(); }
+  try {
+    limited.system.step(.125);
+  } catch (const std::exception& error) {
+    refusal = error.what();
+  }
   ASSERT_FALSE(refusal.empty());
   if (pops::n_ranks() == 1)
     EXPECT_NE(refusal.find("workspace budget"), std::string::npos);
@@ -249,30 +302,43 @@ TEST(AmrInteractionHistorySnapshot, AllocationVoteAndOverflowConvergeAndEmptyReg
   EXPECT_EQ(Access::image_count(*empty.context), 0u);
   EXPECT_THROW(empty.declaration(100, 1), std::logic_error);
   const auto& lane = empty.context->prepared_execution_lane();
-  EXPECT_THROW(program::interaction_phase(lane, [] {
-    if (pops::my_rank() == 0) throw std::bad_alloc();
-  }), std::exception);
-  EXPECT_THROW(program::interaction_phase(lane, [] {
-    if (pops::my_rank() == 0) (void)program::interaction_product(std::numeric_limits<std::size_t>::max(), 2);
-  }), std::exception);
-  EXPECT_THROW(program::interaction_add(std::numeric_limits<std::size_t>::max(), 1), std::overflow_error);
+  EXPECT_THROW(program::interaction_phase(lane,
+                                          [] {
+                                            if (pops::my_rank() == 0)
+                                              throw std::bad_alloc();
+                                          }),
+               std::exception);
+  EXPECT_THROW(program::interaction_phase(lane,
+                                          [] {
+                                            if (pops::my_rank() == 0)
+                                              (void)program::interaction_product(
+                                                  std::numeric_limits<std::size_t>::max(), 2);
+                                          }),
+               std::exception);
+  EXPECT_THROW(program::interaction_add(std::numeric_limits<std::size_t>::max(), 1),
+               std::overflow_error);
   EXPECT_NO_THROW(program::interaction_phase(lane, [] {}));
 }
 
 TEST(AmrInteractionHistorySnapshot, SuccessfulAndCancelledMappingRevokeImages) {
   Fixture fixture;
   bool completed = false;
-  fixture.context->advance_mapping_hierarchy(.125, [&](double) {
-    (void)Access::require(*fixture.context);
-  }, fixture.context, [&] {
-    completed = true;
-    EXPECT_EQ(Access::image_count(*fixture.context), 0u);
-  });
+  fixture.context->advance_mapping_hierarchy(
+      .125, [&](double) { (void)Access::require(*fixture.context); }, fixture.context,
+      [&] {
+        completed = true;
+        EXPECT_EQ(Access::image_count(*fixture.context), 0u);
+      });
   EXPECT_TRUE(completed);
   EXPECT_EQ(Access::image_count(*fixture.context), 0u);
-  EXPECT_THROW(fixture.context->advance_mapping_hierarchy(.125, [&](double) {
-    if (pops::my_rank() == 0) throw std::runtime_error("negative mapping fixture");
-  }, fixture.context, [] {}), std::exception);
+  EXPECT_THROW(fixture.context->advance_mapping_hierarchy(
+                   .125,
+                   [&](double) {
+                     if (pops::my_rank() == 0)
+                       throw std::runtime_error("negative mapping fixture");
+                   },
+                   fixture.context, [] {}),
+               std::exception);
   EXPECT_EQ(Access::image_count(*fixture.context), 0u);
 }
 
@@ -346,7 +412,8 @@ TEST(AmrInteractionHistorySnapshot, OuterTransactionAndExplicitContextRollbackRe
     fixture.body = [&](double local_dt) {
       auto& context = *fixture.context;
       const auto image = Access::require(context);
-      if (context.level() == 0) sources.emplace_back(image->macro_step, image->dt);
+      if (context.level() == 0)
+        sources.emplace_back(image->macro_step, image->dt);
       auto& state = context.state(0);
       auto candidate = context.scratch_state_like(state);
       context.copy_grown_component_span(candidate, 0, state, 0, 1);
@@ -355,7 +422,8 @@ TEST(AmrInteractionHistorySnapshot, OuterTransactionAndExplicitContextRollbackRe
       context.rotate_histories("clock.macro");
       context.commit_many({{&state, &candidate}});
     };
-    for (double dt : {.125, .25, .0625}) fixture.system.step(dt);
+    for (double dt : {.125, .25, .0625})
+      fixture.system.step(dt);
     return sources;
   };
   fixture.system.begin_step_transaction();
@@ -375,7 +443,8 @@ TEST(AmrInteractionHistorySnapshot, OuterTransactionAndExplicitContextRollbackRe
   EXPECT_FALSE(discarded->attempt.visible());
   EXPECT_EQ(run(), first);
   auto original = program::deserialize_amr_program_accepted_state<Dim>(after);
-  const auto replayed = program::deserialize_amr_program_accepted_state<Dim>(fixture.system.program_accepted_state());
+  const auto replayed =
+      program::deserialize_amr_program_accepted_state<Dim>(fixture.system.program_accepted_state());
   ASSERT_TRUE(original.accepted_attempt.has_value());
   ASSERT_TRUE(replayed.accepted_attempt.has_value());
   EXPECT_GT(*replayed.accepted_attempt, *original.accepted_attempt);
@@ -392,10 +461,15 @@ TEST(AmrInteractionHistorySnapshot, OuterTransactionAndExplicitContextRollbackRe
       const auto& original = history.histories.at(key).at(lag);
       for (std::size_t local = 0; local < replayed.local_size(); ++local) {
         const auto left = replayed.fab(local).view(), right = original.fab(local).view();
-        EXPECT_EQ(pops::for_each_cell_reduce_max(replayed.box(local), [=] POPS_HD(const pops::Index<Dim>& cell) {
-          return std::bit_cast<program::InteractionRealWord>(left(cell, 0)) ==
-              std::bit_cast<program::InteractionRealWord>(right(cell, 0)) ? pops::Real(0) : pops::Real(1);
-        }), pops::Real(0));
+        EXPECT_EQ(pops::for_each_cell_reduce_max(
+                      replayed.box(local),
+                      [=] POPS_HD(const pops::Index<Dim>& cell) {
+                        return std::bit_cast<program::InteractionRealWord>(left(cell, 0)) ==
+                                       std::bit_cast<program::InteractionRealWord>(right(cell, 0))
+                                   ? pops::Real(0)
+                                   : pops::Real(1);
+                      }),
+                  pops::Real(0));
       }
     }
   });

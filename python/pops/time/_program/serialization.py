@@ -4,7 +4,10 @@ from __future__ import annotations
 from pops.time.canonical_data import _json_ready as _json_ready
 
 import json
-from collections.abc import Mapping
+import threading
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from enum import Enum
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, cast
@@ -20,6 +23,68 @@ if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
 else:
     _ProgramBase = object
+
+class _IdentityReuse:
+    __slots__ = ("identities", "thread", "active")
+
+    def __init__(self) -> None:
+        self.identities: dict[int, tuple[Any, str]] = {}
+        self.thread = threading.get_ident()
+        self.active = True
+
+    def applies(self) -> bool:
+        return self.active and self.thread == threading.get_ident()
+
+
+_IR_IDENTITY_REUSE: ContextVar[_IdentityReuse | None] = ContextVar(
+    "pops_ir_identity_reuse", default=None)
+
+
+@contextmanager
+def ir_identity_reuse() -> Iterator[None]:
+    """Project each frozen Program identity once within one synchronous compile.
+
+    ``pops.compile`` re-verifies its plan, detaches the Program twice, converts and lowers the
+    clones and checks the artifact; each check hashed the whole IR again. Inside this scope the
+    first read of a frozen Program, authoring or detached, projects its IR and later reads reuse
+    that identity. When the operation succeeds every identity is projected again outside the
+    scope, so a definition changed during compilation, or an out-of-contract edit of a clone, still
+    fails it. Nothing is retained on a Program, and a failed operation leaves no witness. With or
+    without an error, the graphs converted from the Programs read in the scope leave the conversion
+    cache when it ends (``_forget_scope_graphs``).
+    """
+    inherited = _IR_IDENTITY_REUSE.get()
+    if inherited is not None and inherited.applies():
+        yield
+        return
+    reuse = _IdentityReuse()
+    token = _IR_IDENTITY_REUSE.set(reuse)
+    try:
+        yield
+    finally:
+        reuse.active = False
+        observed = tuple(reuse.identities.values())
+        reuse.identities.clear()
+        _IR_IDENTITY_REUSE.reset(token)
+        _forget_scope_graphs(program for program, _identity in observed)
+    for program, expected in observed:
+        if program._ir_hash() != expected:
+            raise RuntimeError("Program IR identity changed during pops.compile")
+
+
+def _forget_scope_graphs(programs: Iterable[Any]) -> None:
+    """Drop the converted graphs of the Programs that a reuse scope read.
+
+    ``program_to_graph`` caches a detached clone's graph under the identity it reads. Inside the
+    scope that is the identity of the clone's first read, not necessarily the identity of the
+    contents it converted, so no such binding may outlive the scope: afterwards a graph is
+    converted again under a freshly projected identity.
+    """
+    from pops.time._program.graph_conversion import _detached_graphs
+
+    for program in programs:
+        _detached_graphs.pop(program, None)
+
 
 def _raise_ir_version(result: dict[str, Any], version: int) -> None:
     """Raise the same schema floor without accumulating index-flow inference."""
@@ -424,8 +489,20 @@ class _ProgramSerialization(_ProgramBase):
         return result
 
     def _ir_hash(self) -> str:
+        # No Program keeps an identity cache: authoring handles still resolve through live
+        # registries, and even an out-of-contract edit of a detached clone must change what a
+        # check reads. Only an ir_identity_reuse scope reuses a frozen Program's identity, and it
+        # projects every reused identity again when its operation succeeds.
+        reuse = _IR_IDENTITY_REUSE.get()
+        if reuse is None or not reuse.applies() or getattr(self, "_frozen", False) is not True:
+            reuse = None
+        elif id(self) in reuse.identities:
+            return reuse.identities[id(self)][1]
         from pops._structural_data import canonical_json_sha256
-        return canonical_json_sha256(self._serialize(include_provenance=False))
+        identity = canonical_json_sha256(self._serialize(include_provenance=False))
+        if reuse is not None:
+            reuse.identities[id(self)] = (self, identity)
+        return identity
 
     def _semantic_serialize(self) -> dict[str, Any]:
         """Scientific IR projection shared by manual programs and library constructors."""

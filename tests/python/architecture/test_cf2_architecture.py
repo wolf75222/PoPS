@@ -121,6 +121,28 @@ def test_every_exception_names_the_issue_that_removes_it(listed):
         "refresh_exceptions.py:\n  " + "\n  ".join(wrong[:50]))
 
 
+def test_owner_rules_read_the_placement_list():
+    """The N9 path rule holds the files of the N9 entries of the CF0 placement list (or the solver
+    directory that holds them), and the G06 path rule the files of the G06 entries, except those
+    that G11 takes over whole for their named interpolations (C43). The term rules before them keep
+    the field operators and boundary families of 18.4 with G10 and G04."""
+    placement = scan.load_placement()
+    path_rules = {issue: paths for issue, paths, terms, _ in cf2.OWNER_RULES
+                  if paths is not None and terms is None}
+    n9 = {rel for native in placement if native["issue"] == "N9" for rel in native["files"]}
+    uncovered = sorted(rel for rel in n9 if not scan.covered(rel, cf2._NATIVE_SOLVERS))
+    unlisted = sorted(entry for entry in cf2._NATIVE_SOLVERS
+                      if not entry.endswith("/") and entry not in n9)
+    assert path_rules["N9"] == cf2._NATIVE_SOLVERS
+    assert not uncovered and not unlisted, (
+        "cf2.py _NATIVE_SOLVERS differs from the N9 entries of cf0_native_placement.toml: N9 files "
+        "outside it %s, files of it that no N9 entry names %s" % (uncovered, unlisted))
+    g06 = {rel for native in placement if native["issue"] == "G06" for rel in native["files"]
+           if not scan.covered(rel, path_rules["G11"])}
+    uncovered = sorted(rel for rel in g06 if not scan.covered(rel, path_rules["G06"]))
+    assert not uncovered, "G06 placement files outside the G06 path rule: %s" % uncovered
+
+
 def test_every_generic_sense_still_covers_a_site(scanned):
     _, used = scanned
     stale = [entry for entry in scan.GENERIC_SENSES if entry not in used]

@@ -365,7 +365,7 @@ def test_boolean_tagging_composition_lowers_through_node_protocols():
         rules=(
             Tag(predicate),
             Coarsen(value < core.case.value(core.coarsen_value)),
-            Buffer(cells=2),
+            Buffer(cells=2, selection="refine-requests"),
         ),
         hysteresis=authored.tagging.hysteresis,
         conflict_policy=authored.tagging.conflict_policy,

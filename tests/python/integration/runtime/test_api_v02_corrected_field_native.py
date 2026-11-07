@@ -27,8 +27,10 @@ def test_native_replacement_recomputes_consumed_field(
     with collective_check(world):
         assert report.accepted_steps == 1 and report.rejected_steps == 0
         assert abs(runtime.time()-spec.t_end) < 2.e-13
+        # state_global gathers the state into every rank, so every rank evaluates the same
+        # metrics from the same image.
         owners = [row for row in metrics if row.get("metrics_owner", True)]
-        assert len(owners) == 1
+        assert len(owners) == len(metrics) and all(row == owners[0] for row in owners), metrics
         for row in owners:
             # All variants execute the same conservative replacement correctly.
             assert row["reference_error"] < 3.e-13

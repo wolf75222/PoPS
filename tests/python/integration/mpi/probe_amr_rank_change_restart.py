@@ -169,7 +169,7 @@ def _resolved(*, bit_identical: bool) -> Any:
             rules=(
                 Tag(ValueExpr(block_state) > case.value(threshold)),
                 Coarsen(ValueExpr(block_state) < case.value(coarsen_threshold)),
-                Buffer(cells=1),
+                Buffer(cells=1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(HYSTERESIS_CYCLES, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,

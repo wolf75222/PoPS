@@ -514,8 +514,8 @@ void prove_characteristic_uses_interface_normal() {
                                                    active.fab(0), reference, exterior.fab(0));
 
   const pops::Index<Dim> cut{};
-  const auto fractions = pops::nd::cut_cell_fractions_from_phi_cell(
-      std::as_const(phi.fab(0)).view(), cut);
+  const auto fractions =
+      pops::nd::cut_cell_fractions_from_phi_cell(std::as_const(phi.fab(0)).view(), cut);
   pops::RealVector<Dim> normal{};
   ASSERT_TRUE(pops::nd::cut_cell_interface_normal(fractions, normal));
   if constexpr (Dim >= 2) {

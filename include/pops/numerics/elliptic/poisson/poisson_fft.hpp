@@ -303,8 +303,9 @@ class PoissonFFT {
     }
     fftw_complex* data = reinterpret_cast<fftw_complex*>(host.data());
     const int sign = inverse ? FFTW_BACKWARD : FFTW_FORWARD;
-    fftw_plan plan = fftw_plan_guru_dft(1, &dims, howmany_rank, howmany_rank == 0 ? nullptr : howmany,
-                                        data, data, sign, FFTW_ESTIMATE);
+    fftw_plan plan =
+        fftw_plan_guru_dft(1, &dims, howmany_rank, howmany_rank == 0 ? nullptr : howmany, data,
+                           data, sign, FFTW_ESTIMATE);
     if (plan == nullptr)
       return false;
     fftw_execute(plan);
@@ -352,14 +353,16 @@ class PoissonFFT {
       return;
     const auto bit_reversed_input = values_;
     const auto bit_reversed_output = scratch_;
-    device_kernels::bit_reverse(bit_reversed_input, bit_reversed_output, stride, extent, local_count_);
+    device_kernels::bit_reverse(bit_reversed_input, bit_reversed_output, stride, extent,
+                                local_count_);
     std::swap(values_, scratch_);
     for (int length = 2;; length <<= 1) {
       const auto input = values_;
       const auto output = scratch_;
       const int half = length / 2;
       const double sign = inverse ? 1.0 : -1.0;
-      device_kernels::local_radix_stage(input, output, stride, extent, length, half, sign, local_count_);
+      device_kernels::local_radix_stage(input, output, stride, extent, length, half, sign,
+                                        local_count_);
       std::swap(values_, scratch_);
       if (length == extent)
         break;
@@ -408,9 +411,7 @@ class PoissonFFT {
           "peer-DFT launch", PoissonFFTDiagnosticStage::peer_dft_launch);
       exchange_peer_(destination, source_rank);
       execute_local_stage_collectively_(
-          [&] {
-            device_kernels::peer_accumulate(result, receive, local_count_);
-          },
+          [&] { device_kernels::peer_accumulate(result, receive, local_count_); },
           "peer accumulation", PoissonFFTDiagnosticStage::peer_accumulation);
     }
     execute_local_stage_collectively_(

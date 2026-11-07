@@ -264,11 +264,13 @@ TEST(test_weno_convergence, finite_extreme_stencils_and_step_faces) {
   ASSERT_TRUE(std::isfinite(linear));
   EXPECT_NEAR(linear / amplitude, Real(3.5), Real(16) * std::numeric_limits<Real>::epsilon());
 
-  const auto faces = reconstruct_periodic_faces<Weno5>({Real(1), Real(1), Real(1), Real(0),
-                                                        Real(0), Real(0), Real(0), Real(0)});
+  const auto faces = reconstruct_periodic_faces<Weno5>(
+      {Real(1), Real(1), Real(1), Real(0), Real(0), Real(0), Real(0), Real(0)});
   ASSERT_TRUE(faces.publication_permitted);
-  for (const Real face : faces.left) EXPECT_TRUE(std::isfinite(face));
-  for (const Real face : faces.right) EXPECT_TRUE(std::isfinite(face));
+  for (const Real face : faces.left)
+    EXPECT_TRUE(std::isfinite(face));
+  for (const Real face : faces.right)
+    EXPECT_TRUE(std::isfinite(face));
 }
 
 TEST(test_weno_convergence, invalid_stencil_or_epsilon_remains_nonfinite) {
@@ -278,8 +280,8 @@ TEST(test_weno_convergence, invalid_stencil_or_epsilon_remains_nonfinite) {
     EXPECT_FALSE(std::isfinite(weno5z(Real(1), input, Real(1), Real(0), Real(0))));
   for (const Real eps : {Real(0), Real(-2), nan, inf})
     EXPECT_FALSE(std::isfinite(weno5z(Real(1), Real(2), Real(3), Real(4), Real(5), eps)));
-  auto averages = std::vector<Real>{Real(1), Real(1), Real(1), Real(0), Real(0), Real(0),
-                                    Real(0), Real(0)};
+  auto averages =
+      std::vector<Real>{Real(1), Real(1), Real(1), Real(0), Real(0), Real(0), Real(0), Real(0)};
   averages[1] = nan;
   const auto faces = reconstruct_periodic_faces<Weno5>(averages);
   EXPECT_TRUE(std::any_of(faces.left.begin(), faces.left.end(),
@@ -321,22 +323,60 @@ TEST(test_muscl_limiters, minmod_and_vanleer_handle_extreme_finite_differences) 
     EXPECT_EQ(vanleer.limited_slope(sign * tiny, sign * largest), sign * Real(2) * tiny);
   }
 
-  for (const auto slope : {minmod.limited_slope(Real(0), largest),
-                           minmod.limited_slope(-tiny, largest),
-                           vanleer.limited_slope(Real(0), largest),
-                           vanleer.limited_slope(-tiny, largest)})
+  for (const auto slope :
+       {minmod.limited_slope(Real(0), largest), minmod.limited_slope(-tiny, largest),
+        vanleer.limited_slope(Real(0), largest), vanleer.limited_slope(-tiny, largest)})
     EXPECT_EQ(slope, Real(0));
 
   // A limiter must not turn an invalid neighbour into a plausible zero/finite face state.
   const Real nan = std::numeric_limits<Real>::quiet_NaN();
   const Real inf = std::numeric_limits<Real>::infinity();
-  for (const auto slope : {minmod.limited_slope(nan, Real(1)),
-                           minmod.limited_slope(Real(1), inf),
-                           minmod.limited_slope(-inf, Real(1)),
-                           vanleer.limited_slope(nan, Real(1)),
-                           vanleer.limited_slope(Real(1), inf),
-                           vanleer.limited_slope(-inf, Real(1))})
+  for (const auto slope :
+       {minmod.limited_slope(nan, Real(1)), minmod.limited_slope(Real(1), inf),
+        minmod.limited_slope(-inf, Real(1)), vanleer.limited_slope(nan, Real(1)),
+        vanleer.limited_slope(Real(1), inf), vanleer.limited_slope(-inf, Real(1))})
     EXPECT_FALSE(std::isfinite(slope));
+}
+
+TEST(test_muscl_limiters, vanleer_and_mc_keep_masters_expressions_on_ordinary_differences) {
+  // MG8: master's tutorials keep their bits only if van Leer is 2ab/(a+b) and the centred slope of
+  // MC is |a|/2 + |b|/2, evaluated as master wrote them, wherever these stay normal and finite.
+  const auto master_vanleer = [](Real a, Real b) {
+    const Real ab = a * b;
+    return ab <= Real(0) ? Real(0) : Real(2) * ab / (a + b);
+  };
+  const auto master_mc = [](Real backward, Real forward) {
+    const bool positive = backward > Real(0) && forward > Real(0);
+    const bool negative = backward < Real(0) && forward < Real(0);
+    if (!positive && !negative)
+      return Real(0);
+    const Real a = positive ? backward : -backward;
+    const Real b = positive ? forward : -forward;
+    const Real centred = Real(0.5) * a + Real(0.5) * b;
+    const Real smaller = a < b ? a : b;
+    const Real magnitude = Real(0.5) * centred <= smaller ? centred : Real(2) * smaller;
+    return positive ? magnitude : -magnitude;
+  };
+  const auto bounded_vanleer = [](Real a, Real b) {
+    const Real smaller = std::min(std::abs(a), std::abs(b));
+    const Real larger = std::max(std::abs(a), std::abs(b));
+    return std::copysign(smaller * (Real(2) / (Real(1) + smaller / larger)), a);
+  };
+  std::mt19937_64 generator(0x4d4738);
+  std::uniform_real_distribution<Real> mantissa(Real(-1), Real(1));
+  std::uniform_int_distribution<int> exponent(-60, 60);
+  int rounded_apart = 0;
+  for (int sample = 0; sample < 20000; ++sample) {
+    const Real a = std::ldexp(mantissa(generator), exponent(generator));
+    const Real b = std::ldexp(mantissa(generator), exponent(generator));
+    EXPECT_EQ(VanLeer{}.limited_slope(a, b), master_vanleer(a, b)) << a << " " << b;
+    EXPECT_EQ(MC{}.limited_slope(a, b), master_mc(a, b)) << a << " " << b;
+    if (a * b > Real(0) && master_vanleer(a, b) != bounded_vanleer(a, b))
+      ++rounded_apart;
+  }
+  // The bounded form alone rounds differently on a sizeable share of ordinary pairs: the change
+  // that master's tutorials showed.
+  EXPECT_GT(rounded_apart, 1000);
 }
 
 TEST(test_muscl_limiters, mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slopes) {
@@ -351,10 +391,9 @@ TEST(test_muscl_limiters, mc_and_superbee_do_not_mask_invalid_inputs_or_tiny_slo
   EXPECT_EQ(superbee.limited_slope(tiny, tiny), tiny);
   EXPECT_EQ(superbee.limited_slope(-tiny, -tiny), -tiny);
   for (const Real value : {nan, inf, -inf}) {
-    for (const Real slope : {mc.limited_slope(value, Real(1)),
-                             mc.limited_slope(Real(-1), value),
-                             superbee.limited_slope(value, Real(1)),
-                             superbee.limited_slope(Real(-1), value)})
+    for (const Real slope :
+         {mc.limited_slope(value, Real(1)), mc.limited_slope(Real(-1), value),
+          superbee.limited_slope(value, Real(1)), superbee.limited_slope(Real(-1), value)})
       EXPECT_FALSE(std::isfinite(slope));
   }
   EXPECT_EQ(mc.limited_slope(Real(0), Real(1)), Real(0));
@@ -371,7 +410,8 @@ TEST(test_muscl_limiters, scalar_upwind_euler_tvd_and_mean_at_half_cfl) {
   for (int limiter = 0; limiter < 2; ++limiter) {
     for (int case_index = 0; case_index < 600; ++case_index) {
       std::vector<Real> initial(cells), face(cells), next(cells);
-      for (auto& value : initial) value = sample(generator);
+      for (auto& value : initial)
+        value = sample(generator);
       for (int i = 0; i < cells; ++i) {
         const Real backward = initial[i] - initial[(i + cells - 1) % cells];
         const Real forward = initial[(i + 1) % cells] - initial[i];
@@ -386,10 +426,9 @@ TEST(test_muscl_limiters, scalar_upwind_euler_tvd_and_mean_at_half_cfl) {
       for (int i = 0; i < cells; ++i) {
         before_sum += initial[i];
         after_sum += next[i];
-        before_tv += std::abs(static_cast<long double>(initial[i] -
-                                                    initial[(i + cells - 1) % cells]));
-        after_tv += std::abs(static_cast<long double>(next[i] -
-                                                   next[(i + cells - 1) % cells]));
+        before_tv +=
+            std::abs(static_cast<long double>(initial[i] - initial[(i + cells - 1) % cells]));
+        after_tv += std::abs(static_cast<long double>(next[i] - next[(i + cells - 1) % cells]));
       }
       const long double tolerance = 64 * std::numeric_limits<Real>::epsilon() * cells;
       EXPECT_LE(std::abs(after_sum - before_sum), tolerance) << limiter << ':' << case_index;

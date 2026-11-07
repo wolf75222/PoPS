@@ -30,6 +30,7 @@
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 #include <pops/runtime/system/native_package_capability.hpp>
+#include <pops/runtime/system/prepared_active_mask_consensus.hpp>
 
 #include <array>
 #include <cstddef>
@@ -1084,6 +1085,19 @@ class System {
       const std::vector<MultiFab<Dim>*>& states, const std::vector<MultiFab<Dim>*>& rhs,
       const std::vector<int>& flux_only,
       const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces);
+  /// The same group, also observing the local maximum incident-face frequency of each requested
+  /// block's evaluated faces. The frequency is read under the block's prepared scratch lock and
+  /// assigned only after the group published; observing it alone allocates no field.
+  POPS_EXPORT void block_rhs_group(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::vector<int>& blocks,
+      const std::vector<MultiFab<Dim>*>& states, const std::vector<MultiFab<Dim>*>& rhs,
+      const std::vector<int>& flux_only,
+      const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces,
+      const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& retained_frequencies);
+  /// Whether the bound prepared group transport can evaluate one block's flux-only residual with
+  /// face observations: a prepared Cartesian closure, no shared-interface provider and no active
+  /// embedded boundary. Program face observers use a standalone session otherwise.
+  POPS_EXPORT bool has_prepared_group_face_observation(int b) const;
   POPS_EXPORT void block_rhs_core_into_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point, int b, MultiFab<Dim>& U,
       MultiFab<Dim>& R, bool flux_only, const System* prepared_system, int prepared_block,
@@ -1610,6 +1624,12 @@ class System {
   /// become a public publication route.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_active_mask_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
+  /// The rank-local half of prepared_program_block_active_mask_, without any collective, so a
+  /// generated-Program helper decides its own checks and this query in one collective (spec 0.3
+  /// SV20, PF8) through prepared_active_mask_consensus.hpp.
+  [[nodiscard]] POPS_EXPORT runtime::system::PreparedActiveMaskLocal<MultiFab<Dim>>
+  prepared_program_block_active_mask_local_(int runtime_block, const MultiFab<Dim>& field,
+                                            const ExecutionLane& lane) const;
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_volume_fraction_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext

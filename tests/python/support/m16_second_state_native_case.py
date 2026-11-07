@@ -43,7 +43,7 @@ def build():
     threshold=case.param(a.RuntimeParam('unused_refinement_threshold',default=1000.))
     layout=a.AMR(grid=a.CartesianGrid(frame=frame,cells=(a.N,a.N),periodic=a.PeriodicAxes(frame.axes)),
         hierarchy=a.AMRHierarchy(max_levels=1,ratios=()),
-        tagging=a.AMRTagging(rules=(a.Tag(a.ValueExpr(subjects['population'])[a.BINDING[(0,0)]]>case.value(threshold)),a.Buffer(cells=0)),
+        tagging=a.AMRTagging(rules=(a.Tag(a.ValueExpr(subjects['population'])[a.BINDING[(0,0)]]>case.value(threshold)),a.Buffer(cells=0, selection="refine-requests")),
             hysteresis=a.Hysteresis(0,a.EqualityPolicy.HOLD),conflict_policy=a.ConflictPolicy.REFINE_WINS),
         regrid=a.AMRRegrid(schedule=a.every(100,clock=program.clock)),transfer=transfer,execution=a.AMRExecution.synchronous())
     return case,layout,subjects,model,operator

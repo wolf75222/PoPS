@@ -111,8 +111,12 @@ class ExactNamedField final {
     return active_ && candidate_ready_ ? solver_->candidate() : accepted_;
   }
   bool warm_start_pending() const noexcept { return warm_start_pending_; }
-  const std::optional<SolveReport>& last_accepted_solve_report() const noexcept { return accepted_solve_report_; }
-  AcceptedState accepted_state() const { return {accepted_, accepted_outputs_, warm_start_pending_, accepted_solve_report_}; }
+  const std::optional<SolveReport>& last_accepted_solve_report() const noexcept {
+    return accepted_solve_report_;
+  }
+  AcceptedState accepted_state() const {
+    return {accepted_, accepted_outputs_, warm_start_pending_, accepted_solve_report_};
+  }
   void restore_accepted_state(const AcceptedState& state) {
     if (active_)
       throw std::logic_error("cannot restore a named field while a solve is active");
@@ -142,20 +146,25 @@ class ExactNamedField final {
       if (source.ncomp() != 1 || source.local_size() != accepted_.local_size())
         throw std::invalid_argument("named field warm start requires exactly one scalar component");
       authenticate_layout_(solver_->candidate(), "warm start candidate");
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     collective_rethrow_(error, "named field warm-start admission failed collectively", *lane_);
     Real invalid = Real(0);
     error = nullptr;
     try {
       for (std::size_t local = 0; local < source.local_size(); ++local) {
         const auto values = source.fab(local).view();
-        invalid = std::max(invalid, for_each_cell_reduce_max(source.box(local),
-            [=] POPS_HD(const Index<Dim>& cell) {
+        invalid = std::max(
+            invalid,
+            for_each_cell_reduce_max(source.box(local), [=] POPS_HD(const Index<Dim>& cell) {
               return Kokkos::isfinite(values(cell, 0)) ? Real(0) : Real(1);
             }));
       }
       Kokkos::fence();
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     collective_rethrow_(error, "named field warm-start evaluation failed collectively", *lane_);
     if (all_reduce_max(invalid, *lane_) != Real(0))
       throw std::invalid_argument("named field warm start contains nonfinite valid cells");
@@ -163,14 +172,18 @@ class ExactNamedField final {
     try {
       elliptic::nd::detail::copy_component(source, 0, solver_->candidate(), 0);
       Kokkos::fence();
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+      error = std::current_exception();
+    }
     collective_rethrow_(error, "named field warm-start staging failed collectively", *lane_);
     // Like accept_candidate(), this is allocation-free publication after collective admission.
     try {
       elliptic::nd::detail::copy_component(solver_->candidate(), 0, accepted_, 0);
       Kokkos::fence();
       warm_start_pending_ = true;
-    } catch (...) { std::terminate(); }
+    } catch (...) {
+      std::terminate();
+    }
   }
   int maximum_iterations() const noexcept { return solver_->maximum_iterations(); }
   bool materialized() const noexcept { return solver_->materialized(); }
@@ -299,10 +312,16 @@ class ExactNamedField final {
 
     const auto rhs_phase = [&](const auto& operation, const char* message) {
       std::exception_ptr error;
-      try { operation(); Kokkos::fence(); }
-      catch (...) {
+      try {
+        operation();
+        Kokkos::fence();
+      } catch (...) {
         error = std::current_exception();
-        try { Kokkos::fence(); } catch (...) { error = std::current_exception(); }
+        try {
+          Kokkos::fence();
+        } catch (...) {
+          error = std::current_exception();
+        }
       }
       if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
         clear_candidate_();
@@ -311,11 +330,13 @@ class ExactNamedField final {
     };
     // A V2 callback enters its own preflight votes. No rank may reach it while a peer has
     // already failed a contribution allocation or initialization outside that vote.
-    rhs_phase([&] {
-      if (!contribution_scratch_)
-        contribution_scratch_.emplace(solver_->rhs().layout(), solver_->rhs().distribution(),
-                                      solver_->rhs().local_rank(), 1, Extent<Dim>{});
-    }, "named-field RHS allocation failed collectively");
+    rhs_phase(
+        [&] {
+          if (!contribution_scratch_)
+            contribution_scratch_.emplace(solver_->rhs().layout(), solver_->rhs().distribution(),
+                                          solver_->rhs().local_rank(), 1, Extent<Dim>{});
+        },
+        "named-field RHS allocation failed collectively");
     rhs_phase([&] { solver_->rhs().set_val(Real(0)); },
               "named-field RHS initialization failed collectively");
     for (std::size_t block = 0; block < states.size(); ++block)

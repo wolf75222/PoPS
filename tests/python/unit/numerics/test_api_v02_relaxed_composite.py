@@ -12,12 +12,17 @@ def test_composite_affine_publication_lowers_one_parent_region(ratio):
     plan = pops.resolve(pops.validate(spec.case), layout=spec.layout)
     values = list(all_ops(plan.time))
     assert sum(v.op == "accept_increment" for v in values) == 1
-    assert sum(v.op == "composite_pair" for v in values) == 3
+    # The energies before and after are composite pairs. The witness integrates the radial
+    # and squared increments of its Heun map on each of the two levels instead of a mixed
+    # pair of rounded endpoints, which loses the O(h**2) radial increment near the frontier.
+    assert sum(v.op == "composite_pair" for v in values) == 2
+    assert sum(v.op == "composite_integral" for v in values) == 4
     assert not plan.time._post_sync_commits
     cpp = emit_cpp_program(plan.time, target="amr_system",
                            model_graph=ProgramModelGraph.from_resolved_blocks(plan.blocks))
     for token in ("ctx.begin_affine_finalization", "ctx.prepare_affine_finalization",
-                  "ctx.accept_increment", "ctx.finish_affine_finalization", "ctx.composite_pair"):
+                  "ctx.accept_increment", "ctx.finish_affine_finalization", "ctx.composite_pair",
+                  "ctx.composite_integral"):
         assert token in cpp
     assert "_level_programs->front().post_synchronization(dt)" in cpp
     assert "PyObject" not in cpp

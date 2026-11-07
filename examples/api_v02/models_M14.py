@@ -134,7 +134,7 @@ def build_m14(cells=(16,1), *, capacitance=CAPACITANCE, reject=False, receipt=Fa
     numerical.rates.add(acceleration,StateStorage())
     numerical.rates.add(lifting,StateStorage())
     numerical.boundaries.add(TransportBoundarySet({
-        frame.boundaries.x_min:Inflow(state=block[U],value=tuple(RESERVOIR)),
+        frame.boundaries.x_min:Inflow(state=block[U],value=tuple(RESERVOIR),trace="prescribed"),
         frame.boundaries.x_max:Outflow(state=block[U]),
         frame.boundaries.y_min:Outflow(state=block[U]),
         frame.boundaries.y_max:Outflow(state=block[U]),

@@ -70,10 +70,12 @@ def compile_native(
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
     _toolchain_capture: Any = None,
+    native_route: Any = None,
 ) -> Any:
     """Backend "production": generate the NATIVE LOADER (emit_cpp_native_loader)
     and compile it into a .so loadable by System.add_native_block
     (target="system") or AmrSystem.add_native_block (target="amr_system").
+    ``native_route`` restricts the package to one catalogue route (None keeps all).
     Returns so_path.
     """
     import tempfile
@@ -102,6 +104,7 @@ def compile_native(
         native_field_roles=native_field_roles,
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
+        native_route=native_route,
     )
     cc, native_compile_flags, native_link_flags = pops_loader_build_flags(cxx)
     native_compile_flags = native_toolchain_flags(toolchain_capture, native_compile_flags)
@@ -208,6 +211,7 @@ def compile_model(
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
     model_source_policy: str = "allow_missing",
+    _native_route: Any = None,
 ) -> Any:
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
     into a native fixed-ABI package and returns its path.
@@ -218,10 +222,13 @@ def compile_model(
     @p backend: the private ``"production"`` token or ``Production()``.
     @p target:  "system" (default) | "amr_system".
     @p require_metadata: if True, requires physical roles AND explicit gamma.
+    @p _native_route: the one catalogue route the package instantiates (None: every route).
     Returns so_path.
     """
     from pops.codegen.model_compile_evidence import policy, read, paths, guard_recompile
+    from pops.codegen._compile_emit import normalize_native_route
     policy(model_source_policy)
+    native_route = normalize_native_route(_native_route)
     m = model
     backend = lower_backend(backend)
     if target not in ("system", "amr_system"):
@@ -272,6 +279,7 @@ def compile_model(
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
         toolchain_capture=toolchain_capture,
+        native_route=native_route,
     )
 
     def _compile_and_authenticate(path: Any, destination: Any = None) -> Any:
@@ -290,6 +298,7 @@ def compile_model(
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
             _toolchain_capture=toolchain_capture,
+            native_route=native_route,
         )
         read(out_path, require=model_source_policy != "allow_missing")
         verify_native_toolchain(toolchain_capture)
@@ -436,6 +445,9 @@ def _compile_resolved_problem(plan: Any) -> Any:
     balance_due_contract = BalanceDueContract.from_consumer_graph(plan.consumer_graph)
     validate_balance_due_contract(plan.time, balance_due_contract)
     options = _program_compile_options(plan)
+    from pops.mesh._amr import ResolvedRefinementCriterion
+
+    tagging = getattr(plan.bootstrap_plan, "tagging", None)
     return _compile_problem_impl(
         model_graph=build_program_model_graph(plan),
         time=plan.time,
@@ -447,6 +459,8 @@ def _compile_resolved_problem(plan: Any) -> Any:
         native_dimension=plan.resolved_dimension,
         shared_interface_codegen_evidence=evidence,
         physical_global_sources=plan._physical_global_sources,
+        refinement_criterion=(
+            tagging if type(tagging) is ResolvedRefinementCriterion else None),
         **options,
     )
 
@@ -471,12 +485,15 @@ def _compile_problem_impl(
     native_dimension: Any = None,
     shared_interface_codegen_evidence: Any,
     physical_global_sources: Any = None,
+    refinement_criterion: Any = None,
 ) -> Any:
     """Compile a time Program into an ABI-compatible native ``problem.so``.
 
     Only the production backend is supported; ``target`` selects system or AMR entrypoints. An
     omitted path uses the content-addressed cache, ``force`` recompiles, and ``debug`` retains C++.
-    The returned ``CompiledProblem`` carries the validated physical model and compile metadata.
+    ``refinement_criterion`` is the criterion of an adaptive layout written as regions of ``cell``,
+    generated into the same source. The returned ``CompiledProblem`` carries the validated physical
+    model and compile metadata.
     """
     import tempfile
     from pops.codegen._compile_platform import require_shared_library_compile_platform
@@ -582,6 +599,13 @@ def _compile_problem_impl(
             balance_due_contract=balance_due_contract,
             shared_interface_codegen_evidence=shared_interface_codegen_evidence,
         )
+    if refinement_criterion is not None:
+        if target != "amr_system":
+            raise ValueError("a refinement criterion is compiled into an adaptive Program only")
+        from pops.codegen.program_emit_refinement_criterion import emit_refinement_criterion
+
+        src += emit_refinement_criterion(
+            refinement_criterion, native_dimension=native_dimension)
 
     include = include or pops_include()
     sig = pops_header_signature(include)

@@ -129,6 +129,7 @@ class _FacadeCompileMixin(_FacadeModel):
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
         model_source_policy: str = "allow_missing",
+        _native_route: Any = None,
     ) -> Any:
         """Compiles the model into a CompiledModel (Phase A). Delegates the GENERATION + compilation to
         the native package compiler, then
@@ -143,7 +144,9 @@ class _FacadeCompileMixin(_FacadeModel):
 
         - ``backend``: the internal ``"production"`` token or typed
           ``pops.codegen.Production()`` descriptor;
-        - ``target``: ``"system"`` or ``"amr_system"``.
+        - ``target``: ``"system"`` or ``"amr_system"``;
+        - ``_native_route``: the one catalogue ``(variables, limiter, Riemann)`` route the package
+          instantiates, as ``pops.compile`` resolves it for a Case block; ``None`` keeps every route.
 
         NO ``device`` argument: the GPU/MPI/AMR capabilities are checked at wiring time
         (add_equation) / at execution, not frozen at compile time (DSL_MODEL_DESIGN.md point 7).
@@ -206,9 +209,11 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen._compile_emit import (
             _native_amr_field_roles_identity,
             _normalize_native_amr_field_roles,
+            normalize_native_route,
         )
 
         normalized_field_roles = _normalize_native_amr_field_roles(_native_field_roles)
+        native_route = normalize_native_route(_native_route)
 
         m = self._m
         if target == "amr_system" and _native_field_roles is None and bool(m._elliptic_fields):
@@ -279,6 +284,9 @@ class _FacadeCompileMixin(_FacadeModel):
             spec_components[role_key] = canonical_bytes(
                 _native_amr_field_roles_identity(normalized_field_roles)
             ).hex()
+        if native_route is not None:
+            # A package keeping every route adds no component: its identity is unchanged.
+            spec_components["native_route"] = "/".join(native_route)
         spec_identity = artifact_spec_identity(
             semantic_identity,
             target=target,
@@ -314,6 +322,7 @@ class _FacadeCompileMixin(_FacadeModel):
                                      or target == "amr_system" else None),
                 consumer_owner_qid=consumer_owner_qid,
                 declare_auxiliary_providers=declare_auxiliary_providers,
+                _native_route=native_route,
             )
 
         # The facade owns the params-included identity, so its cache cannot delegate the
@@ -403,6 +412,8 @@ class _FacadeCompileMixin(_FacadeModel):
         cm.artifact_identity = final_artifact_identity
         if target == "amr_system" or _native_field_roles is not None:
             cm._native_field_roles = normalized_field_roles
+        if native_route is not None:
+            cm._native_route = native_route
         # Exact ABI order of only the RuntimeParamRef nodes actually read by emitted formulas.
         # BindSchema routes qualified values into this local vector; declarations that are never
         # read do not create native slots.

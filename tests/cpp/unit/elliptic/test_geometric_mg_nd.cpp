@@ -634,7 +634,8 @@ TEST(test_geometric_mg_nd, strict_field_conductor_preserves_initial_warm_start_t
   const Box<2> domain{Index<2>{0, 0}, Index<2>{2, 2}};
   const auto geometry = Geometry<2>::from_bounds(domain, RealVector<2>{0, 0}, RealVector<2>{3, 3});
   auto build = request<2>(geometry, BoxArray<2>{std::vector<Box<2>>{domain}});
-  build.distribution = Distribution<2>::partitioned(build.boxes, build.distribution.rank_space(), std::vector<Index<2>>{Index<2>{}});
+  build.distribution = Distribution<2>::partitioned(build.boxes, build.distribution.rank_space(),
+                                                    std::vector<Index<2>>{Index<2>{}});
   GeometricMultigridOptions options;
   options.smoother = GeometricSmoother::red_black_gauss_seidel;
   options.prolongation = GeometricProlongation::constant_injection;
@@ -652,7 +653,8 @@ TEST(test_geometric_mg_nd, strict_field_conductor_preserves_initial_warm_start_t
   for (std::size_t local = 0; local < solver.phi().local_size(); ++local) {
     auto phi = solver.phi().fab(local).view();
     pops::for_each_cell(solver.phi().box(local), [=] POPS_HD(const Index<2>& cell) {
-      if (cell[0] == 1 && cell[1] == 1) phi(cell, 0) = Real(0);
+      if (cell[0] == 1 && cell[1] == 1)
+        phi(cell, 0) = Real(0);
     });
   }
   const auto first = solver.solve();
@@ -667,35 +669,44 @@ TEST(test_geometric_mg_nd, strict_field_conductor_preserves_initial_warm_start_t
   EXPECT_EQ(second.residual_norm, Real(0));
   for (std::size_t local = 0; local < solver.phi().local_size(); ++local) {
     const auto phi = std::as_const(solver.phi()).fab(local).view();
-    const Real error = pops::for_each_cell_reduce_max(solver.phi().box(local), [=] POPS_HD(const Index<2>& cell) {
-      const Real expected = cell[0] == 1 && cell[1] == 1 ? Real(0.25) : Real(0);
-      return Kokkos::abs(phi(cell, 0) - expected);
-    });
+    const Real error =
+        pops::for_each_cell_reduce_max(solver.phi().box(local), [=] POPS_HD(const Index<2>& cell) {
+          const Real expected = cell[0] == 1 && cell[1] == 1 ? Real(0.25) : Real(0);
+          return Kokkos::abs(phi(cell, 0) - expected);
+        });
     EXPECT_EQ(error, Real(0));
   }
 }
 
 TEST(test_geometric_mg_nd, field_conductor_fac_solves_a_partial_partitioned_hierarchy) {
-  const ExecutionLane lane = ExecutionLane::duplicate_world_collectively(
-      "tests.geometric-mg.field-domain-fac");
+  const ExecutionLane lane =
+      ExecutionLane::duplicate_world_collectively("tests.geometric-mg.field-domain-fac");
   const Box<2> coarse_domain{Index<2>{0, 0}, Index<2>{15, 15}};
-  const auto coarse_geometry = Geometry<2>::from_bounds(coarse_domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
+  const auto coarse_geometry =
+      Geometry<2>::from_bounds(coarse_domain, RealVector<2>{0, 0}, RealVector<2>{1, 1});
   const auto fine_geometry = coarse_geometry.refine(Extent<2>{2, 2});
-  BoxArray<2> coarse_boxes{std::vector<Box<2>>{{Index<2>{0, 0}, Index<2>{7, 15}},
-                                            {Index<2>{8, 0}, Index<2>{15, 15}}}};
+  BoxArray<2> coarse_boxes{
+      std::vector<Box<2>>{{Index<2>{0, 0}, Index<2>{7, 15}}, {Index<2>{8, 0}, Index<2>{15, 15}}}};
   BoxArray<2> fine_boxes{std::vector<Box<2>>{{Index<2>{12, 12}, Index<2>{15, 19}},
-                                          {Index<2>{16, 12}, Index<2>{19, 19}}}};
+                                             {Index<2>{16, 12}, Index<2>{19, 19}}}};
   auto coarse = request<2>(coarse_geometry, coarse_boxes);
   auto fine = request<2>(fine_geometry, fine_boxes);
-  const std::vector<Index<2>> owners{Index<2>{}, Index<2>{std::min(1, pops::n_ranks()-1), 0}};
-  coarse.distribution = Distribution<2>::partitioned(coarse_boxes, coarse.distribution.rank_space(), owners);
-  fine.distribution = Distribution<2>::partitioned(fine_boxes, fine.distribution.rank_space(), owners);
+  const std::vector<Index<2>> owners{Index<2>{}, Index<2>{std::min(1, pops::n_ranks() - 1), 0}};
+  coarse.distribution =
+      Distribution<2>::partitioned(coarse_boxes, coarse.distribution.rank_space(), owners);
+  fine.distribution =
+      Distribution<2>::partitioned(fine_boxes, fine.distribution.rank_space(), owners);
   pops::elliptic::amr::CompositeFacBuildRequest<2> hierarchy;
   hierarchy.levels = {coarse, fine};
   hierarchy.ratios = {RefinementRatio<2>{2, 2}};
-  hierarchy.budget = {2, 1, 16, 512, 65536,
-      {{4, 16}, 4096, 8192, 9, 8, 65536, 65536, 65536},
-      {512, 8, 65536, 65536, 65536}, {512, 8, 65536, 65536, 65536}};
+  hierarchy.budget = {2,
+                      1,
+                      16,
+                      512,
+                      65536,
+                      {{4, 16}, 4096, 8192, 9, 8, 65536, 65536, 65536},
+                      {512, 8, 65536, 65536, 65536},
+                      {512, 8, 65536, 65536, 65536}};
   GeometricMultigridOptions controls;
   controls.smoother = GeometricSmoother::red_black_gauss_seidel;
   controls.prolongation = GeometricProlongation::constant_injection;
@@ -710,8 +721,10 @@ TEST(test_geometric_mg_nd, field_conductor_fac_solves_a_partial_partitioned_hier
   fac.coarse_rel_tol = Real(1e-8);
   fac.coarse_abs_tol = Real(0);
   fac.coarse_cycles = 80;
-  pops::elliptic::amr::CompositeFacPoisson<2> solver(hierarchy, fac, Real(0), &lane, false, true, controls);
-  solver.install_nullspace(FieldNullspacePlan<2>{}, {PreparedVectorDistribution<2>::distributed(), PreparedVectorDistribution<2>::distributed()});
+  pops::elliptic::amr::CompositeFacPoisson<2> solver(hierarchy, fac, Real(0), &lane, false, true,
+                                                     controls);
+  solver.install_nullspace(FieldNullspacePlan<2>{}, {PreparedVectorDistribution<2>::distributed(),
+                                                     PreparedVectorDistribution<2>::distributed()});
   for (int level = 0; level < 2; ++level) {
     auto& rhs = solver.rhs_level(level);
     const auto geometry = level == 0 ? coarse_geometry : fine_geometry;
@@ -723,10 +736,12 @@ TEST(test_geometric_mg_nd, field_conductor_fac_solves_a_partial_partitioned_hier
         if (ball.contains(geometry, cell))
           for (int axis = 0; axis < 2; ++axis) {
             Index<2> lower = cell, upper = cell;
-            --lower[axis]; ++upper[axis];
+            --lower[axis];
+            ++upper[axis];
             const Real h = geometry.spacing(axis);
             load += (Real(2) - (ball.contains(geometry, lower) ? Real(1) : Real(0)) -
-                     (ball.contains(geometry, upper) ? Real(1) : Real(0))) / (h*h);
+                     (ball.contains(geometry, upper) ? Real(1) : Real(0))) /
+                    (h * h);
           }
         values(cell, 0) = load;
       });
@@ -742,10 +757,14 @@ TEST(test_geometric_mg_nd, field_conductor_fac_solves_a_partial_partitioned_hier
     const auto ball = *controls.field_domain;
     for (std::size_t local = 0; local < phi.local_size(); ++local) {
       const auto values = phi.fab(local).view();
-      EXPECT_LE(pops::for_each_cell_reduce_max(phi.box(local), [=] POPS_HD(const Index<2>& cell) {
-        const Real expected = ball.contains(geometry, cell) ? Real(1) : Real(0);
-        return Kokkos::abs(values(cell, 0) - expected);
-      }), Real(1e-6));
+      EXPECT_LE(pops::for_each_cell_reduce_max(phi.box(local),
+                                               [=] POPS_HD(const Index<2>& cell) {
+                                                 const Real expected = ball.contains(geometry, cell)
+                                                                           ? Real(1)
+                                                                           : Real(0);
+                                                 return Kokkos::abs(values(cell, 0) - expected);
+                                               }),
+                Real(1e-6));
     }
   }
 }
@@ -762,14 +781,16 @@ TEST(test_geometric_mg_nd, roundoff_residual_is_opt_in_and_reports_physical_accu
   options.field_domain = CellCentreBallDomain{2, {Real(1.5), Real(1.5), Real(0)}, Real(1)};
   for (bool enabled : {false, true}) {
     options.roundoff_aware_residual = enabled;
-    GeometricMG<2> solver(request<2>(geometry, BoxArray<2>{std::vector<Box<2>>{domain}}), lane, options);
+    GeometricMG<2> solver(request<2>(geometry, BoxArray<2>{std::vector<Box<2>>{domain}}), lane,
+                          options);
     solver.install_nullspace(FieldNullspacePlan<2>{}, PreparedVectorDistribution<2>::replicated());
     solver.phi().set_val(Real(0));
     solver.rhs().set_val(std::nextafter(Real(4e13), std::numeric_limits<Real>::infinity()));
     for (std::size_t local = 0; local < solver.phi().local_size(); ++local) {
       const auto phi = solver.phi().fab(local).view();
       pops::for_each_cell(solver.phi().box(local), [=] POPS_HD(const Index<2>& cell) {
-        if (cell[0] == 1 && cell[1] == 1) phi(cell, 0) = Real(1e13);
+        if (cell[0] == 1 && cell[1] == 1)
+          phi(cell, 0) = Real(1e13);
       });
     }
     const auto report = solver.solve();
@@ -792,7 +813,8 @@ TEST(test_geometric_mg_nd, roundoff_residual_is_opt_in_and_reports_physical_accu
   }
   options.roundoff_aware_residual = true;
   for (const Real forcing : {Real(1e-24), Real(1e12)}) {
-    GeometricMG<2> solver(request<2>(geometry, BoxArray<2>{std::vector<Box<2>>{domain}}), lane, options);
+    GeometricMG<2> solver(request<2>(geometry, BoxArray<2>{std::vector<Box<2>>{domain}}), lane,
+                          options);
     solver.install_nullspace(FieldNullspacePlan<2>{}, PreparedVectorDistribution<2>::replicated());
     solver.phi().set_val(Real(0));
     solver.rhs().set_val(forcing);
@@ -803,8 +825,10 @@ TEST(test_geometric_mg_nd, roundoff_residual_is_opt_in_and_reports_physical_accu
     EXPECT_LE(report.residual_norm, options.relative_tolerance * report.reference_residual_norm);
     EXPECT_FALSE(report.residual_evaluation->roundoff_limited);
   }
-  GeometricMG<2> unsupported(request<2>(geometry, BoxArray<2>{std::vector<Box<2>>{domain}}), lane, options);
-  unsupported.install_nullspace(FieldNullspacePlan<2>{}, PreparedVectorDistribution<2>::replicated());
+  GeometricMG<2> unsupported(request<2>(geometry, BoxArray<2>{std::vector<Box<2>>{domain}}), lane,
+                             options);
+  unsupported.install_nullspace(FieldNullspacePlan<2>{},
+                                PreparedVectorDistribution<2>::replicated());
   unsupported.phi().set_val(Real(0));
   unsupported.rhs().set_val(std::numeric_limits<Real>::denorm_min() * Real(16));
   EXPECT_FALSE(unsupported.solve().solved());
@@ -822,8 +846,11 @@ TEST(test_geometric_mg_nd, roundoff_absolute_term_sum_does_not_overflow_before_g
   rhs.set_val(Real(1));
   for (std::size_t local = 0; local < phi.local_size(); ++local) {
     pops::elliptic::mg::roundoff::FivePointBoundKernel<2> kernel{
-        std::as_const(phi).fab(local).view(), std::as_const(rhs).fab(local).view(), {},
-        {Real(1e109), Real(1e109)}, pops::elliptic::mg::roundoff::stencil_gamma<2>()};
+        std::as_const(phi).fab(local).view(),
+        std::as_const(rhs).fab(local).view(),
+        {},
+        {Real(1e109), Real(1e109)},
+        pops::elliptic::mg::roundoff::stencil_gamma<2>()};
     const Real bound = pops::for_each_cell_reduce_max(box, kernel);
     EXPECT_TRUE(std::isfinite(bound));
     EXPECT_GT(bound, Real(1e294));

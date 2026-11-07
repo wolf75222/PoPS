@@ -255,7 +255,7 @@ def build(cells, order=(0, 1, 2), *, guarded=False, seed=False, right_preconditi
     threshold = case.param(RuntimeParam("mesh-refinement-threshold", default=1.035))
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(cells, cells), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[2][parameter]) > case.value(threshold)), Buffer(cells=1)),
+        tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[2][parameter]) > case.value(threshold)), Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,
         execution=AMRExecution.synchronous(), clustering=BergerRigoutsos(maximum_box_size=8))

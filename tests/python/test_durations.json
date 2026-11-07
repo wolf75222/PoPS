@@ -4008,7 +4008,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 1,
-          "estimated_seconds": 900,
+          "estimated_seconds": 1940,
           "ci_ranks": [
             1,
             2
@@ -4020,7 +4020,7 @@
           ],
           "entrypoint": "tests/python/integration/mpi/test_finite_structural_depth_native_mpi2.py",
           "execution_lane": "serial_and_mpi",
-          "basis": "Unmeasured scheduling estimate including cold generated C++ compilation; not a native receipt. Existing launch watchdog and scientific thresholds remain unchanged."
+          "basis": "Whole-file wall time measured once the depth-160 case runs to completion (B03 F4, PR #703); see _meta.b03_f4_depth160_observation. Existing launch watchdog and scientific thresholds remain unchanged."
         },
         "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": {
           "basis": "Provisional unmeasured whole-file cold compilation allowance; unchanged 1200 s MPI launch watchdog. Replace with complete native timing receipts; split exact cases if the measured budget is exceeded.",
@@ -6067,6 +6067,17 @@
         "ordinary_budget_seconds": 2100
       }
     },
+    "b03_f5_hyqmom15_final_example_weight": {
+      "basis": "CI pytest timestamps of the single collected case, which passed both times. The 285-second row put the file beside test_api_v02_implicit_derivatives_native.py in shard 26 of run 41003081117, which then reached its 45-minute step limit with no failed test. The planning weight rounds the larger observation up by about ten percent, as ci430d_shard114_observation does. No deadline, test selection or assertion changes.",
+      "observed_seconds": {
+        "run 41003081117 job 124023859839 (99e04e1, shard 26, collection end to PASSED)": 1117.74,
+        "run 41037321460 job 124311227312 (cf2f510, shard 25, pytest call duration)": 918.35
+      },
+      "previous_weight_seconds": 285,
+      "weights_seconds": {
+        "tests/python/examples/final/test_hyqmom15_final_example.py": 1230
+      }
+    },
     "ci_20260913_additions": {
       "basis": "Scheduling estimates only: 600 s for the native composition module, 5 s for source-only contracts; 30 s for tensor codegen based on its five reported CI call durations totalling 22.42 s in run 34760671991. These are not complete per-file timing measurements.",
       "files": [
@@ -6601,6 +6612,36 @@
         "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "c1260647ccd3fcfa02a32f913bfda80573fc6168edb1603fda6d367f7a353a73"
       }
     },
+    "ci_20261030_n7_typed_index_maps": {
+      "basis": "Unmeasured CI scheduling estimates for the two N7 lot 1 modules (ROM-88, typed index maps and their analyses), on the api_v02_20261013 tiers: 30 s for the source-only property tests of the normal forms and of the analyses, which build no program, as the analogue test_finite_linear_maps.py rounded up for its seeded random samples; 60 s for the resolution of the M01, M03, M05, M07, M10 and M24 programs, and of two programs that evaluate a face expression in a nested block, without compilation, as the analogue test_faceflux_pilot_n7a.py. The local receipts are pytest sessions on a 4-core container (Python 3.12, source checkout, no native module); they are not GitHub CI file wall times. test_faceflux_pilot_n7a.py now spells its typed maps with pops.regions: its receipt under ci_20261029_n7a_faceflux_pilot is for its previous source, and its re-measured receipt is below. The receipts of test_typed_index_maps_n7.py and test_region_facts_n7.py are re-measured for the sources of the review round of f3b9a8c. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/numerics/test_region_facts_n7.py": "tests/python/unit/numerics/test_faceflux_pilot_n7a.py",
+        "tests/python/unit/numerics/test_typed_index_maps_n7.py": "tests/python/unit/numerics/test_finite_linear_maps.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/numerics/test_region_facts_n7.py": 60,
+        "tests/python/unit/numerics/test_typed_index_maps_n7.py": 30
+      },
+      "local_receipts": {
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": {
+          "cases": 19,
+          "session_seconds": 24.73
+        },
+        "tests/python/unit/numerics/test_region_facts_n7.py": {
+          "cases": 23,
+          "session_seconds": 19.5
+        },
+        "tests/python/unit/numerics/test_typed_index_maps_n7.py": {
+          "cases": 26,
+          "session_seconds": 22.7
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": "341d13806773df6be786e639034c9c9d0cc6223f893f2748d39ad67c009caafe",
+        "tests/python/unit/numerics/test_region_facts_n7.py": "3f4b86457fa835c8d653ad274d769cbc6316829d93d32e4f0097c9d9c4c11900",
+        "tests/python/unit/numerics/test_typed_index_maps_n7.py": "c7c9f9f42e92f47f92f54c49fe459fe4c013d94a707789446d83bdad64fc72a4"
+      }
+    },
     "ci_20261030_n8_traced_methods": {
       "basis": "Unmeasured CI scheduling estimates for the two N8 lot 1 traced-method modules (ROM-89), on the api_v02_20261013 tiers: 300 s for the source-only module, which resolves seven profiles twice (traced method and b6 builder) and generates the C++ of six of them twice without compiling, as the analogue test_program_source_kernel_reuse.py; 600 s for three Dim2 native profile cases with two cold C++ compilations each (the traced route and the b6 reference), in the 300/600/900/1200 s native profile tiers. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container (unit from the source checkout, native with a Kokkos 4.4.01 Serial build of _pops, each beside other local test sessions); they are not GitHub CI file wall times. Existing weights, the 135 Python shards (the full and partial packs stay within the ordinary budget with these two rows), native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
@@ -6694,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1139,
+    "estimated_count": 1147,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6727,6 +6768,9 @@
       "tests/python/integration/amr/test_public_initial_field_ghost.py",
       "tests/python/integration/amr/test_public_initial_field_ghost_failure.py",
       "tests/python/integration/amr/test_public_tag_selection_native.py",
+      "tests/python/integration/amr/test_refinement_criterion_nonfinite.py",
+      "tests/python/integration/amr/test_refinement_criterion_parity.py",
+      "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py",
       "tests/python/integration/amr/test_symbolic_path_amr_runtime.py",
       "tests/python/integration/bindings/test_amr_rectangular_array_orientation.py",
       "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
@@ -6741,6 +6785,7 @@
       "tests/python/integration/io/test_io_multirank.py",
       "tests/python/integration/io/test_scheduler_cache_checkpoint.py",
       "tests/python/integration/io/test_time_history_checkpoint.py",
+      "tests/python/integration/io/test_time_history_checkpoint_identity.py",
       "tests/python/integration/io/test_uniform_selective_history_checkpoint.py",
       "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py",
       "tests/python/integration/mpi/test_compile_stale_and_debug.py",
@@ -7043,6 +7088,7 @@
       "tests/python/unit/amr/test_local_state_storage_adversarial.py",
       "tests/python/unit/amr/test_local_state_storage_amr.py",
       "tests/python/unit/amr/test_public_amr_resolution.py",
+      "tests/python/unit/amr/test_refinement_criterion_regions.py",
       "tests/python/unit/amr/test_tagging_graph_identity_lowering.py",
       "tests/python/unit/amr/test_value_expr_tagging_protocol.py",
       "tests/python/unit/amr/test_vector_component_tagging.py",
@@ -7468,6 +7514,7 @@
       "tests/python/unit/numerics/test_principal_grouping_c11.py",
       "tests/python/unit/numerics/test_principal_grouping_contract.py",
       "tests/python/unit/numerics/test_principal_storage_route.py",
+      "tests/python/unit/numerics/test_region_facts_n7.py",
       "tests/python/unit/numerics/test_retained_stencil_v02.py",
       "tests/python/unit/numerics/test_scoped_stencil_v02.py",
       "tests/python/unit/numerics/test_state_storage.py",
@@ -7483,6 +7530,7 @@
       "tests/python/unit/numerics/test_symbolic_path_param_routing.py",
       "tests/python/unit/numerics/test_symbolic_policy_layering.py",
       "tests/python/unit/numerics/test_trace_flux.py",
+      "tests/python/unit/numerics/test_typed_index_maps_n7.py",
       "tests/python/unit/numerics/test_user_face_authoring.py",
       "tests/python/unit/numerics/test_user_face_independent_review.py",
       "tests/python/unit/numerics/test_user_joint_reconstruction_independent.py",
@@ -7830,6 +7878,7 @@
       "tests/python/unit/time/test_time_where.py",
       "tests/python/unit/time/test_traced_methods_n8.py",
       "tests/python/unit/time/test_typed_capture_outlining_v14.py",
+      "tests/python/unit/time/test_typed_delivery_cf7.py",
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py",
       "tests/python/unit/time/test_uniform_affine_expressions_v02.py",
@@ -8036,7 +8085,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1204,
+    "total_files": 1212,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8082,6 +8131,39 @@
         "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py": 1320
       }
     },
+    "n12_20261030_refinement_criterion": {
+      "basis": "Scheduling estimates for the region refinement criterion of Linear N12 (ROM-95, lot 1): the source-only unit file resolves the tutorial-09 case several times; the native files compile and run complete AMR Programs (each parity case compiles the tag-graph and the region route). Local receipts are one cloud container, Kokkos Serial/OpenMP Dim2, cold isolated caches; they are not GitHub wall times. Replace from complete CI timing receipts.",
+      "files": {
+        "tests/python/unit/amr/test_refinement_criterion_regions.py": {
+          "analogue": "tests/python/unit/amr/test_public_amr_resolution.py",
+          "estimated_seconds": 90,
+          "local_receipt": "18 passed in 39.4 s (07/11, gcc 13, Kokkos Serial, Dim2)",
+          "reason": "source-only: traces, resolves and emits the criterion of the tutorial-09 case about twenty-five times; no compile",
+          "source_sha256": "5a62c84b4aea687836d5055fceab21e4a6ee7877ce5d3f0d60013643545b4f0d"
+        },
+        "tests/python/integration/amr/test_refinement_criterion_parity.py": {
+          "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
+          "estimated_seconds": 1800,
+          "local_receipt": "4 passed in 1502.6 s: value 429 s, gradient 365 s, composite 363 s, negation 346 s (30/10, gcc 13, Kokkos Serial, Dim2, cold module cache, two other native runs on the same 4 cores); negation alone with the on-threshold pin: 1 passed in 383.4 s (30/10)",
+          "reason": "four cases; each compiles a tag-graph and a region Program cold (two model artifacts and eight Programs in the module cache) and runs 16 adaptive steps per route",
+          "source_sha256": "25fd2a239f9d9c62a7bd378fb858b359cea146a90689acf7a7ff0f4f0bdc95e5"
+        },
+        "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py": {
+          "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
+          "estimated_seconds": 300,
+          "local_receipt": "1 passed in 258.3 s, every cell of the level compared (30/10, gcc 13, Kokkos Serial, Dim2, cold isolated cache, one other native run on the same 4 cores)",
+          "reason": "one four-component adaptive Program compiled cold and run for six fixed steps",
+          "source_sha256": "cb9e380493d35094a2821d1fd183270b827324d692dcf145e76efe96e3a6cac1"
+        },
+        "tests/python/integration/amr/test_refinement_criterion_nonfinite.py": {
+          "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
+          "estimated_seconds": 600,
+          "local_receipt": "2 passed in 515.9 s: graph 255 s, region 261 s (30/10, gcc 13, Kokkos Serial, Dim2, cold isolated cache)",
+          "reason": "two two-component adaptive Programs (tag graph and regions) compiled cold, each bound twice and refused at bind",
+          "source_sha256": "ad9e74a032654707d4f29bb75db3098fc90c128c21efd1a15330f56026030356"
+        }
+      }
+    },
     "n3a_20261029": {
       "basis": "Scheduling estimates for the N3a pilot (ROM-82) and its face inputs (ROM-99), not CI receipts. The source unit file builds the M03 and M16 models without compiling (25 s locally on 4 cores, so 30 s). The parity file compiles five case pairs, ten artifacts, each like one row of test_api_v02_models_M01_M14.py (1200 s for fourteen artifacts): 1244 s locally on 4 cores with Kokkos Serial beside three other compiles, 1038 s beside one. It keeps the 1400 s set when it also held the M16 refusal, from 1186 s with the margin of N3a (900 s for 769 s), for which the Python shards went from 135 to 136. The face-input file compiles six artifacts, M01's native Rusanov and two faces that read the normal, the native and the derived HLL of M01 with an inverted signed pair, and the derived HLL on M16's oblique profile: 695 s locally beside three other compiles, so 850 s with the same margin. Refresh from complete CI timing artifacts.",
       "files": {
@@ -8108,9 +8190,64 @@
         "tests/python/integration/runtime/test_qualification_receipt_native.py"
       ],
       "source_sha256": "5972a3f0f749cc623130b8a48deb9525d7497e1f09d41b62cebbcd0f89ac36e6"
+    },
+    "b03_f4_depth160_observation": {
+      "pull_request": 703,
+      "source_sha": "f9d751ed9045aff40a667771b072d45360757702",
+      "review": "https://github.com/wolf75222/PoPS/pull/703#pullrequestreview-5710009090",
+      "ci_reference": {
+        "run": 38840872542,
+        "job": 116783025229,
+        "source_sha": "b6e64c1d23f5c0565c41674d262ca26b401e8339",
+        "seconds_to_banner_recursion_error": 1106.6
+      },
+      "basis": "Before #703 the file stopped at the debug-banner RecursionError, so its 900 s estimate never covered the whole case. The review's container ran the file to completion at f9d751e in 1936 s (one core, peak RSS 7.39 GB) and reached the same banner point at the base in 1242 s, against 1106.6 s on the b6 CI runner: that container is about 1.11 times slower, so the CI cost is about 1745 s. The weight takes the measured 1936 s, rounded up to 10 s, which also covers a runner up to 11 percent slower than the b6 one. It stays at or below the 2100 s ordinary budget, so selected_budget keeps 45 minutes. No deadline, watchdog, threshold or test selection changes; replace from a complete CI per-file timing artifact.",
+      "observed_seconds": {
+        "review_container_f9d751e": 1936,
+        "ci_estimate": 1745
+      },
+      "weights_seconds": {
+        "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940
+      }
+    },
+    "ci_20261030_n7_typed_delivery": {
+      "basis": "Unmeasured CI scheduling estimate for the CF7 regression module of N7 lot 2 (ROM-88, typed delivery IR19), on the api_v02_20261013 tiers: 15 s, as the analogue test_delivery_case_graphs.py, which resolves the same ProgramRealization delivery cases without native compilation; this module resolves literal folds of 10**4 and 10 iterations and one refused accumulated fold of 10**4, emits six zero-block Continuations through emit_cpp_program (maps over the set read back and over a literal set, at 10**5 and 10 entries each, and two refused gathers at 10**5 entries), and analyses one literal map of 10**5 entries directly, with no native module. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/time/test_typed_delivery_cf7.py": "tests/python/unit/time/test_delivery_case_graphs.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/time/test_typed_delivery_cf7.py": 15
+      },
+      "local_receipts": {
+        "tests/python/unit/time/test_typed_delivery_cf7.py": {
+          "cases": 7,
+          "session_seconds": 11.2
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/time/test_typed_delivery_cf7.py": "de4646554623af66dc8c7b2a1d975c827ad039a28567926f7007d6a34f781927"
+      }
+    },
+    "b03_f5_time_history_checkpoint_split": {
+      "basis": "The whole file ran its eight checks in one process under the 300-second process limit: 240.97 s (run 40998658393, attempt 1, shard 98) and 264 s (run 41027375127) on ordinary runners, then the limit at 300.09 s on a runner 1.23 to 1.27 times slower (same run, attempt 4). Section C, three of the file's five cold compiles, moves unchanged to its own process file, which keeps the same 300-second limit; every check still runs once. The weights split the larger observation by the shares of one local per-function timing and round up by about ten percent. No deadline, watchdog, threshold or test selection changes; replace from per-file CI timings.",
+      "observed_seconds": {
+        "run_40998658393_attempt1": 240.97,
+        "run_41027375127": 264,
+        "run_40998658393_attempt4_limit": 300.09
+      },
+      "local_contended_seconds": {
+        "section_A": 0.2,
+        "section_B": 91.0,
+        "section_C": 196.3,
+        "variable_dt_stride": 85.2
+      },
+      "weights_seconds": {
+        "tests/python/integration/io/test_time_history_checkpoint.py": 140.0,
+        "tests/python/integration/io/test_time_history_checkpoint_identity.py": 155.0
+      }
     }
   },
-  "tests/python/examples/final/test_hyqmom15_final_example.py": 285,
+  "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
   "tests/python/examples/final/test_imex_amr_final_example.py": 260,
   "tests/python/examples/final/test_multiphysics_core_example.py": 215,
   "tests/python/examples/final/test_scalar_advection_final_example.py": 2.0,
@@ -8155,7 +8292,7 @@
   "tests/python/integration/io/test_io_checkpoint.py": 365.0,
   "tests/python/integration/io/test_io_multirank.py": 80.0,
   "tests/python/integration/io/test_scheduler_cache_checkpoint.py": 5,
-  "tests/python/integration/io/test_time_history_checkpoint.py": 245.0,
+  "tests/python/integration/io/test_time_history_checkpoint.py": 140.0,
   "tests/python/integration/io/test_uniform_selective_history_checkpoint.py": 120.0,
   "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py": 270,
   "tests/python/integration/mpi/test_compile_stale_and_debug.py": 120.0,
@@ -8325,7 +8462,7 @@
   "tests/python/integration/runtime/test_finite_iteration_ad_v14_native.py": 1200,
   "tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py": 600,
   "tests/python/integration/runtime/test_finite_m09_runtime.py": 600,
-  "tests/python/integration/runtime/test_finite_structural_depth_native.py": 900,
+  "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940,
   "tests/python/integration/runtime/test_generic_physical_maps.py": 600.0,
   "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": 600,
   "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": 1200,
@@ -9193,7 +9330,7 @@
   "tests/python/unit/time/test_ledger_compositions_v15.py": 120,
   "tests/python/unit/time/test_ledger_provenance_v15.py": 60,
   "tests/python/unit/time/test_lib_time_exact_coefficients.py": 1.0,
-  "tests/python/unit/time/test_local_transform.py": 30,
+  "tests/python/unit/time/test_local_transform.py": 40,
   "tests/python/unit/time/test_localized_event_v14.py": 120,
   "tests/python/unit/time/test_method_tableaux.py": 1.0,
   "tests/python/unit/time/test_mpi_restart_fixture_contracts.py": 5,
@@ -9302,16 +9439,24 @@
   "tests/python/unit/numerics/test_composite_integral_level.py": 15,
   "tests/python/unit/identity/test_canonical_encoding_layout.py": 10,
   "tests/python/unit/problem/test_snapshot_hash_protocols.py": 10,
+  "tests/python/unit/amr/test_refinement_criterion_regions.py": 90,
+  "tests/python/integration/amr/test_refinement_criterion_parity.py": 1800,
+  "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py": 300,
+  "tests/python/integration/amr/test_refinement_criterion_nonfinite.py": 600,
   "tests/python/unit/numerics/test_faceflux_pilot_n7a.py": 60,
   "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py": 300,
   "tests/python/unit/numerics/test_lib_numerics_faces.py": 30,
   "tests/python/integration/runtime/test_api_v02_python_faces_native.py": 1400,
   "tests/python/integration/runtime/test_qualification_receipt_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py": 850,
+  "tests/python/unit/numerics/test_typed_index_maps_n7.py": 30,
+  "tests/python/unit/numerics/test_region_facts_n7.py": 60,
+  "tests/python/unit/time/test_typed_delivery_cf7.py": 15,
   "tests/python/integration/runtime/test_traced_methods_n8_native.py": 600,
   "tests/python/unit/time/test_traced_methods_n8.py": 300,
   "tests/python/integration/runtime/test_compiled_control_n8_native.py": 600,
   "tests/python/unit/time/test_compiled_control_n8.py": 30,
   "tests/python/integration/runtime/test_advance_outputs_n8_native.py": 600,
-  "tests/python/unit/time/test_advance_outputs_n8.py": 30
+  "tests/python/unit/time/test_advance_outputs_n8.py": 30,
+  "tests/python/integration/io/test_time_history_checkpoint_identity.py": 155.0
 }

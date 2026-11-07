@@ -49,9 +49,8 @@ namespace detail {
 // then use partial pivoting with a relative floor N*epsilon. Both the closed-form
 // and scaled output paths share this decision, independently of row units.
 template <int N>
-POPS_HD inline bool block_equilibrated_inverse(const Real (&A)[N][N],
-                                               Real (&inverse)[N][N], Real (&scales)[N],
-                                               Real tolerance) {
+POPS_HD inline bool block_equilibrated_inverse(const Real (&A)[N][N], Real (&inverse)[N][N],
+                                               Real (&scales)[N], Real tolerance) {
   if (!std::isfinite(tolerance) || tolerance < Real(0))
     return false;
   Real normalized[N][N];
@@ -94,7 +93,7 @@ POPS_HD inline bool block_closed_form_range(const Real (&scales)[N]) {
 
 template <int N>
 POPS_HD inline bool block_publish_scaled_inverse(const Real (&normalized_inverse)[N][N],
-                                                  const Real (&scales)[N], Real (&out)[N][N]) {
+                                                 const Real (&scales)[N], Real (&out)[N][N]) {
   Real candidate[N][N];
   for (int row = 0; row < N; ++row)
     for (int column = 0; column < N; ++column) {
@@ -113,9 +112,8 @@ POPS_HD inline bool block_publish_scaled_inverse(const Real (&normalized_inverse
 // by decreasing binary exponent, renormalizing after cancellation. In
 // particular a small independent component is not lost by one global RHS scale.
 template <int N>
-POPS_HD inline bool block_publish_scaled_apply(const Real (&inverse)[N][N],
-                                                const Real (&scales)[N], const Real (&v)[N],
-                                                Real (&out)[N]) {
+POPS_HD inline bool block_publish_scaled_apply(const Real (&inverse)[N][N], const Real (&scales)[N],
+                                               const Real (&v)[N], Real (&out)[N]) {
   for (int column = 0; column < N; ++column)
     if (!std::isfinite(v[column]))
       return false;
@@ -249,8 +247,8 @@ POPS_HD inline bool block_inverse<3>(const Real (&A)[3][3], Real (&inv)[3][3], R
     return block_publish_scaled_inverse(normalized_inverse, scales, inv);
   // inv = adj / det = cofactor^T / det.
   const Real candidate[3][3] = {{c00 / det, c10 / det, c20 / det},
-                               {c01 / det, c11 / det, c21 / det},
-                               {c02 / det, c12 / det, c22 / det}};
+                                {c01 / det, c11 / det, c21 / det},
+                                {c02 / det, c12 / det, c22 / det}};
   for (int row = 0; row < 3; ++row)
     for (int column = 0; column < 3; ++column)
       if (!std::isfinite(candidate[row][column]))
@@ -312,9 +310,8 @@ POPS_HD inline bool block_apply_inverse<2>(const Real (&M)[2][2], const Real (&v
   const Real t0 =
       d * v[0];  // hoisted: exact for the rotation block (d = 1), own rounding otherwise
   const Real t1 = a * v[1];
-  const Real candidate[2] = {
-      inv * (t0 + (-b) * v[1]),  // pinned fma pairing on -b*v1
-      inv * ((-c) * v[0] + t1)}; // pinned fma pairing on -c*v0
+  const Real candidate[2] = {inv * (t0 + (-b) * v[1]),   // pinned fma pairing on -b*v1
+                             inv * ((-c) * v[0] + t1)};  // pinned fma pairing on -c*v0
   for (int row = 0; row < 2; ++row)
     if (!std::isfinite(candidate[row]))
       return block_publish_scaled_apply(normalized_inverse, scales, v, out);
@@ -353,10 +350,9 @@ POPS_HD inline bool block_apply_inverse<3>(const Real (&M)[3][3], const Real (&v
     return block_publish_scaled_apply(normalized_inverse, scales, v, out);
   const Real inv = Real(1) / det;
   // adj = cofactor^T: adj[r][c] = C[c][r]. out[r] = inv * sum_c adj[r][c] * v[c].
-  const Real candidate[3] = {
-      inv * (c00 * v[0] + c10 * v[1] + c20 * v[2]),
-      inv * (c01 * v[0] + c11 * v[1] + c21 * v[2]),
-      inv * (c02 * v[0] + c12 * v[1] + c22 * v[2])};
+  const Real candidate[3] = {inv * (c00 * v[0] + c10 * v[1] + c20 * v[2]),
+                             inv * (c01 * v[0] + c11 * v[1] + c21 * v[2]),
+                             inv * (c02 * v[0] + c12 * v[1] + c22 * v[2])};
   for (int row = 0; row < 3; ++row)
     if (!std::isfinite(candidate[row]))
       return block_publish_scaled_apply(normalized_inverse, scales, v, out);
