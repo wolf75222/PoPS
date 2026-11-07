@@ -1,0 +1,220 @@
+# Throwaway probe of the F7 Hall times (branch b03/f7-hall-probe only: no pull request, never
+# merged). It carries the head of PR #724 (B03 family F7, ROM-18) plus this workflow. One job runs
+# the serial Hall test as a Python shard runs it, the other its MPI2 twin as an MPI Python group
+# runs it, two cold launches each, and each launch prints one PROBE line with its time and peak
+# memory (.github/f7-probe/measure.py). The limits are those of CI: the twin's launch keeps the
+# 1200 s timeout of scripts/ci_python_mpi.py; the serial launch is bounded by the 45-minute step of
+# an ordinary shard. The merge thresholds of the driver's rule are 828 s for the twin and the 900 s
+# scheduling line for the serial test.
+name: F7 Hall probe (throwaway)
+
+on:
+  push:
+    branches: [b03/f7-hall-probe]
+
+concurrency:
+  group: f7-hall-probe
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  serial:
+    name: F7 probe, serial Hall test (two launches)
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    env:
+      POPS_NATIVE_DIM: "2"
+      PYTHONUNBUFFERED: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-f7
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+      POPS_KEEP_GENERATED: "1"
+      POPS_REQUIRE_NATIVE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - id: kokkos
+        uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: mold libopenmpi-dev openmpi-bin
+
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Build module Python `pops` (Kokkos Serial, as gate-python-build)
+        timeout-minutes: 50
+        run: |
+          pip install --upgrade pip numpy pytest 'pybind11==2.13.6'
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
+            -DPOPS_HEAVY_MODULE_TU_POOL=4 \
+            -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+          SECONDS=0
+          cmake --build --preset ci-kokkos-python
+          echo "module build: ${SECONDS} s"
+
+      - name: Authenticate the native variant and assemble the wheel (as gate-python-build)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+          PYTHONNOUSERSITE: "1"
+        run: |
+          python3 scripts/verify_installed_native.py --expect-dim "$POPS_NATIVE_DIM" --expect-serial
+          python3 scripts/ci_assemble_installed_wheel.py \
+            --package build-kokkos-py/python --dimension "$POPS_NATIVE_DIM" \
+            --output-dir "$RUNNER_TEMP/pops-ci-wheel"
+          mkdir -p .pops-ci/python-packages/dim2
+          cp -a "$RUNNER_TEMP/pops-ci-wheel/." .pops-ci/python-packages/dim2/
+          rm -rf build-kokkos-py
+
+      - name: Run the serial Hall test twice, cold, as a Python shard runs it
+        timeout-minutes: 75
+        run: |
+          pip install --upgrade pip numpy pytest h5py scipy 'mpmath>=1.3.0'
+          export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
+          selected="$RUNNER_TEMP/selected.txt"
+          echo tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py > "$selected"
+          status=0
+          for launch in 1 2; do
+            out="$RUNNER_TEMP/probe/serial-$launch"
+            mkdir -p "$out"
+            export POPS_CACHE_DIR="$RUNNER_TEMP/dsl-cache-$launch"
+            mkdir -p "$POPS_CACHE_DIR"
+            rm -rf "$HOME/.cache/pops"
+            set +e
+            python3 .github/f7-probe/measure.py --label "serial-$launch" \
+              --receipt "$out/receipt.json" --marker 'test session starts' \
+              --match 'test_api_v02_hall_mhd_ct.py::' --junit "$out/timings" -- \
+              timeout --signal=TERM --kill-after=30s 2700s \
+              python3 scripts/ci_python_dimensions.py --selected-file "$selected" \
+                --packages-root "$PWD/.pops-ci/python-packages" --timings-dir "$out/timings" \
+                --install-root "$RUNNER_TEMP/installed-$launch"
+            rc=$?
+            set -e
+            status=$(( status || rc ))
+          done
+          grep -h '' "$RUNNER_TEMP"/probe/serial-*/receipt.json
+          exit "$status"
+
+      - name: Publish the serial receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: f7-probe-serial
+          path: ${{ runner.temp }}/probe/
+          if-no-files-found: warn
+          retention-days: 7
+
+  mpi2:
+    name: F7 probe, MPI2 twin of the Hall test (two launches)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 160
+    env:
+      POPS_NATIVE_DIM: "2"
+      PYTHONUNBUFFERED: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-f7
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+      POPS_REQUIRE_NATIVE_TESTS: "1"
+      POPS_REQUIRE_MPI_TESTS: "1"
+      PYTHONNOUSERSITE: "1"
+      POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-install
+      Kokkos_ROOT: ${{ github.workspace }}/.kokkos-install
+      OMP_NUM_THREADS: "2"
+      OMP_PROC_BIND: "false"
+      OMPI_MCA_rmaps_base_oversubscribe: "true"
+      PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
+      OMPI_ALLOW_RUN_AS_ROOT: "1"
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+      OMPI_MCA_io: "^ompio"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: libhdf5-openmpi-dev libopenmpi-dev openmpi-bin pybind11-dev python3-dev python3-venv python3-pip python3-packaging python3-numpy python3-pytest python3-h5py python3-mpmath python3-scipy python3-vtk9
+
+      - name: Configure and build the Python module (MPI + Kokkos Serial, as the mpi job)
+        timeout-minutes: 70
+        run: |
+          mpi_cmake_args=()
+          if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
+            mpi_cmake_args+=("-DMPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1")
+          fi
+          cmake --preset ci-mpi \
+            -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
+            -DPOPS_BUILD_PYTHON=ON \
+            -DPOPS_USE_HDF5=ON \
+            -DPOPS_HEAVY_TEST_TU_POOL=2 \
+            -DPOPS_HEAVY_MODULE_TU_POOL=4 \
+            -DPython_EXECUTABLE=/usr/bin/python3 \
+            "${mpi_cmake_args[@]}"
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          SECONDS=0
+          cmake --build --preset ci-mpi --parallel 4 --target _pops
+          echo "module build: ${SECONDS} s"
+
+      - name: Assemble and authenticate the MPI Dim2 wheel and its group plan (as the mpi job)
+        timeout-minutes: 12
+        run: |
+          wheel_directory="$RUNNER_TEMP/pops-mpi-python-wheel"
+          /usr/bin/python3 scripts/ci_assemble_installed_wheel.py \
+            --package build-mpi/python --output-dir "$wheel_directory" \
+            --dimension 2 --backend mpi
+          /usr/bin/python3 scripts/ci_python_mpi.py plan \
+            --plan-file "$wheel_directory/python-mpi-groups.json"
+          rm -rf build-mpi
+          /usr/bin/python3 scripts/ci_python_mpi.py authenticate \
+            --wheel-directory "$wheel_directory" \
+            --install-root "$RUNNER_TEMP/pops-mpi-python-installed" \
+            --receipt-dir "$RUNNER_TEMP/probe/mpi2-installation"
+
+      - name: Run the MPI2 twin twice, cold, as its MPI Python group runs it
+        timeout-minutes: 60
+        run: |
+          status=0
+          for launch in 1 2; do
+            out="$RUNNER_TEMP/probe/mpi2-$launch"
+            mkdir -p "$out"
+            export POPS_CI_MPI_ENTRYPOINT_RECEIPTS="$out/ranked-pytest"
+            rm -rf "$HOME/.cache/pops"
+            set +e
+            /usr/bin/python3 .github/f7-probe/measure.py --label "mpi2-$launch" \
+              --receipt "$out/receipt.json" --marker '^MPI group ' \
+              --junit "$out/ranked-pytest" -- \
+              /usr/bin/python3 scripts/ci_python_mpi.py run \
+                --plan-file "$RUNNER_TEMP/pops-mpi-python-wheel/python-mpi-groups.json" \
+                --group ranked-test_api_v02_hall_mhd_ct_mpi2 \
+                --wheel-directory "$RUNNER_TEMP/pops-mpi-python-wheel" \
+                --install-root "$RUNNER_TEMP/pops-mpi-python-installed" \
+                --receipt-dir "$out/execution"
+            rc=$?
+            set -e
+            status=$(( status || rc ))
+          done
+          grep -h '' "$RUNNER_TEMP"/probe/mpi2-*/receipt.json
+          exit "$status"
+
+      - name: Publish the MPI2 receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: f7-probe-mpi2
+          path: ${{ runner.temp }}/probe/
+          if-no-files-found: warn
+          retention-days: 7
