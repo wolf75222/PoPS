@@ -1,0 +1,143 @@
+# Throwaway probe of the MG8 mpi-dim2 stall (branch n5/mg8-probe-stall only: no pull request,
+# never merged). Each job builds master's package as the MG8 job does, then runs master's
+# reference pass of the mpi-dim2 lane (03, 04, 07, 08) in a loop, one tutorial per launch, with a
+# short watchdog, and prints one PROBE line per launch and the evidence of each failure.
+#
+# Variants: `old` is #701's runner (5c7256b); `new` is #706's (812c6c0); `rank-cache` is #706's
+# runner with a JIT cache of its own for each rank (master compiles the same model on both ranks
+# into one file of the shared cache, without the lock that b6 holds since b4cd92113).
+name: MG8 stall probe (throwaway)
+
+on:
+  push:
+    branches: [n5/mg8-probe-stall]
+
+concurrency:
+  group: mg8-stall-probe
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: MG8 stall probe (${{ matrix.variant }}, copy ${{ matrix.copy }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 160
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: old
+            copy: 1
+          - variant: new
+            copy: 1
+          - variant: rank-cache
+            copy: 1
+          - variant: rank-cache
+            copy: 2
+
+    env:
+      MG8_MASTER: bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-mg8
+      CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+      OMPI_MCA_rmaps_base_oversubscribe: "true"
+      PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
+      OMPI_ALLOW_RUN_AS_ROOT: "1"
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+      OMPI_MCA_io: "^ompio"
+      PROBE_BUDGET_MINUTES: "120"
+      PROBE_WATCHDOG: "300"
+      PROBE_DUMP_AFTER: "210"
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Check out master's tutorials and sources
+        uses: actions/checkout@v7
+        with:
+          ref: bb9aea0cc56fabe6b003bfbee5daee28d38ac7e7
+          path: .mg8/master
+          fetch-depth: 1
+
+      - id: kokkos
+        uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: mold libopenmpi-dev openmpi-bin libhdf5-openmpi-dev
+
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install the tutorials' Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy matplotlib 'pybind11==2.13.6'
+          python -c "import numpy, matplotlib; print('numpy', numpy.__version__, 'matplotlib', matplotlib.__version__)"
+
+      - name: Install the probe's tools (py-spy, gdb)
+        run: |
+          python -m pip install py-spy
+          sudo apt-get install -y gdb
+          py-spy --version
+          gdb --version | head -1
+
+      - name: Build master's package (mpi-dim2)
+        timeout-minutes: 45
+        run: |
+          source scripts/ci_heartbeat.sh
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          cmake -S .mg8/master -B .mg8/master-build --preset ci-python \
+            -DPOPS_NATIVE_DIM=2 \
+            -DKokkos_ROOT="$KOKKOS_PREFIX" \
+            -DPOPS_HEAVY_MODULE_TU_POOL=4 \
+            -DPython_EXECUTABLE="$(command -v python)" \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DPOPS_USE_MPI=ON -DPOPS_USE_HDF5=ON
+          run_with_heartbeat "master package mpi-dim2" 40m \
+            cmake --build .mg8/master-build --parallel 4
+          rm -rf .mg8/master-package
+          mkdir -p .mg8/master-package
+          cp -rL .mg8/master-build/python/pops .mg8/master-package/pops
+          rm -rf .mg8/master-build
+
+      # The loop runs in the foreground of the step, with the step's standard input, as the MG8
+      # job runs the runner; the old runner passes that input on to mpiexec.
+      - name: Loop master's mpi-dim2 reference pass (${{ matrix.variant }})
+        timeout-minutes: 135
+        run: |
+          case "${{ matrix.variant }}" in
+            old) runner=scripts/run_mg8_tutorials_5c7256b.py
+                 contract=tests/gates/mg8_master_tutorials_5c7256b.toml ;;
+            new) runner=scripts/run_mg8_tutorials.py
+                 contract=tests/gates/mg8_master_tutorials.toml ;;
+            rank-cache) runner=scripts/run_mg8_tutorials_rankcache.py
+                 contract=tests/gates/mg8_master_tutorials.toml ;;
+            *) echo "unknown variant"; exit 2 ;;
+          esac
+          python3 .github/mg8-probe/probe_loop.py --label "${{ matrix.variant }}" \
+            --copy "${{ matrix.copy }}" --runner "$runner" --contract "$contract" \
+            --budget-minutes "$PROBE_BUDGET_MINUTES" --watchdog "$PROBE_WATCHDOG" \
+            --dump-after "$PROBE_DUMP_AFTER" \
+            --tutorial 03 --tutorial 04 --tutorial 07 --tutorial 08 \
+            --output "$RUNNER_TEMP/probe" -- \
+            --source .mg8/master --lane mpi-dim2 --python "$(command -v python)" \
+            --pythonpath .mg8/master-package --include .mg8/master/include \
+            --kokkos-root "$KOKKOS_PREFIX" --mpiexec "$(command -v mpiexec)"
+
+      - name: Publish the probe's failures (${{ matrix.variant }}, copy ${{ matrix.copy }})
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mg8-probe-${{ matrix.variant }}-${{ matrix.copy }}
+          path: ${{ runner.temp }}/probe/
+          if-no-files-found: warn
+          retention-days: 7
