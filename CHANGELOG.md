@@ -342,6 +342,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   (`PublishedCoarseFaceIndex` for the published ones), so accumulation order, corrections and
   refusals are unchanged. On one 4-core container, the first segment of the same example (to
   t = 0.2, 226 accepted steps) runs in 11 minutes instead of 28.
+- Project the IR identity of each frozen Program once per `pops.compile`. Every identity check
+  of the compile reprojected the whole IR (`_ir_hash()`, the canonical JSON of the serialized
+  Program), whose size grows with the square of a nested structure's depth: 19 projections per
+  compile of the depth-160 structural test. A scope opened by `pops.compile` and bound to its
+  thread now reuses the identity of a frozen Program already read in the same compile, then
+  projects every reused identity again when the compile ends: a change raises `Program IR
+  identity changed during pops.compile` and no artifact is returned. IR, plan and artifact
+  identities are unchanged (identical hashes for 116 example builders and for the depth test at
+  depths 20, 40, 80 and 160). On one 4-core container, `compile` of the depth-160 test takes
+  740 s instead of 1147 s.
 
 ## [1.0.0] - 2026-07-16
 

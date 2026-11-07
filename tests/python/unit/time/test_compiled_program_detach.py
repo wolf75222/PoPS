@@ -242,6 +242,69 @@ def test_source_mutations_and_stale_containers_cannot_change_detached_program():
         detached._commits[state_ref] = next(iter(detached._commits.values()))
 
 
+def _counted_projections(monkeypatch):
+    projections = []
+    original = Program._serialize
+
+    def counted(self, *args, **kwargs):
+        projections.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Program, "_serialize", counted)
+    return projections
+
+
+def test_compile_identity_reuse_projects_once_and_reauthenticates_on_success(monkeypatch):
+    from pops.time._program.serialization import ir_identity_reuse
+
+    authored = _authored_program()
+    source = authored["program"].freeze()
+    unfrozen = _authored_program()["program"]
+    expected = source._ir_hash()
+    projections = _counted_projections(monkeypatch)
+    with ir_identity_reuse():
+        assert [source._ir_hash() for _ in range(4)] == [expected] * 4
+        with ir_identity_reuse():
+            assert source._ir_hash() == expected
+        detached = detach_compiled_program(source)
+        assert detached.to_graph() is detached.to_graph()
+        unfrozen._ir_hash()
+        unfrozen._ir_hash()
+    # One captured identity and one fresh exit authentication per frozen Program; a mutable
+    # Program is never reused.
+    assert projections == [source, detached, unfrozen, unfrozen, source, detached]
+    projections.clear()
+    assert [source._ir_hash(), source._ir_hash()] == [expected, expected]
+    assert projections == [source, source]
+
+    projections.clear()
+    with pytest.raises(ValueError, match="lowering failed"):
+        with ir_identity_reuse():
+            source._ir_hash()
+            raise ValueError("lowering failed")
+    assert projections == [source]
+
+
+@pytest.mark.parametrize("change", ["definition", "out_of_contract_edit"])
+def test_compile_identity_reuse_fails_when_a_reused_identity_changed(change):
+    from pops.time._program.serialization import ir_identity_reuse
+
+    authored = _authored_program()
+    source = authored["program"].freeze()
+    detached = detach_compiled_program(source)
+    expected = detached._ir_hash()
+    changed = source if change == "definition" else detached
+    with pytest.raises(RuntimeError, match="changed during pops.compile"):
+        with ir_identity_reuse():
+            assert changed._ir_hash() == expected
+            if change == "definition":
+                authored["model"]._registry.register_alias("decay-alias", "decay")
+            else:
+                object.__setattr__(detached, "name", "altered")
+            assert changed._ir_hash() == expected
+    assert changed._ir_hash() != expected
+
+
 def test_detached_program_does_not_keep_source_program_or_registries_alive():
     def build():
         authored = _authored_program()

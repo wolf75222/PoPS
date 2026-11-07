@@ -43,14 +43,17 @@ def compile(plan: Any) -> Any:
 
     if type(plan) is not ResolvedSimulationPlan:
         raise TypeError("pops.compile requires the ResolvedSimulationPlan returned by pops.resolve")
-    plan.verify()
-    from pops._native_selector import select_native_dimension
+    from pops.time._program.serialization import ir_identity_reuse
 
-    select_native_dimension(getattr(plan, "resolved_dimension", None))
-    from pops import _bootstrap  # noqa: F401  # intentional native cut line
-    from pops.codegen._phases import compile as phase
+    with ir_identity_reuse():
+        plan.verify()
+        from pops._native_selector import select_native_dimension
 
-    return phase(plan)
+        select_native_dimension(getattr(plan, "resolved_dimension", None))
+        from pops import _bootstrap  # noqa: F401  # intentional native cut line
+        from pops.codegen._phases import compile as phase
+
+        return phase(plan)
 
 
 def bind(
