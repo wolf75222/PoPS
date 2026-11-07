@@ -165,8 +165,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Write an AMR refinement criterion in Python: a `Tag` or `Coarsen` predicate may be a function of
   `cell` (`cell.value(q)`, `cell.shift(axis, k)`, `cell.width(axis)`, runtime parameters), traced
   once and generated into the compiled Program. The native tagging plan calls it on each patch in
-  place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` and
-  clustering. A criterion requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, and its
+  place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` with the
+  selection it names (master's, or `selection="refine-requests"`) and clustering. A criterion
+  requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, and its
   rules decide as those of the tag graph do. The comparisons that `~`, `&` and `|` join are a
   strict `<` or `>` (`<=`, `>=` and `==` are refused at the line of the rule) and follow Kleene's
   three-valued logic, so one at exact equality decides nothing and neither does its negation under
