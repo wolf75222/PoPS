@@ -472,7 +472,9 @@ def resolve_tagging(
     authoring: Any,
     context: AMRTaggingResolutionContext,
 ) -> ResolvedTaggingAuthority:
-    """Resolve an object-level priority list into one authenticated inert tag graph."""
+    """Resolve an object-level priority list into one authenticated inert tag graph, or one
+    refinement criterion written as regions of ``cell``, with the dilation and the selection of
+    its Buffer."""
     from pops.mesh._amr import TaggingGraph
 
     for method in ("resolve_references", "inspect"):
@@ -508,20 +510,22 @@ def resolve_tagging(
         if roots["refine"] or roots["coarsen"]:
             raise TypeError(
                 "AMR tagging writes every predicate as a function of cell or none of them")
-        criterion = resolve_refinement_criterion(
+        graph = resolve_refinement_criterion(
             tuple(regions),
             hysteresis=resolved.hysteresis,
             conflict_policy=resolved.conflict_policy,
             dimension=_dimension(context.layout_plan),
             admit_state=context.admit_criterion_state,
         )
-        return ResolvedTaggingAuthority(criterion, buffer_cells)
-    graph = TaggingGraph(
-        refine=_union(roots["refine"]),
-        coarsen=_union(roots["coarsen"]),
-        hysteresis=resolved.hysteresis,
-        conflict_policy=resolved.conflict_policy,
-    ).resolve()
+    else:
+        graph = TaggingGraph(
+            refine=_union(roots["refine"]),
+            coarsen=_union(roots["coarsen"]),
+            hysteresis=resolved.hysteresis,
+            conflict_policy=resolved.conflict_policy,
+        ).resolve()
+    # Both routes carry the Buffer's selection: master's transition reach, or the cells around
+    # each refine request (pops.amr.tag-selection@1).
     return ResolvedTaggingAuthority(graph, buffer_cells, selection)
 
 

@@ -8005,9 +8005,9 @@
         "tests/python/unit/amr/test_refinement_criterion_regions.py": {
           "analogue": "tests/python/unit/amr/test_public_amr_resolution.py",
           "estimated_seconds": 90,
-          "local_receipt": "18 passed in 39.4 s (07/11, gcc 13, Kokkos Serial, Dim2)",
-          "reason": "source-only: traces, resolves and emits the criterion of the tutorial-09 case about twenty-five times; no compile",
-          "source_sha256": "5a62c84b4aea687836d5055fceab21e4a6ee7877ce5d3f0d60013643545b4f0d"
+          "local_receipt": "20 passed in 45.4 s (07/11, source-only, Python 3.13)",
+          "reason": "source-only: traces, resolves and emits the criterion of the tutorial-09 case about thirty times; no compile",
+          "source_sha256": "01ebe1cf2375be20e38e0cd12c99480e844ca688f96d3d9464901aacc70a82fd"
         },
         "tests/python/integration/amr/test_refinement_criterion_parity.py": {
           "analogue": "tests/python/integration/amr/test_public_tag_selection_native.py",
