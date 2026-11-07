@@ -36,6 +36,7 @@ from .cpp_strings import cpp_string_literal
 from .program_source_map import emission_program_hash, emission_scope
 from .program_kernel_registry import kernel_scope, kernel_definitions
 from .program_uniform_finite import uniform_scope, uniform_definitions
+from .program_shared_definitions import shared_scope, shared_definitions
 from pops.time.references import block_name
 
 import json  # noqa: F401  (kept for any external reference to program_codegen.json)
@@ -170,6 +171,7 @@ def _emit_resolved_cpp_program(
 @emission_scope
 @kernel_scope
 @uniform_scope
+@shared_scope
 def _emit_cpp_program_impl(
     program: Any,
     model: Any = None,
@@ -349,7 +351,7 @@ def _emit_cpp_program_impl(
     finite_helpers = finite_cpp_helpers() if uses_finite_arrays or uses_distributed else ""
     if uses_distributed:
         finite_helpers += "\n#include <pops/runtime/program/distributed_array.hpp>\n"
-    return _PROGRAM_CPP_TEMPLATE.format(
+    sections = dict(
         name=cpp_string_literal(program.name),
         hash=emission_program_hash(program),
         prelude=prelude,
@@ -362,9 +364,6 @@ def _emit_cpp_program_impl(
                          + _emit_uniform_history_metadata(program, target)),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
-        model_helpers=(finite_helpers + uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
-                       + _emit_program_model_helpers(program, authority)
-                       + provider_plans.source_kernel_helpers.cpp()),
         block_names=(_emit_block_names(program, value_authority.block_names)
                      + (_emit_uniform_clock_manifest(program) if target == "system" else "")),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
@@ -382,6 +381,13 @@ def _emit_cpp_program_impl(
             post_synchronization,
         ),
     )
+    # The install entries are regions too (an AMR entry builds its continuation
+    # configurations), so the translation-unit definitions are rendered after them.
+    sections["model_helpers"] = (
+        finite_helpers + uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
+        + _emit_program_model_helpers(program, authority)
+        + provider_plans.source_kernel_helpers.cpp() + shared_definitions())
+    return _PROGRAM_CPP_TEMPLATE.format(**sections)
 
 
 def _emit_uniform_clock_manifest(program: Any) -> str:

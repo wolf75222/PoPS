@@ -421,7 +421,11 @@ def _propagate_typed_error(program, signature, tokens, var, lines, block_idx, ta
         return
     capture = var.get(("typed_failure_capture",))
     if capture is None:
-        from .program_emit_typed_failure import emit_terminal_failure
+        from .program_emit_typed_failure import emit_shared_terminal_failure, emit_terminal_failure
+        outcome = var.get(("distributed_outcome_error", id(tokens)))
+        if outcome is not None and outcome[0] is tokens:
+            emit_shared_terminal_failure(program, signature, outcome[1:], lines, block_idx, target)
+            return
         emit_terminal_failure(program, signature, tokens, lines, block_idx, target)
         return
     error_signature, error_slots, outer_tag, outer_index, label = capture
