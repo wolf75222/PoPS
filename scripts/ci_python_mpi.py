@@ -18,6 +18,8 @@ import ci_select_tests as selection
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_STEP_SECONDS = 35 * 60
+# Read by tests/python/support/mpi_partition_units.py in each partitioned ranked launch.
+TEST_UNITS_ENVIRONMENT = 'POPS_CI_MPI_TEST_UNITS'
 LEGACY_PARENT_CASES = {
     'tests/python/integration/mpi/test_api_v02_continuation_migration.py': 1,
     'tests/python/integration/mpi/test_amr_rank_change_restart.py': 1,
@@ -67,14 +69,27 @@ def make_plan(manifest=None):
                  'parent_node': partitions[world - 1][index]['parent_node']}
                 for world in (1, 2)]})
     for row in entries:
-        groups.append({'group': 'ranked-' + Path(row['path']).stem, 'launches': [{
-            'kind': 'ranked', 'path': row['path'], 'nproc': row['nproc'],
-            'timeout_seconds': 1200}]})
+        stem = Path(row['path']).stem
+        if 'partitions' not in row:
+            groups.append({'group': 'ranked-' + stem, 'launches': [{
+                'kind': 'ranked', 'path': row['path'], 'nproc': row['nproc'],
+                'timeout_seconds': 1200}]})
+            continue
+        # Each partition launches the whole entrypoint; its pytest collection must equal the
+        # complete inventory before only the partition's units run (mpi_partition_units).
+        inventory = [node for partition in row['partitions'] for node in partition['nodes']]
+        for partition in row['partitions']:
+            groups.append({'group': 'ranked-' + stem + '-' + partition['id'], 'launches': [{
+                'kind': 'ranked', 'path': row['path'], 'nproc': row['nproc'],
+                'timeout_seconds': 1200, 'partition_id': partition['id'],
+                'units': partition['nodes'], 'inventory': inventory}]})
     groups.sort(key=lambda row: row['group'])
-    assigned = [(launch['path'], launch.get('parent_node', ''))
+    assigned = [(launch['path'], launch.get('parent_node', launch.get('partition_id', '')))
                 for group in groups for launch in group['launches']]
     declared = [(row['path'], partition['parent_node'])
                 for row in drivers for partition in row.get('partitions', [])]
+    declared.extend((row['path'], partition['id'])
+                    for row in entries for partition in row.get('partitions', []))
     declared.extend((row['path'], '') for row in entries + drivers if 'partitions' not in row)
     owners = {row['path'] for row in entries + drivers}
     if (sorted(assigned) != sorted(declared) or len(assigned) != len(set(assigned))
@@ -106,7 +121,8 @@ def validate_plan(path):
 def installed_environment():
     environment = os.environ.copy()
     for key in ('PYTHONPATH', 'PYTHONOPTIMIZE', 'POPS_NATIVE_VARIANTS_ROOT', 'POPS_INCLUDE',
-                'POPS_CI_NATIVE_PACKAGE', 'PYTEST_ADDOPTS', 'PIP_PREFIX', 'PIP_TARGET', 'PIP_USER'):
+                'POPS_CI_NATIVE_PACKAGE', 'PYTEST_ADDOPTS', 'PIP_PREFIX', 'PIP_TARGET', 'PIP_USER',
+                TEST_UNITS_ENVIRONMENT):
         environment.pop(key, None)
     environment.update(POPS_NATIVE_DIM='2', POPS_REQUIRE_NATIVE_TESTS='1',
                        POPS_REQUIRE_MPI_TESTS='1', PYTHONNOUSERSITE='1',
@@ -218,8 +234,15 @@ def run_launches(group, python, environment, receipts):
                      '--maxfail=1', '-o', 'pythonpath=', '--junitxml=' + str(xml), selector]
         command = ['timeout', '--signal=TERM', '--kill-after=30s',
                    str(launch['timeout_seconds']) + 's', *child]
+        launch_environment = dict(environment)
+        launch_environment.pop(TEST_UNITS_ENVIRONMENT, None)
+        if launch['kind'] == 'ranked' and 'partition_id' in launch:
+            launch_environment[TEST_UNITS_ENVIRONMENT] = json.dumps(
+                {'partition': launch['partition_id'], 'inventory': launch['inventory'],
+                 'units': launch['units']}, separators=(',', ':'))
         print('MPI group %s: %s' % (group['group'], launch['path']), flush=True)
-        result = subprocess.run(command, cwd=ROOT, env=environment, stdin=subprocess.DEVNULL, check=False)
+        result = subprocess.run(command, cwd=ROOT, env=launch_environment, stdin=subprocess.DEVNULL,
+                                check=False)
         code = result.returncode
         if code == 0 and launch['kind'] == 'orchestrator':
             try:

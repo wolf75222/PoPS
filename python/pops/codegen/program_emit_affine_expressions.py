@@ -2,19 +2,33 @@
 from pops.time._program.affine_expressions import affine_field_terms, coefficient_dag
 
 
-def emit_uniform_coefficients(trees, var, lines, *, name):
+def emit_uniform_coefficients(trees, var, lines, *, name, scalars=None):
+    """Coefficients that every rank must hold equal. When each scalar input (``scalars`` maps the
+    tree scalar ids to their values) is identical on every rank and the coefficients use only
+    exactly rounded operations, they are equal by construction: no collective checks them
+    (spec 0.3 SV20, duty 2), and a nonfinite one is still rejected on every rank."""
     from pops.codegen.program_emit_expressions import checked_expression_dag
     from pops.codegen.program_emit_finite_arrays import _uniform_element
-    from pops.codegen.program_emit_structured_control import _reject_if
+    from pops.codegen.program_emit_structured_control import (
+        _reject_if, _reject_locally, collective_identical, exact_expression_nodes,
+    )
     roots, nodes, scalar_ids = coefficient_dag(trees)
+    identical = (scalars is not None and exact_expression_nodes(nodes)
+                 and all(key in scalars and collective_identical(scalars[key])
+                         for key in scalar_ids))
     body, values, invalid = checked_expression_dag(roots, nodes,
                                                   tuple((var[key],) for key in scalar_ids))
     lines += ["std::array<pops::Real, %d> %s{};" % (len(trees), name), "{"]
     lines.extend(body)
-    _reject_if(invalid, lines, "nonfinite affine coefficient expression")
+    (_reject_locally if identical else _reject_if)(
+        invalid, lines, "nonfinite affine coefficient expression")
     for index, token in enumerate(values):
         lines.append("%s[%d] = %s;" % (name, index, token))
-        _uniform_element({"vtype": "scalar"}, "%s[%d]" % (name, index), lines)
+        if identical:
+            _reject_locally("!std::isfinite(%s[%d])" % (name, index), lines,
+                            "replicated array has a nonfinite element")
+        else:
+            _uniform_element({"vtype": "scalar"}, "%s[%d]" % (name, index), lines)
     lines.append("}")
     return tuple("%s[%d]" % (name, index) for index in range(len(trees)))
 
@@ -29,7 +43,9 @@ def emit_affine_expression(value, var, lines, *, block_index, explicit):
     # neither is a coefficient until its exact consumer boundary has read it.
     coefficients = {**var, **pointwise_scalar_aliases(value)}
     tokens = emit_uniform_coefficients(tuple(tree for _, tree in terms), coefficients, lines,
-                                       name="affine_coefficients_%d" % value.id)
+                                       name="affine_coefficients_%d" % value.id,
+                                       scalars={item.id: item for item in value.inputs
+                                                if item.vtype == "scalar"})
     if explicit and value.id not in var.get(("authored_stability_updates",), ()):
         emit_runtime_affine_stability(value, tuple(zip((x[0] for x in terms), tokens, strict=True)),
                                       var, lines, block_index=block_index)

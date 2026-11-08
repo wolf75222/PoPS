@@ -140,6 +140,23 @@ def test_initial_failure_component_requires_normative_local_authority_and_writte
                           "POPS_TEST_INITIAL_GHOST_SIZE": "str(size)"}
 
 
+def _assert_parameter_units_cover(partitions):
+    """Parameter partitions of one selection share one inventory that their units cover once."""
+    import json
+
+    families = {}
+    for identity, (tests, _cases, units) in partitions.items():
+        if units is None:
+            continue
+        spec = json.loads(units)
+        assert spec["partition"] == identity
+        assert sorted({node.split("[", 1)[0] for node in spec["inventory"]}) == sorted(tests)
+        families.setdefault(tuple(spec["inventory"]), []).extend(spec["units"])
+    for inventory, units in families.items():
+        assert len(units) == len(set(units)) == len(inventory) and set(units) == set(inventory)
+    return families
+
+
 def test_independent_amr_mpi_drivers_each_preserve_all_cases_and_cleanup_budget(tmp_path, monkeypatch):
     from collections import Counter
     from tests.python.integration.mpi import (
@@ -153,17 +170,19 @@ def test_independent_amr_mpi_drivers_each_preserve_all_cases_and_cleanup_budget(
     for module, ranks in ((mpi1, 1), (mpi2, 2)):
         for partition in profile.PARTITIONS:
             getattr(module, "test_public_amr_fixtures_on_authenticated_mpi%d_world" % ranks)(tmp_path, partition)
-    assert [call["ranks"] for call in calls] == [1] * 5 + [2] * 5
+    assert [call["ranks"] for call in calls] == [1] * 7 + [2] * 7
     assert sum(profile.EXPECTED_CASES.values()) == 18
+    assert len(_assert_parameter_units_cover(profile.PARTITIONS)) == 2
     for ranks in (1, 2):
         world = [call for call in calls if call["ranks"] == ranks]
         native_nodes = [selector for call in world for selector in call["tests"]]
-        assert len(native_nodes) == len(set(native_nodes)) == 5
+        assert len(native_nodes) == 7 and len(set(native_nodes)) == 5
         assert {selector.split("::", 1)[0] for selector in native_nodes} == set(profile.TESTS)
         union = Counter()
         for partition, call in zip(profile.PARTITIONS, world, strict=True):
             assert call["tests"] is profile.PARTITIONS[partition][0]
             assert call["expected_cases"] is profile.PARTITIONS[partition][1]
+            assert call["partition_units"] is profile.PARTITIONS[partition][2]
             assert {selector.split("::", 1)[1] for selector in call["tests"]} == set(call["expected_cases"])
             assert call["directory"] == tmp_path / (partition + "-mpi%d" % ranks)
             assert call["timeout_seconds"] == 840
@@ -184,17 +203,40 @@ def test_uniform_mpi_drivers_keep_full_native_groups_separate_from_source_mms(tm
     )
     from tests.python.support import public_uniform_profile_mpi as profile
 
+    from collections import Counter
+
     calls = []
     monkeypatch.setattr(profile, "run_fixture_world", lambda **arguments: calls.append(arguments))
-    original1.test_public_evolved_original_stage_on_authenticated_mpi1_world(tmp_path)
-    original2.test_public_evolved_original_stage_on_authenticated_mpi2_world(tmp_path)
-    captured1.test_public_captured_and_candidate_diffusion_on_authenticated_mpi1_world(tmp_path)
-    captured2.test_public_captured_and_candidate_diffusion_on_authenticated_mpi2_world(tmp_path)
-    assert [call["ranks"] for call in calls] == [1, 2, 1, 2]
-    assert [sum(call["expected_cases"].values()) for call in calls] == [8, 8, 4, 4]
+    drivers = (
+        (original1.test_public_evolved_original_stage_on_authenticated_mpi1_world, 1,
+         profile.EVOLVED_ORIGINAL_PARTITIONS, profile.EVOLVED_ORIGINAL_CASES),
+        (original2.test_public_evolved_original_stage_on_authenticated_mpi2_world, 2,
+         profile.EVOLVED_ORIGINAL_PARTITIONS, profile.EVOLVED_ORIGINAL_CASES),
+        (captured1.test_public_captured_and_candidate_diffusion_on_authenticated_mpi1_world, 1,
+         profile.CAPTURED_DIFFUSION_PARTITIONS, profile.CAPTURED_DIFFUSION_CASES),
+        (captured2.test_public_captured_and_candidate_diffusion_on_authenticated_mpi2_world, 2,
+         profile.CAPTURED_DIFFUSION_PARTITIONS, profile.CAPTURED_DIFFUSION_CASES),
+    )
+    for driver, ranks, partitions, cases in drivers:
+        start = len(calls)
+        for partition in partitions:
+            driver(tmp_path, partition)
+        world = calls[start:]
+        assert [call["ranks"] for call in world] == [ranks] * 4
+        union = Counter()
+        for partition, call in zip(partitions, world, strict=True):
+            tests, expected_cases, units = partitions[partition]
+            assert (call["tests"], call["expected_cases"], call["partition_units"]) == (tests, expected_cases, units)
+            assert call["directory"] == tmp_path / (partition + "-mpi%d" % ranks)
+            union.update(call["expected_cases"])
+        assert union == cases
+        assert len(_assert_parameter_units_cover(partitions)) == 1
+    assert [sum(call["expected_cases"].values()) for call in calls] == [2] * 8 + [1] * 8
     for call in calls:
-        assert {selector.split("::", 1)[1] for selector in call["tests"]} == set(call["expected_cases"])
+        # Each child collects every function of its inventory and runs only its own cases.
+        assert set(call["expected_cases"]) <= {selector.split("::", 1)[1] for selector in call["tests"]}
         assert call["timeout_seconds"] == 840
+    assert len({call["directory"] for call in calls}) == len(calls)
     assert sum(sum(call["expected_cases"].values()) for call in calls) == 24
     assert sum(call["ranks"] * sum(call["expected_cases"].values()) for call in calls) == 36
 
@@ -226,12 +268,12 @@ def test_field_profile_drivers_keep_every_declared_native_group_and_world(tmp_pa
             module = importlib.import_module("tests.python.integration.mpi.%s_mpi%d" % (stem, ranks))
             target = getattr(module, "test_public_%s_on_authenticated_mpi%d_world" % (group, ranks))
             start = len(calls)
-            if group == "amr_original":
-                partitions = profile.AMR_ORIGINAL_PARTITIONS
+            if group in profile.PARTITIONED_GROUPS:
+                partitions = profile.PARTITIONED_GROUPS[group]
                 for partition in partitions:
                     target(tmp_path, partition)
             else:
-                partitions = {None: profile.GROUPS[group]}
+                partitions = {None: (*profile.GROUPS[group], None)}
                 target(tmp_path)
             world = calls[start:]
             assert [call["ranks"] for call in world] == [ranks] * len(partitions)
@@ -240,6 +282,7 @@ def test_field_profile_drivers_keep_every_declared_native_group_and_world(tmp_pa
             for partition, call in zip(partitions, world, strict=True):
                 assert call["tests"] is partitions[partition][0]
                 assert call["expected_cases"] is partitions[partition][1]
+                assert call["partition_units"] is partitions[partition][2]
                 assert {selector.split("::", 1)[1] for selector in call["tests"]} == set(call["expected_cases"])
                 assert call["expected_rank_env"] == "POPS_TEST_PUBLIC_NATIVE_EXPECT_RANKS"
                 assert call["timeout_seconds"] == 840
@@ -249,7 +292,10 @@ def test_field_profile_drivers_keep_every_declared_native_group_and_world(tmp_pa
                 native_nodes.extend(call["tests"])
             assert union == profile.GROUPS[group][1]
             assert sum(union.values()) == expected_counts[group]
-            assert len(native_nodes) == len(set(native_nodes))
+            assert sorted(set(native_nodes)) == sorted(profile.GROUPS[group][0])
+    assert set(profile.PARTITIONED_GROUPS) == {"amr_original", "spatial_interaction"}
+    assert len(_assert_parameter_units_cover(profile.AMR_ORIGINAL_PARTITIONS)) == 1
+    assert _assert_parameter_units_cover(profile.SPATIAL_INTERACTION_PARTITIONS) == {}
     assert sum(sum(call["expected_cases"].values()) for call in calls) == 40
     assert sum(call["ranks"] * sum(call["expected_cases"].values()) for call in calls) == 60
 
@@ -428,7 +474,7 @@ def test_mpi_child_watchdog_cannot_disable_or_exceed_existing_cap(tmp_path, time
                           timeout_seconds=timeout)
 
 
-@pytest.mark.parametrize("partition", (None, "missing", True, 1, "tag_selection[0]"))
+@pytest.mark.parametrize("partition", (None, "missing", True, 1, "tag_selection", "tag_selection[0]"))
 def test_amr_partition_admission_refuses_undeclared_ids_before_launch(tmp_path, monkeypatch, partition):
     from tests.python.support import public_amr_profile_mpi as profile
     calls = []
@@ -438,18 +484,34 @@ def test_amr_partition_admission_refuses_undeclared_ids_before_launch(tmp_path, 
     assert calls == []
 
 
-@pytest.mark.parametrize("partition", (None, "missing", True, 1, "saved_restart[0]"))
-def test_original_amr_partition_admission_refuses_undeclared_ids_before_launch(tmp_path, monkeypatch, partition):
+@pytest.mark.parametrize("partition", (None, "missing", True, 1, "saved_restart", "saved_restart[0]",
+                                       "saved_history[0]"))
+@pytest.mark.parametrize("group", ("amr_original", "spatial_interaction"))
+def test_partitioned_field_profile_admission_refuses_undeclared_ids_before_launch(
+        tmp_path, monkeypatch, group, partition):
     from tests.python.support import public_field_profile_mpi as profile
     calls = []
     monkeypatch.setattr(profile, "run_fixture_world", lambda **arguments: calls.append(arguments))
     with pytest.raises(ValueError, match="exact declared partition"):
-        profile.run_public_field_profile_world(group="amr_original", ranks=1,
+        profile.run_public_field_profile_world(group=group, ranks=1,
                                                directory=tmp_path, partition=partition)
     assert calls == []
 
 
-@pytest.mark.parametrize("group", ("completed_original", "imex_time", "nonlinear_mixed", "spatial_interaction"))
+@pytest.mark.parametrize("partition", (None, "missing", True, 1, "width1_dt001[0]", "captured_width1[0]"))
+@pytest.mark.parametrize("family", ("evolved_original", "captured_diffusion"))
+def test_uniform_partition_admission_refuses_undeclared_ids_before_launch(tmp_path, monkeypatch, family, partition):
+    from tests.python.support import public_uniform_profile_mpi as profile
+    calls = []
+    monkeypatch.setattr(profile, "run_fixture_world", lambda **arguments: calls.append(arguments))
+    run = {"evolved_original": profile.run_evolved_original_world,
+           "captured_diffusion": profile.run_captured_diffusion_world}[family]
+    with pytest.raises(ValueError, match="exact declared partition"):
+        run(ranks=1, directory=tmp_path, partition=partition)
+    assert calls == []
+
+
+@pytest.mark.parametrize("group", ("completed_original", "imex_time", "nonlinear_mixed"))
 def test_unpartitioned_field_profiles_refuse_foreign_partition(tmp_path, monkeypatch, group):
     from tests.python.support import public_field_profile_mpi as profile
     calls = []
@@ -461,13 +523,20 @@ def test_unpartitioned_field_profiles_refuse_foreign_partition(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("ranks", (1, 2))
-@pytest.mark.parametrize("family", ("amr", "original"))
+@pytest.mark.parametrize("family", ("amr", "original", "spatial", "evolved", "captured"))
 def test_partition_rank_receipts_refuse_omission_duplicate_failure_error_and_skip(tmp_path, ranks, family):
     from tests.python.support.mpi_fixture_driver import require_rank_results as require_all
     from tests.python.support.public_amr_profile_mpi import PARTITIONS
-    from tests.python.support.public_field_profile_mpi import AMR_ORIGINAL_PARTITIONS
-    partitions = PARTITIONS if family == "amr" else AMR_ORIGINAL_PARTITIONS
-    for partition, (_, expected) in partitions.items():
+    from tests.python.support.public_field_profile_mpi import (
+        AMR_ORIGINAL_PARTITIONS, SPATIAL_INTERACTION_PARTITIONS,
+    )
+    from tests.python.support.public_uniform_profile_mpi import (
+        CAPTURED_DIFFUSION_PARTITIONS, EVOLVED_ORIGINAL_PARTITIONS,
+    )
+    partitions = {"amr": PARTITIONS, "original": AMR_ORIGINAL_PARTITIONS,
+                  "spatial": SPATIAL_INTERACTION_PARTITIONS, "evolved": EVOLVED_ORIGINAL_PARTITIONS,
+                  "captured": CAPTURED_DIFFUSION_PARTITIONS}[family]
+    for partition, (_, expected, _units) in partitions.items():
         directory = tmp_path / partition
         directory.mkdir()
         for rank in range(ranks):
@@ -497,6 +566,69 @@ def test_partition_rank_receipts_refuse_omission_duplicate_failure_error_and_ski
             ET.ElementTree(root).write(path)
             with pytest.raises(AssertionError, match="mandatory outcomes"):
                 require_all(directory, ranks, expected, purpose=partition)
+
+
+@pytest.mark.parametrize("ranks", (1, 2))
+def test_partitioned_world_hands_its_child_only_declared_units_and_requires_their_receipts(
+        tmp_path, monkeypatch, ranks):
+    import json
+    from pathlib import Path
+    from pops import _native_selector
+    from tests.python.support import mpi_fixture_driver as driver, mpi_partition_units
+    from tests.python.support.public_uniform_profile_mpi import EVOLVED_ORIGINAL_PARTITIONS
+
+    native = SimpleNamespace(__has_mpi__=True, __mpi_contract__="source-only token")
+    monkeypatch.setattr(_native_selector, "select_native_dimension", lambda dimension: native)
+    monkeypatch.setattr(driver, "mpi_launcher_or_skip", lambda *args, **kwargs: ["source-only-mpiexec"])
+    monkeypatch.setenv(mpi_partition_units.ENVIRONMENT, "stale-spec")
+    tests, cases, units = EVOLVED_ORIGINAL_PARTITIONS["width2_dt001"]
+    receipts = {"nodes": json.loads(units)["units"]}
+    calls = []
+
+    def child(command, **kwargs):
+        calls.append((command, kwargs))
+        directory = Path(command[command.index("-c") + 2])
+        for rank in range(ranks):
+            root = ET.Element("testsuite")
+            for node in receipts["nodes"]:
+                owner, name = node.split("::", 1)
+                ET.SubElement(root, "testcase", name=name,
+                              classname=owner.removesuffix(".py").replace("/", "."))
+            ET.ElementTree(root).write(directory / ("rank%d.xml" % rank))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(driver.subprocess, "run", child)
+
+    def run(name, *, tests=tests, cases=cases, units=units):
+        driver.run_fixture_world(ranks=ranks, directory=tmp_path / name, tests=tests,
+                                 expected_cases=cases, expected_rank_env="SOURCE_ONLY_WORLD",
+                                 purpose="source-only partition", timeout_seconds=840,
+                                 partition_units=units)
+
+    run("exact")
+    command, kwargs = calls[-1]
+    directory = command.index("-c") + 2
+    assert command[directory + 1:] == ["-p", "tests.python.support.mpi_partition_units", *tests]
+    assert kwargs["env"][mpi_partition_units.ENVIRONMENT] == units
+    # The same functions and counts from another partition are not this partition's receipt.
+    receipts["nodes"] = json.loads(EVOLVED_ORIGINAL_PARTITIONS["width2_dt002"][2])["units"]
+    with pytest.raises(AssertionError, match="partition identity differs"):
+        run("foreign")
+    # A spec that does not match the selectors or the case counts never starts a child.
+    launched = len(calls)
+    with pytest.raises(ValueError, match="selectors or case counts"):
+        run("counts", cases={name: count + 1 for name, count in cases.items()})
+    with pytest.raises(ValueError, match="selectors or case counts"):
+        run("selectors", tests=tests + ("tests/python/integration/runtime/test_unowned.py::test_case",))
+    with pytest.raises(ValueError, match="partition units"):
+        run("malformed", units=json.dumps({"partition": "width2_dt001", "inventory": [], "units": []}))
+    assert len(calls) == launched
+    # An unpartitioned world removes any inherited spec and loads no plugin.
+    receipts["nodes"] = [tests[0] + "[whole]"]
+    run("whole", cases={tests[0].split("::", 1)[1]: 1}, units=None)
+    command, kwargs = calls[-1]
+    assert mpi_partition_units.ENVIRONMENT not in kwargs["env"]
+    assert "-p" not in command[command.index("-c") + 2:]
 
 
 @pytest.mark.parametrize("ranks", (1, 2))

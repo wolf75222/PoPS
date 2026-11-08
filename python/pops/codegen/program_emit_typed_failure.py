@@ -63,3 +63,23 @@ def emit_terminal_failure(program, signature, tokens, lines, block_indices, targ
     limits = "pops::runtime::program::TypedFailureCapacity{%s,%s}" % (per_rank, aggregate)
     registry = ", ctx.distributed_registry_if_present()" if _has_distributed(signature) else ""
     lines.append("  }, %s%s);" % (limits, registry))
+
+
+def emit_shared_terminal_failure(program, signature, outcome, lines, block_indices, target):
+    """Emit the terminal failure of a distributed map outcome as a call to its shared routine.
+
+    @p outcome is ``(token, tokens_of)``: the outcome variable and the function building the error
+    tokens of an outcome named by its argument. The routine body is exactly the statement
+    ``emit_terminal_failure`` emits for the routine parameter; every exit whose statement is the
+    same text calls one routine. Outside a translation-unit scope the statement is emitted inline.
+    """
+    from .program_shared_definitions import OUTCOME_PARAMETER, terminal_failure_routine
+
+    token, tokens_of = outcome
+    body = []
+    emit_terminal_failure(program, signature, tokens_of(OUTCOME_PARAMETER), body, block_indices, target)
+    name = terminal_failure_routine(["  " + line for line in body])
+    if name is None:
+        emit_terminal_failure(program, signature, tokens_of(token), lines, block_indices, target)
+    else:
+        lines.append("%s(ctx, %s);" % (name, token))

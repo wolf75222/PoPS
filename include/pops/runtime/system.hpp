@@ -30,6 +30,7 @@
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 #include <pops/runtime/system/native_package_capability.hpp>
+#include <pops/runtime/system/prepared_active_mask_consensus.hpp>
 
 #include <array>
 #include <cstddef>
@@ -849,11 +850,14 @@ class System {
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
   /// Compiled run of the installed Advance (spec 0.3 section 5.2, CC14): attempts of @p proposal
-  /// until the accepted time is @p until, landing there as master's fixed step does, after at
-  /// most @p max_steps accepted steps and Retry.max_attempts attempts per step. Collective; the
-  /// rules are those of runtime/program/advance_run.hpp.
-  runtime::program::AdvanceRunReport run_advance(double until, double proposal,
-                                                 std::int64_t max_steps);
+  /// until the accepted time is @p until, landing there and on each time of @p outputs as master's
+  /// fixed step does, after at most @p max_steps accepted steps and Retry.max_attempts attempts per
+  /// step; the Outputs of the Advance, one schedule each, are evaluated at the start of the run and
+  /// after the publications they are due on. Collective; the rules are those of
+  /// runtime/program/advance_run.hpp.
+  runtime::program::AdvanceRunReport run_advance(
+      double until, double proposal, std::int64_t max_steps,
+      const std::vector<runtime::program::AdvanceOutputSchedule>& outputs = {});
   /// Retry.max_attempts of the installed Advance; 0 when the installed Program has none.
   int advance_max_attempts() const noexcept;
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
@@ -1620,6 +1624,12 @@ class System {
   /// become a public publication route.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_active_mask_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
+  /// The rank-local half of prepared_program_block_active_mask_, without any collective, so a
+  /// generated-Program helper decides its own checks and this query in one collective (spec 0.3
+  /// SV20, PF8) through prepared_active_mask_consensus.hpp.
+  [[nodiscard]] POPS_EXPORT runtime::system::PreparedActiveMaskLocal<MultiFab<Dim>>
+  prepared_program_block_active_mask_local_(int runtime_block, const MultiFab<Dim>& field,
+                                            const ExecutionLane& lane) const;
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_volume_fraction_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext

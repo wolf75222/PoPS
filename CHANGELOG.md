@@ -44,6 +44,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-90 (N9, lot 1): decide each Program reduction and its checks in one collective (spec 0.3
+  SV20, duties 2 and 3, and PF8). `dot_all` and the AMR composite pairing and integral send the
+  compensated rank summaries through one `MPI_Allreduce` with a non-commutative Neumaier join, the
+  other reductions on a uniform mesh carry a local failure as a second word, and `ConsensusWords`
+  decides the failure, agreement and maximum slots of a site in one max reduction; when a rank
+  carries a failure, every rank then runs the former failure vote, so the messages do not change.
+  Generated guards on a value that every rank computes identically from block reductions reject it
+  locally, and on a uniform mesh an `iterate` stop computed that way is no longer voted. The CG
+  written as a Program (T04) drops from 357 to 57 collectives per iteration at two ranks
+  (`benchmarks/n9_collectives/`). The `dot_all` contract states its rounding policy: every rank
+  receives the same bits, which can change with the rank count and the MPI reduction algorithm,
+  and `tests/cpp/unit/parallel/test_reduction_collectives.cpp` checks the transport at two, three
+  and four ranks.
 - Move the review material of the API 0.4.0 and API 0.2 work (`docs/development/api_040/`,
   `docs/review/`, `tests/review/`, `outputs/`, `docs/dev/`; 3,281 files) out of the code tree
   into an archive with a SHA-256 manifest, described in `docs/development/review_archive.md`.
@@ -69,6 +82,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the schedule cache restores numbers without their Field description.
 - Capture the recovery admissibility provider of a model with bound runtime parameters:
   `ModelRecoveryAdmissibilityProvider` declares its model as its only device-capture member.
+- Keep replicated finite Arrays of scalar and Product elements on the device (spec 0.3 DM7,
+  DM8): each leaf is one labelled Kokkos column, maps and ordered fold, scan and reduce regions
+  read and write the columns in place, replication is checked by a device fingerprint with O(1)
+  collectives, and only control scalars reach the host inside a step. A host-placed map or scan
+  and a fold sequenced on the host copy each device Array that they read without redefining it
+  once per entry, at its first read, instead of one element per iteration. Host-placed regions,
+  element reads and continuation images are counted per Program
+  (`pops_finite_device_to_host_bytes`, `pops_finite_host_to_device_bytes`,
+  `pops_finite_host_transfer_count`), and System and AmrSystem steps open the Kokkos Tools
+  regions `pops::step` and `pops::program_region`. Structural, Variant and distributed Arrays
+  keep their host storage.
+- Compile a typed terminal failure in a Program without finite operations: its payload packs
+  through finite structural storage, so Program emission now adds the finite helpers whenever
+  the generated code names one of their declarations, not only for finite, versioned or
+  distributed operations.
 - Add the experimental API 0.2 finite algebra: dependent bundles and remapping,
   complete continuations and child advances, spatial composition, distributed
   operators, and graph/implicit derivatives lower from Python into native Program C++.
@@ -144,8 +172,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - Write an AMR refinement criterion in Python: a `Tag` or `Coarsen` predicate may be a function of
   `cell` (`cell.value(q)`, `cell.shift(axis, k)`, `cell.width(axis)`, runtime parameters), traced
   once and generated into the compiled Program. The native tagging plan calls it on each patch in
-  place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` and
-  clustering. A criterion requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, and its
+  place of the tag-graph bytecode and keeps hysteresis, the conflict policy, `Buffer` with the
+  selection it names (master's, or `selection="refine-requests"`) and clustering. A criterion
+  requires `ConflictPolicy.REFINE_WINS` and `EqualityPolicy.HOLD`, and its
   rules decide as those of the tag graph do. The comparisons that `~`, `&` and `|` join are a
   strict `<` or `>` (`<=`, `>=` and `==` are refused at the line of the rule) and follow Kleene's
   three-valued logic, so one at exact equality decides nothing and neither does its negation under
@@ -454,6 +483,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - The coverage fence keeps that catalogue shrink-only: a record added or rewritten, or a changed
   header, fails even when the catalogue's SHA-256 pin is updated with it; a record may only be
   dropped, and its test must then be claimed by a suite.
+- Emit less C++ per generated Program, so that the Hall MHD CT Program compiles. Each translation
+  unit now defines once its continuation field callbacks, each distinct schema construction, each
+  distinct terminal exit of a distributed map and each distinct staging of an Array captured by a
+  device map; the collective entry points receive their callable through a non-owning view; and
+  the step body continues in nested functions at top-level operation boundaries. Operations, their
+  order, their values and schema identities are unchanged. On one 4-core container the Hall source
+  goes from 30.0 to 17.7 MB and compiles in 357 s within 4.8 GiB, where it did not fit in 12 GiB
+  before.
 
 ## [1.0.0] - 2026-07-16
 

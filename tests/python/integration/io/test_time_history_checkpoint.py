@@ -21,6 +21,8 @@ under a different composition is rejected before any state mutation.
 (C) Spec 46 (hash mismatch): checkpoint an AB2 program, then restart a DIFFERENT compiled Program
     (Forward Euler, different IR hash) from that checkpoint -> RuntimeError containing
     "checkpoint was created with a different compiled Program hash".
+    Section (C) runs from test_time_history_checkpoint_identity.py, in its own process: its three
+    cold compiles and the two of this file each fit the 300-second process limit (B03 F5).
 
 Sections (B)/(C) explicitly skip only when numpy, the native extension, or the native toolchain is
 absent. Once those prerequisites are present, compile and install failures are test failures.
@@ -987,11 +989,6 @@ def _run_section_c(t):
 def test_uniform_ab2_history_checkpoint_restart_is_bit_identical():
     """Collect the Uniform AB2 checkpoint/restart acceptance as an ordinary test."""
     _run_section_b(_pops_time())
-
-
-def test_uniform_restart_refuses_a_different_compiled_program():
-    """Collect the authenticated Uniform Program-identity guard as an ordinary test."""
-    _run_section_c(_pops_time())
 
 
 def test_uniform_variable_dt_stride_checkpoint_closes_like_continuous_run():

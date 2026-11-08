@@ -389,8 +389,10 @@ Real dot_all(int program_block, const field_type& left, const field_type& right)
   } catch (...) {
     local_error = std::current_exception();
   }
-  converge_owner_reduction_(local_error, lane, "AMR Program dot-all reduction");
-  return pops::collective_finite_compensated_sum(accumulated, lane.communicator());
+  const CollectiveCompensatedSum reduced = pops::collective_finite_compensated_sum_or_failure(
+      accumulated, static_cast<bool>(local_error), lane.communicator());
+  return reduced.or_vote(
+      [&] { converge_owner_reduction_(local_error, lane, "AMR Program dot-all reduction"); });
 }
 
 Geometry<Dim> geometry() const {

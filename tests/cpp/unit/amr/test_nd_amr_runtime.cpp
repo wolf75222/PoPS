@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -269,12 +270,122 @@ void prove_prepared_multiblock_hierarchy() {
   EXPECT_EQ(prepared.coupling_registry_contract(), coarse_coupling_contract);
 }
 
+PopsExecutionContextV1 serial_interface_execution() {
+  return {sizeof(PopsExecutionContextV1),
+          1u,
+          "test::prepared-amr-interface",
+          POPS_MEMORY_SPACE_HOST_V1,
+          "pops.runtime-backend-manifest.v1:sha256:prepared-amr-interface",
+          "host",
+          POPS_SCALAR_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          POPS_PRECISION_FLOAT64_V1,
+          0,
+          "host::synchronous",
+          0,
+          0,
+          "serial",
+          "none"};
+}
+
+pops::Geometry<1> unit_geometry(const Box<1>& domain, pops::Real lower) {
+  pops::RealVector<1> lo{};
+  pops::RealVector<1> hi{};
+  lo[0] = lower;
+  hi[0] = lower + pops::Real(1);
+  return pops::Geometry<1>::from_bounds(domain, lo, hi);
+}
+
 }  // namespace
 
 TEST(test_nd_amr_runtime, prepared_multiblock_hierarchy_is_exact_ranked_in_1d_2d_3d) {
   prove_prepared_multiblock_hierarchy<1>();
   prove_prepared_multiblock_hierarchy<2>();
   prove_prepared_multiblock_hierarchy<3>();
+}
+
+TEST(test_nd_amr_runtime, prepared_interface_provider_failure_keeps_the_first_reason) {
+  using MultiBlock = runtime::PreparedMultiBlockAmrHierarchy<1>;
+  using Scheduler = MultiBlock::interface_scheduler_type;
+  namespace multiblock = pops::runtime::multiblock;
+  pops::ExecutionLane parent =
+      pops::ExecutionLane::duplicate_world_collectively("test.prepared-amr-interface.parent");
+  const auto authority = load_balance<1>();
+  const auto ranks = execution_rank_space<1>(parent);
+  const Box<1> domain{Index<1>{0}, Index<1>{4 * static_cast<int>(ranks.size()) - 1}};
+  auto coarse = coarse_layout(domain, *authority, ranks, parent);
+  const Index<1> local_rank = ranks.coordinate(static_cast<std::size_t>(parent.rank()));
+  MultiFab<1> primary_state(coarse.patches(), coarse.distribution(), local_rank, 1, Extent<1>{});
+  runtime::AmrRuntime<1> engine(
+      hierarchy::AmrHierarchy<1>::from_coarse(coarse, std::move(primary_state), kHierarchyBudget),
+      authority, "test.prepared-amr-interface.spatial");
+  MultiFab<1> secondary_state(engine.hierarchy().state(0).layout(),
+                              engine.hierarchy().state(0).distribution(), local_rank, 1,
+                              Extent<1>{});
+  std::vector<MultiBlock::AdditionalBlock> additional;
+  additional.push_back({"neutral", {std::move(secondary_state)}});
+  MultiBlock prepared = MultiBlock::prepare_collectively(
+      parent, std::move(engine), "ion", std::move(additional), "test.prepared-amr-interface.lane");
+
+  // The provider's one route joins two standalone blocks that meet at x = 1.
+  const Box<1> left_box{Index<1>{0}, Index<1>{3}};
+  const Box<1> right_box{Index<1>{8}, Index<1>{11}};
+  const auto left_layout = coarse_layout(left_box, *authority);
+  const auto right_layout = coarse_layout(right_box, *authority);
+  const Index<1> serial_rank = serial_rank_space<1>().origin();
+  MultiFab<1> left(left_layout.patches(), left_layout.distribution(), serial_rank, 1, Extent<1>{});
+  MultiFab<1> right(right_layout.patches(), right_layout.distribution(), serial_rank, 1,
+                    Extent<1>{});
+  multiblock::AxisAlignedInterface<1> route;
+  route.identity = "test.prepared-amr-interface.route";
+  route.left_block = 0;
+  route.right_block = 1;
+  route.left_axis = route.right_axis = 0;
+  route.left_side = multiblock::InterfaceSide::High;
+  route.right_side = multiblock::InterfaceSide::Low;
+  route.right_component_for_left = {0};
+  route.left_trace_projection_identity = route.identity + ".left.trace";
+  route.right_trace_projection_identity = route.identity + ".right.trace";
+  route.left_trace_provider_identity = "test.cell-average.left";
+  route.right_trace_provider_identity = "test.cell-average.right";
+  route.left_trace_operation = multiblock::InterfaceTraceOperation::CellAverage;
+  route.right_trace_operation = multiblock::InterfaceTraceOperation::CellAverage;
+  route.left_trace_required_depth = 1;
+  route.right_trace_required_depth = 1;
+  const pops::Geometry<1> provider_geometry = unit_geometry(domain, pops::Real(0));
+  prepared.install_interface_flux_provider(
+      "test.prepared-amr-interface.provider.v1", provider_geometry, [&](Scheduler& scheduler) {
+        scheduler.install(route, left, unit_geometry(left_box, pops::Real(0)), right,
+                          unit_geometry(right_box, pops::Real(1)), serial_interface_execution(),
+                          [](const multiblock::BoundaryEvaluationPoint&,
+                             const multiblock::InterfaceFluxBatch&) {});
+      });
+  ASSERT_TRUE(prepared.has_interface_flux_provider());
+  const std::string accepted(prepared.interface_flux_provider_contract());
+
+  // On one rank a publication failure keeps its own type and restores the accepted provider.
+  EXPECT_THROW(prepared.install_interface_flux_provider(
+                   "test.prepared-amr-interface.provider.v2", provider_geometry, [](Scheduler&) {},
+                   [] { throw std::invalid_argument("deliberate publication failure"); }),
+               std::invalid_argument);
+  EXPECT_EQ(prepared.interface_flux_provider_contract(), accepted);
+  EXPECT_TRUE(prepared.has_interface_flux_provider());
+
+  // An installer that destroys the accepted prefix before it fails makes the rollback fail too.
+  // The installer's reason, not the rollback's, leaves the installation.
+  try {
+    prepared.install_interface_flux_provider(
+        "test.prepared-amr-interface.provider.v3", provider_geometry, [](Scheduler& scheduler) {
+          scheduler.clear();
+          throw std::invalid_argument("deliberate installer failure");
+        });
+    ADD_FAILURE() << "a failed installer must leave the installation";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_STREQ(error.what(), "deliberate installer failure");
+  }
+  EXPECT_EQ(prepared.interface_flux_provider_contract(), accepted);
 }
 
 TEST(test_nd_amr_runtime, anisotropic_regrid_publishes_one_authenticated_spatial_contract) {
