@@ -89,9 +89,12 @@ def _data_layout(plan: Any) -> dict[str, Any]:
     The one reader of ``pops._ir.data_model`` that lot 1a admits under ``python/pops/codegen``:
     nothing in the lowering or the acceptance reads it before the retyping (lot 1b, MG3).
     """
-    from pops._ir.data_model import data_layout_and_distribution
+    try:
+        from pops._ir.data_model import data_layout_and_distribution
 
-    return data_layout_and_distribution(plan)
+        return data_layout_and_distribution(plan)
+    except Exception as exc:  # noqa: BLE001 - A1: a report never refuses a compiled plan
+        return {"schema_version": 2, "unreported": "%s: %s" % (type(exc).__name__, exc)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +192,7 @@ class CompiledPlanRecord:
         if self.target not in ("system", "amr_system"):
             raise ValueError("CompiledPlanRecord has an unsupported target")
         object.__setattr__(self, "layout", _deep_freeze(self.layout))
+        object.__setattr__(self, "data_layout", _deep_freeze(self.data_layout))
         from pops.mesh import LayoutPlan
         from pops.codegen.lowering_coverage import LoweringCoverageReport
         if type(self.layout_plan) is not LayoutPlan:

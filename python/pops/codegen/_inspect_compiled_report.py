@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._frozen_data import thaw_data
 from pops._report import Report
 
 
@@ -106,7 +107,7 @@ class CompiledReport(Report):
         # DM3, CC10 (N10 lot 1a): layout, distribution and origin of every data value, with the
         # support placement of each block; None for an artifact that carries no resolved plan.
         self.data_layout_and_distribution = (
-            dict(data_layout_and_distribution) if data_layout_and_distribution else None)
+            thaw_data(data_layout_and_distribution) if data_layout_and_distribution else None)
 
     def to_dict(self) -> dict:
         """A plain-dict view of the whole report (JSON-ready)."""
@@ -121,7 +122,7 @@ class CompiledReport(Report):
                 "lowering_coverage": (
                     dict(self.lowering_coverage) if self.lowering_coverage else None),
                 "data_layout_and_distribution": (
-                    dict(self.data_layout_and_distribution)
+                    thaw_data(self.data_layout_and_distribution)
                     if self.data_layout_and_distribution else None)}
 
     def __str__(self) -> str:

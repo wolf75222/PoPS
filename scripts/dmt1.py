@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sys
 import time
 import traceback
@@ -100,6 +99,15 @@ def _digest(text: str) -> dict:
     return {"bytes": len(data), "sha": hashlib.sha256(data).hexdigest()}
 
 
+def _identity_scope(ir_identity_reuse):
+    """The scope that ``pops.compile`` opens, at the head and at a base older than #732."""
+    import inspect
+
+    if inspect.signature(ir_identity_reuse).parameters:
+        return ir_identity_reuse("pops.compile")
+    return ir_identity_reuse()
+
+
 def _emit_one(identifier, state, drivers, orchestration, units):
     import pops
     from examples.api_v02.profile_dispatch import build_profile
@@ -108,7 +116,7 @@ def _emit_one(identifier, state, drivers, orchestration, units):
     spec = build_profile(identifier)
     plan = pops.resolve(pops.validate(spec.case), layout=spec.layout)
     state["dimension"] = plan.resolved_dimension
-    with ir_identity_reuse():
+    with _identity_scope(ir_identity_reuse):
         plan.verify()
         try:
             drivers._compile_resolved_problem(plan)
@@ -205,7 +213,7 @@ def compare(base: Path, head: Path, declared: Path | None) -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "DM-T1").splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     emit_parser = sub.add_parser("emit")
     emit_parser.add_argument("out", type=Path)
@@ -221,7 +229,6 @@ def main(argv=None) -> int:
         bad = sorted(set(identifiers) - set(PROFILES))
         if bad:
             parser.error("unknown profiles %s" % bad)
-        os.environ.setdefault("PYTHONHASHSEED", "0")
         return emit(args.out, identifiers, args.units)
     return compare(args.base, args.head, args.declared)
 

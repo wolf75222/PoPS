@@ -24,7 +24,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `pops._ir.index_sets` the index-set constructors of IR2 with the descriptors of IR3, equal by
   instance; `pops._ir.data_model` the support placement of each block (co-located blocks share one
   set of cells, the endpoints of a cross-block interface get one each), a total `ir_type` and the
-  layout record of every data value (`data_layout_and_distribution`). Nothing in the builder or
+  layout record of every data value at every depth of the Program, with its residency
+  (`data_layout_and_distribution`). Nothing in the builder or
   the lowering reads them before the retyping (architecture test). `scripts/dmt1.py` and the
   `DM-T1` workflow compare the generated C++ of the 40 API profiles between a pull request and its
   merge base, without a native build; `scripts/n10_dispatch_inventory.py` lists the field-or-array

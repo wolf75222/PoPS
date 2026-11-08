@@ -20,6 +20,11 @@ CARRIER_NAMES = frozenset(("arrays", "index_sets", "data_model"))
 # The one reader lot 1a admits: the compiled plan record computes the manifest field
 # ``data_layout_and_distribution`` there, outside its contract identity, and nothing reads it back.
 ALLOWED = frozenset(("python/pops/codegen/_compiled_artifact.py",))
+# Reading the records needs no import (``compiled.plan.data_layout[...]``): the files that may
+# name them are the record and the report that copies it into the manifest (review of #749, T5).
+RECORD_READERS = frozenset((
+    "python/pops/codegen/_compiled_artifact.py", "python/pops/codegen/_inspect_compiled_report.py",
+))
 
 
 def _imports(path: Path, sources: Path = SOURCES) -> list[tuple[int, str]]:
@@ -54,6 +59,21 @@ def test_builder_and_lowering_do_not_read_the_array_type_before_the_retyping():
         "lot 1a of N10 keeps the one array type out of the builder and the lowering until the "
         "retyping (lot 1b, MG3); move the reader to the manifest reporter or wait for 1b:\n"
         + "\n".join(offenders))
+
+
+def test_no_emitter_or_acceptance_reads_the_layout_records():
+    offenders = []
+    for package in GUARDED:
+        for path in sorted((SOURCES / package).rglob("*.py")):
+            relative = path.relative_to(ROOT).as_posix()
+            if relative in RECORD_READERS:
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if "data_layout" in line:
+                    offenders.append("%s:%d %s" % (relative, number, line.strip()))
+    assert not offenders, (
+        "lot 1a of N10 reports the layout records in the manifest only; no emitter, dispatch or "
+        "acceptance reads them before the retyping (lot 1b, MG3):\n" + "\n".join(offenders))
 
 
 def test_the_guard_sees_every_spelling_of_an_import(tmp_path):

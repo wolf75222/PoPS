@@ -8349,22 +8349,22 @@
       }
     },
     "ci_20261107_n10_index_sets": {
-      "basis": "Unmeasured CI scheduling estimate for the N10 phase 1 lot 1a module (ROM-85, index sets of IR2, descriptors of IR3, value types of IR1): 15 s on the api_v02_20261013 source-only tier, as the analogue test_typed_index_maps_n7.py, which it matches: it resolves two small programs (M12 and the T10 multi-block example) without compilation and runs no seeded samples. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimate for the N10 phase 1 lot 1a module (ROM-85, index sets of IR2, descriptors of IR3, value types of IR1): 30 s on the api_v02_20261013 source-only tier, twice the analogue test_typed_index_maps_n7.py: it resolves seven small programs (M01, M10, M12, M18, T06 and the T10 multi-block example) without compilation, runs one DM-T1 emission of M15 in a subprocess (no compiler) and runs no seeded samples. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/numerics/test_index_sets_n10.py": "tests/python/unit/numerics/test_typed_index_maps_n7.py"
       },
       "estimated_seconds": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": 15
+        "tests/python/unit/numerics/test_index_sets_n10.py": 30
       },
       "local_receipts": {
         "tests/python/unit/numerics/test_index_sets_n10.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_index_sets_n10.py",
-          "passed": 12,
-          "seconds": 8.84
+          "passed": 16,
+          "seconds": 26.34
         }
       },
       "source_sha256": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": "67278c4329c01a00e640fb32e782a309c8ff4fbd03fb38b409aa803a2382ce87"
+        "tests/python/unit/numerics/test_index_sets_n10.py": "dcf582c8da99d9b3a57a8a879db187f513b4d81118fcbc7f44876dbdc5095f7c"
       }
     }
   },
@@ -9588,5 +9588,5 @@
   "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 600,
   "tests/python/unit/amr/test_regrid_decision.py": 60,
   "tests/python/integration/amr/test_regrid_decision_native.py": 900,
-  "tests/python/unit/numerics/test_index_sets_n10.py": 15
+  "tests/python/unit/numerics/test_index_sets_n10.py": 30
 }

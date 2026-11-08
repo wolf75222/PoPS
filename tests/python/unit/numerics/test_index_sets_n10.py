@@ -231,9 +231,81 @@ def test_the_compiled_plan_record_reports_the_layouts_outside_its_identity():
     from pops._ir.data_model import data_layout_and_distribution
     from pops.codegen._compiled_artifact import CompiledPlanRecord
 
+    from pops._frozen_data import thaw_data
+
     plan = _plan("M01")
     record = CompiledPlanRecord.from_resolved(plan)
-    assert record.data_layout == data_layout_and_distribution(plan)
+    # Frozen like the other mappings of the record, and equal to the report once thawed.
+    assert thaw_data(record.data_layout) == data_layout_and_distribution(plan)
     assert record.data_layout["placements"] and record.data_layout["unplaced"] is None
     # Reported only: the contract identity of the record does not depend on it.
     assert replace(record, data_layout={}).contract_identity == record.contract_identity
+
+
+def test_dmt1_emit_runs_the_real_compile_path_on_a_short_profile(tmp_path):
+    # Review of #749, T1: the identity scope that ``pops.compile`` opens changed under the harness
+    # (#732); only an emission sees it, ``compare`` alone does not.
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[4]
+    out = tmp_path / "m15.jsonl"
+    done = subprocess.run([sys.executable, str(root / "scripts" / "dmt1.py"), "emit", str(out),
+                           "M15"], cwd=root, capture_output=True, text=True, timeout=600)
+    assert done.returncode == 0, done.stdout + done.stderr
+    row = json.loads(out.read_text(encoding="utf-8"))
+    assert "failed" not in row and row["program"]["bytes"] > 0
+    assert row["models"] and all(value is not None for value in row["models"].values())
+
+
+def test_the_manifest_reports_the_values_of_the_control_bodies():
+    # T2: a structured iterate keeps its field leaves in its body, not at the first level.
+    from pops._ir.data_model import data_layout_and_distribution
+
+    plan = _plan("M18")
+    first = {str(value.name if getattr(value, "name", None) else value.id)
+             for value in plan.time._values}
+    report = data_layout_and_distribution(plan)
+    nested = [row for row in report["values"] if row["value"] not in first]
+    assert len(report["values"]) > len(first) and nested
+    assert any(row["role"] == "state" and row["layout"] == "Patches" for row in nested)
+    assert report["untyped"] == sum(1 for row in report["values"] if row["layout"] == "untyped")
+
+
+def test_a_field_without_a_block_reads_its_component_count_from_its_attributes():
+    # T3: ``scalar_field()`` without a block writes ``attrs["ncomp"]`` and nothing else.
+    from pops._ir.data_model import data_layout_and_distribution
+
+    report = data_layout_and_distribution(_plan("M10"))
+    fields = [row for row in report["values"] if row["spelling"] == "scalar_field"]
+    assert fields and all(row["type"].startswith("Array(") for row in fields)
+    assert report["untyped"] == 0
+
+
+def test_every_record_states_a_residency_read_from_the_rule_of_g13():
+    # T4: field leaves live in views of the default memory space; a finite array where
+    # ``device_array`` puts it; what G13 says nothing about is written untyped.
+    from pops._ir.data_model import data_layout_and_distribution
+    from pops.codegen.program_emit_finite_kokkos import device_array
+    from pops.time.value_signatures import value_signature
+
+    plan = _plan("M12")
+    report = data_layout_and_distribution(plan)
+    assert all(row["residency"] for row in report["values"])
+    assert {row["residency"] for row in report["values"] if row["role"]} == {
+        "device: views of the default memory space"}
+    from pops.time._graph.value_traversal import walk_program_nodes
+
+    plan = _plan("T06")  # replicated finite arrays, some of flat elements and some structured
+    rows = {row["value"]: row for row in data_layout_and_distribution(plan)["values"]}
+    finite = [value for value in walk_program_nodes(plan.time._values) if value.vtype == "array"]
+    residencies = set()
+    for value in finite:
+        row = rows[str(value.name if getattr(value, "name", None) else value.id)]
+        device = device_array(value_signature(value))
+        assert row["residency"].startswith("device" if device else "host"), row
+        residencies.add(row["residency"])
+    assert residencies == {"device: columns of the default memory space",
+                           "host: structural cells"}
