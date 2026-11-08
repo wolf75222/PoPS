@@ -81,6 +81,22 @@ class Fab {
     Kokkos::deep_copy(data_, Real{0});
   }
 
+  /// A Fab over a caller-provided slice of a larger allocation in the same memory space. A finite
+  /// Array of fields keeps every element of one box in one column (element-major, spec DM7), and
+  /// each element is a Fab over its own disjoint slice. The slice must hold exactly this Fab's
+  /// elements; its values are left as they are.
+  Fab(const Box<Dim>& valid, int ncomp, Extent<Dim> ghosts, storage_type slice)
+      : valid_(valid), ncomp_(ncomp), ghosts_(ghosts) {
+    if (ncomp < 1)
+      throw std::invalid_argument("pops::Fab: ncomp must be positive");
+    grown_ = grown_with_ghosts(valid_, ghosts_);
+    initialize_layout();
+    if (slice.extent(0) != size_)
+      throw std::invalid_argument("pops::Fab: storage slice differs from the Fab size");
+    if (size_ != 0)
+      data_ = std::move(slice);
+  }
+
   Fab(const Fab& other)
       : valid_(other.valid_),
         grown_(other.grown_),

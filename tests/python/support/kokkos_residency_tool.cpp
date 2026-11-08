@@ -18,7 +18,10 @@
 // count apart ("host_phase"). Allocations labelled
 // "pops_unified:" live in unified memory (SharedSpace): each window reports how many are alive
 // when it opens and how many it makes, the arrays whose page migrations DM8 requires to stay at
-// zero on a GPU target. When KOKKOS_TOOLS_LIBS names this library and
+// zero on a GPU target. A finite Array of Fields (G13 lot 3) keeps its elements in mesh columns
+// labelled "pops_mesh_array:finite_field_column"; each window counts their allocations by memory
+// space ("field_column_allocations") and the mesh copies into or out of them ("field_column").
+// When KOKKOS_TOOLS_LIBS names this library and
 // POPS_KOKKOS_RESIDENCY_OUTPUT names a file, one JSON line is written per completed outermost
 // window. The library needs no Kokkos header: it implements the C interface of Kokkos Tools.
 #include <cstdint>
@@ -45,10 +48,14 @@ struct Tally {
 struct Window {
   std::string region;
   Tally array_data, control, other, mesh_host, mesh_device, host_staging, host_phase;
+  // Mesh copies into or out of the columns of a finite Array of Fields (also in mesh_host or
+  // mesh_device).
+  Tally field_column;
   Tally unified_live, unified_allocations;
   std::set<std::string> array_labels;
   // Allocations of finite array columns made in the window, by memory space name.
   std::map<std::string, std::uint64_t> array_allocations;
+  std::map<std::string, std::uint64_t> field_column_allocations;
 };
 
 std::mutex guard;
@@ -67,6 +74,8 @@ bool starts_with(const char* text, const char* prefix) {
 bool array_label(const char* label) {
   return starts_with(label, "pops_finite_array:") || starts_with(label, "pops_finite_host:");
 }
+
+constexpr const char* kFieldColumn = "pops_mesh_array:finite_field_column";
 
 bool mesh_label(const char* label) {
   return starts_with(label, "pops_mesh_array:");
@@ -113,6 +122,7 @@ void write_window() {
       ", \"control\": " + tally(current.control) + ", \"other\": " + tally(current.other) +
       ", \"mesh_host\": " + tally(current.mesh_host) +
       ", \"mesh_device\": " + tally(current.mesh_device) +
+      ", \"field_column\": " + tally(current.field_column) +
       ", \"host_staging\": " + tally(current.host_staging) +
       ", \"host_phase\": " + tally(current.host_phase) +
       ", \"unified_live\": " + tally(current.unified_live) +
@@ -125,6 +135,12 @@ void write_window() {
   line += "], \"array_allocations\": {";
   first = true;
   for (const auto& [space, count] : current.array_allocations) {
+    line += (first ? "" : ", ") + quoted(space) + ": " + std::to_string(count);
+    first = false;
+  }
+  line += "}, \"field_column_allocations\": {";
+  first = true;
+  for (const auto& [space, count] : current.field_column_allocations) {
     line += (first ? "" : ", ") + quoted(space) + ": " + std::to_string(count);
     first = false;
   }
@@ -187,6 +203,10 @@ extern "C" void kokkosp_begin_deep_copy(SpaceHandle, const char* destination,
     const bool host = ends_with(destination, "_mirror") || ends_with(source, "_mirror") ||
                       (destination_pointer != nullptr && destination_pointer == source_pointer);
     target = host ? &current.mesh_host : &current.mesh_device;
+    if (starts_with(destination, kFieldColumn) || starts_with(source, kFieldColumn)) {
+      ++current.field_column.count;
+      current.field_column.bytes += bytes;
+    }
   } else if (starts_with(destination, "pops_host_phase:") ||
              starts_with(source, "pops_host_phase:"))
     target = &current.host_phase;
@@ -213,9 +233,13 @@ extern "C" void kokkosp_allocate_data(SpaceHandle space, const char* label, cons
       current.unified_allocations.bytes += bytes;
     }
   }
-  if (open_windows == 0 || !starts_with(label, "pops_finite_array:"))
+  if (open_windows == 0)
     return;
-  ++current.array_allocations[std::string(space.name, strnlen(space.name, sizeof(space.name)))];
+  const std::string space_name(space.name, strnlen(space.name, sizeof(space.name)));
+  if (starts_with(label, "pops_finite_array:"))
+    ++current.array_allocations[space_name];
+  else if (starts_with(label, kFieldColumn))
+    ++current.field_column_allocations[space_name];
 }
 
 extern "C" void kokkosp_deallocate_data(SpaceHandle, const char* label, const void* pointer,

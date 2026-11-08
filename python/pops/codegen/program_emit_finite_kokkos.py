@@ -95,6 +95,9 @@ _DEVICE_STORAGE = "device columns in the default memory space; no host staging"
 
 def result_storage(signature, backend):
     """Placement text for the storage of a region's Array result."""
+    from .program_emit_finite_arrays import field_array
+    if field_array(signature):
+        return "device columns per box of the Field elements; no host staging"
     if not device_array(signature):
         return "host structural cells"
     if backend == "host":

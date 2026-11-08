@@ -7,6 +7,7 @@
 #include <utility>
 #include <pops/runtime/program/distributed_array.hpp>
 #include <pops/runtime/program/finite_device_array.hpp>
+#include <pops/runtime/program/finite_field_array.hpp>
 
 namespace pops::runtime::program::finite_structural {
 
@@ -156,6 +157,28 @@ const ContinuationValueRef<Dim>& project(const ContinuationValueRef<Dim>& root,
 }
 
 namespace detail {
+template <int Dim>
+const finite_device::FieldArray<Dim>* field_held(const std::any& cell) {
+  if (const auto* borrowed =
+          std::any_cast<std::reference_wrapper<const finite_device::FieldArray<Dim>>>(&cell))
+    return &borrowed->get();
+  return std::any_cast<finite_device::FieldArray<Dim>>(&cell);
+}
+
+// The continuation image boxes Array elements (G07); a Field Array lends it its elements, which
+// it copies out of their device slices like any borrowed Field.
+template <int Dim>
+Array borrowed_elements(const finite_device::FieldArray<Dim>& source) {
+  if (!source.domain || !source.storage ||
+      source.storage->elements.size() != static_cast<std::size_t>(source.domain->size))
+    throw std::invalid_argument(
+        "finite structural Field Array differs from its domain cardinality");
+  auto buffer = make_values(source.storage->elements.size());
+  for (std::size_t i = 0; i < source.storage->elements.size(); ++i)
+    (*buffer)[i] = std::cref(source.storage->elements[i]);
+  return Array{source.domain, std::move(buffer)};
+}
+
 inline const finite_device::Array* device_held(const std::any& cell) {
   if (const auto* borrowed =
           std::any_cast<std::reference_wrapper<const finite_device::Array>>(&cell))
@@ -451,6 +474,9 @@ ContinuationValueRef<Dim> pack_prepared(const std::vector<Layout>& nodes, Budget
           images.push_back(std::make_unique<const Array>(
               legacy_array(*device, schema.children.at(0), limits.residency)));
           frame.array = images.back().get();
+        } else if (const auto* fields = field_held<Dim>(*frame.source)) {
+          images.push_back(std::make_unique<const Array>(borrowed_elements(*fields)));
+          frame.array = images.back().get();
         } else
           frame.array = &held<Array>(*frame.source);
         detail::domain(frame.array->domain, schema);
@@ -684,6 +710,28 @@ std::any unpack(const ContinuationType& type, const ContinuationValueRef<Dim>& s
         if (count != std::size_t(value->domain_ref()->size))
           throw std::invalid_argument(
               "finite structural Array differs from its domain cardinality");
+        if (schema.children.at(0).kind == ContinuationKind::Field) {
+          // Field elements go straight into the device columns of a Field Array.
+          const auto& element = schema.children.at(0);
+          finite_device::FieldArrayBuilder<Dim> fields(value->domain_ref());
+          for (std::size_t n = 0; n < count; ++n) {
+            input.charge(1, sizeof(Value));
+            const auto& member = value->members()[n];
+            if (!member || member->kind() != ContinuationKind::Field ||
+                member->field_owner() != element.field_owner ||
+                member->field_provider() != element.field_provider ||
+                member->scientific_contract() != element.scientific_contract ||
+                member->field().ncomp() != element.field_components)
+              throw std::invalid_argument("finite structural Field contract differs");
+            preflight(member->field(), element, member->field_metadata());
+            detail::field_storage(member->field(), input, output);
+            const auto& slot = fields.store(static_cast<std::int64_t>(n), member->field());
+            detail::copied_field(on_field_copy, member->field(), slot, fields.lifetime(),
+                                 member->field_metadata());
+          }
+          destination = std::move(fields).publish();
+          break;
+        }
         output.charge(count, sizeof(std::any));
         auto buffer = make_values(count);
         destination = Array{value->domain_ref(), buffer};

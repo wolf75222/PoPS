@@ -11,7 +11,9 @@ domain, an operation without a device lowering: its host evaluation copies the d
 reads to the host once and publishes its result, the negative control which shows that the
 library sees array data cross. KIND "fold" adds a fold whose carry is an Array, which the host
 sequences: each iteration reads one element of its carry, and the Array that the fold reads
-without redefining it is copied once.
+without redefining it is copied once. KIND "fields" adds a map whose element is a Field
+(G13 lot 3): its elements go into device columns, one per box, and two of them are read back into
+the commit; no array byte may cross, and the map is no host map.
 """
 from __future__ import annotations
 
@@ -26,7 +28,8 @@ STEPS = 2
 DT = 0.01
 COUNT = 257
 FOLDS = 4
-KINDS = ("device", "host", "fold")
+FIELDS = 3
+KINDS = ("device", "host", "fold", "fields")
 
 
 def build(kind):
@@ -78,6 +81,15 @@ def build(kind):
     left = p.value("integer_result", p.float64(total["k"]) * q.n)
     right = p.value("real_result", total["x"] * q.n)
     selected = p.value("map_result", (left[0], right[1]))
+    if kind == "fields":
+        elements = p.range_set(FIELDS, capacity=FIELDS, ownership="replicated")
+        scaled = p.map(elements, lambda b, i: b.value(
+            "scaled_element", b.float64(b.index_value(i) + 1) * q.n))
+        # Exactly zero only if each read returns its own element: k * n - k * n.
+        last = scaled[p.index(elements, FIELDS - 1)]
+        first = scaled[p.index(elements, 0)]
+        zero = p.value("field_elements_zero", (last - float(FIELDS) * q.n) + (first - 1. * q.n))
+        selected = p.value("map_and_field_result", selected + zero)
     p.commit(q.next, p.value("accepted", selected, at=q.next.point))
     p.step_strategy(FixedDt(DT))
     case.program(p)
@@ -109,7 +121,7 @@ def _counter(dso, name, restype=ctypes.c_uint64):
 def main(argv):
     if len(argv) != 2 or argv[0] not in KINDS:
         raise SystemExit("usage: python -m tests.python.support.finite_residency_probe "
-                         "{device,host,fold} REPORT")
+                         "{device,host,fold,fields} REPORT")
     from tests.python.support.api_v02_native import execute_case
     from tests.python.support.public_native_profile import native_profile
 
@@ -123,7 +135,7 @@ def main(argv):
     counters = {name: _counter(dso, name) for name in (
         "pops_finite_kokkos_launch_count", "pops_finite_host_map_count",
         "pops_finite_device_to_host_bytes", "pops_finite_host_to_device_bytes",
-        "pops_finite_host_transfer_count")}
+        "pops_finite_host_transfer_count", "pops_finite_field_map_count")}
     counters["execution_space"] = _counter(dso, "pops_finite_kokkos_execution_space",
                                            ctypes.c_char_p).decode()
     counters["steps"] = STEPS
