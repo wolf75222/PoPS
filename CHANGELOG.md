@@ -169,12 +169,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `speed=` stays Rusanov with the R9 speed until a face reads F(1).n (CF15, ROM-106).
   `rusanov(F, Uh, smax=)` keeps the third parameter of section 4.4 as gap C46 of the index
   (adjudication section 20, item 4), until a row of 2.6.9 or N15 closes it.
-- Evaluate a `riemann.User` face residual on the transport prepared at bind, like the native face:
-  no field is allocated per evaluation, the face carrier is copied only when a Program reads it,
-  and the stability frequency is read from the recorded face speeds, on the prepared transport in
-  the pass that validates the residual, elsewhere in one pass. The generated face policy tests its
-  outputs and the operands that could conceal a non-finite value, and refuses the same faces with
-  the same cause (ROM-100, core ledger entry).
+- Evaluate a `riemann.User` face residual on the transport prepared at bind whenever that
+  transport can observe the block's faces, periodic or bounded: no boundary session is allocated
+  per evaluation. A Program that reads only the stability frequency allocates what the native face
+  allocates; a Program that reads the faces still allocates the capture path's candidate and backup
+  residuals per evaluation, and the face carrier is copied only when a Program reads it. The
+  stability frequency is read from the recorded face speeds, on the prepared transport in the pass
+  that validates the residual, elsewhere in one pass. The generated face policy tests its outputs
+  and the operands that could conceal a non-finite value, and refuses the same faces with the same
+  cause (ROM-100, core ledger entry).
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.
