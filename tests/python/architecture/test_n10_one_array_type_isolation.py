@@ -17,8 +17,9 @@ SOURCES = ROOT / "python" / "pops"
 GUARDED = ("codegen", "time")
 CARRIERS = frozenset(("pops._ir.arrays", "pops._ir.index_sets", "pops._ir.data_model"))
 CARRIER_NAMES = frozenset(("arrays", "index_sets", "data_model"))
-# The manifest reporter is the one reader lot 1a admits; none is wired at this commit.
-ALLOWED: frozenset[str] = frozenset()
+# The one reader lot 1a admits: the compiled plan record computes the manifest field
+# ``data_layout_and_distribution`` there, outside its contract identity, and nothing reads it back.
+ALLOWED = frozenset(("python/pops/codegen/_compiled_artifact.py",))
 
 
 def _imports(path: Path, sources: Path = SOURCES) -> list[tuple[int, str]]:
@@ -64,3 +65,11 @@ def test_the_guard_sees_every_spelling_of_an_import(tmp_path):
         fake.write_text(text, encoding="utf-8")
         modules = [module for _, module in _imports(fake, sources)]
         assert any(module in CARRIERS for module in modules), (text, modules)
+
+
+def test_the_one_admitted_reader_only_reports():
+    text = (ROOT / "python/pops/codegen/_compiled_artifact.py").read_text(encoding="utf-8")
+    assert text.count("pops._ir.data_model") == 2  # the docstring and the one import
+    assert text.count("_data_layout(") == 2       # its definition and its one call
+    assert "data_layout" not in text[text.index("def _payload(self)"):][:4000].split(
+        "def verify", 1)[0]

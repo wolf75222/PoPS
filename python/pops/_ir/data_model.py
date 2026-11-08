@@ -266,12 +266,21 @@ def _layout(value: Any, value_type: Any, placements: Placements, plan: Any) -> t
 
 def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
     """The manifest field ``data_layout_and_distribution`` (CC10) of a resolved plan."""
-    placements = support_placements(plan)
+    try:
+        placements = support_placements(plan)
+        unplaced = None
+    except Exception as exc:  # noqa: BLE001 - A1: a plan the placement cannot read is reported
+        placements = Placements({}, {}, {}, {}, None)
+        unplaced = "%s: %s" % (type(exc).__name__, exc)
     program = str(getattr(plan.time, "name", None) or "program")
     records = []
     for value in plan.time._values:
-        value_type = ir_type(value, placements, program=program)
-        layout, distribution, origin = _layout(value, value_type, placements, plan)
+        try:
+            value_type = ir_type(value, placements, program=program)
+            layout, distribution, origin = _layout(value, value_type, placements, plan)
+        except Exception as exc:  # noqa: BLE001 - A1: reported, never refused
+            value_type = A.Untyped("%s: %s" % (type(exc).__name__, exc))
+            layout = distribution = origin = "untyped"
         records.append(LayoutRecord(
             value=str(value.name if getattr(value, "name", None) else value.id),
             spelling=value.vtype, role=_FIELD_ROLES.get(value.vtype), type=repr(value_type),
@@ -282,4 +291,5 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
                        for block, configuration in sorted(placements.configurations.items())},
         "values": records,
         "untyped": sum(1 for row in records if row["layout"] == "untyped"),
+        "unplaced": unplaced,
     }

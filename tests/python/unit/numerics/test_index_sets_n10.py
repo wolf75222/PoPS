@@ -223,3 +223,17 @@ def test_dmt1_compare_gates_undeclared_mesh_differences_and_reports_array_ones(t
     declared.write_text("T99\n", encoding="utf-8")
     assert module.compare(base, mesh, declared) == 2
     assert len(module.GATED) == 29 and len(module.PROFILES) == 40
+
+
+def test_the_compiled_plan_record_reports_the_layouts_outside_its_identity():
+    from dataclasses import replace
+
+    from pops._ir.data_model import data_layout_and_distribution
+    from pops.codegen._compiled_artifact import CompiledPlanRecord
+
+    plan = _plan("M01")
+    record = CompiledPlanRecord.from_resolved(plan)
+    assert record.data_layout == data_layout_and_distribution(plan)
+    assert record.data_layout["placements"] and record.data_layout["unplaced"] is None
+    # Reported only: the contract identity of the record does not depend on it.
+    assert replace(record, data_layout={}).contract_identity == record.contract_identity
