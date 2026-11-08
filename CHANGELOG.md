@@ -37,6 +37,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
   native `MUSCL(<Limiter>())` state bit for bit for the four limiters. `weno5(rep, epsilon=)` is
   the WENO5-Z reconstruction of master's `WENO5()`, bit for bit on the same case.
+- ROM-31 (G13 lot 3): a finite Array whose element is a Field keeps its elements in device
+  columns, one per box, element-major (spec 0.3 DM7, MG3), instead of boxing a copy of each
+  element in a host cell. Each element is a MultiFab over its own slices (new `Fab` and
+  `MultiFab` constructors over provided storage), so continuation and exchange provenance bind
+  to it as before; a read copies the element out in the target memory space. A map of Field
+  elements counts in `pops_finite_field_map_count`, not as a host map (DM8), and the residency
+  probe reports the column allocations per step (`field_column_allocations`).
 - ROM-31 (G13 lot 2): halo transports choose their host staging. `HaloExchangeContext::staging`
   (`automatic`, `device_direct`, `host_staged`) enters the collective contract; `automatic` posts
   MPI on the pack and unpack buffers when the fields live in host memory, and stages through
