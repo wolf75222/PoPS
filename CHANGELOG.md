@@ -23,7 +23,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   sec. 4.3), `muscl(rep, limiter)` is the MUSCL face value of the catalogue, and `minmod`,
   `vanleer`, `mc` and `superbee` are plain limiter functions passed uncalled. The body becomes
   the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
-  native `MUSCL(<Limiter>())` state bit for bit for the four limiters.
+  native `MUSCL(<Limiter>())` state bit for bit for the four limiters. `weno5(rep, epsilon=)` is
+  the WENO5-Z reconstruction of master's `WENO5()`, bit for bit on the same case.
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
   SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
