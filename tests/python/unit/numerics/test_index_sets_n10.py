@@ -309,3 +309,35 @@ def test_every_record_states_a_residency_read_from_the_rule_of_g13():
         residencies.add(row["residency"])
     assert residencies == {"device: columns of the default memory space",
                            "host: structural cells"}
+
+
+def test_one_function_reads_the_kind_of_a_value_from_the_head_of_its_type():
+    # Lot 1b (note §3.4): a field leaf is an Array over the cells of a support, a finite array an
+    # Array over a range set; the spelling of a signature, a live value or the bare spelling agree.
+    from types import SimpleNamespace
+
+    from pops._ir.data_model import (
+        field_role, is_field_leaf, is_finite_array, is_finite_index, value_kind)
+
+    kinds = {"state": "field", "rhs": "field", "scalar_field": "field", "array": "finite",
+             "index_set": "index_set", "index": "index", "scalar": "other",
+             "vector_field": "other", "product": "other", "operator": "other"}
+    for spelling, kind in kinds.items():
+        assert value_kind(spelling) == kind
+        assert value_kind({"vtype": spelling}) == kind
+        assert value_kind(SimpleNamespace(vtype=spelling)) == kind
+        assert is_field_leaf(spelling) is (kind == "field")
+        assert is_finite_array(spelling) is (kind == "finite")
+        assert is_finite_index(spelling) is (kind in ("finite", "index_set", "index"))
+    assert [field_role(spelling) for spelling in ("state", "rhs", "scalar_field", "array")] == [
+        "state", "rhs", "field", None]
+    assert value_kind({}) == value_kind(None) == "other"
+
+
+def test_a_live_field_value_asks_the_one_function():
+    from pops._ir.data_model import is_field_leaf
+
+    plan = _plan("M01")
+    values = list(plan.time._values)
+    assert values and all(value.is_field() is is_field_leaf(value) for value in values)
+    assert any(value.is_field() for value in values)
