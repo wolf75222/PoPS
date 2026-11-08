@@ -97,6 +97,15 @@ def _consumed_solve_action(program: Any, solve: Any) -> tuple[str, tuple[str, ..
     return matches[0]
 
 
+def _trial_site(program: Any, solve: Any) -> Any:
+    """The ``trial_site`` of the outcome that consumes ``solve``: a field request of a traced
+    method (N8 lot 5, T38), or None."""
+    for node in _program_nodes(program):
+        if node.op == "solve_outcome" and len(node.inputs) == 1 and node.inputs[0] is solve:
+            return node.attrs.get("trial_site")
+    return None
+
+
 def _append_solve_report_guard(
         program: Any, solve: Any, outcome: str, lines: list[str], *, label: str,
         phase: str | None = None) -> None:
@@ -108,6 +117,15 @@ def _append_solve_report_guard(
     by the coarser status name at the Python/C++ program boundary.
     """
     action_kind, action_statuses = _consumed_solve_action(program, solve)
+    site = _trial_site(program, solve)
+    if site is not None:
+        # A field request of a traced method (T38): a retryable site is a rejection of the
+        # attempt ("trial"), a fixed site the failure of the step ("trial_failure"); the message
+        # starts with the stable site name of its AdvanceControl row.
+        if action_kind != "reject_attempt":
+            raise ValueError("a trial site of a field request is consumed with RejectAttempt")
+        phase = "trial" if site["retry_can_change"] else "trial_failure"
+        label = site["site"]
     report = "%s_report" % outcome
     if action_kind == "reject_attempt":
         selected_status = " || ".join(

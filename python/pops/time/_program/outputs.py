@@ -23,51 +23,17 @@ of PF1 (``write=``) are refused with ``NotYetElaborated``, which names the lot t
 """
 from __future__ import annotations
 
-import keyword
 import math
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable
 from decimal import Decimal, localcontext
-from types import MappingProxyType
 from typing import Any
 
+from pops.time._program.product import Product
 from pops.time._program.traced_method import ClosedBodyViolation, NotYetElaborated
 from pops.time.values import ProgramValue
 
 _OUTPUT_READONLY_OPS = frozenset({"state", "reduce", "scalar_op"})
 """Operations of a record: the accepted state, its cell reductions and scalar arithmetic."""
-
-
-class Product(Mapping):
-    """``Product(name=value, ...)``: a record of named values, in the order written (IR1)."""
-
-    __slots__ = ("_fields",)
-
-    def __init__(self, **fields: Any) -> None:
-        for name in fields:
-            if not name.isidentifier() or keyword.iskeyword(name):
-                raise ValueError("Product field names are identifiers, got %r" % (name,))
-        object.__setattr__(self, "_fields", MappingProxyType(dict(fields)))
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError("Product is immutable")
-
-    def __getitem__(self, name: str) -> Any:
-        return self._fields[name]
-
-    def __getattr__(self, name: str) -> Any:
-        try:
-            return self._fields[name]
-        except KeyError:
-            raise AttributeError(name) from None
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._fields)
-
-    def __len__(self) -> int:
-        return len(self._fields)
-
-    def __repr__(self) -> str:
-        return "Product(%s)" % ", ".join("%s=%r" % item for item in self._fields.items())
 
 
 def _time(value: Any, where: str) -> float:

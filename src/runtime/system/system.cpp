@@ -276,10 +276,23 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
         break;
       } catch (const runtime::program::StepAttemptRejected& rejected) {
         // step() restored the accepted state on every rank before the rejection left it.
-        if (rejected.phase() != runtime::program::kAssessmentRejectionPhase)
+        const std::string& phase = rejected.phase();
+        if (phase == runtime::program::kTrialFailurePhase) {
+          // A fixed failure site (T38): a retry cannot change it, so the step ends here and the
+          // attempt is not counted as a rejection.
+          report.attempts = attempt;
+          report.rejection = rejected.what();
+          report.rejection_phase = phase;
+          report.rejection_detail = rejected.detail();
+          return finish(AdvanceRunStop::kTrialFailure);
+        }
+        if (phase != runtime::program::kAssessmentRejectionPhase &&
+            phase != runtime::program::kTrialRejectionPhase)
           throw;
         ++report.rejections;
         report.rejection = rejected.what();
+        report.rejection_phase = phase;
+        report.rejection_detail = rejected.detail();
         if (attempt >= max_attempts) {
           report.attempts = attempt;
           return finish(AdvanceRunStop::kAttemptBudget);

@@ -138,6 +138,13 @@ class FieldHandle(Handle):
             self._field_registry.resolved_registration(self), values=values, at=at, solver=solver, temporal=temporal,
         )
 
+    def at(self, state: Any) -> Any:
+        """``field.at(U)``: this field solved for the data of the stage of ``U``, inside a traced
+        method (spec 0.3 T6), see ``pops.time._program.field_requests``."""
+        from pops.time._program.field_requests import at
+
+        return at(self, state)
+
     def observe(self, solution: Any, unknown: Any = None, *, byte_capacity: int = 64 * 1024 * 1024) -> Any:
         """Read one typed unknown from this field's explicitly consumed solve result."""
         if self._field_registry is None:
