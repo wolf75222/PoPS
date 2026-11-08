@@ -28,7 +28,7 @@ from pops.fields import (
 )
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Dirichlet
 from pops.frames import Cartesian2D
-from pops.math import ValueExpr, ddt, div, laplacian
+from pops.math import ddt, div, laplacian
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
@@ -502,17 +502,20 @@ def build_layout(core: IMEXAMRAuthoring, *, temporal_ratio: int = 1) -> Any:
         Tag,
     )
     from pops.layouts import AMR
-    from pops.lib.amr import EllipticRecompute, StateTransfer
-    from pops.math import grad, norm
+    from pops.lib.amr import EllipticRecompute, StateTransfer, gradient_norm
     from pops.time import every
 
-    value = ValueExpr(core.tracer_state)
-    gradient = norm(grad(value))
+    # Each rule is a function of cell, generated into the compiled Program (spec 0.3, DM13b).
+    stencil = core.finite_volume.amr_indicator_stencil(dimension=len(core.frame.axes))
+
+    def gradient(cell: Any) -> Any:
+        return gradient_norm(cell, core.tracer_state, axes=core.frame.axes, stencil=stencil)
+
     tagging = AMRTagging(
         rules=(
-            Tag(value > core.case.value(core.refine_value)),
-            Tag(gradient > core.case.value(core.refine_gradient)),
-            Coarsen(value < core.case.value(core.coarsen_value)),
+            Tag(lambda cell: cell.value(core.tracer_state) > core.case.value(core.refine_value)),
+            Tag(lambda cell: gradient(cell) > core.case.value(core.refine_gradient)),
+            Coarsen(lambda cell: cell.value(core.tracer_state) < core.case.value(core.coarsen_value)),
             Buffer(cells=2),
         ),
         # Keep one full tagging cycle between opposite decisions. The native Program accepted-state

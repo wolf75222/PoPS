@@ -34,10 +34,10 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import StateTransfer, gradient_norm
 from pops.lib.initial import Gaussian
 from pops.lib.time import SSPRK2
-from pops.math import ValueExpr, ddt, div, grad, norm
+from pops.math import ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
@@ -151,12 +151,17 @@ refine_threshold = case.param(
 coarsen_threshold = case.param(
     RuntimeParam("coarsen_u_gradient", default=0.04)
 )
-gradient_magnitude = norm(grad(ValueExpr(tracer_U)))
+gradient_stencil = finite_volume.amr_indicator_stencil(dimension=len(frame.axes))
+
+
+def gradient_magnitude(cell):
+    return gradient_norm(cell, tracer_U, axes=frame.axes, stencil=gradient_stencil)
+
 
 tagging = AMRTagging(
     rules=(
-        Tag(gradient_magnitude > case.value(refine_threshold)),
-        Coarsen(gradient_magnitude < case.value(coarsen_threshold)),
+        Tag(lambda cell: gradient_magnitude(cell) > case.value(refine_threshold)),
+        Coarsen(lambda cell: gradient_magnitude(cell) < case.value(coarsen_threshold)),
         Buffer(cells=2),
     ),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
