@@ -413,6 +413,37 @@ TEST(test_nd_finite_volume, incident_face_frequency_uses_each_axis_actual_speed)
   EXPECT_TRUE(std::isinf(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing)));
 }
 
+TEST(test_nd_finite_volume,
+     largest_axis_face_frequency_is_the_largest_speed_over_the_smallest_width) {
+  // ROM-107: the frequency a step bound c min_a h_a / max_a s_a admits, max_a s_a / min_a h_a,
+  // taken over the same recorded speeds, and refused on the same speeds as the incident sum.
+  const Box<2> cells = make_box<2>({3, 3});
+  HostFaceStorage<2, 1> speeds(cells);
+  speeds.fill(Real(0));
+  const Index<2> cell{1, 1};
+  const std::array<Real, 2> inverse_spacing{Real(32), Real(64)};
+  const auto rule = nd::FaceFrequencyRule::largest_axis;
+  speeds.set(0, Index<2>{1, 1}, 0, Real(0.7));
+  speeds.set(0, Index<2>{2, 1}, 0, Real(0.5));
+  speeds.set(1, Index<2>{1, 1}, 0, Real(0.4));
+  speeds.set(1, Index<2>{1, 2}, 0, Real(0.2));
+  // The largest speed is on the wider axis and the smallest width on the other one.
+  EXPECT_EQ(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing, rule),
+            Real(0.7) * Real(64));
+  speeds.set(1, Index<2>{1, 2}, 0, Real(0.9));
+  EXPECT_EQ(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing, rule),
+            Real(0.9) * Real(64));
+  // The default rule is unchanged: the incident sum of the same speeds.
+  EXPECT_EQ(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing),
+            Real(0.7) * Real(32) + Real(0.9) * Real(64));
+  speeds.set(1, Index<2>{1, 2}, 0, std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_TRUE(
+      std::isinf(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing, rule)));
+  speeds.set(1, Index<2>{1, 2}, 0, Real(-1));
+  EXPECT_TRUE(
+      std::isinf(nd::incident_face_frequency_at(speeds.view(), cell, inverse_spacing, rule)));
+}
+
 TEST(test_nd_finite_volume, inadmissible_states_and_invalid_metric_inputs_fail_closed) {
   EXPECT_THROW((void)nd::IdealGasEuler<3>::prepare(Real(1)), std::invalid_argument);
   EXPECT_THROW((void)nd::ScalarAdvection<2>::prepare(

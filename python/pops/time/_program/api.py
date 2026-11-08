@@ -187,6 +187,9 @@ class Program(
         # Optional bounded AMR cell-local execution authority.  It is explicit, immutable after
         # authoring and serialized into the Program hash; codegen never infers this route from dt.
         self._cell_local_time = None
+        # Optional Regrid(criterion, when) of an adaptive Program (DM13b): the refinement criterion
+        # and the decision to regrid, generated into the compiled Program.
+        self._regrid = None
         # Optional post-reflux AMR phase.  Commits authored inside after_synchronization live here
         # so the main step can still commit the same state exactly once before synchronization.
         self._post_sync_commits = {}
@@ -350,6 +353,28 @@ class Program(
         if type(cadence) is not ProgramCadence:
             raise TypeError("Program carries an invalid cadence contract")
         return cadence
+
+    def regrid(self, regrid: Any) -> Any:
+        """Write the decision to regrid in the Program, once: ``Regrid(criterion, when)`` (DM13b).
+
+        ``criterion`` is an ``AMRTagging`` whose rules are functions of ``cell``; ``when`` is a
+        closed body of the accepted continuation that returns a Bool, such as
+        ``pops.lib.time.every(4)``. Both are generated into the compiled Program, and the adaptive
+        layout of the case then writes neither ``tagging=`` nor ``regrid=``.
+        """
+        from pops.mesh._amr.regrid_decision import Regrid
+
+        self._guard_mutable("set Program regrid")
+        if self._regrid is not None:
+            raise ValueError("Program.regrid may be declared only once")
+        if type(regrid) is not Regrid:
+            raise TypeError("Program.regrid takes a Regrid(criterion, when)")
+        self._regrid = regrid
+        return self
+
+    def regrid_contract(self) -> Any:
+        """Return the authored ``Regrid``, or ``None`` when the adaptive layout decides."""
+        return self._regrid
 
     def cell_local_time(self, *, tick_denominator: Any, rung: Any = 0) -> Any:
         """Select the prepared cell-local AMR execution route.

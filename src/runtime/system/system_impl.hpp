@@ -177,6 +177,9 @@ struct System<Dim>::Impl {
   std::string last_dt_reason_;
   // Invocation-only Courant authority. Zero refuses a path RHS without step_cfl.
   double active_program_step_courant_ = 0.0;
+  // Invocation-only rule of the face frequencies that one block_rhs_group observes; the prepared
+  // group core reads it while that call runs, and it returns to the incident-face sum after.
+  nd::FaceFrequencyRule observed_face_frequency_rule_ = nd::FaceFrequencyRule::incident_sum;
   NewtonReport last_newton_report_{};
   std::string poisson_solver_ = "cartesian_cg";
   bool explicit_default_poisson_requested_ = false;

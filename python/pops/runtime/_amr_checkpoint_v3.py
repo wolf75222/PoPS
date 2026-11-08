@@ -388,6 +388,13 @@ def _prepare_capture_v3(owner, sim, path, regrid_every, persistence):
     from pops.runtime._program_cadence_checkpoint import capture_program_cadence
     from pops.runtime._system_io_history import prepare_history_capture
 
+    decision = getattr(sim, "_generated_regrid_decision_identity", None)
+    if callable(decision) and decision():
+        # A restart replays the regrids of its history ring from the cadence (replay_regrid_steps);
+        # a decision generated into the Program may read the state, so it is not replayable yet.
+        raise NotImplementedError(
+            "an AMR checkpoint of a Program that writes Regrid(criterion, when) is not written "
+            "yet: a restart cannot replay the regrid decisions of its history from the cadence")
     if int(sim.n_blocks()) == 0:
         raise ValueError(
             "AmrSystem.checkpoint: no blocks installed (nothing to checkpoint); bind a compiled "

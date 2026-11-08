@@ -9,7 +9,9 @@ the same Advance without Outputs reaches when it runs to the same frontiers one 
 each ``cell_sum`` is the native sum of b6 over that state. No Python runs during the native call
 (CF9).
 """
+import ctypes
 import math
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -250,3 +252,72 @@ def test_a_run_with_outputs_refuses_a_schedule_the_native_run_cannot_take(artifa
             native._run_advance(0.1, STEP, 10, [(0, [0.05, 0.02], []), (0, [], []),
                                                 (0, [], []), (0, [], [])])
         assert runtime.time() == 0.0 and runtime.macro_step() == 0
+
+
+SCHEDULE_SHIM = r"""
+#include <pops/runtime/program/advance_run.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace program = pops::runtime::program;
+
+// One Output with its step cadence and its times; returns whether it is due after the
+// publication at (time, macro_step) and moves *cursor as run_advance does.
+extern "C" int due(double time, std::int64_t macro_step, std::int64_t every_steps,
+                   const double* at, std::size_t count, std::size_t* cursor) {
+  std::vector<program::AdvanceOutputSchedule> schedule(1);
+  schedule[0].every_steps = every_steps;
+  schedule[0].at.assign(at, at + count);
+  std::vector<std::size_t> cursors{*cursor};
+  const bool result = program::advance_output_due(0, time, macro_step, schedule, cursors);
+  *cursor = cursors[0];
+  return result ? 1 : 0;
+}
+
+extern "C" double next_frontier(double time, double until, const double* at, std::size_t count,
+                                std::size_t cursor) {
+  std::vector<program::AdvanceOutputSchedule> schedule(1);
+  schedule[0].at.assign(at, at + count);
+  return program::advance_next_frontier(time, until, schedule, {cursor});
+}
+"""
+
+
+def test_a_publication_that_passes_several_times_evaluates_its_output_once(native_cxx, tmp_path):
+    """CC14: the rule that ``System::run_advance`` applies after each publication, compiled from
+    its header. Every method of this lot lands on its frontiers, so a run never passes a time of
+    ``at``; a later method whose achieved time is not ``B.time + p.dt`` (T26) can, and its Output
+    is then evaluated once for that publication, with every time it passed behind it."""
+    source, library = tmp_path/"advance_output_schedule.cpp", tmp_path/"advance_output_schedule.so"
+    source.write_text(SCHEDULE_SHIM)
+    compiled = subprocess.run([native_cxx, "-std=c++20", "-O2", "-shared", "-fPIC",
+                               "-I" + str(REPO_ROOT/"include"), str(source), "-o", str(library)],
+                              capture_output=True, text=True, check=False)
+    assert compiled.returncode == 0, compiled.stderr
+    shim = ctypes.CDLL(str(library))
+    shim.due.argtypes = [ctypes.c_double, ctypes.c_int64, ctypes.c_int64,
+                         ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
+                         ctypes.POINTER(ctypes.c_size_t)]
+    shim.due.restype = ctypes.c_int
+    shim.next_frontier.argtypes = [ctypes.c_double, ctypes.c_double,
+                                   ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
+                                   ctypes.c_size_t]
+    shim.next_frontier.restype = ctypes.c_double
+    times = (ctypes.c_double * 3)(0.1, 0.2, 0.3)
+    cursor = ctypes.c_size_t(0)
+
+    def publish(time, macro_step, every=0):
+        return bool(shim.due(time, macro_step, every, times, 3, ctypes.byref(cursor))), cursor.value
+
+    assert shim.next_frontier(0.0, 1.0, times, 3, 0) == 0.1
+    assert publish(0.05, 1) == (False, 0)
+    # One publication at 0.25 passes 0.1 and 0.2: one evaluation, and both times are behind it.
+    assert publish(0.25, 2) == (True, 2)
+    assert shim.next_frontier(0.25, 1.0, times, 3, cursor.value) == 0.3
+    assert publish(0.3, 3) == (True, 3)
+    assert shim.next_frontier(0.3, 1.0, times, 3, cursor.value) == 1.0
+    # every(k) is due on the multiples of k whether or not a time is reached.
+    assert publish(0.4, 4, every=2) == (True, 3) and publish(0.5, 5, every=2) == (False, 3)
+

@@ -25,6 +25,7 @@ api pops/amr/transfer/temporal_interpolation_provider.hpp
 api pops/amr/transfer/transfer_provider.hpp
 api pops/core/foundation/allocator.hpp
 api pops/core/foundation/cold.hpp
+api pops/core/foundation/host_phase_stats.hpp
 api pops/core/foundation/kokkos_env.hpp
 api pops/core/foundation/native_dimension.hpp
 api pops/core/foundation/types.hpp
@@ -167,6 +168,7 @@ api pops/numerics/spatial/nd/conservation_law.hpp
 api pops/numerics/spatial/nd/conservation_laws.hpp
 api pops/numerics/spatial/nd/face_field.hpp
 api pops/numerics/spatial/nd/face_frequency.hpp
+api pops/numerics/spatial/nd/face_frequency_rule.hpp
 api pops/numerics/spatial/nd/finite_volume.hpp
 api pops/numerics/spatial/nd/reconstruction.hpp
 api pops/numerics/spatial/nd/state_conversion.hpp
@@ -241,6 +243,7 @@ api pops/runtime/amr/exact_field_solver_provider.hpp
 sdk-support pops/runtime/amr/component_field_solver_provider.hpp
 sdk-support pops/runtime/amr/field_solver_options.hpp
 abi pops/runtime/amr/generated_refinement_criterion.hpp
+abi pops/runtime/amr/generated_regrid_decision.hpp
 sdk-support pops/runtime/amr/persistent_tagging_state.hpp
 sdk-support pops/runtime/amr/prepared_amr_ghost_fill.hpp
 sdk-support pops/runtime/amr/prepared_clustering_component.hpp

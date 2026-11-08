@@ -21,6 +21,7 @@ from .rk import (
     SSPRK2_TABLEAU,
 )
 from .ssprk import SSPRK2, SSPRK3, SSPRK3_TABLEAU
+from .when import every
 from .strang import Lie, Strang
 
 # Importing submodules installs them as package attributes.  Two historical
@@ -54,4 +55,5 @@ __all__ = [
     "SSPRK3",
     "SSPRK3_TABLEAU",
     "Strang",
+    "every",
 ]

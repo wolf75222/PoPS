@@ -922,20 +922,22 @@ class ProgramContext {
   void neg_div_flux_default_with_faces_into(int program_block, field_type& state_value,
                                             field_type& rhs, int rate_id,
                                             std::vector<nd::FaceField<Dim>>& faces,
-                                            Real* transport_frequency = nullptr) const {
+                                            Real* transport_frequency = nullptr,
+                                            nd::FaceFrequencyRule frequency_rule = {}) const {
     neg_div_flux_default_observed_into_(program_block, state_value, rhs, rate_id, &faces,
-                                        transport_frequency);
+                                        transport_frequency, frequency_rule);
   }
 
   /// The same flux-only residual for a Program that reads only the incident-face frequency of its
   /// exact faces (the stability guard of a riemann.User face): no face carrier is produced.
   void neg_div_flux_default_with_frequency_into(int program_block, field_type& state_value,
                                                 field_type& rhs, int rate_id,
-                                                Real* transport_frequency) const {
+                                                Real* transport_frequency,
+                                                nd::FaceFrequencyRule frequency_rule = {}) const {
     if (transport_frequency == nullptr)
       throw std::invalid_argument("face-frequency residual requires its frequency output");
     neg_div_flux_default_observed_into_(program_block, state_value, rhs, rate_id, nullptr,
-                                        transport_frequency);
+                                        transport_frequency, frequency_rule);
   }
 
   /// A partition guard may be emitted after grouped RHS evaluation, where no
@@ -2758,7 +2760,8 @@ class ProgramContext {
   void neg_div_flux_default_observed_into_(int program_block, field_type& state_value,
                                            field_type& rhs, int rate_id,
                                            std::vector<nd::FaceField<Dim>>* faces,
-                                           Real* transport_frequency) const {
+                                           Real* transport_frequency,
+                                           nd::FaceFrequencyRule frequency_rule) const {
     require_rate_identity_(rate_id);
     count_kernel_();
     const auto point = boundary_evaluation_point(rate_id);
@@ -2772,7 +2775,7 @@ class ProgramContext {
       // FaceField owns Fab values with deep-copy semantics: the retained faces are a detached
       // copy, which later residual evaluations cannot overwrite.
       system_->block_rhs_group(point, {runtime_block}, {&state_value}, {&rhs}, {1}, {faces},
-                               {transport_frequency ? &local_frequency : nullptr});
+                               {transport_frequency ? &local_frequency : nullptr}, frequency_rule);
     } else {
       auto boundary = prepare_block_boundary_session(program_block, state_value, point, lane);
       system_->block_neg_div_flux_into_at_prepared(
@@ -2783,7 +2786,7 @@ class ProgramContext {
         boundary->transport().with_boundary_scratch(state_value, [&](auto& scratch) {
           if (transport_frequency)
             local_frequency = nd::maximum_incident_face_frequency(
-                state_value, scratch.cartesian_operator.face_speeds(), geometry());
+                state_value, scratch.cartesian_operator.face_speeds(), geometry(), frequency_rule);
           if (faces)
             *faces = scratch.generated_faces;
         });

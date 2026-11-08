@@ -194,15 +194,18 @@ def test_jvp_transports_primal_contract_but_tangent_does_not_inherit_it():
 
 
 def test_context_trace_preserves_exact_same_base_path():
+    from pops.codegen.typed_delivery import DeliveryDiagrams
     from pops.ledger_provenance import _context_rows,_same_context_rows
     p=pops.Program('context_same_base_path')
     initial=p.product(q=p.float64(1),time=p.float64(0),step=p.int64(0))
     schema=ContinuationSchema(initial,time=('time',),step=('step',))
     base=p.continuation_open(initial,schema);old=p.continuation_read(base)
     envelope=p.product(continuation=p.product(q=old['q']),increment=p.product())
-    left=_context_rows(envelope,path=('continuation','q'),replacements={},choices=frozenset())
-    right=_context_rows(envelope,path=('continuation','q'),replacements={},choices=frozenset())
-    assert len(left)==1 and len(left[0][1])==1
-    reference=next(iter(left[0][1]))
+    session=DeliveryDiagrams();always=session.always
+    left=_context_rows(session,envelope,path=('continuation','q'),replacements={},choices=always)
+    right=_context_rows(session,envelope,path=('continuation','q'),replacements={},choices=always)
+    assert left.success is always and len(left.references())==1
+    reference=next(iter(left.references()))
     assert reference.value_id==old.id and reference.projection==('q',)
-    assert _same_context_rows(left,right,frozenset())
+    assert left.guard_of(reference) is always
+    assert _same_context_rows(session,left,right,always)
