@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/amr/transfer/transfer_provider.hpp>
+#include <pops/core/foundation/host_phase_stats.hpp>
 #include <pops/core/identity/prepared_provider.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/boundary/halo_exchange.hpp>
@@ -438,10 +439,13 @@ class PreparedAmrGhostFill {
       for (PeerStorage& peer : peers) {
         const std::size_t sends = peer.send == nullptr ? 0 : peer.send->elements;
         const std::size_t receives = peer.receive == nullptr ? 0 : peer.receive->elements;
+        // The parent payload is always staged through pinned host buffers: a reported host phase
+        // of PF2, counted in host_phase_stats() and labelled "pops_host_staging:" (G13 lot 2;
+        // the same-level halos choose their route in HaloExchange).
         peer.device_send = device_buffer_type("pops_amr_parent_device_send", sends);
         peer.device_receive = device_buffer_type("pops_amr_parent_device_receive", receives);
-        peer.host_send = pinned_buffer_type("pops_amr_parent_host_send", sends);
-        peer.host_receive = pinned_buffer_type("pops_amr_parent_host_receive", receives);
+        peer.host_send = pinned_buffer_type("pops_host_staging:amr_parent_send", sends);
+        peer.host_receive = pinned_buffer_type("pops_host_staging:amr_parent_receive", receives);
       }
 #ifdef POPS_HAS_MPI
       receive_requests.resize(coarse_fine->receive_plans().size(), MPI_REQUEST_NULL);
@@ -574,6 +578,7 @@ class PreparedAmrGhostFill {
           if (peer.send != nullptr) {
             pack(peer.send->jobs, peer.device_send);
             Kokkos::deep_copy(peer.host_send, peer.device_send);
+            ::pops::detail::record_staging_to_host(peer.send->elements * sizeof(Real));
           }
         Kokkos::fence();
       } catch (...) {
@@ -693,8 +698,10 @@ class PreparedAmrGhostFill {
       long copy_failure = 0;
       try {
         for (PeerStorage& peer : peers)
-          if (peer.receive != nullptr)
+          if (peer.receive != nullptr) {
             Kokkos::deep_copy(peer.device_receive, peer.host_receive);
+            ::pops::detail::record_staging_from_host(peer.receive->elements * sizeof(Real));
+          }
         Kokkos::fence();
       } catch (...) {
         copy_failure = 1;

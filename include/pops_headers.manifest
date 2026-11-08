@@ -25,6 +25,7 @@ api pops/amr/transfer/temporal_interpolation_provider.hpp
 api pops/amr/transfer/transfer_provider.hpp
 api pops/core/foundation/allocator.hpp
 api pops/core/foundation/cold.hpp
+api pops/core/foundation/host_phase_stats.hpp
 api pops/core/foundation/kokkos_env.hpp
 api pops/core/foundation/native_dimension.hpp
 api pops/core/foundation/types.hpp
@@ -167,6 +168,7 @@ api pops/numerics/spatial/nd/conservation_law.hpp
 api pops/numerics/spatial/nd/conservation_laws.hpp
 api pops/numerics/spatial/nd/face_field.hpp
 api pops/numerics/spatial/nd/face_frequency.hpp
+api pops/numerics/spatial/nd/face_frequency_rule.hpp
 api pops/numerics/spatial/nd/finite_volume.hpp
 api pops/numerics/spatial/nd/reconstruction.hpp
 api pops/numerics/spatial/nd/state_conversion.hpp

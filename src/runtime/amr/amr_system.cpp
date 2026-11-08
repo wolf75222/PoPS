@@ -15578,14 +15578,13 @@ void AmrSystem<Dim>::set_generated_regrid_decision(
         throw std::invalid_argument("AMR generated regrid decision has an invalid field row");
       for (std::size_t read = 0; read < field_variables[field].size(); ++read)
         if (field_variables[field][read].empty() || field_components[field][read] < 0)
-          throw std::invalid_argument(
-              "AMR generated regrid decision has an invalid variable read");
+          throw std::invalid_argument("AMR generated regrid decision has an invalid variable read");
     }
     for (const double value : parameters)
       if (!std::isfinite(value))
         throw std::invalid_argument(
             "AMR generated regrid decision has a non-finite bound parameter");
-    candidate = {identity,         field_identities, field_blocks, field_variables,
+    candidate = {identity,         field_identities, field_blocks,   field_variables,
                  field_components, parameters,       indicator_count};
     ExactContractBuilder exact;
     exact.text("pops.amr-system.generated-regrid-decision-authoring")
@@ -21984,8 +21983,7 @@ void AmrSystem<Dim>::complete_program_step_() {
     return;
   // A decision generated into the Program (DM13b) replaces the cadence: it reads the accepted
   // continuation after the step and returns whether the hierarchy regrids now.
-  if (p_->regrid_decision_spec &&
-      !p_->decide_generated_regrid(p_->require_package_assembly_lane()))
+  if (p_->regrid_decision_spec && !p_->decide_generated_regrid(p_->require_package_assembly_lane()))
     return;
   const auto history_sources = p_->prepare_history_hierarchy_images();
   // Freeze every block endpoint before a parent replacement truncates its descendants.
@@ -23403,8 +23401,9 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
     generated_regrid_decision.indicator =
         reinterpret_cast<runtime::amr::GeneratedIndicatorEntry<Dim>>(
             pops::dynlib::sym(handle, runtime::amr::kGeneratedIndicatorEntrySymbol));
-    generated_regrid_decision.decision = reinterpret_cast<runtime::amr::GeneratedRegridDecisionEntry>(
-        pops::dynlib::sym(handle, runtime::amr::kGeneratedRegridDecisionEntrySymbol));
+    generated_regrid_decision.decision =
+        reinterpret_cast<runtime::amr::GeneratedRegridDecisionEntry>(
+            pops::dynlib::sym(handle, runtime::amr::kGeneratedRegridDecisionEntrySymbol));
     const bool any_decision_symbol = decision_identity != nullptr ||
                                      generated_regrid_decision.indicator != nullptr ||
                                      generated_regrid_decision.decision != nullptr;
@@ -23423,7 +23422,8 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
     }
     const bool expects_decision = p_->regrid_decision_spec.has_value();
     if (expects_decision != any_decision_symbol ||
-        (expects_decision && p_->regrid_decision_spec->identity != generated_regrid_decision.identity))
+        (expects_decision &&
+         p_->regrid_decision_spec->identity != generated_regrid_decision.identity))
       throw std::runtime_error(
           "AmrSystem::install_program: the regrid decision of the compiled Program differs from "
           "the installed AMR regrid authority");

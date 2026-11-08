@@ -615,8 +615,8 @@ class RegionTransport {
       const std::size_t receives = peer.receive == nullptr ? 0 : peer.receive->elements;
       peer.device_send = device_buffer_type("pops_region_transfer_device_send", sends);
       peer.device_receive = device_buffer_type("pops_region_transfer_device_receive", receives);
-      peer.host_send = pinned_buffer_type("pops_region_transfer_host_send", sends);
-      peer.host_receive = pinned_buffer_type("pops_region_transfer_host_receive", receives);
+      peer.host_send = pinned_buffer_type("pops_host_staging:region_transfer_send", sends);
+      peer.host_receive = pinned_buffer_type("pops_host_staging:region_transfer_receive", receives);
     }
 #ifdef POPS_HAS_MPI
     storage->receive_requests.resize(classification.receive.size(), MPI_REQUEST_NULL);

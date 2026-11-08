@@ -4,7 +4,11 @@
 /// Two strategies depending on the build:
 ///   - Kokkos (POPS_HAS_KOKKOS): `ManagedAllocator<T>` backed by `ManagedArena` (a pool of
 ///     blocks in Kokkos::SharedSpace unified memory). std::vector<T, ManagedAllocator<T>>
-///     keeps value semantics (deep copy into a new managed allocation).
+///     keeps value semantics (deep copy into a new managed allocation). Mesh arrays (`Fab`) do not
+///     use it: they are Kokkos views in the memory space of the target. The arena blocks carry the
+///     Kokkos label "pops_unified:arena" and the pinned communication blocks
+///     "pops_host_staging:comm", so a residency probe lists the unified memory alive in a step
+///     (the page-migration condition of DM8) and the host staging it moves (PF2).
 ///   - Pure CPU: `std::allocator<T>` -- byte-identical to the old behavior.
 ///
 /// `fab_allocator<T>` is the canonical alias to use; do not instantiate ManagedAllocator
@@ -168,7 +172,7 @@ class ManagedArena {
         return p;
     }
     void* p =
-        Kokkos::kokkos_malloc<Kokkos::SharedSpace>("pops_fab", bytes);  // portable unified memory
+        Kokkos::kokkos_malloc<Kokkos::SharedSpace>("pops_unified:arena", bytes);  // unified memory
     if (!p)
       throw std::bad_alloc();
     ++misses_;
@@ -294,7 +298,8 @@ struct PinnedAllocator {
     if (n == 0)
       return nullptr;
     detail::ensure_kokkos_initialized();  // kokkos_malloc requires Kokkos initialized
-    void* p = Kokkos::kokkos_malloc<Kokkos::SharedHostPinnedSpace>("pops_comm", n * sizeof(T));
+    void* p = Kokkos::kokkos_malloc<Kokkos::SharedHostPinnedSpace>("pops_host_staging:comm",
+                                                                   n * sizeof(T));
     if (!p)
       throw std::bad_alloc();
     detail::record_communication_allocation(n * sizeof(T));

@@ -15,7 +15,7 @@ from pops.numerics import (DiscretizationPlan, PathConservativeFiniteVolume,
     SymbolicPath, reconstruction, riemann, variables)
 from pops.time import FixedDt, FailRun
 from .common import CaseSpec, MissingCapabilityError, state_array, non_owner_metrics
-from .models_M01_M14 import _domain, _initial, _fv, _ssprk2, _traced_ssprk2
+from .models_M01_M14 import _domain, _initial, _fv, _traced_ssprk2, stencil_rate
 
 
 LIMITS = {
@@ -212,7 +212,7 @@ def build_m23(cells=(32,4), *, hall=.1, ohmic=0., dt=None, steps=8):
     dt=maximum_dt if dt is None else float(dt)
     if not 0<dt<=maximum_dt or type(steps) is not int or steps<1:
         raise ValueError("Hall reception requires a positive stable step and positive step count")
-    _ssprk2(case,block,u,lambda p,q,point,label:p.stencil_flux_divergence("MHD_"+label,q,flux=flux),dt,name="M23_SSPRK2")
+    _traced_ssprk2(case,block,u,stencil_rate("MHD_",flux),dt,name="M23_SSPRK2")
     x,y=np.meshgrid((np.arange(cells[0])+.5)/cells[0],(np.arange(cells[1])+.5)/cells[1])
     k=2*np.pi;dx=1/cells[0];kd=np.sin(k*dx)/dx;kh2=4*np.sin(k*dx/2)**2/dx**2
     omega=.5*(hall*kh2+np.sqrt((hall*kh2)**2+4*kd**2))

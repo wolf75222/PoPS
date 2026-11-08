@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pops/core/foundation/host_phase_stats.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/index/box.hpp>
@@ -29,7 +30,9 @@ struct FabScalarFill {
 }  // namespace detail
 
 /// Component-slowest field storage.  Host access is explicit through a Kokkos host mirror so a
-/// device-only MemorySpace is never presented as directly host-accessible.
+/// device-only MemorySpace is never presented as directly host-accessible.  The storage carries the
+/// Kokkos label prefix "pops_mesh_array:" and each whole-Fab mirror copy is counted in
+/// `host_phase_stats()`, so a residency probe sees any mesh array byte that reaches the host (DM8).
 template <int Dim, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
 class Fab {
  public:
@@ -74,7 +77,7 @@ class Fab {
     if (size_ == 0)
       return;
     detail::ensure_kokkos_initialized();
-    data_ = storage_type("pops_fab", size_);
+    data_ = storage_type("pops_mesh_array:fab", size_);
     Kokkos::deep_copy(data_, Real{0});
   }
 
@@ -90,7 +93,7 @@ class Fab {
     if (size_ == 0)
       return;
     detail::ensure_kokkos_initialized();
-    data_ = storage_type("pops_fab_copy", size_);
+    data_ = storage_type("pops_mesh_array:fab_copy", size_);
     Kokkos::deep_copy(data_, other.data_);
   }
 
@@ -152,13 +155,17 @@ class Fab {
   }
   void copy_to_host(const host_mirror_type& host) const {
     validate_mirror(host);
-    if (size_ != 0)
+    if (size_ != 0) {
       Kokkos::deep_copy(host.values_, data_);
+      detail::record_mesh_to_host(size_ * sizeof(Real));
+    }
   }
   void copy_from_host(const host_mirror_type& host) {
     validate_mirror(host);
-    if (size_ != 0)
+    if (size_ != 0) {
       Kokkos::deep_copy(data_, host.values_);
+      detail::record_mesh_from_host(size_ * sizeof(Real));
+    }
   }
   void set_val(Real value) {
     if (size_ == 0)

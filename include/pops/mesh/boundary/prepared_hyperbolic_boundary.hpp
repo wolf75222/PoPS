@@ -1692,12 +1692,12 @@ class PreparedHyperbolicBoundary {
                   fixed.begin() + static_cast<std::ptrdiff_t>(ordinal * components));
     }
     detail::ensure_kokkos_initialized();
-    device_transforms_ =
-        Kokkos::View<Transform*, Kokkos::SharedSpace>("pops_nd_boundary_transforms", components);
-    device_fixed_values_ =
-        Kokkos::View<Real*, Kokkos::SharedSpace>("pops_nd_boundary_fixed_values", fixed.size());
+    device_transforms_ = Kokkos::View<Transform*, Kokkos::SharedSpace>(
+        "pops_unified:nd_boundary_transforms", components);
+    device_fixed_values_ = Kokkos::View<Real*, Kokkos::SharedSpace>(
+        "pops_unified:nd_boundary_fixed_values", fixed.size());
     device_analytic_programs_ = Kokkos::View<analytic::AnalyticProgramView*, Kokkos::SharedSpace>(
-        "pops_nd_boundary_analytic_programs", fixed.size());
+        "pops_unified:nd_boundary_analytic_programs", fixed.size());
     auto host_programs = Kokkos::create_mirror_view(device_analytic_programs_);
     for (int ordinal = 0; ordinal < 2 * Dim; ++ordinal)
       for (std::size_t component = 0; component < components; ++component) {

@@ -313,11 +313,6 @@ def _projection(value,base,path=(),active=None):
     finally:active.remove(key)
 
 
-def _compatible(left,right):
-    choices=left|right
-    return not any((key,not arm) in choices for key,arm in choices)
-
-
 _TRANSPORT=frozenset(('bundle_validate','bundle_remap_validate','product','product_get','branch','result_match','where','region_argument',
     'variant_construct','variant_payload','variant_require_success','variant_unreachable',
     'result_ok','result_error','result_success','result_payload','iteration_success','iteration_payload',
@@ -335,13 +330,16 @@ def _leaf_paths(signature, path=()):
     else:yield path
 
 
-def _validate_packet_delivery(envelope, values):
+def _validate_packet_delivery(envelope, values, session=None):
     """A packed ledger can be transported/reconstructed, never silently reinterpreted.
 
     Check every retained coordinate against the original packed coordinate. Merely
     using an old packet in a new expression is not an application certificate.
+    Returns (condition, packet references) pairs: the condition is a diagram of
+    ``session`` under which the packet is delivered (MG7).
     """
-    from pops.codegen.typed_delivery import DeliveryReference,delivered_frontiers,require_identified
+    from pops.codegen.typed_delivery import DeliveryDiagrams,DeliveryReference,require_identified
+    session=DeliveryDiagrams() if session is None else session
     signature=dict(value_signature(envelope)['members'])['increment']
     def is_ledger(v):return v.op==OP and v.attrs.get('contract_kind')=='inventory_ledger'
     def terminal(v):return is_ledger(v) or v.op=='continuation_consume_increment' or (v.op not in _TRANSPORT and v.op!=OP)
@@ -368,41 +366,50 @@ def _validate_packet_delivery(envelope, values):
         active.remove(node.id);reachable[node.id]=found
         return found
     if not has_packet(envelope):return ()
+    # (packet, invocation, prefix) -> {projection: condition}: the coordinates of a packet
+    # retained under each condition, from every leaf output path.
     obligations={}
-    ledger_rows=set()
+    ledger_rows={}
     for output_path in _leaf_paths(signature):
-        rows=delivered_frontiers(envelope,terminal,path=('increment',*output_path),
-                                 with_choices=True,with_projection=True)
-        for choices,frontier in rows:
-            for reference in frontier:
-                node=values[reference.value_id]
-                if not is_ledger(node):
-                    if node.op=='continuation_consume_increment':continue
-                    if not has_packet(node):continue
-                    ancestry=delivered_frontiers(node,lambda v:is_ledger(v) or v.op=='continuation_consume_increment')
-                    if any(any(is_ledger(values[r.value_id]) for r in row) for row in ancestry):
-                        raise ValueError('declared ledger packet was numerically modified or stripped')
-                    continue
-                require_identified((reference,),'declared ledger packet')
-                ledger_rows.add((choices,DeliveryReference(reference.value_id,reference.invocation)))
-                projection=reference.projection
-                if len(output_path)<len(projection) or (projection and output_path[-len(projection):]!=projection):
-                    raise ValueError('declared ledger packet lost its exact coordinate names/path')
-                prefix=output_path[:-len(projection)] if projection else output_path
-                key=(reference.value_id,reference.invocation,prefix,choices)
-                obligations.setdefault(key,set()).add(projection)
-    # A packet cannot be shortened to one contribution/interval and keep the claim.
-    for (node_id,invocation,prefix,choices),seen in obligations.items():
+        frontier=session.frontier(envelope,terminal,path=('increment',*output_path),with_projection=True)
+        for reference in sorted(frontier.references(),key=repr):
+            node=values[reference.value_id]
+            if not is_ledger(node):
+                if node.op=='continuation_consume_increment':continue
+                if not has_packet(node):continue
+                ancestry=session.frontier(node,lambda v:is_ledger(v) or v.op=='continuation_consume_increment')
+                if any(is_ledger(values[r.value_id]) for r in ancestry.references()):
+                    raise ValueError('declared ledger packet was numerically modified or stripped')
+                continue
+            require_identified((reference,),'declared ledger packet')
+            choices=frontier.guard_of(reference)
+            packet=DeliveryReference(reference.value_id,reference.invocation)
+            ledger_rows[packet]=session.either(ledger_rows.get(packet,session.never),choices)
+            projection=reference.projection
+            if len(output_path)<len(projection) or (projection and output_path[-len(projection):]!=projection):
+                raise ValueError('declared ledger packet lost its exact coordinate names/path')
+            prefix=output_path[:-len(projection)] if projection else output_path
+            seen=obligations.setdefault((reference.value_id,reference.invocation,prefix),{})
+            seen[projection]=session.either(seen.get(projection,session.never),choices)
+    # A packet cannot be shortened to one contribution/interval and keep the claim: wherever
+    # one coordinate of it is retained, every coordinate is.
+    for (node_id,invocation,prefix),seen in obligations.items():
         expected=set(_leaf_paths(value_signature(values[node_id])))
-        if seen!=expected:raise ValueError('declared ledger packet has incomplete retained coordinates')
-    return tuple((choices,frozenset((reference,))) for choices,reference in ledger_rows)
+        anywhere=session.never
+        for choices in seen.values():anywhere=session.either(anywhere,choices)
+        if set(seen)!=expected or any(choices is not anywhere for choices in seen.values()):
+            raise ValueError('declared ledger packet has incomplete retained coordinates')
+    return tuple((choices,frozenset((reference,))) for reference,choices in ledger_rows.items())
 
 
 def _is_exact_transport(value, target):
-    from pops.codegen.typed_delivery import delivered_count, delivered_frontiers
+    from pops.codegen.typed_delivery import DeliveryDiagrams
     def stop(node):return node is target or (node.op not in _TRANSPORT and node.op!=OP)
-    rows=delivered_frontiers(value,stop)
-    return bool(rows) and all(delivered_count(row)==1 and next(iter(row)).value_id==target.id for row in rows)
+    session=DeliveryDiagrams()
+    delivered=session.single(value,stop)
+    found,counts=delivered.outcomes()
+    return (delivered.success is not session.never and not counts and
+            all(reference.value_id==target.id for reference in found))
 
 
 def _identity_action(action):
@@ -426,48 +433,54 @@ def _recipient_ledger(ledger, recipient, *, omit=()):
                 deliveries=tuple(dict(d,contribution=positions[d['contribution']]) for d in deliveries))
 
 
-def _context_rows(envelope, *, path, replacements, choices):
-    """Follow explicit contract refs in their owner's actual region/loop frame."""
-    from pops.codegen.typed_delivery import delivered_frontiers, require_identified
+def _context_query(session, envelope, path, replacements, *, counted=False):
+    """The frontier of ``path`` with each replaced value expanded, in its owner's region/loop frame.
+
+    Other complete ledger packets in a Product are independent obligations, not data
+    dependencies of the specific contract reference expanded here: the frontier leaves them out.
+    ``counted`` gives the counted frontier (one evaluation or a count) instead of the exact one.
+    """
     def terminal(value):return value.op in (OP,'continuation_read') or value.op not in _TRANSPORT
     def expand(value, projection):
         item=replacements.get(value.id)
         return None if item is None else (item,())
     values={v.id:envelope.prog._canonical_value(v) for v in envelope.prog._issued_values.values()}
-    rows=delivered_frontiers(envelope,terminal,path=path,with_choices=True,with_projection=True,expand_match=expand)
-    # Other complete ledger packets in a Product are independent obligations.
-    # They are not data dependencies of the specific contract reference expanded here.
-    return [(c,frozenset(r for r in require_identified(refs,'inventory contract reference') if not (
-             values[r.value_id].op==OP and values[r.value_id].attrs.get('contract_kind')=='inventory_ledger')))
-            for c,refs in rows if _compatible(choices,c)]
+    def keep(value_id):
+        value=values[value_id]
+        return not (value.op==OP and value.attrs.get('contract_kind')=='inventory_ledger')
+    query=session.single if counted else session.frontier
+    return query(envelope,terminal,path=path,with_projection=True,expand_match=expand,keep=keep)
 
 
-def _same_context_rows(left,right,choices):
-    if bool(left)!=bool(right):return False
-    for lc,lr in left:
-        compatible=[rr for rc,rr in right if _compatible(choices|lc,rc)]
-        if not compatible or any(lr!=rr for rr in compatible):return False
-    return all(any(_compatible(choices|rc,lc) for lc,lr in left) for rc,rr in right)
+def _context_rows(session, envelope, *, path, replacements, choices):
+    """Follow explicit contract refs in their owner's actual region/loop frame, under ``choices``."""
+    return _context_query(session,envelope,path,replacements).require_identified(
+        choices,'inventory contract reference')
 
 
-def _conversion_obligation(applied, binding, ledger, recipient, base, path, *, envelope, pack, choices):
+def _same_context_rows(session, left, right, choices):
+    return session.same(choices,left,right) is None
+
+
+def _conversion_obligation(applied, binding, ledger, recipient, base, path, *, envelope, pack, choices, session):
     from pops.inventory_decode import validate_inventory_conversion
     data=validate_inventory_conversion(applied)
     if binding is None or binding['conversion'] is None:
         raise ValueError('retained conversion differs from its exact explicit inventory binding')
-    retained_rows=_context_rows(envelope,path=('continuation',*path),replacements={},choices=choices)
-    binding_rows=_context_rows(envelope,path=('increment',),
-        replacements={pack.id:binding['conversion']},choices=choices)
-    if not _same_context_rows(binding_rows,retained_rows,choices):
+    def context(path, replacements):
+        return _context_rows(session,envelope,path=path,replacements=replacements,choices=choices)
+    retained_rows=context(('continuation',*path),{})
+    binding_rows=context(('increment',),{pack.id:binding['conversion']})
+    if not _same_context_rows(session,binding_rows,retained_rows,choices):
         raise ValueError('inventory conversion binding belongs to another native invocation')
     if data['recipient'] is not recipient or _projection(data['base_value'],base)!=path:
         raise ValueError('inventory conversion targets another base value or continuation path')
-    application_rows=_context_rows(envelope,path=('continuation',*path),
-        replacements={applied.id:data['application']},choices=choices)
-    applications=[refs for selected,refs in application_rows]
-    if not applications or any(len(row)!=1 for row in applications):
+    application_rows=context(('continuation',*path),{applied.id:data['application']})
+    applications=application_rows.references(choices)
+    counted=_context_query(session,envelope,('continuation',*path),{applied.id:data['application']},counted=True)
+    if not session.meets(choices,application_rows.success) or counted.outcomes(choices)[1]:
         raise ValueError('inventory conversion lacks one exact original application')
-    application_ids={next(iter(row)).value_id for row in applications}
+    application_ids={row.value_id for row in applications}
     if len(application_ids)!=1:raise ValueError('inventory conversion original application is ambiguous')
     values={v.id:applied.prog._canonical_value(v) for v in applied.prog._issued_values.values()}
     original=values[next(iter(application_ids))]
@@ -477,11 +490,9 @@ def _conversion_obligation(applied, binding, ledger, recipient, base, path, *, e
     original_contract=original.attrs['contract']
     if original_contract['recipient'] is not recipient:
         raise ValueError('inventory conversion original application belongs to another recipient')
-    defect_rows=_context_rows(envelope,path=('continuation',*path),
-        replacements={applied.id:data['defect']},choices=choices)
+    defect_rows=context(('continuation',*path),{applied.id:data['defect']})
     indices=[i for i,c in enumerate(ledger['contributions']) if _same_context_rows(
-        _context_rows(envelope,path=('increment',),replacements={pack.id:c['value']},choices=choices),
-        defect_rows,choices)]
+        session,context(('increment',),{pack.id:c['value']}),defect_rows,choices)]
     if len(indices)!=1:raise ValueError('conversion defect must be declared exactly once in final ledger')
     index=indices[0];defect=ledger['contributions'][index]
     if defect['kind']!='defect':raise ValueError('conversion residual requires an explicit defect contribution')
@@ -500,20 +511,19 @@ def _conversion_obligation(applied, binding, ledger, recipient, base, path, *, e
     # Equal static producer IDs alone cannot certify a carried previous iteration.
     # Compare every live parameter of the two declared ledgers in its actual owner frame.
     for prior,current in zip(_refs(original_recipient),_refs(stripped)):
-        prior_rows=_context_rows(envelope,path=('continuation',*path),
-            replacements={applied.id:data['application'],original.id:prior},choices=choices)
-        current_rows=_context_rows(envelope,path=('increment',),
-            replacements={pack.id:current},choices=choices)
-        if not _same_context_rows(prior_rows,current_rows,choices):
+        prior_rows=context(('continuation',*path),{applied.id:data['application'],original.id:prior})
+        current_rows=context(('increment',),{pack.id:current})
+        if not _same_context_rows(session,prior_rows,current_rows,choices):
             raise ValueError('conversion original application and final ledger use different native inputs')
 
 def validate_candidate(candidate):
     """Require each declared ledger's application at its exact retained recipient path."""
-    from pops.codegen.typed_delivery import delivered_count, delivered_frontiers, require_identified
+    from pops.codegen.typed_delivery import DeliveryDiagrams, require_identified
     if candidate.op!='continuation_freeze':raise TypeError('candidate validation requires its exact freeze')
     base,proposal,envelope=candidate.inputs
     values={v.id:candidate.prog._canonical_value(v) for v in candidate.prog._issued_values.values()}
-    rows=_validate_packet_delivery(envelope, values)
+    session=DeliveryDiagrams()
+    rows=_validate_packet_delivery(envelope, values, session)
     count=0
     for choices,refs in rows:
         for reference in refs:
@@ -531,12 +541,13 @@ def validate_candidate(candidate):
                     raise ValueError('ledger binding does not target its exact candidate base recipient')
                 def terminal(v):
                     return v.op==OP or (v.op not in _TRANSPORT and v.vtype not in ('bool','int64'))
-                deliveries=delivered_frontiers(envelope,terminal,path=('continuation',*path),with_choices=True)
-                applicable=[(c,r) for c,r in deliveries if _compatible(choices,c)]
-                if not applicable:raise ValueError('ledger recipient has no retained successful value')
-                for selected,frontier in applicable:
-                    if delivered_count(frontier)!=1:raise ValueError('retained inventory has no unique terminal application proof')
-                    applied_ref=next(iter(frontier));applied=values[applied_ref.value_id]
+                deliveries=session.single(envelope,terminal,path=('continuation',*path))
+                if not session.meets(choices,deliveries.success):
+                    raise ValueError('ledger recipient has no retained successful value')
+                applicable,counts=deliveries.outcomes(choices)
+                if counts:raise ValueError('retained inventory has no unique terminal application proof')
+                for applied_ref,selected in applicable.items():
+                    applied=values[applied_ref.value_id]
                     require_identified((applied_ref,reference),'ledger/application invocation')
                     if applied.op!=OP:raise ValueError('retained inventory is not the declared ledger application')
                     validate_contract_operation(applied.inputs,applied.attrs,value_signature(applied))
@@ -544,7 +555,7 @@ def validate_candidate(candidate):
                         raise ValueError('ledger/application belong to different native loop invocations')
                     if applied.attrs['contract_kind']=='inventory_conversion':
                         _conversion_obligation(applied,binding,ledger,recipient,base,path,
-                            envelope=envelope,pack=pack,choices=choices|selected)
+                            envelope=envelope,pack=pack,choices=selected,session=session)
                         continue
                     if applied.attrs['contract_kind']!='inventory_application':
                         raise ValueError('retained inventory does not carry an application contract')
@@ -553,7 +564,7 @@ def validate_candidate(candidate):
                         raise ValueError('retained inventory uses a different ledger version or recipient')
                 count+=1
     from pops.current_dependencies import validate_current_dependencies
-    dependencies = validate_current_dependencies(candidate)
+    dependencies = validate_current_dependencies(candidate, session)
     return dict(current_dependencies=dependencies,status='bound_ledger' if count else 'uncertified_user_product',recipient_obligations=count,
                 property='exact_application_provenance_not_numerical_equivalence')
 

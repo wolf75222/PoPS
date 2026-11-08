@@ -101,3 +101,46 @@ paths = [
   "python/pops/numerics/riemann/user.py",
   "python/pops/numerics/spatial.py",
 ]
+
+[[mechanism]]
+id = "face-frequency-rule-of-the-step-strategy"
+issue = "ROM-107"
+rule = "IR26"
+pre_freeze = true
+what = """
+The frequency that the stability guard of a riemann.User face reads from the face speeds that its
+evaluation recorded has a rule, named by the step strategy of the Program
+(StepStrategy.face_frequency_rule) and passed to the observing residual by the generated Program:
+incident_sum, sum_a s_a / h_a, the default and the only rule before, or largest_axis,
+max_a s_a / min_a h_a, the rule by which a step bound of the form c min_a h_a / max_a s_a (2.6.9)
+admits its own step. The prepared group transport and the standalone observation reduce the same
+recorded speeds by either rule, in the traversal that already validates the residual; the core
+names neither strategy. The combined transport-diffusion certificate and every Program without
+such a strategy keep the incident sum and the code they had."""
+structures = [
+  { case = "M01", builder = "build_m01", structure = "2-D linear scalar transport, one component" },
+  { case = "M03", builder = "build_m03", structure = "2-D stiffened-gas Euler, four components, nonlinear waves" },
+]
+measurement = """
+benchmarks/n3/rom107_adaptive_faces.py (16 x 8 cells, the builders' two SSPRK2 stages under
+AdaptiveCFL(cfl=0.45) to 200 builder steps; gcc 13, Kokkos 4.4.1 Serial, one cloud container).
+With the incident sum (the guard of the base), the Python rusanov face is refused at its first
+attempt on both structures (reason 503, user_face_numerical_stability) while the native face takes
+16 steps on M01 and 15 on M03. With the strategy's rule, the Python face takes the same 16 and 15
+steps to the same clock, final states bitwise equal (L1 = Linf = 0). Master's scalar-advection
+tutorial 02 as written (64 x 64, MUSCL(VanLeer), inflow and outflow): upwind(speed=) takes the
+native ScalarUpwind's steps, Linf 7.9e-15
+(tests/python/integration/runtime/test_lib_face_body_swap_native.py)."""
+refusal_set = "removed: the first-step refusal of a riemann.User face under AdaptiveCFL where the face speeds equal the proposal's; unchanged under every other strategy and for the combined transport-diffusion certificate"
+paths = [
+  "include/pops/numerics/spatial/nd/face_frequency.hpp",
+  "include/pops/numerics/spatial/nd/face_frequency_rule.hpp",
+  "include/pops/runtime/program/amr_program_context_diffusion.inc",
+  "include/pops/runtime/program/program_context.hpp",
+  "include/pops/runtime/system.hpp",
+  "python/pops/codegen/program_emit_ops.py",
+  "python/pops/codegen/program_partition_stability.py",
+  "python/pops/time/_step/strategy.py",
+  "src/runtime/system/system_impl.hpp",
+  "src/runtime/system/system_program.cpp",
+]

@@ -1460,6 +1460,10 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
             ("mprk22_zero_circulation", ["test_native_mprk22_network[0.0-False]"]),
             ("mprk22_empty_circulating", ["test_native_mprk22_network[1.5-True]"]),
         )),
+        "test_api_v02_gyrokinetic_nd_mpi2.py": ("test_api_v02_gyrokinetic_nd.py", (
+            ("linear_polarization", ["test_native_full_f_3x2v[False]"]),
+            ("nonlinear_polarization", ["test_native_full_f_3x2v[True]"]),
+        )),
         "test_api_v02_implicit_derivatives_mpi2.py": ("test_api_v02_implicit_derivatives_native.py", (
             ("derivatives_base_gauge", [implicit % mode for mode in ("jvp", "vjp", "bad_base", "bad_gauge")]),
             ("tangent_constraints_budget", [implicit % mode for mode in (

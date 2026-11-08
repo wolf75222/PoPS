@@ -236,11 +236,17 @@ siblings in the same run (0.66 to 1.16) and by its local np2 to one-rank ratio w
 | `spatial_interaction` (worlds) | 8 | 1.58 to 1.90 | 3 | 405 s (48%) |
 | `amr_profile`, tag selection (worlds) | 8 | MPI2 launch 828 s | 2 | about 414 s (49%) |
 | `amr_profile`, stationary regrids (worlds) | 5 | MPI2 launch 761 s | 2 | 464 s (55%) |
+| `gyrokinetic_nd` (ranked) | 2 | about 1.1 to 1.2 (compile-bound, like the Hall twin of PR #724) | 2 | 470 s serial on a 4-core container, at most about 790 s (66%) |
 
-Partitioning cannot fix a single case that costs more than its budget: `gyrokinetic_nd` (two
-cases, 1547 and 1866 seconds serial), `v14_decision_assess_nested_reject` (one case, 1340 seconds
-serial) and the depth-160 case of `finite_structural_depth_native` need their cost reduced, and so
-does `mprk22_network[1.5-True]` if R exceeds about 1.2. These predictions are scheduling estimates;
+Partitioning cannot fix a single case that costs more than its budget:
+`v14_decision_assess_nested_reject` (one case, 1340 seconds serial) and the depth-160 case of
+`finite_structural_depth_native` need their cost reduced, and so does `mprk22_network[1.5-True]`
+if R exceeds about 1.2. `gyrokinetic_nd` was in that list (two cases, 1547 and 1866 seconds
+serial): each case compiled one generated `problem.cpp` of 20.9 MB, which on a 4-core 15 GiB
+container ran 842 seconds before the compiler was killed at 13.3 GiB. With the smaller generated
+Programs of PR #724 (B03 F7), each case passes there in 460 and 470 seconds serial, with a 4.2 GiB
+compiler peak. Runners take 0.89 to 1.40 times that container's time, so one launch for both
+cases could still reach about 1580 seconds; one partition per case stays near 790 seconds. These predictions are scheduling estimates;
 the matrix receipts of the partitioned groups decide.
 
 The `collective-field-protocols` policy covers the elliptic `interface`, `linear`, and `amr`
