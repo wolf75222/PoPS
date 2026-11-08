@@ -1,0 +1,3 @@
+# DM-T1 (spec 0.3 section 10, N10 ROM-85): profiles whose generated C++ a pull request changes on
+# purpose. Add one profile id per line in the pull request that changes them; the DM-T1 job reads
+# only the lines that the pull request adds, so old lines declare nothing.
