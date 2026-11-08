@@ -33,6 +33,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   mesh storage, host staging buffers and unified-memory blocks carry the Kokkos labels
   `pops_mesh_array:`, `pops_host_staging:` and `pops_unified:`, which the DM8 residency probe of
   the tests reads per step.
+- ROM-98 (N15, lot 1): level 1 of the user surface of spec 0.3 (section 2.6), as
+  `import pops.surface as pops` until the cut-over of section 21.7. A case states its model
+  (`pops.Box`, `pops.Model`, `model.quantity`, `model.flux`, `model.diffusive_flux`,
+  `model.balance`), its numerics (`pops.Numerics(represent=, schemes=)`) and its program
+  (`pops.Advance`, `pops.Program`, `pops.Case`); building the case traces it into the b6 model,
+  plan and case and the traced methods of N8 (#718), and `pops.inspect(case)` validates and
+  resolves it and reports each choice as stated, derived or default (SU12). The library words
+  `upwind`, `rusanov`, `hll` and `two_point` (`pops.lib.numerics.schemes`) and `forward_euler`,
+  `ssprk2`, `ssprk3` and `rk4` (`pops.lib.time.methods`, `@pops.method`) are written with the
+  surface. The refusals of SU3 to SU14 name the user's file and line, the rule and the construct
+  to write (SU-T2); the L1 case of section 17.1 gives the program IR, the artifact without its
+  provenance, the semantic identity and the C++ of the same case written for b6 and N8 (SU-T3);
+  `scripts/surface_lint.py` lints the gallery of `examples/surface/gallery` and the library
+  (SU-T1). Decisions: SD86 to SD95 of the adjudication of the surface. At level 1 a box is
+  periodic, a rank 2 or 3 case has diffusive fluxes only, and a term of a balance weighs 1 or
+  -1; a weight or a duration of SU10 that is an expression of `pops.math` waits for open point
+  16. `pops` and `pops.math` export their word lists and nothing else (SU13).
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
   SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`

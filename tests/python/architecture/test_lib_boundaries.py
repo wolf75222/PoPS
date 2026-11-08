@@ -63,6 +63,7 @@ _ALLOWED_POPS_IMPORT_ROOTS = (
     "pops.descriptors",
     "pops.params",
     "pops.regions",  # the typed index maps of IR9 (spec 0.3 SU15), their one public home
+    "pops.surface",  # the user surface (spec 0.3 2.6) with which the library writes its words (A4)
     "pops.lib",  # intra-lib composition
 )
 
