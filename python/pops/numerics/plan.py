@@ -34,25 +34,13 @@ class UnsupportedBalanceRealizationError(BlockageValueError):
         )
 
 
-def _occurrence_text(occurrence: Any) -> str:
-    """An occurrence of a balance as a refusal names it: what it is and the line that wrote it."""
-    payload = occurrence.payload
-    name = getattr(payload, "name", None) or getattr(payload, "local_id", None) or repr(payload)
-    text = "%s[%d] %s %s x%s" % (occurrence.balance.local_id, occurrence.ordinal, occurrence.kind,
-                                 name, occurrence.coefficient)
-    if occurrence.written is not None:
-        text += " (inline, written x%s)" % (occurrence.written,)
-    origin = occurrence.origin
-    return text if origin is None else "%s, written at %s:%d" % (text, origin.file, origin.line)
-
-
 def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states: Any) -> None:
     """Cover each chosen equation exactly once, through the whole rate or partitions.
 
     An occurrence covered twice or not at all is refused with ``CoverageNotExact`` (D5), which
     names each such term and the Python line that wrote it into its balance.
     """
-    from pops._ir.refusals import CoverageNotExact
+    from pops.model.balance_analysis import CoverageNotExact, occurrence_text
     contracts = model._rate_contracts
     state_set = None if states is None else set(states)
     expected = model.selected_rate_contracts(states=states)
@@ -84,7 +72,7 @@ def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states
                     "DiscretizationPlan duplicate physical balance occurrence %r[%d] "
                     "in numerical routes %r and %r"
                     % (root.local_id, occurrence.ordinal, previous.local_id, rate.local_id),
-                    term=_occurrence_text(occurrence), count=2)
+                    term=occurrence_text(occurrence), count=2)
             counts[occurrence.ordinal] = rate
     missing = []
     uncovered = []
@@ -98,7 +86,7 @@ def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states
         if root not in covered or required != set(covered[root]):
             omitted = sorted(required - set(covered.get(root, {})))
             missing.append("%s occurrences %s" % (root.local_id, omitted))
-            uncovered.extend(_occurrence_text(view.balance.occurrences[index])
+            uncovered.extend(occurrence_text(view.balance.occurrences[index])
                              for index in omitted)
     if missing or extra:
         message = ("DiscretizationPlan rate coverage mismatch for Model %r block states: "
