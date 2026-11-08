@@ -25,6 +25,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
   native `MUSCL(<Limiter>())` state bit for bit for the four limiters. `weno5(rep, epsilon=)` is
   the WENO5-Z reconstruction of master's `WENO5()`, bit for bit on the same case.
+- ROM-31 (G13 lot 2): halo transports choose their host staging. `HaloExchangeContext::staging`
+  (`automatic`, `device_direct`, `host_staged`) enters the collective contract; `automatic` posts
+  MPI on the pack and unpack buffers when the fields live in host memory, and stages through
+  pinned host buffers otherwise (spec 0.3 PF2). `pops::host_phase_stats()` counts the bytes that
+  host staging moves (uniform halos and AMR parent ghosts) and every whole-Fab host mirror copy;
+  mesh storage, host staging buffers and unified-memory blocks carry the Kokkos labels
+  `pops_mesh_array:`, `pops_host_staging:` and `pops_unified:`, which the DM8 residency probe of
+  the tests reads per step.
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
   SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
