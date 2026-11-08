@@ -1,8 +1,9 @@
-"""Typed refusals of the region analyses (spec 0.3 IR13, IR17, IR19, IR21, D5, the refusal table of
-§14.1).
+"""Typed refusals of the region analyses (spec 0.3 IR13, IR17, IR19, IR21, D5, R7, the refusal table
+of §14.1).
 
 Each refusal names the phase that raises it and what it refuses: a region refusal names the
-region and the first map, coefficient or construct that blocks it, a coverage refusal the term.
+region and the first map, coefficient or construct that blocks it, a coverage refusal the term,
+and a balance refusal the term and the construct that holds it.
 They are ``ValueError`` subclasses, so a caller that already catches the refusals of a phase
 keeps catching them.
 """
@@ -72,9 +73,11 @@ class CoverageNotExact(ValueError):
     rule = "D5"
     phase = "resolve"
 
-    def __init__(self, message, *, term, count):
+    def __init__(self, message, *, term, count, terms=None):
         self.term = term
         self.count = count
+        # Every term in the same state, when one refusal names several (O6); ``term`` is the first.
+        self.terms = (term,) if terms is None else tuple(terms)
         times = "0 times" if count == 0 else "at least twice"
         super().__init__("%s (%s, %s): %s; term %s is delivered %s on a success path"
                          % (type(self).__name__, self.rule, self.phase, message, term, times))
@@ -102,5 +105,41 @@ class ScheduleIllegal(ValueError):
                             subject))
 
 
+class TermNotAdditive(ValueError):
+    """A typed term of a balance that is not a summand of its right-hand side (R7, §14.1).
+
+    R7 decomposes the right-hand side of a balance at its top-level additive structure: ``+``,
+    ``-`` and a product or a quotient by an exact number. A term (the divergence of a flux, a
+    declared source, a delivery, a nonconservative product) under any other node, or used as one
+    component of a vector, is not a summand: its coverage, delivery and accounting could not be
+    derived exactly. The refusal is raised while the equation is traced, and names the term, the
+    node that holds it, the line that wrote it and the constructs to write instead.
+
+    The constructor is cooperative: every argument is optional and keyword-only, and a ``site``
+    that a subclass set before calling it is kept, so a refusal family with its own sites (the
+    user surface) can subclass it.
+    """
+
+    rule = "R7"
+    phase = "tracing"
+
+    def __init__(self, message=None, *, term=None, construct=None, site=None):
+        for name, value in (("term", term), ("construct", construct), ("site", site)):
+            if value is not None or not hasattr(self, name):
+                setattr(self, name, value)
+        if message is not None and term is None and construct is None and site is None:
+            # A cooperative subclass has already written its message and set its site.
+            super().__init__(message)
+            return
+        if message is None:
+            message = "a term of a balance is not a summand of its right-hand side"
+        where = ("" if getattr(self.site, "file", None) is None
+                 else "; written at %s:%d" % (self.site.file, self.site.line))
+        held = "" if self.term is None else "; term %s in %s" % (self.term, self.construct)
+        super().__init__("%s (%s, %s): %s%s%s"
+                         % (type(self).__name__, self.rule, self.phase, message, held, where))
+
+
 __all__ = ["ClassNotReached", "ConservationNotStructural", "CoverageNotExact",
-           "DeliveryNotStructural", "PropertyNotDerived", "RegionRefusal", "ScheduleIllegal"]
+           "DeliveryNotStructural", "PropertyNotDerived", "RegionRefusal", "ScheduleIllegal",
+           "TermNotAdditive"]
