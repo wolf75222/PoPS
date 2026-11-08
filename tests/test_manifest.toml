@@ -1811,6 +1811,11 @@ path = "tests/python/unit/time"
 labels = ["unit", "python", "time", "fast"]
 
 [[python.suite]]
+name = "pops_python_unit_surface"
+path = "tests/python/unit/surface"
+labels = ["unit", "python", "surface", "time", "numerics", "codegen", "fast"]
+
+[[python.suite]]
 name = "pops_python_architecture"
 path = "tests/python/architecture"
 labels = ["quality", "python", "architecture", "fast"]
