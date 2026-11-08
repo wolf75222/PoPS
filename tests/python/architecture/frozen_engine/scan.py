@@ -351,6 +351,13 @@ def _math_definitions(tree: ast.Module, words: frozenset) -> set[int]:
     return admitted
 
 
+def math_definitions(rel: str, tree: ast.Module) -> set[int]:
+    """ids of the nodes of @p tree that define a word of pops.math, when @p rel is the module
+    pops.math (POPS_MATH_MODULES); empty elsewhere. CF2 and gate 2e of test_lib_boundaries.py (no
+    numerical method has a home in the core) read this one admission."""
+    return _math_definitions(tree, POPS_MATH_WORDS) if rel in POPS_MATH_MODULES else set()
+
+
 def python_tokens(text: str, math_words: frozenset = frozenset(), refusal_tables: bool = False):
     """Identifiers, strings and links of Python source. @p math_words are the words that the
     module defines when it is ``pops.math`` (``POPS_MATH_WORDS``), empty elsewhere;
