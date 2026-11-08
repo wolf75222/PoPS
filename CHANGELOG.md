@@ -69,6 +69,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- A `format-bench` job of `ci.yml`, aggregated by `gate`, replays
+  `scripts/test_check_clang_format.sh`, the bench of `scripts/check_clang_format.sh`, on every full
+  plan and when the plan sees the script, the bench or a style file (`.clang-format`,
+  `_clang-format`, `.clang-format-ignore`, at any depth) change: the cases of the check run in a
+  throwaway repository with their own probe files and style, so none depends on the tree. Style
+  files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
+  check works from the repository root; outside a git repository it stops with status 2; against a
+  base that is not an ancestor of the checkout it starts from their merge base.
+
 - ROM-85 (N10, lot 2, C50): the plan chooses the distribution of the coarse level (spec 0.3 DM3,
   §21.6, adjudication §26). `PatchLayout.distribute_coarse` defaults to `None`; the plan partitions
   the coarse level when it carries a cross-block interface and replicates it otherwise, so T10 no
