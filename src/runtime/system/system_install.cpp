@@ -769,7 +769,7 @@ void validate_prepared_block(const PreparedSystemBlock<Dim>& block) {
       !closures.prepare_generated_state_with_transport_prepared ||
       !closures.external_ghost_boundary || !block.maximum_speed ||
       !block.primitive_to_conservative || !block.conservative_to_primitive ||
-      !block.batch_conservative_to_primitive)
+      !block.batch_conservative_to_primitive || !block.candidate_recovery_check)
     throw std::invalid_argument(
         "prepared System block does not implement the complete exact-ranked execution contract");
 }
@@ -848,6 +848,7 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   candidate.prim_to_cons = std::move(prepared.primitive_to_conservative);
   candidate.cons_to_prim = std::move(prepared.conservative_to_primitive);
   candidate.batch_cons_to_prim = std::move(prepared.batch_conservative_to_primitive);
+  candidate.candidate_recovery = std::move(prepared.candidate_recovery_check);
   candidate.source_frequency = std::move(prepared.source_frequency);
   candidate.parabolic_frequency = prepared.parabolic_frequency;
   candidate.stability_dt = std::move(prepared.stability_dt);

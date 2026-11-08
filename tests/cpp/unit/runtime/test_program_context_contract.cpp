@@ -156,6 +156,11 @@ using GasSchema = typename GasModel::Schema;
 constexpr double kGamma = 1.4;
 constexpr int kNcomp = GasModel::n_vars;
 
+// The device decision of the identity recovery below: every finite cell recovers.
+struct FiniteIdentityRecovery {
+  POPS_HD bool operator()(const Real (&)[kNcomp]) const { return true; }
+};
+
 std::size_t uniform_cell_count(int cells) {
   std::size_t result = 1;
   for (int axis = 0; axis < kTestDimension; ++axis)
@@ -284,6 +289,8 @@ void add_gas_block(NativeSystem& s, const std::string& name, int* projection_cal
     return report;
   };
   prepared.batch_conservative_to_primitive = make_uniform_recovery_consumer(model);
+  prepared.candidate_recovery_check =
+      make_device_candidate_recovery_check<kTestDimension, kNcomp>(FiniteIdentityRecovery{});
   s.install_prepared_block(std::move(prepared));
 }
 

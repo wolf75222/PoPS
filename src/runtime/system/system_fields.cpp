@@ -149,50 +149,16 @@ void require_recoverable_candidate(const Species& state, const MultiFab<Dim>& ca
       std::rethrow_exception(layout_error);
     throw std::invalid_argument(std::string(operation) + ": candidate layout failed collectively");
   }
-  if (all_reduce_max(state.cons_to_prim ? 0L : 1L, lane) != 0)
+  if (all_reduce_max(state.candidate_recovery ? 0L : 1L, lane) != 0)
     throw std::runtime_error(std::string(operation) +
                              ": block has no prepared variable-recovery authority");
 
-  long failures = 0;
+  // The prepared recovery decides every valid (active) cell where the candidate lives; only the
+  // census of failed cells reaches the host (DM8, G13 lot 4).
+  CandidateRecoveryCensus census;
   std::exception_ptr recovery_error;
   try {
-    std::vector<double> conservative(static_cast<std::size_t>(state.ncomp));
-    std::vector<double> primitive(static_cast<std::size_t>(state.ncomp));
-    for (std::size_t local = 0; local < candidate.local_size(); ++local) {
-      const Fab<Dim>& fab = candidate.fab(local);
-      auto host = fab.create_host_mirror();
-      const auto consider = [&](const Index<Dim>& index) {
-        for (int component = 0; component < state.ncomp; ++component)
-          conservative[static_cast<std::size_t>(component)] =
-              static_cast<double>(host(storage_ordinal(fab, index, component)));
-        try {
-          const RecoveryReport report = state.cons_to_prim(conservative.data(), primitive.data());
-          const bool finite = std::all_of(conservative.begin(), conservative.end(),
-                                          [](double value) { return std::isfinite(value); }) &&
-                              std::all_of(primitive.begin(), primitive.end(),
-                                          [](double value) { return std::isfinite(value); });
-          if (!report.publication_permitted() || !finite)
-            ++failures;
-        } catch (...) {
-          ++failures;
-        }
-      };
-      if (active_cells == nullptr) {
-        fab.copy_to_host(host);
-        for_each_host_index(fab.box(),
-                            [&](const Index<Dim>& index, std::size_t) { consider(index); });
-        continue;
-      }
-      const Fab<Dim>& mask_fab = active_cells->fab(local);
-      auto mask_host = mask_fab.create_host_mirror();
-      mask_fab.copy_to_host(mask_host);
-      fab.copy_to_host(host);
-      for_each_host_index(fab.box(), [&](const Index<Dim>& index, std::size_t) {
-        if (mask_host(storage_ordinal(mask_fab, index, 0)) < Real{0.5})
-          return;
-        consider(index);
-      });
-    }
+    census = state.candidate_recovery(candidate, active_cells);
   } catch (...) {
     recovery_error = std::current_exception();
   }
@@ -201,6 +167,7 @@ void require_recoverable_candidate(const Species& state, const MultiFab<Dim>& ca
       std::rethrow_exception(recovery_error);
     throw std::runtime_error(std::string(operation) + ": variable recovery failed collectively");
   }
+  long failures = static_cast<long>(census.failed());
   failures = all_reduce_sum(failures, lane);
   if (failures != 0)
     throw std::runtime_error(std::string(operation) +

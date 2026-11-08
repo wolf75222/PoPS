@@ -2561,7 +2561,8 @@ void validate_prepared_amr_block(const PreparedAmrSystemBlock<Dim>& block) {
   validate_variable_set(block.primitive_variables, VariableKind::Primitive, block.ncomp,
                         "primitive");
   if (!block.materialize_level || !block.primitive_to_conservative ||
-      !block.conservative_to_primitive || !block.batch_conservative_to_primitive)
+      !block.conservative_to_primitive || !block.batch_conservative_to_primitive ||
+      !block.candidate_recovery_check)
     throw std::invalid_argument(
         "prepared AMR block does not implement its complete exact-ranked execution contract");
   switch (block.physical_boundary_authority) {
@@ -18023,52 +18024,22 @@ void AmrSystem<Dim>::validate_prepared_amr_state_publication_candidate(
       throw std::logic_error(
           "AMR Program state publication active mask lost its exact block/level contract");
 
-    std::vector<double> conservative(static_cast<std::size_t>(block.ncomp));
-    std::vector<double> primitive(static_cast<std::size_t>(block.ncomp));
-    for (std::size_t local = 0; local < candidate.local_size(); ++local) {
-      const Fab<Dim>& fab = candidate.fab(local);
-      auto host = fab.create_host_mirror();
-      fab.copy_to_host(host);
-      const Box<Dim>& valid = fab.box();
-      const Box<Dim>& grown = fab.grown_box();
-      const std::size_t component_stride = checked_cells(grown);
-      std::optional<typename Fab<Dim>::host_mirror_type> mask_host;
-      Box<Dim> mask_grown = valid;
-      if (active != nullptr) {
-        const Fab<Dim>& mask_fab = active->fab(local);
-        if (candidate.global_index(local) != active->global_index(local) || mask_fab.box() != valid)
+    if (active != nullptr)
+      for (std::size_t local = 0; local < candidate.local_size(); ++local)
+        if (candidate.global_index(local) != active->global_index(local) ||
+            active->fab(local).box() != candidate.fab(local).box())
           throw std::invalid_argument(
               "AMR Program state publication active mask differs from local patch ownership");
-        mask_host.emplace(mask_fab.create_host_mirror());
-        mask_fab.copy_to_host(*mask_host);
-        mask_grown = mask_fab.grown_box();
-      }
-      for (std::size_t ordinal = 0; ordinal < checked_cells(valid); ++ordinal) {
-        const Index<Dim> cell = unflatten(valid, ordinal);
-        if (mask_host) {
-          const double mask_value = static_cast<double>((*mask_host)(offset(cell, mask_grown)));
-          if (mask_value < 0.5)
-            continue;
-        }
-        for (int component = 0; component < block.ncomp; ++component) {
-          const double value = static_cast<double>(
-              host(static_cast<std::size_t>(component) * component_stride + offset(cell, grown)));
-          if (!std::isfinite(value))
-            throw std::invalid_argument(
-                "AMR Program state publication candidate has non-finite values");
-          conservative[static_cast<std::size_t>(component)] = value;
-        }
-        const RecoveryReport report =
-            block.conservative_to_primitive(conservative.data(), primitive.data());
-        if (!report.publication_permitted())
-          throw std::runtime_error(
-              "AMR Program state publication candidate failed prepared variable recovery");
-        if (!std::all_of(primitive.begin(), primitive.end(),
-                         [](double value) { return std::isfinite(value); }))
-          throw std::runtime_error(
-              "AMR Program state publication candidate recovered non-finite primitives");
-      }
-    }
+    if (!block.candidate_recovery_check)
+      throw std::logic_error("AMR Program state publication block lost its device recovery check");
+    // The prepared recovery decides every valid (active) cell where the candidate lives; only the
+    // census of failed cells reaches the host (DM8, G13 lot 4).
+    const CandidateRecoveryCensus census = block.candidate_recovery_check(candidate, active);
+    if (census.nonfinite_conservative != 0)
+      throw std::invalid_argument("AMR Program state publication candidate has non-finite values");
+    if (census.unrecoverable != 0)
+      throw std::runtime_error(
+          "AMR Program state publication candidate failed prepared variable recovery");
   } catch (...) {
     local_failure = 1;
     local_error = std::current_exception();

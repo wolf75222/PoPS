@@ -415,6 +415,7 @@ sdk-support pops/runtime/program/distributed_gc.hpp
 sdk-root pops/runtime/program/step_transaction.hpp
 abi pops/runtime/program/wire_ids.hpp
 api pops/runtime/runtime_environment.hpp
+sdk-support pops/runtime/recovery/device_candidate_recovery.hpp
 sdk-support pops/runtime/recovery/uniform_recovery_consumer.hpp
 api pops/runtime/system.hpp
 sdk-support pops/runtime/system/exact_named_field.hpp
