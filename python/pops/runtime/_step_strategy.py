@@ -17,6 +17,7 @@ from pops.time._step.strategy import (
     ComputedDt,
     ErrorControlledDt,
     ExternalTimeGrid,
+    FACE_STEP_FREQUENCY_SCHEMA,
     FixedDt,
     StepStrategy,
 )
@@ -600,6 +601,18 @@ class FixedDtController(StepController[FixedDt]):
             self.prepare_attempts(engine, native, t_end=t_end))
 
 
+def _face_step_frequency(error: BaseException) -> float | None:
+    """The frequency of the refused step that a riemann.User guard carries, if it carries one."""
+    if getattr(error, "typed_failure_schema", None) != FACE_STEP_FREQUENCY_SCHEMA:
+        return None
+    payload = getattr(error, "typed_failure_payload", None)
+    try:
+        frequency = float.fromhex(payload.decode("ascii"))
+    except (AttributeError, UnicodeDecodeError, ValueError, OverflowError):
+        return None
+    return frequency if math.isfinite(frequency) and frequency > 0.0 else None
+
+
 class AdaptiveCFLController(StepController[AdaptiveCFL]):
     def prepare_attempts(
         self, engine: Any, native: Any, *, t_end: float,
@@ -611,21 +624,36 @@ class AdaptiveCFLController(StepController[AdaptiveCFL]):
         controls = dict(self.controls)
         if "dt_max" in controls:
             caps.append(float(controls["dt_max"]))
-        max_dt = min(caps)
+        max_dt = [min(caps)]
         min_dt = float(controls.get("dt_min", 0.0))
+        number = self.strategy.cfl
 
         def attempt() -> None:
             _native_attempt(
                 engine,
                 native,
-                lambda: native.step_cfl(
-                    self.strategy.cfl, max_dt=max_dt, min_dt=min_dt),
+                lambda: native.step_cfl(number, max_dt=max_dt[0], min_dt=min_dt),
             )
+
+        def retry(error: BaseException, _attempts: int) -> bool:
+            # Spec 0.3, 21.6: one retry, whose step is the bound of the speeds that the refused
+            # attempt's faces recorded (2.6.9; ROM-108). The guard refused dt > cfl / frequency,
+            # so the retry's cap is below the refused step.
+            frequency = _face_step_frequency(error)
+            if frequency is None:
+                return False
+            bound = number / frequency
+            if not bound < max_dt[0] or bound < min_dt:
+                return False
+            max_dt[0] = bound
+            return True
 
         return _PreparedStepAttempts(
             engine=engine,
             controller=self,
             attempt=attempt,
+            retry=retry,
+            retry_budget=1,
         )
 
     def execute(self, engine: Any, native: Any, *, t_end: float) -> int:

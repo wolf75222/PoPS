@@ -195,6 +195,54 @@ def test_all_four_controllers_execute_real_native_attempts():
     assert grid_native.calls == [("step", 0.125)]
 
 
+class _FaceGuardNative(_Native):
+    """step_cfl proposes 0.25; a riemann.User guard refuses dt * frequency > cfl (ROM-108)."""
+
+    def __init__(self, frequency, *, payload=True, refusals=None):
+        super().__init__()
+        self.frequency = frequency
+        self.payload = payload
+        self.refusals = refusals
+
+    def step_cfl(self, cfl, *, max_dt, min_dt):
+        self.calls.append(("step_cfl", float(cfl), float(max_dt), float(min_dt)))
+        dt = min(0.25, float(max_dt))
+        refuse = dt*self.frequency > cfl if self.refusals is None else self.refusals > 0
+        if refuse:
+            if self.refusals is not None:
+                self.refusals -= 1
+            error = _native_evaluation_rejection()
+            if self.payload:
+                from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA
+                error.typed_failure_schema = FACE_STEP_FREQUENCY_SCHEMA
+                error.typed_failure_payload = float(self.frequency).hex().encode("ascii")
+            raise error
+        self.t += dt
+        self.cursor += 1
+        return dt
+
+
+def test_adaptive_cfl_retries_once_at_the_step_of_the_recorded_face_frequency():
+    """ROM-108, spec 0.3 21.6: a guard refusal that carries the frequency of its step is retried
+    once, capped at cfl over that frequency, below the refused step."""
+    native = _FaceGuardNative(4.0)
+    report = prepare_program_run(_Engine(AdaptiveCFL(0.4))).run_step(native, t_end=1.0)
+    assert report.attempts == 2
+    assert native.calls == [("step_cfl", 0.4, 1.0, 0.0), ("step_cfl", 0.4, 0.4/4.0, 0.0)]
+    assert native.time() == 0.4/4.0
+
+
+@pytest.mark.parametrize("native, attempts", [
+    (_FaceGuardNative(4.0, payload=False), 1),  # a refusal without the frequency of its step
+    (_FaceGuardNative(4.0, refusals=2), 2),  # the retry is refused too: one retry only
+    (_FaceGuardNative(1.0, refusals=1), 1),  # the cap would not lower the refused proposal
+])
+def test_adaptive_cfl_does_not_retry_without_a_lower_face_step(native, attempts):
+    with pytest.raises(StepAttemptRejected):
+        prepare_program_run(_Engine(AdaptiveCFL(0.4, max_dt=0.2))).run_step(native, t_end=1.0)
+    assert len(native.calls) == attempts
+
+
 def test_fixed_dt_merges_a_roundoff_equivalent_final_landing():
     native = _Native()
     for _ in range(13):
