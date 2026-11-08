@@ -1238,6 +1238,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             family = _rhs_flux_temporal_family(v)
             family_suffix = ", " + json.dumps(family) if target == "amr_system" else ""
             from pops.codegen.program_transport_quadrature import declare_transport_faces
+            from pops.codegen.program_partition_stability import user_face_frequency_rule
             faces = declare_transport_faces(v, node_model, var, lines)
             authored_face = (getattr(_model_impl(node_model), "_user_face", None)
                              if node_model is not None else None)
@@ -1253,6 +1254,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                     # The final AMR argument follows temporal family and input trace.
                     frequency_suffix = (",nullptr,&" + user_face_frequency
                                         if input_trace is None else ",&" + user_face_frequency)
+                if user_face_frequency:
+                    frequency_suffix += user_face_frequency_rule(program)
                 if faces is not None:
                     lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s%s);"
                                  % (bidx, var[state_in.id], var[v.id], int(v.id), faces,

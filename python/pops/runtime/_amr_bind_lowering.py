@@ -30,6 +30,10 @@ def _runtime_data(layout: Any) -> dict[str, Any]:
 
 def _regrid_every(data: dict[str, Any]) -> int:
     regrid = data["regrid"]
+    if regrid == {"schema_version": 1, "authority_type": "amr_regrid", "mode": "program"}:
+        # Regrid(criterion, when) of the Program (DM13b): the hierarchy may regrid after any
+        # accepted step, and the decision generated into the Program says when.
+        return 1
     if regrid == {
         "schema_version": 1,
         "authority_type": "amr_regrid",

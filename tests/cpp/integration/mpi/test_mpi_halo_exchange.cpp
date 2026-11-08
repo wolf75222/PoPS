@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
+#include <pops/core/foundation/host_phase_stats.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/parallel/comm.hpp>
 
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <exception>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -278,6 +280,94 @@ void expect_one_shot(int ranks, int rank, const ExecutionLane& lane, std::uint64
   expect_schedule_published(schedule, fields, Real{2'000'000});
 }
 
+// G13 lot 2 (PF2, gap C42): the staging choice decides whether remote payloads cross the host.
+// Both choices publish the same ghosts; only `host_staged` stages bytes, exactly the remote
+// payload, and neither copies a mesh array to the host.
+template <int Dim>
+void expect_staging_choices(int ranks, int rank, const ExecutionLane& lane,
+                            std::uint64_t generation) {
+  const HaloCase<Dim> definition = make_case<Dim>(ranks, false);
+  MultiFab<Dim> automatic_fields(definition.layout, definition.distribution,
+                                 rank_coordinate<Dim>(rank), 3, definition.ghosts);
+  MultiFab<Dim> staged_fields(definition.layout, definition.distribution,
+                              rank_coordinate<Dim>(rank), 3, definition.ghosts);
+  fill_valid(automatic_fields, Real{3'000'000});
+  fill_valid(staged_fields, Real{3'000'000});
+  const HaloSchedule<Dim> automatic_schedule =
+      prepare_halo_schedule(automatic_fields, definition.domain, definition.topology,
+                            budget<Dim>(definition.layout.size()));
+  const HaloSchedule<Dim> staged_schedule = prepare_halo_schedule(
+      staged_fields, definition.domain, definition.topology, budget<Dim>(definition.layout.size()));
+
+  HaloExchangeContext automatic{};
+  automatic.context_generation = generation;
+  automatic.schedule_generation = generation + 1;
+  HaloExchangeContext staged = automatic;
+  staged.context_generation = generation + 2;
+  staged.staging = HaloStaging::host_staged;
+  HaloExchange<Dim> automatic_exchange(automatic_schedule, lane, automatic);
+  HaloExchange<Dim> staged_exchange(staged_schedule, lane, staged);
+
+  using FieldSpace = typename MultiFab<Dim>::memory_space;
+  const HaloStaging expected = std::is_same_v<FieldSpace, Kokkos::HostSpace>
+                                   ? HaloStaging::device_direct
+                                   : HaloStaging::host_staged;
+  EXPECT_EQ(automatic_exchange.staging(), expected);
+  EXPECT_EQ(staged_exchange.staging(), HaloStaging::host_staged);
+  const std::size_t send_bytes = staged_schedule.send_elements() * sizeof(Real);
+  const std::size_t receive_bytes = staged_schedule.receive_elements() * sizeof(Real);
+  EXPECT_EQ(staged_exchange.host_staging_bytes_per_exchange(), send_bytes + receive_bytes);
+  if (ranks >= 2)
+    EXPECT_GT(all_reduce_max(static_cast<long>(send_bytes), lane.communicator()), 0L);
+
+  for (int repetition = 0; repetition < 2; ++repetition) {
+    const HostPhaseStats before_automatic = host_phase_stats();
+    automatic_exchange.execute(automatic_fields, lane);
+    const HostPhaseStats automatic_moved = host_phase_stats().since(before_automatic);
+    EXPECT_EQ(automatic_moved.mesh_to_host_calls, 0U);
+    EXPECT_EQ(automatic_moved.mesh_from_host_calls, 0U);
+    if (expected == HaloStaging::device_direct) {
+      EXPECT_EQ(automatic_exchange.host_staging_bytes_per_exchange(), 0U);
+      EXPECT_EQ(automatic_moved, HostPhaseStats{});
+    }
+
+    const HostPhaseStats before_staged = host_phase_stats();
+    staged_exchange.execute(staged_fields, lane);
+    const HostPhaseStats staged_moved = host_phase_stats().since(before_staged);
+    EXPECT_EQ(staged_moved.mesh_to_host_calls, 0U);
+    EXPECT_EQ(staged_moved.mesh_from_host_calls, 0U);
+    EXPECT_EQ(staged_moved.staging_to_host_calls, staged_schedule.send_plans().size());
+    EXPECT_EQ(staged_moved.staging_to_host_bytes, send_bytes);
+    EXPECT_EQ(staged_moved.staging_from_host_calls, staged_schedule.receive_plans().size());
+    EXPECT_EQ(staged_moved.staging_from_host_bytes, receive_bytes);
+  }
+
+  expect_schedule_published(automatic_schedule, automatic_fields, Real{3'000'000});
+  expect_schedule_published(staged_schedule, staged_fields, Real{3'000'000});
+  EXPECT_EQ(snapshot(automatic_fields), snapshot(staged_fields));
+}
+
+// Ranks that disagree on the staging choice refuse the exchange together, before any allocation.
+void expect_staging_mismatch_refused(int rank, const ExecutionLane& lane) {
+  const HaloCase<1> definition = make_case<1>(lane.size(), false);
+  MultiFab<1> fields(definition.layout, definition.distribution, rank_coordinate<1>(rank), 2,
+                     definition.ghosts);
+  const HaloSchedule<1> schedule = prepare_halo_schedule(
+      fields, definition.domain, definition.topology, budget<1>(definition.layout.size()));
+  HaloExchangeContext mismatch{};
+  mismatch.context_generation = 733;
+  mismatch.schedule_generation = 739;
+  mismatch.staging = rank == 0 ? HaloStaging::device_direct : HaloStaging::host_staged;
+  bool threw = false;
+  try {
+    HaloExchange<1> exchange(schedule, lane, mismatch);
+    (void)exchange;
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  EXPECT_EQ(all_reduce_max(threw ? 0L : 1L, lane.communicator()), 0L);
+}
+
 void expect_collective_constructor_failures(int ranks, int rank, const ExecutionLane& lane) {
   const HaloCase<1> definition = make_case<1>(ranks, false);
   MultiFab<1> fields(definition.layout, definition.distribution, rank_coordinate<1>(rank), 2,
@@ -312,7 +402,8 @@ void expect_collective_constructor_failures(int ranks, int rank, const Execution
 }
 
 void expect_sealed_failure(int ranks, int rank, const ExecutionLane& lane,
-                           HaloExchangeDiagnosticStage stage, std::uint64_t generation) {
+                           HaloExchangeDiagnosticStage stage, std::uint64_t generation,
+                           HaloStaging staging = HaloStaging::automatic) {
   const HaloCase<1> definition = make_case<1>(ranks, false);
   MultiFab<1> fields(definition.layout, definition.distribution, rank_coordinate<1>(rank), 2,
                      definition.ghosts);
@@ -322,6 +413,7 @@ void expect_sealed_failure(int ranks, int rank, const ExecutionLane& lane,
   HaloExchangeContext context{};
   context.context_generation = generation;
   context.schedule_generation = generation + 1;
+  context.staging = staging;
   if (stage == HaloExchangeDiagnosticStage::receive_post)
     context.fail_receive_post_rank = 0;
   else if (stage == HaloExchangeDiagnosticStage::send_post)
@@ -435,6 +527,9 @@ int run_mpi_halo_exchange(int argc, char** argv) {
     expect_success<2>(ranks, rank, true, lane, 503);
     expect_success<3>(ranks, rank, true, lane, 601);
     expect_one_shot<2>(ranks, rank, lane, 659);
+    expect_staging_choices<1>(ranks, rank, lane, 661);
+    expect_staging_choices<2>(ranks, rank, lane, 673);
+    expect_staging_choices<3>(ranks, rank, lane, 683);
 
     if (ranks >= 2) {
       expect_collective_constructor_failures(ranks, rank, lane);
@@ -442,6 +537,11 @@ int run_mpi_halo_exchange(int argc, char** argv) {
       expect_sealed_failure(ranks, rank, lane, HaloExchangeDiagnosticStage::send_post, 919);
       expect_sealed_failure(ranks, rank, lane, HaloExchangeDiagnosticStage::wait, 929);
       expect_sealed_failure(ranks, rank, lane, HaloExchangeDiagnosticStage::staging, 937);
+      expect_sealed_failure(ranks, rank, lane, HaloExchangeDiagnosticStage::staging, 941,
+                            HaloStaging::host_staged);
+      expect_sealed_failure(ranks, rank, lane, HaloExchangeDiagnosticStage::wait, 947,
+                            HaloStaging::host_staged);
+      expect_staging_mismatch_refused(rank, lane);
       expect_complete_requires_exact_field(ranks, rank, lane);
       expect_complete_rejects_rebound_storage(ranks, rank, lane);
     }

@@ -259,9 +259,16 @@ class ResolvedRefinementCriterion:
     dimension: int
     fields: tuple[RefinementCriterionField, ...]
     parameters: tuple[ParamHandle, ...]
+    # The decision to regrid written with the criterion in the Program, ``Regrid(criterion,
+    # when)``; None when the adaptive layout keeps its regrid cadence.
+    decision: Any = None
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
+        from .regrid_decision import ResolvedRegridDecision
+
+        if self.decision is not None and type(self.decision) is not ResolvedRegridDecision:
+            raise TypeError("a refinement criterion carries a ResolvedRegridDecision or none")
         if not self.refine or any(not _boolean(root) for root in self.refine + self.coarsen):
             raise TypeError("a refinement criterion needs Boolean refine and coarsen regions")
         if type(self.hysteresis) is not Hysteresis:
@@ -277,6 +284,12 @@ class ResolvedRefinementCriterion:
             raise TypeError("a refinement criterion reads at least one block state")
 
     def canonical_identity(self) -> dict[str, Any]:
+        identity = self._criterion_identity()
+        if self.decision is not None:
+            identity["regrid_decision"] = self.decision.canonical_identity()
+        return identity
+
+    def _criterion_identity(self) -> dict[str, Any]:
         return {
             "schema_version": _SCHEMA_VERSION,
             "resolved_type": "amr_refinement_criterion",
@@ -382,11 +395,13 @@ def resolve_refinement_criterion(
     conflict_policy: ConflictPolicy,
     dimension: int,
     admit_state: Callable[[Handle], None],
+    decision: Any = None,
 ) -> ResolvedRefinementCriterion:
     """Resolve the regions of an AMRTagging into one criterion and its field and parameter tables.
 
     ``admit_state`` refuses a state that the adaptive layout does not own. The native tagging plan
-    checks the reach of each field against the halo that it binds.
+    checks the reach of each field against the halo that it binds. ``decision`` is the resolved
+    ``when`` body of a ``Regrid`` written in the Program, generated with the criterion.
     """
     roots: dict[str, list[Expr]] = {"refine": [], "coarsen": []}
     for action, region in rules:
@@ -440,7 +455,8 @@ def resolve_refinement_criterion(
             tuple(components.index(name) for name in row["variables"]), tuple(row["reach"])))
     return ResolvedRefinementCriterion(
         refine=refine, coarsen=coarsen, hysteresis=hysteresis, conflict_policy=conflict_policy,
-        dimension=dimension, fields=tuple(fields), parameters=tuple(parameters.values()))
+        dimension=dimension, fields=tuple(fields), parameters=tuple(parameters.values()),
+        decision=decision)
 
 
 __all__ = [

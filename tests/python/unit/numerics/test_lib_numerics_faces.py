@@ -96,29 +96,49 @@ def test_upwind_without_speed_is_rusanov_with_the_spectral_radius():
     _same_face(upwind(flux, U).riemann, rusanov(flux, U).riemann)
 
 
+def _generated_body(policy):
+    """The generated body and recorded speed: from the density to the speed's refusal."""
+    return policy[policy.index("State density{};"):policy.index("if (!std::isfinite(numerical_speed)")]
+
+
+def _upwind_body(speed, left, right):
+    """The row of 2.6.9: F* = s uL where s > 0, else s uR, component by component."""
+    return tuple(pops.math.where(speed > 0, lambda l=l: speed*l, lambda r=r: speed*r)
+                 for l, r in zip(left, right, strict=True))
+
+
 def test_upwind_with_a_stated_speed_is_the_face_a_case_would_write_by_hand():
-    """Section 4.4: ``speed(face)``, here the velocity of the case dotted with the face normal."""
+    """Section 4.4 and 2.6.9: ``speed(face)``, here the velocity of the case dotted with the face
+    normal; F* = s uL where s > 0, else s uR, and the flux records |s| (adjudication section 20)."""
     U, flux = _transport(width=2)
     face = authenticated_user_face(upwind(
         flux, U, speed=lambda face: .7*face.normal[0] + .3*face.normal[1]).riemann)
     _same_face(face, riemann.User(
-        body=lambda left, right, fl, fr, s, *, n: tuple(
-            pops.math.where(.7*n[0] + .3*n[1] > 0, lambda a=a: a, lambda b=b: b)
-            for a, b in zip(fl, fr, strict=True)),
-        state=U, stability=lambda left, right, fl, fr, s: s))
+        body=lambda left, right, fl, fr, s, *, n: _upwind_body(.7*n[0] + .3*n[1], left, right),
+        state=U, stability=lambda left, right, fl, fr, s, *, n: abs(.7*n[0] + .3*n[1])))
     # The face also gives the two traces of the realized state, and only those.
     by_trace = authenticated_user_face(upwind(
         flux, U, speed=lambda face: face.right(U)[0] - face.left(U)[0]).riemann)
     _same_face(by_trace, riemann.User(
-        body=lambda left, right, fl, fr, s: tuple(
-            pops.math.where(right[0] - left[0] > 0, lambda a=a: a, lambda b=b: b)
-            for a, b in zip(fl, fr, strict=True)),
-        state=U, stability=lambda left, right, fl, fr, s: s))
+        body=lambda left, right, fl, fr, s: _upwind_body(right[0] - left[0], left, right),
+        state=U, stability=lambda left, right, fl, fr, s: abs(right[0] - left[0])))
     other = _transport(width=2)[0]
     with pytest.raises(TypeError, match="traces of the realized state"):
         upwind(flux, U, speed=lambda face: face.left(other)[0])
     with pytest.raises(TypeError, match="speed function"):
         upwind(flux, U, speed=.7)
+
+
+def test_upwind_with_a_stated_speed_records_the_stated_speed_not_the_spectral_radius():
+    """SD44, SD75: the step rule of ``upwind(speed=f)`` reads |f(face)|, never R9's radius."""
+    U, flux = _transport()
+    policy = _policy(authenticated_user_face(upwind(
+        flux, U, speed=lambda face: -.5*face.normal[0] + .25*face.normal[1]).riemann))
+    body = _generated_body(policy)
+    assert "bound.value" not in body and "std::fabs(" in body
+    # The traces are read, the physical fluxes F(uL).n and F(uR).n are not.
+    assert "left.state[0]" in body and "right.state[0]" in body
+    assert "left_density.value" not in body and "right_density.value" not in body
 
 
 def _hll_body(lower, upper, left, right, fl, fr):
@@ -128,23 +148,14 @@ def _hll_body(lower, upper, left, right, fl, fr):
                  for l, r, a, b in zip(left, right, fl, fr, strict=True))
 
 
-def test_hll_with_stated_speeds_is_the_face_a_case_would_write_by_hand():
-    U, flux = _transport(width=2)
-    def speeds(uL, uR, n):
-        along = .7*n[0] + .3*n[1]
-        return -along, 2*along
-
-    face = authenticated_user_face(hll(flux, U, speeds=speeds).riemann)
-    assert face.native_id != riemann.HLL().native_id
-    assert "wave_speeds" not in face.requirements["capabilities"]
-    _same_face(face, riemann.User(
-        body=lambda left, right, fl, fr, s, *, n: _hll_body(*speeds(left, right, n),
-                                                            left, right, fl, fr),
-        state=U, stability=lambda left, right, fl, fr, s: s))
+def test_hll_takes_the_pair_of_r9_only():
+    """2.6.9 states one way to give the pair of ``hll``: the declared speeds of R9 (I22, CF16).
+    The pilot's ``speeds=`` option is gone; the parameter is refused, not ignored."""
+    U, flux = _transport()
     with pytest.raises(TypeError, match="speeds"):
-        hll(flux, U, speeds=(0., 1.))
-    with pytest.raises(TypeError, match="pair"):
-        hll(flux, U, speeds=lambda uL, uR, n: n[0])
+        hll(flux, U, speeds=lambda uL, uR, n: (-n[0], n[0]))
+    with pytest.raises(TypeError):
+        hll(flux, U, None)
 
 
 def test_derived_hll_reads_the_signed_speeds_of_the_face():
@@ -156,8 +167,11 @@ def test_derived_hll_reads_the_signed_speeds_of_the_face():
         "physical_flux", "provider_pack", "stability_bound", "wave_speeds")
     _same_face(face, riemann.User(
         body=lambda left, right, fl, fr, s, *, speeds: _hll_body(*speeds, left, right, fl, fr),
-        state=U, stability=lambda left, right, fl, fr, s: s))
+        state=U, stability=lambda left, right, fl, fr, s, *, speeds: pops.math.maximum(
+            abs(speeds[0]), abs(speeds[1]))))
+    # The flux records max(|sL|, |sR|) of its pair (adjudication section 20), not the input s.
     policy = _policy(face)
+    assert "bound.value" not in _generated_body(policy)
     assert policy.count("physical.signed_wave_speeds(") == 2
     assert "physical.signed_wave_speeds(left, face," in policy
     assert "physical.signed_wave_speeds(right, face," in policy
@@ -263,3 +277,34 @@ def test_m03_and_m16_declare_signed_speeds_that_the_spectral_radius_does_not_giv
             assert lower.max() < 0 < upper.min(), name
             assert np.max(np.abs(lower + upper)) > 1e-3, name
         assert np.max(np.abs(pairs["x"][0] - pairs["y"][0])) > 1e-3, name
+
+
+def _burgers_case(scheme):
+    """A case whose flux u^2/2 is not of the form F(1) u; returns the case, its flux and state."""
+    frame = Rectangle("n3_burgers_box", (0., 0.), (1., 1.)).frame(Cartesian2D())
+    model = pops.Model("n3_burgers", frame=frame)
+    U = model.state("U", components=("u",))
+    flux = model.flux("burgers", state=U, frame=frame,
+        components={axis: (U[0]*U[0]/2,) for axis in frame.axes},
+        waves={axis: (U[0],) for axis in frame.axes})
+    rate = model.rate("balance", equation=pops.math.ddt(U) == -pops.math.div(flux))
+    case = pops.Case("n3_burgers_case")
+    block = case.block("fluid", model)
+    plan = pops.numerics.DiscretizationPlan()
+    plan.rates.add(rate, scheme(flux, U))
+    case.numerics(plan, block=block)
+    return case, flux, U
+
+
+def test_upwind_without_speed_still_accepts_a_flux_that_is_not_linear_rom_106():
+    """The failing graph of the CF15 card ROM-106, pinned.
+
+    Section 2.6.9, row ``upwind``: without ``speed=``, a flux that is not F(1) u is refused
+    (``RealizationMismatch``, naming ``rusanov()`` and ``hll()``). The face of ``riemann.User``
+    has no input F(1).n and the library cannot read the form of its key, so ``upwind(F, Uh)`` is
+    still section 4.4's ``rusanov()`` and validates on Burgers. When ROM-106 lands, this test
+    becomes the refusal: ``pops.validate`` raises, with both names in its message.
+    """
+    case, flux, U = _burgers_case(upwind)
+    assert pops.validate(case)
+    _same_face(upwind(flux, U).riemann, rusanov(flux, U).riemann)

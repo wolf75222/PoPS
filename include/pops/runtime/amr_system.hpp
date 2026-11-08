@@ -696,6 +696,25 @@ class AmrSystem {
                              const std::vector<double>& parameters, int min_cycles,
                              const std::string& clock_identity,
                              const std::string& provider_identity);
+  /// Install the regrid decision generated into the compiled Program (DM13b, T33) in place of
+  /// the configured cadence: its identity, the field table of its indicators (the qualified state
+  /// of each field, its block, the variables read in it with their component indices), the bound
+  /// values of its runtime parameters and its number of indicators. Requires a generated
+  /// refinement criterion; install_program then requires the Program to export this decision.
+  /// After each accepted step, the hierarchy regrids when the generated body is true.
+  void set_generated_regrid_decision(const std::string& identity,
+                                     const std::vector<std::string>& field_identities,
+                                     const std::vector<std::string>& field_blocks,
+                                     const std::vector<std::vector<std::string>>& field_variables,
+                                     const std::vector<std::vector<int>>& field_components,
+                                     const std::vector<double>& parameters,
+                                     std::size_t indicator_count);
+  /// The identity of the installed generated regrid decision, empty when the cadence decides.
+  POPS_EXPORT std::string generated_regrid_decision_identity() const;
+  /// The inputs and the result of the last generated regrid decision: the accepted step count,
+  /// 1 or 0 for the decision, then the reduced value of each indicator. Empty before the first
+  /// decision. An inspection route: it publishes nothing.
+  POPS_EXPORT std::vector<double> last_regrid_decision() const;
   /// The requests that the tagging authority makes on one live parent level after its equality
   /// and conflict policies, before hysteresis and the buffer: one byte per cell of the parent
   /// domain, axis 0 fastest (1 refine, 2 coarsen, 0 keep). An inspection route: it publishes

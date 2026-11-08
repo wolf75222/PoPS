@@ -97,14 +97,17 @@ def test_two_nonlinear_recipients_keep_their_own_exact_defect(mode):
 
 
 def test_context_trace_distinguishes_exact_current_base_paths():
+    from pops.codegen.typed_delivery import DeliveryDiagrams
     from pops.ledger_provenance import _context_rows,_same_context_rows
     p,base,old,proposal=setup();q=old['q'];other=old['history']
     inc=ledger(p,q,old['time'],2);packet=inc.pack(p)
     envelope=p.product(increment=packet)
-    left=_context_rows(envelope,path=('increment',),replacements={packet.id:q},choices=frozenset())
-    right=_context_rows(envelope,path=('increment',),replacements={packet.id:other},choices=frozenset())
-    assert left and right and all(refs for _,refs in (*left,*right))
-    assert not _same_context_rows(left,right,frozenset())
+    session=DeliveryDiagrams();always=session.always
+    left=_context_rows(session,envelope,path=('increment',),replacements={packet.id:q},choices=always)
+    right=_context_rows(session,envelope,path=('increment',),replacements={packet.id:other},choices=always)
+    assert left.success is always and right.success is always
+    assert left.references() and right.references()
+    assert not _same_context_rows(session,left,right,always)
 
 
 def test_opaque_iteration_schema_scan_does_not_grant_structured_transport():

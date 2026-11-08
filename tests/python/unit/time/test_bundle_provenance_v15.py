@@ -225,7 +225,7 @@ def test_plain_product_skips_inventory_delivery_but_keeps_current_equations(monk
     p,bs,schema,base,old,_=setup()
     def forbidden(*args,**kwargs):raise AssertionError('uncertified product invoked delivery analysis')
     with monkeypatch.context() as m:
-        m.setattr(delivery,'delivered_frontiers',forbidden)
+        m.setattr(delivery.DeliveryDiagrams,'_run',forbidden)
         candidate=freeze(p,bs,base,old,old['bundle']['fields']['q'],p.product(delta=p.float64(1)))
     assert candidate.attrs['increment_proof_v15']['status']=='uncertified_user_product'
     p,bs,schema,base,old,requirement=setup(dependency=True)

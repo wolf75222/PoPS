@@ -11,6 +11,8 @@ dependencies:
   - ccache
   - scikit-build-core>=0.10
   - numpy>=1.24
+  # Receivers of a qualification prefix run `python -m pytest` from this environment.
+  - pytest
   - pybind11>=2.13,<3
   - kokkos
   # Keep the MPI/HDF5 ABI pair aligned with the ParaView integration.

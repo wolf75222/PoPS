@@ -480,6 +480,32 @@ def _flow_refinement_criterion(
         clock_identity,
         provider_identity,
     )
+    if criterion.decision is not None:
+        _flow_regrid_decision(sim, criterion.decision, params)
+
+
+def _flow_regrid_decision(sim: Any, decision: Any, params: Any) -> None:
+    """Install the tables of the regrid decision generated into the compiled Program (DM13b)."""
+    data = decision.runtime_decision_data(params)
+    if (
+        type(data) is not dict
+        or data.get("schema_version") != 1
+        or data.get("decision_type") != "amr_regrid_decision_runtime"
+        or data.get("identity") != decision.qualified_id
+    ):
+        raise ValueError("pops.bind: regrid decision returned an unsupported runtime manifest")
+    fields = data.get("fields")
+    if not isinstance(fields, list):
+        raise ValueError("pops.bind: a regrid decision has a list of fields")
+    sim._set_generated_regrid_decision(
+        data["identity"],
+        [row["state"] for row in fields],
+        [row["block"] for row in fields],
+        [row["variables"] for row in fields],
+        [row["components"] for row in fields],
+        data["parameters"],
+        data["indicator_count"],
+    )
 
 
 # The opcode table is generated from the versioned component catalog and shared with the C ABI.

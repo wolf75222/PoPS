@@ -14,6 +14,7 @@
 #include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/spatial/nd/face_frequency_rule.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
@@ -1085,15 +1086,16 @@ class System {
       const std::vector<MultiFab<Dim>*>& states, const std::vector<MultiFab<Dim>*>& rhs,
       const std::vector<int>& flux_only,
       const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces);
-  /// The same group, also observing the local maximum incident-face frequency of each requested
-  /// block's evaluated faces. The frequency is read under the block's prepared scratch lock and
-  /// assigned only after the group published; observing it alone allocates no field.
+  /// The same group, also observing the local maximum face frequency (by ``frequency_rule``) of
+  /// each requested block's evaluated faces. It is read under the block's prepared scratch lock
+  /// and assigned only after the group published; observing it alone allocates no field.
   POPS_EXPORT void block_rhs_group(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::vector<int>& blocks,
       const std::vector<MultiFab<Dim>*>& states, const std::vector<MultiFab<Dim>*>& rhs,
       const std::vector<int>& flux_only,
       const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces,
-      const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& retained_frequencies);
+      const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& retained_frequencies,
+      nd::FaceFrequencyRule frequency_rule = {});
   /// Whether the bound prepared group transport can evaluate one block's flux-only residual with
   /// face observations: a prepared Cartesian closure, no shared-interface provider and no active
   /// embedded boundary. Program face observers use a standalone session otherwise.
