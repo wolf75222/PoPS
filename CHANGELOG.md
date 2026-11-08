@@ -200,7 +200,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   regrids when it is true, with no Python in the step. An indicator that is not finite fails the
   step. In this lot an indicator reads the cell itself (`cell.shift` is refused), and a checkpoint
   of a Program that writes a `Regrid` is refused, since a restart replays its regrids from the
-  cadence.
+  cadence. The native file also runs on every rank of MPI1 and MPI2 worlds
+  (`tests/python/integration/mpi/test_public_regrid_decision_mpi{1,2}.py`).
 
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.
