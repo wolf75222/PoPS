@@ -225,7 +225,7 @@ def test_runtime_snapshot_compares_every_amr_level_by_exact_bits(dimension):
 def test_field_install_consumes_the_public_amr_layout_contract():
     example = _example()
     from pops.amr import ConflictPolicy, EqualityPolicy
-    from pops.mesh._amr import Above, AnyOf, Below, GradientAbove
+    from pops.mesh._amr import ResolvedRefinementCriterion
 
     target = example.build_final_case()
     resolved = pops.resolve(
@@ -241,13 +241,16 @@ def test_field_install_consumes_the_public_amr_layout_contract():
     assert recipe["levels"] == 2
     assert recipe["transition_ratios"] == ((2, 2),)
     assert recipe["level_refinements"] == ((1, 1), (2, 2))
-    graph = resolved.bootstrap_plan.tagging.graph
-    assert type(graph.refine) is AnyOf
-    assert tuple(type(child) for child in graph.refine.children) == (Above, GradientAbove)
-    assert type(graph.coarsen) is Below
-    assert graph.hysteresis.min_cycles == 2
-    assert graph.hysteresis.equality is EqualityPolicy.HOLD
-    assert graph.conflict_policy is ConflictPolicy.REFINE_WINS
+    # The criterion is written as functions of cell and generated into the Program (DM13b): two
+    # refine regions (the value, then the gradient norm) and one coarsen region.
+    criterion = resolved.bootstrap_plan.tagging
+    assert type(criterion) is ResolvedRefinementCriterion
+    assert len(criterion.refine) == 2 and len(criterion.coarsen) == 1
+    assert [row.block for row in criterion.fields] == [target.authoring.tracer.name]
+    assert criterion.decision is None
+    assert criterion.hysteresis.min_cycles == 2
+    assert criterion.hysteresis.equality is EqualityPolicy.HOLD
+    assert criterion.conflict_policy is ConflictPolicy.REFINE_WINS
 
 
 def test_every_output_and_checkpoint_schedule_is_accepted_step_only():

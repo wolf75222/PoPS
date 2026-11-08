@@ -96,7 +96,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
-
+- ROM-95 (N12, lot 3a, part 1): the scalar advection AMR tutorials 05-14, the IMEX AMR final
+  example, the field diffusion example and the scalar AMR migration workflow write their tagging
+  as regions of `cell` (`Tag(lambda cell: cell.value(q) > c)`, `gradient_norm` for 09) instead of
+  the ValueExpr tagging graph. MG8 serial-dim2 and mpi-dim2 records are bitwise identical to the
+  graph route. Other single-layout cases still write the graph: the condensed_fac, diocotron,
+  hyqmom and initial_field_ghost tutorials and 19 `examples/api_v02` files move in part 2; the
+  scalar advection final example moves with the VM removal (lot 3c).
 - ROM-85 (N10, lot 2, C50): the plan chooses the distribution of the coarse level (spec 0.3 DM3,
   §21.6, adjudication §26). `PatchLayout.distribute_coarse` defaults to `None`; the plan partitions
   the coarse level when it carries a cross-block interface and replicates it otherwise, so T10 no
@@ -105,7 +111,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `ScheduleIllegal` (IR22, phase compile). The resolved plan identity of an AMR case without a
   `PatchLayout` changes once: its authored data now says "no constraint" (`None`), and the resolved
   patch-generation options record the plan's choice.
-
 - ROM-90 (N9, lot 1): decide each Program reduction and its checks in one collective (spec 0.3
   SV20, duties 2 and 3, and PF8). `dot_all` and the AMR composite pairing and integral send the
   compensated rank summaries through one `MPI_Allreduce` with a non-commutative Neumaier join, the
@@ -188,12 +193,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `speed=` stays Rusanov with the R9 speed until a face reads F(1).n (CF15, ROM-106).
   `rusanov(F, Uh, smax=)` keeps the third parameter of section 4.4 as gap C46 of the index
   (adjudication section 20, item 4), until a row of 2.6.9 or N15 closes it.
-- Evaluate a `riemann.User` face residual on the transport prepared at bind, like the native face:
-  no field is allocated per evaluation, the face carrier is copied only when a Program reads it,
-  and the stability frequency is read from the recorded face speeds, on the prepared transport in
-  the pass that validates the residual, elsewhere in one pass. The generated face policy tests its
-  outputs and the operands that could conceal a non-finite value, and refuses the same faces with
-  the same cause (ROM-100, core ledger entry).
+- Evaluate a `riemann.User` face residual on the transport prepared at bind whenever that
+  transport can observe the block's faces, periodic or bounded: no boundary session is allocated
+  per evaluation. A Program that reads only the stability frequency allocates what the native face
+  allocates; a Program that reads the faces still allocates the capture path's candidate and backup
+  residuals per evaluation, and the face carrier is copied only when a Program reads it. The
+  stability frequency is read from the recorded face speeds, on the prepared transport in the pass
+  that validates the residual, elsewhere in one pass. The generated face policy tests its outputs
+  and the operands that could conceal a non-finite value, and refuses the same faces with the same
+  cause (ROM-100, core ledger entry).
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.
@@ -265,13 +273,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   writing the regrid in both places is refused). The body reads `B.steps % k == 0`
   (`pops.lib.time.every(k)`), `B.time`, runtime parameters and indicators of the accepted state,
   `pops.amr.largest_cells(f)` and `smallest_cells(f)`, the largest or the smallest value of a
-  function of `cell` over the valid cells of every level; it is two-valued, as the `cond` of IR4.
+  function of `cell` over the valid cells of every level (covered coarse cells included, so for a
+  nonlinear `f` it is not the composite extremum); it is two-valued, as the `cond` of IR4.
   The decision is generated into the compiled Program with the criterion; after each accepted step
   the core reduces each indicator over the patches and the ranks, calls the generated decision and
   regrids when it is true, with no Python in the step. An indicator that is not finite fails the
   step. In this lot an indicator reads the cell itself (`cell.shift` is refused), and a checkpoint
   of a Program that writes a `Regrid` is refused, since a restart replays its regrids from the
-  cadence.
+  cadence. The native file also runs on every rank of MPI1 and MPI2 worlds
+  (`tests/python/integration/mpi/test_public_regrid_decision_mpi{1,2}.py`).
 
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.

@@ -1607,6 +1607,14 @@ def test_manifest_projects_serial_python_mpi_orchestrators():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_regrid_decision_mpi1.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_public_regrid_decision_mpi2.py",
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py",
         },
         {
@@ -1902,6 +1910,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py",
         "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py",
         "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_regrid_decision_mpi1.py",
+        "tests/python/integration/mpi/test_public_regrid_decision_mpi2.py",
         "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py",
         "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py",
         "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py",
@@ -1913,9 +1923,9 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "131"
+    assert outputs["python_mpi_count"] == "133"
     assert outputs["python_mpi_entrypoint_count"] == "102"
-    assert outputs["python_mpi_orchestrator_count"] == "29"
+    assert outputs["python_mpi_orchestrator_count"] == "31"
 
 
 def test_python_mpi_orchestrator_contract_is_fail_closed():

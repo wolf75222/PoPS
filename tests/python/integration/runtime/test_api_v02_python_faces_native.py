@@ -9,6 +9,13 @@ of each axis are positive, so only the sL >= 0 branch runs; on M03 (v.n - c, v.n
 (the eigenvalues of the B.1 flux Jacobian) sL < 0 < sR on every face, so the two-wave state runs.
 The faces that read the normal, and the refusals of an invalid interval, are in
 test_api_v02_python_face_inputs_native.py.
+
+The Outflow row (ROM-100) runs M01's transport on a block whose x faces are physical. There the
+two routes are different C++ paths: the Python face, whose Program reads its frequency, goes
+through the transport prepared at bind (System::has_prepared_group_face_observation), while the
+native face, whose Program observes no face, prepares a boundary session per evaluation
+(System::requires_block_boundary_session). On the periodic rows both go through the prepared
+transport.
 """
 from __future__ import annotations
 
@@ -16,14 +23,88 @@ import numpy as np
 import pops
 import pytest
 
+from examples.api_v02.common import CaseSpec, non_owner_metrics, state_array
 from examples.api_v02.models_M01_M14 import build_m01, build_m03, native_hll, native_rusanov
 from examples.api_v02.models_M15_M18 import build_m16
+from pops import math as pm
+from pops.boundary import TransportBoundarySet
+from pops.boundary.transport import Outflow
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.initial import InitialCondition
+from pops.layouts import Uniform
+from pops.lib.initial import BindArray
 from pops.lib.numerics import hll, rusanov
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan
+from pops.projection import ConservativeCellAverage
+from pops.time import FixedDt
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.public_native_profile import (
     compile_profile_plan_once, native_profile, profile_gather_value,
 )
+
+
+def build_outflow(cells=(16, 8), *, scheme=rusanov):
+    """M01's transport, speeds (.7, .3), with Outflow on both x faces and y periodic; SSPRK2.
+
+    The scheme is upwind (Rusanov on a linear flux) at a Courant number of .0425, and the Outflow
+    trace repeats the interior one, so every accepted state stays within the initial range.
+    """
+    frame = Rectangle("outflow_transport", (0., 0.), (1., 1.)).frame(Cartesian2D())
+    x, y = frame.axes
+    layout = Uniform(CartesianGrid(frame=frame, cells=cells, periodic=PeriodicAxes((y,))))
+    model = pops.Model("outflow_authored_transport", frame=frame)
+    U = model.state("amount", components=("u",))
+    speeds = (.7, .3)
+    flux = model.flux("transport", state=U, frame=frame,
+        components={axis: (a*U[0],) for axis, a in zip(frame.axes, speeds)},
+        waves={axis: (a,) for axis, a in zip(frame.axes, speeds)})
+    rate = model.rate("conservation", equation=pm.ddt(U) == -pm.div(flux))
+    case = pops.Case("outflow_transport")
+    block = case.block("fluid", model)
+    plan = DiscretizationPlan()
+    plan.rates.add(rate, scheme(flux, U))
+    plan.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: Outflow(state=block[U]),
+        frame.boundaries.x_max: Outflow(state=block[U]),
+    }, periodic=PeriodicAxes((y,))))
+    case.numerics(plan, block=block)
+    dt = .05/max(cells)
+    program = pops.Program("outflow_SSPRK2")
+    temporal = program.state(block[U])
+    first = rate(temporal.n)
+    predictor = program.value("predictor", temporal.n + program.dt*first,
+                              at=program.stage("predictor", c=1))
+    accepted = program.value("accepted", .5*temporal.n + .5*(predictor + program.dt*rate(predictor)),
+                             at=temporal.next.point)
+    program.commit(temporal.next, accepted)
+    program.step_strategy(FixedDt(dt))
+    case.program(program)
+    case.initials.add(InitialCondition(state=block[U], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+    xc, yc = np.meshgrid((np.arange(cells[0])+.5)/cells[0], (np.arange(cells[1])+.5)/cells[1])
+    amp = .2*np.sinc(1/cells[0])*np.sinc(1/cells[1])
+    initial = (1+amp*np.cos(2*np.pi*(xc+yc)))[None]  # exact cell averages
+
+    def invariants(runtime):
+        actual = state_array(runtime, "fluid", initial.shape)
+        if actual is None:
+            return non_owner_metrics()
+        out = {"metrics_owner": True, "finite": bool(np.all(np.isfinite(actual))),
+               "state_change": float(np.max(np.abs(actual-initial))),
+               "minimum": float(np.min(actual)), "maximum": float(np.max(actual))}
+        out["passed"] = bool(out["finite"] and out["state_change"] > 1.e-10
+                             and out["minimum"] >= float(np.min(initial)) - 1.e-14
+                             and out["maximum"] <= float(np.max(initial)) + 1.e-14)
+        return out
+
+    subject = block[U]
+    return CaseSpec(case, layout, {subject: np.ascontiguousarray(initial)}, {"fluid": subject},
+        4*dt, dt, invariants,
+        "Outflow: M01's 2D scalar transport with physical x faces, first-order FV/SSPRK2; "
+        "final state within the initial range")
 
 
 # case -> (builder, native face, Python face, builder options, evolved block)
@@ -34,6 +115,7 @@ PAIRS = {
     "M01-hll": (build_m01, native_hll, hll, SIGNED, "fluid"),
     "M03-hll": (build_m03, native_hll, hll, SIGNED, "fluid"),
     "M16-hll": (build_m16, native_hll, hll, {}, "moments"),
+    "outflow-rusanov": (build_outflow, native_rusanov, rusanov, {}, "fluid"),
 }
 
 

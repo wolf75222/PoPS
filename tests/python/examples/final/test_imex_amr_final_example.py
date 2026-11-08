@@ -110,12 +110,20 @@ def test_resolved_amr_lowering_report_covers_every_executed_authority(temporal_r
     assert amr_rows
     assert all(row.disposition == "lowered" and row.targets for row in amr_rows)
 
-    predicate_sources = {
+    # The criterion is written as regions of ``cell``: each region is generated into the
+    # compiled Program, so every one of them lowers to the criterion entry.
+    region_sources = sorted(
         row.source.rsplit(":", 1)[-1]
         for row in amr_rows
-        if row.source.startswith("amr-tagging-predicate:")
-    }
-    assert predicate_sources == {"above", "any_of", "below", "gradient_above"}
+        if row.source.startswith("amr-refinement-region:")
+    )
+    assert region_sources == ["coarsen/0", "refine/0", "refine/1"]
+    assert {
+        target
+        for row in amr_rows
+        if row.source.startswith("amr-refinement-region:")
+        for target in row.targets
+    } == {"program-entry:pops_program_refinement_criterion_amr"}
     source_families = {
         row.source.split(":", 1)[0]
         for row in amr_rows
@@ -126,10 +134,10 @@ def test_resolved_amr_lowering_report_covers_every_executed_authority(temporal_r
         "amr-hierarchy",
         "amr-regrid",
         "amr-subcycling",
+        "amr-refinement-criterion",
+        "amr-refinement-region",
         "amr-tagging-conflict-policy",
-        "amr-tagging-graph",
         "amr-tagging-hysteresis",
-        "amr-tagging-predicate",
         "amr-transfer-entry",
         "amr-transfer-plan",
     } <= source_families
@@ -160,12 +168,12 @@ def test_resolved_amr_lowering_report_covers_every_executed_authority(temporal_r
         in hysteresis_row.targets
     )
 
-    tagging = resolved.bootstrap_plan.tagging.inspect()["graph"]
-    assert tagging["refine"]["node_type"] == "any_of"
-    assert {
-        child["node_type"] for child in tagging["refine"]["children"]
-    } == {"above", "gradient_above"}
-    assert tagging["coarsen"]["node_type"] == "below"
+    tagging = resolved.bootstrap_plan.tagging.inspect()
+    assert tagging["resolved_type"] == "amr_refinement_criterion"
+    assert tagging["decision"] == "refine_then_coarsen"
+    assert [region[0] for region in tagging["refine"]] == [">", ">"]
+    assert [region[0] for region in tagging["coarsen"]] == ["<"]
+    assert [row["block"] for row in tagging["fields"]] == [target.authoring.tracer.name]
     assert tagging["hysteresis"] == {
         "schema_version": 1,
         "hysteresis_type": "min_cycles",
