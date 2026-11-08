@@ -105,12 +105,51 @@ def _native_layout(layout_plan):
     return normalized.native_spatial_layout
 
 
-@pytest.mark.parametrize("value", [0, 1, "true", None, object()])
+@pytest.mark.parametrize("value", [0, 1, "true", object()])
 def test_patch_layout_requires_an_exact_bool(value):
     from pops.amr import PatchLayout
 
     with pytest.raises(TypeError, match="exact bool"):
         PatchLayout(distribute_coarse=value)
+
+
+def test_plan_choice_and_compile_refusal_read_one_interface_predicate():
+    from pops.amr._resolution import _planned_coarse_distribution, carries_cross_block_interface
+
+    authority = SimpleNamespace(interfaces=("between_blocks",), boundaries=())
+    composed = SimpleNamespace(
+        interfaces=(), boundaries=(SimpleNamespace(interfaces=("between_blocks",)),))
+    plain = SimpleNamespace(interfaces=(), boundaries=(SimpleNamespace(interfaces=()),))
+    assert carries_cross_block_interface(authority)
+    assert carries_cross_block_interface(composed)
+    assert not carries_cross_block_interface(plain)
+    assert not carries_cross_block_interface(None)
+    # An interface declared only on a boundary partitions the coarse level too, so the plan's
+    # own choice never meets the compile-time refusal (review of the N10 note, A3).
+    unconstrained = {"distribute_coarse": None}
+    for numerics, expected in ((authority, True), (composed, True), (plain, False)):
+        context = SimpleNamespace(numerics=(numerics,))
+        assert _planned_coarse_distribution(unconstrained, context) is expected
+    assert _planned_coarse_distribution({"distribute_coarse": False},
+                                        SimpleNamespace(numerics=(composed,))) is False
+
+
+def test_default_patch_layout_lets_the_plan_choose_a_replicated_coarse_level():
+    # Spec 0.3 DM3 and gap C50: the plan chooses the distribution. With no cross-block interface
+    # it keeps the replicated coarse level of b6; an explicit False stays a satisfied constraint.
+    from pops.amr import PatchLayout
+
+    default = PatchLayout()
+    assert default.distribute_coarse is None
+    assert default.to_data()["distribute_coarse"] is None
+    for patch_layout in (default, PatchLayout(distribute_coarse=False)):
+        _, layout, _, authorities = _resolved_target(patch_layout=patch_layout)
+        assert layout.options()["patch_layout"] == patch_layout.to_data()
+        assert authorities.hierarchy.plan.patch_generation.options.to_data() == {
+            "native_route": "box_array",
+            "distribute_coarse": False,
+            "coarse_max_grid": None,
+        }
 
 
 @pytest.mark.parametrize("value", [True, False, 1.0, "8", object()])

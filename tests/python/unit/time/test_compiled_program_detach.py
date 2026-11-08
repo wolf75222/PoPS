@@ -242,6 +242,216 @@ def test_source_mutations_and_stale_containers_cannot_change_detached_program():
         detached._commits[state_ref] = next(iter(detached._commits.values()))
 
 
+def _counted_projections(monkeypatch):
+    """Record each Program whose IR identity projection (``include_provenance=False``) runs."""
+    projections = []
+    original = Program._serialize
+
+    def counted(self, *args, **kwargs):
+        if kwargs.get("include_provenance", True) is False:
+            projections.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Program, "_serialize", counted)
+    return projections
+
+
+def test_compile_identity_reuse_projects_once_and_reauthenticates_on_success(monkeypatch):
+    from pops.time._program.serialization import ir_identity_reuse
+
+    authored = _authored_program()
+    source = authored["program"].freeze()
+    unfrozen = _authored_program()["program"]
+    expected = source._ir_hash()
+    projections = _counted_projections(monkeypatch)
+    with ir_identity_reuse("pops.compile"):
+        assert [source._ir_hash() for _ in range(4)] == [expected] * 4
+        with ir_identity_reuse("pops.compile"):
+            assert source._ir_hash() == expected
+        detached = detach_compiled_program(source)
+        assert detached.to_graph() is detached.to_graph()
+        unfrozen._ir_hash()
+        unfrozen._ir_hash()
+    # One captured identity and one fresh exit authentication per frozen Program; a mutable
+    # Program is never reused.
+    assert projections == [source, detached, unfrozen, unfrozen, source, detached]
+    projections.clear()
+    assert [source._ir_hash(), source._ir_hash()] == [expected, expected]
+    assert projections == [source, source]
+
+    projections.clear()
+    with pytest.raises(ValueError, match="lowering failed"):
+        with ir_identity_reuse("pops.compile"):
+            source._ir_hash()
+            raise ValueError("lowering failed")
+    assert projections == [source]
+
+
+@pytest.mark.parametrize("change", ["definition", "out_of_contract_edit"])
+def test_compile_identity_reuse_fails_when_a_reused_identity_changed(change):
+    from pops.time._program.serialization import ir_identity_reuse
+
+    authored = _authored_program()
+    source = authored["program"].freeze()
+    detached = detach_compiled_program(source)
+    expected = detached._ir_hash()
+    changed = source if change == "definition" else detached
+    with pytest.raises(RuntimeError, match="changed during pops.compile"):
+        with ir_identity_reuse("pops.compile"):
+            assert changed._ir_hash() == expected
+            if change == "definition":
+                authored["model"]._registry.register_alias("decay-alias", "decay")
+            else:
+                object.__setattr__(detached, "name", "altered")
+            assert changed._ir_hash() == expected
+    assert changed._ir_hash() != expected
+
+
+@pytest.mark.parametrize("exit", ["success", "error"])
+def test_compile_identity_reuse_leaves_no_graph_binding_after_the_scope(exit):
+    from pops.codegen.program_graph_lowering import emit_program_graph
+    from pops.time._program.serialization import ir_identity_reuse
+
+    program = Program("cached")
+    program.int64(3)
+    detached = detach_compiled_program(program)
+    converted = []
+
+    def convert_a_transient_edit():
+        detached._ir_hash()
+        # A transient out-of-contract edit, undone before the scope ends: a successful exit passes.
+        object.__setattr__(detached, "name", "altered")
+        converted.append(detached.to_graph())
+        object.__setattr__(detached, "name", "cached")
+
+    if exit == "success":
+        with ir_identity_reuse("pops.compile"):
+            convert_a_transient_edit()
+    else:
+        with pytest.raises(ValueError, match="lowering failed"):
+            with ir_identity_reuse("pops.compile"):
+                convert_a_transient_edit()
+                raise ValueError("lowering failed")
+    (altered,) = converted
+    # With or without an error, the graph converted under the first read's identity does not
+    # outlive the scope.
+    assert detached.to_graph() is not altered
+    with pytest.raises(ValueError, match="does not match"):
+        emit_program_graph(altered, lowering_program=detached)
+
+
+def test_compile_identity_reuse_is_bound_to_the_thread_that_opens_it(monkeypatch):
+    import contextvars
+    import threading
+
+    from pops.time._program.serialization import ir_identity_reuse
+
+    source = _authored_program()["program"].freeze()
+    expected = source._ir_hash()
+    projections = _counted_projections(monkeypatch)
+    with ir_identity_reuse("pops.compile"):
+        assert source._ir_hash() == expected
+        context = contextvars.copy_context()
+        reads = []
+        worker = threading.Thread(target=lambda: context.run(
+            lambda: reads.extend(source._ir_hash() for _ in range(2))))
+        worker.start()
+        worker.join()
+        assert reads == [expected, expected]
+    # The opening thread's first read and exit authentication, plus a fresh projection for each
+    # read of the copied context on the other thread.
+    assert projections == [source] * 4
+
+
+def test_public_compile_reads_identities_in_one_reuse_scope(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    import pops
+    import pops._native_selector as selector
+    import pops.codegen._phases as phases
+    import pops.codegen._plans as plans
+    import pops.codegen.region_facts as region_facts
+    from pops import _api
+
+    source = _authored_program()["program"].freeze()
+    expected = source._ir_hash()
+    projections = _counted_projections(monkeypatch)
+    result = object()
+
+    class Resolved:
+        resolved_dimension = 2
+
+        @staticmethod
+        def verify() -> None:
+            assert source._ir_hash() == expected
+
+    def compile_phase(plan):
+        assert [source._ir_hash(), source._ir_hash()] == [expected, expected]
+        return result
+
+    bootstrap = ModuleType("pops._bootstrap")
+    monkeypatch.setattr(plans, "ResolvedSimulationPlan", Resolved)
+    # pops.compile also checks the expected region classes of the verified plan (#710, IR21);
+    # this stand-in plan has no regions.
+    monkeypatch.setattr(region_facts, "check_expected_classes", lambda plan: ())
+    monkeypatch.setattr(selector, "select_native_dimension", lambda dimension: None)
+    monkeypatch.setitem(sys.modules, "pops._bootstrap", bootstrap)
+    monkeypatch.setattr(pops, "_bootstrap", bootstrap, raising=False)
+    monkeypatch.setattr(phases, "compile", compile_phase)
+
+    assert _api.compile(Resolved()) is result
+    # The plan check and the compile phase read in one scope: the first read projects, the
+    # later reads reuse it, and the successful exit authenticates it once.
+    assert projections == [source, source]
+
+
+def test_public_resolve_reads_identities_in_one_reuse_scope(monkeypatch):
+    import pops.codegen._phases as phases
+    from pops import _api
+
+    source = _authored_program()["program"]
+    projections = _counted_projections(monkeypatch)
+    result = object()
+
+    def resolve_phase(case, **options):
+        # Models a phase that also freezes a Program itself; the real resolve reads only Programs
+        # that pops.validate froze, so its first read projects and the next three reuse it.
+        before_freeze = source._ir_hash()
+        source.freeze()
+        identities = [source._ir_hash() for _ in range(3)]
+        assert identities == [before_freeze] * 3
+        return result
+
+    monkeypatch.setattr(phases, "resolve", resolve_phase)
+
+    assert _api.resolve(object(), layout=object()) is result
+    # The read before the freeze projects; after it the first read projects, the later reads
+    # reuse it, and the successful exit authenticates it once.
+    assert projections == [source, source, source]
+
+
+def test_public_resolve_fails_when_a_program_read_during_it_changes(monkeypatch):
+    import pops.codegen._phases as phases
+    from pops import _api
+
+    authored = _authored_program()
+    source = authored["program"].freeze()
+    expected = source._ir_hash()
+
+    def resolve_phase(case, **options):
+        assert source._ir_hash() == expected
+        authored["model"]._registry.register_alias("decay-alias", "decay")
+        assert source._ir_hash() == expected
+        return object()
+
+    monkeypatch.setattr(phases, "resolve", resolve_phase)
+
+    with pytest.raises(RuntimeError, match="changed during pops.resolve"):
+        _api.resolve(object(), layout=object())
+    assert source._ir_hash() != expected
+
+
 def test_detached_program_does_not_keep_source_program_or_registries_alive():
     def build():
         authored = _authored_program()

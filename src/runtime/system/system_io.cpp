@@ -802,6 +802,50 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
         "System::install_program: Program declares a dt bound but pops_program_dt_bound is "
         "missing; regenerate the System artifact");
   }
+  // A Program elaborated from an Advance exports its attempt budget (spec 0.3 T38); System::run_advance
+  // runs only such a Program. A Program without the entry keeps the facade step routes alone.
+  using advance_attempts_t = int (*)();
+  auto advance_attempts = reinterpret_cast<advance_attempts_t>(
+      pops::dynlib::sym(h, "pops_program_advance_max_attempts"));
+  const int advance_max_attempts = advance_attempts ? advance_attempts() : 0;
+  if (advance_attempts && advance_max_attempts < 1) {
+    pops::dynlib::close(h);
+    throw std::runtime_error(
+        "System::install_program: Program declares an Advance with no attempt; regenerate the "
+        "System artifact");
+  }
+  // The Outputs of an elaborated Advance (spec 0.3 CC14): their count, the scalar count of each,
+  // and the generated entry that evaluates the scalars of one Output on the accepted state.
+  using advance_output_count_t = int (*)();
+  using advance_output_scalar_count_t = int (*)(int);
+  using advance_output_scalars_t = void (*)(System<Dim>*, int, pops::Real*);
+  auto advance_output_count = reinterpret_cast<advance_output_count_t>(
+      pops::dynlib::sym(h, "pops_program_advance_output_count"));
+  auto advance_output_scalar_count = reinterpret_cast<advance_output_scalar_count_t>(
+      pops::dynlib::sym(h, "pops_program_advance_output_scalar_count"));
+  auto advance_output_scalars = reinterpret_cast<advance_output_scalars_t>(
+      pops::dynlib::sym(h, "pops_program_advance_output_scalars"));
+  std::vector<int> advance_output_scalar_counts;
+  if (advance_output_count || advance_output_scalar_count || advance_output_scalars) {
+    const int outputs = advance_output_count ? advance_output_count() : -1;
+    if (!advance_attempts || !advance_output_count || !advance_output_scalar_count ||
+        !advance_output_scalars || outputs < 1) {
+      pops::dynlib::close(h);
+      throw std::runtime_error(
+          "System::install_program: Program declares Advance outputs without its complete "
+          "output entries; regenerate the System artifact");
+    }
+    for (int output = 0; output < outputs; ++output) {
+      const int scalars = advance_output_scalar_count(output);
+      if (scalars < 0) {
+        pops::dynlib::close(h);
+        throw std::runtime_error(
+            "System::install_program: Program declares an Advance output with a negative scalar "
+            "count; regenerate the System artifact");
+      }
+      advance_output_scalar_counts.push_back(scalars);
+    }
+  }
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
   const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
   auto install_boundaries = reinterpret_cast<void (*)(System<Dim>*)>(
@@ -1163,6 +1207,17 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     if (program_has_dt_bound) {
       System<Dim>* self = this;
       p_->program_.dt_bound_ = [self, dt_bound](Real cfl) -> Real { return dt_bound(self, cfl); };
+    }
+    p_->program_.advance_max_attempts_ = advance_max_attempts;
+    p_->program_.advance_output_scalar_counts_ = std::move(advance_output_scalar_counts);
+    if (!p_->program_.advance_output_scalar_counts_.empty()) {
+      System<Dim>* self = this;
+      p_->program_.advance_output_scalars_ = [self, advance_output_scalars](int output,
+                                                                            Real* values) {
+        advance_output_scalars(self, output, values);
+      };
+    } else {
+      p_->program_.advance_output_scalars_ = nullptr;
     }
     p_->program_.artifact_backed_ = true;
 

@@ -548,6 +548,40 @@ void prove_synchronized_envelopes() {
   }
 }
 
+template <int Dim>
+void prove_interface_provider_publication_vote() {
+  auto hierarchy = make_hierarchy<Dim>();
+  const pops::ExecutionLane& lane = hierarchy.lane();
+  const int failing_rank = lane.size() - 1;
+  pops::RealVector<Dim> lower{};
+  pops::RealVector<Dim> upper{};
+  for (int axis = 0; axis < Dim; ++axis)
+    upper[axis] = pops::Real(1);
+  const auto geometry = pops::Geometry<Dim>::from_bounds(
+      hierarchy.topology_runtime().hierarchy().layout(0).domain(), lower, upper);
+  // Only the last rank fails to publish the provider; every rank leaves with that rank's reason.
+  try {
+    hierarchy.install_interface_flux_provider(
+        "test.multiblock-subcycling.interface-provider." + std::to_string(Dim), geometry,
+        [](typename MultiBlock<Dim>::interface_scheduler_type&) {},
+        [&] {
+          if (lane.rank() == failing_rank)
+            throw std::invalid_argument("deliberate publication failure");
+        });
+    ADD_FAILURE() << "a publication failure on one rank must leave every rank";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_EQ(lane.size(), 1);
+    EXPECT_STREQ(error.what(), "deliberate publication failure");
+  } catch (const std::runtime_error& error) {
+    EXPECT_GT(lane.size(), 1);
+    const std::string reason =
+        "rank " + std::to_string(failing_rank) + ": deliberate publication failure";
+    EXPECT_NE(std::string_view(error.what()).find(reason), std::string_view::npos) << error.what();
+  }
+  EXPECT_FALSE(hierarchy.has_interface_flux_provider());
+  EXPECT_TRUE(hierarchy.interface_flux_provider_contract().empty());
+}
+
 }  // namespace
 
 TEST(test_amr_multiblock_substeps, three_levels_two_blocks_are_atomic_and_conservative) {
@@ -560,4 +594,10 @@ TEST(test_amr_multiblock_substeps, synchronized_envelopes_preserve_parent_time_a
   prove_synchronized_envelopes<1>();
   prove_synchronized_envelopes<2>();
   prove_synchronized_envelopes<3>();
+}
+
+TEST(test_amr_multiblock_substeps, interface_provider_publication_failure_carries_the_rank_reason) {
+  prove_interface_provider_publication_vote<1>();
+  prove_interface_provider_publication_vote<2>();
+  prove_interface_provider_publication_vote<3>();
 }

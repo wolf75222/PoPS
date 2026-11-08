@@ -65,6 +65,19 @@ from .tagging_graph import (
     TagExpr,
     TaggingGraph,
 )
+from .refinement_criterion import (
+    CriterionCell,
+    RefinementCriterionField,
+    RefinementRegion,
+    ResolvedRefinementCriterion,
+    resolve_refinement_criterion,
+)
+from .regrid_decision import (
+    Regrid,
+    RegridWhen,
+    ResolvedRegridDecision,
+    resolve_regrid_decision,
+)
 from .tagging_resolution import (
     ResolvedTaggingGraph,
     TagDecision,
@@ -476,6 +489,15 @@ __all__ = [
     "TagExpr",
     "TaggingGraph",
     "ResolvedTaggingGraph",
+    "CriterionCell",
+    "RefinementCriterionField",
+    "RefinementRegion",
+    "ResolvedRefinementCriterion",
+    "resolve_refinement_criterion",
+    "Regrid",
+    "RegridWhen",
+    "ResolvedRegridDecision",
+    "resolve_regrid_decision",
     "TagDecision",
     "TagNodeRegistration",
     "TagNodeRegistry",

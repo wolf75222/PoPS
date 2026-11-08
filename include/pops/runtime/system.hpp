@@ -4,6 +4,7 @@
 #include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
 
 #include <pops/runtime/program/accepted_exchange.hpp>
+#include <pops/runtime/program/advance_run.hpp>
 #include <limits>
 
 #include <pops/core/state/variables.hpp>  // VariableSet (role-bearing descriptor carried by each block)
@@ -13,6 +14,7 @@
 #include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/numerics/spatial/nd/face_frequency_rule.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/mesh/boundary/prepared_hyperbolic_boundary.hpp>
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
@@ -29,6 +31,7 @@
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/system_block_closures.hpp>
 #include <pops/runtime/system/native_package_capability.hpp>
+#include <pops/runtime/system/prepared_active_mask_consensus.hpp>
 
 #include <array>
 #include <cstddef>
@@ -847,6 +850,17 @@ class System {
   /// @}
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
+  /// Compiled run of the installed Advance (spec 0.3 section 5.2, CC14): attempts of @p proposal
+  /// until the accepted time is @p until, landing there and on each time of @p outputs as master's
+  /// fixed step does, after at most @p max_steps accepted steps and Retry.max_attempts attempts per
+  /// step; the Outputs of the Advance, one schedule each, are evaluated at the start of the run and
+  /// after the publications they are due on. Collective; the rules are those of
+  /// runtime/program/advance_run.hpp.
+  runtime::program::AdvanceRunReport run_advance(
+      double until, double proposal, std::int64_t max_steps,
+      const std::vector<runtime::program::AdvanceOutputSchedule>& outputs = {});
+  /// Retry.max_attempts of the installed Advance; 0 when the installed Program has none.
+  int advance_max_attempts() const noexcept;
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
   POPS_EXPORT std::string advance_program_region(double dt);
   void begin_step_transaction();
@@ -1072,15 +1086,16 @@ class System {
       const std::vector<MultiFab<Dim>*>& states, const std::vector<MultiFab<Dim>*>& rhs,
       const std::vector<int>& flux_only,
       const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces);
-  /// The same group, also observing the local maximum incident-face frequency of each requested
-  /// block's evaluated faces. The frequency is read under the block's prepared scratch lock and
-  /// assigned only after the group published; observing it alone allocates no field.
+  /// The same group, also observing the local maximum face frequency (by ``frequency_rule``) of
+  /// each requested block's evaluated faces. It is read under the block's prepared scratch lock
+  /// and assigned only after the group published; observing it alone allocates no field.
   POPS_EXPORT void block_rhs_group(
       const runtime::multiblock::BoundaryEvaluationPoint& point, const std::vector<int>& blocks,
       const std::vector<MultiFab<Dim>*>& states, const std::vector<MultiFab<Dim>*>& rhs,
       const std::vector<int>& flux_only,
       const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces,
-      const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& retained_frequencies);
+      const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& retained_frequencies,
+      nd::FaceFrequencyRule frequency_rule = {});
   /// Whether the bound prepared group transport can evaluate one block's flux-only residual with
   /// face observations: a prepared Cartesian closure, no shared-interface provider and no active
   /// embedded boundary. Program face observers use a standalone session otherwise.
@@ -1611,6 +1626,12 @@ class System {
   /// become a public publication route.
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_active_mask_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
+  /// The rank-local half of prepared_program_block_active_mask_, without any collective, so a
+  /// generated-Program helper decides its own checks and this query in one collective (spec 0.3
+  /// SV20, PF8) through prepared_active_mask_consensus.hpp.
+  [[nodiscard]] POPS_EXPORT runtime::system::PreparedActiveMaskLocal<MultiFab<Dim>>
+  prepared_program_block_active_mask_local_(int runtime_block, const MultiFab<Dim>& field,
+                                            const ExecutionLane& lane) const;
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_volume_fraction_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext

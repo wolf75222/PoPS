@@ -187,6 +187,9 @@ class Program(
         # Optional bounded AMR cell-local execution authority.  It is explicit, immutable after
         # authoring and serialized into the Program hash; codegen never infers this route from dt.
         self._cell_local_time = None
+        # Optional Regrid(criterion, when) of an adaptive Program (DM13b): the refinement criterion
+        # and the decision to regrid, generated into the compiled Program.
+        self._regrid = None
         # Optional post-reflux AMR phase.  Commits authored inside after_synchronization live here
         # so the main step can still commit the same state exactly once before synchronization.
         self._post_sync_commits = {}
@@ -196,6 +199,12 @@ class Program(
         self._integral_transfers = []
         self._transaction_stores = ALL_PROVISIONAL_STORES
         self._acceptance_guards = ()
+        # The compiled control of the Advance this Program elaborates (control.AdvanceControl), or
+        # None for a Program authored on the builder; it enters the Program identity.
+        self._advance_control = None
+        # The Outputs of that Advance (outputs.OutputRegion), each a read-only region of the builder
+        # evaluated by the compiled run between steps (spec 0.3 CC14); they enter the identity.
+        self._advance_outputs = ()
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
         # freeze, adding an IR node (via _new) RAISES -- a compiled artifact is frozen to exactly the
         # program it was compiled from. Emission / hashing are pure reads and stay allowed.
@@ -300,6 +309,29 @@ class Program(
         self._transaction_stores = stores
         return self
 
+    def _set_advance_control(self, control: Any) -> None:
+        """Record, once, the compiled control of the Advance that this Program elaborates."""
+        from .control import AdvanceControl
+
+        self._guard_mutable("set the Advance control")
+        if type(control) is not AdvanceControl:
+            raise TypeError("Program._set_advance_control takes an AdvanceControl")
+        if self._advance_control is not None:
+            raise ValueError("Program already elaborates an Advance")
+        self._advance_control = control
+
+    def _set_advance_outputs(self, regions: Any) -> None:
+        """Record, once, the traced Outputs of the Advance that this Program elaborates."""
+        from .outputs import OutputRegion
+
+        self._guard_mutable("set the Advance outputs")
+        regions = tuple(regions)
+        if not regions or any(type(region) is not OutputRegion for region in regions):
+            raise TypeError("Program._set_advance_outputs takes OutputRegion values")
+        if self._advance_outputs:
+            raise ValueError("Program already elaborates the Outputs of an Advance")
+        self._advance_outputs = regions
+
     def cadence(self, *, substeps: Any = 1, stride: Any = 1) -> Any:
         """Declare the global Program cadence once, before compile.
 
@@ -321,6 +353,28 @@ class Program(
         if type(cadence) is not ProgramCadence:
             raise TypeError("Program carries an invalid cadence contract")
         return cadence
+
+    def regrid(self, regrid: Any) -> Any:
+        """Write the decision to regrid in the Program, once: ``Regrid(criterion, when)`` (DM13b).
+
+        ``criterion`` is an ``AMRTagging`` whose rules are functions of ``cell``; ``when`` is a
+        closed body of the accepted continuation that returns a Bool, such as
+        ``pops.lib.time.every(4)``. Both are generated into the compiled Program, and the adaptive
+        layout of the case then writes neither ``tagging=`` nor ``regrid=``.
+        """
+        from pops.mesh._amr.regrid_decision import Regrid
+
+        self._guard_mutable("set Program regrid")
+        if self._regrid is not None:
+            raise ValueError("Program.regrid may be declared only once")
+        if type(regrid) is not Regrid:
+            raise TypeError("Program.regrid takes a Regrid(criterion, when)")
+        self._regrid = regrid
+        return self
+
+    def regrid_contract(self) -> Any:
+        """Return the authored ``Regrid``, or ``None`` when the adaptive layout decides."""
+        return self._regrid
 
     def cell_local_time(self, *, tick_denominator: Any, rung: Any = 0) -> Any:
         """Select the prepared cell-local AMR execution route.

@@ -983,7 +983,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 137-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 141-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -996,7 +996,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "137"
+      SHARD_TOTAL: "141"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1761,7 +1761,7 @@ jobs:
           fi
           # Two heavy -O0 test units at a time (the presets keep one): one at a time, the two
           # remaining native test phases of a cold build passed the 60-minute step. Their measured
-          # peak memory is in docs/development/change_aware_ci.md; the isolated phase keeps one.
+          # peak memory is in docs/development/change_aware_ci.md; test_program_runtime keeps one.
           cmake --preset ci-mpi \
             -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
             -DPOPS_BUILD_PYTHON=ON \
@@ -1800,9 +1800,13 @@ jobs:
           test "$(( ${#isolated_targets[@]} + ${#remaining0_targets[@]} + ${#remaining1_targets[@]} ))" \
             -eq "${{ steps.mpi-test-plan.outputs.cpp_label_count }}"
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
-          # The program runtime and loader DSOs remain isolated for peak memory.
+          # One 28-minute watchdog covers the isolated phase. The loader fixture DSOs compile
+          # first, two at a time in the heavy-TU pool; then test_program_runtime and the other
+          # isolated targets compile with one compiler, so no other compiler runs beside
+          # test_program_runtime. Measured peak memory is in docs/development/change_aware_ci.md.
           run_with_heartbeat "MPI isolated native test build" 28m \
-            cmake --build --preset ci-mpi --parallel 1 --target "${isolated_targets[@]}"
+            bash -c 'cmake --build --preset ci-mpi --parallel 2 --target pops_synthetic_loader_fixtures &&
+              cmake --build --preset ci-mpi --parallel 1 --target "$@"' isolated "${isolated_targets[@]}"
           run_with_heartbeat "MPI remaining native test build0" 28m \
             cmake --build --preset ci-mpi --parallel 4 --target "${remaining0_targets[@]}"
           run_with_heartbeat "MPI remaining native test build1" 28m \

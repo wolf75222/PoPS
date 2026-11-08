@@ -30,6 +30,8 @@ from pops.physics.diffusion import DiffusiveBoundary
 from pops.projection import ConservativeCellAverage
 from pops.solvers import CG
 from pops.time import FailRun, FixedDt
+from pops.time._program.elaboration import Advance, Proposal, elaborate
+from pops.time._program.traced_method import Candidate, method
 
 from .common import CaseSpec, non_owner_metrics, state_array
 
@@ -95,6 +97,40 @@ def _ssprk2(case, block, state, evaluate, dt, *, name, trace_quantity=False):
     return program, quantity
 
 
+@method
+def shu_osher_ssprk2(B, p, flow):
+    """The two stages of _ssprk2, in the same Shu-Osher form, as a traced method (N8)."""
+    k0 = flow(B.state, B.time)
+    U1 = B.state + p.dt*k0
+    k1 = flow(U1, B.time + p.dt)
+    return Candidate(.5*B.state + .5*(U1 + p.dt*k1), B.time + p.dt)
+
+
+def _traced_ssprk2(case, block, state, flow, dt, *, name):
+    """The traced route of the profiles whose stages read one rate of their model.
+
+    _ssprk2 stays the b6 reference of these profiles: their native test compares both
+    routes bit for bit (MG1). The Program keeps the b6 name of the profile.
+    """
+    return elaborate(Advance(shu_osher_ssprk2(flow=flow)), case=case, state=block[state],
+                     proposal=Proposal(dt), name=name)
+
+
+def stencil_rate(prefix, flux):
+    """The rate ``-div_h(flux)`` of a closed ``StencilFlux``, as a component of a traced method.
+
+    Evaluation k of a Program is named ``<prefix>stage<k>``, the name that the b6 builder gives
+    to the stencil of its stage k (``NS_stage0``, ``MHD_stage1``), so the region names that N7
+    reports stay those of b6.
+    """
+    def rate(state):
+        program = state.prog
+        evaluation = sum(1 for value in program._values if value.op == "stencil_flux_divergence")
+        return program.stencil_flux_divergence("%sstage%d" % (prefix, evaluation), state,
+                                               flux=flux)
+    return rate
+
+
 def _periodic_metrics(initial, *, block="fluid", components=(0,), tolerance=2.e-10,
                       minimum=None, reference=None, error_limit=None, changed=True):
     def check(runtime):
@@ -140,7 +176,7 @@ def build_m01(cells=(16, 8), *, scheme=rusanov, signed_wave_speeds=False):
     block = case.block("fluid", model)
     plan = DiscretizationPlan(); plan.rates.add(rate, scheme(flux, U)); case.numerics(plan, block=block)
     dt, end = .05/max(cells), .1/max(cells)
-    _ssprk2(case, block, U, lambda p, u, point, label: rate(u), dt, name="M01_SSPRK2")
+    _traced_ssprk2(case, block, U, rate, dt, name="M01_SSPRK2")
     x, y = np.meshgrid((np.arange(cells[0])+.5)/cells[0], (np.arange(cells[1])+.5)/cells[1])
     amp = .2*np.sinc(1/cells[0])*np.sinc(1/cells[1])
     initial = (1+amp*np.cos(2*np.pi*(x+y)))[None]
@@ -173,7 +209,7 @@ def build_m02(cells=(16, 8)):
     case = pops.Case("M02_Godunov_shock_rarefaction"); block = case.block("fluid", model)
     plan = DiscretizationPlan(); plan.rates.add(rate, _fv(flux, U, face)); case.numerics(plan, block=block)
     dt, end = .04/max(cells), .08/max(cells)
-    _ssprk2(case, block, U, lambda p,u,point,label: rate(u), dt, name="M02_SSPRK2")
+    _traced_ssprk2(case, block, U, rate, dt, name="M02_SSPRK2")
     line = np.where(np.arange(cells[0]) < cells[0]//2, 2., 1.)
     initial = np.broadcast_to(line, (1, cells[1], cells[0])).copy()
     def rate_reference(u):
@@ -242,7 +278,7 @@ def build_m03(cells=(16,8), *, gamma=1.4, pressure_offset=.2, scheme=rusanov,
     case=pops.Case("M03_full_Euler_entropy_wave");block=case.block("fluid",model)
     plan=DiscretizationPlan();plan.rates.add(rate,scheme(flux,U));case.numerics(plan,block=block)
     dt,end=.02/max(cells),.04/max(cells)
-    _ssprk2(case,block,U,lambda p,u,point,label:rate(u),dt,name="M03_SSPRK2")
+    _traced_ssprk2(case,block,U,rate,dt,name="M03_SSPRK2")
     x=(np.arange(cells[0])+.5)/cells[0]
     def data(time):
         rho=np.broadcast_to(1+.1*np.sinc(1/cells[0])*np.cos(2*np.pi*(x-.3*time)),(cells[1],cells[0]))
@@ -275,7 +311,7 @@ def build_m04(cells=(16,8)):
     plan=DiscretizationPlan();plan.rates.add(advection,_fv(flux,U));plan.rates.add(conduction,TensorDiffusion(flux=diffusion))
     case.numerics(plan,block=block)
     dt,end=.03/(max(cells)**2),.06/(max(cells)**2)
-    _ssprk2(case,block,U,lambda p,u,point,label:advection(u)+conduction(u),dt,name="M04_combined_SSPRK2")
+    _traced_ssprk2(case,block,U,lambda u:advection(u)+conduction(u),dt,name="M04_combined_SSPRK2")
     x,y=np.meshgrid((np.arange(cells[0])+.5)/cells[0],(np.arange(cells[1])+.5)/cells[1])
     amp=.2*np.sinc(1/cells[0])*np.sinc(1/cells[1]);initial=(1+amp*np.cos(2*np.pi*(x+y)))[None]
     exact=(1+amp*np.exp(-4*np.pi**2*sum(map(sum,K))*end)*np.cos(2*np.pi*(x+y-sum(velocity)*end)))[None]
@@ -372,8 +408,7 @@ def build_m05(cells=(16, 8), *, viscosity=.01, two_dimensional=False):
     plan = DiscretizationPlan(); plan.states.add(U, StateStorage(ghost_depth=max(flux.ghost_extent)))
     case.numerics(plan, block=block)
     dt, end = .005/max(cells), .01/max(cells)
-    _ssprk2(case, block, U, lambda p,u,point,label: p.stencil_flux_divergence(
-        "NS_"+label, u, flux=flux), dt, name="M05_SSPRK2")
+    _traced_ssprk2(case, block, U, stencil_rate("NS_", flux), dt, name="M05_SSPRK2")
     x, y = np.meshgrid((np.arange(cells[0])+.5)/cells[0], (np.arange(cells[1])+.5)/cells[1])
     rho = 1+.03*np.cos(2*np.pi*x)
     vx = .15+.03*np.sin(2*np.pi*x)
@@ -489,7 +524,7 @@ def build_m07(cells=(24,8), *, nonstationary=False):
     case=pops.Case("M07_wet_dry_lake");block=case.block("fluid",model)
     plan=DiscretizationPlan();plan.rates.add(rate,CoordinatedFiniteVolume(face=face));case.numerics(plan,block=block)
     dt,end=.02/max(cells),.04/max(cells)
-    _ssprk2(case,block,U,lambda p,u,point,label:rate(u),dt,name="M07_SSPRK2")
+    _traced_ssprk2(case,block,U,rate,dt,name="M07_SSPRK2")
     x=(np.arange(cells[0])+.5)/cells[0];bed=.4+.4*np.cos(2*np.pi*x)
     surface=.6+.04*np.sin(4*np.pi*x) if nonstationary else .6
     height=np.maximum(surface-bed,0.)

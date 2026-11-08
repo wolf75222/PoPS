@@ -15,7 +15,7 @@ from pops.numerics import (DiscretizationPlan, PathConservativeFiniteVolume,
     SymbolicPath, reconstruction, riemann, variables)
 from pops.time import FixedDt, FailRun
 from .common import CaseSpec, MissingCapabilityError, state_array, non_owner_metrics
-from .models_M01_M14 import _domain, _initial, _fv, _ssprk2
+from .models_M01_M14 import _domain, _initial, _fv, _traced_ssprk2, stencil_rate
 
 
 LIMITS = {
@@ -212,7 +212,7 @@ def build_m23(cells=(32,4), *, hall=.1, ohmic=0., dt=None, steps=8):
     dt=maximum_dt if dt is None else float(dt)
     if not 0<dt<=maximum_dt or type(steps) is not int or steps<1:
         raise ValueError("Hall reception requires a positive stable step and positive step count")
-    _ssprk2(case,block,u,lambda p,q,point,label:p.stencil_flux_divergence("MHD_"+label,q,flux=flux),dt,name="M23_SSPRK2")
+    _traced_ssprk2(case,block,u,stencil_rate("MHD_",flux),dt,name="M23_SSPRK2")
     x,y=np.meshgrid((np.arange(cells[0])+.5)/cells[0],(np.arange(cells[1])+.5)/cells[1])
     k=2*np.pi;dx=1/cells[0];kd=np.sin(k*dx)/dx;kh2=4*np.sin(k*dx/2)**2/dx**2
     omega=.5*(hall*kh2+np.sqrt((hall*kh2)**2+4*kd**2))
@@ -304,7 +304,7 @@ def build_m25(cells=(12,4), *, tau_distortion=.1, tau_heat=.1):
     case=pops.Case("M25_evolved_distortion_and_heat");block=case.block("continuum",model)
     plan=DiscretizationPlan();plan.rates.add(transport,method);plan.rates.add(relaxation,StateStorage());case.numerics(plan,block=block)
     dt=1.e-5;steps=8
-    _ssprk2(case,block,u,lambda p,q,point,label:balance(q),dt,name="M25_SSPRK2")
+    _traced_ssprk2(case,block,u,balance,dt,name="M25_SSPRK2")
     x,y=np.meshgrid((np.arange(cells[0])+.5)/cells[0],(np.arange(cells[1])+.5)/cells[1])
     initial=np.zeros((17,cells[1],cells[0]));initial[0]=1
     for i in range(3):initial[5+3*i+i]=1
@@ -450,7 +450,7 @@ def build_m24(cells=(16,4), *, pressure_relaxation=0., velocity_relaxation=0.):
     plan=DiscretizationPlan();plan.rates.add(transport,method)
     plan.rates.add(relaxation,StateStorage());case.numerics(plan,block=block)
     dt=.0005;steps=4
-    _ssprk2(case,block,u,lambda p,q,point,label:rate(q),dt,name="M24_SSPRK2")
+    _traced_ssprk2(case,block,u,rate,dt,name="M24_SSPRK2")
     x,y=np.meshgrid((np.arange(cells[0])+.5)/cells[0],(np.arange(cells[1])+.5)/cells[1])
     a=.45+.08*np.sin(2*np.pi*x);r1=a*(1+.03*np.cos(2*np.pi*x));r2=(1-a)*.8
     v1=.2+.02*np.cos(2*np.pi*x);v2=-.1+.03*np.sin(2*np.pi*x)

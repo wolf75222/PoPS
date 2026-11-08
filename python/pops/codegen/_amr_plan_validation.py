@@ -270,14 +270,19 @@ def validate_amr_authorities(plan: Any) -> None:
         NativeAMRMaterializationKind,
     )
 
-    tagging_provider = getattr(plan.bootstrap_plan.tagging, "runtime_tagging_data", None)
-    if not callable(tagging_provider):
-        raise TypeError("resolved AMR tagging must implement runtime_tagging_data(params)")
-    tagging_manifest = tagging_provider()
-    if type(tagging_manifest) is not dict \
-            or tagging_manifest.get("graph_type") != "amr_tagging_runtime" \
-            or not tagging_manifest.get("lowerings"):
-        raise TypeError("resolved AMR tagging returned an incomplete runtime provider manifest")
+    from pops.mesh._amr import ResolvedRefinementCriterion
+
+    # A refinement criterion is complete by construction: compile generates it into the Program.
+    if type(plan.bootstrap_plan.tagging) is not ResolvedRefinementCriterion:
+        tagging_provider = getattr(plan.bootstrap_plan.tagging, "runtime_tagging_data", None)
+        if not callable(tagging_provider):
+            raise TypeError("resolved AMR tagging must implement runtime_tagging_data(params)")
+        tagging_manifest = tagging_provider()
+        if type(tagging_manifest) is not dict \
+                or tagging_manifest.get("graph_type") != "amr_tagging_runtime" \
+                or not tagging_manifest.get("lowerings"):
+            raise TypeError(
+                "resolved AMR tagging returned an incomplete runtime provider manifest")
     initial_ids = {row.subject.qualified_id for row in plan.initial_condition_plan.bindings}
     for constraint in plan.bootstrap_plan.constraints:
         options = constraint.options.to_data()

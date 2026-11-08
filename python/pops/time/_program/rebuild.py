@@ -100,11 +100,17 @@ def rebuild_program(
     out._step_strategy = getattr(self, "_step_strategy", None)
     out._cadence = getattr(self, "_cadence", None)
     out._cell_local_time = getattr(self, "_cell_local_time", None)
+    out._regrid = getattr(self, "_regrid", None)
     out._post_sync_recording = False
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
     out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
+    out._advance_control = getattr(self, "_advance_control", None)
     out._integral_states = dict(getattr(self, "_integral_states", {}))
     out._integral_units = dict(getattr(self, "_integral_units", {}))
+    if project_states and getattr(self, "_advance_outputs", ()):
+        raise ValueError(
+            "state-partitioned Program rebuild requires the Outputs of an Advance to be lowered "
+            "by an explicit partitioning protocol")
     if project_states and (self._dt_bound is not None or out._acceptance_guards):
         raise ValueError(
             "state-partitioned Program rebuild requires global dt bounds and guards to be lowered "
@@ -449,6 +455,13 @@ def rebuild_program(
         sub, result = self._dt_bound
         cloned_sub = clone_block(sub)
         out._dt_bound = (cloned_sub, idmap[rep(result).id])
+    if getattr(self, "_advance_outputs", ()):
+        from .outputs import OutputRegion
+        out._advance_outputs = tuple(
+            OutputRegion(region.output, clone_block(region.sub), tuple(
+                (name, kind, item if kind == "array" else idmap[rep(item).id])
+                for name, kind, item in region.record))
+            for region in self._advance_outputs)
     self._rebuild_time_handle_tables(
         out, idmap, rep, reference_of=reference_of, state_keep=state_keep)
     transfer_issuances(self, out, remap_storage_metadata, history_names)

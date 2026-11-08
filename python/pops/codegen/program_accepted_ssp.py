@@ -75,6 +75,13 @@ def successful_guard_input(value):
     allowed = {"guard", "action"}
     if value.attrs.get("numerical_stability") == "pops.authored-stability-admission@1":
         allowed.add("numerical_stability")
+    if "assessment" in value.attrs:
+        from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT
+
+        # An assessment of an Advance rejects its attempt; it never mutates the candidate.
+        if value.attrs["assessment"] == ADVANCE_ASSESSMENT_CONTRACT \
+                and type(value.attrs.get("action")) is RejectAttempt:
+            allowed.add("assessment")
     if (
         set(value.attrs) != allowed
         or type(value.attrs.get("action")) not in (FailRun, RejectAttempt)

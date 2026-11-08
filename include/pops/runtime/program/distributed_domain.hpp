@@ -15,10 +15,37 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace pops::runtime::program::distributed {
+// A non-owning view of a callable. A collective protocol that receives one is compiled once,
+// whatever closure type a generated call site passes; the call itself is unchanged. The
+// referenced callable must outlive the call that receives the view (every use below is a
+// full-expression argument of a call that does not retain it).
+template <class Signature>
+class FunctionRef;
+template <class R, class... A>
+class FunctionRef<R(A...)> {
+ public:
+  template <class F, class = std::enable_if_t<!std::is_same_v<std::remove_cv_t<F>, FunctionRef>>>
+  FunctionRef(F& function) noexcept
+      : object_(const_cast<void*>(static_cast<const void*>(std::addressof(function)))),
+        call_(&invoke<F>) {}
+  R operator()(A... arguments) const { return call_(object_, std::forward<A>(arguments)...); }
+
+ private:
+  template <class F>
+  static R invoke(void* object, A... arguments) {
+    if constexpr (std::is_void_v<R>)
+      (*static_cast<F*>(object))(std::forward<A>(arguments)...);
+    else
+      return (*static_cast<F*>(object))(std::forward<A>(arguments)...);
+  }
+  void* object_;
+  R (*call_)(void*, A...);
+};
 using Bytes = std::vector<std::uint8_t>;
 enum class Code : std::int64_t {
   allocation = 1,
@@ -105,8 +132,7 @@ inline std::int64_t common_failure_rank(bool failed, const ExecutionLane& lane) 
 }
 // Exactly one rendezvous follows this rank-local phase, including ranks with zero work.
 // The lowest failing rank wins; local loop order defines its first failing global index.
-template <class F>
-void phase(const ExecutionLane& lane, F&& body) {
+inline void phase_erased(const ExecutionLane& lane, FunctionRef<void()> body) {
   std::optional<Failure> failure;
   try {
     body();
@@ -129,6 +155,10 @@ void phase(const ExecutionLane& lane, F&& body) {
   mpi_status(MPI_Bcast(fields.data(), 2, MPI_INT64_T, int(owner), lane.native_handle()));
 #endif
   throw Failure(Code(fields[0]), owner, fields[1]);
+}
+template <class F>
+void phase(const ExecutionLane& lane, F&& body) {
+  phase_erased(lane, FunctionRef<void()>(body));
 }
 inline void agree_i64(std::int64_t value, const ExecutionLane& lane) {
   std::int64_t lower = value, upper = value;

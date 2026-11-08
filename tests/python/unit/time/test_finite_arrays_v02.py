@@ -1,6 +1,9 @@
 """Finite arrays are typed native regions, not callbacks evaluated by the runtime."""
 from __future__ import annotations
 
+import json
+import re
+
 import pytest
 
 from pops.time import Program, TimePoint
@@ -24,6 +27,11 @@ def _source(p, q):
     return emit_cpp_program(p)
 
 
+def _placements(source, tag):
+    return [json.loads(line.split(tag + " ", 1)[1]) for line in source.splitlines()
+            if "// " + tag + " " in line]
+
+
 def test_arrays_map_scan_reduce_and_loop_carry_are_native_and_body_is_recorded_once():
     p, q = _fixture()
     d = p.range_set(p.int64((1 << 53)+3) - (1 << 53), capacity=4, ownership="replicated")
@@ -41,11 +49,22 @@ def test_arrays_map_scan_reduce_and_loop_carry_are_native_and_body_is_recorded_o
     source = _source(p, q)
     assert "std::int64_t(9007199254740995)" in source
     assert "std::bit_cast<std::int64_t>" in source
-    assert "finite_collective::allocate_values(" in source
-    assert "finite_collective::assign_any(" in source
+    # Every Array here is a device Array: the maps publish device columns through
+    # the voted allocation helpers, the scan and the reduce run as serial device
+    # regions, and the loop whose carry is an Array is sequenced on the host
+    # (DM7, DM8, IR4); no element is boxed.
+    maps = _placements(source, "pops-finite-map-placement@1")
+    ordered = _placements(source, "pops-finite-ordered-placement@1")
+    assert len(maps) == 2 and all(row["backend"] == "Kokkos::DefaultExecutionSpace" for row in maps)
+    assert sorted(row["schedule"] for row in ordered) == [
+        "host loop", "serial region (ordered, IR4)", "serial region (ordered, IR4)"]
+    assert "finite_collective::allocate_view(" in source
+    assert "finite_collective::publish(" in source
+    assert "finite_collective::allocate_values(" not in source
+    assert "finite_collective::assign_any(" not in source
     assert "pops/runtime/program/finite_structural_storage.hpp" in source
-    assert "finite array allocation capacity exhausted" in source
-    assert "for (std::int64_t finite_" in source
+    assert "for (std::int64_t step = 0; step < " in source
+    assert "for (; iteration_" in source
     assert "pops_finite_instance_version" not in source
     assert "ctx.continuation_new_domain(" in source
     assert len(calls) == 1
@@ -170,7 +189,12 @@ def test_int64_capacity_is_exact_metadata_for_small_runtime_arrays(capacity):
     assert empty.attrs["signature"]["capacity"] == capacity
     source = _source(p, q)
     assert str(capacity) in source
-    assert "std::size_t((" in source  # allocation follows domain->size, never capacity
+    # Allocation follows domain->size, never capacity.
+    counts = re.findall(
+        r"finite_collective::allocate_view\(finite_\d+_output_\d+, (finite_\d+_count), ", source)
+    assert len(counts) == 2
+    for count in counts:
+        assert re.search(r"const std::int64_t %s = \(\w+\)->size;" % count, source)
 
 
 @pytest.mark.parametrize("capacity", (-1, True, 2**63, 1.0))

@@ -916,6 +916,9 @@ inline void all_reduce_max_inplace(Real* buffer, int count, const ExecutionLane&
 inline void all_reduce_max_inplace(Real* buffer, std::size_t count, const ExecutionLane& lane) {
   all_reduce_max_inplace(buffer, count, lane.communicator());
 }
+inline void all_reduce_min_inplace(Real* buffer, int count, const ExecutionLane& lane) {
+  all_reduce_min_inplace(buffer, count, lane.communicator());
+}
 template <class T, std::enable_if_t<detail::kControlDouble<T>, int> = 0>
 inline void all_reduce_max_inplace(T* buffer, int count, const ExecutionLane& lane) {
   all_reduce_max_inplace(buffer, count, lane.communicator());

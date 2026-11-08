@@ -224,6 +224,7 @@ set(POPS_CPP_TEST_SOURCE_test_program_runtime "tests/cpp/integration/runtime/tes
 set(POPS_CPP_TEST_SOURCE_test_public_validation_errors "tests/cpp/unit/runtime/test_public_validation_errors.cpp")
 set(POPS_CPP_TEST_SOURCE_test_reduce "tests/cpp/unit/mesh/test_reduce.cpp")
 set(POPS_CPP_TEST_SOURCE_test_reduce_abs_sum "tests/cpp/unit/mesh/test_reduce_abs_sum.cpp")
+set(POPS_CPP_TEST_SOURCE_test_reduction_collectives "tests/cpp/unit/parallel/test_reduction_collectives.cpp")
 set(POPS_CPP_TEST_SOURCE_test_refinement "tests/cpp/integration/amr/test_refinement.cpp")
 set(POPS_CPP_TEST_SOURCE_test_riemann_capabilities "tests/cpp/unit/numerics/test_riemann_capabilities.cpp")
 set(POPS_CPP_TEST_SOURCE_test_roe_flux "tests/cpp/unit/numerics/test_roe_flux.cpp")

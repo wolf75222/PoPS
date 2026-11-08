@@ -152,4 +152,7 @@ def test_new_bounded_domain_map_and_fold_are_legitimate_authoring_allocations():
     result=recipe(use,incoming,body).evaluate(p)[use]
     p.commit(q.next,p.value("accepted",result,at=q.next.point))
     assert p.validate()
-    assert "for (std::int64_t finite_" in emit(model,p)
+    source=emit(model,p)
+    # Both maps are device kernels; the fold carrying an Array sequences its iterations (DM7).
+    assert source.count('Kokkos::parallel_for("pops_finite_map_')==2
+    assert "for (; iteration_" in source

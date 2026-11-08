@@ -150,8 +150,10 @@ collective I/O checks. An unrelated mapped change does not create a partial MPI 
 The MPI native build runs three sequential phases with separate 28-minute watchdogs inside a
 60-minute native-build cap; the complete job remains capped at 180 minutes. The manifest projection puts
 `test_program_runtime`, `test_amr_synthetic_program_loader_transaction`,
-`test_mpi_system_gather_scatter`, and `test_mpi_system_io_gather` in a strictly sequential compiler
-phase. Two further phases split the exact complement by the build costs of
+`test_mpi_system_gather_scatter`, and `test_mpi_system_io_gather` in an isolated phase. That phase
+first compiles the seven synthetic loader fixture DSOs of the loader test
+(`pops_synthetic_loader_fixtures`) two at a time, then its four targets with one compiler, under
+its single watchdog. Two further phases split the exact complement by the build costs of
 `tests/cpp/mpi_build_durations.json` and build it with parallelism four. The MPI job configures the
 heavy-TU pool with two slots (`-DPOPS_HEAVY_TEST_TU_POOL=2`; the presets keep one): every test that
 links the System or AMR runtime compiles at `-O0` in that pool. New manifest targets enter the
@@ -183,6 +185,69 @@ GiB, and the 56 other units of these phases peak at 1.2 GiB or less. Two heavy a
 units together therefore stay near 12.2 GiB, against the 14.5 GiB available with no compiler
 running. The isolated phase keeps one compiler: `test_program_runtime` alone left 82 MiB
 available in that run.
+
+The fixture order addresses the PR #704 `c494c61` run (job 124154515435), whose isolated phase
+used 1509 of its 1680 seconds: `test_program_runtime` compiled alone for 600 seconds, with 88 MiB
+available at worst, then the seven fixtures one at a time for 813 seconds while 11.7 to 14.2 GiB
+stayed available. Each fixture is one `-O2` compile and link of a generated Program by
+`tests/cpp/support/native_dso_compiler.hpp`, which calls the compiler directly, without ccache, so
+every build compiles all seven. Compiled alone with their exact commands (GCC 13.3, Xeon 2.1 GHz),
+they peak at 3.6 to 3.7 GiB and take 134 to 165 seconds of compiler CPU each, 1025 seconds in
+series. The isolated-phase command replayed on that machine compiled them two at a time in 586
+seconds, each fixture within 6 percent of its time alone, with a sampled peak of 7.3 GiB for the
+two compilers; the runner has 14.5 GiB available with no compiler running. The fixture rules are
+in the heavy-TU pool, whose two slots bound them at any parallelism, and `test_program_runtime`
+still compiles only after them, alone. At that ratio the fixtures of the #704 run take about 480
+instead of 813 seconds, which brings its isolated phase near 1170 seconds, 70 instead of 90
+percent of the watchdog. No watchdog, step cap or job cap changes.
+
+The MPI Python matrix gives each ranked entrypoint one 1200-second launch and each pair of
+independent worlds two 900-second orchestrator launches whose child keeps its 840-second
+watchdog. These limits do not change. A group whose measured cost exceeds its budget is split by
+cost into declared partitions instead, each its own matrix group. A ranked entrypoint lists
+`partitions = [{ id, nodes }]`, naming every case of its pytest receiver exactly once; a world
+pair lists one parent node per partition, closed by `MPI_ORCHESTRATOR_PARTITION_CONTRACTS` and
+the support module that owns the fixture inventory. Every partition launch still collects the
+whole receiver, or every function of its world inventory, and
+[`mpi_partition_units.py`](../../tests/python/support/mpi_partition_units.py) refuses any missing,
+added, renamed or duplicated case against the declared inventory before it runs the partition's
+units only. The receipts must then name exactly those units. The partitions of one selection are
+disjoint and their union is the inventory, so the lane still runs every case.
+
+Run 41037321460 of PR #705 (`cf2f510`) stopped eight ranked groups at 1200 seconds and four world
+groups at their 840-second child watchdog. Its serial shards give each case's cost; the cases each
+MPI group finished before its limit bound the ratio R of MPI to serial cost. Partitions aim at 60%
+of the budget at the upper bound of R. A single case cannot be split further.
+`relaxed_multiblock_native` failed its first case in that run, which hid the other two (fixed by
+PR #721). Its three cases cost 917 seconds serial (shard 45); its R is bounded by its relaxed
+siblings in the same run (0.66 to 1.16) and by its local np2 to one-rank ratio with that fix (1.22).
+
+| MPI group | Cases | R | Partitions | Largest partition, predicted |
+| --- | --- | --- | --- | --- |
+| `implicit_derivatives` (ranked) | 10 | 0.97 to 1.05 | 2 | 650 s (54%) |
+| `v14_distributed_derivatives` (ranked) | 10 | 1.03 to 1.09 | 2 | 673 s (56%) |
+| `coupled_methods_native` (ranked) | 7 | 0.81 to 1.53 | 4 | `mprk22_network[1.5-True]` alone, 796 to 1504 s |
+| `original_field_recovery_native` (ranked) | 7 | 1.38 to 1.72 | 4 | 602 s (50%) |
+| `original_field_typed_recovery_native` (ranked) | 4 | 1.29 to 1.72 | 4 | 400 s (33%) |
+| `relaxed_multiblock_native` (ranked) | 3 | 0.66 to 1.22 | 2 | 705 s (59%) |
+| `amr_original_field`, saved restart (worlds) | 3 | at most 1.43 | 3 | 553 s (66%) |
+| `captured_diffusion` (worlds) | 4 | 1.38 to 1.88 | 4 | about 300 s (36%) |
+| `evolved_original_stage` (worlds) | 8 | at most 1.35 | 4 | 422 s (50%) |
+| `spatial_interaction` (worlds) | 8 | 1.58 to 1.90 | 3 | 405 s (48%) |
+| `amr_profile`, tag selection (worlds) | 8 | MPI2 launch 828 s | 2 | about 414 s (49%) |
+| `amr_profile`, stationary regrids (worlds) | 5 | MPI2 launch 761 s | 2 | 464 s (55%) |
+| `gyrokinetic_nd` (ranked) | 2 | about 1.1 to 1.2 (compile-bound, like the Hall twin of PR #724) | 2 | 470 s serial on a 4-core container, at most about 790 s (66%) |
+
+Partitioning cannot fix a single case that costs more than its budget:
+`v14_decision_assess_nested_reject` (one case, 1340 seconds serial) and the depth-160 case of
+`finite_structural_depth_native` need their cost reduced, and so does `mprk22_network[1.5-True]`
+if R exceeds about 1.2. `gyrokinetic_nd` was in that list (two cases, 1547 and 1866 seconds
+serial): each case compiled one generated `problem.cpp` of 20.9 MB, which on a 4-core 15 GiB
+container ran 842 seconds before the compiler was killed at 13.3 GiB. With the smaller generated
+Programs of PR #724 (B03 F7), each case passes there in 460 and 470 seconds serial, with a 4.2 GiB
+compiler peak. Runners take 0.89 to 1.40 times that container's time, so one launch for both
+cases could still reach about 1580 seconds; one partition per case stays near 790 seconds. These predictions are scheduling estimates;
+the matrix receipts of the partitioned groups decide.
 
 The `collective-field-protocols` policy covers the elliptic `interface`, `linear`, and `amr`
 header families and requests MPI for their collective contracts. The isolated

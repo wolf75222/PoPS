@@ -136,7 +136,8 @@ def schema_cpp(signature, block_idx, *, roles=None, path=()):
         if frames:
             frames[-1]["children"].append(completed)
     lines.extend(["return std::move(schema_nodes.back());", "}()"])
-    return "\n".join(lines)
+    from .program_shared_definitions import schema_reference
+    return schema_reference("\n".join(lines))
 
 
 def configuration_cpp(schema, block_idx, *, distributed_storage=(0, 0)):
@@ -155,7 +156,9 @@ def configuration_cpp(schema, block_idx, *, distributed_storage=(0, 0)):
 
 
 def _limits(capacity):
-    return _NS + "finite_structural::Limits{" + ",".join([str(capacity)] * 3) + "}"
+    # The Program's residency counters see every host image of a device Array.
+    return (_NS + "finite_structural::Limits{" + ",".join([str(capacity)] * 3)
+            + ",&pops_finite_residency}")
 
 
 def _local_storage(signature, tokens, body, prefix, capacity):
@@ -200,26 +203,22 @@ def _local_storage(signature, tokens, body, prefix, capacity):
 
 
 def _pack(signature, token, body, prefix, block_idx, roles, path=(), *, capacity):
+    from .program_shared_definitions import field_callbacks
     storage = _local_storage(signature, token, body, prefix, capacity)
     schema = schema_cpp(signature, block_idx, roles=roles, path=path)
+    copy, preflight = field_callbacks()
     return (_NS + "finite_structural::pack<" + _DIM + ">(" + schema + "," + storage
-            + "," + _limits(capacity)
-            + ",[&](const auto& source, const auto& destination, const auto& lifetime, const auto&... metadata) { "
-              "return ctx.continuation_bind_field_provenance(source, destination, lifetime, metadata...); },"
-              "[&](const auto& source, const auto& type, const auto&... metadata) { "
-              "ctx.continuation_preflight_field(source, type, metadata...); })")
+            + "," + _limits(capacity) + "," + copy + "," + preflight + ")")
 
 
 def _unpack(signature, reference, body, prefix, *, capacity, block_idx=None, roles=None):
     """Project an authenticated native value through bounded iterative storage conversion."""
     from .program_emit_finite_arrays import finite_cpp_type
+    from .program_shared_definitions import field_callbacks
     schema = schema_cpp(signature, {} if block_idx is None else block_idx, roles=roles)
+    copy, preflight = field_callbacks()
     expression = (_NS + "finite_structural::unpack<" + _DIM + ">(" + schema + "," + reference
-                  + "," + _limits(capacity)
-                  + ",[&](const auto& source, const auto& destination, const auto& lifetime, const auto&... metadata) { "
-                    "return ctx.continuation_bind_field_provenance(source, destination, lifetime, metadata...); },"
-              "[&](const auto& source, const auto& type, const auto&... metadata) { "
-              "ctx.continuation_preflight_field(source, type, metadata...); })")
+                  + "," + _limits(capacity) + "," + copy + "," + preflight + ")")
     return "std::any_cast<%s>(%s)" % (finite_cpp_type(signature), expression)
 
 

@@ -19,6 +19,7 @@
 #include <pops/parallel/collective_exception.hpp>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 #include <exception>
 #include <initializer_list>
@@ -1218,6 +1219,56 @@ void bind_system_stepping(py::class_<System>& cls) {
           },
           py::arg("provider_slot"))
       .def("step", &System::step, py::arg("dt"))
+      // One compiled run of the installed Advance; the interpreter only receives its counters.
+      .def(
+          "_run_advance",
+          [](System& system, double until, double proposal, std::int64_t max_steps,
+             const std::vector<std::tuple<std::int64_t, std::vector<double>,
+                                          std::vector<std::string>>>& outputs) {
+            std::vector<pops::runtime::program::AdvanceOutputSchedule> schedule;
+            schedule.reserve(outputs.size());
+            for (const auto& [every_steps, at, arrays] : outputs)
+              schedule.push_back({every_steps, at, arrays});
+            const auto report = system.run_advance(until, proposal, max_steps, schedule);
+            py::list samples;
+            for (const auto& sample : report.outputs) {
+              py::dict row;
+              row["output"] = sample.output;
+              row["time"] = sample.time;
+              row["macro_step"] = sample.macro_step;
+              row["scalars"] = py::cast(sample.scalars);
+              py::list arrays;
+              const auto& blocks = schedule.at(static_cast<std::size_t>(sample.output)).arrays;
+              for (std::size_t index = 0; index < sample.arrays.size(); ++index)
+                arrays.append(to_ranked_state(sample.arrays[index], system.n_vars(blocks.at(index)),
+                                              system.spatial_shape()));
+              row["arrays"] = arrays;
+              samples.append(row);
+            }
+            py::dict result;
+            result["steps"] = report.steps;
+            result["rejections"] = report.rejections;
+            result["stop"] = static_cast<int>(report.stop);
+            result["attempts"] = report.attempts;
+            result["rejection"] = report.rejection;
+            result["segment_origin"] = report.segment.origin;
+            result["segment_steps"] = report.segment.steps;
+            result["outputs"] = samples;
+            return result;
+          },
+          py::arg("until"), py::arg("proposal"), py::arg("max_steps"),
+          py::arg("outputs") = std::vector<
+              std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>{})
+      .def("_advance_max_attempts", &System::advance_max_attempts)
+      .def_static(
+          "_advance_attempt_duration",
+          [](double time, double proposal, double frontier, double origin, std::int64_t steps) {
+            const auto duration = pops::runtime::program::advance_attempt_duration(
+                time, proposal, frontier, origin, steps);
+            return py::make_tuple(duration.dt, duration.lands, duration.continuous);
+          },
+          py::arg("time"), py::arg("proposal"), py::arg("frontier"), py::arg("origin"),
+          py::arg("steps"))
       .def("_advance_program_region", &System::advance_program_region, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("_begin_step_transaction", &System::begin_step_transaction)

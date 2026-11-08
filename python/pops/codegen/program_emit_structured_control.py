@@ -224,6 +224,59 @@ def _reject_if(condition, lines, message):
     lines.append("}")
 
 
+def _reject_locally(condition, lines, message):
+    """``_reject_if`` for a condition that every rank evaluates on the same bits."""
+    lines.append("if (%s) {" % condition)
+    lines.append("  throw pops::runtime::program::StepAttemptRejected("
+                 "pops::SolveStatus::kInvalidEvaluation, \"structured_control\", %s);"
+                 % json.dumps(message))
+    lines.append("}")
+
+
+# Exactly rounded IEEE operations: equal operands give equal bits on every rank.
+_EXACT_SCALAR_FUNCTIONS = frozenset(("add", "sub", "mul", "div"))
+_EXACT_EXPRESSION_OPERATIONS = frozenset((
+    "input", "literal", "add", "sub", "mul", "div", "neg", "abs", "minimum", "maximum",
+    "compare", "and", "or", "not",
+))
+
+
+def exact_expression_nodes(nodes):
+    """True when a closed expression DAG uses only exactly rounded operations."""
+    return all(isinstance(node, (tuple, list)) and node and node[0] in _EXACT_EXPRESSION_OPERATIONS
+               for node in nodes)
+
+
+def collective_identical(value):
+    """True when every rank of the execution lane holds the same bits for scalar ``value``.
+
+    A reduction of a Program block is one collective whose result every rank receives. Exactly
+    rounded arithmetic, comparisons and finiteness tests of such values and of literals keep that
+    property. A vote on such a value is a collective that decides nothing (spec 0.3 SV20, duty 2):
+    its emitters reject it locally, and every rank still takes the same branch.
+    """
+    pending, seen = [value], set()
+    while pending:
+        item = pending.pop()
+        if item.id in seen:
+            continue
+        seen.add(item.id)
+        if item.op == "reduce":
+            if item.block is None:
+                return False
+            continue
+        if item.op == "scalar_op":
+            if item.attrs.get("fn") not in _EXACT_SCALAR_FUNCTIONS:
+                return False
+        elif item.op == "scalar_expression":
+            if not exact_expression_nodes(item.attrs.get("expression_nodes", ())):
+                return False
+        elif item.op not in ("compare", "scalar_isfinite"):
+            return False
+        pending.extend(item.inputs)
+    return True
+
+
 def _uniform_int(token, lines, message):
     # The native reduction ABI overloads Real and long; int64_t may be long long (macOS).
     # Preserve every signed Int64 bit and refuse platforms with a narrower native integer lane.
@@ -255,6 +308,11 @@ def _emit_region(program, block, sub, model, lines, prelude, block_idx, field_pl
 def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plans, target):
     _check_region_effects(value.attrs.get("cond_block", ()))
     _check_region_effects(value.attrs["body_block"])
+    if value.op == "structured_fold":
+        from .program_emit_finite_kokkos import emit_ordered, host_snapshots, reads_arrays
+        # An ordered fold over device Arrays runs as one serial device region (IR4).
+        if reads_arrays(value) and emit_ordered(value, var, lines):
+            return
     initial = value.inputs[0]
     signature = value_signature(initial)
     current = _slots(signature, var[initial.id], value.id, "carry", lines)
@@ -269,8 +327,10 @@ def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plan
         _uniform_int(budget, lines, "fold capacity differs across execution lane")
         _reject_if("%s < 0 || %s < 0 || %s > %s" % (bound, budget, bound, budget),
                    lines, "fold count outside declared capacity")
+        snapshots = host_snapshots(value, var, lines)
         lines.append("for (; %s < %s; ++%s) {" % (count, bound, count))
         sub = dict(var)
+        sub.update(snapshots)
         sub[value.attrs["body_argument"].id] = current
         sub[value.attrs["body_index"].id] = count
         body = []
@@ -309,7 +369,8 @@ def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plan
                  block_idx, field_plans, target)
     stop = "iteration_stop_%d" % value.id
     inner.append("const long %s = (%s) ? 1L : 0L;" % (stop, sub[value.attrs["cond"].id]))
-    _uniform_int(stop, inner, "iterate stop differs across execution lane")
+    if not collective_identical(value.attrs["cond"]):
+        _uniform_int(stop, inner, "iterate stop differs across execution lane")
     inner.append("if (%s != 0) break;" % stop)
     inner.append("if (%s == %s) { %s = 2; %s = 1; break; }" % (count, budget, origin, status))
     sub[value.attrs["body_argument"].id] = current
@@ -421,7 +482,11 @@ def _propagate_typed_error(program, signature, tokens, var, lines, block_idx, ta
         return
     capture = var.get(("typed_failure_capture",))
     if capture is None:
-        from .program_emit_typed_failure import emit_terminal_failure
+        from .program_emit_typed_failure import emit_shared_terminal_failure, emit_terminal_failure
+        outcome = var.get(("distributed_outcome_error", id(tokens)))
+        if outcome is not None and outcome[0] is tokens:
+            emit_shared_terminal_failure(program, signature, outcome[1:], lines, block_idx, target)
+            return
         emit_terminal_failure(program, signature, tokens, lines, block_idx, target)
         return
     error_signature, error_slots, outer_tag, outer_index, label = capture

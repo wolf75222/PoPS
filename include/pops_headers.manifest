@@ -25,6 +25,7 @@ api pops/amr/transfer/temporal_interpolation_provider.hpp
 api pops/amr/transfer/transfer_provider.hpp
 api pops/core/foundation/allocator.hpp
 api pops/core/foundation/cold.hpp
+api pops/core/foundation/host_phase_stats.hpp
 api pops/core/foundation/kokkos_env.hpp
 api pops/core/foundation/native_dimension.hpp
 api pops/core/foundation/types.hpp
@@ -167,6 +168,7 @@ api pops/numerics/spatial/nd/conservation_law.hpp
 api pops/numerics/spatial/nd/conservation_laws.hpp
 api pops/numerics/spatial/nd/face_field.hpp
 api pops/numerics/spatial/nd/face_frequency.hpp
+api pops/numerics/spatial/nd/face_frequency_rule.hpp
 api pops/numerics/spatial/nd/finite_volume.hpp
 api pops/numerics/spatial/nd/reconstruction.hpp
 api pops/numerics/spatial/nd/state_conversion.hpp
@@ -197,6 +199,7 @@ api pops/numerics/time/integrators/time_steppers.hpp
 test-only pops/numerics/time/schemes/imex.hpp
 test-only pops/numerics/time/schemes/splitting.hpp
 sdk-support pops/parallel/collective_exception.hpp
+sdk-support pops/parallel/consensus_words.hpp
 api pops/parallel/comm.hpp
 api pops/parallel/execution_lane.hpp
 sdk-support pops/parallel/field_distribution_reduction.hpp
@@ -239,6 +242,8 @@ sdk-support pops/runtime/amr/detail/native_tagger_session.hpp
 api pops/runtime/amr/exact_field_solver_provider.hpp
 sdk-support pops/runtime/amr/component_field_solver_provider.hpp
 sdk-support pops/runtime/amr/field_solver_options.hpp
+abi pops/runtime/amr/generated_refinement_criterion.hpp
+abi pops/runtime/amr/generated_regrid_decision.hpp
 sdk-support pops/runtime/amr/persistent_tagging_state.hpp
 sdk-support pops/runtime/amr/prepared_amr_ghost_fill.hpp
 sdk-support pops/runtime/amr/prepared_clustering_component.hpp
@@ -396,6 +401,7 @@ sdk-support pops/runtime/program/program_diagnostics_checkpoint.hpp
 sdk-support pops/runtime/program/program_owner_field_identity.hpp
 sdk-support pops/runtime/program/prepared_tensor_boundary_session.hpp
 sdk-support pops/runtime/program/same_level_cell_temporal_provider.hpp
+sdk-support pops/runtime/program/advance_run.hpp
 sdk-support pops/runtime/program/program_runtime_state.hpp
 sdk-support pops/runtime/program/residual_operator.hpp
 sdk-support pops/runtime/program/source_mask.hpp
@@ -425,6 +431,7 @@ api pops/runtime/system/field_topology_report.hpp
 sdk-support pops/runtime/system/provider_storage_binding.hpp
 sdk-support pops/runtime/system/program_field_publication.hpp
 sdk-support pops/runtime/system/prepared_embedded_boundary.hpp
+sdk-support pops/runtime/system/prepared_active_mask_consensus.hpp
 sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/prepared_field_rhs_inputs.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
@@ -440,6 +447,7 @@ sdk-support pops/runtime/program/prepared_amr_spatial_residual.hpp
 sdk-support pops/runtime/program/amr_program_context_spatial_implicit.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_imex.inc
 sdk-root pops/runtime/program/finite_kokkos.hpp
+sdk-support pops/runtime/program/finite_device_array.hpp
 sdk-support pops/runtime/program/finite_structural_storage.hpp
 sdk-root pops/runtime/program/host_face_publication.hpp
 sdk-support pops/runtime/program/amr_program_context_stencil_flux.inc

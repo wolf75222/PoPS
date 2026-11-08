@@ -50,6 +50,20 @@ def capture_stencil_body(*, dimension, components, radius, field_components, bod
 
 
 
+def row_leaf_names(row):
+    """The names of the variables that the expressions of one stencil row hold."""
+    names, pending, seen = set(), list(row), set()
+    while pending:
+        value = pending.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        if type(value) is ir.Var:
+            names.add(value.name)
+        pending.extend(_children(value))
+    return frozenset(names)
+
+
 def validate_closed_stencil(rows, samples, field_samples, spacing, *, exact=False, scalars=()):
     symbols = tuple(v for *_,v in samples)+tuple(v for *_,v in field_samples)+spacing+scalars
     if any(type(v) is not ir.Var for v in symbols) or len({v.name for v in symbols}) != len(symbols):

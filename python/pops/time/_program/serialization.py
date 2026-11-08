@@ -4,7 +4,10 @@ from __future__ import annotations
 from pops.time.canonical_data import _json_ready as _json_ready
 
 import json
-from collections.abc import Mapping
+import threading
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from enum import Enum
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, cast
@@ -20,6 +23,70 @@ if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
 else:
     _ProgramBase = object
+
+class _IdentityReuse:
+    __slots__ = ("identities", "thread", "active")
+
+    def __init__(self) -> None:
+        self.identities: dict[int, tuple[Any, str]] = {}
+        self.thread = threading.get_ident()
+        self.active = True
+
+    def applies(self) -> bool:
+        return self.active and self.thread == threading.get_ident()
+
+
+_IR_IDENTITY_REUSE: ContextVar[_IdentityReuse | None] = ContextVar(
+    "pops_ir_identity_reuse", default=None)
+
+
+@contextmanager
+def ir_identity_reuse(operation: str) -> Iterator[None]:
+    """Project each frozen Program identity once within one synchronous public operation.
+
+    ``pops.resolve`` reads the identity of the Program that ``pops.validate`` froze for its
+    snapshots and plan evidence, and ``pops.compile`` re-verifies its plan, detaches the Program
+    twice, converts and lowers the clones and checks the artifact; each check hashed the whole IR
+    again. Inside this scope the first read of a frozen Program, authoring or detached, projects
+    its IR and later reads reuse that identity; a read of a mutable Program always projects. When
+    ``operation`` succeeds every identity is projected again outside the scope, so a definition
+    changed during it, or an out-of-contract edit of a clone, still fails it with a RuntimeError
+    naming ``operation``. Nothing is retained on a Program, and a failed operation leaves no
+    witness. With or without an error, the graphs converted from the Programs read in the scope
+    leave the conversion cache when it ends (``_forget_scope_graphs``).
+    """
+    inherited = _IR_IDENTITY_REUSE.get()
+    if inherited is not None and inherited.applies():
+        yield
+        return
+    reuse = _IdentityReuse()
+    token = _IR_IDENTITY_REUSE.set(reuse)
+    try:
+        yield
+    finally:
+        reuse.active = False
+        observed = tuple(reuse.identities.values())
+        reuse.identities.clear()
+        _IR_IDENTITY_REUSE.reset(token)
+        _forget_scope_graphs(program for program, _identity in observed)
+    for program, expected in observed:
+        if program._ir_hash() != expected:
+            raise RuntimeError("Program IR identity changed during %s" % operation)
+
+
+def _forget_scope_graphs(programs: Iterable[Any]) -> None:
+    """Drop the converted graphs of the Programs that a reuse scope read.
+
+    ``program_to_graph`` caches a detached clone's graph under the identity it reads. Inside the
+    scope that is the identity of the clone's first read, not necessarily the identity of the
+    contents it converted, so no such binding may outlive the scope: afterwards a graph is
+    converted again under a freshly projected identity.
+    """
+    from pops.time._program.graph_conversion import _detached_graphs
+
+    for program in programs:
+        _detached_graphs.pop(program, None)
+
 
 def _raise_ir_version(result: dict[str, Any], version: int) -> None:
     """Raise the same schema floor without accumulating index-flow inference."""
@@ -284,12 +351,20 @@ class _ProgramSerialization(_ProgramBase):
         transaction = self.transaction_plan()
         if transaction is not None:
             result["step_transaction"] = transaction.to_data()
+        advance_control = getattr(self, "_advance_control", None)
+        if advance_control is not None:
+            # Version 30: the compiled control of an elaborated Advance (spec 0.3 section 5.2).
+            result["advance_control"] = advance_control.to_data()
+            _raise_ir_version(result, 30)
         cadence = self.cadence_contract()
         if not cadence.is_default:
             result["cadence"] = cadence.to_data()
         cell_local_time = self.cell_local_time_contract()
         if cell_local_time is not None:
             result["cell_local_time"] = cell_local_time.to_data()
+        regrid = getattr(self, "_regrid", None)
+        if regrid is not None:
+            result["regrid"] = regrid.to_data()
         if self._histories:
             result["histories"] = [
                 {
@@ -334,9 +409,23 @@ class _ProgramSerialization(_ProgramBase):
         # integral captures; it takes precedence over vector pairing's version 7.
         if self._integral_units:
             result["version"] = 8
+        advance_outputs = getattr(self, "_advance_outputs", ())
+        if advance_outputs:
+            # Version 31: the Outputs of an elaborated Advance (spec 0.3 CC14), each a read-only
+            # region that the compiled run evaluates between steps, and its record.
+            result["advance_outputs"] = [
+                {"nodes": [self._serialize_node(node, include_provenance=include_provenance)
+                           for node in region.sub],
+                 "record": [{"name": name, "array": item} if kind == "array"
+                            else {"name": name, "scalar": item.id}
+                            for name, kind, item in region.record]}
+                for region in advance_outputs]
+            _raise_ir_version(result, 31)
         pending = list(self._values)
         if self._dt_bound is not None:
             pending.extend(self._dt_bound[0])
+        for region in advance_outputs:
+            pending.extend(region.sub)
         seen = set()
         trace_rates = {row[1] for row in self._integral_transfers}
         while pending:
@@ -393,6 +482,10 @@ class _ProgramSerialization(_ProgramBase):
                 _raise_ir_version(result, 16)
             elif node.op == "reduce" and node.attrs.get("kind") == "dot_all":
                 _raise_ir_version(result, 7)
+            elif node.op == "reduce" and node.attrs.get("kind") == "norm_inf_all":
+                _raise_ir_version(result, 30)
+            if node.op == "acceptance_guard" and "assessment" in node.attrs:
+                _raise_ir_version(result, 30)
             for key in ("cond_block", "body_block", "true_block", "false_block",
                         "apply_block", "residual_block"):
                 block = node.attrs.get(key)
@@ -401,8 +494,20 @@ class _ProgramSerialization(_ProgramBase):
         return result
 
     def _ir_hash(self) -> str:
+        # No Program keeps an identity cache: authoring handles still resolve through live
+        # registries, and even an out-of-contract edit of a detached clone must change what a
+        # check reads. Only an ir_identity_reuse scope reuses a frozen Program's identity, and it
+        # projects every reused identity again when its operation succeeds.
+        reuse = _IR_IDENTITY_REUSE.get()
+        if reuse is None or not reuse.applies() or getattr(self, "_frozen", False) is not True:
+            reuse = None
+        elif id(self) in reuse.identities:
+            return reuse.identities[id(self)][1]
         from pops._structural_data import canonical_json_sha256
-        return canonical_json_sha256(self._serialize(include_provenance=False))
+        identity = canonical_json_sha256(self._serialize(include_provenance=False))
+        if reuse is not None:
+            reuse.identities[id(self)] = (self, identity)
+        return identity
 
     def _semantic_serialize(self) -> dict[str, Any]:
         """Scientific IR projection shared by manual programs and library constructors."""

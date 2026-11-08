@@ -1238,6 +1238,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             family = _rhs_flux_temporal_family(v)
             family_suffix = ", " + json.dumps(family) if target == "amr_system" else ""
             from pops.codegen.program_transport_quadrature import declare_transport_faces
+            from pops.codegen.program_partition_stability import user_face_frequency_rule
             faces = declare_transport_faces(v, node_model, var, lines)
             authored_face = (getattr(_model_impl(node_model), "_user_face", None)
                              if node_model is not None else None)
@@ -1253,6 +1254,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                     # The final AMR argument follows temporal family and input trace.
                     frequency_suffix = (",nullptr,&" + user_face_frequency
                                         if input_trace is None else ",&" + user_face_frequency)
+                if user_face_frequency:
+                    frequency_suffix += user_face_frequency_rule(program)
                 if faces is not None:
                     lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s%s);"
                                  % (bidx, var[state_in.id], var[v.id], int(v.id), faces,
@@ -1715,6 +1718,16 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         elif kind == "norm_inf":
             (u,) = v.inputs
             reduction = "ctx.norm_inf(%d, %s)" % (owner, var[u.id])
+        elif kind == "norm_inf_all":
+            if v.attrs.get("component_contract") != "pops.program.norm-inf-all@1":
+                raise ValueError("norm_inf_all lost its all-component contract")
+            if target == "amr_system":
+                from pops.time._program.traced_method import NotYetElaborated
+                raise NotYetElaborated(
+                    "norm_inf_all, the finite() assessment of an elaborated Advance, runs on the "
+                    "Uniform route; the AMR route of the compiled control is a later lot of N8")
+            (u,) = v.inputs
+            reduction = "ctx.norm_inf_all(%d, %s)" % (owner, var[u.id])
         elif kind in ("sum", "max", "min", "abs_sum"):
             (u,) = v.inputs
             comp = int(v.attrs.get("comp", 0))
@@ -1784,15 +1797,20 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         if due is not None:
             expression = "(%s) ? (%s) : pops::Real(0)" % (due, expression)
         lines.append("const pops::Real %s = %s;" % (var[v.id], expression))
-        from pops.codegen.program_emit_structured_control import _reject_if
-        _reject_if("!std::isfinite(%s)" % var[v.id], lines,
-                   "nonfinite scalar arithmetic or invalid division")
+        from pops.codegen.program_emit_structured_control import (
+            _reject_if, _reject_locally, collective_identical,
+        )
+        reject = _reject_locally if collective_identical(v) else _reject_if
+        reject("!std::isfinite(%s)" % var[v.id], lines,
+               "nonfinite scalar arithmetic or invalid division")
     elif v.op == "scalar_isfinite":
         from pops.codegen.program_emit_expressions import prepared_scalar_input
         var[v.id] = "std::isfinite(%s)" % prepared_scalar_input(v.inputs[0], var)
     elif v.op == "scalar_expression":
         from pops.codegen.program_emit_expressions import checked_expression_dag, prepared_scalar_input
-        from pops.codegen.program_emit_structured_control import _reject_if
+        from pops.codegen.program_emit_structured_control import (
+            _reject_if, _reject_locally, collective_identical,
+        )
         if v.vtype != "scalar" or any(item.vtype != "scalar" for item in v.inputs):
             raise TypeError("scalar expression has lost its finite scalar authority")
         body, outputs, invalid = checked_expression_dag(
@@ -1805,7 +1823,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         lines.extend("  " + line for line in body)
         lines.append("  return std::pair<pops::Real, bool>{%s, (%s)};" % (outputs[0], invalid))
         lines.append("}();")
-        _reject_if(evaluation + ".second", lines, "scalar expression domain or nonfinite result")
+        reject = _reject_locally if collective_identical(v) else _reject_if
+        reject(evaluation + ".second", lines, "scalar expression domain or nonfinite result")
         var[v.id] = "s%d" % v.id
         lines.append("const pops::Real %s = %s.first;" % (var[v.id], evaluation))
     elif v.op == "compare":
@@ -1824,14 +1843,22 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         action = v.attrs["action"]
         from pops.time.solve_outcome import FailRun, RejectAttempt
         message = "acceptance guard %r failed" % v.attrs["guard"]
+        phase = "guard"
+        if "assessment" in v.attrs:
+            # An assessment of an Advance rejects in the phase that its compiled run repeats.
+            from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT
+            if v.attrs["assessment"] != ADVANCE_ASSESSMENT_CONTRACT or type(action) is not RejectAttempt:
+                raise ValueError("Advance assessment lost its rejection contract")
+            phase = "assessment"
+            message = "Advance assessment %r rejected the candidate" % v.attrs["guard"]
         from pops.codegen.program_emit_structured_control import _uniform_int
         _uniform_int(var[condition.id], lines, "acceptance guard differs across execution lane")
         lines.append("if (!(%s)) {" % var[condition.id])
         if type(action) is RejectAttempt:
             lines.append(
                 "  throw pops::runtime::program::StepAttemptRejected("
-                "pops::SolveStatus::kInvalidEvaluation, \"guard\", %s);"
-                % json.dumps(message))
+                "pops::SolveStatus::kInvalidEvaluation, %s, %s);"
+                % (json.dumps(phase), json.dumps(message)))
         elif type(action) is FailRun:
             lines.append("  throw std::runtime_error(%s);" % json.dumps(message))
         else:  # guarded by Program.guard; defense in depth for a forged IR

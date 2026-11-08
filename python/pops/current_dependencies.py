@@ -124,11 +124,18 @@ def _leaves(signature,path=()):
     else:yield path
 
 
-def validate_current_dependencies(candidate):
-    """Recheck every declared target against the exact current record on each success path."""
-    from pops.codegen.realization_delivery import delivered_frontiers
-    from pops.ledger_provenance import OP, _TRANSPORT, _key, _compatible, validate_contract_operation
+def validate_current_dependencies(candidate, session=None):
+    """Recheck every declared target against the exact current record on each success path.
+
+    The success paths are the assignments of the named conditions of the Program, read on one
+    shared decision diagram (``DeliveryDiagrams``, MG7): the target, each argument and the
+    current record are compared under the conditions where they are delivered, without listing
+    the paths.
+    """
+    from pops.codegen.typed_delivery import DeliveryDiagrams
+    from pops.ledger_provenance import OP, _TRANSPORT, _key, validate_contract_operation
     if candidate.op!='continuation_freeze':raise TypeError('current dependencies require the actual candidate freeze')
+    session=DeliveryDiagrams() if session is None else session
     base,proposal,envelope=candidate.inputs
     schema=value_signature(base)['schema']
     declarations=schema.get('current_dependencies',())
@@ -136,12 +143,12 @@ def validate_current_dependencies(candidate):
     def terminal(value):return value.op in (OP,'continuation_read') or value.op not in _TRANSPORT
     for definition in declarations:
         _validate_definition(definition,schema['write'])
-        rows=delivered_frontiers(envelope,terminal,path=('continuation',*definition['target']),
-                                with_choices=True,with_projection=True)
+        target=session.single(envelope,terminal,path=('continuation',*definition['target']),with_projection=True)
         # An unconditionally failing candidate has no successful publication.
-        for choices,frontier in rows:
-            if len(frontier)!=1:raise ValueError('current dependency target lacks one exact application')
-            reference=next(iter(frontier));value=values[reference.value_id]
+        applications,counts=target.outcomes()
+        if counts:raise ValueError('current dependency target lacks one exact application')
+        for reference,choices in applications.items():
+            value=values[reference.value_id]
             if reference.projection or value.op!=OP or value.attrs.get('contract_kind')!='current_dependency':
                 raise ValueError('current dependency target lost its mandatory application')
             validate_contract_operation(value.inputs,value.attrs,value_signature(value))
@@ -154,19 +161,17 @@ def validate_current_dependencies(candidate):
                 # tags are included as projection paths, so equal payloads do not
                 # make different injections interchangeable.
                 for leaf in _leaves(value_signature(argument)):
-                    actual=delivered_frontiers(envelope,terminal,path=('continuation',*definition['target']),
-                        with_choices=True,with_projection=True,
-                        expand_match=lambda node,path: (argument,leaf) if node is value else None)
-                    current=delivered_frontiers(envelope,terminal,path=('continuation',*path,*leaf),
-                                                with_choices=True,with_projection=True)
-                    actual=[(c,r) for c,r in actual if _compatible(choices,c)]
-                    current=[(c,r) for c,r in current if _compatible(choices,c)]
-                    if bool(actual)!=bool(current):raise ValueError('current dependency input has a different current variant')
-                    for ac,ar in actual:
-                        compatible=[cr for cc,cr in current if _compatible(choices|ac,cc)]
-                        if not compatible or any(ar!=cr for cr in compatible):
-                            raise ValueError('current dependency input is stale or belongs to another current path')
-                    for cc,cr in current:
-                        if not any(_compatible(choices|cc,ac) for ac,ar in actual):
-                            raise ValueError('current dependency current path has no matching argument')
+                    actual=session.frontier(envelope,terminal,path=('continuation',*definition['target']),
+                        with_projection=True,
+                        expand_match=lambda node,path,value=value,argument=argument,leaf=leaf:
+                            (argument,leaf) if node is value else None)
+                    current=session.frontier(envelope,terminal,path=('continuation',*path,*leaf),
+                                             with_projection=True)
+                    actual.require_identified(choices,'current dependency input')
+                    current.require_identified(choices,'current dependency input')
+                    difference=session.same(choices,actual,current)
+                    if difference=='variant':raise ValueError('current dependency input has a different current variant')
+                    if difference=='right':raise ValueError('current dependency current path has no matching argument')
+                    if difference is not None:
+                        raise ValueError('current dependency input is stale or belongs to another current path')
     return len(declarations)

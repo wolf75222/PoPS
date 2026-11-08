@@ -113,7 +113,8 @@ def _handle_token(domain: str, payload: Any) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedTaggingAuthority:
-    """Resolved tag graph plus the explicit spatial dilation requested by authoring.
+    """Resolved tag graph, or refinement criterion written as regions of ``cell``, plus the
+    explicit spatial dilation requested by authoring.
 
     ``selection`` is None for master's Buffer, whose cells join the transition buffer, and
     ``"refine-requests"`` for API 0.2's tag selection (pops.amr.tag-selection@1).
@@ -124,10 +125,12 @@ class ResolvedTaggingAuthority:
     selection: str | None = None
 
     def __post_init__(self) -> None:
-        from pops.mesh._amr import ResolvedTaggingGraph
+        from pops.mesh._amr import ResolvedRefinementCriterion, ResolvedTaggingGraph
 
-        if type(self.graph) is not ResolvedTaggingGraph:
-            raise TypeError("ResolvedTaggingAuthority.graph must be a ResolvedTaggingGraph")
+        if type(self.graph) not in (ResolvedTaggingGraph, ResolvedRefinementCriterion):
+            raise TypeError(
+                "ResolvedTaggingAuthority.graph must be a ResolvedTaggingGraph or a "
+                "ResolvedRefinementCriterion")
         if isinstance(self.buffer_cells, bool) or not isinstance(self.buffer_cells, int) \
                 or self.buffer_cells < 0:
             raise ValueError("ResolvedTaggingAuthority.buffer_cells must be an integer >= 0")
@@ -253,6 +256,16 @@ class AMRTaggingResolutionContext:
         if frame != "model" and frame != self.layout_plan.normalized(layout).geometry.frame_id:
             raise ValueError("AMR indicator state frame differs from its assigned layout frame")
         return layout
+
+    def admit_criterion_state(self, state: Handle) -> None:
+        """Refuse a state that a refinement region reads but this adaptive layout does not own."""
+        if not isinstance(state, Handle) or state.kind != "state" or not state.is_resolved:
+            raise TypeError("a refinement region reads owner-qualified block states")
+        if state.owner_path.nodes[0] != self.owner.nodes[0]:
+            raise ValueError(
+                "refinement region state %s belongs to a different Case owner"
+                % state.qualified_id)
+        self._indicator_layout(state)
 
     def _discrete_context(self, state: Handle) -> Any:
         from pops.mesh._amr import DiscreteIndicatorContext
@@ -458,8 +471,16 @@ def _union(values: list[Any]) -> Any:
 def resolve_tagging(
     authoring: Any,
     context: AMRTaggingResolutionContext,
+    *,
+    when: Any = None,
 ) -> ResolvedTaggingAuthority:
-    """Resolve an object-level priority list into one authenticated inert tag graph."""
+    """Resolve an object-level priority list into one authenticated inert tag graph, or one
+    refinement criterion written as regions of ``cell``, with the dilation and the selection of
+    its Buffer.
+
+    ``when`` is the traced ``when`` body of a ``Regrid(criterion, when)`` written in the Program
+    (DM13b); it is resolved with the criterion, whose rules are then functions of ``cell``.
+    """
     from pops.mesh._amr import TaggingGraph
 
     for method in ("resolve_references", "inspect"):
@@ -467,13 +488,18 @@ def resolve_tagging(
             raise TypeError("resolve_tagging authoring must implement %s()" % method)
     if type(context) is not AMRTaggingResolutionContext:
         raise TypeError("resolve_tagging requires an AMRTaggingResolutionContext")
+    from pops.mesh._amr import RefinementRegion, resolve_refinement_criterion
+
     resolved = authoring.resolve_references(context.resolve)
     roots: dict[str, list[Any]] = {"refine": [], "coarsen": []}
+    regions: list[tuple[str, Any]] = []
     buffer_cells = None
     selection = None
     for rule in resolved.rules:
         action = getattr(rule, "action", None)
-        if action in roots:
+        if action in roots and type(rule.predicate) is RefinementRegion:
+            regions.append((action, rule.predicate))
+        elif action in roots:
             roots[action].append(
                 _resolve_predicate(rule.predicate, action=action, context=context)
             )
@@ -486,12 +512,40 @@ def resolve_tagging(
             )
     if buffer_cells is None:
         raise ValueError("AMR tagging resolution lost its explicit Buffer authority")
-    graph = TaggingGraph(
-        refine=_union(roots["refine"]),
-        coarsen=_union(roots["coarsen"]),
-        hysteresis=resolved.hysteresis,
-        conflict_policy=resolved.conflict_policy,
-    ).resolve()
+    if when is not None and not regions:
+        raise TypeError(
+            "Regrid(criterion, when) generates its criterion into the Program: write every Tag "
+            "and Coarsen predicate as a function of cell")
+    if regions:
+        if roots["refine"] or roots["coarsen"]:
+            raise TypeError(
+                "AMR tagging writes every predicate as a function of cell or none of them")
+        decision = None
+        if when is not None:
+            from pops.mesh._amr import resolve_regrid_decision
+
+            decision = resolve_regrid_decision(
+                when.resolve_references(context.resolve),
+                dimension=_dimension(context.layout_plan),
+                admit_state=context.admit_criterion_state,
+            )
+        graph = resolve_refinement_criterion(
+            tuple(regions),
+            hysteresis=resolved.hysteresis,
+            conflict_policy=resolved.conflict_policy,
+            dimension=_dimension(context.layout_plan),
+            admit_state=context.admit_criterion_state,
+            decision=decision,
+        )
+    else:
+        graph = TaggingGraph(
+            refine=_union(roots["refine"]),
+            coarsen=_union(roots["coarsen"]),
+            hysteresis=resolved.hysteresis,
+            conflict_policy=resolved.conflict_policy,
+        ).resolve()
+    # Both routes carry the Buffer's selection: master's transition reach, or the cells around
+    # each refine request (pops.amr.tag-selection@1).
     return ResolvedTaggingAuthority(graph, buffer_cells, selection)
 
 
@@ -574,6 +628,74 @@ def _combined_requirement(
         minimum_buffer,
         minimum_lookahead,
     )
+
+
+def _planned_coarse_distribution(patch_layout_data: Any, context: AMRResolutionContext) -> bool:
+    """Choose the distribution of the coarse level (spec 0.3 DM3, PF3, gap C50).
+
+    The interface scheduler refuses a cross-block interface whose endpoint is replicated as soon
+    as it runs on two ranks or more ("distributed multi-block interfaces require unique patch
+    ownership"). So, when the case writes no constraint, the plan partitions the coarse level of
+    a hierarchy whose blocks carry a cross-block interface, and keeps the replicated coarse level
+    of b6 otherwise. A constraint the case writes is kept as written; ``pops.compile`` refuses the
+    one the runtime cannot run (``check_coarse_distribution``).
+    """
+    authored = patch_layout_data["distribute_coarse"]
+    if authored is None:
+        return any(carries_cross_block_interface(row) for row in context.numerics)
+    return authored
+
+
+def carries_cross_block_interface(numerics: Any) -> bool:
+    """Whether a block's resolved numerics carry a cross-block interface (the one predicate).
+
+    An interface reaches a block in one of two forms: an interface authority that composition
+    has not consumed yet (``numerics.interfaces``, a ``ConservativeInterface`` before
+    ``compose_shared_interfaces``), or a row of the ghost producer plan of one of its boundaries
+    (``boundary.interfaces``, which composition fills and which a boundary may also declare). The
+    plan's choice of the coarse distribution and the compile-time refusal read this one function,
+    before and after composition alike, so they never disagree on a case.
+    """
+    if numerics is None:
+        return False
+    if tuple(getattr(numerics, "interfaces", ()) or ()):
+        return True
+    return any(tuple(getattr(boundary, "interfaces", ()) or ())
+               for boundary in getattr(numerics, "boundaries", ()) or ())
+
+
+def check_coarse_distribution(plan: Any) -> None:
+    """Refuse a replicated coarse level under a cross-block interface (IR22, spec 0.3 C50).
+
+    An artefact does not depend on the rank count, and the interface scheduler needs one owner
+    per patch of an endpoint as soon as two ranks run it. A hierarchy whose coarse level is
+    replicated and whose blocks carry a cross-block interface is therefore a storage constraint
+    the runtime cannot run on every rank count the artefact admits. The plan only reaches that
+    state from an authored ``PatchLayout(distribute_coarse=False)``, since its own choice
+    partitions such a level; ``pops.compile`` refuses it before any native work, whatever the
+    rank count.
+    """
+    authorities = getattr(plan, "layout_amr_authorities", None) or {}
+    if not authorities:
+        return
+    block_layouts = {row.subject.local_id: row.layout.qualified_id
+                     for row in plan.layout_plan.assignments if row.subject_kind == "block"}
+    for layout_id, row in authorities.items():
+        options = row.authorities.hierarchy.plan.patch_generation.options.to_data()
+        if options["distribute_coarse"] is not False:
+            continue
+        if any(block_layouts.get(block.name) == layout_id
+               and carries_cross_block_interface(block.numerics)
+               for block in plan.blocks):
+            from pops._ir.refusals import ScheduleIllegal
+
+            raise ScheduleIllegal(
+                "a cross-block interface needs one owner per patch of the coarse level, and a "
+                "replicated coarse level has one copy per rank; omit the constraint and the "
+                "plan partitions the coarse level",
+                subject=layout_id,
+                constraint="PatchLayout(distribute_coarse=False)",
+            )
 
 
 def _hierarchy(
@@ -725,6 +847,7 @@ def _hierarchy(
         )
     patch_layout_data = _protocol(
         patch_layout, "to_data", where="AMR patch layout authority")()
+    distribute_coarse = _planned_coarse_distribution(patch_layout_data, context)
     from pops.amr._load_balance_contract import load_balance_provider_data
 
     load_balance_data = load_balance_provider_data(load_balance)
@@ -749,7 +872,7 @@ def _hierarchy(
             provider("box_array", "amr_patch_generation_provider"),
             CanonicalOptions({
                 "native_route": "box_array",
-                "distribute_coarse": patch_layout_data["distribute_coarse"],
+                "distribute_coarse": distribute_coarse,
                 "coarse_max_grid": patch_layout_data["coarse_max_grid"],
             }),
         ),
@@ -798,7 +921,32 @@ def resolve_amr_authorities(
     reflux: Any,
     context: AMRResolutionContext,
 ) -> ResolvedAMRAuthorities:
-    """Resolve every adaptive-layout concern exactly once from its owning declaration."""
+    """Resolve every adaptive-layout concern exactly once from its owning declaration.
+
+    A layout written without ``tagging=`` and ``regrid=`` takes both from the ``Regrid(criterion,
+    when)`` of its Program (DM13b): the hierarchy may then regrid after any accepted step, and the
+    decision generated into the Program says when.
+    """
+    if type(context) is not AMRResolutionContext:
+        raise TypeError("AMR resolution requires an AMRResolutionContext")
+    program_regrid = getattr(context.program, "_regrid", None)
+    when = None
+    if tagging is None and regrid is None:
+        if program_regrid is None:
+            raise ValueError(
+                "an adaptive layout written without tagging= and regrid= takes them from its "
+                "Program: write program.regrid(Regrid(criterion, when))")
+        from pops.time import every as schedule_every
+
+        tagging = program_regrid.criterion
+        regrid = AMRRegrid(schedule=schedule_every(1, clock=context.program.clock))
+        when = program_regrid.when
+    elif tagging is None or regrid is None:
+        raise TypeError("an adaptive layout writes both tagging= and regrid=, or neither")
+    elif program_regrid is not None:
+        raise ValueError(
+            "the regrid is written twice: in the adaptive layout (tagging=, regrid=) and in the "
+            "Program (Regrid(criterion, when)); write it in the Program only")
     if type(regrid) is not AMRRegrid:
         raise TypeError("AMR regrid resolution requires an exact AMRRegrid authority")
     protocols = {
@@ -833,7 +981,7 @@ def resolve_amr_authorities(
         context.resolve,
         context.state_storage,
     )
-    resolved_tagging = resolve_tagging(tagging, tagging_context)
+    resolved_tagging = resolve_tagging(tagging, tagging_context, when=when)
     from pops.amr.providers import (
         AMRProviderLoweringContext,
         ResolvedAMRProviderBinding,

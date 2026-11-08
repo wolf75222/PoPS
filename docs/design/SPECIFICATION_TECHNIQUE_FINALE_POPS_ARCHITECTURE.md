@@ -612,8 +612,13 @@ layout = AMR(
 )
 ```
 
-`PatchLayout` est une autorité de configuration, pas un troisième provider de clustering. Le choix
-`distribute_coarse` est explicite et participe à l'identité résolue. `coarse_max_grid=None`, sa valeur
+`PatchLayout` est une autorité de configuration, pas un troisième provider de clustering.
+`distribute_coarse=None`, sa valeur par défaut, laisse le plan choisir la distribution du niveau
+grossier (spec 0.3 DM3, C50) : il le partitionne quand le niveau porte une interface entre blocs et
+le réplique sinon. Un booléen écrit par le cas est une contrainte ; `pops.compile` refuse
+`distribute_coarse=False` sur une interface par `ScheduleIllegal` (IR22, phase compile), quel que
+soit le nombre de rangs. L'identité résolue porte la valeur écrite (`None` quand le cas ne
+contraint rien) et la distribution retenue par le plan. `coarse_max_grid=None`, sa valeur
 par défaut, demande au provider natif sélectionné de dériver la taille des patches grossiers. Aucun
 entier sentinelle n'appartient au contrat public ; une éventuelle représentation sentinelle reste un
 détail de lowering privé. Une taille positive n'est écrite dans `coarse_max_grid` que lorsque

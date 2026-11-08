@@ -9,6 +9,7 @@ from typing import Any
 from pops.identity import Identity, make_identity
 from ._contracts import canonical_handle
 from .hierarchy import CanonicalOptions
+from .refinement_criterion import ResolvedRefinementCriterion
 from .tagging_resolution import ResolvedTaggingGraph
 
 
@@ -170,7 +171,7 @@ class BootstrapPlan:
     hierarchy_identity: Identity
     transfer_identity: Identity
     initial_identity: Identity
-    tagging: ResolvedTaggingGraph
+    tagging: ResolvedTaggingGraph | ResolvedRefinementCriterion
     ordering: BootstrapOrdering
     selections: tuple[BootstrapSelection, ...]
     constraints: tuple[Any, ...]
@@ -190,8 +191,10 @@ class BootstrapPlan:
                 raise TypeError("BootstrapPlan.%s must be an exact %s Identity" % (name, domain))
         if type(self.ordering) is not BootstrapOrdering:
             raise TypeError("BootstrapPlan.ordering must be BootstrapOrdering")
-        if type(self.tagging) is not ResolvedTaggingGraph:
-            raise TypeError("BootstrapPlan.tagging must be a ResolvedTaggingGraph")
+        if type(self.tagging) not in (ResolvedTaggingGraph, ResolvedRefinementCriterion):
+            raise TypeError(
+                "BootstrapPlan.tagging must be a ResolvedTaggingGraph or a "
+                "ResolvedRefinementCriterion")
         selections = tuple(self.selections)
         if not selections or any(type(row) is not BootstrapSelection for row in selections):
             raise TypeError("BootstrapPlan.selections must contain selections")

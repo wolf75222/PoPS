@@ -236,6 +236,15 @@ execution. MPI halo exchanges, reductions and collective publication require mat
 participation, including failure paths. Actual device/backend support is established by
 compiled artifacts and corresponding tests, not by template syntax alone.
 
+On a uniform mesh, the value of a Program reduction (`sum`, `abs_sum`, `max`, `min`, `norm2`,
+`norm_inf`, `dot`, `dot_all`) and any rank-local failure travel in one collective; the failure
+is then reported collectively, and only when some rank carried one. `dot_all`, and on AMR the
+composite pairing and integral, sum the cells of each rank with compensation and join the rank
+sums in rank order within that collective, in the bracketing that the MPI library chooses for
+its reduction tree. Every rank receives the same bits. They can change in the last bits with the
+rank count and with the library's reduction algorithm, and a sum whose partial join overflows is
+refused as nonfinite even when another order would stay finite.
+
 ## Choosing and checking a route
 
 Start with a [tutorial](tutorials/README.md) matching the problem class, inspect its authored
