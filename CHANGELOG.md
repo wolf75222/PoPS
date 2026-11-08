@@ -52,11 +52,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
-- ROM-95 (N12, lot 3a): the single-layout AMR tutorials (scalar advection 05-14), the IMEX AMR
-  final example, the field diffusion example and the scalar AMR migration workflow write their
-  tagging as regions of `cell` (`Tag(lambda cell: cell.value(q) > c)`, `gradient_norm` for 09)
-  instead of the ValueExpr tagging graph. MG8 serial-dim2 and mpi-dim2 records are bitwise
-  identical to the graph route; the scalar advection final example keeps the graph until the VM removal (lot 3c).
+- ROM-95 (N12, lot 3a, part 1): the scalar advection AMR tutorials 05-14, the IMEX AMR final
+  example, the field diffusion example and the scalar AMR migration workflow write their tagging
+  as regions of `cell` (`Tag(lambda cell: cell.value(q) > c)`, `gradient_norm` for 09) instead of
+  the ValueExpr tagging graph. MG8 serial-dim2 and mpi-dim2 records are bitwise identical to the
+  graph route. Other single-layout cases still write the graph: the condensed_fac, diocotron,
+  hyqmom and initial_field_ghost tutorials and 19 `examples/api_v02` files move in part 2; the
+  scalar advection final example moves with the VM removal (lot 3c).
 - ROM-85 (N10, lot 2, C50): the plan chooses the distribution of the coarse level (spec 0.3 DM3,
   §21.6, adjudication §26). `PatchLayout.distribute_coarse` defaults to `None`; the plan partitions
   the coarse level when it carries a cross-block interface and replicates it otherwise, so T10 no
