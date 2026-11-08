@@ -136,8 +136,12 @@ def _ahead(times: tuple, start: float, until: float) -> list:
     """The output times that are frontiers of a run from ``start`` to ``until``.
 
     A time within four units in the last place below ``until`` is ``until`` itself, as master
-    merges a consumer deadline into the end of its run (``_runtime_instance.py@bb9``); a time
-    after ``until`` stays ahead for a later run.
+    merges a consumer deadline into the end of its run. The merge is one-sided on purpose, as in
+    master, whose run loop takes a deadline only when it is at most ``t_end``, then lands on
+    ``t_end`` when ``_same_physical_time`` holds (``_runtime_instance.py:1782-1787``, « a threshold
+    one ULP above t_end is a future occurrence, not an end-of-run sample »): a tolerance never
+    extends the requested run, so a time after ``until``, however close, stays ahead for a later
+    run, which lands on it.
     """
     frontiers = []
     for time in times:

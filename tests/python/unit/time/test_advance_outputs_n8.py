@@ -15,7 +15,7 @@ import pytest
 import pops
 import examples.api_v02.models_M01_M14 as early
 from pops._ir.symbolic import SymbolicTruthValueError
-from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.program_codegen import _emit_advance_outputs, emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
 from pops.identity.semantic import program_semantic_data
 from pops.runtime._simulation import RunResult, _ahead
@@ -116,6 +116,10 @@ def test_a_time_within_four_units_below_until_is_until():
     assert _ahead((0.05,), 0.05, 0.1) == []
     far = 0.1 - 8 * math.ulp(0.1)
     assert _ahead((far,), 0.0, 0.1) == [far]
+    # One-sided, as master: a time one unit above until never extends the run; the next run
+    # lands on it.
+    above = math.nextafter(0.1, 1.0)
+    assert _ahead((above,), 0.0, 0.1) == [] and _ahead((above,), 0.1, 0.2) == [above]
 
 
 # --- elaboration -------------------------------------------------------------------------------
@@ -163,6 +167,13 @@ def test_a_program_without_outputs_keeps_lot_2(monkeypatch):
     assert "outputs" not in elaboration.control.to_data()
     source = _source(spec)
     assert not any(entry in source for entry in ENTRIES)
+
+
+def test_the_amr_route_refuses_outputs_by_name(monkeypatch):
+    _, elaboration = _elaborated(monkeypatch, (Output(_mass, when=every(2)),))
+    with pytest.raises(NotYetElaborated, match="Outputs of an elaborated Advance run on the "
+                                               "Uniform route"):
+        _emit_advance_outputs(elaboration.program, None, "amr_system")
 
 
 def test_a_record_of_arrays_only_exports_no_scalar(monkeypatch):
