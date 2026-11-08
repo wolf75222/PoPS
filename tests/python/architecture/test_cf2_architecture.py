@@ -618,6 +618,19 @@ def test_pops_math_defines_its_words(source):
     ('def grad(e):\n    return Call("curl", (e,))\n', ["curl"]),  # another word's body
     ("def laplacian(e):\n    pass\n", ["laplacian"]),  # not a word of 2.6.3 (div(grad(e)))
     ("from ._vector import curl\n", ["curl"]),  # defined elsewhere, re-exported
+    # a selector or a route key inside the definition of the word (review of #748, point 1)
+    ('def curl(e, kind=None):\n    if kind == "curl":\n        return e\n'
+     '    return Call("curl", (e,))\n', ["curl"]),
+    ('def curl(e):\n    return _KERNELS["curl"](e)\n', ["curl"]),
+    ('def curl(e):\n    routes = {"curl": k}\n    return routes["curl"](e)\n', ["curl"]),
+    ('def curl(e):\n    return _KERNELS.get("curl")(e)\n', ["curl"]),
+    ('def outflow(q, form):\n    match form:\n        case "outflow":\n            return q\n',
+     ["outflow"]),
+    ('class curl:\n    def emit(self, op):\n        return op == "curl"\n', ["curl"]),
+    ('def outflow(q):\n    return getattr(_FORMS, "outflow")(q)\n', ["outflow"]),
+    ('curl = {"curl": k}\n', ["curl"]),
+    ('curl = _ROUTES["curl"]\n', ["curl"]),
+    ('curl = _ROUTES.get("curl")\n', ["curl"]),
 ])
 def test_pops_math_refuses_its_words_as_selectors_emitters_kernels_and_route_keys(source, expected):
     assert _terms(source, "python", path=_MATH) == expected
@@ -661,6 +674,12 @@ def test_a_refusal_table_of_the_surface_is_error_text(source):
      ["laplacian"]),
     # a refusal table outside the surface is code
     ('_EARLIER = {"rusanov": "hll"}\n', "python/pops/codegen/x.py", ["hll", "rusanov"]),
+    # a bare or dotted name is not a message (review of #748, point 2)
+    ('_EARLIER = {"laplacian": "laplacian_kernel"}\n', "python/pops/surface/__init__.py",
+     ["laplacian"]),
+    ('_EARLIER = {"rusanov": "hll"}\n', "python/pops/surface/__init__.py", ["hll", "rusanov"]),
+    ('_EARLIER_ROUTES = {"laplacian": "pops.lib.laplacian"}\n', "python/pops/surface/math.py",
+     ["laplacian"]),
 ])
 def test_only_a_refusal_table_of_the_surface_is_error_text(source, path, expected):
     assert _terms(source, "python", path=path) == expected

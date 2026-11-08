@@ -164,8 +164,10 @@ _PY_FAILURE_HELPER = re.compile(r"^_?(warn|fail|error|raise|reject|refuse|abort)
 # texts that the surface refuses and whose values are their messages, each a string or a call that
 # builds the refusal (SpellingRefusal(...)). The whole table is user-facing error text. A table with
 # any other value is code, and so is a table under another name: a dictionary of names to names is
-# a route table.
+# a route table, so a value that is a bare or dotted name (``"laplacian_kernel"``, ``"pops.x"``) is
+# not a message.
 _PY_REFUSAL_TABLE = re.compile(r"^_EARLIER(_[A-Z0-9]+)*$")
+_PY_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 SURFACE_PACKAGE = "python/pops/surface/"
 
 
@@ -191,7 +193,8 @@ def _is_refusal_table(node: ast.AST) -> bool:
     def message(item: ast.AST) -> bool:
         if isinstance(item, ast.Call):
             return _PY_ERROR_TYPE.search(_call_name(item.func) or "-") is not None
-        return isinstance(item, ast.Constant) and isinstance(item.value, str)
+        return isinstance(item, ast.Constant) and isinstance(item.value, str) \
+            and not _PY_NAME.match(item.value)
 
     return all(isinstance(key, ast.Constant) and isinstance(key.value, str) for key in value.keys) \
         and all(map(message, value.values))
@@ -275,16 +278,53 @@ def _is_axis_link(node: ast.AST) -> bool:
     return False
 
 
+# The calls that look a value up by its name: ``table.get("curl")``, ``getattr(module, "curl")``.
+_PY_LOOKUP_CALLS = frozenset({"get", "pop", "setdefault", "__getitem__", "__contains__", "getattr",
+                              "hasattr"})
+
+
+def _selector_positions(tree: ast.AST) -> set[int]:
+    """ids of the nodes in a position that selects by a name (CF2, FC4): an operand of a
+    comparison (``==``, ``in``), a key of a dictionary, the subscript of an item, a value or a key
+    of a ``case`` pattern, and the arguments of a lookup call (_PY_LOOKUP_CALLS)."""
+    positions: set[int] = set()
+
+    def hold(*nodes) -> None:
+        for node in nodes:
+            if node is not None:
+                positions.update(id(sub) for sub in ast.walk(node))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            hold(node.left, *node.comparators)
+        elif isinstance(node, ast.Dict):
+            hold(*node.keys)
+        elif isinstance(node, ast.Subscript):
+            hold(node.slice)
+        elif isinstance(node, ast.MatchValue):
+            hold(node.value)
+        elif isinstance(node, ast.MatchMapping):
+            hold(*node.keys)
+        elif isinstance(node, ast.Call) and _call_name(node.func) in _PY_LOOKUP_CALLS:
+            hold(*node.args, *(keyword.value for keyword in node.keywords))
+    return positions
+
+
 def _math_definitions(tree: ast.Module, words: frozenset) -> set[int]:
     """ids of the nodes that define a word of @p words at the top level of the module pops.math
     (CF2, 2.6.3): the name of a ``def`` or a ``class`` and every token spelled as that name in its
-    body, the target of an assignment and every string spelled as it in the assigned value, and the
-    strings of ``__all__``. Only a token spelled exactly as the word is admitted: ``curl_kernel``,
-    ``CurlEmitter``, a comparison with ``"curl"`` or a key ``"curl"`` of a table are refused."""
+    body, the target of an assignment and every token spelled as it in the assigned value, and the
+    strings of ``__all__``. Only a token spelled exactly as the word is admitted, and never in a
+    position that selects by a name (_selector_positions), in the definition or anywhere else:
+    ``curl_kernel``, ``CurlEmitter``, a comparison with ``"curl"``, a key ``"curl"`` of a table,
+    ``table["curl"]``, ``table.get("curl")`` and ``case "curl"`` are refused."""
     admitted: set[int] = set()
+    selectors = _selector_positions(tree)
 
     def spelled(node: ast.AST, word: str) -> None:
         for sub in ast.walk(node):
+            if id(sub) in selectors:
+                continue
             if (isinstance(sub, ast.Name) and sub.id == word) or (
                     isinstance(sub, ast.Constant) and sub.value == word):
                 admitted.add(id(sub))
