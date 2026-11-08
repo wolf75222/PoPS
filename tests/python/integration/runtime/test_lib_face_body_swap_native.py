@@ -37,9 +37,7 @@ from pops.numerics.spatial import FiniteVolume
 from tests.python.integration.runtime.test_api_v02_python_faces_native import (
     _assert_rounding_level, _bind,
 )
-from tests.python.support.collective_checks import (
-    collective_attempt, collective_call, collective_check,
-)
+from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.public_native_profile import native_profile
 
 
@@ -219,13 +217,14 @@ def test_the_native_face_loop_runs_the_l1_and_the_l5_bodies(isolated_native_cach
 # on both sides, so the row isolates the flux; the Python muscl and vanleer are the row of the
 # reconstruction family.
 #
-# Under the tutorial's AdaptiveCFL every Python face is refused at its first step by the stability
-# guard of the riemann.User route (reason 503, user_face_numerical_stability), the pilot's rusanov
-# too, while the native face takes 29 steps: System::step_cfl proposes a step by another rule than
-# the guard checks (ROM-107). The parity row therefore runs both faces at the step that the native
-# tutorial takes, FixedDt(0.45/64) (|a| = 1 on x, h = 1/64), after checking on the native route
-# that this step reproduces the tutorial's own steps and final state; the tutorial as written with
-# the Python face is the failing graph of ROM-107, pinned by its own test.
+# Two rows. The first runs both faces at the step that the native tutorial takes, FixedDt(0.45/64)
+# (|a| = 1 on x, h = 1/64), after checking on the native route that this step reproduces the
+# tutorial's own steps and final state. The second runs the tutorial as written, under its
+# AdaptiveCFL, with each face: before ROM-107 every Python face was refused there at its first
+# step (reason 503, user_face_numerical_stability), because System::step_cfl proposed the step
+# cfl min_a h_a / max_a s_a while the guard of the riemann.User face checked dt sum_a s_a / h_a
+# against cfl. The guard now reads the frequency of the bound its strategy proposes from
+# (StepStrategy.face_frequency_rule), so both faces take the same steps.
 # ---------------------------------------------------------------------------------------------
 TUTORIAL_CELLS = (64, 64)
 TUTORIAL_VELOCITY = (1.0, 0.25)
@@ -354,25 +353,22 @@ def test_upwind_matches_master_scalar_upwind_on_tutorial_02(isolated_native_cach
 @pytest.mark.compiler
 @pytest.mark.kokkos
 @pytest.mark.native_loader
-def test_tutorial_02_as_written_refuses_the_python_face_rom_107(isolated_native_cache, native_cxx,
-                                                                kokkos_root):
-    """The failing graph of ROM-107, pinned: the tutorial as written, with the library's face.
+def test_upwind_matches_master_scalar_upwind_on_tutorial_02_as_written(isolated_native_cache,
+                                                                       native_cxx, kokkos_root,
+                                                                       record_property):
+    """ROM-107: the tutorial as written, under its AdaptiveCFL, with master's face and the library's.
 
-    The native face takes 29 steps under AdaptiveCFL (the parity test above runs it); the same
-    case with ``upwind(speed=f)`` is refused at its first step by the stability guard of the
-    riemann.User face, and its clock stays at zero. When ROM-107 gives both routes one step
-    rule, this test becomes the parity of the tutorial as written.
+    The two runs take the same steps to the same clock, and their final states agree to rounding.
+    Before ROM-107 the library's face was refused at the first step and its clock stayed at zero.
     """
     del isolated_native_cache, native_cxx, kokkos_root
     _native, world = native_profile(dimension=2, scope="N3 tutorial 02 as written")
-    spec = collective_call(world, lambda: _tutorial_02(_tutorial_02_library, fixed_step=False))
-    runtime = _bind(world, spec, "N3 tutorial 02 upwind(speed=) AdaptiveCFL")
-    _, failures = collective_attempt(world, lambda: pops.run(
-        runtime, t_end=spec.t_end, max_steps=10_000, console=False))
-    clock = collective_call(world, lambda: (float(runtime.time()), int(runtime.macro_step())))
+    native = _run_tutorial_02(world, "native AdaptiveCFL", _tutorial_02_native, fixed_step=False)
+    library = _run_tutorial_02(world, "upwind(speed=) AdaptiveCFL", _tutorial_02_library,
+                               fixed_step=False)
     with collective_check(world):
-        assert all(failure is not None and failure[0] == "StepAttemptRejected"
-                   and "reason_code=503" in failure[1]
-                   and "user_face_numerical_stability" in failure[1]
-                   for failure in failures), failures
-        assert clock == (0., 0), clock
+        assert native[0] > 10, native[:2]
+        assert library[:2] == native[:2], (library[:2], native[:2])
+        if native[2] is not None:
+            _assert_rounding_level(native[0], native[2], library[2], record_property,
+                                   "tutorial 02 as written, upwind vs ScalarUpwind ")

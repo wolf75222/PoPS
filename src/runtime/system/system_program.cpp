@@ -26,7 +26,7 @@ namespace pops {
 namespace system_program_detail {
 
 // One traversal of an observed block's candidate: the finite-result maximum of its first
-// component (norm_inf's kernel) and the incident-face frequency of the speeds that the same
+// component (norm_inf's kernel) and the face frequency, by ``rule``, of the speeds that the same
 // evaluation recorded.
 template <int Dim>
 struct ObservedFirstComponentMaximum {
@@ -40,6 +40,7 @@ struct ObservedFirstComponentMaximum {
   FieldView<const Real, Dim> values{};
   nd::FaceFieldView<const Real, Dim> speeds{};
   std::array<Real, static_cast<std::size_t>(Dim)> inverse_spacing{};
+  nd::FaceFrequencyRule rule = nd::FaceFrequencyRule::incident_sum;
 
   POPS_HD void init(value_type& value) const {
     value.norm = std::numeric_limits<Real>::lowest();
@@ -55,8 +56,9 @@ struct ObservedFirstComponentMaximum {
 
   POPS_HD void operator()(std::int64_t ordinal, value_type& accumulator) const {
     const Index<Dim> cell = detail::cell_index_from_ordinal(lower, extent, ordinal);
-    join(accumulator, value_type{mf_arith_detail::NormInfKernel<Dim>{values, 0}(cell),
-                                 nd::incident_face_frequency_at(speeds, cell, inverse_spacing)});
+    join(accumulator,
+         value_type{mf_arith_detail::NormInfKernel<Dim>{values, 0}(cell),
+                    nd::incident_face_frequency_at(speeds, cell, inverse_spacing, rule)});
   }
 };
 
@@ -129,14 +131,15 @@ Real prepared_boundary_local_norm_inf(const MultiFab<Dim>& field) {
 }
 
 /// prepared_boundary_local_norm_inf of an observed block. The traversal of its first component
-/// also reduces the incident-face frequency of the speeds that the same evaluation recorded:
+/// also reduces the face frequency, by ``rule``, of the speeds that the same evaluation recorded:
 /// both maxima equal norm_inf and nd::maximum_incident_face_frequency, with one traversal fewer.
 template <int Dim>
 Real prepared_boundary_local_norm_inf_observing(const MultiFab<Dim>& field,
                                                 const std::vector<nd::FaceField<Dim>>& speeds,
-                                                const Geometry<Dim>& geometry, Real& frequency) {
+                                                const Geometry<Dim>& geometry,
+                                                nd::FaceFrequencyRule rule, Real& frequency) {
   if (field.ncomp() < 1) {
-    frequency = nd::maximum_incident_face_frequency(field, speeds, geometry);
+    frequency = nd::maximum_incident_face_frequency(field, speeds, geometry, rule);
     return prepared_boundary_local_norm_inf(field);
   }
   if (speeds.size() != field.local_size())
@@ -168,7 +171,7 @@ Real prepared_boundary_local_norm_inf_observing(const MultiFab<Dim>& field,
         Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>(
             Kokkos::DefaultExecutionSpace{}, 0, box.numPts()),
         Reduction{box.lo, box.extent(), field.fab(local).view(), speeds[local].view(),
-                  inverse_spacing},
+                  inverse_spacing, rule},
         patch);
     local_norm = std::max(local_norm, patch.norm);
     observed = std::max(observed, patch.frequency);
@@ -245,7 +248,8 @@ template <int Dim, class Invoke>
 void invoke_prepared_boundary_transaction(
     MultiFab<Dim>& state, MultiFab<Dim>& result, const ExecutionLane& lane, const char* operation,
     const runtime::program::PreparedScalarBoundarySession<Dim>& transport, Invoke&& invoke,
-    Real* observed_frequency = nullptr, const Geometry<Dim>* observed_geometry = nullptr) {
+    Real* observed_frequency = nullptr, const Geometry<Dim>* observed_geometry = nullptr,
+    nd::FaceFrequencyRule observed_rule = nd::FaceFrequencyRule::incident_sum) {
   transport.with_boundary_scratch(state, [&](auto& scratch) {
     MultiFab<Dim>& state_snapshot = scratch.transaction_state_snapshot;
     MultiFab<Dim>& result_snapshot = scratch.transaction_result_snapshot;
@@ -299,7 +303,7 @@ void invoke_prepared_boundary_transaction(
                        ? prepared_boundary_local_norm_inf(candidate)
                        : prepared_boundary_local_norm_inf_observing(
                              candidate, scratch.cartesian_operator.face_speeds(),
-                             *observed_geometry, *observed_frequency);
+                             *observed_geometry, observed_rule, *observed_frequency);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -668,7 +672,8 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
               *retained_faces[block] = scratch.generated_faces;
           },
           // The frequency of the speeds this evaluation recorded is read by its validation pass.
-          retained_frequencies.empty() ? nullptr : retained_frequencies[block], &owner->geom);
+          retained_frequencies.empty() ? nullptr : retained_frequencies[block], &owner->geom,
+          owner->observed_face_frequency_rule_);
     }
   };
   typename SystemInterfaceProvider<Dim>::CoreEvaluator evaluator;
@@ -749,7 +754,8 @@ void System<Dim>::block_rhs_group(
     const std::vector<MultiFab<Dim>*>& requested_residuals,
     const std::vector<int>& requested_flux_only,
     const typename SystemInterfaceProvider<Dim>::RetainedFaces& requested_faces,
-    const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& requested_frequencies) {
+    const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& requested_frequencies,
+    nd::FaceFrequencyRule frequency_rule) {
   using Faces = std::vector<nd::FaceField<Dim>>;
   const bool capture = std::any_of(requested_faces.begin(), requested_faces.end(),
                                    [](const auto* output) { return output != nullptr; });
@@ -823,7 +829,9 @@ void System<Dim>::block_rhs_group(
   if (prepared_boundary_execution_lane_) {
     const auto& lane = *prepared_boundary_execution_lane_;
     // Share the existing route agreement; optional observations add no collective round.
-    const long authority = 4L * group_route + (capture ? 2L : 0L) + (observe ? 1L : 0L);
+    const long authority =
+        4L * group_route + (capture ? 2L : 0L) + (observe ? 1L : 0L) +
+        (observe && frequency_rule == nd::FaceFrequencyRule::largest_axis ? 16L : 0L);
     const auto minimum_authority = all_reduce_min(authority, lane);
     const auto maximum_authority = all_reduce_max(authority, lane);
     if (minimum_authority != maximum_authority)
@@ -836,6 +844,13 @@ void System<Dim>::block_rhs_group(
         prepare_group);
   else
     prepare_group();
+  // The prepared group core reads the rule of its observed frequencies while this call runs.
+  struct ObservedRuleScope {
+    nd::FaceFrequencyRule& rule;
+    ~ObservedRuleScope() { rule = nd::FaceFrequencyRule::incident_sum; }
+  } observed_rule_scope{p_->observed_face_frequency_rule_};
+  p_->observed_face_frequency_rule_ =
+      observe ? frequency_rule : nd::FaceFrequencyRule::incident_sum;
   if (capture) {
     const auto& lane = prepared_boundary_execution_lane();
     std::vector<MultiFab<Dim>> candidates, backups;
@@ -1835,7 +1850,7 @@ template void System<kNativeDimension>::block_rhs_group(
     const std::vector<MultiFab<kNativeDimension>*>&,
     const std::vector<MultiFab<kNativeDimension>*>&, const std::vector<int>&,
     const SystemInterfaceProvider<kNativeDimension>::RetainedFaces&,
-    const SystemInterfaceProvider<kNativeDimension>::RetainedFrequencies&);
+    const SystemInterfaceProvider<kNativeDimension>::RetainedFrequencies&, nd::FaceFrequencyRule);
 template void System<kNativeDimension>::block_rhs_core_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, bool, const System<kNativeDimension>*, int,
