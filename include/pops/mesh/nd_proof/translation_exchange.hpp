@@ -437,9 +437,10 @@ class TranslationExchange {
       peer.device_send = device_buffer_type("pops_nd_translation_send", peer.send_elements);
       peer.device_receive =
           device_buffer_type("pops_nd_translation_receive", peer.receive_elements);
-      peer.host_send = pinned_buffer_type("pops_nd_translation_host_send", peer.send_elements);
+      peer.host_send =
+          pinned_buffer_type("pops_host_staging:nd_translation_send", peer.send_elements);
       peer.host_receive =
-          pinned_buffer_type("pops_nd_translation_host_receive", peer.receive_elements);
+          pinned_buffer_type("pops_host_staging:nd_translation_receive", peer.receive_elements);
     }
     receive_requests_.reserve(schedule_->receive_plan_count());
     send_requests_.reserve(schedule_->send_plan_count());

@@ -6,8 +6,10 @@ used, stays as the reference (MG1). Both routes are compiled, bound and run unde
 the profile's Program; the case invariants of b6 must pass on both, and the final states must be
 equal bitwise, as the accepted step counts.
 
-CI runs three distinct spatial routes: an authored scalar flux (M01), two summed rates with
-their own realizations (M04) and a coordinated face with a bed product (M07). The same test over
+CI runs five distinct spatial routes: an authored scalar flux (M01), two summed rates with
+their own realizations (M04), a coordinated face with a bed product (M07) and, since lot 4, the
+closed stencil fluxes of M05 (Navier-Stokes) and M23 (Hall MHD), whose stages evaluate
+``stencil_rate`` (5 passed in 305 s locally). The same test over
 all seven profiles also passed for M02, M03, M24 and M25 (1311 s on four cores, M25 alone 620 s;
 handoff of N8 lot 1). ``tests/python/unit/time/test_traced_methods_n8.py`` compares the IR of the
 seven and the C++ of six.
@@ -16,6 +18,7 @@ import numpy as np
 import pytest
 
 import examples.api_v02.models_M01_M14 as early
+import examples.api_v02.models_M22_M25_M28 as late
 from tests.python.support.api_v02_native import execute_case
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.public_native_profile import native_profile
@@ -26,7 +29,9 @@ pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loade
 PROFILES = {
     "M01": (early, early.build_m01, "M01_SSPRK2", "fluid"),
     "M04": (early, early.build_m04, "M04_combined_SSPRK2", "fluid"),
+    "M05": (early, early.build_m05, "M05_SSPRK2", "fluid"),
     "M07": (early, early.build_m07, "M07_SSPRK2", "fluid"),
+    "M23": (late, late.build_m23, "M23_SSPRK2", "magnetofluid"),
 }
 
 

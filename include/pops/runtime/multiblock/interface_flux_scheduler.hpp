@@ -1543,11 +1543,18 @@ class InterfaceFluxScheduler {
     for (int component = 0; component < prepared.component_count; ++component)
       component_host(component) = prepared.route.right_component_for_left[component];
     Kokkos::deep_copy(prepared.device_right_components, component_host);
-    prepared.host_traces = host_real_view("pops_interface_host_traces", 2 * packed);
-    prepared.host_flux = host_real_view("pops_interface_host_flux", packed);
+    // The traces stage MPI data (PF2 staging) only when the interface is distributed and runs
+    // its all_reduce. On one rank they still round-trip through the host with no MPI, so they
+    // carry an undeclared host phase there, like the flux, normals and consensus buffers, which
+    // carry host work (finiteness check, consensus, sample, host-built normals) (DM8).
+    prepared.host_traces =
+        host_real_view(std::string(prepared.distributed ? "pops_host_staging:interface_traces"
+                                                        : "pops_host_phase:interface_traces"),
+                       2 * packed);
+    prepared.host_flux = host_real_view("pops_host_phase:interface_flux", packed);
     prepared.host_normals =
-        host_real_view("pops_interface_host_normals", prepared.face_count * Dim);
-    prepared.host_consensus = host_real_view("pops_interface_host_consensus", packed);
+        host_real_view("pops_host_phase:interface_normals", prepared.face_count * Dim);
+    prepared.host_consensus = host_real_view("pops_host_phase:interface_consensus", packed);
     std::fill_n(prepared.host_normals.data(), prepared.host_normals.extent(0), Real(0));
     const Real outward_sign = prepared.route.left_side == InterfaceSide::Low ? Real(-1) : Real(1);
     for (std::size_t face = 0; face < prepared.face_count; ++face)

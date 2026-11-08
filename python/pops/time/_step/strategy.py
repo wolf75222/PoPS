@@ -64,6 +64,10 @@ class StepStrategy:
     kind: ClassVar[str] = "strategy"
     __pops_ir_immutable__ = True
     initial_controls_contract: ClassVar[str] = "pops.step-strategy.initial-runtime-controls@1"
+    # The face frequency whose product with dt a riemann.User guard bounds by the step's budget:
+    # "incident_sum", sum_a s_a / h_a, against the unit budget of the incident faces, unless a
+    # strategy proposes its step from a bound of another form (ROM-107).
+    face_frequency_rule: ClassVar[str] = "incident_sum"
 
     def __new__(cls, *args: Any, **kwargs: Any) -> StepStrategy:
         if cls is StepStrategy:
@@ -255,6 +259,10 @@ class AdaptiveCFL(StepStrategy):
     cfl: float
     max_dt: float | None = None
     kind: ClassVar[str] = "adaptive_cfl"
+    # The native proposal is master's cfl min_a h_a / max_a s_a (2.6.9), so a riemann.User guard
+    # checks dt max_a s_a / min_a h_a against cfl: the guard admits the proposed step whenever
+    # the faces record the speeds the proposal read, as a native face does (ROM-107, MG1, PF10).
+    face_frequency_rule: ClassVar[str] = "largest_axis"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cfl", _positive_float(self.cfl, where="AdaptiveCFL.cfl"))

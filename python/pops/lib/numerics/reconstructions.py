@@ -7,7 +7,8 @@ is the MUSCL face value of the catalogue, written with it:
 
     u_c + limiter(u_c - u_(c-1), u_(c+1) - u_c) / 2
 
-so that master's ``MUSCL(VanLeer())`` is ``muscl(Uh, vanleer)``. The body runs once, now, and
+so that master's ``MUSCL(VanLeer())`` is ``muscl(Uh, vanleer)``, and ``weno5(rep)`` is the
+WENO5-Z face value of master's ``WENO5()``. The body runs once, now, and
 its expression becomes the generated C++ of the face reconstruction; no native reconstruction or
 limiter is named.
 
@@ -29,8 +30,12 @@ The stencil, the halo and the derived ghost depth come from the shifts that the 
 """
 from __future__ import annotations
 
+import math
+import sys
 from collections.abc import Callable
 from typing import Any
+
+from pops import math as pm
 
 
 class _Axis:
@@ -143,4 +148,140 @@ def muscl(rep: Any, limiter: Callable[[Any, Any], Any]) -> Any:
     return Reconstruct(rep, value, formal_order=2)
 
 
-__all__ = ["Reconstruct", "muscl"]
+# The constants of the native WENO5-Z policy (include/pops/numerics/fv/reconstruction.hpp and
+# include/pops/runtime/numerical_defaults.hpp): the default smoothness regulariser kWenoEpsilon,
+# the sample magnitude above which the stencil is rescaled, and the ratio tau5 / (eps + beta)
+# above which the weights are formed relative to the smallest denominator.
+_WENO_EPSILON = 1e-40
+_WENO_SCALE_LIMIT = 1e37
+_WENO_RATIO_LIMIT = 1e100
+# The largest binary64 value, std::numeric_limits<double>::max() of the native policy.
+_LARGEST = sys.float_info.max
+
+
+def _smaller(x: Any, y: Any) -> Any:
+    return pm.where(x < y, lambda: x, lambda: y)
+
+
+def _weno5z_weights(d0: Any, d1: Any, d2: Any, tau5: Any, smallest: Any,
+                    q: tuple[Any, Any, Any]) -> Any:
+    """The bounded form of the WENO-Z weights: the alphas times a common factor, finite even
+    where tau5 / (eps + beta) would overflow."""
+    q0, q1, q2 = q
+
+    def indicator_weights():
+        # A zero denominator dominates with its ideal weight.
+        a0 = pm.where(d0 == 0, lambda: .1, lambda: 0.)
+        a1 = pm.where(d1 == 0, lambda: .6, lambda: 0.)
+        a2 = pm.where(d2 == 0, lambda: .3, lambda: 0.)
+        return (a0*q0 + a1*q1 + a2*q2)/(a0 + a1 + a2)
+
+    def ratio_weights():
+        r0, r1, r2 = tau5/d0, tau5/d1, tau5/d2
+        a0 = .1*(1. + r0*r0)
+        a1 = .6*(1. + r1*r1)
+        a2 = .3*(1. + r2*r2)
+        return (a0*q0 + a1*q1 + a2*q2)/(a0 + a1 + a2)
+
+    def relative_weights():
+        common = smallest/tau5
+        a0 = .1*(common*common + (smallest/d0)*(smallest/d0))
+        a1 = .6*(common*common + (smallest/d1)*(smallest/d1))
+        a2 = .3*(common*common + (smallest/d2)*(smallest/d2))
+        return (a0*q0 + a1*q1 + a2*q2)/(a0 + a1 + a2)
+
+    return pm.where(tau5 == 0, lambda: .1*q0 + .6*q1 + .3*q2,
+                    lambda: pm.where(smallest == 0, indicator_weights,
+                                     lambda: pm.where(tau5 <= smallest, ratio_weights,
+                                                      relative_weights)))
+
+
+def _weno5z_core(vm2: Any, vm1: Any, v0: Any, vp1: Any, vp2: Any, eps: Any,
+                 bounded: bool) -> Any:
+    """WENO5-Z (Borges et al. 2008) at the face between v0 and vp1, in the order of operations of
+    the native ``weno5z_core``; ``bounded`` is Python data, true on the rescaled stencil."""
+    # The three third-order traces of the face.
+    q0 = (2.*vm2 - 7.*vm1 + 11.*v0)/6.
+    q1 = (-vm1 + 5.*v0 + 2.*vp1)/6.
+    q2 = (2.*v0 + 5.*vp1 - vp2)/6.
+    # The smoothness indicators of Jiang and Shu.
+    c = 13./12.
+    e0, f0 = vm2 - 2.*vm1 + v0, vm2 - 4.*vm1 + 3.*v0
+    e1, f1 = vm1 - 2.*v0 + vp1, vm1 - vp1
+    e2, f2 = v0 - 2.*vp1 + vp2, 3.*v0 - 4.*vp1 + vp2
+    b0 = c*e0*e0 + .25*f0*f0
+    b1 = c*e1*e1 + .25*f1*f1
+    b2 = c*e2*e2 + .25*f2*f2
+    tau5 = pm.where(b0 - b2 < 0, lambda: b2 - b0, lambda: b0 - b2)
+    d0, d1, d2 = eps + b0, eps + b1, eps + b2
+    smallest = pm.where(d0 < d1, lambda: _smaller(d0, d2), lambda: _smaller(d1, d2))
+    q = (q0, q1, q2)
+    if bounded:
+        return _weno5z_weights(d0, d1, d2, tau5, smallest, q)
+
+    def ordinary():
+        r0, r1, r2 = tau5/(eps + b0), tau5/(eps + b1), tau5/(eps + b2)
+        a0 = .1*(1. + r0*r0)
+        a1 = .6*(1. + r1*r1)
+        a2 = .3*(1. + r2*r2)
+        inv = 1./(a0 + a1 + a2)
+        return (a0*q0 + a1*q1 + a2*q2)*inv
+
+    return pm.where(tau5 > _WENO_RATIO_LIMIT*smallest,
+                    lambda: _weno5z_weights(d0, d1, d2, tau5, smallest, q), ordinary)
+
+
+def _weno5z(v: tuple[Any, Any, Any, Any, Any], eps: float) -> Any:
+    vm2, vm1, v0, vp1, vp2 = v
+
+    def rescaled():
+        # The largest magnitude of the five samples; a NaN never replaces it.
+        scale: Any = 0.
+        for value in v:
+            magnitude = pm.where(value < 0, lambda value=value: -value, lambda value=value: value)
+            scale = pm.where(magnitude > scale, lambda m=magnitude: m, lambda s=scale: s)
+
+        def scaled():
+            wm2, wm1, w0, wp1, wp2 = (value/scale for value in v)
+            return scale*_weno5z_core(wm2, wm1, w0, wp1, wp2, (eps/scale)/scale, True)
+
+        return pm.where(scale <= _LARGEST, scaled, lambda: scale)
+
+    large = None
+    for value in v:
+        outside = (value > _WENO_SCALE_LIMIT) | (value < -_WENO_SCALE_LIMIT)
+        large = outside if large is None else large | outside
+    uniform = (vm2 == vm1) & (vm1 == v0) & (v0 == vp1) & (vp1 == vp2)
+    return pm.where(uniform, lambda: v0, lambda: pm.where(
+        large, rescaled, lambda: _weno5z_core(vm2, vm1, v0, vp1, vp2, eps, False)))
+
+
+def weno5(rep: Any, epsilon: float | None = None) -> Any:
+    """WENO5 reconstruction of ``rep``: the WENO-Z weights of Borges et al. (2008) over the
+    shifts -2 to 2 (IR table of section 13: halo 3, nonlinear), master's ``WENO5()`` and
+    ``WENO5Z()``, which both run ``weno5z``.
+
+    The trace on the positive face of each axis combines the three third-order traces of the
+    sub-stencils with the weights d_k (1 + (tau5 / (epsilon + beta_k))^2), d = (1/10, 6/10,
+    3/10), beta_k the smoothness indicators of Jiang and Shu and tau5 = |beta_0 - beta_2|;
+    the negative face mirrors it. ``epsilon`` is the regulariser, by default the native
+    ``kWenoEpsilon`` = 1e-40. As the native policy, a uniform stencil returns its value, a
+    stencil with a sample beyond 1e37 in magnitude is rescaled by its largest magnitude, and the
+    weights are formed relative to the smallest denominator where tau5 / (epsilon + beta) passes
+    1e100, so that the trace stays finite. Claimed order 5 (section 13); derived ghost depth 3.
+    """
+    eps = _WENO_EPSILON if epsilon is None else epsilon
+    if isinstance(eps, bool) or not isinstance(eps, (int, float)):
+        raise TypeError("weno5(epsilon=) must be a Python number")
+    eps = float(eps)
+    if not (math.isfinite(eps) and eps > 0):
+        raise ValueError("weno5(epsilon=) must be finite and positive; got %r" % (epsilon,))
+
+    def value(c, a):
+        samples = tuple(c.shift(a, k).value(rep) for k in (-2, -1, 0, 1, 2))
+        return _weno5z(samples, eps)
+
+    return Reconstruct(rep, value, formal_order=5)
+
+
+__all__ = ["Reconstruct", "muscl", "weno5"]

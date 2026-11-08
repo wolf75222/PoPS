@@ -23,7 +23,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   sec. 4.3), `muscl(rep, limiter)` is the MUSCL face value of the catalogue, and `minmod`,
   `vanleer`, `mc` and `superbee` are plain limiter functions passed uncalled. The body becomes
   the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
-  native `MUSCL(<Limiter>())` state bit for bit for the four limiters.
+  native `MUSCL(<Limiter>())` state bit for bit for the four limiters. `weno5(rep, epsilon=)` is
+  the WENO5-Z reconstruction of master's `WENO5()`, bit for bit on the same case.
+- ROM-31 (G13 lot 2): halo transports choose their host staging. `HaloExchangeContext::staging`
+  (`automatic`, `device_direct`, `host_staged`) enters the collective contract; `automatic` posts
+  MPI on the pack and unpack buffers when the fields live in host memory, and stages through
+  pinned host buffers otherwise (spec 0.3 PF2). `pops::host_phase_stats()` counts the bytes that
+  host staging moves (uniform halos and AMR parent ghosts) and every whole-Fab host mirror copy;
+  mesh storage, host staging buffers and unified-memory blocks carry the Kokkos labels
+  `pops_mesh_array:`, `pops_host_staging:` and `pops_unified:`, which the DM8 residency probe of
+  the tests reads per step.
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
   SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
@@ -46,8 +55,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - ROM-95 (N12, lot 3a): the single-layout AMR tutorials (scalar advection 05-14), the IMEX AMR
   final example, the field diffusion example and the scalar AMR migration workflow write their
   tagging as regions of `cell` (`Tag(lambda cell: cell.value(q) > c)`, `gradient_norm` for 09)
-  instead of the ValueExpr tagging graph. MG8 serial records are bitwise identical to the graph
-  route; the scalar advection final example keeps the graph until the VM removal (lot 3c).
+  instead of the ValueExpr tagging graph. MG8 serial-dim2 and mpi-dim2 records are bitwise
+  identical to the graph route; the scalar advection final example keeps the graph until the VM removal (lot 3c).
+- ROM-85 (N10, lot 2, C50): the plan chooses the distribution of the coarse level (spec 0.3 DM3,
+  §21.6, adjudication §26). `PatchLayout.distribute_coarse` defaults to `None`; the plan partitions
+  the coarse level when it carries a cross-block interface and replicates it otherwise, so T10 no
+  longer writes a `PatchLayout`. An explicit `distribute_coarse=False` on an interface is refused by
+  `pops.compile`, before any native work and whatever the rank count, with the new typed refusal
+  `ScheduleIllegal` (IR22, phase compile). The resolved plan identity of an AMR case without a
+  `PatchLayout` changes once: its authored data now says "no constraint" (`None`), and the resolved
+  patch-generation options record the plan's choice.
 - ROM-90 (N9, lot 1): decide each Program reduction and its checks in one collective (spec 0.3
   SV20, duties 2 and 3, and PF8). `dot_all` and the AMR composite pairing and integral send the
   compensated rank summaries through one `MPI_Allreduce` with a non-commutative Neumaier join, the
@@ -121,6 +138,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   derived `hll(F, Uh)` reads them and matches `riemann.HLL()` on M03 and M16; `rusanov` takes
   `smax(uL, uR, n)` and `upwind` takes `speed(face)`, both matching `riemann.Rusanov()` on M01
   when they read the normal (spec 0.3 section 4.4, ROM-99).
+- Write the fluxes of `pops.lib.numerics` to the rows of spec 0.3 section 2.6.9 (N3, ROM-87):
+  `upwind(F, Uh, speed=f)` gives s uL where s = f(face) > 0, else s uR, and records |s| as its
+  speed; `hll(F, Uh)` records max(|sL|, |sR|) of its pair and drops the pilot's `speeds=` option.
+  The native face loop of `riemann.User` passes the CF4 body-swap parity with the L1 upwind body
+  and the L5 Scharfetter-Gummel body, and `upwind(speed=f)` matches master's
+  `riemann.ScalarUpwind` on the case of scalar-advection tutorial 02. `upwind(F, Uh)` without
+  `speed=` stays Rusanov with the R9 speed until a face reads F(1).n (CF15, ROM-106).
+  `rusanov(F, Uh, smax=)` keeps the third parameter of section 4.4 as gap C46 of the index
+  (adjudication section 20, item 4), until a row of 2.6.9 or N15 closes it.
 - Evaluate a `riemann.User` face residual on the transport prepared at bind, like the native face:
   no field is allocated per evaluation, the face carrier is copied only when a Program reads it,
   and the stability frequency is read from the recorded face speeds, on the prepared transport in
@@ -448,9 +474,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   is compiled for the route of the block it installs. A package without a catalogue route (state
   storage, source-authored or coordinated faces, external Riemann bricks) and a direct
   `model.compile()` keep their current route set.
+- ROM-88 (N7, lot 3): the provenance validators of current dependencies and inventory ledgers
+  compare their queries on one shared decision diagram (`DeliveryDiagrams` in
+  `pops.codegen.typed_delivery`) instead of listing the success paths of the Program (spec 0.3
+  MG7, B4). A choice is a boolean diagram, an exact frontier is kept per delivered value, and two
+  queries are compared by walking their diagrams together: a record chosen by the parity of 40
+  independent conditions validates in under a second, where the former validator took 198 s at
+  12. On each assignment of the conditions, the compared queries both succeed or both fail, and
+  every coordinate of a packed ledger is retained wherever one is. A missing delivery names the
+  folds whose zero-iteration alternative alone misses the term, such as a `reduce` in a map
+  element.
 
 ### Fixed
 
+- ROM-17: build PoPS against conda-forge's Kokkos 5.2.2. Its HWLOC TPL names the prefix's
+  `include/` with a trailing separator next to Kokkos' own `include`, so the include contract kept
+  both spellings and counted four defining headers instead of two, and configuration stopped.
+  Each include directory is now kept once per real directory, under its first spelling without
+  a trailing separator. The recorded Kokkos ABI and include list are unchanged where every include
+  directory is named once and without a trailing separator.
+  `environment.yml` lists pytest, which the receivers of a qualification prefix need.
+- ROM-107: a `riemann.User` face (every `pops.lib.numerics` flux) is no longer refused at its
+  first step under `AdaptiveCFL`. `System::step_cfl` proposes master's cfl min_a h_a / max_a s_a,
+  while the face's guard checked dt sum_a s_a / h_a against cfl, so the proposed step failed in
+  two dimensions (reason 503). The step strategy now names the face frequency its guard reads
+  (`StepStrategy.face_frequency_rule`): `AdaptiveCFL` checks max_a s_a / min_a h_a, the native
+  observation computes it from the same recorded speeds (`nd::FaceFrequencyRule`), and FixedDt
+  and the combined transport-diffusion certificate keep the incident sum. Tutorial 02 as written
+  takes the native face's steps with `upwind(speed=)` (core ledger entry).
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
   and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step
@@ -474,6 +525,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   identities are unchanged (identical hashes for 116 example builders and for the depth test at
   depths 20, 40, 80 and 160). On one 4-core container, `compile` of the depth-160 test takes
   740 s instead of 1147 s.
+- Open the same identity reuse scope in `pops.resolve`. `pops.validate` freezes the authoring
+  Program; `pops.resolve` then read its identity four times for the problem snapshots and the
+  plan evidence, each a projection of the whole IR. Within the scope the first read projects and
+  the later ones reuse it; the two serializations that embed the IR itself (the artifact snapshot
+  payload and the semantic identity) still run. The identity is projected again when resolve
+  ends: a change raises `Program IR identity changed during pops.resolve` and no plan is
+  returned. Plan, artifact and Program
+  identities are unchanged (depth test at 40 and 160). On one 4-core container, `resolve` of the
+  depth-160 test takes 332 s instead of 392 s.
 - `ci.yml` checks, with the pinned clang-format 19.1.7, what each pull request changes in the C++
   files, in a `format` job that the required gate aggregates (against the first parent of the
   merge commit, about a minute, no build). It works as a ratchet: a touched file that conformed at

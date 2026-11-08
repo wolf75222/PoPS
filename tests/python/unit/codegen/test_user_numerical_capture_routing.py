@@ -18,10 +18,10 @@ from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
 from pops.representations import Conservative
 from pops.spaces import CellState
-from pops.time import FixedDt
+from pops.time import AdaptiveCFL, FixedDt
 
 
-def _case(*, foreign=False, face=False, width=1, cross=False):
+def _case(*, foreign=False, face=False, width=1, cross=False, strategy=None):
     frame = Rectangle("domain", lower=(0., 0.), upper=(1., 1.)).frame(Cartesian2D())
     model = pops.Model("transport", frame=frame)
     U = model.state("U", components=tuple("q%d" % index for index in range(width)),
@@ -60,7 +60,7 @@ def _case(*, foreign=False, face=False, width=1, cross=False):
         next_value = program.value(name + "_next", temporal.n + program.dt * rhs,
                                    at=temporal.next.point)
         program.commit(temporal.next, next_value)
-    program.step_strategy(FixedDt(1.e-3))
+    program.step_strategy(FixedDt(1.e-3) if strategy is None else strategy)
     case.program(program)
     layout = Uniform(CartesianGrid(frame=frame, cells=(8, 8),
                                    periodic=PeriodicAxes(frame.axes)))
@@ -136,3 +136,25 @@ def test_authored_face_frequency_guards_the_exact_default_rhs_on_both_targets():
         # The Program reads the frequency of these faces, never the faces: no carrier is copied.
         assert source.count("ctx.neg_div_flux_default_with_frequency_into(") == 2
         assert "with_faces_into" not in source and "user_face_faces_" not in source
+        # FixedDt keeps the native incident-face sum: no rule argument is emitted.
+        assert "FaceFrequencyRule" not in source
+
+
+def test_adaptive_step_guards_the_user_face_with_the_frequency_of_its_own_bound():
+    """ROM-107: under AdaptiveCFL each user-face residual observes max_a s_a / min_a h_a, the
+    frequency of the bound the native proposal computes, and the guard is otherwise unchanged."""
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    case, layout, _, _, _, _ = _case(face=True, width=1, strategy=AdaptiveCFL(cfl=.45))
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    for target in ("system", "amr_system"):
+        source = emit_cpp_program(resolved.time, model=graph, target=target)
+        assert source.count("user_face_numerical_stability") == 2
+        assert source.count("numerical_face_courant()") == 2
+        calls = [line for line in source.splitlines()
+                 if "ctx.neg_div_flux_default_with_frequency_into(" in line]
+        assert len(calls) == 2
+        assert all(line.rstrip().endswith(
+            "&user_face_frequency_%s,pops::nd::FaceFrequencyRule::largest_axis);"
+            % line.split("&user_face_frequency_")[1].split(",")[0]) for line in calls), calls

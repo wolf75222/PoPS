@@ -409,7 +409,8 @@ def _patch_layout_data(value: Any) -> dict[str, Any]:
             or type(data.get("schema_version")) is not int \
             or data["schema_version"] != 1 \
             or data.get("authority_type") != "amr_patch_layout" \
-            or type(data.get("distribute_coarse")) is not bool:
+            or (data.get("distribute_coarse") is not None
+                and type(data.get("distribute_coarse")) is not bool):
         raise TypeError("AMR.patch_layout must expose the exact amr_patch_layout schema-v1")
     coarse_max_grid = data["coarse_max_grid"]
     if coarse_max_grid is not None:

@@ -24,6 +24,7 @@ from pops.time._program.control import (
     ADVANCE_ASSESSMENT_CONTRACT, ADVANCE_CONTROL_SCHEMA, AdvanceControl,
 )
 from pops.time._program.elaboration import Advance, Proposal, Retry, elaborate
+from pops.time._program.traced_method import NotYetElaborated
 from pops.time.solve_outcome import FailRun
 from pops.time.values import _freeze_attr
 
@@ -186,7 +187,7 @@ def test_the_generated_program_exports_the_budget_and_rejects_in_the_assessment_
 def test_the_amr_route_refuses_the_assessment_by_name(monkeypatch):
     spec, _ = _elaborated(monkeypatch)
     resolved = pops.resolve(pops.validate(spec.case), layout=spec.layout)
-    with pytest.raises(NotImplementedError, match="AMR route of the compiled control"):
+    with pytest.raises(NotYetElaborated, match="AMR route of the compiled control"):
         emit_cpp_program(resolved.time, target="amr_system",
                          model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
 
