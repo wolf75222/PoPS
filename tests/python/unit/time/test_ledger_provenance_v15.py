@@ -210,7 +210,7 @@ def test_arbitrary_shared_metadata_reference_still_reaches_delivery_guard(monkey
         pass
     def reached(*args, **kwargs):
         raise ReachedExactDelivery
-    monkeypatch.setattr(delivery, 'delivered_frontiers', reached)
+    monkeypatch.setattr(delivery.DeliveryDiagrams, '_run', reached)
     with pytest.raises(ReachedExactDelivery):
         _validate_packet_delivery(envelope, {})
 

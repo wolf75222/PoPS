@@ -37,13 +37,18 @@ and the check of a term never enumerates iterations, map entries or alternatives
   which starts every target, cannot carry an element-wise delivery of an array.
 
 ``require_single_delivery`` checks one term (D5): every success path delivers exactly one
-evaluation, otherwise ``CoverageNotExact`` names the term. It counts evaluations up to two,
-so it reads only the distinct leaves of the diagram. ``delivered_frontiers`` lists exact rows,
-one per success path and alternative, for the provenance validators (current dependencies,
-ledger provenance), which compare rows across queries: k independent choices give 2**k rows.
-Moving those validators onto the diagram is N7 lot 3 (ROM-88, MG7); until then their cost
-follows the success paths of the Program, as with b6, without its budget (B4, CF7).
+evaluation, otherwise ``CoverageNotExact`` names the term, and the folds whose zero-iteration
+alternative alone misses it. It counts evaluations up to two, so it reads only the distinct
+leaves of the diagram.
+
+The provenance validators (current dependencies, ledger provenance) compare what several
+queries deliver under the same choices. ``DeliveryDiagrams`` builds those queries in one
+shared manager: a choice is a boolean diagram, an exact frontier is kept per delivered value,
+and two frontiers are compared by walking their diagrams together, so k independent choices
+cost k, not the 2**k success paths that b6 listed (B4, CF7, N7 lot 3). ``delivered_frontiers``
+still lists one row per success path; tests read it, the compiler does not.
 """
+import itertools
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -237,11 +242,19 @@ _TOP = float('inf')
 class _Diagrams:
     """Hash-consed decision diagrams; a variable is a named condition (SSA id, invocation)."""
 
-    def __init__(self, merge):
+    def __init__(self, merge, share=None):
+        # Diagrams that share their variables, nodes and leaves can be compared node by node;
+        # each merge of evaluations keeps its own cache of sequential compositions.
         self.merge = merge
-        self.levels, self.variables = {}, []
-        self.nodes, self.leaves = {}, {}
-        self.applied, self.chosen = {}, {}
+        if share is None:
+            self.levels, self.variables = {}, []
+            self.nodes, self.leaves, self.chosen = {}, {}, {}
+            self.keys = itertools.count()
+        else:
+            self.levels, self.variables = share.levels, share.variables
+            self.nodes, self.leaves, self.chosen = share.nodes, share.leaves, share.chosen
+            self.keys = share.keys
+        self.applied = {}
         self.fail = self.leaf(frozenset())
         self.empty = self.leaf(frozenset((_Bag(),)))
 
@@ -367,6 +380,50 @@ class _Diagrams:
                 stack.extend((current.lo, current.hi))
         return leaves
 
+    def guard(self, diagram, test):
+        """The condition, as a diagram with the leaves ``empty`` and ``fail``, under which the
+        leaf of ``diagram`` passes ``test``."""
+        return self.rebuild(diagram, lambda name: name,
+                            lambda found: self.empty if test(found) else self.fail)
+
+    def exists(self, diagrams, test):
+        """Whether one assignment of the conditions reaches leaves that pass ``test``.
+
+        The diagrams are walked together, one condition at a time: the cost is bounded by the
+        product of their sizes, never by the number of their paths.
+        """
+        memo = {}
+        def go(current):
+            key = tuple(map(id, current))
+            found = memo.get(key)
+            if found is None:
+                level = min(map(self.top, current))
+                if level == _TOP:
+                    found = bool(test(*current))
+                else:
+                    found = (go(tuple(self.cofactor(d, level, False) for d in current)) or
+                             go(tuple(self.cofactor(d, level, True) for d in current)))
+                memo[key] = found
+            return found
+        return go(tuple(diagrams))
+
+    def leaves_within(self, diagram, within):
+        """The distinct leaves of ``diagram`` that an assignment in ``within`` reaches."""
+        seen, leaves = set(), {}
+        def go(current, where):
+            key = (id(current), id(where))
+            if key in seen or where is self.fail:
+                return
+            seen.add(key)
+            if type(current) is _Leaf and type(where) is _Leaf:
+                leaves[id(current)] = current
+                return
+            level = min(self.top(current), self.top(where))
+            for arm in (False, True):
+                go(self.cofactor(current, level, arm), self.cofactor(where, level, arm))
+        go(diagram, within)
+        return tuple(leaves.values())
+
     def paths(self, diagram, choices=()):
         """Every path to a successful leaf, true arm first, as (choices, leaf)."""
         if type(diagram) is _Leaf:
@@ -457,16 +514,31 @@ class _Formal:
 
 
 class _Analysis:
-    def __init__(self, matches, *, saturate, with_projection=False, expand_match=None, stop_at=None):
+    def __init__(self, matches, *, saturate, with_projection=False, expand_match=None, stop_at=None,
+                 dd=None, keep=None, iterate_once=False, structure=None):
         self.matches, self.stop_at = matches, stop_at
         self.expand_match, self.with_projection = expand_match, with_projection
-        self.saturate = saturate
-        self.dd = _Diagrams(_merge_saturated if saturate else _merge_exact)
-        self.root = _Context(None, None, frozenset(), {})
-        self.contexts, self.region_sets, self.invocations = {}, {}, {}
-        self.memo, self.affect, self.deliver = {}, {}, {}
-        self.loop_states, self.sequences, self.formals = {}, {}, {}
-        self.maps, self.index_owners = {}, {}
+        self.saturate, self.keep = saturate, keep
+        # ``iterate_once`` reads a fold whose count is not a literal as running at least once;
+        # ``zero_trips`` are the folds whose zero-iteration alternative it then leaves out.
+        self.iterate_once, self.zero_trips = iterate_once, []
+        # The values whose evaluation a leaf may name, before ``keep`` filters them.
+        self.evaluated = set()
+        self.dd = _Diagrams(_merge_saturated if saturate else _merge_exact) if dd is None else dd
+        self.memo, self.sequences = {}, {}
+        if structure is None:
+            self.root = _Context(None, None, frozenset(), {})
+            self.contexts, self.region_sets, self.invocations = {}, {}, {}
+            self.affect, self.deliver = {}, {}
+            self.loop_states, self.formals = {}, {}
+            self.maps, self.index_owners = {}, {}
+        else:
+            # Another analysis of the same query: contexts, loop and combine placeholders and
+            # reachability depend on the graph and the matches, not on which evaluations a
+            # leaf keeps, so they are shared; leaves, visits and loop sequences are not.
+            for name in ('root', 'contexts', 'region_sets', 'invocations', 'affect', 'deliver',
+                         'loop_states', 'formals', 'maps', 'index_owners'):
+                setattr(self, name, getattr(structure, name))
 
     # -- contexts ---------------------------------------------------------------------------
     def nodes_of(self, owner, *blocks):
@@ -564,6 +636,10 @@ class _Analysis:
 
     # -- leaves -----------------------------------------------------------------------------
     def evaluation(self, value, path, context):
+        self.evaluated.add(value.id)
+        if self.keep is not None and not self.keep(value.id):
+            # The evaluation still ends its path; only its identity leaves the frontier.
+            return self.dd.empty
         reference = DeliveryReference(value.id, self.invocation(value.id, context),
                                       tuple(path) if self.with_projection else ())
         refs = frozenset((reference,))
@@ -1044,8 +1120,11 @@ class _Analysis:
         if is_fold and literal is not None:
             return sequence.state(literal)[path]
         if is_fold:
-            result = dd.fail
-            for state in sequence.states(limit):
+            result, states = dd.fail, sequence.states(limit)
+            if self.iterate_once and len(states) > 1:
+                self.zero_trips.append(value)
+                states = states[1:]
+            for state in states:
                 result = dd.alt(result, state[path])
             return result
         accepted, continued = dd.fail, dd.empty
@@ -1068,7 +1147,7 @@ class _Analysis:
         if found is None:
             found = self.loop_states[key] = _LoopState(
                 value, context, ('ok',) if value.attrs.get('body_is_variant_result') else (),
-                len(self.loop_states), lambda state: self.context(
+                next(self.dd.keys), lambda state: self.context(
                     context, (value.id, _CURRENT), self.nodes_of(value, 'body_block'),
                     ((value.attrs['body_argument'].id, ('state', state, None, ())),)))
         return found
@@ -1280,8 +1359,8 @@ def delivered_frontiers(root, matches, *, path=(), with_choices=False, with_proj
     A path to a leaf with several alternatives gives one row per alternative.
 
     The rows enumerate the success paths of the diagram: 2**k rows for k independent
-    choices. They serve the provenance validators until N7 lot 3 (ROM-88) moves them onto
-    the diagram (MG7); a coverage check is ``require_single_delivery``, which does not
+    choices. Only tests read them; the compiler checks coverage with
+    ``require_single_delivery`` and provenance with ``DeliveryDiagrams``, which do not
     enumerate.
     """
     analysis, diagram = _analysis(root, matches, path, saturate=False, with_projection=with_projection,
@@ -1293,6 +1372,36 @@ def delivered_frontiers(root, matches, *, path=(), with_choices=False, with_proj
                 raise RuntimeError('a carried loop path escaped its loop analysis')
             rows.append((choices, bag.refs) if with_choices else bag.refs)
     return tuple(rows)
+
+
+def _missing(analysis, diagram):
+    """Whether no path succeeds, or one successful alternative delivers nothing."""
+    bags = [bag for found in analysis.dd.distinct_leaves(diagram) for bag in found.alternatives]
+    return not bags or any(not bag.refs for bag in bags)
+
+
+def _zero_trip_cause(root, matches, path, stop_at):
+    """The folds whose zero-iteration alternative alone delivers nothing, as a clause.
+
+    A fold whose count is not a literal (the count of a ``reduce`` is the size of its set) may
+    run zero times, and then its result is its initial value. When reading every such fold as
+    running at least once delivers the term on every path, those zero-iteration alternatives
+    are the missing deliveries, and the refusal names them (O5 of the N7 lot 2 review).
+    """
+    try:
+        analysis, diagram = _analysis(root, matches, path, saturate=True, stop_at=stop_at, iterate_once=True)
+    except DeliveryNotStructural:
+        return ''
+    if not analysis.zero_trips or _missing(analysis, diagram):
+        return ''
+    folds = sorted({value.id: value for value in analysis.zero_trips}.values(), key=lambda value: value.id)
+    def count(value):
+        found = value.inputs[1]
+        kind = ('the size of a set, as in a reduce' if found.op in ('finite_size', 'distributed_size')
+                else 'not a literal')
+        return '%s may run zero times: its count %s is %s' % (_region(value), _region(found), kind)
+    return ('; %s; with zero iterations a fold returns its initial value, which delivers nothing'
+            % '; '.join(count(value) for value in folds))
 
 
 def require_single_delivery(root, matches, *, term, path=(), stop_at=None, missing, duplicate):
@@ -1310,14 +1419,202 @@ def require_single_delivery(root, matches, *, term, path=(), stop_at=None, missi
             raise
         raise DeliveryNotStructural(error.detail, region=error.region, construct=error.construct,
                                     term=term) from error
+    if _missing(analysis, diagram):
+        raise CoverageNotExact(missing + _zero_trip_cause(root, matches, path, stop_at), term=term, count=0)
     leaves = [found for found in analysis.dd.distinct_leaves(diagram) if found.alternatives]
     bags = [bag for found in leaves for bag in found.alternatives]
-    if not bags or any(not bag.refs for bag in bags):
-        raise CoverageNotExact(missing, term=term, count=0)
     if any(bag.refs is _SATURATED for bag in bags):
         raise CoverageNotExact(duplicate, term=term, count=2)
     return frozenset(reference for bag in bags for reference in bag.refs)
 
 
-__all__ = ['DeliveryReference', 'EACH', 'MANY', 'Ordinal', 'SOME', 'delivered_count', 'delivered_frontiers',
+class DeliveryDiagrams:
+    """Delivery frontiers as functions of the named conditions, on one shared diagram (MG7, B4).
+
+    The provenance validators (current dependencies, ledger provenance) compare what
+    several queries deliver under the same choices. Each query is a diagram over the named
+    conditions of the Program, all of them in one hash-consed manager, so a condition is a
+    boolean diagram (``always``, ``never``, ``both``, ``either``) and two queries are
+    compared by walking their diagrams together (``same``), never by listing their success
+    paths: k independent choices cost k, not 2**k.
+
+    A frontier is kept per delivered value (``Frontier``): the diagram of its exact
+    evaluations restricted to one value has the distinct sets of that value's evaluations as
+    leaves, so independent choices of different values never multiply. A check that needs
+    exactly one evaluation reads the counting analysis of ``require_single_delivery``
+    (``single``), whose leaves keep one identified evaluation and saturate beyond.
+    """
+
+    def __init__(self):
+        self._exact = _Diagrams(_merge_exact)
+        self._counted = _Diagrams(_merge_saturated, share=self._exact)
+        self.always, self.never = self._exact.empty, self._exact.fail
+        self._queries = {}
+
+    def both(self, left, right):
+        """The conditions under which both hold."""
+        return self._exact.seq(left, right)
+
+    def either(self, left, right):
+        """The conditions under which one of them holds."""
+        return self._exact.alt(left, right)
+
+    def meets(self, left, right):
+        """Whether one assignment of the conditions satisfies both."""
+        return self.both(left, right) is not self.never
+
+    def _run(self, root, matches, path, *, saturate, keep, structure=None, **options):
+        analysis = _Analysis(matches, saturate=saturate, keep=keep, structure=structure,
+                             dd=self._counted if saturate else self._exact, **options)
+        return analysis, analysis.visit(root, tuple(path), analysis.root)
+
+    def _cached(self, kind, root, matches, path, options, keep, build):
+        # A query is a function of its root, path, options and callables; the callables are
+        # held by the key, so an identity is never reused while the session lives.
+        key = (kind, root.id, id(root.prog), tuple(path), matches, keep,
+               tuple(sorted(options.items(), key=lambda item: item[0])))
+        try:
+            found = self._queries.get(key)
+        except TypeError:
+            return build()
+        if found is None:
+            found = self._queries[key] = (root, build())
+        return found[1]
+
+    def _success(self, diagram):
+        return self._exact.guard(diagram, lambda found: bool(found.alternatives))
+
+    def frontier(self, root, matches, *, path=(), with_projection=False, expand_match=None,
+                 stop_at=None, keep=None):
+        """The exact delivered evaluations of ``root`` at ``path`` (``delivered_frontiers``).
+
+        ``keep`` names the values whose evaluations the frontier holds; an evaluation of
+        another matched value still ends its path and delivers nothing.
+        """
+        options = dict(with_projection=with_projection, expand_match=expand_match, stop_at=stop_at)
+        return self._cached('frontier', root, matches, path, options, keep,
+                            lambda: Frontier(self, root, matches, path, options, keep))
+
+    def single(self, root, matches, *, path=(), with_projection=False, expand_match=None,
+               stop_at=None, keep=None):
+        """The counted frontier of ``root`` at ``path``: one identified evaluation or a count."""
+        options = dict(with_projection=with_projection, expand_match=expand_match, stop_at=stop_at)
+        return self._cached('single', root, matches, path, options, keep,
+                            lambda: Single(self, root, matches, path, options, keep))
+
+    def same(self, within, left, right):
+        """Where ``left`` and ``right`` differ under a condition of ``within``, or None.
+
+        On every assignment in ``within``, both succeed or neither does, and where both
+        succeed they deliver one alternative each, the same evaluations. The answer names the
+        first difference: ``'variant'`` when only one of them succeeds anywhere in
+        ``within``, ``'left'`` or ``'right'`` when only that one succeeds on some assignment,
+        ``'evaluations'`` when both succeed with other evaluations or several alternatives.
+        """
+        dd, never = self._exact, self.never
+        left_success = self.both(within, left.success)
+        right_success = self.both(within, right.success)
+        if (left_success is never) != (right_success is never):
+            return 'variant'
+        if self.meets(left_success, self._complement(right.success)):
+            return 'left'
+        if self.meets(right_success, self._complement(left.success)):
+            return 'right'
+        domain = self.both(left_success, right_success)
+        def differs(where, mine, theirs):
+            if where is never:
+                return False
+            return (len(mine.alternatives) != 1 or len(theirs.alternatives) != 1 or
+                    mine.alternatives != theirs.alternatives)
+        for value_id in sorted(left.values | right.values):
+            if dd.exists((domain, left.restricted(value_id), right.restricted(value_id)), differs):
+                return 'evaluations'
+        return None
+
+    def _complement(self, condition):
+        return self._exact.rebuild(condition, lambda name: name, lambda found: (
+            self.never if found.alternatives else self.always))
+
+
+class Frontier:
+    """One query of ``DeliveryDiagrams``: its success condition and its frontier per value."""
+
+    def __init__(self, session, root, matches, path, options, keep):
+        self.session = session
+        analysis, diagram = session._run(root, matches, path, saturate=False,
+                                         keep=lambda value_id: False, **options)
+        self.success = session._success(diagram)
+        evaluated = analysis.evaluated if keep is None else {v for v in analysis.evaluated if keep(v)}
+        # One analysis per delivered value: its structural refusals are raised here, as the
+        # unrestricted analysis would raise them, since each names an evaluation it holds.
+        self._restricted = {
+            value_id: session._run(root, matches, path, saturate=False,
+                                   keep=lambda candidate, value_id=value_id: candidate == value_id,
+                                   structure=analysis, **options)[1]
+            for value_id in sorted(evaluated)}
+        self.values = frozenset(self._restricted)
+
+    def restricted(self, value_id):
+        """The diagram of the evaluations of one value (the success condition without one)."""
+        found = self._restricted.get(value_id)
+        return self.success if found is None else found
+
+    def references(self, within=None):
+        """The evaluations delivered on some successful assignment in ``within``."""
+        dd = self.session._exact
+        within = self.session.always if within is None else within
+        found = set()
+        for diagram in self._restricted.values():
+            for leaf in dd.leaves_within(diagram, within):
+                for bag in leaf.alternatives:
+                    found.update(bag.refs)
+        return frozenset(found)
+
+    def guard_of(self, reference):
+        """The condition under which ``reference`` is delivered."""
+        diagram = self._restricted.get(reference.value_id)
+        if diagram is None:
+            return self.session.never
+        return self.session._exact.guard(diagram, lambda found: any(
+            reference in bag.refs for bag in found.alternatives))
+
+    def require_identified(self, within, message):
+        require_identified(self.references(within), message)
+        return self
+
+
+class Single:
+    """One counted query of ``DeliveryDiagrams``: every successful alternative delivers one
+    identified evaluation, or the query reports the other counts it found."""
+
+    def __init__(self, session, root, matches, path, options, keep):
+        self.session = session
+        _, self.diagram = session._run(root, matches, path, saturate=True, keep=keep, **options)
+        self.success = session._success(self.diagram)
+
+    def outcomes(self, within=None):
+        """(the delivered evaluations with their conditions, the counts other than one).
+
+        Only the assignments in ``within`` are read; a count is 0 for an empty alternative
+        and 2 for two or more evaluations.
+        """
+        session = self.session
+        within = session.always if within is None else within
+        guards, counts = {}, set()
+        for leaf in session._exact.leaves_within(self.diagram, within):
+            for bag in leaf.alternatives:
+                if bag.refs is _SATURATED or len(bag.refs) != 1 or delivered_count(bag.refs) != 1:
+                    counts.add(2 if bag.refs is _SATURATED else delivered_count(bag.refs))
+                    continue
+                reference = next(iter(bag.refs))
+                if reference not in guards:
+                    guards[reference] = session.both(within, session._exact.guard(
+                        self.diagram, lambda found, reference=reference: any(
+                            item.refs is not _SATURATED and reference in item.refs
+                            for item in found.alternatives)))
+        return guards, frozenset(counts)
+
+
+__all__ = ['DeliveryDiagrams', 'DeliveryReference', 'EACH', 'Frontier', 'MANY', 'Ordinal', 'SOME', 'Single',
+           'delivered_count', 'delivered_frontiers',
            'identified', 'multiplicity', 'require_identified', 'require_single_delivery', 'term_label']
