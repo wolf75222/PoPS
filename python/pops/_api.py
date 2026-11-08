@@ -54,6 +54,10 @@ def compile(plan: Any) -> Any:
         # Classes are derived facts of the plan: ClassNotReached comes before any native work
         # (IR21).
         check_expected_classes(plan)
+        from pops.amr._resolution import check_coarse_distribution
+
+        # A storage constraint the runtime cannot run is refused before any native work (IR22).
+        check_coarse_distribution(plan)
         from pops._native_selector import select_native_dimension
 
         select_native_dimension(getattr(plan, "resolved_dimension", None))

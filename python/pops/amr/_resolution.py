@@ -630,6 +630,74 @@ def _combined_requirement(
     )
 
 
+def _planned_coarse_distribution(patch_layout_data: Any, context: AMRResolutionContext) -> bool:
+    """Choose the distribution of the coarse level (spec 0.3 DM3, PF3, gap C50).
+
+    The interface scheduler refuses a cross-block interface whose endpoint is replicated as soon
+    as it runs on two ranks or more ("distributed multi-block interfaces require unique patch
+    ownership"). So, when the case writes no constraint, the plan partitions the coarse level of
+    a hierarchy whose blocks carry a cross-block interface, and keeps the replicated coarse level
+    of b6 otherwise. A constraint the case writes is kept as written; ``pops.compile`` refuses the
+    one the runtime cannot run (``check_coarse_distribution``).
+    """
+    authored = patch_layout_data["distribute_coarse"]
+    if authored is None:
+        return any(carries_cross_block_interface(row) for row in context.numerics)
+    return authored
+
+
+def carries_cross_block_interface(numerics: Any) -> bool:
+    """Whether a block's resolved numerics carry a cross-block interface (the one predicate).
+
+    An interface reaches a block in one of two forms: an interface authority that composition
+    has not consumed yet (``numerics.interfaces``, a ``ConservativeInterface`` before
+    ``compose_shared_interfaces``), or a row of the ghost producer plan of one of its boundaries
+    (``boundary.interfaces``, which composition fills and which a boundary may also declare). The
+    plan's choice of the coarse distribution and the compile-time refusal read this one function,
+    before and after composition alike, so they never disagree on a case.
+    """
+    if numerics is None:
+        return False
+    if tuple(getattr(numerics, "interfaces", ()) or ()):
+        return True
+    return any(tuple(getattr(boundary, "interfaces", ()) or ())
+               for boundary in getattr(numerics, "boundaries", ()) or ())
+
+
+def check_coarse_distribution(plan: Any) -> None:
+    """Refuse a replicated coarse level under a cross-block interface (IR22, spec 0.3 C50).
+
+    An artefact does not depend on the rank count, and the interface scheduler needs one owner
+    per patch of an endpoint as soon as two ranks run it. A hierarchy whose coarse level is
+    replicated and whose blocks carry a cross-block interface is therefore a storage constraint
+    the runtime cannot run on every rank count the artefact admits. The plan only reaches that
+    state from an authored ``PatchLayout(distribute_coarse=False)``, since its own choice
+    partitions such a level; ``pops.compile`` refuses it before any native work, whatever the
+    rank count.
+    """
+    authorities = getattr(plan, "layout_amr_authorities", None) or {}
+    if not authorities:
+        return
+    block_layouts = {row.subject.local_id: row.layout.qualified_id
+                     for row in plan.layout_plan.assignments if row.subject_kind == "block"}
+    for layout_id, row in authorities.items():
+        options = row.authorities.hierarchy.plan.patch_generation.options.to_data()
+        if options["distribute_coarse"] is not False:
+            continue
+        if any(block_layouts.get(block.name) == layout_id
+               and carries_cross_block_interface(block.numerics)
+               for block in plan.blocks):
+            from pops._ir.refusals import ScheduleIllegal
+
+            raise ScheduleIllegal(
+                "a cross-block interface needs one owner per patch of the coarse level, and a "
+                "replicated coarse level has one copy per rank; omit the constraint and the "
+                "plan partitions the coarse level",
+                subject=layout_id,
+                constraint="PatchLayout(distribute_coarse=False)",
+            )
+
+
 def _hierarchy(
     authoring: Any,
     patch_layout: Any,
@@ -779,6 +847,7 @@ def _hierarchy(
         )
     patch_layout_data = _protocol(
         patch_layout, "to_data", where="AMR patch layout authority")()
+    distribute_coarse = _planned_coarse_distribution(patch_layout_data, context)
     from pops.amr._load_balance_contract import load_balance_provider_data
 
     load_balance_data = load_balance_provider_data(load_balance)
@@ -803,7 +872,7 @@ def _hierarchy(
             provider("box_array", "amr_patch_generation_provider"),
             CanonicalOptions({
                 "native_route": "box_array",
-                "distribute_coarse": patch_layout_data["distribute_coarse"],
+                "distribute_coarse": distribute_coarse,
                 "coarse_max_grid": patch_layout_data["coarse_max_grid"],
             }),
         ),
