@@ -358,14 +358,13 @@ def math_definitions(rel: str, tree: ast.Module) -> set[int]:
     return _math_definitions(tree, POPS_MATH_WORDS) if rel in POPS_MATH_MODULES else set()
 
 
-def python_tokens(text: str, math_words: frozenset = frozenset(), refusal_tables: bool = False):
-    """Identifiers, strings and links of Python source. @p math_words are the words that the
-    module defines when it is ``pops.math`` (``POPS_MATH_WORDS``), empty elsewhere;
-    @p refusal_tables is true in the package of the surface (``SURFACE_PACKAGE``)."""
+def python_tokens(text: str, rel: str = "", refusal_tables: bool = False):
+    """Identifiers, strings and links of Python source. @p rel is the path of the file, whose
+    definitions of the words of pops.math are admitted when it is the module pops.math
+    (``math_definitions``, the admission that gate 2e reads too); @p refusal_tables is true in the
+    package of the surface (``SURFACE_PACKAGE``)."""
     tree = ast.parse(text)
-    excluded = _python_excluded_strings(tree, refusal_tables)
-    if math_words:
-        excluded |= _math_definitions(tree, math_words)
+    excluded = _python_excluded_strings(tree, refusal_tables) | math_definitions(rel, tree)
     for node in ast.walk(tree):
         if id(node) in excluded and not isinstance(node, ast.Constant):
             continue  # the name of a definition of a word of pops.math; its body is still read
@@ -859,8 +858,7 @@ def cf2_sites_in_text(rel: str, text: str, kind: str):
     lines = text.splitlines()
     found = [Occurrence(rel, 0, term, "(path)") for term in terms_in(rel, "path")]
     if kind == "python":
-        tokens = python_tokens(text, POPS_MATH_WORDS if rel in POPS_MATH_MODULES else frozenset(),
-                               rel.startswith(SURFACE_PACKAGE))
+        tokens = python_tokens(text, rel, rel.startswith(SURFACE_PACKAGE))
     else:
         tokens = LEXERS[kind](text)
     for line, token, token_kind in tokens:
