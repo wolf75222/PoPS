@@ -27,9 +27,23 @@ def test_uniform_ssa_coefficient_preserves_equation_and_accepted_face_weight():
     assert "ctx.publish_stencil_exchanges" in cpp
     # Spec 0.3 SV20, duty 2 (N9 lot 1, #722): both coefficients come from rank-identical scalars
     # by exact operations, so each is rejected locally when nonfinite and never voted bit by bit.
-    assert cpp.count("replicated array has a nonfinite element") == 2
+    assert cpp.count("if (!std::isfinite(affine_coefficients_") == 2
+    assert "all_reduce_max((!std::isfinite(affine_coefficients_" not in cpp
     assert "std::bit_cast<std::int64_t>" not in cpp
     assert "pops::for_each_cell" in cpp  # the original equation still executes
+
+
+def test_uniform_ssa_coefficient_from_a_rank_local_scalar_is_still_voted():
+    """The counterpart of SV20 duty 2: requested_dt is not identical by construction on every
+    rank, so each coefficient is rejected collectively and its Float64 bits are voted."""
+    model, p, q, rate = _spatial_rate_fixture()
+    update = p.value("ssa_equation", q.n+p.requested_dt()*rate, at=q.next.point)
+    p.commit(q.next, update)
+    cpp = emit(model, p)
+    assert cpp.count("all_reduce_max((!std::isfinite(affine_coefficients_") == 2
+    assert "if (!std::isfinite(affine_coefficients_" not in cpp
+    assert cpp.count("std::bit_cast<std::int64_t>") == 4  # min and max, per coefficient
+    assert cpp.count("Float64 bits differ across execution ranks") == 2
 
 
 def test_local_source_consumes_the_exact_ssa_affine_stage():
