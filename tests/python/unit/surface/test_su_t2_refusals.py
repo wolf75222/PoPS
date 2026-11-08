@@ -21,7 +21,7 @@ import pytest
 import pops.surface as surface
 from pops.lib.numerics.schemes import two_point, upwind
 from pops.lib.time.methods import ssprk2
-from pops.surface.math import all_of, ddt, div, grad, where
+from pops.surface.math import all_of, ddt, div, exp, grad, sqrt, where
 
 HERE = os.path.abspath(__file__)
 
@@ -663,3 +663,130 @@ def test_a_construct_of_a_later_lot_names_the_lot_that_elaborates_it():
         surface.compile(None)  # <- later-compile
     assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("later-compile"))
     assert "the run of N8 (Simulation.run, RunResult and Output, CC14)" in str(caught.value)
+
+
+# --- the refusals that the review of lot 1 asked for (#745) -------------------------------------
+
+def _later(caught, marker, words):
+    """A NotYetElaborated at the marked line, whose message names ``words``."""
+    assert type(caught.value) is surface.NotYetElaborated
+    assert (caught.value.site.file, caught.value.site.line) == (HERE, _line(marker))
+    for word in words:
+        assert word in str(caught.value)
+
+
+def test_su10_a_weight_of_pops_math_beyond_the_rationals_is_not_elaborated_yet():
+    weight = 1 - 1 / sqrt(2)
+
+    @surface.method
+    def blend(step, rate):
+        stage = step.state + step.dt * rate(step.state, step.time)
+        return surface.Candidate(weight * step.state + (1 - weight) * stage)  # <- su10-weight
+
+    @surface.method
+    def blend_right(step, rate):
+        stage = step.state + step.dt * rate(step.state, step.time)
+        return surface.Candidate(step.state * weight + stage * (1 - weight))  # <- su10-weight-r
+
+    for method_value, marker in ((blend, "su10-weight"), (blend_right, "su10-weight-r")):
+        with pytest.raises(surface.NotYetElaborated) as caught:
+            _traced(lambda model, value=method_value: value(rate=model))
+        _later(caught, marker, ("a weight or a duration of SU10 that is an expression of "
+                                "pops.math", "a later lot of N8 with N11 (open point 16, SD95)"))
+
+
+def test_su10_a_duration_beyond_the_polynomials_of_the_step_is_not_elaborated_yet():
+    @surface.method
+    def damped(step, rate):
+        damping = exp(-step.dt)  # <- su10-exp
+        return surface.Candidate(step.state + damping * rate(step.state, step.time))
+
+    with pytest.raises(surface.NotYetElaborated) as caught:
+        _traced(lambda model: damped(rate=model))
+    _later(caught, "su10-exp", ("here exp with a duration of the method", "N8 with N11"))
+
+
+def test_a_refusal_of_n8_keeps_its_own_sentence():
+    @surface.method
+    def compared(step, rate):
+        if step.dt < 1:  # <- su4-n8-compare
+            pass
+        return surface.Candidate(step.state + step.dt * rate(step.state, step.time))
+
+    with pytest.raises(surface.NotYetElaborated) as caught:
+        _traced(lambda model: compared(rate=model))
+    _later(caught, "su4-n8-compare", ())
+    assert ": NotYetElaborated: a comparison of traced values builds a predicate (SU4), which a " \
+        "later lot of N8 elaborates, with Python's max(...) and min(...) of traced values." \
+        in str(caught.value)
+    assert "has no elaborated form yet" not in str(caught.value)
+
+
+def test_a_weight_other_than_one_before_div_is_not_elaborated_yet():
+    domain, model, u, a, nu, u0 = _model()
+    advection = model.flux(of=u, value=a * u)
+    diffusion = model.diffusive_flux(of=u, value=-nu * grad(u))
+    model.balance(ddt(u) == -2 * div(advection) - div(diffusion))  # <- r7-weight
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
+                              initial={u: u0})
+    with pytest.raises(surface.NotYetElaborated) as caught:
+        surface.Case(model=model, numerics=_numerics(u, advection, diffusion), program=program,
+                     layout=_layout(domain))
+    _later(caught, "r7-weight", ("the weight -2 of div(", "a weight other than 1 or -1"))
+
+
+def test_two_point_takes_a_coefficient_that_does_not_vary_with_the_state():
+    domain, model, u, a, nu, u0 = _model()
+    advection = model.flux(of=u, value=a * u)
+    diffusion = model.diffusive_flux(of=u, value=-u * grad(u))
+    model.balance(ddt(u) == -div(advection + diffusion))
+    numerics = surface.Numerics(represent={u: surface.CellAverage()},
+                                schemes={advection: upwind(), diffusion: two_point()})  # <- d5-k
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
+                              initial={u: u0})
+    with pytest.raises(surface.NotYetElaborated) as caught:
+        surface.Case(model=model, numerics=numerics, program=program, layout=_layout(domain))
+    _later(caught, "d5-k", ("two_point() under", "varies with the state", "face means of 2.6.4"))
+
+
+def test_upwind_refuses_an_affine_flux():
+    domain, model, u, a, nu, u0 = _model()
+    advection = model.flux(of=u, value=a * u + a)
+    model.balance(ddt(u) == -div(advection))
+    numerics = surface.Numerics(represent={u: surface.CellAverage()},
+                                schemes={advection: upwind()})  # <- d5-affine
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
+                              initial={u: u0})
+    with pytest.raises(surface.RealizationMismatch) as caught:
+        surface.Case(model=model, numerics=numerics, program=program, layout=_layout(domain))
+    _refused(caught, surface.RealizationMismatch, "d5-affine", ("D5", "§2.6.4"),
+             "rusanov() or hll(), which take the wave speeds of the flux")
+
+
+@pytest.mark.parametrize("spelling, write", [
+    ("Realization", "solvers={key: solver} in pops.Program, keyed by handles"),
+    ("from_data", "initial={u: pops.project(e, quadrature=...)}, or initial={u: u0} for a datum"),
+    ("integrate_rates", "the state arithmetic, step.state + step.dt * rate(step.state, "
+                        "step.time)"),
+    ("apply_increment", "S + J, a state plus an increment"),
+    ("accept_all", "accept=[check1, check2]; a list of checks accepts when all of them do"),
+    ("step_bound", "the bound as dt="),
+])
+def test_su13_a_spelling_of_level_1_in_an_earlier_text_names_the_construct(spelling, write):
+    with pytest.raises(surface.SymbolNotInSurface) as caught:
+        getattr(surface, spelling)  # <- su13-earlier-level1
+    _refused(caught, surface.SymbolNotInSurface, "su13-earlier-level1", ("SU3", "SU13", "§21.7"),
+             write)
+    assert "pops.%s is a spelling of an earlier text" % spelling in str(caught.value)
+
+
+def test_su13_pops_and_pops_math_have_their_words_only():
+    math = surface.math
+    later = {name for name in dir(surface) if not name.startswith("_")
+             and getattr(getattr(surface, name), "__module__", None) == surface.__name__}
+    assert {name for name in dir(math) if not name.startswith("_")} == set(math.__all__)
+    assert {name for name in dir(surface) if not name.startswith("_")} - later \
+        == set(surface.__all__)
+    for leaked in ("Expr", "Call", "Any", "annotations", "SpellingRefusal", "operand"):
+        with pytest.raises(surface.SymbolNotInSurface):
+            getattr(math, leaked)

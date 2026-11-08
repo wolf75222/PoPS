@@ -48,6 +48,7 @@ from ._model import (
     Balance, Datum, DiffusiveFlux, Flux, Model, ModelConstant, Parameter, Positive, Quantity,
     Term, model_names,
 )
+from ._model import _sign as _derived_sign
 from ._numerics import Numerics, SchemeValue, TermView
 from ._refusal import (
     AmbiguousElaboration, CoverageNotExact, MissingBoundaryRealization, NotYetElaborated,
@@ -136,6 +137,18 @@ def elaborate_case(case: Any) -> Elaborated:
         return _Elaboration(case).run()
     except SurfaceRefusal as refusal:
         raise refusal.traced_at(case.site) from None
+
+
+# b6 selects a term of a balance whose weight is 1 or -1 only (the partitions of a physical
+# balance).
+_WEIGHTED = "a later lot of N15, once a selection of b6 realizes a term of another weight"
+
+
+def _dissipation(coefficient: Any) -> str:
+    """R2, K7: whether the declarations establish that F = -k grad(w) dissipates, k > 0."""
+    if _derived_sign(coefficient) == 1:
+        return "established: %s > 0" % text(coefficient)
+    return "not established: the sign of %s is not derived" % text(coefficient)
 
 
 def _number(value: Any) -> Any:
@@ -353,30 +366,32 @@ class _Elaboration:
                                               self.code(term.coefficient), variable.name),
             [Choice("name", name, origin),
              Choice("differentiated variables", ", ".join(map(str, term.variables)), term.origin),
-             Choice("k", text(term.coefficient), "derived")]))
+             Choice("k", text(term.coefficient), "derived"),
+             Choice("dissipation", _dissipation(term.coefficient), "derived")]))
         return handle
 
     def rate(self, b6: Any, balance: Balance, terms: dict, states: dict) -> Any:
         rhs = None
         parts = []
         for term, coefficient in balance.occurrences:
-            # c div(F) of the physical flux F; F^d = -F for a diffusive flux (R7)
+            if coefficient not in (1, -1):
+                raise NotYetElaborated(
+                    "the weight %s of div(%s) in the balance of %s, a weight other than 1 or -1"
+                    % (coefficient, term, balance.quantity), _WEIGHTED, site=balance.site)
+        for term, coefficient in balance.occurrences:
+            # c div(F) of the physical flux F, c = 1 or -1; F^d = -F for a diffusive flux (R7)
             weight = -coefficient if isinstance(term, DiffusiveFlux) else coefficient
             piece = _pm.div(terms[term])
             spelled = "div(%s)" % self.names[term]
             if rhs is None:
-                rhs = piece if weight == 1 else -piece if weight == -1 else _number(weight) * piece
-                parts.append(spelled if weight == 1 else "-" + spelled if weight == -1
-                             else "%s * %s" % (weight, spelled))
+                rhs = piece if weight == 1 else -piece
+                parts.append(spelled if weight == 1 else "-" + spelled)
             elif weight == 1:
                 rhs = rhs + piece
                 parts.append("+ " + spelled)
-            elif weight == -1:
+            else:
                 rhs = rhs - piece
                 parts.append("- " + spelled)
-            else:
-                rhs = rhs + _number(weight) * piece
-                parts.append("+ %s * %s" % (weight, spelled))
         name = balance.name if balance.name is not None else balance.quantity.name
         handle = b6.rate(name, equation=_pm.ddt(states[balance.quantity]) == rhs)
         self.rows.append(Row(

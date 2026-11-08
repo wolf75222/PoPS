@@ -313,7 +313,7 @@ def _public_alias_route_errors(module, tree, aliases):
     if not registered and ast.dump(ast.Module(body=body, type_ignores=[])) == ast.dump(
             ast.Module(body=rejection, type_ignores=[])):
         return []
-    if not registered and _refusal_hook(hook, body):
+    if not registered and _refusal_hook(module, hook, body):
         return []
     expected = ast.parse(
         "from pops.public_api_exports import resolve_public_library_alias\n"
@@ -339,19 +339,64 @@ def _public_alias_route_errors(module, tree, aliases):
             for alias in registered if alias.public_name not in exports]
 
 
-def _refusal_hook(hook, body):
-    """A hook that refuses every name it is asked for, as the user surface refuses the names of
-    earlier texts and the words that it does not list (spec 0.3 SU3, SU13, section 21.7): its one
-    parameter is the name, it has no decorator, nothing in it returns, yields or imports, and its
-    body ends by raising. It exports nothing and adds no import edge."""
-    return (isinstance(hook, ast.FunctionDef) and not hook.decorator_list
+# What a refusal hook may not name, anywhere in it: a way to install, import or look up a value.
+_REFUSAL_HOOK_FORBIDDEN = frozenset({
+    "globals", "locals", "vars", "setattr", "delattr", "exec", "eval", "compile", "__import__",
+    "importlib", "sys", "builtins", "__builtins__", "getattr", "__dict__"})
+
+
+def _refusal_hook(module, hook, body):
+    """A hook of the user surface that refuses every name it is asked for, as the surface refuses
+    the names of earlier texts and the words that it does not list (spec 0.3 SU3, SU13, section
+    21.7, SD93). It is a hook of ``pops.surface`` or of one of its modules; its one parameter is
+    the name and it has no decorator; past its docstring it holds only ``if`` and ``raise``
+    statements and ends by raising; it names no way to install, import or look up a value; and a
+    call in it is a method of the name (``name.startswith("_")``) or, inside a ``raise``, builds
+    the refusal: a class (a capitalized name, private or not), its method ``refuse``, a method of
+    a string, or ``sorted``. It exports nothing and adds no import edge."""
+    if not (module == "pops.surface" or module.startswith("pops.surface.")):
+        return False
+    if not (isinstance(hook, ast.FunctionDef) and not hook.decorator_list
             and [argument.arg for argument in hook.args.args] == ["name"]
             and not hook.args.posonlyargs and not hook.args.kwonlyargs
             and not hook.args.vararg and not hook.args.kwarg and not hook.args.defaults
-            and bool(body) and isinstance(body[-1], ast.Raise)
-            and not any(isinstance(node, (ast.Return, ast.Yield, ast.YieldFrom, ast.Await,
-                                          ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal))
-                        for node in ast.walk(hook)))
+            and bool(body) and isinstance(body[-1], ast.Raise)):
+        return False
+
+    def only_if_and_raise(statements):
+        return all(isinstance(statement, ast.Raise)
+                   or (isinstance(statement, ast.If) and only_if_and_raise(statement.body)
+                       and only_if_and_raise(statement.orelse))
+                   for statement in statements)
+
+    if not only_if_and_raise(body):
+        return False
+    raised = {id(node) for statement in ast.walk(hook) if isinstance(statement, ast.Raise)
+              for node in ast.walk(statement)}
+    for node in ast.walk(hook):
+        if isinstance(node, (ast.Yield, ast.YieldFrom, ast.Await, ast.NamedExpr, ast.Lambda)):
+            return False
+        if isinstance(node, ast.Name) and node.id in _REFUSAL_HOOK_FORBIDDEN:
+            return False
+        if isinstance(node, ast.Attribute) and node.attr in _REFUSAL_HOOK_FORBIDDEN:
+            return False
+        if isinstance(node, ast.Call) and not _refusal_hook_call(node, id(node) in raised):
+            return False
+    return True
+
+
+def _refusal_hook_call(call, in_raise):
+    function = call.func
+    if isinstance(function, ast.Attribute) and isinstance(function.value, ast.Name) \
+            and function.value.id == "name":
+        return True
+    if not in_raise:
+        return False
+    if isinstance(function, ast.Name):
+        return function.id.lstrip("_")[:1].isupper() or function.id == "sorted"
+    return isinstance(function, ast.Attribute) and (
+        function.attr == "refuse"
+        or (isinstance(function.value, ast.Constant) and isinstance(function.value.value, str)))
 
 
 def _public_alias_contract():
@@ -405,10 +450,27 @@ def test_public_alias_fence_rejects_fake_unregistered_and_imperative_routes():
                "        raise SymbolNotInSurface(_EARLIER[name])\n"
                "    raise SymbolNotInSurface(name)\n")
     assert not _public_alias_route_errors("pops.surface", ast.parse(refusal), aliases)
+    # the hooks of the surface as written, admitted in their modules and nowhere else
+    for module, rows in (("pops.surface", "_EARLIER[name].refuse('pops.%s' % name, 'the surface')"),
+                         ("pops.surface.math", "_EARLIER[name].refuse(name, 'pops.math')")):
+        hook = ("def __getattr__(name):\n    if name.startswith('_'):\n"
+                "        raise AttributeError(name)\n    if name in _EARLIER:\n"
+                "        raise %s\n    raise SymbolNotInSurface('no word %%s; its words are %%s'\n"
+                "        %% (name, ', '.join(sorted(__all__))), write='a word')\n" % rows)
+        assert not _public_alias_route_errors(module, ast.parse(hook), aliases)
+        assert _public_alias_route_errors("pops.numerics", ast.parse(hook), aliases)
     for body in (
         "if name in _LATER:\n    return _LATER[name]\nraise SymbolNotInSurface(name)",
         "from pops.runtime import Runtime\nraise SymbolNotInSurface(name)",
         "if name in _EARLIER:\n    raise SymbolNotInSurface(name)",
+        # hooks that export by a side effect before they raise (review of #745, T2)
+        "globals()[name] = _resolve(name)\nraise AttributeError(name)",
+        "_install(name)\nraise SymbolNotInSurface(name)",
+        "setattr(_sys.modules[__name__], name, _importlib.import_module('pops.runtime'))\n"
+        "raise SymbolNotInSurface(name)",
+        "if _install(name):\n    raise AttributeError(name)\nraise AttributeError(name)",
+        "raise SymbolNotInSurface(_install(name))",
+        "raise SymbolNotInSurface(name, vars()[name])",
     ):
         fake = ast.parse("def __getattr__(name):\n    " + body.replace("\n", "\n    "))
         assert _public_alias_route_errors("pops.surface", fake, aliases)

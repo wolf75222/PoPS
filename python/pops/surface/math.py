@@ -13,14 +13,19 @@ the core paths), so they wait for ``pops.lib.math``, which this module will re-e
 An unknown name, or a name of an earlier text, is refused on import with ``SymbolNotInSurface``,
 a subclass of ``ImportError`` whose message names the word to write (SU13, §21.7).
 """
-from __future__ import annotations
-
 from fractions import Fraction
-from typing import Any
+from typing import Any as _Any
 
-from ._expr import Call, Expr, Predicate, Relation, is_number, operand
+from ._expr import Call as _Call
+from ._expr import Expr as _Expr
+from ._expr import Predicate as _Predicate
+from ._expr import Relation as _Relation
+from ._expr import operand as _operand
 from ._geometry import infinity, pi
-from ._refusal import NotYetElaborated, SpellingRefusal, SymbolNotInSurface, surface_entry
+from ._refusal import NotYetElaborated as _NotYetElaborated
+from ._refusal import SpellingRefusal as _SpellingRefusal
+from ._refusal import SymbolNotInSurface as _SymbolNotInSurface
+from ._refusal import surface_entry as _surface_entry
 
 _ELEMENTARY = ("exp", "expm1", "log", "sqrt", "sin", "cos")
 
@@ -42,60 +47,60 @@ _LATER = {
 
 # Earlier spellings that this module refuses on import, with the word to write (2.6.3, §21.7).
 _EARLIER = {
-    "Q": SpellingRefusal("Fraction(1, 2), Python's exact fraction"),
-    "const": SpellingRefusal("the number itself, or model.constant(name, value=v) for a value of "
+    "Q": _SpellingRefusal("Fraction(1, 2), Python's exact fraction"),
+    "const": _SpellingRefusal("the number itself, or model.constant(name, value=v) for a value of "
                              "the physics"),
-    "value": SpellingRefusal("the constant or the parameter itself: a constant or a parameter of "
+    "value": _SpellingRefusal("the constant or the parameter itself: a constant or a parameter of "
                              "the model is a value"),
-    "maximum": SpellingRefusal("largest([a, b, ...])"),
-    "minimum": SpellingRefusal("smallest([a, b, ...])"),
-    "lt": SpellingRefusal("a < b"), "le": SpellingRefusal("a <= b"),
-    "ge": SpellingRefusal("a >= b"), "gt": SpellingRefusal("a > b"),
-    "not_": SpellingRefusal("none_of([p])"),
-    "cond": SpellingRefusal("where(p, a, b) between values, or pops.choose(p, then=f, "
+    "maximum": _SpellingRefusal("largest([a, b, ...])"),
+    "minimum": _SpellingRefusal("smallest([a, b, ...])"),
+    "lt": _SpellingRefusal("a < b"), "le": _SpellingRefusal("a <= b"),
+    "ge": _SpellingRefusal("a >= b"), "gt": _SpellingRefusal("a > b"),
+    "not_": _SpellingRefusal("none_of([p])"),
+    "cond": _SpellingRefusal("where(p, a, b) between values, or pops.choose(p, then=f, "
                             "otherwise=g) between computations with effects"),
-    "trace_t": SpellingRefusal("matrix_trace(e)"), "det": SpellingRefusal("determinant(e)"),
-    "inv": SpellingRefusal("inverse(e)"), "eig_sym": SpellingRefusal("symmetric_eigen(e)"),
-    "D": SpellingRefusal("derivative(e, wrt=q)"),
-    "moment": SpellingRefusal("integral(w * f, over=v), v the support integrated over"),
-    "pullback": SpellingRefusal("the field itself: a field read on a product support is pulled "
+    "trace_t": _SpellingRefusal("matrix_trace(e)"), "det": _SpellingRefusal("determinant(e)"),
+    "inv": _SpellingRefusal("inverse(e)"), "eig_sym": _SpellingRefusal("symmetric_eigen(e)"),
+    "D": _SpellingRefusal("derivative(e, wrt=q)"),
+    "moment": _SpellingRefusal("integral(w * f, over=v), v the support integrated over"),
+    "pullback": _SpellingRefusal("the field itself: a field read on a product support is pulled "
                                 "back along its unique projection"),
-    "side": SpellingRefusal("minus_side(e) or plus_side(e)"),
-    "normal_flux": SpellingRefusal("dot(F, normal())"),
-    "normal_component": SpellingRefusal("dot(e, normal())"),
+    "side": _SpellingRefusal("minus_side(e) or plus_side(e)"),
+    "normal_flux": _SpellingRefusal("dot(F, normal())"),
+    "normal_component": _SpellingRefusal("dot(e, normal())"),
 }
 
 
-def _value(value: Any, word: str) -> Any:
-    return operand(value, word)
+def _value(value: _Any, word: str) -> _Any:
+    return _operand(value, word)
 
 
-@surface_entry
-def ddt(q: Any) -> Expr:
+@_surface_entry
+def ddt(q: _Any) -> _Expr:
     """``ddt(q)``: the time derivative of an evolved quantity, the side of its balance (SU4)."""
     from ._model import Quantity
 
     if not isinstance(q, Quantity):
         raise TypeError("ddt(q) takes a quantity of the model, got %r" % (q,))
-    return Call("ddt", (q,))
+    return _Call("ddt", (q,))
 
 
-@surface_entry
-def grad(e: Any) -> Expr:
+@_surface_entry
+def grad(e: _Any) -> _Expr:
     """``grad(e)``: the gradient of a field."""
-    return Call("grad", (_value(e, "grad"),))
+    return _Call("grad", (_value(e, "grad"),))
 
 
-@surface_entry
-def div(e: Any) -> Expr:
+@_surface_entry
+def div(e: _Any) -> _Expr:
     """``div(e)``: the divergence of a flux, or of a sum of fluxes."""
-    return Call("div", (_value(e, "div"),))
+    return _Call("div", (_value(e, "div"),))
 
 
-def _elementary(word: str) -> Any:
-    @surface_entry
-    def function(e: Any) -> Expr:
-        return Call(word, (_value(e, word),))
+def _elementary(word: str) -> _Any:
+    @_surface_entry
+    def function(e: _Any) -> _Expr:
+        return _Call(word, (_value(e, word),))
 
     function.__name__ = function.__qualname__ = word
     function.__doc__ = "``%s(e)``, pointwise (2.6.3)." % word
@@ -105,16 +110,16 @@ def _elementary(word: str) -> Any:
 exp, expm1, log, sqrt, sin, cos = (_elementary(word) for word in _ELEMENTARY)
 
 
-def _predicate(value: Any, word: str) -> Predicate:
-    if isinstance(value, Relation):
+def _predicate(value: _Any, word: str) -> _Predicate:
+    if isinstance(value, _Relation):
         raise TypeError("%s takes predicates; %s is a relation" % (word, value))
-    if not isinstance(value, Predicate):
+    if not isinstance(value, _Predicate):
         raise TypeError("%s takes predicates, built by < <= >= > and equal(a, b); got %r"
                         % (word, value))
     return value
 
 
-def _relation_refusal(relation: Relation) -> Any:
+def _relation_refusal(relation: _Relation) -> _Any:
     from ._refusal import NotAPopsOperation
 
     lhs, rhs = relation.sides()
@@ -123,32 +128,32 @@ def _relation_refusal(relation: Relation) -> Any:
         write="equal(%s, %s) or abs(%s - %s) <= tolerance" % (lhs, rhs, lhs, rhs))
 
 
-@surface_entry
-def where(p: Any, a: Any, b: Any) -> Expr:
+@_surface_entry
+def where(p: _Any, a: _Any, b: _Any) -> _Expr:
     """``where(p, a, b)``: a where the predicate p holds, b elsewhere."""
-    if isinstance(p, Relation):
+    if isinstance(p, _Relation):
         raise _relation_refusal(p)
-    return Call("where", (_predicate(p, "where(p, a, b)"), _value(a, "where"), _value(b, "where")))
+    return _Call("where", (_predicate(p, "where(p, a, b)"), _value(a, "where"), _value(b, "where")))
 
 
-@surface_entry
-def equal(a: Any, b: Any) -> Predicate:
+@_surface_entry
+def equal(a: _Any, b: _Any) -> _Predicate:
     """``equal(a, b)``: the predicate a = b."""
-    return Predicate("equal", _value(a, "equal"), _value(b, "equal"))
+    return _Predicate("equal", _value(a, "equal"), _value(b, "equal"))
 
 
-def _combination(word: str) -> Any:
-    @surface_entry
-    def combine(predicates: Any) -> Predicate:
+def _combination(word: str) -> _Any:
+    @_surface_entry
+    def combine(predicates: _Any) -> _Predicate:
         if isinstance(predicates, tuple):
             raise TypeError("%s takes a list of predicates, %s([...]); a tuple is a point, a size "
                             "or an interval (SU14)" % (word, word))
         if not isinstance(predicates, list) or not predicates:
             raise TypeError("%s takes a nonempty list of predicates, %s([p, q])" % (word, word))
         for item in predicates:
-            if isinstance(item, Relation):
+            if isinstance(item, _Relation):
                 raise _relation_refusal(item)
-        return Predicate(word, *(_predicate(item, word) for item in predicates))
+        return _Predicate(word, *(_predicate(item, word) for item in predicates))
 
     combine.__name__ = combine.__qualname__ = word
     return combine
@@ -157,9 +162,9 @@ def _combination(word: str) -> Any:
 all_of, any_of, none_of = (_combination(word) for word in ("all_of", "any_of", "none_of"))
 
 
-def _later(word: str, owner: str) -> Any:
-    def later(*args: Any, **kwargs: Any) -> Any:
-        raise NotYetElaborated("the word %s of pops.math" % word, owner).with_traceback(None)
+def _later(word: str, owner: str) -> _Any:
+    def later(*args: _Any, **kwargs: _Any) -> _Any:
+        raise _NotYetElaborated("the word %s of pops.math" % word, owner).with_traceback(None)
 
     later.__name__ = later.__qualname__ = word
     later.__doc__ = "``%s``, a word of 2.6.3 that a later lot elaborates (%s)." % (word, owner)
@@ -174,17 +179,12 @@ __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
     "any_of", "none_of", *_LATER]
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> _Any:
     """Refuse a name that pops.math does not list (SU3, SU13, §21.7); export nothing."""
     if name.startswith("_"):
         raise AttributeError(name)
     if name in _EARLIER:
         raise _EARLIER[name].refuse(name, "pops.math")
-    raise SymbolNotInSurface("pops.math has no word %s; its words are %s"
+    raise _SymbolNotInSurface("pops.math has no word %s; its words are %s"
                              % (name, ", ".join(__all__)),
                              write="one of these words, or Python's own numbers and operators")
-
-
-def is_symbolic(value: Any) -> bool:
-    """Whether a value is an expression of the surface rather than a Python number."""
-    return isinstance(value, Expr) and not is_number(value)

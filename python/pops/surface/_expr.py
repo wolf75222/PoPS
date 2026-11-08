@@ -21,9 +21,21 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
-from ._refusal import NotAPopsOperation, SymbolicTruthValue
+from pops.time._program.traced_method import TracedField, TracedScalar, TracedTime
+
+from ._refusal import NotAPopsOperation, NotYetElaborated, SymbolicTruthValue
 
 Number = (int, float, Fraction, Decimal)
+
+# The values of a method body that N8 traces (SU10), which an expression of pops.math does not
+# combine yet: a weight such as 1 - 1 / sqrt(2), or a duration such as exp(-step.dt).
+_TRACED = ((TracedField, "the state"), (TracedScalar, "a duration"), (TracedTime, "a time"))
+_SYMBOLIC_STEP = "a later lot of N8 with N11 (open point 16, SD95)"
+
+
+def _symbolic_step(here: str) -> str:
+    return ("a weight or a duration of SU10 that is an expression of pops.math, beyond the "
+            "rationals and the polynomials of step.dt (here %s)" % here)
 
 _TRUTH_WORDS = ("where(p, a, b) between values, all_of([...]), any_of([...]) or none_of([...]) "
                 "between predicates, largest([...]) or smallest([...]) in place of max and min")
@@ -64,6 +76,10 @@ def operand(value: Any, where: str) -> Any:
             "%s takes values; %r is a %s, which arithmetic does not combine"
             % (where, value, "relation" if isinstance(value, Relation) else "predicate"),
             write="the value itself, or where(p, a, b) to choose between two values")
+    for kind, what in _TRACED:
+        if isinstance(value, kind):
+            raise NotYetElaborated(_symbolic_step("%s with %s of the method" % (where, what)),
+                                   _SYMBOLIC_STEP)
     raise TypeError("%s takes PoPS values and Python numbers, got %r" % (where, value))
 
 
@@ -164,6 +180,12 @@ class Expr(_Symbolic):
     """A scalar or vector field, a constant or a term, as an expression."""
 
     __slots__ = ()
+
+    def __pops_scalar_literal__(self) -> dict:
+        """The trace of N8 asks a weight or a duration of a method for its number (SU10): an
+        expression of pops.math has none at this level, whichever side of the product it is."""
+        raise NotYetElaborated(_symbolic_step("%s in a step of the method" % (self,)),
+                               _SYMBOLIC_STEP)
 
     def __add__(self, other: Any) -> Any:
         return Arith("+", (self, operand(other, "+")))

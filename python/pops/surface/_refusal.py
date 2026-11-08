@@ -243,18 +243,20 @@ class MissingBoundaryRealization(SurfaceRefusal, ValueError):
 class NotYetElaborated(SurfaceRefusal, _TracedNotYetElaborated):
     """A construct of the surface whose elaborated form this lot does not build yet.
 
-    ``owner`` names the lot that elaborates it. The refusal keeps the site and the format of the
-    other refusals, so that the user sees where the construct was written (P13: honest status).
+    ``owner`` names the lot that elaborates it; without an owner, ``construct`` is a sentence that
+    names its lot already, as a refusal of N8 does. The refusal keeps the site and the format of
+    the other refusals, so that the user sees where the construct was written (P13: honest status).
     """
 
     rules = ()
     code = "not_yet_elaborated"
 
-    def __init__(self, construct: str, owner: str, *, site: Site | None = None) -> None:
+    def __init__(self, construct: str, owner: str | None, *, site: Site | None = None) -> None:
         self.construct = construct
         self.owner = owner
-        super().__init__("%s has no elaborated form yet; %s elaborates it" % (construct, owner),
-                         site=user_site(2) if site is None else site)
+        rule = construct.rstrip(".") if owner is None else \
+            "%s has no elaborated form yet; %s elaborates it" % (construct, owner)
+        super().__init__(rule, site=user_site(2) if site is None else site)
 
 
 class SpellingRefusal:

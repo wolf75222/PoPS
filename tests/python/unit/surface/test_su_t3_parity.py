@@ -17,6 +17,7 @@ that R9 derives. SU12: printing a value shows its mathematics, and ``pops.inspec
 elaborated form, its level and the origin of each choice.
 """
 import json
+from fractions import Fraction
 
 import pytest
 
@@ -37,7 +38,8 @@ from pops.numerics import Diffusion, DiscretizationPlan, reconstruction, riemann
 from pops.numerics.spatial import FiniteVolume
 from pops.params import ConstParam, Positive, RuntimeParam
 from pops.projection import ConservativeCellAverage
-from pops.surface.math import ddt, div, grad
+from pops.surface._derive import derivative
+from pops.surface.math import cos, ddt, div, exp, expm1, grad, log, sin, sqrt
 from pops.time._program.elaboration import Advance, Proposal, Retry, elaborate
 from pops.time._program.traced_method import Candidate, method
 
@@ -81,7 +83,11 @@ N8 = _n8_methods()
 
 # --- the two forms of the L1 case -------------------------------------------------------------
 
-def _surface_l1(word, component="rate"):
+def _l1_balance(advection, diffusion):
+    return -div(advection + diffusion)
+
+
+def _surface_l1(word, component="rate", balance=_l1_balance):
     """§17.1 at level 1, as the user writes it; ``component`` names the rate option of its
     method."""
     domain = surface.Box(x=surface.Periodic(0, 1))
@@ -92,7 +98,7 @@ def _surface_l1(word, component="rate"):
     u0 = model.data("u0", surface.Scalar(domain))
     advection = model.flux(of=u, value=a * u)
     diffusion = model.diffusive_flux(of=u, value=-nu * grad(u))
-    transport = model.balance(ddt(u) == -div(advection + diffusion))
+    transport = model.balance(ddt(u) == balance(advection, diffusion))
     numerics = surface.Numerics(represent={u: surface.CellAverage()},
                                 schemes={advection: upwind(), diffusion: two_point()})
     advance = surface.Advance(word(**{component: model}), dt=1e-3, attempts=2)
@@ -102,8 +108,14 @@ def _surface_l1(word, component="rate"):
     return case, transport, advection
 
 
-def _hand_l1(n8_method, component="rate"):
-    """The same case written for b6 and N8; ``component`` names the component of the method."""
+def _hand_l1_equation(u, flux_u, diffusive_flux_u):
+    return pm.ddt(u) == -pm.div(flux_u) + pm.div(diffusive_flux_u)
+
+
+def _hand_l1(n8_method, component="rate", equation=_hand_l1_equation, diffusion_first=False):
+    """The same case written for b6 and N8; ``component`` names the component of the method,
+    ``equation`` gives the balance of b6 and ``diffusion_first`` the order of its terms in the
+    rate."""
     frame = CartesianDomain("box", lower=(0.0,), upper=(1.0,)).frame(Cartesian1D())
     (x,) = frame.axes
     model = pops.Model("advection_diffusion", frame=frame)
@@ -114,7 +126,7 @@ def _hand_l1(n8_method, component="rate"):
                         waves={x: (a,)})
     diffusive_flux_u = model.diffusive_flux("diffusive_flux_u", state=u,
                                             value=nu * pm.grad(u[0]))
-    rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u) + pm.div(diffusive_flux_u))
+    rate = model.rate("u", equation=equation(u, flux_u, diffusive_flux_u))
     plan = DiscretizationPlan()
     advection = rate.select(flux_u)
     plan.rates.add(advection, FiniteVolume(
@@ -129,6 +141,8 @@ def _hand_l1(n8_method, component="rate"):
                                        projection=ConservativeCellAverage()))
 
     def transport(state):
+        if diffusion_first:
+            return diffusion(state) + advection(state)
         return advection(state) + diffusion(state)
 
     elaborate(Advance(n8_method(**{component: transport}), retry=Retry(max_attempts=2)),
@@ -235,6 +249,30 @@ def test_a_rate_option_takes_the_name_of_a_parameter_of_n8():
         hand_case._time._serialize(include_provenance=False)
 
 
+def test_python_sum_of_fluxes_is_the_sum_of_its_terms():
+    """``div(sum([F, G]))``, a finite sum of 2.6.3, is ``div(F + G)``."""
+    case, _, _ = _surface_l1(ssprk2, balance=lambda advection, diffusion:
+                             -div(sum([advection, diffusion])))
+    plain, _, _ = _surface_l1(ssprk2)
+    assert case.elaborated.case._time._serialize(include_provenance=False) == \
+        plain.elaborated.case._time._serialize(include_provenance=False)
+
+
+def test_a_later_term_of_weight_minus_one_is_subtracted():
+    """``-div(D + F)``, the diffusive flux first: the flux F, a later term of weight -1, enters the
+    balance of b6 as ``- div(F)``."""
+    case, _, _ = _surface_l1(ssprk2, balance=lambda advection, diffusion:
+                             -div(diffusion + advection))
+    hand_case, hand_layout = _hand_l1(N8["ssprk2"], equation=lambda u, flux, diffusive:
+                                      pm.ddt(u) == pm.div(diffusive) - pm.div(flux),
+                                      diffusion_first=True)
+    elaborated = case.elaborated
+    resolved = _resolved(elaborated.case, elaborated.layout)
+    hand = _resolved(hand_case, hand_layout)
+    assert _without_provenance(_artifact(resolved)) == _without_provenance(_artifact(hand))
+    assert resolved.snapshot.semantic_identity == hand.snapshot.semantic_identity
+
+
 # --- a non-linear flux: rusanov() and hll() with the derived waves ------------------------------
 
 def _surface_burgers(word):
@@ -290,6 +328,60 @@ def test_a_non_linear_flux_takes_the_waves_that_r9_derives(word, face):
     report = surface.inspect(case)
     assert ("waves", "dF/du = u", "derived") in [
         (choice.name, choice.value, choice.origin) for choice in report.choices()]
+
+
+# --- the derivatives of R9, which give the waves of rusanov() and hll() ---------------------------
+
+def _scalar_quantity():
+    domain = surface.Box(x=surface.Periodic(0, 1))
+    model = surface.Model("waves")
+    return model.quantity("u", surface.Scalar(domain)), model.constant("a", value=3.0)
+
+
+@pytest.mark.parametrize("flux, waves", [
+    (lambda u, a: exp(u), "exp(u)"),
+    (lambda u, a: expm1(u), "exp(u)"),
+    (lambda u, a: log(u), "1 / u"),
+    (lambda u, a: sqrt(u), "1 / (2 * sqrt(u))"),
+    (lambda u, a: sin(u), "cos(u)"),
+    (lambda u, a: cos(u), "-sin(u)"),
+    (lambda u, a: 1 / u, "(-1) / u**2"),
+    (lambda u, a: a / (1 + u), "-a / (1 + u)**2"),
+    (lambda u, a: u ** Fraction(3, 2), "3/2 * u**(1/2)"),
+    (lambda u, a: u ** 3 / 3, "u**2"),
+    (lambda u, a: exp(2 * u), "exp(2 * u) * 2"),
+    (lambda u, a: log(1 + u ** 2), "1 / (1 + u**2) * 2 * u"),
+], ids=["exp", "expm1", "log", "sqrt", "sin", "cos", "reciprocal", "quotient", "fraction-power",
+        "cube", "chain", "chain-log"])
+def test_the_waves_are_the_exact_derivative_of_the_flux(flux, waves):
+    """R9: the waves of a flux F(u) are dF/du, derived exactly by each rule, the chain rule
+    included."""
+    u, a = _scalar_quantity()
+    assert str(derivative(flux(u, a), u)) == waves
+
+
+def test_an_unsigned_coefficient_is_accepted_and_its_dissipation_is_not_established():
+    """R2 refuses only what the declarations derive to be anti-diffusive; a parameter without an
+    admissible set gives a coefficient of unknown sign, which pops.inspect reports (K7)."""
+    domain = surface.Box(x=surface.Periodic(0, 1))
+    model = surface.Model("heat")
+    u = model.quantity("u", surface.Scalar(domain))
+    nu = model.parameter("nu", default=1e-2)
+    kappa = model.parameter("kappa", default=1e-2, admissible=surface.Positive())
+    u0 = model.data("u0", surface.Scalar(domain))
+    unsigned = model.diffusive_flux(of=u, value=nu * grad(u))
+    signed = model.diffusive_flux(of=u, value=-kappa * grad(u))
+    model.balance(ddt(u) == -div(unsigned + signed))
+    numerics = surface.Numerics(represent={u: surface.CellAverage()},
+                                schemes={unsigned: two_point(), signed: two_point()})
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
+                              initial={u: u0})
+    case = surface.Case(model=model, numerics=numerics, program=program,
+                        layout={domain: surface.Uniform(cells=16)})
+    choices = [(choice.name, choice.value, choice.origin)
+               for choice in surface.inspect(case).choices()]
+    assert ("dissipation", "not established: the sign of -nu is not derived", "derived") in choices
+    assert ("dissipation", "established: kappa > 0", "derived") in choices
 
 
 # --- SU12: print shows the mathematics, inspect the elaborated form ------------------------------

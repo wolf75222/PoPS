@@ -38,7 +38,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   to write (SU-T2); the L1 case of section 17.1 gives the program IR, the artifact without its
   provenance, the semantic identity and the C++ of the same case written for b6 and N8 (SU-T3);
   `scripts/surface_lint.py` lints the gallery of `examples/surface/gallery` and the library
-  (SU-T1). Decisions: SD86 to SD95 of the adjudication of the surface.
+  (SU-T1). Decisions: SD86 to SD95 of the adjudication of the surface. At level 1 a box is
+  periodic, a rank 2 or 3 case has diffusive fluxes only, and a term of a balance weighs 1 or
+  -1; a weight or a duration of SU10 that is an expression of `pops.math` waits for open point
+  16. `pops` and `pops.math` export their word lists and nothing else (SU13).
 
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed

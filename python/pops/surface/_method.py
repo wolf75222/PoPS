@@ -256,7 +256,7 @@ def translate(error: BaseException, trace: _Trace) -> BaseException:
             write="where(p, a, b) between values; the tableau of a method is Python data",
             site=site)
     if isinstance(error, _n8.NotYetElaborated):
-        return NotYetElaborated(str(error), _N8_LATER, site=site)
+        return NotYetElaborated(_in_surface_words(str(error)), None, site=site)
     for source, target, write in _N8_REFUSALS:
         if isinstance(error, source):
             return target(_surface_words(str(error)), write=write, site=site)
@@ -268,12 +268,17 @@ _N8_WORDS = (("B, p and its components", "step and its options"), ("B.state", "s
              ("B.time", "step.time"), ("p.dt", "step.dt"))
 
 
+def _in_surface_words(message: str) -> str:
+    """An N8 message with ``step`` for B and p; its rule ids stay where the sentence has them."""
+    for n8, surface in _N8_WORDS:
+        message = message.replace(n8, surface)
+    return message
+
+
 def _surface_words(message: str) -> str:
     """An N8 message in the words of the surface: ``step`` for B and p, without its rule ids,
     which the refusal of the surface states."""
-    for n8, surface in _N8_WORDS:
-        message = message.replace(n8, surface)
-    return _RULES.sub("", message.rstrip(".")).rstrip(".")
+    return _RULES.sub("", _in_surface_words(message).rstrip(".")).rstrip(".")
 
 
 def specialize(value: MethodValue, components: dict, trace: _Trace) -> _n8.SpecializedMethod:

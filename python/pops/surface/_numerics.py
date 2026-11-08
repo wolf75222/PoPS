@@ -101,7 +101,7 @@ class SchemeValue:
         return "%s(%s)" % (self.word, options)
 
 
-class Realization:
+class _Realization:
     """``numerics.of(x)``: the realization of a balance or of a term under a numerics."""
 
     __slots__ = ("numerics", "subject")
@@ -198,12 +198,12 @@ class Numerics:
                 return representation
         return None
 
-    def of(self, subject: Any) -> Realization:
+    def of(self, subject: Any) -> _Realization:
         """``numerics.of(x)``: the realization of a balance or of a term."""
         if not isinstance(subject, (Balance, Term)):
             raise TypeError("numerics.of(x) takes a balance or a term of the model, got %r"
                             % (subject,))
-        return Realization(self, subject)
+        return _Realization(self, subject)
 
     def check_coverage(self, balances: list, terms: list) -> None:
         """D5: each term of each balance is covered by one scheme, and each key is such a term."""
@@ -234,4 +234,4 @@ class Numerics:
         return "pops.Numerics(...)"
 
 
-__all__ = ["CellAverage", "Numerics", "Realization", "SchemeValue", "TermView", "Site"]
+__all__ = ["CellAverage", "Numerics", "SchemeValue", "TermView", "Site"]

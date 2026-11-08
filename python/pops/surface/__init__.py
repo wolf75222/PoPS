@@ -12,16 +12,14 @@ Every other construct of 2.6.2, 2.6.4 and 2.6.8 is importable and refuses its us
 with ``SymbolNotInSurface``, whose message is the row of §21.7 (SU13); any other name is refused
 with the list of the words of this module.
 """
-from __future__ import annotations
-
-from typing import Any
+from typing import Any as _Any
 
 from . import math
 from ._elaborate import Choice, Report, Row
 from ._geometry import Box, Periodic
 from ._method import Candidate, method
 from ._model import Components, Model, Positive, Scalar, Tensor, Vector
-from ._numerics import CellAverage, Numerics, Realization, SchemeValue, TermView
+from ._numerics import CellAverage, Numerics, SchemeValue, TermView
 from ._program import (
     AMR, CUDA, Advance, Case, GaussLegendre, OpenMP, Program, Resources, Uniform, bind, claim,
     compile, inspect,
@@ -30,9 +28,10 @@ from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
     MissingBoundaryRealization, NotAPopsOperation, NotDiffusive, NotYetElaborated, OutOfScope,
-    RealizationMismatch, ReservedName, SpellingRefusal, SupportMismatch, SurfaceRefusal,
+    RealizationMismatch, ReservedName, SupportMismatch, SurfaceRefusal,
     SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, UnknownName,
 )
+from ._refusal import SpellingRefusal as _SpellingRefusal
 
 _N8_ASSESS = "N8 phase 1 (the assessments of T28)"
 _N8_LATER = "a later lot of N8"
@@ -85,45 +84,63 @@ _LATER = {
 
 # Names of earlier texts (§21.7): the construct to write, as the message of SymbolNotInSurface.
 _EARLIER = {
-    "Rectangle": "pops.Box(x=(0, 1), y=(0, 1)), one keyword per axis",
-    "Interval": "pops.Box(x=(0, 1)), a box of one axis",
-    "Cartesian1D": "pops.Box(x=...), whose named axes give the Cartesian frame",
-    "Cartesian2D": "pops.Box(x=..., y=...), whose named axes give the Cartesian frame",
-    "Cartesian3D": "pops.Box(x=..., y=..., z=...), whose named axes give the Cartesian frame",
-    "ConstParam": 'model.constant("g", value=...)',
-    "RuntimeParam": 'model.parameter("nu", default=...), or pops.parameter(...) for one that no '
-                    'relation reads',
-    "Space": "pops.Scalar(Ω), pops.Vector(Ω) or pops.Components(Ω, ...), which name the support "
-             "first",
-    "Realize": "pops.Numerics(schemes={term: scheme}), keyed by what the scheme covers",
-    "Represent": "pops.Numerics(represent={u: pops.CellAverage()})",
-    "Problem": "pops.solve(relation, X) or pops.solve([relations], [X, Y])",
-    "Proposal": "dt= of pops.Advance or pops.substep, and next_dt= of pops.Accept or pops.Reject",
-    "Retry": "attempts=n and transforms=k on pops.Advance",
-    "Request": "pops.Tolerance(rtol=, atol=, observe=, norm=)",
-    "Layout": "layout={Ω: pops.Uniform(cells=...)} in pops.Case",
-    "layouts": "pops.Uniform(cells=...) or pops.AMR(...) from pops",
-    "mesh": "the layout in pops.Case(layout={Ω: pops.Uniform(cells=...)})",
-    "amr": "pops.AMR(...) in layout= and pops.Regrid(...) in pops.Program",
-    "domain": "pops.Box, pops.product or pops.Finite, which pops itself exports",
-    "spaces": "pops.Scalar, pops.Vector or another space, which pops itself exports",
-    "rel": "a relation with == and the words of pops.math; pops.rel has no words",
-    "Target": "target=pops.OpenMP() or target=pops.CUDA() on pops.compile",
-    "set_threads": "resources=pops.Resources(threads=4) on pops.bind",
-    "validate": "pops.inspect(case), which validates and resolves without compiling",
-    "resolve": "pops.inspect(case), which validates and resolves without compiling",
-    "space_ratio": "level_ratio(Ω, l), or leave ratio= of subcycle out, which takes it",
-    "solvers": "the solver, imported from pops.lib.solve by name",
-    "UnrealizedOutput": "pops.CoverageNotExact, the refusal of a definition that holds a "
-                        "derivative or an integral of a discrete field and is read without a "
-                        "scheme",
+    "Rectangle": _SpellingRefusal("pops.Box(x=(0, 1), y=(0, 1)), one keyword per axis"),
+    "Interval": _SpellingRefusal("pops.Box(x=(0, 1)), a box of one axis"),
+    "Cartesian1D": _SpellingRefusal("pops.Box(x=...), whose named axes give the Cartesian frame"),
+    "Cartesian2D": _SpellingRefusal("pops.Box(x=..., y=...), whose named axes give the Cartesian "
+                                    "frame"),
+    "Cartesian3D": _SpellingRefusal("pops.Box(x=..., y=..., z=...), whose named axes give the "
+                                    "Cartesian frame"),
+    "ConstParam": _SpellingRefusal('model.constant("g", value=...)'),
+    "RuntimeParam": _SpellingRefusal('model.parameter("nu", default=...), or pops.parameter(...) '
+                                     "for one that no relation reads"),
+    "Space": _SpellingRefusal("pops.Scalar(Ω), pops.Vector(Ω) or pops.Components(Ω, ...), which "
+                              "name the support first"),
+    "Realize": _SpellingRefusal("pops.Numerics(schemes={term: scheme}), keyed by what the scheme "
+                                "covers"),
+    "Represent": _SpellingRefusal("pops.Numerics(represent={u: pops.CellAverage()})"),
+    "Problem": _SpellingRefusal("pops.solve(relation, X) or pops.solve([relations], [X, Y])"),
+    "Proposal": _SpellingRefusal("dt= of pops.Advance or pops.substep, and next_dt= of pops.Accept"
+                                 " or pops.Reject"),
+    "Retry": _SpellingRefusal("attempts=n and transforms=k on pops.Advance"),
+    "Request": _SpellingRefusal("pops.Tolerance(rtol=, atol=, observe=, norm=)"),
+    "Layout": _SpellingRefusal("layout={Ω: pops.Uniform(cells=...)} in pops.Case"),
+    "layouts": _SpellingRefusal("pops.Uniform(cells=...) or pops.AMR(...) from pops"),
+    "mesh": _SpellingRefusal("the layout in pops.Case(layout={Ω: pops.Uniform(cells=...)})"),
+    "amr": _SpellingRefusal("pops.AMR(...) in layout= and pops.Regrid(...) in pops.Program"),
+    "domain": _SpellingRefusal("pops.Box, pops.product or pops.Finite, which pops itself exports"),
+    "spaces": _SpellingRefusal("pops.Scalar, pops.Vector or another space, which pops itself "
+                               "exports"),
+    "rel": _SpellingRefusal("a relation with == and the words of pops.math; pops.rel has no words"),
+    "Target": _SpellingRefusal("target=pops.OpenMP() or target=pops.CUDA() on pops.compile"),
+    "set_threads": _SpellingRefusal("resources=pops.Resources(threads=4) on pops.bind"),
+    "validate": _SpellingRefusal("pops.inspect(case), which validates and resolves without "
+                                 "compiling"),
+    "resolve": _SpellingRefusal("pops.inspect(case), which validates and resolves without "
+                                "compiling"),
+    "space_ratio": _SpellingRefusal("level_ratio(Ω, l), or leave ratio= of subcycle out, which "
+                                    "takes it"),
+    "solvers": _SpellingRefusal("the solver, imported from pops.lib.solve by name"),
+    "UnrealizedOutput": _SpellingRefusal("pops.CoverageNotExact, the refusal of a definition that "
+                                         "holds a derivative or an integral of a discrete field "
+                                         "and is read without a scheme"),
+    "Realization": _SpellingRefusal("solvers={key: solver} in pops.Program, keyed by handles"),
+    "from_data": _SpellingRefusal("initial={u: pops.project(e, quadrature=...)}, or initial={u: "
+                                  "u0} for a datum"),
+    "integrate_rates": _SpellingRefusal("the state arithmetic, step.state + step.dt * "
+                                        "rate(step.state, step.time)"),
+    "apply_increment": _SpellingRefusal("S + J, a state plus an increment"),
+    "accept_all": _SpellingRefusal("accept=[check1, check2]; a list of checks accepts when all of "
+                                   "them do"),
+    "step_bound": _SpellingRefusal("the bound as dt=cfl_limit(flux, cfl=...) or as dt= a function "
+                                   "of cell, since accept= holds checks only"),
 }
 
 _LIBRARY = "pops.lib.numerics.schemes and pops.lib.time.methods"
 
 
-def _later(name: str, owner: str) -> Any:
-    def later(*args: Any, **kwargs: Any) -> Any:
+def _later(name: str, owner: str) -> _Any:
+    def later(*args: _Any, **kwargs: _Any) -> _Any:
         raise NotYetElaborated("pops.%s" % name, owner).with_traceback(None)
 
     later.__name__ = later.__qualname__ = name
@@ -134,12 +151,12 @@ for _name, _owner in _LATER.items():
     globals()[_name] = _later(_name, _owner)
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> _Any:
     """Refuse a name that the surface does not have (SU3, SU13, §21.7); export nothing."""
     if name.startswith("_"):
         raise AttributeError(name)
     if name in _EARLIER:
-        raise SpellingRefusal(_EARLIER[name]).refuse("pops.%s" % name, "the surface")
+        raise _EARLIER[name].refuse("pops.%s" % name, "the surface")
     raise SymbolNotInSurface(
         "pops.%s is not a word of the surface; pops has %s, and the library %s"
         % (name, ", ".join(sorted(__all__)), _LIBRARY),
@@ -157,5 +174,5 @@ __all__ = [
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
     "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
-    "Choice", "Realization", "Report", "Row", "SchemeValue", "TermView",
+    "Choice", "Report", "Row", "SchemeValue", "TermView",
 ]

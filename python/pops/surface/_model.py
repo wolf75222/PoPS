@@ -644,6 +644,8 @@ def _occurrences(rhs: Any, site: Site | None) -> tuple:
             flux(node.args[0], -coefficient)
         elif isinstance(node, (Flux, DiffusiveFlux)):
             rows.append((node, coefficient))
+        elif is_number(node) and node == 0:
+            return  # the start of Python's sum([F, G]), a finite sum of 2.6.3
         else:
             raise TypeError("div(...) in a balance takes the fluxes of the model and their sums, "
                             "got %s" % text(node))
