@@ -262,8 +262,8 @@ case.initials.add(InitialCondition(state=plasma_U,
 indicator = ValueExpr(plasma_U)["density"]
 refine_threshold = case.param(RuntimeParam("refine_weighted_density", default=0.05))
 coarsen_threshold = case.param(RuntimeParam("coarsen_weighted_density", default=0.01))
-tagging = AMRTagging(rules=(Tag(indicator > case.value(refine_threshold)),
-    Coarsen(indicator < case.value(coarsen_threshold)), Buffer(cells=2, selection="refine-requests")),
+tagging = AMRTagging(rules=(Tag(lambda cell: cell.value(indicator) > case.value(refine_threshold)),
+    Coarsen(lambda cell: cell.value(indicator) < case.value(coarsen_threshold)), Buffer(cells=2, selection="refine-requests")),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS)
 transfer = AMRTransfer()
 transfer.state(plasma_U, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
