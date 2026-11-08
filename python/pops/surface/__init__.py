@@ -132,6 +132,8 @@ _EARLIER = {
     "apply_increment": _SpellingRefusal("S + J, a state plus an increment"),
     "accept_all": _SpellingRefusal("accept=[check1, check2]; a list of checks accepts when all of "
                                    "them do"),
+    "cfl_guard": _SpellingRefusal("dt=cfl_limit(advection, cfl=..., max_dt=...) in "
+                                  "pops.Advance, master's AdaptiveCFL and its formula"),
     "step_bound": _SpellingRefusal("the bound as dt=cfl_limit(flux, cfl=...) or as dt= a function "
                                    "of cell, since accept= holds checks only"),
 }

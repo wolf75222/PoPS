@@ -519,6 +519,29 @@ def test_su13_a_word_of_a_later_lot_is_importable_and_refuses_its_use():
         in message
 
 
+def test_su13_curl_and_outflow_are_words_of_pops_math_of_later_lots():
+    """``curl`` and ``outflow`` of 2.6.3 are importable from ``pops.math`` (CF2 admits their
+    definition there, R20) and refuse their use with the lot that elaborates them."""
+    namespace = {}
+    exec("from pops.surface.math import *", namespace)
+    assert {"curl", "outflow"} <= set(namespace)
+    _, _, u, _, _, _ = _model()
+    with pytest.raises(surface.NotYetElaborated) as caught:
+        surface.math.curl(u)
+    assert "the word curl of pops.math has no elaborated form yet; N11" in str(caught.value)
+    with pytest.raises(surface.NotYetElaborated) as caught:
+        surface.math.outflow(u)
+    assert "the word outflow of pops.math has no elaborated form yet; a later lot of N15 with " \
+        "the boundary relations of G04" in str(caught.value)
+
+
+def test_su13_laplacian_is_a_spelling_that_pops_math_refuses():
+    with pytest.raises(surface.SymbolNotInSurface) as caught:
+        surface.math.laplacian  # noqa: B018  # <- su13-laplacian
+    _refused(caught, surface.SymbolNotInSurface, "su13-laplacian", ("SU3", "SU13", "§21.7"),
+             "div(grad(e))")
+
+
 # --- SU14: tuples and lists ----------------------------------------------------------------------
 
 def test_su14_several_predicates_are_a_list():
@@ -771,6 +794,7 @@ def test_upwind_refuses_an_affine_flux():
     ("apply_increment", "S + J, a state plus an increment"),
     ("accept_all", "accept=[check1, check2]; a list of checks accepts when all of them do"),
     ("step_bound", "the bound as dt="),
+    ("cfl_guard", "dt=cfl_limit(advection, cfl=..., max_dt=...) in pops.Advance"),
 ])
 def test_su13_a_spelling_of_level_1_in_an_earlier_text_names_the_construct(spelling, write):
     with pytest.raises(surface.SymbolNotInSurface) as caught:

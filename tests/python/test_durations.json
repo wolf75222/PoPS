@@ -8329,9 +8329,9 @@
       },
       "local_receipts": {
         "tests/python/unit/surface/test_su_t2_refusals.py": {
-          "cases": 64,
-          "phase_seconds": 2.71,
-          "session_seconds": 3.5
+          "cases": 67,
+          "phase_seconds": 2.59,
+          "session_seconds": 3.43
         },
         "tests/python/unit/surface/test_su_t3_parity.py": {
           "cases": 30,
@@ -8340,7 +8340,7 @@
         }
       },
       "source_sha256": {
-        "tests/python/unit/surface/test_su_t2_refusals.py": "b4c60b582da7a574f5305c80099f7e4e0ea7ca0aee7a1b5988f514a822865827",
+        "tests/python/unit/surface/test_su_t2_refusals.py": "11862ab8dd0e252317035bfb4c92747c3b229a97373576969b6f424f6e240212",
         "tests/python/unit/surface/test_su_t3_parity.py": "67515bc956d7c75900c7f48687bc7095ee43b0c34a0528e529e967fbe34d081c"
       }
     }

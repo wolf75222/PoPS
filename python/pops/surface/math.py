@@ -6,9 +6,9 @@ exact), the elementary functions that the expressions of b6 lower (``exp``, ``ex
 ``sqrt``, ``sin``, ``cos``), the differential words of a balance (``ddt``, ``grad``, ``div``) and
 the predicate words, whose refusals SU4 and SU11 state (``where``, ``equal``, ``all_of``,
 ``any_of``, ``none_of``). Every other word of 2.6.3 is importable and refuses its call with
-``NotYetElaborated``, which names the lot that elaborates it. Two words of 2.6.3 are not here:
-the core of PoPS may not name them (CF2 refuses them as named operators and boundary families in
-the core paths), so they wait for ``pops.lib.math``, which this module will re-export.
+``NotYetElaborated``, which names the lot that elaborates it, ``curl`` and ``outflow`` included:
+CF2 admits the definition of a word of 2.6.3 in this module, by a top-level ``def`` or assignment,
+and refuses the word everywhere else (FC2, R20).
 
 An unknown name, or a name of an earlier text, is refused on import with ``SymbolNotInSurface``,
 a subclass of ``ImportError`` whose message names the word to write (SU13, §21.7).
@@ -52,6 +52,7 @@ _EARLIER = {
                              "the physics"),
     "value": _SpellingRefusal("the constant or the parameter itself: a constant or a parameter of "
                              "the model is a value"),
+    "laplacian": _SpellingRefusal("div(grad(e))"),
     "maximum": _SpellingRefusal("largest([a, b, ...])"),
     "minimum": _SpellingRefusal("smallest([a, b, ...])"),
     "lt": _SpellingRefusal("a < b"), "le": _SpellingRefusal("a <= b"),
@@ -174,9 +175,13 @@ def _later(word: str, owner: str) -> _Any:
 for _word, _owner in _LATER.items():
     globals()[_word] = _later(_word, _owner)
 
+# CF2 admits these two words only as a top-level definition of this module (FC2, R20).
+curl = _later("curl", _N11)
+outflow = _later("outflow", _TRACES)
+
 __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
-    "Fraction", "pi", "infinity", "ddt", "grad", "div", *_ELEMENTARY, "where", "equal", "all_of",
-    "any_of", "none_of", *_LATER]
+    "Fraction", "pi", "infinity", "ddt", "grad", "div", "curl", *_ELEMENTARY, "where", "equal",
+    "all_of", "any_of", "none_of", "outflow", *_LATER]
 
 
 def __getattr__(name: str) -> _Any:
