@@ -249,13 +249,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   writing the regrid in both places is refused). The body reads `B.steps % k == 0`
   (`pops.lib.time.every(k)`), `B.time`, runtime parameters and indicators of the accepted state,
   `pops.amr.largest_cells(f)` and `smallest_cells(f)`, the largest or the smallest value of a
-  function of `cell` over the valid cells of every level; it is two-valued, as the `cond` of IR4.
+  function of `cell` over the valid cells of every level (covered coarse cells included, so for a
+  nonlinear `f` it is not the composite extremum); it is two-valued, as the `cond` of IR4.
   The decision is generated into the compiled Program with the criterion; after each accepted step
   the core reduces each indicator over the patches and the ranks, calls the generated decision and
   regrids when it is true, with no Python in the step. An indicator that is not finite fails the
   step. In this lot an indicator reads the cell itself (`cell.shift` is refused), and a checkpoint
   of a Program that writes a `Regrid` is refused, since a restart replays its regrids from the
-  cadence.
+  cadence. The native file also runs on every rank of MPI1 and MPI2 worlds
+  (`tests/python/integration/mpi/test_public_regrid_decision_mpi{1,2}.py`).
 
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.

@@ -8294,16 +8294,16 @@
         "tests/python/unit/amr/test_regrid_decision.py": {
           "analogue": "tests/python/unit/amr/test_refinement_criterion_regions.py",
           "estimated_seconds": 60,
-          "local_receipt": "19 passed in 11.8 s (07/11, source-only, no compile)",
+          "local_receipt": "22 passed in 11.5 s (08/11, source-only, no compile)",
           "reason": "source-only: traces, resolves and emits the decision of the tutorial-09 case about fifteen times; no compile",
-          "source_sha256": "b03558083698544d3d1cfcbe45b16c8b626341db3cb89ace1d48f337e841997d"
+          "source_sha256": "520f450314f134cd92685e635fc99ad51263854532d606116da4de8c54f8b3fe"
         },
         "tests/python/integration/amr/test_regrid_decision_native.py": {
           "analogue": "tests/python/integration/amr/test_refinement_criterion_parity.py",
           "estimated_seconds": 900,
-          "local_receipt": "3 passed in 325.8 s (07/11, gcc 13, Kokkos Serial, Dim2, cold isolated cache)",
+          "local_receipt": "3 passed in 327.5 s (08/11, gcc 13, Kokkos Serial, Dim2, cold isolated cache); the same file under the MPI drivers test_public_regrid_decision_mpi1.py 323.8 s and _mpi2.py 347.7 s (OpenMPI 4.1.6, Kokkos Serial, Dim2)",
           "reason": "three Programs compiled cold (layout cadence, every(2) and a state predicate) and five adaptive runs of the tutorial-09 case",
-          "source_sha256": "a4d62430162e070d766282fe6fa8f9ca093b1ce8370b3c5d59949306acb496f7"
+          "source_sha256": "7e721d3adaa934194674c140b747bcc08b4e2a401deba778d1fe64516920d2d4"
         }
       }
     },

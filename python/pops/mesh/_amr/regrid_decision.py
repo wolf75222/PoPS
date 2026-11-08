@@ -132,6 +132,10 @@ class _StepsRemainder:
             raise RegridBodyError("a when body tests B.steps % k == 0 only (every(k))")
         return EveryAcceptedSteps(self.k)
 
+    def __ne__(self, other: Any) -> Any:  # type: ignore[override]
+        raise RegridBodyError("a when body tests B.steps % k == 0 only; write "
+                              "~(B.steps % k == 0) for the steps where it does not hold")
+
     __hash__ = None  # type: ignore[assignment]
 
     def __bool__(self) -> bool:
@@ -206,12 +210,24 @@ def _indicator(kind: str, function: Any, over: Any) -> CellIndicator:
 
 
 def largest_cells(f: Callable[[CriterionCell], Any], over: Any = None) -> CellIndicator:
-    """The largest value of ``f`` over the valid cells of every level (spec 0.3, 2.6.3)."""
+    """The largest value of ``f`` over the valid cells of every level (spec 0.3, 2.6.3).
+
+    The valid cells of a coarse level include the cells that a finer level covers. For a linear
+    ``f`` of a restricted state this is the largest value over the composite (uncovered) cells; for a
+    nonlinear ``f``, or one that reads ``cell.width``, a covered coarse cell can give a value
+    that no composite cell gives. A composite mask comes with ``over=``, refused in this lot.
+    """
     return _indicator("largest", f, over)
 
 
 def smallest_cells(f: Callable[[CriterionCell], Any], over: Any = None) -> CellIndicator:
-    """The smallest value of ``f`` over the valid cells of every level (spec 0.3, 2.6.3)."""
+    """The smallest value of ``f`` over the valid cells of every level (spec 0.3, 2.6.3).
+
+    The valid cells of a coarse level include the cells that a finer level covers. For a linear
+    ``f`` of a restricted state this is the smallest value over the composite (uncovered) cells; for a
+    nonlinear ``f``, or one that reads ``cell.width``, a covered coarse cell can give a value
+    that no composite cell gives. A composite mask comes with ``over=``, refused in this lot.
+    """
     return _indicator("smallest", f, over)
 
 
