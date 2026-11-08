@@ -97,7 +97,10 @@ def plans(tmp_path_factory):
         "docs": ["README.md"],
         "docs-workflow": [".github/workflows/docs.yml"],
         "docs-entrypoint": ["scripts/build_docs.sh"],
-        "format-style": [".clang-format", ".clang-format-ignore", "scripts/check_clang_format.sh"],
+        "format-style": [".clang-format", ".clang-format-ignore", "scripts/check_clang_format.sh",
+                         "scripts/test_check_clang_format.sh"],
+        "format-nested-style": ["src/.clang-format", "benchmarks/_clang-format",
+                                "tests/cpp/.clang-format-ignore"],
         "python-test": ["tests/python/unit/runtime/test_capacity_limits.py"],
         "dim1-test": ["tests/python/integration/runtime/test_public_drift_diffusion_matrix.py"],
         "cpp-test": ["tests/cpp/unit/mesh/test_box.cpp"],
@@ -115,6 +118,7 @@ def plans(tmp_path_factory):
     ("docs-workflow", [], [], []),
     ("docs-entrypoint", [], [], []),
     ("format-style", [], [], []),
+    ("format-nested-style", [], [], []),
     ("python-test", [], ["tests/python/unit/runtime/test_capacity_limits.py"], []),
     ("cpp-test", ["test_box"], [], []),
     ("architecture-test", [], [], ["tests/python/architecture/test_ci_shard_binpack.py"]),
@@ -126,6 +130,27 @@ def test_test_only_and_metadata_changes_do_not_run_unrelated_components(plans, n
     assert plan["architecture"] == architecture
     assert not any(plan["outputs"][flag] for flag in (
         "full", "mpi_required", "openmp_required", "compile_cache_required", "cpp_prewarm_required"))
+
+
+def test_format_bench_runs_on_full_plans_and_when_the_check_its_bench_or_a_style_file_changes(
+        plans, tmp_path):
+    assert plans["format-style"]["outputs"]["format_bench_required"]
+    assert plans["format-nested-style"]["outputs"]["format_bench_required"]
+    for name in ("docs", "docs-workflow", "python-test", "cpp-test", "architecture-test",
+                 "operator"):
+        assert not plans[name]["outputs"]["format_bench_required"], name
+    # Every full plan requires the bench: a change to its own job in ci.yml gives one, and so do an
+    # event that plans no diff and unknown changed paths.
+    full_plans = {
+        "ci-workflow": planner.make_plan([".github/workflows/ci.yml"], event_name="pull_request",
+                                         output_dir=tmp_path / "ci-workflow"),
+        "push": planner.make_plan([], event_name="push", output_dir=tmp_path / "push"),
+        "unknown-diff": planner.make_plan([planner.UNKNOWN_DIFF], event_name="pull_request",
+                                          output_dir=tmp_path / "unknown-diff"),
+        "unknown-mixed": plans["unknown-mixed"],
+    }
+    for name, plan in full_plans.items():
+        assert plan["outputs"]["full"] and plan["outputs"]["format_bench_required"], name
 
 
 def test_leaf_operator_has_bounded_native_coverage_without_unrelated_lanes(plans):

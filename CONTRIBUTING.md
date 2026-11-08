@@ -58,13 +58,17 @@ Report actual GitHub status separately from local validation.
 - C++ follows `.clang-format` under clang-format 19.1.7. The `format` job of `ci.yml` checks what
   each pull request changes in the C++ files (`scripts/check_clang_format.sh --changed-since
   HEAD^1`), and the weekly `format` job of `quality.yml` the whole tree. Install that version
-  (`pipx install clang-format==19.1.7`) and check before pushing. A file you touch that conformed
+  (`pipx install clang-format==19.1.7`) and check before pushing:
+  `bash scripts/check_clang_format.sh --changed-since origin/<target branch>` checks what your
+  branch changes since its merge base with that branch. A file you touch that conformed
   before your change must still conform as a whole file, since a changed line can misalign its
   neighbours (trailing comments, escaped newlines): `clang-format -i <file>` fixes it. In a file
   that did not conform, only your changed lines count:
   `git clang-format --binary "$(command -v clang-format)" <base>` formats the lines that differ
   from `<base>`. Files listed in `.clang-format-ignore` are byte-pinned data and are never
-  formatted.
+  formatted. A change to the script, to its bench or to a style file also runs the `format-bench`
+  job, `bash scripts/test_check_clang_format.sh`, which replays the cases of the check in a
+  throwaway repository; run it locally too.
 - Keep public headers self-contained, use `#pragma once`, and preserve existing naming within
   a subsystem. Use explicit ownership and typed handles instead of name-based runtime dispatch.
 - Check authored input at host boundaries. Exceptions must not escape device kernels; carry

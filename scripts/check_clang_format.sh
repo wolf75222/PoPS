@@ -4,21 +4,26 @@
 #   bash scripts/check_clang_format.sh                         # every tracked C++ file
 #   bash scripts/check_clang_format.sh --changed-since <rev>   # what a change does to the C++ files
 #
-# Run from the repository root. The format job of quality.yml (weekly on master) checks the whole
-# tree. The format job of ci.yml checks, on every pull request and push, what the change itself
-# brings (`--changed-since HEAD^1`, the first parent of the merge commit that CI checks out), as a
-# ratchet. A C++ file that the change adds or modifies passes when it conforms as a whole file.
-# Otherwise it fails when it conformed at <rev>, since a changed line can leave its aligned
-# neighbours behind (trailing comments, escaped newlines); a file that did not conform at <rev> is
-# held to its changed lines only, so a branch never has to reformat a file that it found
+# The script works from the repository root, wherever it is started. The format job of quality.yml
+# (weekly on master) checks the whole tree. The format job of ci.yml checks, on every pull request
+# and push, what the change itself brings (`--changed-since HEAD^1`, the first parent of the merge
+# commit that CI checks out), as a ratchet; when <rev> is not an ancestor of HEAD, the change starts
+# from their merge base. A C++ file that the change adds or modifies passes when it conforms as a
+# whole file. Otherwise it fails when it conformed at <rev>, since a changed line can leave its
+# aligned neighbours behind (trailing comments, escaped newlines); a file that did not conform at
+# <rev> is held to its changed lines only, so a branch never has to reformat a file that it found
 # unformatted. When the change edits .clang-format or .clang-format-ignore, every tracked C++ file
 # that conformed at <rev>, under the style and the ignore list of <rev>, must still conform. Both
 # modes share the version, the extensions and .clang-format-ignore (byte-pinned snapshots, never
 # checked). The diff to apply goes to format-diff.patch (ignored by git, removed when the check
-# passes; `git apply` takes it) and the script exits 1.
+# passes; `git apply` takes it) and the script exits 1. It exits 2 when it cannot check, for
+# instance outside a git repository or with an unknown <rev>.
 # Fix a file with `clang-format -i <file>`, or, for a file that did not conform at <rev>,
 # `git clang-format --binary "$(command -v clang-format)" <rev>` (its changed lines only).
 set -euo pipefail
+top=$(git rev-parse --show-toplevel) \
+  || { echo "::error::clang-format : lancer le script dans un depot git" >&2; exit 2; }
+cd "$top"
 
 version=$(clang-format --version)
 echo "$version"
@@ -63,6 +68,14 @@ if [ "${1:-}" = "--changed-since" ]; then
   base=${2:?usage: check_clang_format.sh [--changed-since <rev>]}
   git rev-parse -q --verify "$base^{commit}" >/dev/null \
     || { echo "::error::clang-format : revision $base introuvable (fetch-depth ?)" >&2; exit 2; }
+  # What the change itself brings: when <rev> is not an ancestor of HEAD (a branch behind its
+  # base), the files that only the base changed would count as touched; start from the fork point.
+  fork=$(git merge-base "$base" HEAD) \
+    || { echo "::error::clang-format : pas de base de fusion entre $base et HEAD" >&2; exit 2; }
+  if [ "$fork" != "$(git rev-parse "$base^{commit}")" ]; then
+    echo "clang-format : $base n'est pas un ancetre de HEAD ; controle depuis la base de fusion $(git rev-parse --short "$fork")"
+    base=$fork
+  fi
   command -v git-clang-format >/dev/null \
     || { echo "::error::git-clang-format required (installed with clang-format 19.1.7)" >&2; exit 2; }
   scratch=$(mktemp -d)
