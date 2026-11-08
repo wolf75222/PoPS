@@ -18,6 +18,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-93 (N11 lot 1): the right-hand side of a balance is a free algebra (spec 0.3 R7, gap C1).
+  `ddt(U) == -div(F) + k*u*(1 - u)` declares each term-free operand as the anonymous source
+  `<rate>_inline_<k>` of the balance, with its exact coefficient folded in, so it lowers on the
+  native route of a declared source, bit for bit (M03 with an inline radiative loss). A term under
+  any node other than `+`, `-` and an exact scaling (`u * div(F)`, `exp(S)`) raises
+  `TermNotAdditive` at the line that wrote it; a refused balance leaves the model unchanged.
+  `CoverageNotExact` lists every uncovered term with its line, and `rate.inline` selects the
+  anonymous sources. A declared source whose name is not an identifier now runs in a source-only
+  view.
 - ROM-87 (N3): reconstructions and slope limiters written in Python in `pops.lib.numerics`.
   `Reconstruct(rep, value)` builds a per-axis reconstruction from `value(c, a)` (spec 0.3
   sec. 4.3), `muscl(rep, limiter)` is the MUSCL face value of the catalogue, and `minmod`,
