@@ -342,11 +342,7 @@ class FieldSolution:
     def gradient(self, unknown: Handle, *, dimension: int) -> ProgramValue:
         if type(dimension) is not int or dimension not in (1, 2, 3):
             raise TypeError("field gradient requires an explicit physical dimension")
-        return self._gradient_of(self[unknown], unknown, dimension=dimension)
-
-    def _gradient_of(self, value: ProgramValue, unknown: Handle, *, dimension: int) -> ProgramValue:
-        """The gradient node of the observation ``value`` of ``unknown``; a field request of a
-        traced method passes its memoized observation (N8 lot 5)."""
+        value = self[unknown]
         space = None
         if value.space is not None:
             if self.observation_axes is None or len(self.coordinate_units) != len(self.observation_axes) \

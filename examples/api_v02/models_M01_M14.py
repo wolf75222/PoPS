@@ -602,17 +602,21 @@ def _poisson(case,phi,rhs):
         solver=CG(max_iter=2000,rel_tol=1.e-12,abs_tol=1.e-13)))
 
 
+def _publish_potential(observation,potential,unknown,carrier,potential_target):
+    """Publish the potential, or its gradient, of one observation to the carrier field inputs."""
+    if potential_target is None:
+        gradient=observation.gradient(unknown,dimension=2)
+        return observation.publish({(carrier,"potential_grad_x"):(gradient,0),
+                                    (carrier,"potential_grad_y"):(gradient,1)})
+    return observation.publish({(carrier,potential_target):potential})
+
+
 def _live_field_evaluator(field,phi,model,block,U,rate,*,potential_target=None):
     module=model.module;carrier=block[module.field_handle(module.field_spaces()["fields"])]
     def evaluate(program,state,point,label):
         observation=field.observe(program.solve(field,values={block[U]:state},at=point).consume(action=FailRun()))
         potential=observation[field[phi]]
-        if potential_target is None:
-            gradient=observation.gradient(field[phi],dimension=2)
-            context=observation.publish({(carrier,"potential_grad_x"):(gradient,0),
-                                         (carrier,"potential_grad_y"):(gradient,1)})
-        else:
-            context=observation.publish({(carrier,potential_target):potential})
+        context=_publish_potential(observation,potential,field[phi],carrier,potential_target)
         program.store_history(label+"_state",state,depth=1)
         program.store_history(label+"_potential",potential,depth=1)
         return rate(state,context)
@@ -624,12 +628,7 @@ def _field_flow(field,phi,model,block,rate,*,potential_target=None):
     module=model.module;carrier=block[module.field_handle(module.field_spaces()["fields"])]
     def flow(state):
         request=field.at(state)
-        if potential_target is None:
-            gradient=request.gradient(field[phi],dimension=2)
-            context=request.publish({(carrier,"potential_grad_x"):(gradient,0),
-                                     (carrier,"potential_grad_y"):(gradient,1)})
-        else:
-            context=request.publish({(carrier,potential_target):request[field[phi]]})
+        context=_publish_potential(request,request[field[phi]],field[phi],carrier,potential_target)
         return rate(state,context)
     return flow
 

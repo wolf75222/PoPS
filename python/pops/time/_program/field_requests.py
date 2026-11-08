@@ -20,8 +20,10 @@ value that its solve read (the field context of a publication, the stage of a st
 same state read at another time of the attempt is a copy at another stage, and a request there is
 solved again. Its reuse goes with the linear recombination of T7, in the candidate-guard lot.
 
-The reads of a request (``request[unknown]``, ``request.gradient``, ``request.publish``) are b6's,
-and ``request[unknown]`` creates its node once. Every node of a request is recorded in the trace:
+The reads of a request are b6's: ``request[unknown]`` and ``request.publish``, and every other
+observation of b6's ``FieldSolution`` (a derivative of an unknown, for instance), which the request
+runs on a view of its solution whose reads are the request's. ``request[unknown]`` creates its node
+once, so an observation derived from an unknown reads the node of that unknown. Every node of a request is recorded in the trace:
 the rules of a component (``traced_method._require_rate``) exempt them from the time rule, since
 PoPS places them at the stage of the evaluation, and count the nodes of a reused request as given.
 
@@ -34,6 +36,7 @@ the proposal through a rate of its state: a retryable site (phase ``trial``), co
 from __future__ import annotations
 
 import contextlib
+import functools
 from typing import Any
 
 from pops.time._program.traced_method import (
@@ -108,23 +111,60 @@ class FieldRequest:
         """``((observation, unknown), ...)`` of the reads of this request, in order."""
         return tuple(sorted(self._reads.values(), key=lambda item: item[0].id))
 
-    def gradient(self, unknown: Any, *, dimension: int) -> ProgramValue:
-        """b6's cell-centred gradient of ``unknown``, reading the memoized observation."""
-        self._require_active()
-        if type(dimension) is not int or dimension not in (1, 2, 3):
-            raise TypeError("field gradient requires an explicit physical dimension")
-        value = self[unknown]
-        with self._recording():
-            return self._solution._gradient_of(value, unknown, dimension=dimension)
-
     def publish(self, bindings: Any, *, states: Any = None) -> ProgramValue:
         """b6's publication of observations of this request to physics field inputs."""
         self._require_active()
         with self._recording():
             return self._solution.publish(bindings, states=states)
 
+    def __getattr__(self, name: str) -> Any:
+        """The other observations of b6's ``FieldSolution``, run on the view whose reads are this
+        request's memoized reads; the projections to a State are not observations of a request."""
+        if name.startswith("_") or name in _NOT_OBSERVATIONS:
+            raise AttributeError("a field request has no %r: it observes its solution, "
+                                 "request[unknown], request.publish and b6's observations" % name)
+        if self._solution is None:
+            raise AttributeError(name)
+        attribute = getattr(_memoized_view(self), name)
+        if not callable(attribute):
+            return attribute
+
+        def observe(*args: Any, **kwargs: Any) -> Any:
+            self._require_active()
+            with self._recording():
+                return attribute(*args, **kwargs)
+        return observe
+
     def __repr__(self) -> str:
         return "<FieldRequest %s>" % self.site
+
+
+# b6's FieldSolution members that write a State or map to private candidates: not a request's.
+_NOT_OBSERVATIONS = frozenset(("cell_mean_state", "evolved_state", "publish_mapped",
+                               "mapping_port"))
+
+
+@functools.cache
+def _memoized_solution_class() -> type:
+    """A subclass of b6's ``FieldSolution`` whose reads ``self[unknown]`` are a request's (T7);
+    built on first use, as this module defers the imports of b6's field route."""
+    from pops.fields._program_problem import FieldSolution
+
+    class MemoizedSolution(FieldSolution):
+        __slots__ = ("_request",)
+
+        def __getitem__(self, unknown: Any) -> ProgramValue:
+            return self._request[unknown]
+
+    return MemoizedSolution
+
+
+def _memoized_view(request: FieldRequest) -> Any:
+    solution = request._solution
+    view = _memoized_solution_class()(**{name: getattr(solution, name)
+                                         for name in type(solution).__dataclass_fields__})
+    object.__setattr__(view, "_request", request)
+    return view
 
 
 def _route(field: Any, value: ProgramValue) -> Any:

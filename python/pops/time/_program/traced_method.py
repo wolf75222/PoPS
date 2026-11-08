@@ -47,6 +47,7 @@ from fractions import Fraction
 from typing import Any, NoReturn
 
 from pops._ir.symbolic import SymbolicTruthValueError
+from pops.time._program.product import Product
 from pops.time.points import Clock, StagePoint, TimePoint
 from pops.time.value_metadata import CoeffPolynomial, _exact_number
 from pops.time.values import ProgramValue, _Affine, _Coeff
@@ -74,6 +75,80 @@ class NotYetElaborated(NotImplementedError):
     """A construct of section 5 that this elaborator does not lower yet; the message names the issue that does."""
 
     code = "not_yet_elaborated"
+
+
+# --- method memory (T27, CN4, C51; N8 lot 5) ------------------------------------------------
+# The declaration side of ``method(memory=..., role=...)``; ``memory.py`` holds the runtime side
+# (``MemoryView``, ``MemoryUndefined``) and re-exports these names.
+
+class _StateType:
+    """``State``: the type placeholder of section 5.2, resolved to the type of ``B.state``."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "State"
+
+
+State = _StateType()
+
+
+class Auxiliary:
+    """``Auxiliary()``: the CN4 role of a memory that a rejection may change and that no
+    scientific claim reads (T37). Its argument (persisted) is gap C46, not elaborated here."""
+
+    __slots__ = ()
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if args or kwargs:
+            raise NotYetElaborated("Auxiliary(...): the arguments of Auxiliary (gap C46) are "
+                                   "elaborated with the continuation of G07")
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is Auxiliary
+
+    def __hash__(self) -> int:
+        return hash(Auxiliary)
+
+    def __repr__(self) -> str:
+        return "Auxiliary()"
+
+
+def _is_field_unknown(value: Any) -> bool:
+    """A qualified field unknown, ``field[unknown]``: a field Handle that is not the field."""
+    from pops.model import Handle
+    from pops.problem.handles import FieldHandle
+
+    return isinstance(value, Handle) and value.kind == "field" \
+        and not isinstance(value, FieldHandle)
+
+
+def declared_memory(memory: Any, role: Any) -> tuple:
+    """The members ``((name, type), ...)`` of ``method(memory=..., role=...)``, checked."""
+    if memory is None:
+        if role is not None:
+            raise TypeError("method(role=...) states the role of a memory; this method declares "
+                            "none")
+        return ()
+    if type(memory) is not Product or not len(memory):
+        raise TypeError("method(memory=...) is a Product of member types, "
+                        "Product(name=State, ...), got %r" % (memory,))
+    if role is None:
+        raise NotYetElaborated(
+            "method(memory=...) without role= is a Scientific memory (roles of section 2.6), "
+            "which enters B and needs a startup (CN6); this lot elaborates "
+            "role=Auxiliary() only (gap C51)")
+    if type(role) is not Auxiliary:
+        raise NotYetElaborated("method(role=%r): this lot elaborates the role Auxiliary() of a "
+                               "method memory only (CN4, gap C51)" % (role,))
+    members = []
+    for name, kind in memory.items():
+        if kind is not State and not _is_field_unknown(kind):
+            raise TypeError(
+                "method(memory=...): member %r has the type %r; this lot takes State or the "
+                "qualified field unknown that the member observes, field[unknown]" % (name, kind))
+        members.append((name, kind))
+    return tuple(members)
 
 
 # --- exact expansions -------------------------------------------------------------------------
@@ -754,7 +829,7 @@ def _held_values(node: Any) -> Any:
 # The vocabulary of a field solve, which a component reaches through field.at(U) only (T6).
 _FIELD_SOLVE_OPS = frozenset((
     "field_problem_load", "field_problem_coefficients", "matrix_free_operator", "solve_linear",
-    "solve_outcome", "solve_outcome_component", "field_component", "field_gradient",
+    "solve_outcome", "solve_outcome_component", "field_component",
     "field_publication",
 ))
 
@@ -842,8 +917,6 @@ class Candidate:
             raise TypeError("Candidate(time=...) takes a time of the attempt, B.time + c*p.dt")
         state._same_trace(time, "Candidate(state, time)")
         if memory is not None:
-            from pops.time._program.outputs import Product
-
             if type(memory) is not Product:
                 raise TypeError("Candidate(memory=...) is a Product of the members that the "
                                 "method declares, Product(name=value, ...), got %r" % (memory,))
@@ -969,8 +1042,6 @@ class Method:
                  role: Any = None) -> None:
         if not callable(body):
             raise TypeError("method(f): f must be a function f(B, p, *components)")
-        from pops.time._program.memory import declared_memory
-
         members = declared_memory(memory, role)
         if policies:
             raise NotYetElaborated("method(policies=...): memory policies (CN5, CN7) are "
@@ -1023,8 +1094,6 @@ def method(f: Callable | None = None, *, memory: Any = None, policies: Any = Non
 
 def _candidate_memory(method: Method, trace: _Trace, candidate: Candidate) -> tuple:
     """The members of ``candidate.memory``, checked against the declaration of ``method``."""
-    from pops.time._program.memory import State
-
     members = method.members
     memory = candidate.memory
     if not members:
