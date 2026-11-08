@@ -1514,7 +1514,10 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_api_v02_kinetic_nd_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_history_transfer_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_hall_mhd_ct_mpi2.py", nproc = 2, native_dimension = 2 },
-  { path = "tests/python/integration/mpi/test_api_v02_gyrokinetic_nd_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_gyrokinetic_nd_mpi2.py", nproc = 2, native_dimension = 2, partitions = [
+    { id = "linear_polarization", nodes = ["test_native_full_f_3x2v[False]"] },
+    { id = "nonlinear_polarization", nodes = ["test_native_full_f_3x2v[True]"] },
+  ] },
   { path = "tests/python/integration/mpi/test_api_v02_finite_kokkos_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_distributed_kokkos_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_coupled_methods_native_mpi2.py", nproc = 2, native_dimension = 2, partitions = [
