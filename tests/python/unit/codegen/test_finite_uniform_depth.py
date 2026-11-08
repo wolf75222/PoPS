@@ -29,11 +29,24 @@ def test_nested_array_types_do_not_use_recursive_python_or_cpp_loops():
     for family in range(1500):
         signature = _array(signature, family)
     source = _source(signature)
-    assert "std::vector<UniformFrame>(1501)" in source
+    # The innermost Array of Float64 is a device Array (DM7): a leaf of the walk, validated by
+    # its device fingerprint, which compares bits and rejects nonfinite elements.
+    assert "std::vector<UniformFrame>(1500)" in source
     assert source.count("while (top != 0)") == 1
     assert "element_i_" not in source
     assert _nesting(source) < 12
     assert source.index("finite array allocation capacity exhausted") < source.index("while (top != 0)")
+    assert source.count("finite_collective::uniform_device(") == 1
+    # A structural innermost element keeps the host checks of each leaf.
+    signature = {"vtype": "variant", "members": (("value", {"vtype": "scalar"}),)}
+    for family in range(1500):
+        signature = _array(signature, family)
+    source = _source(signature)
+    assert "std::vector<UniformFrame>(1502)" in source
+    assert source.count("while (top != 0)") == 1
+    assert "element_i_" not in source
+    assert _nesting(source) < 12
+    assert "finite_collective::uniform_device(" not in source
     assert "std::bit_cast<std::int64_t>" in source
     assert "replicated array has a nonfinite element" in source
 
@@ -48,8 +61,11 @@ def test_record_layout_slots_preserve_variant_arms_and_array_boundaries():
     variant = nodes[record["children"][0]]
     assert record["width"] == 4 and record["offsets"] == [0, 3]
     assert variant["width"] == 3 and variant["offsets"] == [1, 2]
-    assert depth == 5
+    # The inner Array of Int64 is a device Array (DM7): its boundary ends the record walk.
+    assert nodes[variant["children"][1]]["children"] == []
+    assert depth == 4
     source = _source(signature)
+    assert source.count("finite_collective::uniform_device(") == 1
     assert "switch (*tag)" in source
     assert source.index("replicated Variant tag differs") < source.index("switch (*tag)")
     domain_guard = ("finite_collective::require_domain(frame.array->domain, 2, 1, "

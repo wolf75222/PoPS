@@ -308,6 +308,11 @@ def _emit_region(program, block, sub, model, lines, prelude, block_idx, field_pl
 def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plans, target):
     _check_region_effects(value.attrs.get("cond_block", ()))
     _check_region_effects(value.attrs["body_block"])
+    if value.op == "structured_fold":
+        from .program_emit_finite_kokkos import emit_ordered, host_snapshots, reads_arrays
+        # An ordered fold over device Arrays runs as one serial device region (IR4).
+        if reads_arrays(value) and emit_ordered(value, var, lines):
+            return
     initial = value.inputs[0]
     signature = value_signature(initial)
     current = _slots(signature, var[initial.id], value.id, "carry", lines)
@@ -322,8 +327,10 @@ def _emit_loop(program, value, var, model, lines, prelude, block_idx, field_plan
         _uniform_int(budget, lines, "fold capacity differs across execution lane")
         _reject_if("%s < 0 || %s < 0 || %s > %s" % (bound, budget, bound, budget),
                    lines, "fold count outside declared capacity")
+        snapshots = host_snapshots(value, var, lines)
         lines.append("for (; %s < %s; ++%s) {" % (count, bound, count))
         sub = dict(var)
+        sub.update(snapshots)
         sub[value.attrs["body_argument"].id] = current
         sub[value.attrs["body_index"].id] = count
         body = []
@@ -475,7 +482,11 @@ def _propagate_typed_error(program, signature, tokens, var, lines, block_idx, ta
         return
     capture = var.get(("typed_failure_capture",))
     if capture is None:
-        from .program_emit_typed_failure import emit_terminal_failure
+        from .program_emit_typed_failure import emit_shared_terminal_failure, emit_terminal_failure
+        outcome = var.get(("distributed_outcome_error", id(tokens)))
+        if outcome is not None and outcome[0] is tokens:
+            emit_shared_terminal_failure(program, signature, outcome[1:], lines, block_idx, target)
+            return
         emit_terminal_failure(program, signature, tokens, lines, block_idx, target)
         return
     error_signature, error_slots, outer_tag, outer_index, label = capture

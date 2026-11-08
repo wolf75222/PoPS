@@ -365,3 +365,53 @@ def test_tag_graph_route_is_unchanged_for_expression_predicates() -> None:
     tagging = _resolved(graph).bootstrap_plan.tagging
     assert type(tagging) is not ResolvedRefinementCriterion
     assert tagging.runtime_tagging_data()["graph_type"] == "amr_tagging_runtime"
+
+
+@pytest.mark.parametrize("selection", [None, "refine-requests"])
+def test_a_region_criterion_keeps_the_selection_of_its_buffer(selection) -> None:
+    # Buffer(cells=n) is master's: its cells join the transition buffer, max(n, derived), and the
+    # native tag selection 2 grows the whole target coverage. selection="refine-requests" is
+    # pops.amr.tag-selection@1: n cells around each refine request, and derived nesting alone in
+    # the hierarchy. Regions of cell keep either choice as the tag graph of the same cells does.
+    from pops.amr import Buffer
+    from pops.mesh._amr.hierarchy_native import lower_native_hierarchy
+    from pops.runtime._amr_bind_lowering import _install_native_tag_selection_config
+
+    class ConfigProjection:
+        tag_selection_contract_version = None
+        tag_selection_buffer = None
+
+    def graph(names):
+        value = ValueExpr(names.state)
+        return (Tag(value > names.value("refine")), Coarsen(value < names.value("coarsen")))
+
+    def route(rules):
+        resolved = _resolved(rules, buffer=Buffer(cells=3, selection=selection))
+        (local,) = resolved.layout_amr_authorities.values()
+        tagging = local.authorities.tagging
+        config = ConfigProjection()
+        _install_native_tag_selection_config(config, tagging, dimension=2)
+        identity = {key: value for key, value in tagging.canonical_identity().items()
+                    if key != "graph"}
+        native = (config.tag_selection_contract_version, config.tag_selection_buffer)
+        buffers = lower_native_hierarchy(resolved.resolved_hierarchy).transition_buffers
+        return tagging, identity, native, buffers
+
+    region, region_identity, region_native, region_buffers = route(_value_rules)
+    vm, vm_identity, vm_native, vm_buffers = route(graph)
+
+    assert type(region.graph) is ResolvedRefinementCriterion
+    assert type(vm.graph) is not ResolvedRefinementCriterion
+    assert region.buffer_cells == vm.buffer_cells == 3
+    assert region.selection == vm.selection == selection
+    if selection is None:
+        assert region_identity == vm_identity == {
+            "schema_version": 1, "authority_type": "resolved_amr_tagging", "buffer_cells": 3}
+        assert region_native == vm_native == (2, (0, 0))
+        assert region_buffers == vm_buffers == ((3, 3),)
+    else:
+        assert region_identity == vm_identity == {
+            "schema_version": 2, "authority_type": "resolved_amr_tagging",
+            "selection_contract": "pops.amr.tag-selection@1", "buffer_cells": 3}
+        assert region_native == vm_native == (1, (3, 3))
+        assert region_buffers == vm_buffers == ((2, 2),)

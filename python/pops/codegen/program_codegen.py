@@ -36,6 +36,7 @@ from .cpp_strings import cpp_string_literal
 from .program_source_map import emission_program_hash, emission_scope
 from .program_kernel_registry import kernel_scope, kernel_definitions
 from .program_uniform_finite import uniform_scope, uniform_definitions
+from .program_shared_definitions import shared_scope, shared_definitions
 from pops.time.references import block_name
 
 import json  # noqa: F401  (kept for any external reference to program_codegen.json)
@@ -170,6 +171,7 @@ def _emit_resolved_cpp_program(
 @emission_scope
 @kernel_scope
 @uniform_scope
+@shared_scope
 def _emit_cpp_program_impl(
     program: Any,
     model: Any = None,
@@ -331,7 +333,7 @@ def _emit_cpp_program_impl(
             has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
             provider_plans=provider_plans)
         if target == "amr_system" else None)
-    from .program_emit_finite_arrays import FINITE_OPS, finite_cpp_helpers
+    from .program_emit_finite_arrays import FINITE_OPS, finite_cpp_helpers, uses_finite_helpers
     from .program_emit_versioned import VERSIONED_OPS
     from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
     value_ops = FINITE_OPS | VERSIONED_OPS | FIELD_REPRESENTATION_OPS
@@ -346,10 +348,7 @@ def _emit_cpp_program_impl(
     distributed_ops = DISTRIBUTED_OPS | FIELD_REPRESENTATION_OPS
     uses_distributed = any(value.op in distributed_ops or any(
         child.op in distributed_ops for child in program._subblock_value_refs(value)) for value in finite_roots)
-    finite_helpers = finite_cpp_helpers() if uses_finite_arrays or uses_distributed else ""
-    if uses_distributed:
-        finite_helpers += "\n#include <pops/runtime/program/distributed_array.hpp>\n"
-    return _PROGRAM_CPP_TEMPLATE.format(
+    parts = dict(
         name=cpp_string_literal(program.name),
         hash=emission_program_hash(program),
         prelude=prelude,
@@ -358,14 +357,12 @@ def _emit_cpp_program_impl(
         operator_authorities=_emit_operator_authorities(operator_authorities),
         has_dt_bound=has_dt_bound,
         dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
-        advance_control=_emit_advance_control(program),
+        advance_control=(_emit_advance_control(program)
+                         + _emit_advance_outputs(program, authority, target)),
         module_metadata=(_emit_module_metadata(program, authority)
                          + _emit_uniform_history_metadata(program, target)),
         program_params=_emit_program_params(program, authority),
         field_boundaries=field_boundaries,
-        model_helpers=(finite_helpers + uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
-                       + _emit_program_model_helpers(program, authority)
-                       + provider_plans.source_kernel_helpers.cpp()),
         block_names=(_emit_block_names(program, value_authority.block_names)
                      + (_emit_uniform_clock_manifest(program) if target == "system" else "")),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
@@ -383,6 +380,20 @@ def _emit_cpp_program_impl(
             post_synchronization,
         ),
     )
+    # The install entries are regions too (an AMR entry builds its continuation
+    # configurations), so the translation-unit definitions are rendered after them.
+    parts["model_helpers"] = (
+        uniform_definitions() + kernel_definitions() + composite_integral_helpers(program)
+        + _emit_program_model_helpers(program, authority)
+        + provider_plans.source_kernel_helpers.cpp() + shared_definitions())
+    # The finite helpers follow the code that names them, not only the finite operations.
+    if uses_finite_arrays or uses_distributed or any(
+            uses_finite_helpers(part) for part in parts.values() if isinstance(part, str)):
+        finite_helpers = finite_cpp_helpers()
+        if uses_distributed:
+            finite_helpers += "\n#include <pops/runtime/program/distributed_array.hpp>\n"
+        parts["model_helpers"] = finite_helpers + parts["model_helpers"]
+    return _PROGRAM_CPP_TEMPLATE.format(**parts)
 
 
 def _emit_uniform_clock_manifest(program: Any) -> str:
@@ -510,6 +521,63 @@ def _emit_advance_control(program: Any) -> str:
             "// one step (Retry.max_attempts, T38). System::run_advance repeats a rejected proposal.\n"
             "extern \"C\" int pops_program_advance_max_attempts() { return %d; }\n"
             % control.max_attempts)
+
+
+def _emit_advance_outputs(program: Any, model: Any, target: str) -> str:
+    """The Outputs of the Advance that the Program elaborates (spec 0.3 CC14), read by its loader.
+
+    Each Output is a read-only region of the builder, lowered as the dt bound is: one case of
+    ``pops_program_advance_output_scalars`` evaluates the scalars of its record on the accepted
+    state, between steps, and writes them in record order. ``System::run_advance`` calls it after
+    the publications the Output is due on; the arrays of a record are the gathered accepted state
+    and need no generated code. A Program without Outputs exports no entry, so its translation
+    unit is unchanged.
+    """
+    regions = getattr(program, "_advance_outputs", ())
+    if not regions:
+        return ""
+    if target != "system":
+        raise NotImplementedError(
+            "the Outputs of an elaborated Advance run on the Uniform route; the AMR route of the "
+            "compiled control is a later lot of N8")
+    from pops.time._program.dt_bound import readonly_query_nodes
+    from pops.time._program.outputs import _OUTPUT_READONLY_OPS
+
+    block_idx = program._block_indices()
+    counts, cases = [], []
+    for index, region in enumerate(regions):
+        scalars = region.scalars()
+        counts.append(len(scalars))
+        if not scalars:
+            continue
+        nodes = readonly_query_nodes(program, region.sub, where="Output",
+                                     ops=_OUTPUT_READONLY_OPS)
+        bases = {}
+        for v in nodes:
+            if v.op == "state" and v.block not in bases:
+                bases[v.block] = v
+        var, lines = {}, []
+        for v in nodes:
+            _emit_op(program, v, bases.get(v.block), frozenset(), var, model, lines, None,
+                     block_idx)
+        lines.extend("values[%d] = %s;" % (slot, var[value.id])
+                     for slot, value in enumerate(scalars))
+        body = "\n".join("      " + line for line in lines)
+        cases.append("    case %d: {\n%s\n      return;\n    }\n" % (index, body))
+    count_cases = "".join("    case %d: return %d;\n" % item for item in enumerate(counts))
+    return (
+        "// Outputs of the elaborated Advance (spec 0.3 CC14): System::run_advance evaluates the\n"
+        "// scalars of an Output on the accepted state after the publications it is due on.\n"
+        'extern "C" int pops_program_advance_output_count() { return %d; }\n'
+        'extern "C" int pops_program_advance_output_scalar_count(int output) {\n'
+        "  switch (output) {\n%s    default: return -1;\n  }\n}\n"
+        'extern "C" void pops_program_advance_output_scalars('
+        "pops::System<pops::kNativeDimension>* sys, int output, pops::Real* values) {\n"
+        "  auto ctx = pops::runtime::program::make_program_execution_view(sys);\n"
+        "  (void)ctx; (void)values;\n"
+        "  switch (output) {\n%s    default: break;\n  }\n"
+        '  throw std::out_of_range("pops_program_advance_output_scalars: no such Output");\n'
+        "}\n" % (len(regions), count_cases, "".join(cases)))
 
 
 def _emit_dt_bound_entry(target: str, body: str, value_name: str | None = None) -> str:

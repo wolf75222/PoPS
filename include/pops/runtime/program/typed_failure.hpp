@@ -153,10 +153,20 @@ void describe(const ContinuationType& type, const ContinuationValueRef<Dim>& val
 // Preparation is a generated, rank-local expression: evaluate the closed structural value,
 // copy any field shards and converge, close distributed dependencies, then encode each shard.
 // All ranks receive the same ordered aggregate. No field shard is replaced with rank-zero data.
-template <int Dim, class Prepare, class Prototypes>
-[[noreturn]] void reject_typed_failure(const ExecutionLane& lane, Prepare&& prepare,
-                                       Prototypes&& prototypes, TypedFailureCapacity capacity = {},
-                                       distributed::Registry* registry = nullptr) {
+template <int Dim>
+using TypedFailurePreparation = distributed::FunctionRef<
+    std::tuple<ContinuationType, ContinuationValueRef<Dim>, std::string>()>;
+// The prototype provider is converted to the codec's holder where the codec is built, inside
+// the same guarded preparation as before; the view only defers that conversion.
+template <int Dim>
+using TypedFailurePrototypes =
+    distributed::FunctionRef<typename ContinuationCodec<Dim>::Prototypes()>;
+template <int Dim>
+[[noreturn]] void reject_typed_failure_erased(const ExecutionLane& lane,
+                                              TypedFailurePreparation<Dim> prepare,
+                                              TypedFailurePrototypes<Dim> prototypes,
+                                              TypedFailureCapacity capacity,
+                                              distributed::Registry* registry) {
   std::string local, schema, detail;
   ContinuationType type;
   ContinuationValueRef<Dim> value;
@@ -184,8 +194,7 @@ template <int Dim, class Prepare, class Prototypes>
       continuation_collective_closure<Dim>(value, registry, lane, capacity.per_rank);
   error = {};
   try {
-    ContinuationCodec<Dim> codec(type, schema, capacity.per_rank,
-                                 std::forward<Prototypes>(prototypes), &lane, registry,
+    ContinuationCodec<Dim> codec(type, schema, capacity.per_rank, prototypes(), &lane, registry,
                                  closure.get());
     auto bytes = codec.encode(value, 0);
     local.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
@@ -257,6 +266,16 @@ template <int Dim, class Prepare, class Prototypes>
   }
   collectively_rethrow_exception(error, lane, "typed failure collective publication failed");
   std::rethrow_exception(rejected);
+}
+template <int Dim, class Prepare, class Prototypes>
+[[noreturn]] void reject_typed_failure(const ExecutionLane& lane, Prepare&& prepare,
+                                       Prototypes&& prototypes, TypedFailureCapacity capacity = {},
+                                       distributed::Registry* registry = nullptr) {
+  const auto holder = [&]() -> typename ContinuationCodec<Dim>::Prototypes {
+    return typename ContinuationCodec<Dim>::Prototypes(std::forward<Prototypes>(prototypes));
+  };
+  reject_typed_failure_erased<Dim>(lane, TypedFailurePreparation<Dim>(prepare),
+                                   TypedFailurePrototypes<Dim>(holder), capacity, registry);
 }
 
 }  // namespace pops::runtime::program

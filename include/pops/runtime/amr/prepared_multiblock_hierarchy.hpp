@@ -539,7 +539,13 @@ class PreparedMultiBlockAmrHierarchy {
     const bool failed = all_reduce_max(local_error ? 1L : 0L, *lane_) != 0;
     if (failed) {
       if (interface_scheduler_) {
-        interface_scheduler_->rollback_installations(accepted_size);
+        // A rollback that throws on one rank still enters the vote below with every other rank.
+        try {
+          interface_scheduler_->rollback_installations(accepted_size);
+        } catch (...) {
+          if (!local_error)
+            local_error = std::current_exception();
+        }
         if (created)
           interface_scheduler_.reset();
       }
@@ -562,12 +568,16 @@ class PreparedMultiBlockAmrHierarchy {
       interface_provider_contract_.swap(next_contract);
       interface_lower_ = accepted_lower;
       interface_upper_ = accepted_upper;
-      interface_scheduler_->rollback_installations(accepted_size);
+      try {
+        interface_scheduler_->rollback_installations(accepted_size);
+      } catch (...) {
+        if (!local_error)
+          local_error = std::current_exception();
+      }
       if (created)
         interface_scheduler_.reset();
-      if (lane_->size() == 1 && local_error)
-        std::rethrow_exception(local_error);
-      throw std::runtime_error(
+      collectively_rethrow_(
+          local_error,
           "prepared AMR interface provider accepted-state publication failed collectively");
     }
   }
