@@ -25,7 +25,10 @@ def test_uniform_ssa_coefficient_preserves_equation_and_accepted_face_weight():
     assert "runtime_affine_spatial_stability" in cpp
     assert "ctx.capture_stencil_exchanges" in cpp
     assert "ctx.publish_stencil_exchanges" in cpp
-    assert "std::bit_cast<std::int64_t>" in cpp
+    # Spec 0.3 SV20, duty 2 (N9 lot 1, #722): both coefficients come from rank-identical scalars
+    # by exact operations, so each is rejected locally when nonfinite and never voted bit by bit.
+    assert cpp.count("replicated array has a nonfinite element") == 2
+    assert "std::bit_cast<std::int64_t>" not in cpp
     assert "pops::for_each_cell" in cpp  # the original equation still executes
 
 
