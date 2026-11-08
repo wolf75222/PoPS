@@ -427,11 +427,19 @@ def _load_balance_data(value: Any) -> dict[str, Any]:
     return load_balance_provider_data(value)
 
 
+_PROGRAM_TAGGING = {"schema_version": 1, "authority_type": "amr_tagging", "mode": "program"}
+_PROGRAM_REGRID = {"schema_version": 1, "authority_type": "amr_regrid", "mode": "program"}
+
+
 class AMR(MeshDescriptor):
     """One complete adaptive-layout authority.
 
     Accuracy, formal order and halo depth are deliberately absent: they are derived from the
     selected numerical and transfer providers during resolution.
+
+    ``tagging=`` and ``regrid=`` are written together, or not at all: a layout without them takes
+    the refinement criterion and the decision to regrid from the ``Regrid(criterion, when)`` of
+    its Program (spec 0.3, DM13b).
     """
 
     category = "layout"
@@ -441,8 +449,8 @@ class AMR(MeshDescriptor):
         *,
         grid: Any,
         hierarchy: Any,
-        tagging: Any,
-        regrid: Any,
+        tagging: Any = None,
+        regrid: Any = None,
         transfer: Any,
         execution: Any,
         embedded_boundary: Any = None,
@@ -533,14 +541,23 @@ class AMR(MeshDescriptor):
     def reflux(self) -> Any:
         return self._reflux
 
+    @property
+    def regrid_in_program(self) -> bool:
+        """Whether the Program writes the criterion and the regrid decision (DM13b)."""
+        return self.tagging is None and self.regrid is None
+
     def _validate_authorities(self) -> None:
-        if type(self.regrid) is not AMRRegrid:
+        if (self.tagging is None) != (self.regrid is None):
+            raise TypeError("AMR writes both tagging= and regrid=, or neither; without them the "
+                            "Program writes Regrid(criterion, when)")
+        if not self.regrid_in_program and type(self.regrid) is not AMRRegrid:
             raise TypeError("AMR.regrid must be an exact AMRRegrid authority")
         authorities = {
-            "hierarchy": self.hierarchy, "tagging": self.tagging,
-            "regrid": self.regrid, "transfer": self.transfer,
+            "hierarchy": self.hierarchy, "transfer": self.transfer,
             "execution": self.execution,
         }
+        if not self.regrid_in_program:
+            authorities.update(tagging=self.tagging, regrid=self.regrid)
         data = {slot: _authority_data(value, slot) for slot, value in authorities.items()}
         data["patch_layout"] = _patch_layout_data(self.patch_layout)
         _load_balance_data(self.load_balance)
@@ -596,8 +613,9 @@ class AMR(MeshDescriptor):
             "hierarchy": _resolved_hierarchy_data(
                 self.hierarchy, dimension=dimension
             ),
-            "tagging": self.tagging.inspect(),
-            "regrid": self.regrid.to_data(),
+            "tagging": (dict(_PROGRAM_TAGGING) if self.regrid_in_program
+                        else self.tagging.inspect()),
+            "regrid": dict(_PROGRAM_REGRID) if self.regrid_in_program else self.regrid.to_data(),
             "transfer": self.transfer.inspect(),
             "execution": self.execution.to_data(),
             "patch_layout": _patch_layout_data(self.patch_layout),
@@ -654,7 +672,8 @@ class AMR(MeshDescriptor):
         result = type(self)(
             grid=self.grid,
             hierarchy=self.hierarchy,
-            tagging=self.tagging.resolve_references(resolved),
+            tagging=(None if self.tagging is None
+                     else self.tagging.resolve_references(resolved)),
             regrid=self.regrid,
             transfer=self.transfer.resolve_references(resolved),
             execution=self.execution,
@@ -700,7 +719,7 @@ class AMR(MeshDescriptor):
             "schema_version": 1,
             "layout_type": "adaptive_cartesian",
             "grid": self.grid.to_dict(),
-            "regrid": self.regrid.to_data(),
+            "regrid": dict(_PROGRAM_REGRID) if self.regrid_in_program else self.regrid.to_data(),
             "execution": self.execution.to_data(),
             "load_balance": _load_balance_data(self.load_balance),
         }

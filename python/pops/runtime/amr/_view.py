@@ -195,6 +195,12 @@ class AmrRuntimeView:
             )
         else:
             notes.append("a cell is tagged when ANY criterion fires (cell-by-cell OR).")
+        decision = getattr(self._sim._s, "_generated_regrid_decision_identity", None)
+        if callable(decision) and decision():
+            notes.append(
+                "the Program decides when to regrid (Regrid(criterion, when), %s): with "
+                "regrid_every == 1 the hierarchy may regrid after any accepted step, and does so "
+                "when the generated decision is true." % decision())
         return RegridReport(
             regrid_every=regrid_every,
             frozen=frozen,

@@ -204,6 +204,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   method declares (`amr_indicator_stencil`). Tag-graph expressions are unchanged and are not mixed
   with functions of `cell` in one `AMRTagging`; external Tagger components and multi-layout plans
   refuse a criterion.
+- Write the decision to regrid in the Program: `program.regrid(pops.amr.Regrid(criterion, when))`
+  carries the refinement criterion (an `AMRTagging` whose rules are functions of `cell`) and a
+  closed `when` body of the accepted continuation `B` that returns a Bool, and the adaptive layout
+  then writes neither `tagging=` nor `regrid=` (a layout that still writes them keeps its cadence;
+  writing the regrid in both places is refused). The body reads `B.steps % k == 0`
+  (`pops.lib.time.every(k)`), `B.time`, runtime parameters and indicators of the accepted state,
+  `pops.amr.largest_cells(f)` and `smallest_cells(f)`, the largest or the smallest value of a
+  function of `cell` over the valid cells of every level; it is two-valued, as the `cond` of IR4.
+  The decision is generated into the compiled Program with the criterion; after each accepted step
+  the core reduces each indicator over the patches and the ranks, calls the generated decision and
+  regrids when it is true, with no Python in the step. An indicator that is not finite fails the
+  step. In this lot an indicator reads the cell itself (`cell.shift` is refused), and a checkpoint
+  of a Program that writes a `Regrid` is refused, since a restart replays its regrids from the
+  cadence.
 
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.

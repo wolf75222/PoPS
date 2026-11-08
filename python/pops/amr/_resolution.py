@@ -471,10 +471,16 @@ def _union(values: list[Any]) -> Any:
 def resolve_tagging(
     authoring: Any,
     context: AMRTaggingResolutionContext,
+    *,
+    when: Any = None,
 ) -> ResolvedTaggingAuthority:
     """Resolve an object-level priority list into one authenticated inert tag graph, or one
     refinement criterion written as regions of ``cell``, with the dilation and the selection of
-    its Buffer."""
+    its Buffer.
+
+    ``when`` is the traced ``when`` body of a ``Regrid(criterion, when)`` written in the Program
+    (DM13b); it is resolved with the criterion, whose rules are then functions of ``cell``.
+    """
     from pops.mesh._amr import TaggingGraph
 
     for method in ("resolve_references", "inspect"):
@@ -506,16 +512,30 @@ def resolve_tagging(
             )
     if buffer_cells is None:
         raise ValueError("AMR tagging resolution lost its explicit Buffer authority")
+    if when is not None and not regions:
+        raise TypeError(
+            "Regrid(criterion, when) generates its criterion into the Program: write every Tag "
+            "and Coarsen predicate as a function of cell")
     if regions:
         if roots["refine"] or roots["coarsen"]:
             raise TypeError(
                 "AMR tagging writes every predicate as a function of cell or none of them")
+        decision = None
+        if when is not None:
+            from pops.mesh._amr import resolve_regrid_decision
+
+            decision = resolve_regrid_decision(
+                when.resolve_references(context.resolve),
+                dimension=_dimension(context.layout_plan),
+                admit_state=context.admit_criterion_state,
+            )
         graph = resolve_refinement_criterion(
             tuple(regions),
             hysteresis=resolved.hysteresis,
             conflict_policy=resolved.conflict_policy,
             dimension=_dimension(context.layout_plan),
             admit_state=context.admit_criterion_state,
+            decision=decision,
         )
     else:
         graph = TaggingGraph(
@@ -832,7 +852,32 @@ def resolve_amr_authorities(
     reflux: Any,
     context: AMRResolutionContext,
 ) -> ResolvedAMRAuthorities:
-    """Resolve every adaptive-layout concern exactly once from its owning declaration."""
+    """Resolve every adaptive-layout concern exactly once from its owning declaration.
+
+    A layout written without ``tagging=`` and ``regrid=`` takes both from the ``Regrid(criterion,
+    when)`` of its Program (DM13b): the hierarchy may then regrid after any accepted step, and the
+    decision generated into the Program says when.
+    """
+    if type(context) is not AMRResolutionContext:
+        raise TypeError("AMR resolution requires an AMRResolutionContext")
+    program_regrid = getattr(context.program, "_regrid", None)
+    when = None
+    if tagging is None and regrid is None:
+        if program_regrid is None:
+            raise ValueError(
+                "an adaptive layout written without tagging= and regrid= takes them from its "
+                "Program: write program.regrid(Regrid(criterion, when))")
+        from pops.time import every as schedule_every
+
+        tagging = program_regrid.criterion
+        regrid = AMRRegrid(schedule=schedule_every(1, clock=context.program.clock))
+        when = program_regrid.when
+    elif tagging is None or regrid is None:
+        raise TypeError("an adaptive layout writes both tagging= and regrid=, or neither")
+    elif program_regrid is not None:
+        raise ValueError(
+            "the regrid is written twice: in the adaptive layout (tagging=, regrid=) and in the "
+            "Program (Regrid(criterion, when)); write it in the Program only")
     if type(regrid) is not AMRRegrid:
         raise TypeError("AMR regrid resolution requires an exact AMRRegrid authority")
     protocols = {
@@ -867,7 +912,7 @@ def resolve_amr_authorities(
         context.resolve,
         context.state_storage,
     )
-    resolved_tagging = resolve_tagging(tagging, tagging_context)
+    resolved_tagging = resolve_tagging(tagging, tagging_context, when=when)
     from pops.amr.providers import (
         AMRProviderLoweringContext,
         ResolvedAMRProviderBinding,

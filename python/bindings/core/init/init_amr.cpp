@@ -623,6 +623,16 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("field_identities"), py::arg("field_blocks"), py::arg("field_variables"),
            py::arg("field_components"), py::arg("field_reach"), py::arg("parameters"),
            py::arg("min_cycles"), py::arg("clock_identity"), py::arg("provider_identity"))
+      .def("_set_generated_regrid_decision", &AmrSystem::set_generated_regrid_decision,
+           py::arg("identity"), py::arg("field_identities"), py::arg("field_blocks"),
+           py::arg("field_variables"), py::arg("field_components"), py::arg("parameters"),
+           py::arg("indicator_count"))
+      .def("_generated_regrid_decision_identity", &AmrSystem::generated_regrid_decision_identity,
+           "The identity of the installed generated regrid decision, empty when the cadence "
+           "decides.")
+      .def("_last_regrid_decision", &AmrSystem::last_regrid_decision,
+           "The accepted step count, 1 or 0 for the decision, then the reduced value of each "
+           "indicator, of the last generated regrid decision; empty before the first one.")
       .def(
           "_tagging_requests",
           [](AmrSystem& system, int parent_level) {

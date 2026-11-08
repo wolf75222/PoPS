@@ -100,6 +100,7 @@ def rebuild_program(
     out._step_strategy = getattr(self, "_step_strategy", None)
     out._cadence = getattr(self, "_cadence", None)
     out._cell_local_time = getattr(self, "_cell_local_time", None)
+    out._regrid = getattr(self, "_regrid", None)
     out._post_sync_recording = False
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
     out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
