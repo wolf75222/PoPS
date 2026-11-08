@@ -8322,7 +8322,7 @@
         "tests/python/integration/runtime/test_lib_face_body_swap_native.py": {
           "analogue": "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py",
           "estimated_seconds": 600,
-          "source_sha256": "cbc80cede3fd8a46f7bf0d9b8c0b303d9d269859575cc2fa288ec0a1347f1043"
+          "source_sha256": "c92e540dd791e9c4cb5c39a4ebb543edd739807b0b1ae57bfb13758fd2595ac8"
         }
       }
     }
