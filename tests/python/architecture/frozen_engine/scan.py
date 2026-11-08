@@ -25,6 +25,14 @@ refused only as a whole identifier or string; a term inside a longer term is the
 rounding bound gamma_n, the slope of a level-set fit) are listed, with their reason, in
 ``GENERIC_SENSES`` below.
 
+Three rules of CF2 (amendment of 08/11 after the review of N15 lot 1) keep the scanner on the
+knowledge it refuses. The words of ``pops.math`` that 2.6.3 lists are the algebra of the core: in
+the module ``pops.math`` the definition of such a word is admitted (``POPS_MATH_WORDS``), while its
+name stays refused as a selector, an emitter, a kernel or a route key, there and everywhere else.
+The refusal tables of the surface (§21.7), whose keys are refused spellings (``laplacian``,
+``cfl_guard``) and whose values are their messages, are user-facing error text. A compound that
+names a quadrature (``GaussHermite``) names the quadrature, not the closure of one of its words.
+
 The module imports neither ``pops`` nor ``_pops``. ``python -m
 tests.python.architecture.frozen_engine.scan`` prints every occurrence in the format of
 ``cf2_exceptions.txt``.
@@ -151,6 +159,14 @@ class _Lines:
 _PY_ERROR_TYPE = re.compile(r"(Error|Exception|Warning|Failure|Refusal|Violation)$", re.IGNORECASE)
 _PY_FAILURE_HELPER = re.compile(r"^_?(warn|fail|error|raise|reject|refuse|abort)(_|$)",
                                 re.IGNORECASE)
+# A refusal table of the surface (§21.7, CF2): in the package of the surface (SURFACE_PACKAGE), a
+# dictionary bound to a name _EARLIER or _EARLIER_<WHAT>, whose keys are the spellings of earlier
+# texts that the surface refuses and whose values are their messages, each a string or a call that
+# builds the refusal (SpellingRefusal(...)). The whole table is user-facing error text. A table with
+# any other value is code, and so is a table under another name: a dictionary of names to names is
+# a route table.
+_PY_REFUSAL_TABLE = re.compile(r"^_EARLIER(_[A-Z0-9]+)*$")
+SURFACE_PACKAGE = "python/pops/surface/"
 
 
 def _call_name(func: ast.AST) -> str:
@@ -161,8 +177,29 @@ def _call_name(func: ast.AST) -> str:
     return ""
 
 
-def _python_excluded_strings(tree: ast.AST) -> set[int]:
-    """ids of the string constants that are docstrings, bare string statements or error text."""
+def _is_refusal_table(node: ast.AST) -> bool:
+    """Whether @p node binds a refusal table of the surface (_PY_REFUSAL_TABLE)."""
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        target, value = node.targets[0], node.value
+    elif isinstance(node, ast.AnnAssign) and node.value is not None:
+        target, value = node.target, node.value
+    else:
+        return False
+    if not (isinstance(target, ast.Name) and _PY_REFUSAL_TABLE.match(target.id)
+            and isinstance(value, ast.Dict) and value.keys):
+        return False
+    def message(item: ast.AST) -> bool:
+        if isinstance(item, ast.Call):
+            return _PY_ERROR_TYPE.search(_call_name(item.func) or "-") is not None
+        return isinstance(item, ast.Constant) and isinstance(item.value, str)
+
+    return all(isinstance(key, ast.Constant) and isinstance(key.value, str) for key in value.keys) \
+        and all(map(message, value.values))
+
+
+def _python_excluded_strings(tree: ast.AST, refusal_tables: bool = False) -> set[int]:
+    """ids of the string constants that are docstrings, bare string statements or error text;
+    with @p refusal_tables (a file of the surface), also the refusal tables of §21.7."""
     excluded: set[int] = set()
 
     def exclude_all(node: ast.AST) -> None:
@@ -190,6 +227,8 @@ def _python_excluded_strings(tree: ast.AST) -> set[int]:
             exclude_all(node.msg)
         elif isinstance(node, ast.Call) and _PY_ERROR_TYPE.search(_call_name(node.func) or "-"):
             exclude_arguments(node)
+        elif refusal_tables and _is_refusal_table(node):
+            exclude_all(node.value)  # the refused spellings and their messages (§21.7)
     return excluded
 
 
@@ -236,10 +275,53 @@ def _is_axis_link(node: ast.AST) -> bool:
     return False
 
 
-def python_tokens(text: str):
+def _math_definitions(tree: ast.Module, words: frozenset) -> set[int]:
+    """ids of the nodes that define a word of @p words at the top level of the module pops.math
+    (CF2, 2.6.3): the name of a ``def`` or a ``class`` and every token spelled as that name in its
+    body, the target of an assignment and every string spelled as it in the assigned value, and the
+    strings of ``__all__``. Only a token spelled exactly as the word is admitted: ``curl_kernel``,
+    ``CurlEmitter``, a comparison with ``"curl"`` or a key ``"curl"`` of a table are refused."""
+    admitted: set[int] = set()
+
+    def spelled(node: ast.AST, word: str) -> None:
+        for sub in ast.walk(node):
+            if (isinstance(sub, ast.Name) and sub.id == word) or (
+                    isinstance(sub, ast.Constant) and sub.value == word):
+                admitted.add(id(sub))
+
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
+                and statement.name in words:
+            admitted.add(id(statement))
+            spelled(statement, statement.name)
+        elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in words:
+                    admitted.add(id(target))
+                    if statement.value is not None:
+                        spelled(statement.value, target.id)
+                elif isinstance(target, ast.Name) and target.id == "__all__" \
+                        and isinstance(statement.value, (ast.List, ast.Tuple)):
+                    admitted.update(id(item) for item in statement.value.elts
+                                    if isinstance(item, ast.Constant) and item.value in words)
+                elif isinstance(target, ast.Tuple):
+                    admitted.update(id(item) for item in target.elts
+                                    if isinstance(item, ast.Name) and item.id in words)
+    return admitted
+
+
+def python_tokens(text: str, math_words: frozenset = frozenset(), refusal_tables: bool = False):
+    """Identifiers, strings and links of Python source. @p math_words are the words that the
+    module defines when it is ``pops.math`` (``POPS_MATH_WORDS``), empty elsewhere;
+    @p refusal_tables is true in the package of the surface (``SURFACE_PACKAGE``)."""
     tree = ast.parse(text)
-    excluded = _python_excluded_strings(tree)
+    excluded = _python_excluded_strings(tree, refusal_tables)
+    if math_words:
+        excluded |= _math_definitions(tree, math_words)
     for node in ast.walk(tree):
+        if id(node) in excluded and not isinstance(node, ast.Constant):
+            continue  # the name of a definition of a word of pops.math; its body is still read
         line = getattr(node, "lineno", None)
         if _is_axis_link(node):
             yield line, ast.get_source_segment(text, node) or AXIS_LINK, "link"
@@ -460,9 +542,14 @@ CF2_VOCABULARY = (
      "adams-moulton rosenbrock ars imexrk lie"),
     ("method", "15.3 named discretizations; CF2 named methods",
      "scharfetter gummel"),
+    # curl, like grad and div, is also a word of pops.math (2.6.3), whose definition there is
+    # admitted (POPS_MATH_WORDS); everywhere else, and as a selector, an emitter, a kernel or a
+    # route key, it is refused.
     ("method", "15.3 named field operators; FC2", "laplacian curl gradient divergence"),
     ("tagging", "15.3 named field operators in the refinement predicates of the tag-graph VM (C36)",
      "gradient-above gradient-below discrete-gradient-stencil"),
+    # outflow, the empty relation, is the one word of pops.math among the boundary families (R20,
+    # SD43): its definition there is admitted (POPS_MATH_WORDS); its NoData form selects nothing.
     ("boundary", "15.3 named boundary families",
      "dirichlet neumann robin inflow outflow reflective slip foextrap no-flux zero-flux "
      "constant-extrapolation"),
@@ -522,9 +609,23 @@ AXIS_LINK = "name-axis-link"
 # norms in the core (pops.linalg) and M00, M10, ... raw moments, so neither is refused.
 CASE_IDENTIFIER = re.compile(r"^(M(0[1-9]|1[0-9]|2[0-8])|T(0[1-9]|1[0-2]))$")
 # A term preceded by one of these words is another word: round_robin is a load-balancing order,
-# not the Robin boundary family. (The conjugate gradient is its own term, conjugate-gradient, which
-# shadows the gradient operator.)
-NOT_AFTER = {"robin": frozenset({"round"})}
+# not the Robin boundary family, and GaussHermite is a quadrature (2.6.2), not the Hermite closure
+# (CF2: a compound that names a quadrature names the quadrature; GaussLegendre holds no term). (The
+# conjugate gradient is its own term, conjugate-gradient, which shadows the gradient operator.)
+NOT_AFTER = {"robin": frozenset({"round"}), "hermite": frozenset({"gauss"})}
+
+# The module pops.math: b6's module and the module of the surface (N15) that §21.7 makes pops.math.
+POPS_MATH_MODULES = ("python/pops/math.py", "python/pops/surface/math.py")
+# The words of pops.math, the closed list of 2.6.3 (FC5), the same list as the "math" list of the
+# lint of the surface (scripts/surface_lint_words.json). In POPS_MATH_MODULES the definition of a
+# word of this list is admitted by an exact rule (_math_definitions); of these words, only curl and
+# outflow hold a CF2 term.
+POPS_MATH_WORDS = frozenset(
+    "Fraction abs all_of any_of atan atan2 cbrt clamp component contract cos cosh curl ddt "
+    "derivative determinant div dot equal erf erfc exp expm1 grad identity incoming_projector "
+    "infinity integral inverse jump jvp largest log log1p matrix_trace mean minus_side none_of "
+    "norm normal outer outflow pi plus_side reflect restrict sign sin sinh smallest solve_small "
+    "sqrt sum sum_over symmetric_eigen tan tanh trace transpose unit vector vjp where".split())
 
 
 @dataclasses.dataclass(frozen=True)
@@ -710,7 +811,12 @@ def cf2_sites_in_text(rel: str, text: str, kind: str):
     """
     lines = text.splitlines()
     found = [Occurrence(rel, 0, term, "(path)") for term in terms_in(rel, "path")]
-    for line, token, token_kind in LEXERS[kind](text):
+    if kind == "python":
+        tokens = python_tokens(text, POPS_MATH_WORDS if rel in POPS_MATH_MODULES else frozenset(),
+                               rel.startswith(SURFACE_PACKAGE))
+    else:
+        tokens = LEXERS[kind](text)
+    for line, token, token_kind in tokens:
         spelling = _spelling(token, token_kind)[:EXCERPT_WIDTH].rstrip()
         found.extend(Occurrence(rel, line, term, spelling) for term in terms_in(token, token_kind))
     for occurrence in sorted(found):

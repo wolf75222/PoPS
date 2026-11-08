@@ -20,9 +20,17 @@ added by hand lets nothing in and a change to the scanner cannot hide a site una
 requires the list to be empty (section 1.5). The closed list of interfaces of FC6b is asserted by
 ``test_native_interfaces_closed.py``.
 
+Three rules of CF2 come from the amendment of 08/11 (review of N15 lot 1, point 4). The words
+of ``pops.math`` that 2.6.3 lists (``grad``, ``div``, ``curl``, ``outflow``, ...) are the algebra of
+the core: CF2 admits the definition of each word in ``pops.math`` by an exact rule of the scanner,
+and refuses its name as a selector, an emitter, a kernel or a route key. A refusal table of the
+surface (§21.7) is user-facing error text, so it can name ``laplacian`` or ``cfl_guard``. A compound
+that names a quadrature (``GaussHermite``) is not the closure of one of its words.
+
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
 import collections
+import json
 import shutil
 import subprocess
 
@@ -575,3 +583,97 @@ def test_every_exception_list_is_checked_against_the_base():
     assert files <= lists, (
         "MG6: every exception list is registered in refresh_exceptions.LISTS, which CI checks "
         "against the base of each PR: %s" % sorted(files - lists))
+
+
+# ---------------------------------------------------------------------------------------------
+# The words of pops.math, the refusal tables of the surface and the quadratures (CF2 amendment of
+# 08/11, review of N15 lot 1, point 4).
+# ---------------------------------------------------------------------------------------------
+_MATH = "python/pops/surface/math.py"
+
+
+@pytest.mark.parametrize("source", [
+    'def curl(e):\n    """The curl of a vector field."""\n'
+    '    return Call("curl", (_value(e, "curl"),))\n',
+    # R20: outflow, the empty relation, whose NoData form selects nothing
+    "def outflow(q):\n    return Relation(q, NoData())\n",
+    'outflow = _later("outflow", _TRACES)\n',
+    "exp, curl = (_elementary(word) for word in _WORDS)\n",
+    '__all__ = ["grad", "div", "curl", "outflow"]\n',
+])
+def test_pops_math_defines_its_words(source):
+    """The definition of a word of 2.6.3 in pops.math: its name, its self-reference in its body
+    and in its assigned value, and its entry in __all__."""
+    for path in scan.POPS_MATH_MODULES:
+        assert _terms(source, "python", path=path) == []
+
+
+@pytest.mark.parametrize("source, expected", [
+    ('if op == "curl":\n    pass\n', ["curl"]),  # a selector
+    ('KERNELS = {"curl": 1, "outflow": 2}\n', ["curl", "outflow"]),  # a route key
+    ("def curl_kernel(e):\n    pass\n", ["curl"]),  # the name of a kernel
+    ("class CurlEmitter:\n    pass\n", ["curl"]),  # the name of an emitter
+    ("class OutflowBoundary:\n    pass\n", ["outflow"]),  # a boundary family
+    ("def f(e):\n    def curl(v):\n        pass\n", ["curl"]),  # not the module's definition
+    ('def grad(e):\n    return Call("curl", (e,))\n', ["curl"]),  # another word's body
+    ("def laplacian(e):\n    pass\n", ["laplacian"]),  # not a word of 2.6.3 (div(grad(e)))
+    ("from ._vector import curl\n", ["curl"]),  # defined elsewhere, re-exported
+])
+def test_pops_math_refuses_its_words_as_selectors_emitters_kernels_and_route_keys(source, expected):
+    assert _terms(source, "python", path=_MATH) == expected
+
+
+def test_a_word_of_pops_math_is_refused_outside_pops_math():
+    source = 'def curl(e):\n    return Call("curl", (e,))\n__all__ = ["curl"]\n'
+    assert _terms(source, "python", path="python/pops/surface/_expr.py") == ["curl"]
+    assert _terms(source, "python", path="python/pops/codegen/math.py") == ["curl"]
+
+
+def test_the_words_of_pops_math_that_hold_a_term_are_curl_and_outflow():
+    """POPS_MATH_WORDS is the closed list of 2.6.3, the "math" list of the lint of the surface
+    when the tree has it; only curl and outflow of these words hold a CF2 term, so the rule admits
+    nothing else."""
+    held = {word for word in scan.POPS_MATH_WORDS if scan.terms_in(word, "ident")}
+    assert held == {"curl", "outflow"}
+    assert {"grad", "div", "ddt", "trace", "normal"} <= scan.POPS_MATH_WORDS
+    assert not {"laplacian", "Laplacian", "gradient", "divergence"} & scan.POPS_MATH_WORDS
+    lint = scan.REPO_ROOT / "scripts" / "surface_lint_words.json"
+    if lint.exists():
+        assert set(json.loads(lint.read_text(encoding="utf-8"))["math"]) == scan.POPS_MATH_WORDS
+
+
+@pytest.mark.parametrize("source", [
+    '_EARLIER = {\n    "laplacian": SpellingRefusal("div(grad(e))"),\n'
+    '    "Q": SpellingRefusal("Fraction(1, 2)"),\n}\n',
+    '_EARLIER = {"cfl_guard": "pops.lib.time.cfl_limit(...)", "Rectangle": "pops.Box(x=...)"}\n',
+    '_EARLIER_METHODS: dict = {"cfl_guard": SpellingRefusal("a guard of the method")}\n',
+])
+def test_a_refusal_table_of_the_surface_is_error_text(source):
+    assert _terms(source, "python", path="python/pops/surface/__init__.py") == []
+
+
+@pytest.mark.parametrize("source, path, expected", [
+    # a table of the surface whose value is code, not a message
+    ('_EARLIER = {"laplacian": laplacian_kernel}\n', "python/pops/surface/math.py", ["laplacian"]),
+    # a table under another name: a dictionary of names to names is a route table
+    ('ALIASES = {"rusanov": "hll"}\n', "python/pops/surface/_numerics.py", ["hll", "rusanov"]),
+    ('ROUTES = {"laplacian": SpellingRefusal("x")}\n', "python/pops/surface/math.py",
+     ["laplacian"]),
+    # a refusal table outside the surface is code
+    ('_EARLIER = {"rusanov": "hll"}\n', "python/pops/codegen/x.py", ["hll", "rusanov"]),
+])
+def test_only_a_refusal_table_of_the_surface_is_error_text(source, path, expected):
+    assert _terms(source, "python", path=path) == expected
+
+
+@pytest.mark.parametrize("source, kind, expected", [
+    ("class GaussHermite:\n    pass\nGaussLegendre = 1\n", "python", []),
+    ('rule = "gauss_hermite"\n', "python", []),
+    ("struct GaussHermiteNodes {};", "cpp", []),
+    # the Hermite closure keeps its name
+    ("def fan_li15_from_hermite(m):\n    pass\n", "python", ["fan-li", "hermite"]),
+    ("hermite_raw_edge = 1\n", "python", ["hermite"]),
+])
+def test_a_quadrature_compound_names_the_quadrature(source, kind, expected):
+    path = "python/pops/x.py" if kind == "python" else "include/pops/x.hpp"
+    assert _terms(source, kind, path=path) == expected
