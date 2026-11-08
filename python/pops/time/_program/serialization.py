@@ -354,6 +354,10 @@ class _ProgramSerialization(_ProgramBase):
             # Version 30: the compiled control of an elaborated Advance (spec 0.3 section 5.2).
             result["advance_control"] = advance_control.to_data()
             _raise_ir_version(result, 30)
+            if advance_control.memory or advance_control.trial_failures:
+                # Version 32: the memory and the field requests of a traced method (N8 lot 5):
+                # control schema 3 and the trial sites of the request outcomes.
+                _raise_ir_version(result, 32)
         cadence = self.cadence_contract()
         if not cadence.is_default:
             result["cadence"] = cadence.to_data()

@@ -125,6 +125,59 @@ class Elaboration:
         self.control = control
 
 
+# The lot that classifies the field_evaluation guards of a request (T39 PartialOperation, IR4).
+_GUARD_LOT = "N8 candidate guards (M15 to M21)"
+
+
+def _type_identity(program: Any, kind: Any, node: Any) -> dict:
+    """The type identity of a memory member: its space, or for a field observation its field
+    authority, never a node id (CN9; this lot computes no schema_id, which is G07's)."""
+    from pops.time._program.memory import State
+
+    row = program._serialize_node(node, include_provenance=False)
+    if kind is State:
+        return {"kind": "state", "space": row.get("space")}
+    attrs = row.get("attrs", {})
+    return {"kind": "field_observation", "authority": attrs.get("field_authority"),
+            "space": row.get("space")}
+
+
+def _lower_memory(program: Any, method: Any, trace: MethodTrace) -> tuple:
+    """Lower each member of the Candidate's memory to a History ring of depth one (CN11), after
+    the assessment and the commit, and return its control rows (T27, CN1, CN2)."""
+    if not trace.memory:
+        return ()
+    rows = []
+    for name, kind, node in trace.memory:
+        if name in program._histories:
+            raise ValueError("the memory member %r of %r names a History ring that the Program "
+                             "already holds" % (name, method.name))
+        program.store_history(name, node, depth=1)
+        rows.append({"path": "%s/%s" % (method.name, name), "role": "auxiliary",
+                     "type": _type_identity(program, kind, node), "writer": method.name,
+                     "readers": [], "ring": name})
+    return tuple(rows)
+
+
+def _trial_failures(program: Any, trace: MethodTrace) -> tuple:
+    """The failure sites of the field requests of the trace (T38): the solve, classified, and the
+    field_evaluation guards of its load, coefficients and reads, listed unclassified."""
+    rows = []
+    for request in trace.requests:
+        retry = not request.fixed
+        for guard in ("load", "coefficients"):
+            rows.append({"site": "%s/%s" % (request.site, guard), "guard": "field_evaluation",
+                         "variant": None, "retry_can_change": retry, "classified": False,
+                         "lot": _GUARD_LOT})
+        rows.append({"site": request.site + "/solve", "guard": "solve", "variant": "SolveFailed",
+                     "retry_can_change": retry, "classified": True, "lot": None})
+        for _, unknown in request.reads:
+            rows.append({"site": "%s/read:%s" % (request.site, unknown.name),
+                         "guard": "field_evaluation", "variant": None, "retry_can_change": retry,
+                         "classified": False, "lot": _GUARD_LOT})
+    return tuple(rows)
+
+
 def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
               name: str | None = None, outputs: Any = ()) -> Elaboration:
     """Elaborate ``advance`` for the block-qualified ``state`` of ``case``, from ``proposal``.
@@ -154,13 +207,15 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
     regions = tuple(trace_output(program, temporal, output) for output in outputs)
     if regions:
         program._set_advance_outputs(regions)
+    memory = _lower_memory(program, advance.method, trace)
     dt = proposal.dt
     strategy = FixedDt(float(dt) if isinstance(dt, (Fraction, Decimal)) else dt)
     program.step_strategy(strategy)
     control = AdvanceControl(assessments=(("finite", "default"),),
                              max_attempts=advance.retry.max_attempts,
                              max_transforms=advance.retry.max_transforms, first_dt=strategy.dt,
-                             outputs=tuple(region.schedule_data() for region in regions))
+                             outputs=tuple(region.schedule_data() for region in regions),
+                             memory=memory, trial_failures=_trial_failures(program, trace))
     program._set_advance_control(control)
     case.program(program)
     return Elaboration(advance, proposal, program, trace, control)

@@ -35,6 +35,8 @@ from pops.time import FixedDt, TimePoint
 from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT, ADVANCE_CONTROL_SCHEMA
 from pops.time._program.elaboration import Advance, Proposal, Retry, elaborate
 from pops.time._program.global_history_storage import prepare_issuance, publish_issuance
+from pops.time._program.memory import State
+from pops.time._program.outputs import Product
 from pops.time._program.traced_method import (
     _GUARDED_TABLES, Candidate, ClosedBodyViolation, IncrementNotDerivable, IncrementTypeMismatch,
     NotYetElaborated, method,
@@ -601,7 +603,8 @@ def test_an_exact_proposal_runs_its_nearest_binary64_step(m01, dt):
                               retry=Retry(max_transforms=1)), "transforms"),
     (lambda parts: _elaborate(parts, _stage_formula(lambda B, p, k0, U1, k1: U1)(parts["flow"]),
                               clock=object()), "clocks"),
-    (lambda parts: method(lambda B, p: None, memory=object()), "method memory"),
+    # Lot 5 elaborates an Auxiliary memory; a Scientific one (no role=) stays later (C51, CN6).
+    (lambda parts: method(lambda B, p: None, memory=Product(u=State)), "Scientific memory"),
     (lambda parts: Proposal(parts["dt"], tolerance=1.e-6), "choices"),
 ], ids=["accept", "retry", "clock", "memory", "choices"])
 def test_constructs_of_later_lots_are_refused_by_name(m01, construct, match):

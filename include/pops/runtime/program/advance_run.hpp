@@ -34,14 +34,21 @@
 namespace pops::runtime::program {
 
 /// Phase of the StepAttemptRejected raised by a generated assessment that rejects its candidate.
-/// Any other rejection is a failure of the trial and leaves the run.
 inline constexpr std::string_view kAssessmentRejectionPhase = "assessment";
+/// Phase of the StepAttemptRejected raised by a retryable failure site of the trial (spec 0.3
+/// T38): a field request whose dependency set reads the proposal. It rejects the attempt.
+inline constexpr std::string_view kTrialRejectionPhase = "trial";
+/// Phase of the StepAttemptRejected raised by a fixed failure site of the trial (T38): a field
+/// request whose dependency set excludes the proposal, which a retry cannot change. It ends the
+/// step and consumes no attempt. Any other rejection leaves the run as the error that raised it.
+inline constexpr std::string_view kTrialFailurePhase = "trial_failure";
 
 /// Why a compiled run returned.
 enum class AdvanceRunStop : std::uint8_t {
   kReached = 0,        ///< the accepted time reached the frontier
   kStepBudget = 1,     ///< max_steps accepted steps before the frontier
   kAttemptBudget = 2,  ///< one step spent every attempt of the Advance
+  kTrialFailure = 3,   ///< a fixed failure site of the trial ended the step (T38)
 };
 
 /// The uninterrupted segment of accepted steps of one proposal that a compiled run continues:
@@ -85,8 +92,10 @@ struct AdvanceRunReport {
   std::int64_t steps = 0;       ///< accepted steps of the run
   std::int64_t rejections = 0;  ///< rejected attempts of the run
   AdvanceRunStop stop = AdvanceRunStop::kReached;
-  std::int64_t attempts = 0;  ///< attempts of the step that spent the attempt budget
+  std::int64_t attempts = 0;  ///< attempts of the step that spent its budget or failed
   std::string rejection;      ///< diagnostic of the last rejected attempt, empty when none
+  std::string rejection_phase;   ///< phase of that rejection: assessment, trial, trial_failure
+  std::string rejection_detail;  ///< its detail; a trial site starts with the site name
   AdvanceSegment segment;     ///< the segment that the next run continues
   std::vector<AdvanceOutputSample> outputs;  ///< the evaluations of the Outputs, in run order
 };

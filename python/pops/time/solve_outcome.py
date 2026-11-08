@@ -113,6 +113,11 @@ class SolveOutcome:
             "RejectAttempt(...)) before using solved values")
 
     def consume(self, *, action: SolveAction | None = None) -> Any:
+        return self._consume(action, {})
+
+    def _consume(self, action: Any, attrs: Any) -> Any:
+        """``consume`` with extra outcome attributes, such as the ``trial_site`` of a field
+        request of a traced method (``pops.time._program.field_requests``)."""
         if not isinstance(action, SolveAction):
             if "solve_request" in self._token.attrs:
                 from pops.time.solve_request import SolveRequestError
@@ -127,7 +132,7 @@ class SolveOutcome:
         with authoring_transaction(self._program):
             node = self._program._new(
                 "solve_outcome", "solve_outcome", (self._token,),
-                {"action": action}, "%s_outcome" % self._name, self._token.block,
+                {"action": action, **attrs}, "%s_outcome" % self._name, self._token.block,
                 space=self._token.space, point=self._token.point)
             result = self._factory(node)
         self._result = result

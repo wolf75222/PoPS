@@ -21,6 +21,13 @@ ADVANCE_CONTROL_OUTPUTS_SCHEMA = "pops.advance-control@2"
 """Schema of ``AdvanceControl.to_data`` for an Advance with Outputs (CC14): schema 1 and the
 schedule and record shape of each Output."""
 
+ADVANCE_CONTROL_MEMORY_SCHEMA = "pops.advance-control@3"
+"""Schema of ``AdvanceControl.to_data`` for an Advance whose method has memory or field requests
+(N8 lot 5): a superset of schema 2, whose keys ``outputs``, ``memory`` and ``trial_failures`` are
+always present. ``memory`` lists each member (T27, CN1): its path, role, type identity, writer,
+readers and ring; ``trial_failures`` lists each failure site of a field request and whether a
+retry can change it (T38), the sites that no lot classifies yet with the lot that will."""
+
 ADVANCE_ASSESSMENT_CONTRACT = "pops.advance-assessment@1"
 """Attribute of an acceptance guard that is an assessment of an Advance: its rejection is raised
 in the phase that the compiled run repeats (T28), every other rejection is a trial failure."""
@@ -31,10 +38,12 @@ _MAX_ATTEMPTS = 2**31 - 1
 class AdvanceControl:
     """The assessments, the retry budget and the first proposal of one elaborated Advance."""
 
-    __slots__ = ("assessments", "max_attempts", "max_transforms", "first_dt", "outputs")
+    __slots__ = ("assessments", "max_attempts", "max_transforms", "first_dt", "outputs",
+                 "memory", "trial_failures")
 
     def __init__(self, *, assessments: tuple, max_attempts: int, max_transforms: int,
-                 first_dt: float, outputs: tuple = ()) -> None:
+                 first_dt: float, outputs: tuple = (), memory: tuple = (),
+                 trial_failures: tuple = ()) -> None:
         if type(assessments) is not tuple or not assessments or any(
                 type(row) is not tuple or len(row) != 2
                 or any(type(item) is not str or not item for item in row)
@@ -52,6 +61,9 @@ class AdvanceControl:
         object.__setattr__(self, "max_transforms", max_transforms)
         object.__setattr__(self, "first_dt", first_dt)
         object.__setattr__(self, "outputs", _outputs(outputs))
+        object.__setattr__(self, "memory", _rows(memory, _MEMORY_KEYS, "memory"))
+        object.__setattr__(self, "trial_failures",
+                           _rows(trial_failures, _TRIAL_KEYS, "trial failure"))
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("AdvanceControl is immutable")
@@ -61,20 +73,30 @@ class AdvanceControl:
 
     def __hash__(self) -> int:
         return hash((self.assessments, self.max_attempts, self.max_transforms, self.first_dt,
-                     len(self.outputs)))
+                     len(self.outputs), len(self.memory), len(self.trial_failures)))
 
     def __repr__(self) -> str:
         return "AdvanceControl(%r)" % (self.to_data(),)
 
+    @property
+    def schema(self) -> str:
+        if self.memory or self.trial_failures:
+            return ADVANCE_CONTROL_MEMORY_SCHEMA
+        return ADVANCE_CONTROL_OUTPUTS_SCHEMA if self.outputs else ADVANCE_CONTROL_SCHEMA
+
     def to_data(self) -> dict[str, Any]:
+        schema = self.schema
         data = {
-            "schema": ADVANCE_CONTROL_OUTPUTS_SCHEMA if self.outputs else ADVANCE_CONTROL_SCHEMA,
+            "schema": schema,
             "accept": [{"assess": name, "origin": origin} for name, origin in self.assessments],
             "retry": {"max_attempts": self.max_attempts, "max_transforms": self.max_transforms},
             "proposal": {"dt": self.first_dt.hex()},
         }
-        if self.outputs:
+        if self.outputs or schema == ADVANCE_CONTROL_MEMORY_SCHEMA:
             data["outputs"] = _thaw(self.outputs)
+        if schema == ADVANCE_CONTROL_MEMORY_SCHEMA:
+            data["memory"] = _thaw(self.memory)
+            data["trial_failures"] = _thaw(self.trial_failures)
         return data
 
     @classmethod
@@ -83,7 +105,9 @@ class AdvanceControl:
         if not isinstance(data, dict) or not (
                 data.get("schema") == ADVANCE_CONTROL_SCHEMA and set(data) == keys
                 or data.get("schema") == ADVANCE_CONTROL_OUTPUTS_SCHEMA
-                and set(data) == keys | {"outputs"}):
+                and set(data) == keys | {"outputs"}
+                or data.get("schema") == ADVANCE_CONTROL_MEMORY_SCHEMA
+                and set(data) == keys | {"outputs", "memory", "trial_failures"}):
             raise ValueError("Advance control record has another schema")
         accept, retry, proposal = data["accept"], data["retry"], data["proposal"]
         if type(accept) is not list or any(
@@ -97,14 +121,35 @@ class AdvanceControl:
         control = cls(assessments=tuple((row["assess"], row["origin"]) for row in accept),
                       max_attempts=retry["max_attempts"], max_transforms=retry["max_transforms"],
                       first_dt=float.fromhex(proposal["dt"]),
-                      outputs=tuple(data.get("outputs", ())))
+                      outputs=tuple(data.get("outputs", ())),
+                      memory=tuple(data.get("memory", ())),
+                      trial_failures=tuple(data.get("trial_failures", ())))
         if control.to_data() != data:
             raise ValueError("Advance control record is not canonical")
         return control
 
 
+_MEMORY_KEYS = frozenset(("path", "role", "type", "writer", "readers", "ring"))
+_TRIAL_KEYS = frozenset(("site", "guard", "variant", "retry_can_change", "classified", "lot"))
+
+
+def _rows(rows: Any, keys: frozenset, what: str) -> tuple:
+    """Validate the %s rows of schema 3 and freeze them."""
+    if type(rows) is not tuple:
+        raise TypeError("AdvanceControl %s rows are a tuple" % what)
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != keys:
+            raise ValueError("an AdvanceControl %s row holds %s" % (what, ", ".join(sorted(keys))))
+    return tuple(_freeze(row) for row in rows)
+
+
 def _freeze(row: dict) -> str:
     return json.dumps(row, sort_keys=True, separators=(",", ":"))
+
+
+def memory_rings(control: Any) -> dict:
+    """``{member: ring}`` of the method memory of ``control`` (T27), in declaration order."""
+    return {row["path"].rsplit("/", 1)[1]: row["ring"] for row in _thaw(control.memory)}
 
 
 def _thaw(rows: tuple) -> list:
@@ -160,5 +205,6 @@ def _outputs(outputs: Any) -> tuple:
     return tuple(_freeze(row) for row in outputs)
 
 
-__all__ = ["ADVANCE_ASSESSMENT_CONTRACT", "ADVANCE_CONTROL_OUTPUTS_SCHEMA",
-           "ADVANCE_CONTROL_SCHEMA", "AdvanceControl"]
+__all__ = ["ADVANCE_ASSESSMENT_CONTRACT", "ADVANCE_CONTROL_MEMORY_SCHEMA",
+           "ADVANCE_CONTROL_OUTPUTS_SCHEMA",
+           "ADVANCE_CONTROL_SCHEMA", "AdvanceControl", "memory_rings"]

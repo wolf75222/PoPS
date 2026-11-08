@@ -2351,7 +2351,21 @@ class RuntimeInstance:
             raise TypeError("installed plan has no exact restart authority")
         return authority.operation
 
+    def _refuse_method_memory_checkpoint(self) -> None:
+        """The b6 checkpoint does not carry the method memory of an elaborated Advance (T27):
+        its identity (schema_id, CN9) and its restart are G07's (ROM-25)."""
+        program = getattr(getattr(self._install_plan.artifact, "program", None), "program", None)
+        control = getattr(program, "_advance_control", None)
+        if control is not None and getattr(control, "memory", ()):
+            from pops.time._program.control import memory_rings
+            from pops.time._program.traced_method import NotYetElaborated
+            raise NotYetElaborated(
+                "checkpoint of a Program whose Advance returns a method memory (%s): the "
+                "continuation codec that carries a memory, its schema_id (CN9) and its restart "
+                "are G07's (ROM-25)" % ", ".join(memory_rings(control).values()))
+
     def checkpoint(self, path: Any) -> str:
+        self._refuse_method_memory_checkpoint()
         self._retry_consumer_finalizers()
         try:
             operation = self._restart_operation()
