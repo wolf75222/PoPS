@@ -92,8 +92,8 @@ def _wrap(o: Any) -> Any:
         if isinstance(o, RateTerm):
             # A term of a balance is a summand of its right-hand side, never the operand of
             # another node (R7): refused where the node is written.
-            from .rate_algebra import refuse_operand
-            raise refuse_operand(o)
+            from .rate_algebra import OPERAND, refuse
+            raise refuse(o, OPERAND)
         return o
     # Promote a Param through its symbolic node; float(param) would erase runtime identity.
     node = getattr(o, "_node", None)

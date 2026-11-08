@@ -291,6 +291,8 @@ def _plan(*rates):
 
 
 def _logistic_transport():
+    """L1 on the board: oblique advection and anisotropic diffusion, as M04 writes them, plus an
+    inline logistic reaction ``r*u*(1-u)``."""
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
     frame = Rectangle("unit-square-n11", lower=(0.0, 0.0), upper=(1.0, 1.0)
@@ -298,31 +300,41 @@ def _logistic_transport():
     model = pops.Model("logistic_transport", frame=frame)
     state = model.state("U", components=("u",))
     (u,) = state
+    velocity = (0.4, -0.2)
     flux = model.flux("F", frame=frame, state=state,
-                      components={frame.x: (u,), frame.y: (0 * u,)},
-                      waves={frame.x: (1,), frame.y: (0,)})
+                      components={axis: (a * u,) for axis, a in zip(frame.axes, velocity)},
+                      waves={axis: (a,) for axis, a in zip(frame.axes, velocity)})
+    diffusion = model.diffusive_flux("conduction", state=state, value=pm.CoeffGradient(
+        u, ((0.02, 0.006), (0.006, 0.015))))
     growth = 3
-    rate = model.rate("A", equation=ddt(state) == -div(flux) + growth * u * (1 - u))
+    rate = model.rate("A", equation=ddt(state) == (
+        -div(flux) + div(diffusion) + growth * u * (1 - u)))  # n11-l1-reaction
     model.select_balance(rate)
-    return model, flux, rate
+    return model, (flux, diffusion), rate
 
 
 def test_partitions_cover_the_anonymous_source_exactly_once():
-    model, flux, rate = _logistic_transport()
+    model, (flux, diffusion), rate = _logistic_transport()
+    assert [item.kind for item in rate.occurrences] == ["flux", "diffusion", "source"]
     assert _plan(rate).validate_for(model)
-    assert _plan(rate.select(flux), rate.select(rate.occurrences[1])).validate_for(model)
+    assert _plan(rate.select(flux), rate.select(diffusion),
+                 rate.select(*rate.inline)).validate_for(model)
 
 
 def test_an_uncovered_anonymous_source_is_named_with_its_line():
-    model, flux, rate = _logistic_transport()
+    model, (flux, diffusion), rate = _logistic_transport()
     with pytest.raises(CoverageNotExact) as caught:
         _plan(rate.select(flux)).validate_for(model)
     message = str(caught.value)
     assert "missing=" in message
-    assert "A_inline_1" in message
-    assert "written at %s:" % __file__ in message
+    assert "conduction" in message and "A_inline_1" in message
+    assert "written at %s:%d" % (__file__, _line_of("# n11-l1-" + "reaction")) in message
+    first, second = caught.value.terms
+    assert "conduction" in first and "A_inline_1" in second and "written x1" in second
+    assert caught.value.term is caught.value.terms[0] and caught.value.count == 0
     with pytest.raises(CoverageNotExact, match="duplicate physical balance occurrence"):
-        _plan(rate, rate.select(rate.occurrences[1])).validate_for(model)
+        _plan(rate, rate.select(*rate.inline)).validate_for(model)
+    del diffusion
 
 
 # --- Revision 2 of the lot 1 note: folding, grouping, zeros, names ---------------------------------
@@ -381,12 +393,12 @@ def test_a_numeric_zero_is_the_identity_but_a_scaled_term_and_an_empty_balance_a
 
 
 def test_the_anonymous_sources_are_named_after_the_balance_and_selected_by_handle():
-    model, flux, rate = _logistic_transport()
+    model, (flux, diffusion), rate = _logistic_transport()
     assert [source.name for source in rate.inline] == ["A_inline_1"]
     assert rate.inline[0].reg_name == "A_inline_1" == rate.inline[0].name
-    assert rate.inline[0] is rate.occurrences[1].payload
-    assert rate.select(*rate.inline).occurrences == (rate.occurrences[1],)
-    assert _plan(rate.select(flux), rate.select(*rate.inline)).validate_for(model)
+    assert rate.inline[0] is rate.occurrences[2].payload
+    assert rate.select(*rate.inline).occurrences == (rate.occurrences[2],)
+    assert _plan(rate.select(flux, diffusion), rate.select(*rate.inline)).validate_for(model)
     with pytest.raises(ValueError, match="collides with already declared source"):
         model.source("A_inline_1", on=model._states["U"], value=[0])
 
@@ -467,24 +479,36 @@ def test_each_refused_spelling_names_the_line_that_wrote_it(marker):
     assert _observed(model) == before
 
 
-class _SurfaceRow(TermNotAdditive):
-    """A refusal family with its own sites, built the way the user surface builds its rows."""
+class _SurfaceRefusal(ValueError):
+    """The shape of the user surface's refusal family: a site, then ``super().__init__(message)``."""
 
     def __init__(self, message, *, site):
         self.site = site
-        self.term = "div(F)"
-        self.construct = "u * div(F)"
-        super().__init__("surface: " + message)
+        super().__init__(message)
+
+
+class _SurfaceTermNotAdditive(_SurfaceRefusal, TermNotAdditive):
+    pass
+
+
+class _SurfaceCoverage(_SurfaceRefusal, CoverageNotExact):
+    pass
 
 
 def test_a_cooperative_subclass_keeps_its_own_site_and_is_caught_as_the_board_refusal():
     site = SourceSpan(file="user.py", line=12, column=0)
     with pytest.raises(TermNotAdditive) as caught:
-        raise _SurfaceRow("u * div(F) is not a summand", site=site)
+        raise _SurfaceTermNotAdditive("u * div(F) is not a summand", site=site)
     assert caught.value.site is site
-    assert caught.value.term == "div(F)" and caught.value.construct == "u * div(F)"
-    assert str(caught.value) == "surface: u * div(F) is not a summand"
+    assert caught.value.term is None and caught.value.construct is None
+    assert str(caught.value) == "u * div(F) is not a summand"
     assert caught.value.rule == "R7" and isinstance(caught.value, ValueError)
+    with pytest.raises(CoverageNotExact) as covered:
+        raise _SurfaceCoverage("div(F) is not covered", site=site)
+    assert covered.value.site is site and covered.value.terms == ()
+    assert str(covered.value) == "div(F) is not covered"
+    positional = TermNotAdditive("written by hand")
+    assert str(positional) == "written by hand" and positional.site is None
 
 
 def _joint():

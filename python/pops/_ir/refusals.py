@@ -9,6 +9,8 @@ keeps catching them.
 """
 from __future__ import annotations
 
+from typing import Any
+
 
 class RegionRefusal(ValueError):
     """A refusal about one region of the plan, with the map or coefficient that blocks it."""
@@ -73,7 +75,16 @@ class CoverageNotExact(ValueError):
     rule = "D5"
     phase = "resolve"
 
-    def __init__(self, message, *, term, count, terms=None):
+    term: Any = None
+    count: Any = None
+    terms: tuple[Any, ...] = ()
+
+    def __init__(self, message, *, term=None, count=None, terms=None):
+        if term is None and count is None and terms is None:
+            # A cooperative subclass (the surface's row) has written its message and set its
+            # attributes; the class defaults stand for any it left out.
+            super().__init__(message)
+            return
         self.term = term
         self.count = count
         # Every term in the same state, when one refusal names several (O6); ``term`` is the first.
@@ -122,10 +133,14 @@ class TermNotAdditive(ValueError):
 
     rule = "R7"
     phase = "tracing"
+    term: Any = None
+    construct: Any = None
+    site: Any = None
 
     def __init__(self, message=None, *, term=None, construct=None, site=None):
+        # An argument given wins; otherwise a value a subclass set before this call stays.
         for name, value in (("term", term), ("construct", construct), ("site", site)):
-            if value is not None or not hasattr(self, name):
+            if value is not None:
                 setattr(self, name, value)
         if message is not None and term is None and construct is None and site is None:
             # A cooperative subclass has already written its message and set its site.

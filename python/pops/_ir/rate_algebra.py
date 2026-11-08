@@ -152,12 +152,15 @@ def refuse(term: Any, construct: str, message: str | None = None) -> TermNotAddi
                            site=_site())
 
 
+OPERAND = "an operand of a node other than +, - and an exact scaling"
+
+
 def refuse_operand(value: Any) -> TermNotAdditive | None:
     """The refusal of a term met as the operand of another node (``_wrap``), or ``None``."""
     term = rate_term_of(value)
     if term is None:
         return None
-    return refuse(term, "an operand of a node other than +, - and an exact scaling")
+    return refuse(term, OPERAND)
 
 
 def _scale(coefficient: Any, number: Any) -> Any:
@@ -246,5 +249,5 @@ def rate_summands(value: Any) -> list[tuple[str, Any, Any]]:
     return summands
 
 
-__all__ = ["InlineAlgebra", "exact_number", "exact_reciprocal", "first_term", "is_term",
+__all__ = ["OPERAND", "InlineAlgebra", "exact_number", "exact_reciprocal", "first_term", "is_term",
            "rate_summands", "rate_term_of", "refuse", "refuse_operand", "term_holders"]
