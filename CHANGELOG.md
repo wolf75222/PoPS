@@ -43,6 +43,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-95 (N12, lot 3a): the single-layout AMR tutorials (scalar advection 05-14), the IMEX AMR
+  final example, the field diffusion example and the scalar AMR migration workflow write their
+  tagging as regions of `cell` (`Tag(lambda cell: cell.value(q) > c)`, `gradient_norm` for 09)
+  instead of the ValueExpr tagging graph. MG8 serial records are bitwise identical to the graph
+  route; the scalar advection final example keeps the graph until the VM removal (lot 3c).
 - ROM-90 (N9, lot 1): decide each Program reduction and its checks in one collective (spec 0.3
   SV20, duties 2 and 3, and PF8). `dot_all` and the AMR composite pairing and integral send the
   compensated rank summaries through one `MPI_Allreduce` with a non-commutative Neumaier join, the
