@@ -123,6 +123,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   and the L5 Scharfetter-Gummel body, and `upwind(speed=f)` matches master's
   `riemann.ScalarUpwind` on the case of scalar-advection tutorial 02. `upwind(F, Uh)` without
   `speed=` stays Rusanov with the R9 speed until a face reads F(1).n (CF15, ROM-106).
+  `rusanov(F, Uh, smax=)` keeps the third parameter of section 4.4 as gap C46 of the index
+  (adjudication section 20, item 4), until a row of 2.6.9 or N15 closes it.
 - Evaluate a `riemann.User` face residual on the transport prepared at bind, like the native face:
   no field is allocated per evaluation, the face carrier is copied only when a Program reads it,
   and the stability frequency is read from the recorded face speeds, on the prepared transport in

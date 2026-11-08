@@ -339,8 +339,11 @@ def test_upwind_matches_master_scalar_upwind_on_tutorial_02(isolated_native_cach
         # FixedDt(0.45/64) is the tutorial's own step sequence on the native route.
         assert native[:2] == as_written[:2] and as_written[0] > 10, (native[:2], as_written[:2])
         if as_written[2] is not None:
-            _assert_rounding_level(as_written[0], as_written[2], native[2], record_property,
-                                   "tutorial 02 native FixedDt vs AdaptiveCFL ")
+            # Same step sequence, same face: the two native runs agree bit for bit.
+            record_property("tutorial 02 native FixedDt vs AdaptiveCFL bitwise_equal",
+                            bool(np.array_equal(as_written[2], native[2])))
+            assert np.array_equal(as_written[2], native[2]), (
+                float(np.max(np.abs(np.asarray(native[2]) - np.asarray(as_written[2])))))
         assert library[:2] == native[:2], (library[:2], native[:2])
         if native[2] is not None:
             _assert_rounding_level(native[0], native[2], library[2], record_property,
