@@ -25,13 +25,15 @@ manifest reporter and the tests (review of the N10 note, A2):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any
 
 from pops._ir import arrays as A
 from pops._ir import index_sets as S
 
 __all__ = [
-    "LayoutRecord", "Placements", "data_layout_and_distribution", "ir_type", "support_placements",
+    "LayoutRecord", "Placements", "data_layout_and_distribution", "field_role", "ir_type",
+    "is_field_leaf", "is_finite_array", "is_finite_index", "support_placements", "value_kind",
 ]
 
 _FIELD_ROLES = {"state": "state", "rhs": "rhs", "scalar_field": "field", "vector_field": "field"}
@@ -357,3 +359,113 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
         "untyped": sum(1 for row in records if row["layout"] == "untyped"),
         "unplaced": unplaced,
     }
+
+
+# ------------------------------------------------------------------------------------------------
+# Lot 1b: the one function that tells a field leaf from a finite array (note §3.4).
+#
+# The serialized spelling of a value (``vtype``) is the canonical encoding of its IR type and its
+# role: ``state``, ``rhs`` and ``scalar_field`` encode ``(Array(cells(κ_σ), T), role)``, ``array``
+# encodes ``Array(range_set, T)``. The builder and the emitters ask the kind of a value here, and
+# the kind is read from the head of the IR type that ``_signature_type`` gives the spelling, on a
+# symbolic support: which support a field lives on, and its element type, never change its kind.
+
+class _EverySupport(dict):
+    """A placement table that places every block on one symbolic support."""
+
+    def __init__(self, configuration: S.Configuration):
+        super().__init__()
+        self._configuration = configuration
+
+    def __contains__(self, block: object) -> bool:
+        return True
+
+    def __getitem__(self, block: str) -> S.Configuration:
+        return self._configuration
+
+
+def _symbolic_placements() -> Placements:
+    configuration = S.Configuration("pops.ir.kind@support", (1,), (False,))
+    return Placements(_EverySupport(configuration), {}, _EverySupport(False),  # type: ignore[arg-type]
+                      {}, configuration)
+
+
+# The smallest signature of each spelling whose type head is its kind: a field leaf of one
+# component, an array of scalars over one family, an index set and an index of that family.
+_KIND_PROBES = {
+    "state": {"vtype": "state", "block": "b"},
+    "rhs": {"vtype": "rhs", "block": "b"},
+    "scalar_field": {"vtype": "scalar_field", "block": "b"},
+    "array": {"vtype": "array", "family": 0, "element": {"vtype": "scalar"}},
+    "index_set": {"vtype": "index_set", "family": 0},
+    "index": {"vtype": "index", "family": 0},
+}
+_KINDS: dict[str, str] = {}
+
+
+def _kind_of_type(value_type: Any) -> str:
+    if isinstance(value_type, A.Array):
+        if isinstance(value_type.domain, (S.Entities, S.Union, S.Level)):
+            return "field"
+        return "finite"
+    if isinstance(value_type, A.IndexSetType):
+        return "index_set"
+    if isinstance(value_type, A.Index):
+        return "index"
+    return "other"
+
+
+def _kinds() -> dict[str, str]:
+    if not _KINDS:
+        placements = _symbolic_placements()
+        for spelling, probe in _KIND_PROBES.items():
+            _KINDS[spelling] = _kind_of_type(_signature_type(probe, placements, "kind", 1))
+    return _KINDS
+
+
+def _spelling(value: Any) -> Any:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return value.get("vtype")
+    return getattr(value, "vtype", None)
+
+
+def value_kind(value: Any) -> str:
+    """``field``, ``finite``, ``index_set``, ``index`` or ``other``: the head of its IR type.
+
+    ``value`` is a live Program value, its serialized signature, or its spelling. A field leaf is
+    an ``Array`` over entities or levels (stored on ``Patches`` or ``LevelPatches``); any other
+    ``Array`` is ``finite``; an index set and an index of the finite world are ``index_set`` and
+    ``index``.
+    """
+    return _kinds().get(_spelling(value), "other")
+
+
+def is_field_leaf(value: Any) -> bool:
+    """Whether ``value`` is a field leaf: an ``Array`` over the cells or levels of a support."""
+    return value_kind(value) == "field"
+
+
+def is_finite_array(value: Any) -> bool:
+    """Whether ``value`` is an ``Array`` over a range set (a finite array)."""
+    return value_kind(value) == "finite"
+
+
+def is_finite_index(value: Any) -> bool:
+    """Whether ``value`` is a finite array, or an index set or index of the finite world."""
+    return value_kind(value) in ("finite", "index_set", "index")
+
+
+_ROLES = {"state": "state", "rhs": "rhs", "scalar_field": "field"}
+
+
+def field_role(value: Any) -> str | None:
+    """The role of a field leaf (``state``, ``rhs`` or ``field``); ``None`` for any other value.
+
+    A state and its rate have one type; the role is what tells them apart, and a plain field (a
+    scratch or a solve operand) from both.
+    """
+    if not is_field_leaf(value):
+        return None
+    return _ROLES[_spelling(value)]

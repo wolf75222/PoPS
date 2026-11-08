@@ -10,6 +10,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 from collections.abc import Callable
+from pops._ir.data_model import is_finite_array, is_finite_index, value_kind
 
 if TYPE_CHECKING:
     from pops.time.value_signatures import ValueSignature
@@ -27,9 +28,6 @@ from pops.time._program.structured_control import (
 from pops.time._program.value_validation import require_owned, validate_input_regions
 
 
-FINITE_VALUE_TYPES = frozenset(("index_set", "index", "array"))
-
-
 @dataclass(frozen=True, eq=False)
 class IndexFamily:
     """Authoring identity shared by distinct native domain instances."""
@@ -44,7 +42,7 @@ class IndexFamily:
 
 
 def finite_signature(value) -> ValueSignature:
-    if value.vtype not in FINITE_VALUE_TYPES:
+    if not is_finite_index(value):
         raise TypeError("expected a finite set, checked index or array")
     return cast("ValueSignature", value.attrs["signature"])
 
@@ -84,36 +82,36 @@ def validate_finite_operation(op, inputs, attrs, signature):
             x = attrs.get("value")
             require(type(x) in (float, int) and math.isfinite(x))
     elif op == "finite_range_set":
-        require(signature["vtype"] == "index_set" and signature["ownership"] == "replicated")
+        require(value_kind(signature) == "index_set" and signature["ownership"] == "replicated")
         require(type(signature["capacity"]) is int and 0 <= signature["capacity"] < (1 << 63))
         require(len(inputs) in (1, 2) and inputs[0].vtype == "int64")
         if len(inputs) == 2:
-            require(inputs[1].vtype == "index_set" and same_signature(signature, sig(inputs[1])))
+            require(value_kind(inputs[1]) == "index_set" and same_signature(signature, sig(inputs[1])))
     elif op in ("finite_size", "finite_same_domain"):
         require(len(inputs) == (2 if op == "finite_same_domain" else 1))
-        require(all(v.vtype == "index_set" for v in inputs))
+        require(all(value_kind(v) == "index_set" for v in inputs))
         require(signature["vtype"] == ("bool" if op == "finite_same_domain" else "int64"))
         if len(inputs) == 2:
             require(same_signature(sig(inputs[0]), sig(inputs[1])))
     elif op == "finite_domain":
-        require(len(inputs) == 1 and inputs[0].vtype in ("index", "array"))
+        require(len(inputs) == 1 and value_kind(inputs[0]) in ("index", "finite"))
         require(same_signature(signature, _domain_signature(sig(inputs[0]))))
     elif op in ("finite_index", "finite_index_argument"):
-        require(len(inputs) == (2 if op == "finite_index" else 1) and inputs[0].vtype == "index_set")
+        require(len(inputs) == (2 if op == "finite_index" else 1) and value_kind(inputs[0]) == "index_set")
         require(same_signature(signature, dict(sig(inputs[0]), vtype="index")))
         if op == "finite_index":
             require(inputs[1].vtype == "int64")
     elif op == "finite_index_value":
-        require(len(inputs) == 1 and inputs[0].vtype == "index" and signature["vtype"] == "int64")
+        require(len(inputs) == 1 and value_kind(inputs[0]) == "index" and signature["vtype"] == "int64")
     elif op == "finite_at":
-        require(len(inputs) == 2 and inputs[0].vtype == "array" and inputs[1].vtype == "index")
+        require(len(inputs) == 2 and is_finite_array(inputs[0]) and value_kind(inputs[1]) == "index")
         require(same_signature(_domain_signature(sig(inputs[0])), _domain_signature(sig(inputs[1]))))
         require(same_signature(signature, sig(inputs[0])["element"]))
     elif op in ("finite_map", "finite_scan"):
         scan = op == "finite_scan"
         require(len(inputs) == (4 if scan else 3))
         domain = inputs[1 if scan else 0]
-        require(domain.vtype == "index_set" and all(v.vtype == "int64" for v in inputs[-2:]))
+        require(value_kind(domain) == "index_set" and all(v.vtype == "int64" for v in inputs[-2:]))
         require(isinstance(attrs.get("body"), ProgramValue) and isinstance(attrs.get("body_index"), ProgramValue))
         require(same_signature(sig(attrs["body_index"]), dict(sig(domain), vtype="index")))
         if scan:
@@ -232,7 +230,7 @@ class _ProgramFiniteArrays(_ProgramBase):
     @atomic_authoring
     def size(self, domain):
         require_owned(self, domain, "size")
-        if domain.vtype != "index_set":
+        if value_kind(domain) != "index_set":
             raise TypeError("size requires an IndexSet")
         if finite_signature(domain)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
@@ -242,7 +240,7 @@ class _ProgramFiniteArrays(_ProgramBase):
     @atomic_authoring
     def domain(self, value):
         require_owned(self, value, "domain")
-        if value.vtype not in ("index", "array"):
+        if value_kind(value) not in ("index", "finite"):
             raise TypeError("domain requires an Index or Array")
         if finite_signature(value)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
@@ -253,7 +251,7 @@ class _ProgramFiniteArrays(_ProgramBase):
     @atomic_authoring
     def index(self, domain, offset):
         require_owned(self, domain, "index domain")
-        if domain.vtype != "index_set":
+        if value_kind(domain) != "index_set":
             raise TypeError("index requires an IndexSet")
         if finite_signature(domain)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
@@ -266,7 +264,7 @@ class _ProgramFiniteArrays(_ProgramBase):
     def index_value(self, index):
         """Explicit forgetful projection to Int64; indexing still requires P.index(D,k)."""
         require_owned(self, index, "index_value")
-        if index.vtype != "index":
+        if value_kind(index) != "index":
             raise TypeError("index_value requires a checked Index")
         if finite_signature(index)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
@@ -277,7 +275,7 @@ class _ProgramFiniteArrays(_ProgramBase):
     def at(self, array, index):
         require_owned(self, array, "at array")
         require_owned(self, index, "at index")
-        if array.vtype != "array" or index.vtype != "index":
+        if not is_finite_array(array) or value_kind(index) != "index":
             raise TypeError("at requires an Array and a checked Index, never a naked Int64")
         if finite_signature(array)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
@@ -297,7 +295,7 @@ class _ProgramFiniteArrays(_ProgramBase):
             if domain is not None:
                 raise TypeError("map accepts one physical map or finite domain")
             domain = physical_map
-        if not isinstance(domain, ProgramValue) or domain.vtype != "index_set":
+        if not isinstance(domain, ProgramValue) or value_kind(domain) != "index_set":
             if body is not None:
                 raise TypeError("finite map requires an IndexSet and body(P, Index)")
             from .physical_maps import _ProgramPhysicalMaps
@@ -305,7 +303,7 @@ class _ProgramFiniteArrays(_ProgramBase):
         if source is not None or target is not None:
             raise TypeError("finite map does not accept physical source/target stages")
         require_owned(self, domain, "map domain")
-        if domain.vtype != "index_set" or not callable(body):
+        if value_kind(domain) != "index_set" or not callable(body):
             raise TypeError("map requires an IndexSet and body(P, Index)")
         if finite_signature(domain)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
@@ -329,20 +327,20 @@ class _ProgramFiniteArrays(_ProgramBase):
         No partially constructed array is returned on failure.
         """
         require_owned(self, domain, "scan domain or values")
-        if domain.vtype == "array":
+        if is_finite_array(domain):
             values = domain
             if finite_signature(values)["ownership"] != "replicated":
                 from .distributed_arrays import Distributed
                 return Distributed(self).scan(values, initial, body, order=order, byte_capacity=byte_capacity)
             return self.scan(self.domain(values), initial, lambda p, state, i: body(p, state, p.at(values, i)),
                              order=order, byte_capacity=byte_capacity)
-        if domain.vtype != "index_set" or finite_signature(domain)["ownership"] != "replicated":
+        if value_kind(domain) != "index_set" or finite_signature(domain)["ownership"] != "replicated":
             raise TypeError("distributed scan requires materialized Array values, not local index captures")
         if order != "ascending" or byte_capacity is not None:
             raise NotImplementedError("replicated scan supports explicit ascending order")
         require_owned(self, domain, "scan domain")
         require_owned(self, initial, "scan initial")
-        if domain.vtype != "index_set" or not callable(body):
+        if value_kind(domain) != "index_set" or not callable(body):
             raise TypeError("scan requires an IndexSet and body(P, state, Index)")
         validate_input_regions(self, (domain,initial), self._current_region(), "scan")
         state_signature = value_signature(initial)
@@ -366,8 +364,8 @@ class _ProgramFiniteArrays(_ProgramBase):
         """Replicated gather, composed solely from map and checked at."""
         require_owned(self, values, "gather values")
         require_owned(self, indices, "gather indices")
-        if values.vtype != "array" or indices.vtype != "array" \
-                or finite_signature(indices)["element"]["vtype"] != "index":
+        if not is_finite_array(values) or not is_finite_array(indices) \
+                or value_kind(finite_signature(indices)["element"]) != "index":
             raise TypeError("gather requires values:Array(E,T), indices:Array(D,Index(E))")
         if finite_signature(values)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
@@ -379,7 +377,7 @@ class _ProgramFiniteArrays(_ProgramBase):
     def reduce(self, values, initial, body: Callable[..., ProgramValue], *, order, byte_capacity=None):
         """Local ordered fold on replicated entries; never sums a replica per MPI rank."""
         require_owned(self, values, "reduce values")
-        if values.vtype != "array" or not callable(body):
+        if not is_finite_array(values) or not callable(body):
             raise TypeError("reduce requires Array and body(P,carry,element)")
         if finite_signature(values)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
@@ -396,7 +394,7 @@ class _ProgramFiniteArrays(_ProgramBase):
         """Functional ordered accumulation; duplicate destinations retain source order."""
         for value in (values, indices, domain, initial):
             require_owned(self, value, "scatter_reduce")
-        if values.vtype != "array" or indices.vtype != "array" or domain.vtype != "index_set":
+        if not is_finite_array(values) or not is_finite_array(indices) or value_kind(domain) != "index_set":
             raise TypeError("scatter_reduce requires arrays of values/indices and an IndexSet")
         if finite_signature(values)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
@@ -405,7 +403,7 @@ class _ProgramFiniteArrays(_ProgramBase):
         if order != "ascending" or byte_capacity is not None or not callable(body):
             raise ValueError("replicated scatter_reduce requires ascending order and a combine body")
         target = finite_signature(indices)["element"]
-        if target["vtype"] != "index" or not same_signature(_domain_signature(target), finite_signature(domain)):
+        if value_kind(target) != "index" or not same_signature(_domain_signature(target), finite_signature(domain)):
             raise TypeError("scatter indices must belong to the destination family")
         source = self.domain(values)
         compatible = self.same_domain(source, self.domain(indices))

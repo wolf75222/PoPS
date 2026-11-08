@@ -12,6 +12,7 @@ from typing import Any
 
 from .program_emit_kernels import _coeff_metadata_terms
 from pops.time._evaluation_point import evaluation_stage_fraction
+from pops._ir.data_model import field_role
 
 
 def _exact_terms(value):
@@ -171,7 +172,7 @@ def _independent_effect(program, value):
         "field_component",
         "solve_linear",
     }:
-        return value.vtype in {"scalar_field", "solve_outcome"}
+        return field_role(value) == "field" or value.vtype == "solve_outcome"
     if value.op == "matrix_free_operator":
         return value.vtype == "matrix_free_op"
     if value.op in {"field_publication", "input_fields"}:

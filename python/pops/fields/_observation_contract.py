@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.identity import Identity, canonical_bytes
+from pops._ir.data_model import field_role
 
 
 def field_provider_authority(problem_identity: str, unknown: Any, space: Any) -> dict[str, Any]:
@@ -44,7 +45,7 @@ def direct_native_field_operations(solve: Any) -> tuple[Any, ...]:
 
 def validate_field_observation(value: Any) -> tuple[int, int, Any]:
     """Return packed width, selected component and solve after authenticating the observation."""
-    if value.op != "field_component" or value.vtype != "scalar_field" \
+    if value.op != "field_component" or field_role(value) != "field" \
             or type(value.attrs.get("ncomp")) is not int or value.attrs["ncomp"] != 1 \
             or len(value.inputs) != 1:
         raise ValueError("field observation requires one consumed packed source")
@@ -107,7 +108,7 @@ def validate_field_observation(value: Any) -> tuple[int, int, Any]:
 
 def validate_field_gradient(value: Any) -> tuple[int, Any]:
     """Authenticate differentiation separately from the consumed potential identity."""
-    if value.op != "field_gradient" or value.vtype != "scalar_field" or len(value.inputs) != 1:
+    if value.op != "field_gradient" or field_role(value) != "field" or len(value.inputs) != 1:
         raise ValueError("field gradient requires one consumed scalar observation")
     source = value.inputs[0]
     _width, _selected, solve = validate_field_observation(source)
@@ -164,7 +165,7 @@ def validate_field_state_cell_mean(value: Any) -> Any:
     from pops.model import StateSpace
     from pops.time.references import canonical_handle
 
-    if value.op != "field_state_cell_mean" or value.vtype != "scalar_field" \
+    if value.op != "field_state_cell_mean" or field_role(value) != "field" \
             or len(value.inputs) != 1 or value.attrs.get("projection_version") != 1 \
             or value.attrs.get("ncomp") != 1 or value.attrs.get("sampling") != "cell_average" \
             or value.attrs.get("measure") != "cell_volume":

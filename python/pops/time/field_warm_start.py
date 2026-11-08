@@ -7,6 +7,7 @@ from pops.time.value_scope import require_top_level
 from pops.time.value_support import require_owned_value
 from pops.time.field_context import field_provenance_contains, require_field_read
 from pops.time.references import bind_field_reference, canonical_handle
+from pops._ir.data_model import field_role
 
 
 def _consumed_linear_sources(value: Any) -> tuple[Any, ...]:
@@ -33,7 +34,7 @@ def warm_start_context(value: Any) -> Any:
     if value.op != "field_warm_start" or value.vtype != "effect" or len(value.inputs) != 4:
         raise ValueError("field warm start has an invalid effect contract")
     scalar, fields, template, target = value.inputs
-    if scalar.vtype != "scalar_field" or template.vtype != "state" or target.vtype != "state" \
+    if field_role(scalar) != "field" or template.vtype != "state" or target.vtype != "state" \
             or template.block != target.block or scalar.block != target.block \
             or scalar.clock != target.clock or value.point != target.point \
             or template.space != target.space or template.state_ref != target.state_ref:

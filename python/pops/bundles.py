@@ -8,6 +8,7 @@ which returns the complete package, including geometry, maps and histories.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from pops._ir.data_model import value_kind
 if TYPE_CHECKING:
     from pops.graph_functions import GraphFunction
 
@@ -77,7 +78,7 @@ def validate_bundle_signature(signature):
     if signature.get("vtype") != "product" or not isinstance(contract, Mapping):
         raise TypeError("expected a dependent Bundle signature")
     members = dict(signature["members"])
-    if tuple(members) != _ROLES or members["instance"]["vtype"] != "index_set":
+    if tuple(members) != _ROLES or value_kind(members["instance"]) != "index_set":
         raise TypeError("Bundle requires ordered instance, fields, geometry, maps, histories")
     if any(members[role]["vtype"] != "product" for role in _ROLES[1:]):
         raise TypeError("Bundle fields, geometry, maps and histories must be Products")
@@ -89,7 +90,7 @@ def validate_bundle_signature(signature):
     domain_types = {}
     for path in domains:
         leaf = _project_type(signature, path, domain=True)
-        if leaf["vtype"] != "index_set":
+        if value_kind(leaf) != "index_set":
             raise TypeError("Bundle domain binder must name an IndexSet")
         domain_types[path] = leaf
     bindings = tuple((_path(path), _path(domain)) for path, domain in contract["bindings"])
@@ -104,7 +105,7 @@ def validate_bundle_signature(signature):
         leaf, target = dependents[path], domain_types[domain]
         if any(leaf.get(key) != target.get(key) for key in _DOMAIN_KEYS):
             raise ValueError("Bundle binding changes a domain family, capacity or ownership")
-        if leaf["vtype"] == "index_set" and path != domain:
+        if value_kind(leaf) == "index_set" and path != domain:
             raise ValueError("Bundle domain declarations bind themselves, not another instance")
     return contract
 

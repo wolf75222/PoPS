@@ -8,6 +8,7 @@ from pops.time.handles import StateEndpointHandle
 from pops.time.references import block_name
 from pops.time.values import ProgramValue
 from pops.time._program.value_validation import require_compatible_spaces, require_top_level
+from pops._ir.data_model import field_role
 
 
 def validate_commit_many(program: Any, mapping: Any) -> list[tuple[Any, Any]]:
@@ -24,7 +25,7 @@ def validate_commit_many(program: Any, mapping: Any) -> list[tuple[Any, Any]]:
                 "block-name strings are not public commit targets")
         endpoint = program._require_endpoint(endpoint, "commit_many")
         block = endpoint.block
-        if not (isinstance(state, ProgramValue) and state.vtype in ("state", "scalar_field")):
+        if not (isinstance(state, ProgramValue) and field_role(state) in ("state", "field")):
             raise TypeError(
                 "commit_many: endpoint for block %r needs a State or scalar_field ProgramValue"
                 % (block,))

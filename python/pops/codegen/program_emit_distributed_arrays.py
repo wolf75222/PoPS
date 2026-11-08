@@ -20,6 +20,7 @@ from pops.time._program.structured_control import (
     success_signature,
     failure_signature,
 )
+from pops._ir.data_model import is_finite_array, is_finite_index, value_kind
 
 NS = "pops::runtime::program"
 DN = NS + "::distributed"
@@ -31,9 +32,9 @@ LOCAL_FAILURE = DN + "::LocalPayloadFailure<pops::kNativeDimension>"
 
 def _requests_signature(sig):
     return (
-        sig["vtype"] == "array"
+        is_finite_array(sig)
         and sig.get("ownership") == OWNERSHIP
-        and sig["element"]["vtype"] == "index"
+        and value_kind(sig["element"]) == "index"
         and sig["element"].get("ownership") == OWNERSHIP
     )
 
@@ -813,7 +814,7 @@ def _body(v, var, lines, formal_name, *, lane):
         formal = v.attrs.get("body_index", v.attrs.get("body_offset"))
         env[formal.id] = (
             CV + "::distributed_index((%s).domain,(%s).gid)" % (formal_name, formal_name)
-            if formal.vtype == "index"
+            if value_kind(formal) == "index"
             else formal_name
         )
     lifted = frozenset(node.id for node in _local_nodes(block)
@@ -829,7 +830,7 @@ def _has_finite_capture(signature):
         if id(node) in seen:
             continue
         seen.add(id(node))
-        if node["vtype"] in ("index_set", "index", "array"):
+        if is_finite_index(node):
             if node.get("ownership") in ("replicated", OWNERSHIP):
                 return True
         else:
@@ -912,11 +913,11 @@ def emit_distributed_op(program, v, var, model, lines, prelude, block_idx, field
         lines.append("const std::int64_t %s=(%s)->size();" % (token, args[0]))
     elif v.op == "distributed_value_domain":
         source = signature(v.inputs[0])
-        is_requests = source["vtype"] == "array" and (
-            source["element"]["vtype"] == "index"
+        is_requests = is_finite_array(source) and (
+            value_kind(source["element"]) == "index"
             and source["element"].get("ownership") == OWNERSHIP
         )
-        access = "." if source["vtype"] == "index" or is_requests else "->"
+        access = "." if value_kind(source) == "index" or is_requests else "->"
         lines.append("const auto %s=(%s)%sdomain;" % (token, args[0], access))
         lines.append("%s.common(%s);" % (registry, token))
     elif v.op in ("distributed_domain", "distributed_balanced_domain"):

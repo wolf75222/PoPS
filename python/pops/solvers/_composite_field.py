@@ -13,6 +13,7 @@ from .providers import (PreparedHierarchySolverProvider, PreparedHierarchySolver
     PreparedHierarchySolverUseFacts, PreparedHierarchyConvergenceContract,
     PreparedHierarchyFlatExecution, PreparedHierarchySolverNativeEmission,
     register_prepared_hierarchy_solver_provider)
+from pops._ir.data_model import field_role
 
 
 def _options(values, where):
@@ -75,7 +76,7 @@ def _author(program, problem, prepared, name, provider):
         singular_nullspace=declaration.singular, extensions={})
     provider.use_policy.validate(facts, operator=operator, where="composite field solver")
     guess = None if problem.initial_guess is None else program._canonical_value(_resolve_handle(problem.initial_guess))
-    if guess is not None and (guess.vtype != "scalar_field" or guess.attrs.get("ncomp") != ncomp):
+    if guess is not None and (field_role(guess) != "field" or guess.attrs.get("ncomp") != ncomp):
         raise ValueError("composite field initial guess changes the physical tuple")
     relative, absolute, maximum = provider.convergence.values(options, where="composite field solver")
     attrs = {"tol": scalar_literal(relative), "abs_tol": scalar_literal(absolute), "max_iter": maximum,

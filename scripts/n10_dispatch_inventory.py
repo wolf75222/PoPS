@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Inventory of the field-or-array dispatch that the N10 retyping moves (ROM-85, lot 1a, R3).
+"""Inventory of the field-or-array dispatch that the N10 retyping moves (ROM-85, lots 1a and 1b, R3).
 
-Every line of the core Python (``python/pops``) that reads a value type of the Program builder to
-decide between a field leaf, a role or a finite value is one row: file, line, kind and the text.
-The kind is read from the spellings the line compares:
+Every line of the core Python (``python/pops``) that compares the spelling of a value type
+(``vtype``, as an attribute, a key or ``.get``) with a field or finite spelling is one row: file,
+line, kind and the text. The kind is read from the spellings compared:
 
-* ``field``: a field spelling (``scalar_field``, ``_FIELD``, ``is_field``) or both ``state`` and
-  ``rhs``: the line asks « is this a field »;
+* ``field``: ``scalar_field``, or both ``state`` and ``rhs``: the line asks « is this a field »;
 * ``role``: exactly one of ``state`` and ``rhs``: the line tells a state from its rate, which
   stays a role test after the retyping;
-* ``finite``: ``array`` or ``index_set``: the other side of the same dispatch.
+* ``finite``: ``array``, ``index_set`` or ``index``: the other side of the same dispatch.
 
-Lot 1b moves the ``field`` and ``finite`` rows onto ``ir_type`` and the plan's layout and closes
-them row by row; ``role`` rows stay. The kind is a reading of the text, which the review of each
-row in 1b confirms. ``--write`` regenerates the CSV, ``--check`` reports whether it is current.
+Lot 1a listed the lines; lot 1b moved the ``field`` and ``finite`` rows onto the one function of
+``pops._ir.data_model`` (``value_kind``, ``is_field_leaf``, ``is_finite_array``,
+``is_finite_index``, ``field_role``), which reads the kind from the head of the IR type. Only that
+module still compares those spellings, and the architecture test of N10 holds it. Writing a
+signature (``vtype="array"``) is its encoding, not a test, and is not a row. ``--write``
+regenerates the CSV, ``--check`` reports whether it is current.
 """
 from __future__ import annotations
 
@@ -26,15 +28,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "docs" / "design" / "n10_dispatch_inventory.csv"
-_READS_TYPE = re.compile(r"vtype|_FIELD\b|is_field")
-_FIELD = re.compile(r"\"scalar_field\"|'scalar_field'|_FIELD\b|is_field")
+_ACCESS = r"""(?:\.vtype|\[["']vtype["']\]|\.get\(["']vtype["']\))"""
+_SPELLINGS = r"""["'](?:state|rhs|scalar_field|array|index_set|index)["']"""
+# The spelling is the compared operand: ``<access> == "x"``, ``<access> in (..., "x", ...)``, or
+# ``"x" == <access>``.
+_COMPARES = re.compile(
+    _ACCESS + r"\s*(?:==|!=)\s*" + _SPELLINGS
+    + r"|" + _ACCESS + r"""\s+(?:not\s+)?in\s+[\(\{\[][^\)\}\]]*""" + _SPELLINGS
+    + r"|" + _SPELLINGS + r"\s*(?:==|!=)\s*[\w\.\[\]\"']*" + _ACCESS)
+_FIELD = re.compile(r"""["']scalar_field["']""")
 _STATE = re.compile(r"[\"']state[\"']")
 _RHS = re.compile(r"[\"']rhs[\"']")
-_FINITE = re.compile(r"[\"'](array|index_set)[\"']")
+_FINITE = re.compile(r"[\"'](array|index_set|index)[\"']")
 
 
 def _kind(text: str) -> str | None:
-    if not _READS_TYPE.search(text):
+    if not _COMPARES.search(text):
         return None
     if _FIELD.search(text) or (_STATE.search(text) and _RHS.search(text)):
         return "field"

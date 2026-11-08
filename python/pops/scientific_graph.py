@@ -18,6 +18,7 @@ import hashlib
 import json
 
 from pops._ir.quantity import PhysicalDimension
+from pops._ir.data_model import is_field_leaf, is_finite_array
 
 
 DIMENSIONLESS = PhysicalDimension()
@@ -1062,11 +1063,11 @@ def scientific_packet_schema(signature, scientific):
             return
         if sig['vtype'] == 'product':
             for key, child in sig['members']: covered(child, (*path,key))
-        elif sig['vtype'] == 'array':
+        elif is_finite_array(sig):
             covered(sig['element'], (*path,'[]'))
         elif sig['vtype'] == 'variant':
             for tag, child in sig['members']: covered(child, (*path,tag))
-        elif sig['vtype'] in ('scalar','state','rhs','scalar_field'):
+        elif sig['vtype'] == 'scalar' or is_field_leaf(sig):
             raise TypeError('scientific Continuation schema does not cover real path '+repr(path))
     covered(signature)
     return tuple(entries)
@@ -1123,7 +1124,7 @@ def validate_scientific_packet_data(schema):
 
 def _scientific_at(signature, path):
     for key in path:
-        if signature['vtype'] == 'array' and key == '[]':
+        if is_finite_array(signature) and key == '[]':
             signature = signature['element']
         elif signature['vtype'] in ('product','variant') and key in dict(signature['members']):
             signature = dict(signature['members'])[key]

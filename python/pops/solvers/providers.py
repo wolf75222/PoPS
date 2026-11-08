@@ -21,6 +21,7 @@ from pops.solvers._numeric import (
     exact_open_unit_real,
     optional_positive_int,
 )
+from pops._ir.data_model import field_role
 
 
 _HIERARCHY_PROVIDER_SCHEMA_VERSION = 1
@@ -971,7 +972,7 @@ def _author_composite_tensor_fac(
     owner = coefficients.block
     if not (
         isinstance(rhs, ProgramValue)
-        and rhs.vtype == "scalar_field"
+        and field_role(rhs) == "field"
         and rhs.op == "condensed_rhs"
     ):
         raise ValueError("CompositeTensorFAC rhs must be an owner-qualified condensed_rhs")
@@ -988,7 +989,7 @@ def _author_composite_tensor_fac(
         if coefficients.attrs.get(key) != rhs.attrs.get(key):
             raise ValueError("CompositeTensorFAC coefficients and rhs disagree on %s" % key)
     if initial_guess is not None:
-        if not isinstance(initial_guess, ProgramValue) or initial_guess.vtype != "scalar_field":
+        if not isinstance(initial_guess, ProgramValue) or field_role(initial_guess) != "field":
             raise ValueError("CompositeTensorFAC initial_guess must be a scalar field")
         if initial_guess.block != owner or int(initial_guess.attrs.get("ncomp", 1)) != 1:
             raise ValueError("CompositeTensorFAC initial_guess has an incompatible owner/layout")

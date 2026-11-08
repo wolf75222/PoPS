@@ -12,6 +12,7 @@ Distributed gid/index/rank/at_local require a lexical local region.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
+from pops._ir.data_model import value_kind
 
 if TYPE_CHECKING:
     from pops.time.value_signatures import ValueSignature
@@ -360,7 +361,7 @@ class Distributed:
         p = self.program
         require_owned(p, value, "distributed domain projection")
         sig = _distributed(value)
-        if value.vtype not in ("array", "index"):
+        if value_kind(value) not in ("index", "finite"):
             raise TypeError("distributed domain_of requires Array or Index")
         domain = dict(sig, vtype="index_set")
         domain.pop("element", None)
@@ -634,7 +635,7 @@ class Distributed:
             _capacity(nnz_capacity)
             row_sig = _distributed(rows, "index_set")
             req = _distributed(requests, "array")
-            if req["element"]["vtype"] != "index":
+            if value_kind(req["element"]) != "index":
                 raise TypeError("CSR columns require typed target indices")
             inputs = (rows, requests)
             if target is not None:

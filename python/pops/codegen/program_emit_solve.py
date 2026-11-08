@@ -41,6 +41,7 @@ from pops.codegen.krylov_contract import (
     validated_prepared_problem_contract,
 )
 from pops.codegen._rhs_coherence import plan_rhs_coherence
+from pops._ir.data_model import field_role
 
 
 def _program_nodes(program: Any) -> Any:
@@ -493,7 +494,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         if w.op not in ("where", "cell_compare", "linear_combine"):
             continue
         for operand in w.inputs:
-            if operand.id not in local_ids and operand.vtype == "scalar_field":
+            if operand.id not in local_ids and field_role(operand) == "field":
                 external_fields[operand.id] = operand
     for operand in external_fields.values():
         if scalar_owner_index is None or operand.attrs.get("scalar_storage") is None:
