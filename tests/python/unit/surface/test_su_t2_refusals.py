@@ -14,6 +14,7 @@ root names Periodic and Scalar of ``pops`` are attributes that b6 retired, which
 ``test_no_legacy_runtime_routes`` refuses in a test.
 """
 import os
+import re
 
 import numpy
 import pytest
@@ -727,6 +728,27 @@ def test_su10_a_duration_beyond_the_polynomials_of_the_step_is_not_elaborated_ye
     with pytest.raises(surface.NotYetElaborated) as caught:
         _traced(lambda model: damped(rate=model))
     _later(caught, "su10-exp", ("here exp with a duration of the method", "N8 with N11"))
+
+
+def test_a_relayed_refusal_of_n8_speaks_of_step():
+    """A refusal of N8 that names B and p reaches the user with ``step`` (delta review of #745,
+    O-b). No construct of level 1 reaches such a refusal of N8 yet, since pops.Candidate always
+    ends at step.time + step.dt, so the relay is called on the refusal that N8 writes."""
+    from types import SimpleNamespace
+
+    from pops.surface._method import translate
+    from pops.time._program import traced_method as n8
+
+    error = n8.NotYetElaborated(
+        "the method 'm' reaches B.time + 1/2*p.dt: an achieved time other than B.time + p.dt "
+        "(T26, T36) is elaborated in Phase 2 of N8; B.state stays")
+    relayed = translate(error, SimpleNamespace(candidate_site=None, site=None))
+    assert type(relayed) is surface.NotYetElaborated
+    message = str(relayed)
+    assert "reaches step.time + 1/2*step.dt: an achieved time other than step.time + step.dt " \
+        "(T26, T36)" in message
+    assert "step.state stays" in message
+    assert not re.search(r"\bB\.|\bp\.dt", message)
 
 
 def test_a_refusal_of_n8_keeps_its_own_sentence():
