@@ -774,7 +774,7 @@ class _Component:
         self._name = name
         self._evaluate = evaluate
 
-    def __call__(self, state: Any = None, time: Any = None, **options: Any) -> TracedField:
+    def __call__(self, state: Any = None, time: Any = None, **options: Any) -> "TracedField | _PredicateCall":
         trace = self._trace
         trace.require_active("the component %r" % self._name)
         if options:
