@@ -26,6 +26,34 @@
 #define POPS_HD
 #endif
 
+/// `POPS_HD_FORCEINLINE`: POPS_HD plus a forced inline, for the few geometric accessors that every
+/// face or cell of a hot kernel calls (reference cell, cell measure, face area vector). GCC sizes
+/// its inlining budget on the whole translation unit (--param inline-unit-growth): a generated
+/// package compiled for one resolved route is a small unit, so the budget ran out before these
+/// accessors and every face called them through the PLT (M01 2048^2: face kernel x1.65, step x1.19
+/// against b6, ROM-18/#699). Forcing them keeps the kernel body independent of how many routes the
+/// package instantiates. Never on a function with a cold or large body; never with `inline`.
+#if defined(POPS_HAS_KOKKOS)
+#define POPS_HD_FORCEINLINE KOKKOS_FORCEINLINE_FUNCTION
+#elif defined(__CUDACC__) || defined(__HIPCC__)
+#define POPS_HD_FORCEINLINE __host__ __device__ __forceinline__
+#elif defined(__GNUC__) || defined(__clang__)
+#define POPS_HD_FORCEINLINE inline __attribute__((always_inline))
+#else
+#define POPS_HD_FORCEINLINE inline
+#endif
+
+/// `POPS_HD_OUTLINE`: POPS_HD kept out of line (and cold) on the host, for a rarely taken branch of
+/// a per-face or per-cell kernel, so that the common path stays small for the register allocator.
+/// Device passes keep the default. Never on the common path of a kernel.
+#if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__) || defined(__SYCL_DEVICE_ONLY__)
+#define POPS_HD_OUTLINE POPS_HD
+#elif defined(__GNUC__) || defined(__clang__)
+#define POPS_HD_OUTLINE POPS_HD __attribute__((noinline, cold))
+#else
+#define POPS_HD_OUTLINE POPS_HD
+#endif
+
 #include <cstdint>
 #include <type_traits>
 
