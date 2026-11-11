@@ -1,6 +1,6 @@
 """The user surface of spec 0.3, section 2.6: level 1 (the model, the numerics and the program).
 
-This is lot 1 of N15. Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
+This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2. Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
 imports it as ``import pops.surface as pops`` and ``from pops.surface.math import *``; the words
 of the library that it elaborates are ``pops.lib.numerics.schemes`` (``upwind``, ``rusanov``,
 ``two_point``) and ``pops.lib.time.methods`` (``forward_euler``, ``ssprk2``, ``ssprk3``, ``rk4``).
@@ -14,12 +14,13 @@ with the list of the words of this module.
 """
 from typing import Any as _Any
 
-from . import math
+from . import discrete, math
 from ._elaborate import Choice, Report, Row
 from ._geometry import Box, Periodic
 from ._method import Candidate, method
 from ._model import Components, Model, Positive, Scalar, Tensor, Vector
 from ._numerics import CellAverage, Numerics, SchemeValue, TermView
+from ._scheme import check_plain_function, scheme
 from ._program import (
     AMR, CUDA, Advance, Case, GaussLegendre, OpenMP, Program, Resources, Uniform, bind, claim,
     compile, inspect,
@@ -68,7 +69,6 @@ _LATER = {
     "Dimension": _SUPPORTS,
     "MovingConfiguration": "a later lot of N15 with the moving configurations of D18",
     "Swept": "a later lot of N15 with the moving configurations of D18",
-    "scheme": "a later lot of N15 with @pops.scheme (A4)",
     "jointly": "a later lot of N15 with the joint realizations of G05",
     "multistep": "a later lot of N8 (T27)", "substep": _N8_LATER, "try_substep": _N8_LATER,
     "exact_flow": _N8_LATER, "choose": _N8_LATER, "action": _N8_LATER, "predictor": _N8_LATER,
@@ -79,7 +79,7 @@ _LATER = {
     "Auxiliary": _LATER_N15, "explain": _LATER_N15,
     "claims": "a later lot of N15 with the claims of §13",
     "regions": "a later lot of N15 with the region level (SU15)",
-    "schedules": _RUN, "external": _LATER_N15, "discrete": _LATER_N15,
+    "schedules": _RUN, "external": _LATER_N15,
 }
 
 # Names of earlier texts (§21.7): the construct to write, as the message of SymbolNotInSurface.
@@ -169,12 +169,12 @@ __all__ = [
     "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
     "GaussLegendre", "Model", "Numerics", "OpenMP", "Periodic", "Positive", "Program",
     "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "inspect",
-    "math", "method",
+    "discrete", "math", "method", "scheme",
     # the refusals of §14.1 that this lot raises, and the values that the library reads
     "AmbiguousElaboration", "AntiDiffusive", "ClosedBodyViolation", "ContradictsDerivation",
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
     "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
-    "Choice", "Report", "Row", "SchemeValue", "TermView",
+    "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]

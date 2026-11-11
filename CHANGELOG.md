@@ -18,6 +18,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-98 (N15, lot 2): `@pops.scheme` with the entities `face`, `cell`, `term` and `axis` of
+  spec 0.3, 2.6.4 (rows 377 and 702 of 2.6). A scheme records its options at its call and runs
+  when `pops.Numerics` receives it, once per key and once per axis, so a refusal names the line of
+  its body and of `Numerics` (SU5). A `FaceFlux` under a flux lowers to the b6 `riemann.User` face
+  (`face.left(u)`, `face.right(u)`, `face.normal`, `dot(term.law(...), face.normal)` as `fL`/`fR`,
+  `largest` of the two spectral radii as `s`; stability `abs(speed)`, or `s` without `speed=`); a
+  `Reconstruct` lowers to `reconstruction.User` with `formal_order` the number of cells read, a
+  bound of its stencil that `pops.inspect` reports as not claimed. `pops.surface.discrete` holds
+  `FaceFlux`, `Reconstruct`, `spectral_radius`, `slowest_speed`, `fastest_speed`, `kinds` and
+  `forms` (`NormalComponent`, renamed from `NormalVelocity` with the spec of 11/11), the other
+  builders and reductions refused with their lot. `pops.math` elaborates `largest`, `smallest` and
+  `dot(term.law(...), face.normal)` in a scheme; `term.expect` compares exact normal forms (CC2).
+  The library words take `reconstruction=` a cell scheme, and `upwind(speed=f)`, f a function of
+  `face`, is `fluxes.upwind`. SU-T3 compares each with the case written by hand for b6, and CF4 a
+  scheme in the arithmetic of `fluxes.rusanov` with that face node for node.
 - ROM-85 (N10, phase 1, lot 1a): the vocabulary of the one array type (spec 0.3 DM1 to DM3, IR1 to
   IR3). `pops._ir.arrays` holds the value types of IR1 (`Array(D, T)`, `Product`, `Variant`,
   `Result`, `Iteration`, `Index`, scalars, and `Untyped` for what the plan cannot type yet);
