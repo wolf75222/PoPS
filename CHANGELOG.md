@@ -133,6 +133,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   receives the same bits, which can change with the rank count and the MPI reduction algorithm,
   and `tests/cpp/unit/parallel/test_reduction_collectives.cpp` checks the transport at two, three
   and four ranks.
+- ROM-90 (N9, lot 3): the SV8 gate also accepts a residual by the quotient
+  (||R(u)|| - atol) / scale <= rtol, as the realization's stop reads rtol, so a residual one ulp
+  above the rounded product is no longer refused; the M08 gap job is charged to `r260105`; the
+  gate on the `CompositeTensorFAC` flat Krylov fallback is pinned in source and in a native row.
 - ROM-90 (N9, lot 2): a Program mesh solve is decided by its original residual, outside its
   realization (spec 0.3 SV8). After the generated `solve_linear` (prepared Krylov) or a uniform
   `ImplicitStage` returns a solved candidate, the generated code measures the problem's own
