@@ -25,6 +25,7 @@ from ._program import (
     AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Uniform, bind, claim, compile, inspect,
 )
 from ._quadrature import Quadrature
+from ._run import BudgetExhausted, Output, RunFailed, every, record
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
@@ -54,7 +55,6 @@ _LATER = {
     "Tolerance": _SOLVES, "solve": _SOLVES, "try_solve": _SOLVES, "unknown": _SOLVES,
     "solver": _SOLVES, "Norm": _SOLVES, "Dense": _SOLVES, "Affine": _SOLVES,
     "eliminate": _SOLVES, "SolveFailed": _SOLVES, "Normalization": _SOLVES,
-    "Output": _RUN, "record": _RUN, "every": _RUN, "RunFailed": _RUN, "BudgetExhausted": _RUN,
     "Scientific": _RUN, "Bitwise": _RUN, "Reproducible": _RUN, "Cache": _RUN,
     "Regrid": _HIERARCHY, "Level": _HIERARCHY, "invalidate": _HIERARCHY, "remap": _HIERARCHY,
     "restrict_onto": _HIERARCHY, "replace_contribution": _HIERARCHY,
@@ -166,14 +166,16 @@ def __getattr__(name: str) -> _Any:
 
 __all__ = [
     "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
-    "Model", "Numerics", "OpenMP", "Periodic", "Positive", "Program", "Quadrature",
-    "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "inspect",
-    "discrete", "math", "method", "scheme",
+    "Model", "Numerics", "OpenMP", "Output", "Periodic", "Positive", "Program", "Quadrature",
+    "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "every", "inspect",
+    "record", "discrete", "math", "method", "scheme",
     # the refusals of §14.1 that this lot raises, and the values that the library reads
     "AmbiguousElaboration", "AntiDiffusive", "ClosedBodyViolation", "ContradictsDerivation",
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
     "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
+    # the failures of a run (T39), lot G
+    "BudgetExhausted", "RunFailed",
     "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]
