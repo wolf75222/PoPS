@@ -33,7 +33,10 @@ benchmarks/romeo/submit_n9_m08_gap.sh                                  # x64cpu,
 benchmarks/romeo/submit_n9_m08_gap.sh --constraint=armgpu --gpus-per-task=1
 ```
 
-The job builds the wheel of the checked-out revision in `/scratch_p/$USER/$SLURM_JOB_ID`, runs the
+The job is charged to the project account `r260105` (the project's ROMEO account; the other
+scripts of `benchmarks/romeo/` still name `r250127`), and `--account=...` at submission overrides
+it, since the submit script passes its arguments to `sbatch`. The job builds the wheel of the
+checked-out revision in `/scratch_p/$USER/$SLURM_JOB_ID`, runs the
 sizes of `POPS_N9_SIZES` (256 to 4096) and writes one JSON per size to
 `~/pops-benchmark-results/n9-m08/`.
 

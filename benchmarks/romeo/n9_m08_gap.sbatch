@@ -5,7 +5,7 @@
 # One rank only: a Uniform Cartesian layout lowers to one box, so a second rank would own no cell
 # (benchmarks/n9_m08/README.md). The sizes are the per-rank sizes of SV-T1, 256² to 4096².
 #SBATCH --job-name=pops-n9-m08
-#SBATCH --account=r250127
+#SBATCH --account=r260105
 #SBATCH --constraint=x64cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
