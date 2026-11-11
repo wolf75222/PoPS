@@ -92,7 +92,7 @@ class ResidualSolution:
 class SolveOutcome:
     """Non-readable Program solve token; call ``consume(action=...)`` to project values."""
 
-    __slots__ = ("_program", "_token", "_factory", "_name", "_result")
+    __slots__ = ("_program", "_token", "_factory", "_name", "_result", "_node", "_evidence")
 
     def __init__(self, program: Any, token: Any, factory: Any, name: Any) -> None:
         self._program = program
@@ -100,6 +100,8 @@ class SolveOutcome:
         self._factory = factory
         self._name = name
         self._result = None
+        self._node = None
+        self._evidence = None
 
     @property
     def token(self) -> Any:
@@ -136,7 +138,25 @@ class SolveOutcome:
                 space=self._token.space, point=self._token.point)
             result = self._factory(node)
         self._result = result
+        self._node = node
         return result
+
+    @property
+    def evidence(self) -> "SolveEvidence":
+        """The evidence of a consumed solve (spec 0.3 SV5): its iterations and the norm of its last
+        physical residual, in the request's norm. It reports what the realization did and never
+        decides success: the gates of SV8 decide, and a failed solve does not continue past its
+        consumption, so the evidence that a Program reads is that of a solved candidate."""
+        if self._node is None:
+            raise TypeError(
+                "SolveOutcome evidence is readable only after outcome.consume(action=...) (SV5)")
+        if self._token.op not in _EVIDENCE_OPS:
+            raise NotImplementedError(
+                "SolveOutcome evidence of a %r solve is not elaborated yet; the prepared Krylov "
+                "solve_linear route has it (N9 lot 4)" % self._token.op)
+        if self._evidence is None:
+            self._evidence = SolveEvidence(self._program, self._node)
+        return self._evidence
 
     def __iter__(self):
         raise TypeError("SolveOutcome is not iterable; call consume(action=...) first")
@@ -149,6 +169,59 @@ class SolveOutcome:
 
     def __repr__(self) -> str:
         return "<SolveOutcome %s: unconsumed>" % self._name
+
+
+_EVIDENCE_OPS = frozenset(("solve_linear",))
+SOLVE_EVIDENCE_FIELDS = ("iterations", "residual_norm")
+
+
+class SolveEvidence:
+    """The evidence of one consumed solve (SV5), as Program values read after the consumption.
+
+    ``iterations`` is an Int64 and ``residual_norm`` a Scalar, both identical on every rank (the
+    count is local to an identical recurrence and the norm is already reduced). ``reason`` is
+    "solved": a consumed outcome whose report is not solved fails the attempt or the run at its
+    consumption. ``correction_norm`` is not measured by either route yet."""
+
+    __slots__ = ("_program", "_outcome", "_values")
+
+    def __init__(self, program: Any, outcome: Any) -> None:
+        self._program = program
+        self._outcome = outcome
+        self._values: dict[str, Any] = {}
+
+    def _value(self, field: str) -> Any:
+        if field not in self._values:
+            from pops.time._program.structured_control import new_typed, scalar_signature
+
+            kind = "int64" if field == "iterations" else "scalar"
+            with authoring_transaction(self._program):
+                self._values[field] = new_typed(
+                    self._program, scalar_signature(kind), "solve_evidence", (self._outcome,),
+                    {"field": field}, point=self._outcome.point,
+                    name="%s_%s" % (self._outcome.name, field))
+        return self._values[field]
+
+    @property
+    def iterations(self) -> Any:
+        return self._value("iterations")
+
+    @property
+    def residual_norm(self) -> Any:
+        return self._value("residual_norm")
+
+    @property
+    def reason(self) -> str:
+        return "solved"
+
+    @property
+    def correction_norm(self) -> Any:
+        raise NotImplementedError(
+            "SolveOutcome evidence correction_norm (SV5) is not measured by the prepared Krylov "
+            "route or the reference CG yet; a later lot of N9 adds it")
+
+    def __repr__(self) -> str:
+        return "<SolveEvidence of %s>" % self._outcome.name
 
 
 class FieldSolveOutcome(SolveOutcome):
@@ -165,6 +238,6 @@ class FieldSolveOutcome(SolveOutcome):
 
 
 __all__ = [
-    "FailRun", "FieldSolveOutcome", "RejectAttempt", "ResidualSolution", "SOLVE_STATUSES",
-    "SolveAction", "SolveOutcome",
+    "FailRun", "FieldSolveOutcome", "RejectAttempt", "ResidualSolution", "SOLVE_EVIDENCE_FIELDS",
+    "SOLVE_STATUSES", "SolveAction", "SolveEvidence", "SolveOutcome",
 ]

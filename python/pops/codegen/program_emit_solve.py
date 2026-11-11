@@ -106,6 +106,31 @@ def _trial_site(program: Any, solve: Any) -> Any:
     return None
 
 
+def _solve_evidence_requested(program: Any, solve: Any) -> bool:
+    """Whether a ``solve_evidence`` read (SV5) consumes the outcome of ``solve``. The evidence is
+    emitted only when the case reads it, so a case that does not read it keeps its C++."""
+    for node in _program_nodes(program):
+        if (node.op == "solve_evidence" and len(node.inputs) == 1
+                and node.inputs[0].op == "solve_outcome" and node.inputs[0].inputs
+                and node.inputs[0].inputs[0] is solve):
+            return True
+    return False
+
+
+def solve_evidence_cpp(value: Any) -> str:
+    """The C++ expression of one ``solve_evidence`` read: a field of the report that the solve
+    copied before its consumption guard (``kr<id>_evidence``)."""
+    outcome = value.inputs[0]
+    solve = outcome.inputs[0]
+    report = "kr%d_evidence" % solve.id
+    field = value.attrs.get("field")
+    if field == "iterations":
+        return "static_cast<std::int64_t>(%s.iters)" % report
+    if field == "residual_norm":
+        return "static_cast<pops::Real>(%s.residual_norm)" % report
+    raise ValueError("solve_evidence field %r is not elaborated" % (field,))
+
+
 def _append_solve_report_guard(
         program: Any, solve: Any, outcome: str, lines: list[str], *, label: str,
         phase: str | None = None) -> None:
@@ -1511,6 +1536,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                 lines.extend(hierarchy_emission.solve)
         else:
             lines.extend(hierarchy_emission.solve)
+        if _solve_evidence_requested(program, v):
+            raise ValueError("solve evidence (SV5) of a direct hierarchy solve is not elaborated; "
+                             "the prepared Krylov route has it")
         _append_solve_report_guard(
             program, v, kr, lines, label="solve_linear", phase="solve")
         return
@@ -1706,6 +1734,10 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     _append_original_residual_gate(
         program, v, kr, problem_name, workspace_name, controls_name, rhs_tok, op_ncomp,
         input_ghosts, tol, abs_tol, prelude, lines)
+    if _solve_evidence_requested(program, v):
+        # SV5: the evidence is the report the gates left, copied before its consumption; a report
+        # that is not solved fails at the guard below, so a read after it is a solved one.
+        lines.append("const pops::SolveReport %s_evidence = %s.report();" % (kr, kr))
     _append_solve_report_guard(
         program, v, kr, lines, label="solve_linear", phase="solve")
     if fallback_owner is not None:
