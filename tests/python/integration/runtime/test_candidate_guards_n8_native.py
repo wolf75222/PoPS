@@ -174,13 +174,17 @@ def test_a_retry_keeps_the_solve_of_its_fixed_site(
         assert solved["last_prepared_solve_residual"] > 0.0
         assert (native["last_prepared_solve_iterations"], _bits(native)) == (
             solved["last_prepared_solve_iterations"], _bits(solved))
-    # The sabotage proof: a reuse that zeroes the kept solution changes that residual.
+    # The sabotage proof: a reuse that zeroes the kept solution is caught. The stage-1 solve of
+    # the second attempt then reads another right-hand side and converges, so the first step is
+    # accepted with a wrong potential, and the second step fails at its stage-0 solve: neither
+    # the outcome nor the last residual is the one of the honest reuse.
     spec, _, simulation = _m08(world, monkeypatch, 3, max_iter, sabotage=True)
     wrong = failed(spec, simulation)
     with collective_check(world):
-        assert type(wrong) is BudgetExhausted and wrong.result.rejections == 3
-        assert wrong.result.diagnostics["native"]["prepared_solves"] == 1 + 3
-        assert _bits(wrong.result.diagnostics["native"]) != _bits(solved)
+        assert type(wrong) is SolveFailed and wrong.result.steps == 1
+        assert wrong.result.failure.payload["site"].endswith("flow#0/live_Poisson/solve")
+        assert (type(wrong), wrong.result.steps, _bits(wrong.result.diagnostics["native"])) != (
+            type(error), error.result.steps, _bits(native))
     # The same step accepted: every attempt is the first of its step, and solves both stages.
     spec, _, simulation = _m08(world, monkeypatch, 3, None)
     result = collective_call(world, lambda: simulation.run(spec.t_end))
