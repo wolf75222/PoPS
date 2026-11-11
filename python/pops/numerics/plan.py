@@ -35,7 +35,12 @@ class UnsupportedBalanceRealizationError(BlockageValueError):
 
 
 def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states: Any) -> None:
-    """Cover each chosen equation exactly once, through the whole rate or partitions."""
+    """Cover each chosen equation exactly once, through the whole rate or partitions.
+
+    An occurrence covered twice or not at all is refused with ``CoverageNotExact`` (D5), which
+    names each such term and the Python line that wrote it into its balance.
+    """
+    from pops.model.balance_analysis import CoverageNotExact, occurrence_text
     contracts = model._rate_contracts
     state_set = None if states is None else set(states)
     expected = model.selected_rate_contracts(states=states)
@@ -63,12 +68,14 @@ def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states
         for occurrence in view.occurrences:
             previous = counts.get(occurrence.ordinal)
             if previous is not None:
-                raise ValueError(
+                raise CoverageNotExact(
                     "DiscretizationPlan duplicate physical balance occurrence %r[%d] "
                     "in numerical routes %r and %r"
-                    % (root.local_id, occurrence.ordinal, previous.local_id, rate.local_id))
+                    % (root.local_id, occurrence.ordinal, previous.local_id, rate.local_id),
+                    term=occurrence_text(occurrence), count=2)
             counts[occurrence.ordinal] = rate
     missing = []
+    uncovered = []
     for root in expected:
         view = retained.get(root)
         if view is None:
@@ -79,10 +86,16 @@ def _validate_selected_balance_coverage(model: Any, selected: Mapping, *, states
         if root not in covered or required != set(covered[root]):
             omitted = sorted(required - set(covered.get(root, {})))
             missing.append("%s occurrences %s" % (root.local_id, omitted))
+            uncovered.extend(occurrence_text(view.balance.occurrences[index])
+                             for index in omitted)
     if missing or extra:
-        raise ValueError(
-            "DiscretizationPlan rate coverage mismatch for Model %r block states: missing=%s extra=%s"
-            % (model.name, missing, sorted(rate.local_id for rate in extra)))
+        message = ("DiscretizationPlan rate coverage mismatch for Model %r block states: "
+                   "missing=%s extra=%s"
+                   % (model.name, missing, sorted(rate.local_id for rate in extra)))
+        if not uncovered:
+            raise ValueError(message)
+        raise CoverageNotExact("%s; uncovered terms: %s" % (message, "; ".join(uncovered)),
+                               term=uncovered[0], count=0, terms=uncovered)
 
 
 def _require_rate_method(value: Any, where: str) -> Any:
