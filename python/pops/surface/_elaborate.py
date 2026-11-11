@@ -582,6 +582,9 @@ class _Elaboration:
             schedule = ("every(%d)" % output.every_steps if output.every_steps is not None
                         else "at=every_dt(%r)" % output.every_time if output.every_time is not None
                         else "at=%r" % (output.times,))
+            if output.every_steps is not None or output.every_time is not None:
+                schedule += (", the lattice from the start of the simulation; a later run that "
+                             "starts off it is refused (N8)")
             self.rows.append(Row(
                 repr(output), "program",
                 "Output(lambda B, interval: Product(%s), %s), evaluated by the compiled run (CC14)"

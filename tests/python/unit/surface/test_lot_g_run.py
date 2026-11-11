@@ -253,6 +253,27 @@ def test_npz_writes_the_series_of_an_output(tmp_path, parts):
     assert [path.name for path in (tmp_path / "out").iterdir()] == ["u.npz"]
 
 
+def test_npz_refuses_a_metadata_named_as_a_field_of_the_record(tmp_path, parts):
+    """F2 of the review of lot G: a metadata u would replace the series u."""
+    writer = npz("u.npz", metadata=surface.record(u=3.0))
+    with pytest.raises(ValueError, match="u is both a field of the record and a metadata"):
+        surface.Output(surface.record(u=parts.u), when=0.5, write=writer)
+    with pytest.raises(ValueError, match="u is both a field of the record and a metadata"):
+        writer.write_series(str(tmp_path), surface.record(u=parts.u), _series(0.0), first=True)
+    assert not (tmp_path / "u.npz").exists()
+    surface.Output(surface.record(u=parts.u), when=0.5,
+                   write=npz("u.npz", metadata=surface.record(nx=3)))
+
+
+def test_from_layout_takes_the_layout_of_b6_or_a_flat_array():
+    """O1 of the review of lot G: an array in another order is refused, not reshaped."""
+    cells = (4, 3)
+    value = numpy.arange(12.0).reshape(cells)
+    stored = _run.to_layout(value, cells, "data")
+    with pytest.raises(ValueError, match="has the shape \\(1, 3, 4\\) or is flat"):
+        _run.from_layout(numpy.transpose(stored[0])[numpy.newaxis, ...], cells)
+
+
 def test_npz_refuses_a_field_named_as_the_series(tmp_path, parts):
     with pytest.raises(ValueError, match="name the field otherwise"):
         npz("u.npz").write_series(str(tmp_path), surface.record(time=parts.u), (), first=True)

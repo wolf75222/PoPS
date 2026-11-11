@@ -8547,17 +8547,17 @@
       },
       "local_receipts": {
         "tests/python/integration/runtime/test_surface_lot_g_run_native.py": {
-          "cases": 3,
-          "session_seconds": 151.77
+          "cases": 4,
+          "session_seconds": 152.65
         },
         "tests/python/unit/surface/test_lot_g_run.py": {
-          "cases": 14,
-          "session_seconds": 2.3
+          "cases": 16,
+          "session_seconds": 2.44
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_surface_lot_g_run_native.py": "fb0ab61d93d2ea76e048a38ee00cb781e458f7ff2b7b1e37e78b63580d937612",
-        "tests/python/unit/surface/test_lot_g_run.py": "4ece21d73a61e9318203b4476ed66b322123f0a530d619ec95d2323e5dc09ea1"
+        "tests/python/integration/runtime/test_surface_lot_g_run_native.py": "4ab191f189bb4566117ce35df3d038665aa58fbb24c1b3a3c688c8534c592f1a",
+        "tests/python/unit/surface/test_lot_g_run.py": "21c94f63eace2331e33dc8b0add0e3c547c18e15ed01cfcb2cf0c912f39cde72"
       }
     }
   },

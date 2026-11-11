@@ -40,6 +40,7 @@ from pops.projection import ConservativeCellAverage
 from pops.runtime._simulation import Simulation
 from pops.surface.math import ddt, div, grad, vector
 from pops.time._program.elaboration import Advance, Proposal, elaborate
+from pops.time._program.outputs import EveryDt
 from pops.time._program.traced_method import Candidate, method
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
@@ -48,6 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 CELLS = (16, 8)
 B = 0.25                        # the bound value of the runtime parameter b (default 0.5)
 TIMES = [0.02, 0.05]
+H = 0.004                       # pops.every(time=H)
 
 
 def _surface_case():
@@ -67,10 +69,11 @@ def _surface_case():
                               write=npz("series/u.npz",
                                         metadata=surface.record(nx=CELLS[0], ny=CELLS[1])))
     by_steps = surface.Output(surface.record(u=u), when=surface.every(steps=10))
+    by_time = surface.Output(surface.record(u=u), when=surface.every(time=H))
     case = surface.Case(model=model, numerics=numerics, program=program,
                         layout={domain: surface.Uniform(cells=CELLS)},
-                        outputs=[at_times, by_steps])
-    return case, u, b, u0, at_times, by_steps
+                        outputs=[at_times, by_steps, by_time])
+    return case, u, b, u0, at_times, by_steps, by_time
 
 
 @method
@@ -130,12 +133,13 @@ def compiled(tmp_path_factory, native_cxx, kokkos_root):
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
         patch.chdir(REPO_ROOT)
-        case, u, b, u0, at_times, by_steps = _surface_case()
+        case, u, b, u0, at_times, by_steps, by_time = _surface_case()
         artifact = surface.compile(case, target=surface.OpenMP())
         hand_case, layout, b_handle = _hand_case()
         hand = pops.compile(pops.resolve(pops.validate(hand_case), layout=layout))
         yield {"case": case, "u": u, "b": b, "u0": u0, "at_times": at_times,
-               "by_steps": by_steps, "artifact": artifact, "hand": hand, "b_handle": b_handle}
+               "by_steps": by_steps, "by_time": by_time, "artifact": artifact, "hand": hand,
+               "b_handle": b_handle}
 
 
 def _hand_states(compiled, frontiers):
@@ -147,6 +151,10 @@ def _hand_states(compiled, frontiers):
                         params={compiled["b_handle"]: B})
     simulation = Simulation(runtime)
     states = {}
+    # The run of the surface lands on the times of its Outputs, those of every(time=H) included:
+    # the hand-written case runs to the same frontiers in turn.
+    lattice = [EveryDt(H).time(k) for k in range(1, int(max(frontiers) / H) + 1)]
+    frontiers = sorted(set(frontiers) | {t for t in lattice if t <= max(frontiers)})
     for frontier in frontiers:
         result = simulation.run(frontier)
         assert result.failure is None
@@ -179,6 +187,9 @@ def test_the_surface_run_is_the_run_of_the_hand_written_case(compiled, tmp_path)
     _bitwise(cadence[0]["u"], _initial())
     _bitwise(cadence[-1]["u"], final)
     assert result.diagnostics["threads"]["asked"] == 1
+    # every(time=H): the start t0 = 0 and t0 + k H up to until, each landed on
+    assert [row.time for row in result.outputs[compiled["by_time"]]] == [
+        EveryDt(H).time(k) for k in range(13)]
     # npz: the series of the Output after the run, its times, steps and metadata
     with np.load(tmp_path / "series" / "u.npz") as archive:
         assert sorted(archive.files) == ["nx", "ny", "step", "time", "u"]
@@ -206,11 +217,29 @@ def test_a_second_run_continues_and_rewrites_its_series(compiled, tmp_path):
     _bitwise(second.state[u], np.transpose(state[0]))
     with np.load(tmp_path / "series" / "u.npz") as archive:
         assert archive["time"].tolist() == TIMES
+    # every(time=H) on the second run, whose start 0.02 = 5 H is on the lattice: t0 + k H
+    assert [row.time for row in second.outputs[compiled["by_time"]]] == [
+        EveryDt(H).time(k) for k in range(6, 13)]
     # a new simulation in the same directory would replace a file that it did not write
     other = surface.bind(compiled["artifact"], data={compiled["u0"]: _initial()},
                          directory=tmp_path)
     with pytest.raises(OutputExists, match="overwrite=True"):
         other.run(until=0.01)
+
+
+
+def test_a_later_run_that_starts_off_the_lattice_of_every_is_refused(compiled, tmp_path):
+    """F1 of the review of lot G: the run would publish N8's k H, where the spec gives t0 + k H;
+    it is refused before it runs, and the simulation is left as it was."""
+    simulation = surface.bind(compiled["artifact"], params={compiled["b"]: B},
+                              data={compiled["u0"]: _initial()}, directory=tmp_path)
+    first = simulation.run(until=0.01)          # 10 steps, on the lattice of every(steps=10)
+    with pytest.raises(surface.NotYetElaborated,
+                       match="starts at t0 = 0.01, off the lattice k h of pops.every\\(time=0.004\\)"
+                             ".*later lot of N8"):
+        simulation.run(until=0.015)
+    assert first.time == 0.01 and first.steps == 10
+    assert simulation._simulation._runtime.time() == 0.01
 
 
 # --- A2: the two_point diffusion is kappa P.laplacian ---------------------------------------------

@@ -18,9 +18,13 @@ of N8 (``pops.runtime._simulation``), these constructs of the surface:
 * ``pops.Output(pops.record(u=u), when=schedule, write=writer)`` and ``pops.every(time=h)`` or
   ``pops.every(steps=k)``: an Output of N8 whose body reads the accepted state. A time or a list
   of times gives ``at=`` and the run publishes at those times only; ``every(time=h)`` publishes at
-  the start of the run and at t0 + k h; ``every(steps=k)`` at the start and after every k-th
-  accepted step; a later run of the same simulation publishes its own times and steps, not its
-  start, which the run before it ended on. ``write=None`` keeps the publications in ``result.outputs`` (2.6.9); a writer of
+  the start t0 of the run and at t0 + k h, ``every(steps=k)`` at the start and after every k-th
+  accepted step. N8 lowers both on a lattice fixed when the case is compiled, k h and the k-th
+  macro step from the start of the simulation, which is the lattice of the spec only when the
+  run starts on it: a later run whose start is off the lattice is refused before it runs
+  (``NotYetElaborated``, naming N8), and a later run that starts on it publishes its times and
+  steps after its start, the start being the end of the run before it, which that run published
+  (review of lot G, F1). ``write=None`` keeps the publications in ``result.outputs`` (2.6.9); a writer of
   ``pops.lib.output`` writes the whole series of the simulation after each run, outside every step
   (CF9), relative to ``directory=``.
 
@@ -44,6 +48,8 @@ _RESTART = "a later lot of N15 with the continuation and restart of G07 (CN11)"
 _DEFINITIONS = "a later lot of N15 with the definitions of R16 and the reductions of N8"
 _PREDICATE = "a later lot of N8 with the predicates of the when bodies (CC14)"
 _DEFAULT_MAX_STEPS = 1_000_000
+_LATTICE = ("a later lot of N8 with the Outputs whose lattice starts at the start of each run "
+            "(CC14)")
 
 
 # --- records and schedules ----------------------------------------------------------------------
@@ -185,6 +191,8 @@ class Output:
                                       and callable(getattr(write, "check", None))):
             raise TypeError("pops.Output(write=...) takes a writer of pops.lib.output, such as "
                             "npz(path), got %r" % (write,))
+        if write is not None and callable(getattr(write, "check_record", None)):
+            write.check_record(value)
         self.record = value
         self.when = when
         self.write = write
@@ -347,6 +355,9 @@ def from_layout(array: Any, cells: tuple) -> Any:
     value = _np.asarray(array, dtype=_np.float64)
     expected = (1,) + tuple(reversed(tuple(cells)))
     if value.shape != expected:
+        if value.ndim != 1 or value.size != _math.prod(expected):
+            raise ValueError("a state of b6 has the shape %r or is flat; got %r"
+                             % (expected, value.shape))
         value = value.reshape(expected)
     return _np.ascontiguousarray(_np.transpose(value[0]))
 
@@ -541,6 +552,7 @@ class Simulation:
         for output in self._series:
             if output.write is not None and output not in self._written:
                 output.write.check(self.directory)
+        self._check_lattices()
         first_run = self._runs == 0
         self._runs += 1
         failure_error = None
@@ -555,6 +567,29 @@ class Simulation:
             variant = _VARIANTS.get(type(failure_error).__name__, RunFailed)
             raise variant(surface, str(failure_error)).with_traceback(None) from failure_error
         return surface
+
+    def _check_lattices(self) -> None:
+        """Refuse a run whose start is off the lattice of an ``every`` schedule (F1): N8's
+        lattice, k h and every k-th macro step, is fixed at compile time, and it is t0 + k h only
+        when the run starts on it."""
+        runtime = self._simulation._runtime
+        start, step = float(runtime.time()), int(runtime.macro_step())
+        for output in self._series:
+            if output.every_time is not None:
+                from pops.time._program.outputs import EveryDt
+
+                lattice = EveryDt(output.every_time)
+                index = round(start / output.every_time)
+                near = lattice.time(index)
+                if abs(near - start) > 4.0 * max(_math.ulp(start), _math.ulp(near)):
+                    raise NotYetElaborated(
+                        "a run of %r that starts at t0 = %r, off the lattice k h of "
+                        "pops.every(time=%r), where the run would publish t0 + k h"
+                        % (output, start, output.every_time), _LATTICE)
+            if output.every_steps is not None and step % output.every_steps:
+                raise NotYetElaborated(
+                    "a run of %r that starts after %d accepted steps, which is not a multiple of "
+                    "pops.every(steps=%d)" % (output, step, output.every_steps), _LATTICE)
 
     def _result(self, result: Any, first_run: bool) -> RunResult:
         case = self.artifact.case

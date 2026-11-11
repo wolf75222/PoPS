@@ -9,7 +9,7 @@ path is relative to the ``directory=`` of ``pops.bind``.
 is the array ``f`` of shape ``(n,) + cells``, the n publications in order, each in the order of the
 support's axes; ``time`` and ``step`` are the achieved time and the accepted macro step of each
 publication; each field of ``metadata``, a ``pops.record`` of numbers, is a scalar array of its
-name. A file that this simulation did not write is refused with ``OutputExists`` unless
+name, which no field of the record may take. A file that this simulation did not write is refused with ``OutputExists`` unless
 ``overwrite=True``, before the first run of the simulation starts. ``hdf5`` is a later lot.
 """
 from __future__ import annotations
@@ -41,6 +41,20 @@ class Npz:
         return "npz(%r%s%s)" % (self.path, "" if self.metadata is None else ", metadata=...",
                                 ", overwrite=True" if self.overwrite else "")
 
+    def check_record(self, record: Any) -> None:
+        """Refuse a field of the record that a metadata or the series would take (F2)."""
+        names = [name for name, _ in record.items()]
+        for name in names:
+            if name in _RESERVED:
+                raise ValueError("npz(%r): the record field %s is the series of the publications; "
+                                 "name the field otherwise" % (self.path, name))
+        if self.metadata is not None:
+            for name, _ in self.metadata.items():
+                if name in names:
+                    raise ValueError("npz(%r): %s is both a field of the record and a metadata of "
+                                     "the writer, which would replace its series; name one of "
+                                     "them otherwise" % (self.path, name))
+
     def check(self, directory: str) -> None:
         """Refuse, before a simulation runs, a file that it would replace and did not write."""
         target = os.path.join(directory, self.path)
@@ -54,12 +68,9 @@ class Npz:
         target = os.path.join(directory, self.path)
         if first:
             self.check(directory)
+        self.check_record(record)
         arrays: dict = {}
         names = [name for name, _ in record.items()]
-        for name in names:
-            if name in _RESERVED:
-                raise ValueError("npz(%r): the record field %s is the series of the publications; "
-                                 "name the field otherwise" % (self.path, name))
         for name in names:
             arrays[name] = np.stack([publication[name] for publication in series]) if series \
                 else np.zeros((0,))
