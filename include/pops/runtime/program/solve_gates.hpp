@@ -43,6 +43,17 @@ struct OriginalResidualGate {
   /// atol + rtol * scale, the bound of SV8.
   [[nodiscard]] Real bound() const noexcept { return atol + rtol * scale; }
 
+  /// ||R(u)|| <= atol + rtol * scale, for a finite norm and bound. The quotient form
+  /// (||R(u)|| - atol) / scale <= rtol states the same relation and is also accepted: the rounded
+  /// product can refuse by one ulp a residual that the realization's own stop accepts, since that
+  /// stop reads rtol as a quotient (`satisfies_stopping_controls`).
+  [[nodiscard]] bool satisfied() const noexcept {
+    if (norm <= bound())
+      return true;
+    return std::isfinite(static_cast<double>(scale)) && scale > Real(0) &&
+           (norm - atol) / scale <= rtol;
+  }
+
   /// The reason the gate refuses, in the order of `relations.solve`, or empty when it passes: a
   /// norm that is not finite or negative, an accuracy whose bound is not finite, then a residual
   /// above its bound.
@@ -53,7 +64,7 @@ struct OriginalResidualGate {
       cause = "invalid_norm";
     else if (!std::isfinite(static_cast<double>(limit)) || limit < Real(0))
       cause = "invalid_accuracy";
-    else if (!(norm <= limit))
+    else if (!satisfied())
       cause = "original_residual";
     if (cause == nullptr)
       return {};

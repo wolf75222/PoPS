@@ -81,7 +81,7 @@ def build_finite_amr(*, cells=(16, 8), dt=.01, steps=3, ratio=2,
     layout = AMR(grid=CartesianGrid(frame=frame, cells=cells,
                                     periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(pm.ValueExpr(block[state]) > case.value(threshold)),
+        tagging=AMRTagging(rules=(Tag(lambda cell: cell.value(pm.ValueExpr(block[state])) > case.value(threshold)),
                                  Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid.frozen(), transfer=transfer, execution=execution)

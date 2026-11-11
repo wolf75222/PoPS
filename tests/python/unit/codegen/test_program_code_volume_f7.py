@@ -83,6 +83,40 @@ def test_a_body_that_cannot_be_scanned_stays_whole(monkeypatch):
     assert control._chunk_step_body(list(unbalanced), [0, 1, 2]) == unbalanced
 
 
+def test_a_split_follows_only_a_line_that_ends_a_statement(monkeypatch):
+    monkeypatch.setattr(control, "_STEP_CHUNK_CHARACTERS", 1)
+    outlined = "\n".join(["// pops-outlined-capture begin 7", "#if defined(__GNUC__) || defined(__clang__)",
+                          "[&]() __attribute__((noinline)) {", "#else", "[&]() {", "#endif",
+                          "  const auto x = g(a);", "  use(x);", "}();", "// pops-outlined-capture end 7"])
+    lines = ["const int a = f();", "if (a)", "  use(a);", outlined, "done(a);"]
+    # 2 sits after `if (a)`: a split there would make the `if` govern the rest of the step. 4
+    # follows an outlined capture, whose closing comment is passed over to its `}();`.
+    chunked = control._chunk_step_body(list(lines), [1, 2, 3, 4, 5])
+    body, opened = strip_chunks(chunked)
+    assert body == lines and opened == 3
+    assert split_points(lines, chunked) == [1, 3, 4]
+    assert not control._ends_statement(lines, 2) and not control._ends_statement(lines, 0)
+    assert control._ends_statement(["work(); // why", "// note", ""], 3) is False
+    # A preprocessor line does not qualify: after `#endif`, the `if` would govern the rest of the
+    # step whenever X is undefined.
+    guarded = ["const int a = f();", "if (a)", "#if X", "  use(a);", "#endif", "done(a);"]
+    assert split_points(guarded, control._chunk_step_body(list(guarded), [1, 2, 5])) == [1]
+    assert control._ends_statement(["use(a);", "#endif", "// note"], 3) is False
+
+
+def test_raw_string_literals_have_no_braces():
+    lines = ['const char* s = R"pops(" { ")pops";', "use(s);", 'const char* t = u8R"(', "#if 0", "{",
+             ')";', 'const wchar_t* u = LR"({)" L"}";', "use(t, u);"]
+    assert control._brace_depths(lines) == [0, 0, 0, None, None, None, 0, 0, 0]
+    # An identifier that ends with R before a quote is no raw literal prefix.
+    assert control._brace_depths(['use(ABR"{", 1);', "done();"]) == [0, 0, 0]
+    # The scan resumes right after the closing quote, where a brace may follow.
+    assert control._brace_depths(['const S s{R"(x)"};', "use(s);"]) == [0, 0, 0]
+    # A literal whose delimiter is malformed or never ends leaves the body unscannable.
+    assert control._brace_depths(['const char* s = R"' + "d" * 17 + '(x)' + "d" * 17 + '";']) is None
+    assert control._brace_depths(['const char* s = R"x(', "{"])[-1] is None
+
+
 def test_the_size_measure_ignores_outlining_scaffold_and_indentation():
     entry = "const auto x = f(a,\n    b);"
     outlined = "\n".join(["// pops-outlined-capture begin 7", "#if defined(__GNUC__) || defined(__clang__)",

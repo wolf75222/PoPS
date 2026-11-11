@@ -152,7 +152,7 @@ def build_layout(
     ))
     tagging = AMRTagging(
         rules=(
-            Tag(ValueExpr(marker_state) > case.value(threshold)),
+            Tag(lambda cell: cell.value(ValueExpr(marker_state)) > case.value(threshold)),
             Buffer(cells=1),
         ),
         hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

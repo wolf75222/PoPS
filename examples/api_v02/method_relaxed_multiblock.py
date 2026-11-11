@@ -98,7 +98,7 @@ def build_t10_multiblock(numerical_flux, *, cells=(32, 16), temporal_ratio=2,
     for subject in subjects: transfer.state(subject, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     from pops.params import RuntimeParam
     threshold = case.param(RuntimeParam("refine_threshold", default=.5))
-    tags = tuple(Tag(pm.ValueExpr(subject)["q"] > case.value(threshold)) for subject in subjects)
+    tags = tuple(Tag(lambda cell: cell.value(pm.ValueExpr(subject)["q"]) > case.value(threshold)) for subject in subjects)
     if temporal_ratio not in (1, 2):
         raise ValueError("receiver requires synchronous or 2:1 temporal composition")
     execution = (AMRExecution.synchronous() if temporal_ratio == 1 else

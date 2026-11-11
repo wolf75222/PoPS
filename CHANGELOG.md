@@ -122,6 +122,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3a, part 2): the 19 `examples/api_v02` AMR cases and the condensed_fac/01,
+  diocotron/01, 02 and 04, hyqmom (`_amr_hybrid`) and initial_field_ghost/01 tutorials write their
+  tagging as regions of `cell`; the three reviewed api_v02 modules that changed carry new source
+  digests in `profile_implementations.json`. Graph and region runs of condensed_fac/01, hyqmom/02
+  and diocotron/01 are bitwise identical. Only the scalar advection final example still writes the
+  graph; it moves with the VM removal (lot 3c).
 - ROM-95 (N12, lot 3a, part 1): the scalar advection AMR tutorials 05-14, the IMEX AMR final
   example, the field diffusion example and the scalar AMR migration workflow write their tagging
   as regions of `cell` (`Tag(lambda cell: cell.value(q) > c)`, `gradient_norm` for 09) instead of
@@ -150,6 +156,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   receives the same bits, which can change with the rank count and the MPI reduction algorithm,
   and `tests/cpp/unit/parallel/test_reduction_collectives.cpp` checks the transport at two, three
   and four ranks.
+- ROM-90 (N9, lot 3): the SV8 gate also accepts a residual by the quotient
+  (||R(u)|| - atol) / scale <= rtol, as the realization's stop reads rtol, so a residual one ulp
+  above the rounded product is no longer refused; the M08 gap job is charged to `r260105`; the
+  gate on the `CompositeTensorFAC` flat Krylov fallback is pinned in source and in a native row.
 - ROM-90 (N9, lot 2): a Program mesh solve is decided by its original residual, outside its
   realization (spec 0.3 SV8). After the generated `solve_linear` (prepared Krylov) or a uniform
   `ImplicitStage` returns a solved candidate, the generated code measures the problem's own
@@ -656,6 +666,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   order, their values and schema identities are unchanged. On one 4-core container the Hall source
   goes from 30.0 to 17.7 MB and compiles in 357 s within 4.8 GiB, where it did not fit in 12 GiB
   before.
+- The step body of a generated Program continues in a nested function only after a line that ends
+  with `;` or `}`, never after a preprocessor line, and the brace scan that places these splits
+  skips raw string literals, so a split can no longer follow a statement header such as a bare
+  `if (a)`. The Hall Program and the eleven other Programs of the F7 review keep byte-identical
+  sources. In CI the Hall test now passes in 465 s, and its two-rank twin in 457 s per rank, so
+  its weight in `tests/python/test_durations.json` goes from the 900 s estimate to 520 s.
 
 ## [1.0.0] - 2026-07-16
 

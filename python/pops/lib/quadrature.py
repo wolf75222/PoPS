@@ -38,8 +38,18 @@ def GaussHermite(n):
     """``GaussHermite(n)``: the n Gauss-Hermite nodes v_k on (-infinity, infinity) with the
     measures w_k exp(v_k^2), w_k the Gauss-Hermite weights, so that the sum of
     w_k exp(v_k^2) f(v_k) is exact for f = p exp(-v^2) with p of degree 2n - 1 (D0)."""
-    nodes, weights = numpy.polynomial.hermite.hermgauss(_order(n, "GaussHermite"))
-    measures = weights * numpy.exp(nodes * nodes)
+    n = _order(n, "GaussHermite")
+    with numpy.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        nodes, weights = numpy.polynomial.hermite.hermgauss(n)
+        measures = weights * numpy.exp(nodes * nodes)
+    if not (numpy.all(numpy.isfinite(nodes)) and numpy.all(numpy.isfinite(measures))
+            and numpy.all(measures > 0)):
+        # the weights w_k underflow and exp(v_k^2) overflows in binary64 for a rule this large
+        # (from n = 371 with NumPy 2); the size of the rule is the cause, not its data (E4)
+        raise ValueError(
+            "GaussHermite(%d): the nodes and measures w_k exp(v_k^2) of a Gauss-Hermite rule of %d "
+            "nodes overflow in double precision; take fewer nodes, or write the rule as "
+            "pops.Quadrature(nodes=, weights=, interval=)" % (n, n))
     return pops.Quadrature(nodes=nodes.tolist(), weights=measures.tolist(),
                            interval=(-infinity, infinity))
 
