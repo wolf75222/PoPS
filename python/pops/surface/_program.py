@@ -9,9 +9,9 @@ traced when it is built: its model, numerics and program are elaborated into a b
 methods are traced once (SU5). ``pops.inspect(case)`` runs ``validate`` and ``resolve`` and
 reports without compiling (SU12).
 
-The step rule that is a function of ``cell``, the acceptances, the tolerance, the solvers, the
-outputs, the claims, compile, bind and run have no elaborated form in this lot; each refuses with
-``NotYetElaborated`` and the lot that elaborates it.
+The step rule that is a function of ``cell``, the acceptances, the tolerance, the solvers and the
+claims have no elaborated form yet; each refuses with ``NotYetElaborated`` and the lot that
+elaborates it. The outputs, compile, bind and run are lot G (``_run``).
 """
 from __future__ import annotations
 
@@ -31,7 +31,6 @@ from ._refusal import (
 
 _N8_STEP = "a later lot of N8 (the step rules of 5.11, PF8)"
 _N8_ACCEPT = "N8 phase 1 (the assessments of T28)"
-_N8_RUN = "the run of N8 (Simulation.run, RunResult and Output, CC14) and a later lot of N15"
 
 
 class Advance:
@@ -204,8 +203,18 @@ class Case:
             raise TypeError("pops.Case(numerics=...) takes a pops.Numerics, got %r" % (numerics,))
         if not isinstance(program, Program):
             raise TypeError("pops.Case(program=...) takes a pops.Program, got %r" % (program,))
-        if outputs is not None:
-            raise NotYetElaborated("pops.Case(outputs=[...])", _N8_RUN)
+        from ._run import Output
+
+        if outputs is None:
+            outputs = []
+        if isinstance(outputs, Output):
+            raise TypeError("pops.Case(outputs=...) takes a list of outputs, outputs=[output] "
+                            "(SU14)")
+        if not isinstance(outputs, list) or not all(isinstance(item, Output) for item in outputs):
+            raise TypeError("pops.Case(outputs=...) takes a list of pops.Output, got %r"
+                            % (outputs,))
+        if len({id(item) for item in outputs}) != len(outputs):
+            raise ValueError("pops.Case(outputs=[...]) names each output once")
         if not isinstance(layout, dict) or not layout:
             raise TypeError("pops.Case(layout=...) takes a dictionary keyed by supports, "
                             "layout={Ω: pops.Uniform(cells=c)}, got %r" % (layout,))
@@ -228,6 +237,7 @@ class Case:
         self.numerics = numerics
         self.program = program
         self.layout = tuple(rows)
+        self.outputs = tuple(outputs)
         from ._elaborate import elaborate_case
 
         self.elaborated = elaborate_case(self)
@@ -252,19 +262,7 @@ def inspect(value: Any) -> Any:
     return inspect_value(value)
 
 
-def _later_run(name: str) -> Any:
-    def run(*args: Any, **kwargs: Any) -> Any:
-        raise NotYetElaborated("pops.%s" % name, _N8_RUN).with_traceback(None)
-
-    run.__name__ = run.__qualname__ = name
-    return run
-
-
-compile = _later_run("compile")
-bind = _later_run("bind")
-OpenMP = _later_run("OpenMP")
-CUDA = _later_run("CUDA")
-Resources = _later_run("Resources")
+from ._run import CUDA, OpenMP, Resources, bind, compile  # noqa: E402,F401  (lot G)
 
 
 def claim(*args: Any, **kwargs: Any) -> Any:

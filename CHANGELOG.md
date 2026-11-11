@@ -18,6 +18,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-98 (N15, lot G): a case of the surface compiles, binds and runs (spec 0.3, 2.6.2, 2.6.6,
+  §5.2, CC14; OD31). `pops.compile(case, target=pops.OpenMP())`, `pops.bind(artifact,
+  params={b: v}, data={u0: array}, resources=pops.Resources(threads=n), directory=d)` and
+  `simulation.run(until=t, max_steps=n)` run the b6 compile and the compiled run of N8; arrays
+  are in the order of the support's axes. `pops.Output(pops.record(u=u), when=[t1, t2] |
+  pops.every(time=h) | pops.every(steps=k), write=npz(path, metadata=pops.record(...)))` lowers
+  to the Outputs of N8, and `pops.lib.output.npz` writes the series of an Output after each run.
+  `pops.RunFailed` and `pops.BudgetExhausted` carry the surface `RunResult`. A 2D periodic case
+  runs bit for bit as the same case written by hand for b6.
 - ROM-98 (N15, lot 2b): schemes of one's own on a support of rank two and three. A flux is
   written by its axis components, `model.flux(of=u, value=vector(a, b) * u)`, and lowered on the
   b6 dictionary per axis with the waves dF_a/du of each component; in a scheme,
