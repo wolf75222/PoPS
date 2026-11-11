@@ -52,8 +52,11 @@ class Proposal:
             raise ValueError("Proposal(dt): dt is a positive finite duration, got %r" % (dt,))
         _fraction(dt)
         if request is not None:
-            raise NotYetElaborated("Proposal(request=...): solve requests (5.5, SV3) are "
-                                   "elaborated with the implicit relations of a later lot of N8")
+            from pops.time._program.relations import Request
+
+            if not isinstance(request, Request):
+                raise TypeError("Proposal(request=...) takes a Request(rtol=..., atol=...), the "
+                                "request of the solves of the attempt (SV3), got %r" % (request,))
         if choices:
             raise NotYetElaborated("Proposal(%s): attempt choices (T28), which Accept and Reject "
                                    "carry, are lowered with the assessments of N8 phase 1"
@@ -176,6 +179,9 @@ def _trial_failures(program: Any, trace: MethodTrace) -> tuple:
             rows.append({"site": "%s/read:%s" % (request.site, unknown.name),
                          "guard": "field_evaluation", "variant": None, "retry_can_change": retry,
                          "classified": False, "lot": _GUARD_LOT})
+    for site in trace.solves:
+        rows.append({"site": site.site, "guard": "solve", "variant": "SolveFailed",
+                     "retry_can_change": not site.fixed, "classified": True, "lot": None})
     for guard in trace.guards:
         rows.append({"site": guard.site, "guard": "admissibility", "variant": "NotAdmissible",
                      "retry_can_change": not guard.fixed, "classified": True, "lot": None})
@@ -183,7 +189,7 @@ def _trial_failures(program: Any, trace: MethodTrace) -> tuple:
 
 
 def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
-              name: str | None = None, outputs: Any = ()) -> Elaboration:
+              name: str | None = None, outputs: Any = (), realization: Any = None) -> Elaboration:
     """Elaborate ``advance`` for the block-qualified ``state`` of ``case``, from ``proposal``.
 
     ``outputs`` is a tuple of ``Output`` (``outputs.py``, CC14): each body is traced once into a
@@ -191,6 +197,11 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
 
     The builder is named ``name``, by default after the method; that name and the value and stage
     names are presentation (CC2), though b6 hashes them into the program identity (C47).
+
+    ``realization`` maps the path of each solve of the method (``relations.py``: the method name,
+    ``method/name`` for a named solve, ``method/*`` for every solve of the method) to its solver
+    reference, the ``Realization`` of 5.5; a key that names no solve is refused with
+    ``UnknownSolvePath``, which lists the solves.
     """
     if not isinstance(advance, Advance):
         raise TypeError("elaborate(advance): an Advance, got %r" % (advance,))
@@ -199,7 +210,20 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
                         % (proposal,))
     program = _Builder(advance.method.name if name is None else name)
     temporal = program.state(state)
-    trace = advance.method.trace(program, temporal, proposal)
+    if realization is not None and not isinstance(realization, dict):
+        raise TypeError("elaborate(realization=...) maps solve paths to solvers, got %r"
+                        % (realization,))
+    trace = advance.method.trace(program, temporal, proposal, realization)
+    unused = sorted(set(realization or {}) - {
+        key for key in (realization or {})
+        if any(key in (site.path, "%s/*" % advance.method.name) for site in trace.solves)})
+    if unused:
+        from pops.time._program.relations import UnknownSolvePath
+
+        raise UnknownSolvePath(
+            "the realization keys %s name no solve of %r, whose solves are %s (5.5)"
+            % (", ".join(map(repr, unused)), advance.method.name,
+               ", ".join(repr(site.path) for site in trace.solves) or "none"))
     # finite(): every value of the candidate is finite, the norm counting a NaN as infinite.
     candidate = program._assess_candidate(
         "finite", trace.candidate, program.isfinite(program.norm_inf_all(trace.candidate)))

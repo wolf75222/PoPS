@@ -24,8 +24,8 @@ from pops.time._program import traced_method as _n8
 
 from ._model import Balance, Model, Term
 from ._refusal import (
-    ClosedBodyViolation, IncrementNotDerivable, IncrementTypeMismatch, NotYetElaborated, Site,
-    SurfaceRefusal, SymbolicTruthValue, site_of_traceback, user_site,
+    AmbiguousElaboration, AmbiguousSolvePath, ClosedBodyViolation, IncrementNotDerivable, IncrementTypeMismatch, NotYetElaborated, Site,
+    SurfaceRefusal, SymbolicTruthValue, UnknownSolvePath, site_of_traceback, user_site,
 )
 
 # SU5: the parameters that PoPS supplies, named after an entity.
@@ -110,12 +110,24 @@ class MethodValue:
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
-        raise NotYetElaborated("method.%s, the name of a solve of a method (SU8)" % name,
-                               "a later lot of N15 with the solves of N9 and G10")
+        return SolvePath(self, name)
 
     def __repr__(self) -> str:
         return "%s(%s)" % (self.method.name, ", ".join("%s=%r" % item
                                                         for item in self.options.items()))
+
+
+class SolvePath:
+    """``method.name``: the solve named ``name`` of a method value, a key of ``solvers=`` (SU8)."""
+
+    __slots__ = ("method", "name")
+
+    def __init__(self, method: MethodValue, name: str) -> None:
+        self.method = method
+        self.name = name
+
+    def __repr__(self) -> str:
+        return "%s.%s" % (self.method.name, self.name)
 
 
 def is_rate(value: Any) -> bool:
@@ -222,6 +234,45 @@ class Candidate:
         self.site = user_site(2)
 
 
+def unknown(space: Any) -> Any:
+    """``pops.unknown(step.state.space)``: an unknown of a relation of the method (2.6.2, 5.5)."""
+    from pops.time._program import relations as _relations
+
+    return _relations.unknowns(X=space).X
+
+
+def solve(relation: Any, unknown: Any, *, name: Any = None, default: Any = None,
+          tolerance: Any = None, guess: Any = None) -> Any:
+    """``pops.solve(relation, X, name=None, tolerance=None)``: the value of the unknown X that
+    satisfies the relation (2.6.2, 5.5). A failed solve fails the attempt (T38)."""
+    from pops.time._program import relations as _relations
+
+    from ._program import Tolerance
+
+    if isinstance(relation, (list, tuple)) or isinstance(unknown, (list, tuple)):
+        raise NotYetElaborated("pops.solve([relations], [X, Y]), a system of several relations",
+                               "a later lot of N8 with the solves of N9")
+    if default is not None:
+        raise NotYetElaborated("pops.solve(default=...), the default solver of a solve",
+                               "a later lot of N15 with the selection of SV11 (N9)")
+    if guess is not None:
+        raise NotYetElaborated("pops.solve(guess=...), a predictor of the solve (SV3)",
+                               "a later lot of N8 with the solves of N9")
+    if not isinstance(unknown, _relations.TracedUnknown):
+        raise TypeError("pops.solve(relation, X) solves for an unknown X = pops.unknown(space), "
+                        "got %r" % (unknown,))
+    if not isinstance(relation, _relations.Relation):
+        raise TypeError("pops.solve(relation, X) takes a relation, X == ..., got %r"
+                        % (relation,))
+    if tolerance is not None and not isinstance(tolerance, Tolerance):
+        raise TypeError("pops.solve(tolerance=...) takes a pops.Tolerance, got %r" % (tolerance,))
+    problem = _relations.Problem(unknowns=_relations._Unknowns({unknown.name: unknown}),
+                                 equations=(relation,))
+    outcome = _relations.solve(problem, request=None if tolerance is None else
+                               tolerance.request(), name=name)
+    return _relations.require_success(outcome).values[unknown]
+
+
 # --- elaboration onto the traced methods of N8 ----------------------------------------------
 
 _N8_REFUSALS = (
@@ -255,6 +306,19 @@ def translate(error: BaseException, trace: _Trace) -> BaseException:
             "a state, a rate or a time of a method is symbolic and has no Python truth value",
             write="where(p, a, b) between values; the tableau of a method is Python data",
             site=site)
+    from pops.time._program import relations as _relations
+
+    if isinstance(error, _relations.MissingRequest):
+        return AmbiguousElaboration(
+            "%s; the tolerance of an advance whose method solves is a choice that PoPS never "
+            "makes by a heuristic" % _surface_words(str(error)).split(":")[0],
+            write="pops.Advance(..., tolerance=pops.Tolerance(rtol=..., atol=...)), or "
+                  "pops.solve(..., tolerance=...)", site=site)
+    if isinstance(error, (_relations.AmbiguousSolvePath, _relations.UnknownSolvePath)):
+        target = AmbiguousSolvePath if isinstance(error, _relations.AmbiguousSolvePath) \
+            else UnknownSolvePath
+        return target(_surface_words(str(error)), write="pops.solve(..., name=...) for each "
+                      "solve, and solvers={method.name: solver}", site=site)
     if isinstance(error, _n8.NotYetElaborated):
         return NotYetElaborated(_in_surface_words(str(error)), None, site=site)
     for source, target, write in _N8_REFUSALS:
@@ -319,4 +383,5 @@ def specialize(value: MethodValue, components: dict, trace: _Trace) -> _n8.Speci
     return _n8.Method(elaborated)(**{name: components[name] for name in names})
 
 
-__all__ = ["method", "Candidate", "SurfaceMethod", "MethodValue", "Step", "Rate", "Balance"]
+__all__ = ["method", "Candidate", "SurfaceMethod", "MethodValue", "Step", "Rate", "Balance",
+           "SolvePath", "solve", "unknown"]

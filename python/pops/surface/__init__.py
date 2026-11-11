@@ -1,6 +1,7 @@
 """The user surface of spec 0.3, section 2.6: level 1 (the model, the numerics and the program).
 
-This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2. Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
+This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2, and the solves of
+the lot « solves » (``pops.unknown``, ``pops.solve``, ``pops.Tolerance``, ``solvers=``). Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
 imports it as ``import pops.surface as pops`` and ``from pops.surface.math import *``; the words
 of the library that it elaborates are ``pops.lib.numerics.schemes`` (``upwind``, ``rusanov``,
 ``two_point``) and ``pops.lib.time.methods`` (``forward_euler``, ``ssprk2``, ``ssprk3``, ``rk4``).
@@ -17,12 +18,13 @@ from typing import Any as _Any
 from . import discrete, math
 from ._elaborate import Choice, Report, Row
 from ._geometry import Box, Periodic
-from ._method import Candidate, method
+from ._method import Candidate, method, solve, unknown
 from ._model import Components, Model, Positive, Scalar, Tensor, Vector
 from ._numerics import CellAverage, Numerics, SchemeValue, TermView
 from ._scheme import check_plain_function, scheme
 from ._program import (
-    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Uniform, bind, claim, compile, inspect,
+    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Tolerance, Uniform, bind, claim, compile,
+    inspect,
 )
 from ._quadrature import Quadrature
 from ._refusal import (
@@ -32,6 +34,7 @@ from ._refusal import (
     RealizationMismatch, ReservedName, SupportMismatch, SurfaceRefusal,
     SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, UnknownName,
 )
+from ._refusal import AmbiguousSolvePath, UnknownSolvePath
 from ._refusal import SpellingRefusal as _SpellingRefusal
 
 _N8_ASSESS = "N8 phase 1 (the assessments of T28)"
@@ -51,7 +54,7 @@ _LATER = {
     "assess": _N8_ASSESS, "fail": _N8_ASSESS, "refuse": _N8_ASSESS, "Finite": _N8_ASSESS,
     "Observed": _N8_ASSESS, "Admissible": _N8_ASSESS, "NotAdmissible": _N8_ASSESS,
     "transform": _N8_ASSESS,
-    "Tolerance": _SOLVES, "solve": _SOLVES, "try_solve": _SOLVES, "unknown": _SOLVES,
+    "try_solve": _SOLVES,
     "solver": _SOLVES, "Norm": _SOLVES, "Dense": _SOLVES, "Affine": _SOLVES,
     "eliminate": _SOLVES, "SolveFailed": _SOLVES, "Normalization": _SOLVES,
     "Output": _RUN, "record": _RUN, "every": _RUN, "RunFailed": _RUN, "BudgetExhausted": _RUN,
@@ -167,13 +170,14 @@ def __getattr__(name: str) -> _Any:
 __all__ = [
     "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
     "Model", "Numerics", "OpenMP", "Periodic", "Positive", "Program", "Quadrature",
-    "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "inspect",
-    "discrete", "math", "method", "scheme",
+    "Resources", "Scalar", "Tensor", "Tolerance", "Uniform", "Vector", "bind", "claim", "compile",
+    "inspect", "discrete", "math", "method", "scheme", "solve", "unknown",
     # the refusals of §14.1 that this lot raises, and the values that the library reads
     "AmbiguousElaboration", "AntiDiffusive", "ClosedBodyViolation", "ContradictsDerivation",
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
     "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
+    "AmbiguousSolvePath", "UnknownSolvePath",
     "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]
