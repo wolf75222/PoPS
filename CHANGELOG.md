@@ -55,6 +55,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
   native `MUSCL(<Limiter>())` state bit for bit for the four limiters. `weno5(rep, epsilon=)` is
   the WENO5-Z reconstruction of master's `WENO5()`, bit for bit on the same case.
+- ROM-31 (G13 lot 4): the commit's variable-recovery check of a state publication candidate runs
+  where the candidate lives (spec 0.3 DM8). Each prepared System and AMR block carries a
+  `candidate_recovery_check`, built from the model's declared inversion and ordered admissible
+  set (`include/pops/runtime/recovery/device_candidate_recovery.hpp`), that counts in a Kokkos
+  reduction the cells whose conservative values are not finite or whose recovery is refused.
+  Only the two counts return: the commit no longer copies the state to the host, and the DM8
+  residency test now sees no mesh byte cross in a step. A prepared block without the check is
+  refused at installation.
 - ROM-31 (G13 lot 3): a finite Array whose element is a Field keeps its elements in device
   columns, one per box, element-major (spec 0.3 DM7, MG3), instead of boxing a copy of each
   element in a host cell. Each element is a MultiFab over its own slices (new `Fab` and

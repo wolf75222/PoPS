@@ -132,6 +132,7 @@ class SystemBlockStore {
     std::shared_ptr<const boundary_type> boundary;
     std::string state_identity;
     CellBatchRecovery batch_cons_to_prim;
+    CandidateRecoveryCheck<Dim> candidate_recovery;
   };
 
   std::vector<BlockState> blocks;

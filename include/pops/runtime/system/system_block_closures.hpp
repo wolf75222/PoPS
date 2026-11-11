@@ -13,6 +13,7 @@
 #include <pops/numerics/nonlinear/newton_options.hpp>
 #include <pops/numerics/nonlinear/prepared_variable_recovery.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
+#include <pops/runtime/recovery/device_candidate_recovery.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/system/prepared_embedded_boundary.hpp>
 #include <pops/runtime/system/system_interface_core_session.hpp>
@@ -317,6 +318,9 @@ struct PreparedSystemBlock {
   std::function<void(const double*, double*)> primitive_to_conservative;
   std::function<RecoveryReport(const double*, double*)> conservative_to_primitive;
   UniformCellRecovery batch_conservative_to_primitive;
+  /// The decision of conservative_to_primitive on every cell of a state publication candidate,
+  /// evaluated in the memory space of the candidate (DM8): the commit checks recovery with it.
+  CandidateRecoveryCheck<Dim> candidate_recovery_check;
   std::function<Real(const field_type&)> source_frequency;
   /// Additive explicit Fickian inverse frequency q = 2 nu sum_a h_a^-2.  The runtime combines
   /// it with transport before applying the user CFL, rather than treating it as a separate dt.
