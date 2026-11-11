@@ -9,6 +9,7 @@ from pops.lib.models import characteristic
 from pops.lib.numerics import hll, muscl, minmod, pointwise, ghosts
 from pops.lib.time import explicit_rk, bogacki_shampine, pi_controller
 from pops.lib.output import hdf5
+from pops.lib.quadrature import GaussLegendre
 
 GAMMA, GRAVITY = Fraction(7, 5), 9.81
 channel = pops.Box(x=(0, 4), y=(0, 1))
@@ -51,7 +52,7 @@ program = pops.Program(
                          attempts=8, tolerance=pops.Tolerance(rtol=1e-4, atol=1e-6)),
     initial={U: pops.project(pops.record(rho=stratified_rho * bump, m=stratified_rho * bump * vector(0.2, 0),
                                          E=stratified_E),
-                             quadrature=pops.GaussLegendre(2))},
+                             quadrature=GaussLegendre(2))},
 )
 
 outputs = [pops.Output(pops.record(rho=rho, pressure=pressure), when=pops.every(time=0.1),
