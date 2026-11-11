@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from .expr import Expr, _wrap
+from .expr import Expr, _wrap, rate_term_of
+
+# The operation that the other operand performs when this vector meets it on the given side.
+_REFLECTED = {"__add__": "__radd__", "__radd__": "__add__", "__sub__": "__rsub__",
+              "__rsub__": "__sub__", "__mul__": "__rmul__", "__rmul__": "__mul__",
+              "__truediv__": "__rtruediv__", "__rtruediv__": "__truediv__"}
 
 
 class VectorExpr(tuple):
@@ -22,7 +27,12 @@ class VectorExpr(tuple):
     def __bool__(self) -> bool:
         raise TypeError("symbolic VectorExpr has no Python truth value")
 
-    def _binary(self, other: Any, operation: str) -> VectorExpr:
+    def _binary(self, other: Any, operation: str) -> Any:
+        term = rate_term_of(other)
+        if term is not None:
+            # A term of a balance is a summand of the whole state, never one component: the term
+            # reads this vector as an operand of its balance (R7) instead of a broadcast.
+            return getattr(term, _REFLECTED[operation])(self)
         if isinstance(other, (tuple, list)):
             if len(other) != len(self):
                 raise ValueError("VectorExpr operands have different component counts")

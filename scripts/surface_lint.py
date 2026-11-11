@@ -54,7 +54,7 @@ SKIPPED_COLUMNS = ("Replaces", "Elaborated form (spec 0.3)", "Rules")
 TRANSITIONAL = {"pops.surface": "pops", "pops.surface.math": "pops.math"}
 # The names that the column Words of 2.6.3 mentions without listing them as words of pops.math:
 # two refusals, a form of the boundary policy (2.6.2) and a scheme of the library (2.6.9).
-MENTIONED = ("AmbiguousElaboration", "NormalVelocity", "SupportMismatch", "upwind")
+MENTIONED = ("AmbiguousElaboration", "NormalComponent", "SupportMismatch", "upwind")
 
 # SU6: geometry, model, numerics, claims, methods, program, outputs, case and run.
 LEVELS = ("geometry", "model", "numerics", "claims", "methods", "program", "outputs",

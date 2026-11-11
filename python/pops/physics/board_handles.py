@@ -287,6 +287,15 @@ class RateHandle(OperatorHandle):
     def occurrences(self) -> Any:
         return self.view.occurrences
 
+    @property
+    def inline(self) -> tuple[Any, ...]:
+        """The anonymous sources of this balance's inline operands, in written order (R7).
+
+        A plan selects them by handle, ``rate.select(*rate.inline)``, not by ordinal.
+        """
+        return tuple(item.payload for item in self.view.balance.occurrences
+                     if item.written is not None)
+
     def select(self, *selectors: Any) -> RateHandle:
         """Register an occurrence-preserving numerical view of this balance."""
         model = self._model_ref()

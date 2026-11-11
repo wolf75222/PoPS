@@ -7,6 +7,7 @@ from pops.lib.models.kinetic import maxwellian
 from pops.lib.numerics import upwind, adjacent_mean, pointwise, poisson_residual, ghosts
 from pops.lib.numerics.kinetic import discrete_maxwellian
 from pops.lib.time import ssprk2, strang
+from pops.lib.quadrature import GaussLegendre
 
 LENGTH, VMAX = 4 * pi, 6.0
 DT, T_END = 0.01, 20.0      # each a value chosen for the gallery: at |v_i| = VMAX, the Courant numbers
@@ -44,7 +45,7 @@ def field_speed(face):
 # The discrete Maxwellian has the discrete moments 1, v and |v|^2/2 of f on each fibre. Its solve keeps the
 # relative tolerance of 17.6, 1e-13; its absolute tolerance is a value chosen for the gallery.
 numerics = pops.Numerics(
-    represent={f: pops.CellAverage(), phi: pops.CellAverage(quadrature=pops.GaussLegendre(1))},
+    represent={f: pops.CellAverage(), phi: pops.CellAverage(quadrature=GaussLegendre(1))},
     schemes={vlasov: upwind(speed={velocity: field_speed}),     # the space block keeps its derived speed v.n
              equilibrium: discrete_maxwellian(tolerance=pops.Tolerance(rtol=1e-13, atol=1e-15)),
              collisions: pointwise(),
@@ -69,7 +70,7 @@ program = pops.Program(
     advance=pops.Advance(strang(first=transport, second=relaxation), dt=DT,
                          tolerance=pops.Tolerance(rtol=1e-10, atol=1e-12)),     # value chosen for the gallery
     initial={f: pops.project((1 + cos(x / 2) / 100) * exp(-dot(v, v) / 2) / sqrt(2 * pi)**3,
-                             quadrature=pops.GaussLegendre(2))},
+                             quadrature=GaussLegendre(2))},
 )
 
 case = pops.Case(model=model, numerics=numerics, program=program,

@@ -179,6 +179,7 @@ inline std::string exact_native_system_package_contract(
       .presence(static_cast<bool>(block.primitive_to_conservative))
       .presence(static_cast<bool>(block.conservative_to_primitive))
       .presence(static_cast<bool>(block.batch_conservative_to_primitive))
+      .presence(static_cast<bool>(block.candidate_recovery_check))
       .presence(static_cast<bool>(block.source_frequency))
       .presence(block.parabolic_frequency.has_value())
       .scalar(block.parabolic_frequency.value_or(Real(0)))

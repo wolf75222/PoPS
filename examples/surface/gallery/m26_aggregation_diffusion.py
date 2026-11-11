@@ -12,6 +12,7 @@ from pops.discrete import CellValue, sum_cells
 from pops.lib.numerics import upwind, two_point
 from pops.lib.time import ssprk2
 from pops.lib.output import hdf5
+from pops.lib.quadrature import GaussLegendre
 
 HALF_LENGTH, CELLS = 5, 256  # each a value chosen for the gallery
 DT, T_END = 0.01, 5.0        # each a value chosen for the gallery: DT is below
@@ -62,7 +63,7 @@ numerics = pops.Numerics(
 program = pops.Program(
     advance=pops.Advance(ssprk2(rate=model), dt=DT),
     initial={rho: pops.project(exp(-2 * (x + 1)**2) + exp(-2 * (x - 1)**2),     # value chosen for the gallery:
-                               quadrature=pops.GaussLegendre(2))},              # two bumps that merge
+                               quadrature=GaussLegendre(2))},              # two bumps that merge
 )
 # The output times are a value chosen for the gallery.
 outputs = [pops.Output(pops.record(rho=rho, psi=psi), when=pops.every(time=0.5),

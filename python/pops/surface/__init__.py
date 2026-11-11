@@ -21,9 +21,9 @@ from ._method import Candidate, method
 from ._model import Components, Model, Positive, Scalar, Tensor, Vector
 from ._numerics import CellAverage, Numerics, SchemeValue, TermView
 from ._program import (
-    AMR, CUDA, Advance, Case, GaussLegendre, OpenMP, Program, Resources, Uniform, bind, claim,
-    compile, inspect,
+    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Uniform, bind, claim, compile, inspect,
 )
+from ._quadrature import Quadrature
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
@@ -43,9 +43,8 @@ _SUPPORTS = "a later lot of N15 with the supports of G03 and G09"
 _LATER_N15 = "a later lot of N15"
 
 # The constructs of 2.6.2, 2.6.4 and 2.6.8 that this lot does not elaborate, with their owner.
-# The quadrature rule GaussHermite of 2.6.2 is not listed: CF2 keeps the name of a quadrature
-# rule out of the core files (term hermite, N3), so the surface does not have it until the lot
-# of the quadratures of G03 settles where the rule lives (a tension that SD86 records).
+# No named quadrature rule is listed: the core knows pops.Quadrature only (D0, review of 11/11,
+# P3), and GaussLegendre and GaussHermite are words of pops.lib.quadrature, outside the core.
 _LATER = {
     "Accept": _N8_ASSESS, "Reject": _N8_ASSESS, "Stop": _N8_ASSESS, "Transform": _N8_ASSESS,
     "assess": _N8_ASSESS, "fail": _N8_ASSESS, "refuse": _N8_ASSESS, "Finite": _N8_ASSESS,
@@ -138,7 +137,7 @@ _EARLIER = {
                                    "of cell, since accept= holds checks only"),
 }
 
-_LIBRARY = "pops.lib.numerics.schemes and pops.lib.time.methods"
+_LIBRARY = "pops.lib.numerics.schemes, pops.lib.time.methods and pops.lib.quadrature"
 
 
 def _later(name: str, owner: str) -> _Any:
@@ -167,7 +166,7 @@ def __getattr__(name: str) -> _Any:
 
 __all__ = [
     "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
-    "GaussLegendre", "Model", "Numerics", "OpenMP", "Periodic", "Positive", "Program",
+    "Model", "Numerics", "OpenMP", "Periodic", "Positive", "Program", "Quadrature",
     "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "inspect",
     "math", "method",
     # the refusals of §14.1 that this lot raises, and the values that the library reads
