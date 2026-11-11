@@ -71,12 +71,12 @@ class TermView:
         """Whether a value reads a quantity of the model, so varies with the state."""
         return any(isinstance(node, Quantity) for node in walk(value))
 
-    def face_function(self, function: Any, where: str) -> Any:
+    def face_function(self, function: Any, where: str, reconstructed: bool = False) -> Any:
         """A plain function of ``face`` given as an option, ``upwind(speed=f)``, run on the face
         of the key: the function of the b6 face of ``pops.lib.numerics.fluxes`` that lowers it."""
         from ._scheme import face_function
 
-        return face_function(function, self, where)
+        return face_function(function, self, where, reconstructed)
 
     def reads_derivative(self, value: Any) -> bool:
         """Whether a value reads the derivative of a field, ``grad(...)``."""

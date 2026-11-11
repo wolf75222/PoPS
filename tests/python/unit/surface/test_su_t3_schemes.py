@@ -337,3 +337,63 @@ def test_largest_and_smallest_lower_to_b6_maximum_and_minimum():
         return riemann.User(body=body, state=u, stability=stability)
 
     _assert_same(_surface_burgers(lambda u: bounded()), _hand_burgers(face))
+
+
+# --- the stability of a stated speed (review of #760, R2) ----------------------------------------
+
+@surface.scheme
+def signed(face, term):
+    """A signed speed reaches b6 as its absolute value."""
+    q = term.quantity
+    s = face.left(q) * face.normal
+    return FaceFlux(s * face.left(q), speed=s)
+
+
+@surface.scheme
+def unsigned(face, term):
+    """A speed nonnegative by its form reaches b6 unchanged."""
+    q = term.quantity
+    s = abs(face.left(q))
+    return FaceFlux(s * face.left(q), speed=s)
+
+
+@pytest.mark.parametrize("scheme, bound", [
+    (signed, lambda uL, n: abs(uL[0] * n[0])),
+    (unsigned, lambda uL, n: abs(uL[0])),
+], ids=["signed", "nonnegative"])
+def test_a_stated_speed_is_the_stability_bound_in_absolute_value(scheme, bound):
+    def face(flux_u, u):
+        def body(uL, uR, fL, fR, s, *, n):
+            return (speed(uL, n) * uL[0],)
+
+        def speed(uL, n):
+            return uL[0] * n[0] if scheme is signed else abs(uL[0])
+
+        def stability(uL, uR, fL, fR, s, *, n):
+            return bound(uL, n)
+
+        return riemann.User(body=body, state=u, stability=stability)
+
+    _assert_same(_surface_burgers(lambda u: scheme()), _hand_burgers(face))
+
+
+# --- the average of a cell (review of #760, R1) -----------------------------------------------------
+
+@surface.scheme
+def cell_average(face, term, reconstruction=None):
+    q = term.quantity
+    return FaceFlux((face.left_cell.value(q) + face.right_cell.value(q)) / 2,
+                    reconstruction=reconstruction)
+
+
+def test_the_average_of_a_cell_is_the_trace_of_a_face_without_reconstruction():
+    def face(flux_u, u):
+        def body(uL, uR, fL, fR, s, *, n):
+            return ((uL[0] + uR[0]) / 2,)
+
+        def stability(uL, uR, fL, fR, s, *, n):
+            return s
+
+        return riemann.User(body=body, state=u, stability=stability)
+
+    _assert_same(_surface_burgers(lambda u: cell_average()), _hand_burgers(face))

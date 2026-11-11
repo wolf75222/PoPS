@@ -58,6 +58,28 @@ _GEOMETRY = "a later lot of N15 with the geometry reads of §4.3 (D18)"
 _STENCIL = ("a later lot of N15 with the stencil faces of N7a (a face of this lot reads its two "
             "cells; a wider stencil is a Reconstruct)")
 _BUILDERS = "a later lot of N15 with the keys that this builder covers"
+
+# Refusal tables of the surface (CF2, §21.7): the reads of 2.6.4 that a later lot elaborates and
+# whose names the core does not otherwise spell, keyed by the read, with the sentence of their lot.
+_LATER_FACE = {
+    "gradient": "a later lot of N15 with a b6 face route that covers a diffusive flux and reads "
+                "the spacing (C31)",
+    "normal_gradient": "a later lot of N15 with a b6 face route that covers a diffusive flux and "
+                       "reads the spacing (C31)",
+    "velocity": "a later lot of N15 with the moving configurations of D18 and D21",
+}
+_LATER_CELL = {
+    "gradient": "a later lot of N15 with a b6 face route that covers a diffusive flux and reads "
+                "the spacing (C31)",
+}
+_LATER_TERM = {
+    "gradient_variables": "a later lot of N15 with a b6 face route that covers a diffusive flux "
+                          "and reads the spacing (C31)",
+}
+_LATER_KINDS = {
+    "Gradient": "a later lot of N15 with the schemes given to face.gradient(e, scheme=) and "
+                "cell.gradient(e, scheme=)",
+}
 _N11 = "N11 (expression closure, C1)"
 _PER_AXIS = ("a later lot of N15 with a face lowered per axis (riemann.User has one body for the "
              "axes)")
@@ -168,10 +190,10 @@ def _polynomial(value: Any) -> dict:
             return _times(_polynomial(left), _polynomial(right))
         if value.op == "/":
             divisor = _polynomial(right)
-            if len(divisor) == 1:
-                ((mono, coef),) = divisor.items()
-                inverse = {tuple((atom, -e) for atom, e in mono): 1 / coef}
-                return _times(_polynomial(left), inverse)
+            if len(divisor) == 1 and () in divisor:
+                # only a number divides exactly; a quotient by an expression stays an atom, so
+                # that u*u*u/(2*u), undefined at u = 0, is not u**2/2 (review of #760)
+                return _times(_polynomial(left), {(): 1 / divisor[()]})
             return _times(_polynomial(left), {((("quotient", normal_form(right)), 1),): 1})
         if is_number(right) and Fraction(right).denominator == 1 and 0 <= right <= 16:
             out: dict = {(): Fraction(1)}
@@ -214,15 +236,18 @@ class Word:
 class Words:
     """``pops.discrete.kinds`` and ``pops.discrete.forms``."""
 
-    def __init__(self, group: str, names: tuple) -> None:
+    def __init__(self, group: str, names: tuple, later: dict | None = None) -> None:
         self._group = group
         self._names = names
+        self._later = later or {}
         for name in names:
             setattr(self, name, Word(group, name))
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
+        if name in self._later:
+            raise NotYetElaborated("pops.discrete.%s.%s" % (self._group, name), self._later[name])
         raise AttributeError("%s has the words %s, not %s"
                              % (self._group, ", ".join(self._names), name))
 
@@ -231,7 +256,7 @@ class Words:
 
 
 kinds = Words("kinds", ("Flux", "DiffusiveFlux", "Source", "Interaction", "Definition",
-                        "Inventory", "Constraint", "Relation", "BoundaryRelation", "Gradient"))
+                        "Inventory", "Constraint", "Relation", "BoundaryRelation"), _LATER_KINDS)
 forms = Words("forms", ("Value", "NoData", "Characteristic", "NormalFlux", "NormalComponent",
                         "General"))
 
@@ -432,6 +457,7 @@ class _Unread:
     """The reads of an entity that this lot does not elaborate."""
 
     _later: dict = {}
+    _later_reads: dict = {}
     _entity = ""
 
     def __getattr__(self, name: str) -> Any:
@@ -439,6 +465,8 @@ class _Unread:
             raise AttributeError(name)
         if name in self._later:
             raise NotYetElaborated("%s.%s" % (self._entity, name), self._later[name])
+        if name in self._later_reads:
+            raise NotYetElaborated("%s.%s" % (self._entity, name), self._later_reads[name])
         raise AttributeError("%s has no read %s (2.6.4)" % (self._entity, name))
 
 
@@ -446,9 +474,10 @@ class FaceCell(_Unread):
     """``face.left_cell`` and ``face.right_cell``: the two cells of the face."""
 
     _entity = "face.left_cell"
+    _later_reads = _LATER_CELL
     _later = {"shift": _STENCIL, "width": _GEOMETRY, "center": _GEOMETRY, "lower": _GEOMETRY,
               "upper": _GEOMETRY, "measure": _GEOMETRY, "displacement": _GEOMETRY,
-              "gradient": _DIFFUSIVE, "load": _BUILDERS, "speed": _BUILDERS,
+              "load": _BUILDERS, "speed": _BUILDERS,
               "parent": "a later lot of N15 with the hierarchies of N12",
               "level": "a later lot of N15 with the hierarchies of N12",
               "lower_face": _STENCIL, "upper_face": _STENCIL}
@@ -459,9 +488,12 @@ class FaceCell(_Unread):
         object.__setattr__(self, "_entity", "face.%s_cell" % side)
 
     def value(self, quantity: Any) -> Any:
-        return _traced(self._face._key, _own_quantity(self._face._key, quantity,
-                                                      "%s.value" % self._entity),
-                       self._side, "%s.value" % self._entity)
+        """The average of the cell on that side (2.6.4): the trace of the face where the face has
+        no reconstruction; under a reconstruction it is a read of the stencil, which a later lot
+        elaborates (review of #760, R1)."""
+        quantity = _own_quantity(self._face._key, quantity, "%s.value" % self._entity)
+        return SchemeLeaf(("cell", self._side), quantity,
+                          "%s.value(%s)" % (self._entity, quantity))
 
     def __repr__(self) -> str:
         return self._entity
@@ -471,10 +503,10 @@ class FaceEntity(_Unread):
     """``face`` in a scheme that returns ``FaceFlux``."""
 
     _entity = "face"
-    _later = {"distance": _DIFFUSIVE, "measure": _GEOMETRY, "normal_gradient": _DIFFUSIVE,
-              "gradient": _DIFFUSIVE, "inner": "a later lot of N15 with the ghosts of G04",
-              "flux": "a later lot of N15 with the face fluxes read by another scheme (X1)",
-              "velocity": "a later lot of N15 with the moving configurations of D18 and D21"}
+    _later_reads = _LATER_FACE
+    _later = {"distance": _DIFFUSIVE, "measure": _GEOMETRY,
+              "inner": "a later lot of N15 with the ghosts of G04",
+              "flux": "a later lot of N15 with the face fluxes read by another scheme (X1)"}
 
     def __init__(self, key: Term, axis: Coordinate) -> None:
         self._key = key
@@ -503,8 +535,9 @@ class CellEntity(_Unread):
     """``cell`` in a scheme that returns ``Reconstruct``: a cell at an offset along the axis."""
 
     _entity = "cell"
+    _later_reads = _LATER_CELL
     _later = {"width": _GEOMETRY, "center": _GEOMETRY, "lower": _GEOMETRY, "upper": _GEOMETRY,
-              "measure": _GEOMETRY, "displacement": _GEOMETRY, "gradient": _DIFFUSIVE,
+              "measure": _GEOMETRY, "displacement": _GEOMETRY,
               "load": _BUILDERS, "speed": _BUILDERS, "lower_face": _STENCIL,
               "upper_face": _STENCIL,
               "parent": "a later lot of N15 with the hierarchies of N12",
@@ -541,11 +574,13 @@ class TermEntity(_Unread):
     _entity = "term"
     _later = {"quantities": "a later lot of N15 with the record states of N8",
               "unknowns": "a later lot of N15 with the constraints of N10",
-              "gradient_variables": _DIFFUSIVE, "first_order_inputs": _DIFFUSIVE,
+              "first_order_inputs": _DIFFUSIVE,
               "operator": "a later lot of N15 with the constraints of N10",
               "load": "a later lot of N15 with the constraints of N10",
               "data": "a later lot of N15 with the boundary relations of G04",
               "flux": "a later lot of N15 with the boundary relations of G04"}
+
+    _later_reads = _LATER_TERM
 
     def __init__(self, key: Term) -> None:
         self._key = key
@@ -784,6 +819,12 @@ class UserScheme(SchemeValue):
                         "the axis %s" % (self, axis, axes[0]), _PER_AXIS, site=self.site)
             assert builder is not None
             recon = builder.reconstruction
+            if recon is not None and _reads_cells(builder.value, builder.speed):
+                raise NotYetElaborated(
+                    "the scheme %s, which reads face.left_cell.value or face.right_cell.value "
+                    "under the reconstruction %r: the face receives the reconstructed traces, "
+                    "and the average of a cell is a read of the stencil" % (self, recon),
+                    _STENCIL, site=self.site)
             traced = Traced(builder, None if recon is None else recon.traced(key))
         self._traced.append((key, traced))
         return traced
@@ -845,7 +886,12 @@ class UserScheme(SchemeValue):
                                                              speed))
 
 
-_FACE_READS = ("trace", "normal", "flux", "radius")
+_FACE_READS = ("trace", "normal", "flux", "radius", "cell")
+
+
+def _reads_cells(*values: Any) -> bool:
+    return any(isinstance(node, SchemeLeaf) and node.key[0] == "cell"
+               for value in values if value is not None for node in walk(value))
 
 
 def _option_text(value: Any) -> str:
@@ -867,8 +913,10 @@ def _same_face(one: FaceFlux, other: FaceFlux) -> bool:
 
 
 def _face_inputs(uL: Any, uR: Any, fL: Any, fR: Any, n: Any, s: Any) -> dict:
+    # A cell read is lowered to the trace only where the face has no reconstruction (traced).
     return {("trace", "left"): uL[0], ("trace", "right"): uR[0], ("flux", "left"): fL[0],
-            ("flux", "right"): fR[0], ("normal",): n[0], ("speed",): s}
+            ("flux", "right"): fR[0], ("normal",): n[0], ("speed",): s,
+            ("cell", "left"): uL[0], ("cell", "right"): uR[0]}
 
 
 def _reads(value: Any, allowed: tuple, scheme_: Any, entity: str, site: Any = None) -> None:
@@ -923,7 +971,7 @@ def realize_reconstruction(value: Any, traced: Traced, view: TermView) -> Any:
                                name=value.word)
 
 
-def face_function(function: Any, view: TermView, where: str) -> Any:
+def face_function(function: Any, view: TermView, where: str, reconstructed: bool = False) -> Any:
     """A plain function of ``face`` given as an option, ``upwind(speed=f)`` (SU5): run once per
     axis on the face of the key of ``view``, as a face scheme runs; return the function of the b6
     face of ``fluxes`` that lowers its value (``face.left(Uh)``, ``face.right(Uh)``,
@@ -934,7 +982,11 @@ def face_function(function: Any, view: TermView, where: str) -> Any:
     for axis in key.quantity.support.axes:
         ran = function(FaceEntity(key, axis))
         _expression(ran, "the value of %s" % where)
-        _reads(ran, ("trace", "normal"), where, "face", site=user_site(2))
+        _reads(ran, ("trace", "normal", "cell"), where, "face", site=user_site(2))
+        if reconstructed and _reads_cells(ran):
+            raise NotYetElaborated(
+                "%s, which reads face.left_cell.value or face.right_cell.value under a "
+                "reconstruction: the face receives the reconstructed traces" % where, _STENCIL)
         if value is None:
             value = ran
         elif normal_form(value) != normal_form(ran):
@@ -945,6 +997,8 @@ def face_function(function: Any, view: TermView, where: str) -> Any:
     def lowered(face: Any) -> Any:
         return lower(value, {("trace", "left"): face.left(view.state)[0],
                              ("trace", "right"): face.right(view.state)[0],
+                             ("cell", "left"): face.left(view.state)[0],
+                             ("cell", "right"): face.right(view.state)[0],
                              ("normal",): face.normal[0]})
 
     return lowered

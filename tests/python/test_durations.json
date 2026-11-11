@@ -8439,19 +8439,19 @@
       },
       "local_receipts": {
         "tests/python/unit/surface/test_su_t2_scheme_refusals.py": {
-          "cases": 35,
-          "phase_seconds": 0.63,
+          "cases": 37,
+          "phase_seconds": 0.7,
           "session_seconds": 1.6
         },
         "tests/python/unit/surface/test_su_t3_schemes.py": {
-          "cases": 15,
-          "phase_seconds": 27.2,
-          "session_seconds": 28.2
+          "cases": 18,
+          "phase_seconds": 33.0,
+          "session_seconds": 34.0
         }
       },
       "source_sha256": {
-        "tests/python/unit/surface/test_su_t2_scheme_refusals.py": "da11a2c09fbd47457a7ad6b1684f4e4e87feaf41c8d34e6914d69096e873cb48",
-        "tests/python/unit/surface/test_su_t3_schemes.py": "12d994c58e8c6133303fbd9c65ec55029abaed6ceb1327383150df068f8c6d70"
+        "tests/python/unit/surface/test_su_t2_scheme_refusals.py": "de44e8ba4bc9e53db344cf9f54a574d18334f976ec975cc9ef00507bfe03fe52",
+        "tests/python/unit/surface/test_su_t3_schemes.py": "520e1feff79968f1dd72100fa808094be1cce5c17b3dd9236644e816cb0fd161"
       }
     }
   },

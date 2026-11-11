@@ -79,7 +79,8 @@ class _Upwind(_FaceFlux):
             from pops.lib.numerics import fluxes
 
             return fluxes.upwind(view.elaborated, view.state,
-                                 speed=view.face_function(speed, "upwind(speed=f)"),
+                                 speed=view.face_function(speed, "upwind(speed=f)",
+                                                          recon is not None),
                                  reconstruction=recon)
         if view.unit_flux is None:
             if view.reads_derivative(view.value):

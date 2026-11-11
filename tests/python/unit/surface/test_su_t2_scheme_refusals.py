@@ -326,3 +326,29 @@ def test_no_method_of_this_lot_derives_a_face():
         surface.solve()
     with pytest.raises(surface.NotYetElaborated, match="solves of N9"):
         surface.unknown("x")
+
+
+# --- R1 of the review of #760: the average of a cell under a reconstruction -----------------------
+
+def test_the_average_of_a_cell_under_a_reconstruction_names_its_lot():
+    @surface.scheme
+    def centre(cell, term, axis):
+        return Reconstruct(cell.value(term.quantity))
+
+    @surface.scheme
+    def cell_average(face, term, reconstruction=None):
+        q = term.quantity
+        return FaceFlux(face.left_cell.value(q), reconstruction=reconstruction)
+
+    _, _, u, flux, _ = _model()
+    with pytest.raises(surface.NotYetElaborated, match="stencil faces of N7a"):
+        _numerics(u, flux, cell_average(reconstruction=centre()))
+    _numerics(u, flux, cell_average())
+
+
+def test_a_later_kind_names_its_lot():
+    from pops.surface.discrete import kinds
+
+    with pytest.raises(surface.NotYetElaborated, match="face.gradient"):
+        kinds.Gradient  # noqa: B018
+    assert kinds.Flux is kinds.Flux
