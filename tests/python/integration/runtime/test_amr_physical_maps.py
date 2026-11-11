@@ -27,12 +27,17 @@ SPACE = PhysicalSupport((("position", "x-domain"),))
 ROOT = Path(__file__).resolve().parents[4]
 
 
-def resolve_amr_maps(directory, *, initial=2.):
+def _value_above(subject, threshold):
+    """The refine region of one layout, written as a function of cell (DM13b)."""
+    return lambda cell: cell.value(ValueExpr(subject)) > threshold
+
+
+def resolve_amr_maps(directory, *, initial=2., graph=False, refine=-100.):
     case = pops.Case("distinct adaptive moment and extension")
     program = pops.Program("one accepted AMR mapping cadence")
     phase = Rectangle("v,x", (-2, 0), (2, 1)).frame(Cartesian2D())
     space = Rectangle("x,hidden", (0, 0), (1, 1)).frame(Cartesian2D())
-    threshold = case.param(RuntimeParam("refine", default=-100.))
+    threshold = case.param(RuntimeParam("refine", default=refine))
     states, grids = {}, {}
     for name, frame, support, shape, ratio in (
             ("distribution", phase, PHASE, (4, 8), (2, 2)),
@@ -62,7 +67,9 @@ def resolve_amr_maps(directory, *, initial=2.):
         grids[name] = AMR(
             grid=CartesianGrid(frame=frame, cells=shape, periodic=PeriodicAxes(frame.axes)),
             hierarchy=AMRHierarchy(max_levels=2, ratios=(ratio,)),
-            tagging=AMRTagging(rules=(Tag(ValueExpr(block[state]) > case.value(threshold)), Buffer(cells=0)),
+            tagging=AMRTagging(rules=(Tag(ValueExpr(block[state]) > case.value(threshold) if graph
+                                      else _value_above(block[state], case.value(threshold))),
+                                  Buffer(cells=0)),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid.frozen(), transfer=transfer, execution=AMRExecution.synchronous())
@@ -189,6 +196,35 @@ def test_native_amr_moment_extension_and_restart(tmp_path):
     for key, value in _hierarchy_image(instance).items():
         np.testing.assert_array_equal(value, accepted[key])
     assert set(instance._executor.mapping_report().values()) == {2}
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+@pytest.mark.parametrize("refine", (-100., 100.))
+def test_native_amr_maps_regions_match_the_tag_graph(tmp_path, refine):
+    """Each layout's region criterion is generated into its own Program slice (lot 3b): three
+    hierarchies refine, or stay coarse, exactly as the tag graph decides, and evolve the same."""
+    import numpy as np
+    from tests.python.support.native_execution_context import artifact_execution_context
+    from pops.mesh._amr import ResolvedRefinementCriterion, ResolvedTaggingGraph
+
+    images, tagging = {}, {}
+    for graph in (True, False):
+        plan = resolve_amr_maps(tmp_path / ("graph" if graph else "regions"), graph=graph,
+                                refine=refine)
+        tagging[graph] = {type(row.authorities.bootstrap.tagging)
+                          for row in plan.layout_amr_authorities.values()}
+        artifact = pops.compile(plan)
+        instance = pops.bind(
+            artifact, resources={"execution_context": artifact_execution_context(artifact)})
+        before = _hierarchy_image(instance)
+        pops.run(instance, t_end=0.01, max_steps=1)
+        images[graph] = (before, _hierarchy_image(instance))
+    assert tagging == {True: {ResolvedTaggingGraph}, False: {ResolvedRefinementCriterion}}
+    for graph_image, region_image in zip(images[True], images[False], strict=True):
+        assert graph_image.keys() == region_image.keys()
+        for key, value in graph_image.items():
+            np.testing.assert_array_equal(region_image[key], value)
 
 
 @pytest.mark.compiler
