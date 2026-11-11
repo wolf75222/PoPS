@@ -8,12 +8,12 @@ the Program DSO count the same bytes (PF2). A fold sequenced on the host reads o
 carry per iteration and copies once the Array it reads without redefining it.
 
 The same library sees the mesh arrays of the case (G13 lot 2): the state lives in the memory
-space of the target, and no halo stages through host memory on one process. One mesh copy still
-reaches the host in each step, and the test pins it exactly so that any other crossing fails: the
-System commit checks that the committed state is recoverable by copying it to the host and calling
-the block's host recovery on every cell (`require_recoverable_candidate`,
-src/runtime/system/system_fields.cpp). DM8 requires zero; moving that check to the device is the
-next lot of ROM-31, and that lot turns the expected count below into zero. The unified-memory
+space of the target, and no halo stages through host memory on one process. No mesh copy reaches
+the host in a step (G13 lot 4): the System commit checks that the committed state is recoverable
+with the block's prepared recovery evaluated on every cell where the state lives
+(`require_recoverable_candidate`, src/runtime/system/system_fields.cpp, and
+include/pops/runtime/recovery/device_candidate_recovery.hpp), and only the count of failed cells
+returns. Before that lot the check copied the whole state to the host. The unified-memory
 allocations alive in each step are reported, for the page-migration condition of DM8 on a GPU
 target (Q03a).
 
@@ -83,10 +83,9 @@ def test_device_lowered_arrays_move_no_array_byte_inside_a_step(
     windows, steps, report = _run("device", residency_tool, tmp_path)
     assert all(window["array_data"] == {"count": 0, "bytes": 0} for window in windows), windows
     assert all(window["array_labels"] == [] for window in windows)
-    # Mesh arrays (DM8, PF2): the only host copy in a step is the commit's recovery check of the
-    # whole state (gap named in the module docstring), and no halo stages through the host.
-    assert all(window["mesh_host"] == {"count": 1, "bytes": STATE_FAB_BYTES}
-               for window in windows), windows
+    # Mesh arrays (DM8, PF2): no mesh byte reaches the host in a step, the commit's recovery
+    # check included, and no halo stages through the host.
+    assert all(window["mesh_host"] == {"count": 0, "bytes": 0} for window in windows), windows
     assert all(window["host_staging"] == {"count": 0, "bytes": 0} for window in windows), windows
     assert all(window["host_phase"] == {"count": 0, "bytes": 0} for window in windows), windows
     record_property("unified_live", json.dumps([window["unified_live"] for window in windows]))
@@ -150,11 +149,9 @@ def test_field_element_array_stays_in_device_columns(
     windows, steps, report = _run("fields", residency_tool, tmp_path)
     space = TARGET_SPACES[report["execution_space"]]
     assert report["metrics"]["passed"] is True, report["metrics"]
-    # No array byte and no other mesh byte reaches the host: the only host copy stays the
-    # commit's recovery check of the state (lot 4).
+    # No array byte and no mesh byte reaches the host.
     assert all(window["array_data"] == {"count": 0, "bytes": 0} for window in windows), windows
-    assert all(window["mesh_host"] == {"count": 1, "bytes": STATE_FAB_BYTES}
-               for window in windows), windows
+    assert all(window["mesh_host"] == {"count": 0, "bytes": 0} for window in windows), windows
     assert all(window["host_staging"] == {"count": 0, "bytes": 0} for window in windows), windows
     assert all(window["host_phase"] == {"count": 0, "bytes": 0} for window in windows), windows
     # One map of Field elements per step: no host map, and its columns are allocated once per

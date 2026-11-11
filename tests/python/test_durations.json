@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1161,
+    "estimated_count": 1163,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7060,6 +7060,7 @@
       "tests/python/integration/runtime/test_public_three_stage_screened_fields.py",
       "tests/python/integration/runtime/test_qualification_receipt_native.py",
       "tests/python/integration/runtime/test_rank_one_owned_amr_invalid.py",
+      "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py",
       "tests/python/integration/runtime/test_relations_v09_native.py",
       "tests/python/integration/runtime/test_scientific_spatial_gmres_v14_native.py",
       "tests/python/integration/runtime/test_scientific_spatial_v14_native.py",
@@ -7579,6 +7580,7 @@
       "tests/python/unit/physics/test_ranked_flux_authoring.py",
       "tests/python/unit/physics/test_ranked_gradient_ir.py",
       "tests/python/unit/physics/test_rate_equation_contract.py",
+      "tests/python/unit/physics/test_rate_expression_closure_n11.py",
       "tests/python/unit/physics/test_riemann_formula_hooks.py",
       "tests/python/unit/physics/test_riemann_provider_identity.py",
       "tests/python/unit/physics/test_role_identity_authority.py",
@@ -8099,7 +8101,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1226,
+    "total_files": 1228,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8424,6 +8426,31 @@
       },
       "source_sha256": {
         "tests/python/unit/numerics/test_index_sets_n10.py": "dcf582c8da99d9b3a57a8a879db187f513b4d81118fcbc7f44876dbdc5095f7c"
+      }
+    },
+    "n11_20261108_expression_closure": {
+      "basis": "Unmeasured CI scheduling estimates for N11 lot 1 (ROM-93, rule R7, gap C1), not CI receipts. The unit module traces small board models and plans without compiling, on the 15 s source-only tier of api_v02_20261013, as the analogue test_joint_rate_projection_balance.py. The native module compiles six artifacts (a source-only balance and a transport balance, each inline and declared, explicit Euler on 8 x 8; M03 stiffened-gas Euler with an inline radiative loss, inline and declared, SSPRK2 on 16 x 8) with cold caches, on the 600 s native tier, as the analogue test_balance_multiplicity_runtime.py. The local receipts are pytest session times on a 4-core container beside other local test sessions; they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; the Python shard total is 142, which holds this native file beside the rest of the catalog under the 35 min budget; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/physics/test_rate_expression_closure_n11.py": "tests/python/unit/physics/test_joint_rate_projection_balance.py",
+        "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": "tests/python/integration/runtime/test_balance_multiplicity_runtime.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/physics/test_rate_expression_closure_n11.py": 15,
+        "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": 600
+      },
+      "local_receipts": {
+        "tests/python/unit/physics/test_rate_expression_closure_n11.py": {
+          "cases": 57,
+          "session_seconds": 1.21
+        },
+        "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": {
+          "cases": 3,
+          "session_seconds": 249.5
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/physics/test_rate_expression_closure_n11.py": "ffda6d652aec74c16925bc254d66ca9c2272ef407edea714cc5eb34942416534",
+        "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": "69b67515a06f56055befee3d5c90fdd991698dbdfd1eec832f48f9550b1ce08a"
       }
     },
     "n2_20261111_quadrature": {
@@ -9671,5 +9698,7 @@
   "tests/python/integration/runtime/test_field_requests_n8_native.py": 900,
   "tests/python/unit/time/test_field_requests_n8.py": 120,
   "tests/python/unit/numerics/test_index_sets_n10.py": 30,
+  "tests/python/unit/physics/test_rate_expression_closure_n11.py": 15.0,
+  "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": 600.0,
   "tests/python/unit/surface/test_quadrature.py": 5
 }
