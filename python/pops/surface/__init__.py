@@ -24,6 +24,7 @@ from ._scheme import check_plain_function, scheme
 from ._program import (
     AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Uniform, bind, claim, compile, inspect,
 )
+from . import _solver
 from ._quadrature import Quadrature
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
@@ -33,6 +34,9 @@ from ._refusal import (
     SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, UnknownName,
 )
 from ._refusal import SpellingRefusal as _SpellingRefusal
+from ._solver import (
+    BudgetExhausted, PropertyNotDerived, SolveFailed, choose, fail, record, solver,
+)
 
 _N8_ASSESS = "N8 phase 1 (the assessments of T28)"
 _N8_LATER = "a later lot of N8"
@@ -48,13 +52,13 @@ _LATER_N15 = "a later lot of N15"
 # P3), and GaussLegendre and GaussHermite are words of pops.lib.quadrature, outside the core.
 _LATER = {
     "Accept": _N8_ASSESS, "Reject": _N8_ASSESS, "Stop": _N8_ASSESS, "Transform": _N8_ASSESS,
-    "assess": _N8_ASSESS, "fail": _N8_ASSESS, "refuse": _N8_ASSESS, "Finite": _N8_ASSESS,
+    "assess": _N8_ASSESS, "refuse": _N8_ASSESS, "Finite": _N8_ASSESS,
     "Observed": _N8_ASSESS, "Admissible": _N8_ASSESS, "NotAdmissible": _N8_ASSESS,
     "transform": _N8_ASSESS,
     "Tolerance": _SOLVES, "solve": _SOLVES, "try_solve": _SOLVES, "unknown": _SOLVES,
-    "solver": _SOLVES, "Norm": _SOLVES, "Dense": _SOLVES, "Affine": _SOLVES,
-    "eliminate": _SOLVES, "SolveFailed": _SOLVES, "Normalization": _SOLVES,
-    "Output": _RUN, "record": _RUN, "every": _RUN, "RunFailed": _RUN, "BudgetExhausted": _RUN,
+    "Norm": _SOLVES, "Dense": _SOLVES, "Affine": _SOLVES,
+    "eliminate": _SOLVES, "Normalization": _SOLVES,
+    "Output": _RUN, "every": _RUN, "RunFailed": _RUN,
     "Scientific": _RUN, "Bitwise": _RUN, "Reproducible": _RUN, "Cache": _RUN,
     "Regrid": _HIERARCHY, "Level": _HIERARCHY, "invalidate": _HIERARCHY, "remap": _HIERARCHY,
     "restrict_onto": _HIERARCHY, "replace_contribution": _HIERARCHY,
@@ -70,7 +74,7 @@ _LATER = {
     "Swept": "a later lot of N15 with the moving configurations of D18",
     "jointly": "a later lot of N15 with the joint realizations of G05",
     "multistep": "a later lot of N8 (T27)", "substep": _N8_LATER, "try_substep": _N8_LATER,
-    "exact_flow": _N8_LATER, "choose": _N8_LATER, "action": _N8_LATER, "predictor": _N8_LATER,
+    "exact_flow": _N8_LATER, "action": _N8_LATER, "predictor": _N8_LATER,
     "step_change": _N8_LATER, "step_duration": _N8_LATER, "step_start": _N8_LATER,
     "Controller": "N8 phase 2 (controllers)", "Fixed": "N8 phase 2 (controllers)",
     "Frozen": _N8_LATER, "Revolve": _N8_LATER, "recompute": _N8_LATER, "Off": _N8_LATER,
@@ -151,6 +155,11 @@ def _later(name: str, owner: str) -> _Any:
 for _name, _owner in _LATER.items():
     globals()[_name] = _later(_name, _owner)
 
+# @pops.solver and the words of its body (N9 lot 4, SV9). pops.record, pops.choose and pops.fail
+# are elaborated inside a solver only; elsewhere they refuse with the lot that owns them.
+_solver.OUTSIDE_OWNERS.update({"pops.record": _RUN, "pops.choose": _N8_LATER,
+                               "pops.fail": _N8_ASSESS})
+
 
 def __getattr__(name: str) -> _Any:
     """Refuse a name that the surface does not have (SU3, SU13, §21.7); export nothing."""
@@ -169,6 +178,8 @@ __all__ = [
     "Model", "Numerics", "OpenMP", "Periodic", "Positive", "Program", "Quadrature",
     "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "inspect",
     "discrete", "math", "method", "scheme",
+    # @pops.solver and the words of its body (N9 lot 4)
+    "BudgetExhausted", "PropertyNotDerived", "SolveFailed", "choose", "fail", "record", "solver",
     # the refusals of §14.1 that this lot raises, and the values that the library reads
     "AmbiguousElaboration", "AntiDiffusive", "ClosedBodyViolation", "ContradictsDerivation",
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",
