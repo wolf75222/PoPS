@@ -18,6 +18,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-98 (N15, lot 2b): schemes of one's own on a support of rank two and three. A flux is
+  written by its axis components, `model.flux(of=u, value=vector(a, b) * u)`, and lowered on the
+  b6 dictionary per axis with the waves dF_a/du of each component; in a scheme,
+  `dot(term.law(...), face.normal)` and the wave speeds are their dot with the canonical normal,
+  one face body for every axis. SU-T3 compares 2D cases with the case written by hand for b6.
 - ROM-98 (N15, lot 2): `@pops.scheme` with the entities `face`, `cell`, `term` and `axis` of
   spec 0.3, 2.6.4 (rows 377 and 702 of 2.6). A scheme records its options at its call and runs
   when `pops.Numerics` receives it, once per key and once per axis, so a refusal names the line of

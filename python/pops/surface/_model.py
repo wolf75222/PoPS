@@ -190,9 +190,83 @@ class Term(Expr):
 
 
 class Flux(Term):
-    """``model.flux(of=u, value=e)``: a transport flux (R1, §3.6)."""
+    """``model.flux(of=u, value=e)``: a transport flux (R1, §3.6).
 
-    __slots__ = ()
+    ``components`` holds its component on each axis of the support, in the order of the axes: the
+    value itself on a support of rank one, and on a support of rank two or three the components of
+    the vector that the value writes, ``vector(a, b) * u`` giving ``(a * u, b * u)`` (lot 2b of
+    N15)."""
+
+    __slots__ = ("components",)
+
+    def __init__(self, model: Model, kind: str, quantity: Quantity, value: Any,
+                 name: str | None, site: Site | None, components: tuple = ()) -> None:
+        super().__init__(model, kind, quantity, value, name, site)
+        self.components = tuple(components) or (value,)
+
+    def slopes(self) -> tuple | None:
+        """dF_a/du of each component, the wave speeds of R9 along each axis; ``None`` when one of
+        them is not derived in this lot."""
+        from ._derive import derivative
+
+        slopes = tuple(derivative(component, self.quantity) for component in self.components)
+        return None if any(slope is None for slope in slopes) else slopes
+
+    def unit_fluxes(self) -> tuple | None:
+        """F(1) of each component when F = F(1) u, linear in u; ``None`` otherwise."""
+        from ._derive import unit_flux
+
+        units = tuple(unit_flux(component, self.quantity) for component in self.components)
+        return None if any(unit is None for unit in units) else units
+
+
+_VECTOR_ALGEBRA = "N11 (expression closure, C1), with the vector algebra"
+
+
+def _holds_vector(value: Any) -> bool:
+    return any(isinstance(node, Call) and node.word == "vector" for node in walk(value))
+
+
+def vector_components(value: Any, rank: int, site: Any) -> tuple | None:
+    """The components on the axes of a flux written as a vector, ``None`` for a scalar (lot 2b).
+
+    A flux of a support of rank d is a vector of d components, written ``vector(c_1, ..., c_d)``
+    and combined with scalars by ``*`` and ``/`` and with vectors of the same rank by ``+``, ``-``
+    and unary ``-``; each component is then a scalar of the field algebra, which the elaborator
+    lowers on the dictionary per axis of b6. Any other vector algebra is N11's."""
+    if not _holds_vector(value):
+        return None
+    if isinstance(value, Call) and value.word == "vector":
+        if len(value.args) != rank:
+            raise SupportMismatch(
+                "%s has %d components, and the support of the flux has rank %d"
+                % (text(value), len(value.args), rank),
+                write="vector(%s), one component per axis" % ", ".join(["..."] * rank), site=site)
+        if any(_holds_vector(arg) for arg in value.args):
+            raise NotYetElaborated("a vector of vectors, %s" % text(value), _VECTOR_ALGEBRA,
+                                   site=site)
+        return tuple(value.args)
+    if isinstance(value, Arith):
+        if value.op == "neg":
+            inner = vector_components(value.args[0], rank, site)
+            return None if inner is None else tuple(Arith("neg", (c,)) for c in inner)
+        left, right = value.args
+        lc = vector_components(left, rank, site)
+        rc = vector_components(right, rank, site)
+        if value.op in ("+", "-"):
+            if lc is None or rc is None:
+                raise SupportMismatch(
+                    "%s adds a vector and a scalar" % text(value),
+                    write="the scalar as a vector of %d components, vector(...)" % rank,
+                    site=site)
+            return tuple(Arith(value.op, (a, b)) for a, b in zip(lc, rc, strict=True))
+        if value.op == "*" and (lc is None) != (rc is None):
+            return tuple(Arith("*", (a, right)) for a in lc) if lc is not None else \
+                tuple(Arith("*", (left, b)) for b in rc)  # type: ignore[union-attr]
+        if value.op == "/" and lc is not None and rc is None:
+            return tuple(Arith("/", (a, right)) for a in lc)
+    raise NotYetElaborated("the vector expression %s, other than a vector of components scaled "
+                           "and added" % text(value), _VECTOR_ALGEBRA, site=site)
 
 
 class DiffusiveFlux(Term):
@@ -375,13 +449,15 @@ class Model:
         self._own(value, "model.flux")
         site = user_site(2)
         rank = quantity.support.rank
-        if rank != 1:
+        components = vector_components(value, rank, site)
+        if components is None and rank != 1:
             raise SupportMismatch(
                 "the flux of %s on a support of rank %d is a vector of %d components, and %s is "
                 "a scalar" % (quantity, rank, rank, text(value)),
-                write="model.flux(of=%s, value=vector(%s))"
+                write="model.flux(of=%s, value=vector(%s)), one component per axis"
                       % (quantity, ", ".join(["..."] * rank)), site=site)
-        handle = Flux(self, "Flux", quantity, value, self._term_name(name, "model.flux"), site)
+        handle = Flux(self, "Flux", quantity, value, self._term_name(name, "model.flux"), site,
+                      components or (value,))
         self.terms.append(handle)
         return handle
 
