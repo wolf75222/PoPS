@@ -18,6 +18,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-93 (N11 lot 1): the right-hand side of a balance is a free algebra (spec 0.3 R7, gap C1).
+  `ddt(U) == -div(F) + k*u*(1 - u)` declares each term-free operand as the anonymous source
+  `<rate>_inline_<k>` of the balance, with its exact coefficient folded in, so it lowers on the
+  native route of a declared source, bit for bit (M03 with an inline radiative loss). A term under
+  any node other than `+`, `-` and an exact scaling (`u * div(F)`, `exp(S)`) raises
+  `TermNotAdditive` at the line that wrote it; a refused balance leaves the model unchanged.
+  `CoverageNotExact` lists every uncovered term with its line, and `rate.inline` selects the
+  anonymous sources. A declared source whose name is not an identifier now runs in a source-only
+  view.
 - ROM-85 (N10, phase 1, lot 1a): the vocabulary of the one array type (spec 0.3 DM1 to DM3, IR1 to
   IR3). `pops._ir.arrays` holds the value types of IR1 (`Array(D, T)`, `Product`, `Variant`,
   `Result`, `Iteration`, `Index`, scalars, and `Untyped` for what the plan cannot type yet);

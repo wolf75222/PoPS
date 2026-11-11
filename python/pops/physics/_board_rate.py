@@ -1,6 +1,7 @@
 """Rate-equation authoring for the physics blackboard facade."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from .. import math as _bm
@@ -12,6 +13,31 @@ if TYPE_CHECKING:
     from ._model_contract import _BoardModel
 else:
     _BoardModel = object
+
+
+def _fold_coefficient(coefficient: Any, values: Any) -> tuple[Any, ...]:
+    """The value of an anonymous source: its operand with its exact coefficient folded in (R7).
+
+    c = 1 keeps each component as written; an exact literal folds to the exact product, and a
+    literal zero stays as written (no -0.0); otherwise c = -1 negates the component and any other
+    c multiplies it by the exact constant c, which stays exact until lowering.
+    """
+    if coefficient == 1:
+        return tuple(values)
+    from pops.identity.scalar import multiply_exact_scalars
+    from .._ir.expr import Const, _wrap
+    from .._ir.rate_algebra import exact_number
+    folded = []
+    for value in values:
+        number = exact_number(value)
+        if number is not None:
+            folded.append(value if number == 0 else Const(multiply_exact_scalars(
+                coefficient, number, where="inline operand coefficient")))
+        elif coefficient == -1:
+            folded.append(-_wrap(value))
+        else:
+            folded.append(Const(coefficient) * _wrap(value))
+    return tuple(folded)
 
 
 class _RateAuthoringMixin(_BoardModel):
@@ -56,12 +82,127 @@ class _RateAuthoringMixin(_BoardModel):
                 "got %r" % (state,))
         if self._multi_module is not None:
             state = self._species_handle("rate", name, state)
+        from pops.provenance import source_span
+        site = source_span()
         terms = self._destructure_rate(equation.rhs, target=state)
+        if not terms:
+            raise ValueError("balance %r holds no term; a balance holds at least one term, and "
+                             "ddt(U) == 0 declares nothing to integrate" % (name,))
+        if not any(kind == "inline" for kind, _, _ in terms):
+            return self._register_rate(reg, state, terms, (site,) * len(terms), None,
+                                       equation.lhs.accumulation)
+        # R7: each inline operand becomes an anonymous source of this balance. Every check that
+        # needs no write runs first; the sources and the balance are then declared together, or
+        # not at all.
+        plan = self._plan_inline_sources(name, reg, state, terms)
+        with self._balance_transaction():
+            terms, origins, written = self._declare_inline_sources(state, terms, plan, site)
+            return self._register_rate(reg, state, terms, origins, written,
+                                       equation.lhs.accumulation)
+
+    def _register_rate(self, reg: str, state: Any, terms: Any, origins: Any, written: Any,
+                       accumulation: Any) -> Any:
         from pops.model import OperatorHandle
         handle = OperatorHandle(reg, kind="local_rate", owner=self.owner_path,
                                 signature=self._balance_signature(state, terms))
-        balance = Balance.capture(handle, state, terms, equation.lhs.accumulation)
+        balance = Balance.capture(handle, state, terms, accumulation, origins=origins,
+                                  written=written)
         return self._register_balance_view(handle, balance.full_view())
+
+    def _operator_names(self) -> set[str]:
+        registry = (self._multi_module.operator_registry() if self._multi_module is not None
+                    else self._dsl._m.operator_registry())
+        return set(registry.names()) | set(registry.aliases())
+
+    def _plan_inline_sources(self, name: Any, reg: str, state: Any, terms: Any) -> Any:
+        """Check the balance and each anonymous source before the first write (R7, R4).
+
+        The k-th inline operand becomes the source ``<rate>_inline_<k>``: its display name is its
+        registry name, the name by which every route finds a source. Its exact coefficient c
+        folds into its value (c = 1 keeps the operand as written), so its occurrence is ``+1``
+        times the source, the sum that the native rate route of a balance runs. Returns, per
+        term, ``None`` or ``(name, value, fields, site)``.
+        """
+        self._guard_mutable("declare a balance or partition")
+        if any(previous.local_id == reg for previous in getattr(self, "_retained_rates", {})):
+            raise ValueError("balance operator %r is already declared" % reg)
+        names = self._operator_names()
+        if reg in names:
+            raise ValueError("balance operator %r collides with an existing operator" % reg)
+        width = len(state.components) if self._multi_module is not None else self._dsl._m.n_vars
+        plan, ordinal = [], 0
+        for kind, payload, coefficient in terms:
+            if kind != "inline":
+                plan.append(None)
+                continue
+            ordinal += 1
+            source_name = "%s_inline_%d" % (reg, ordinal)
+            where = "the inline operand %d of balance %r (written at %s:%d)" % (
+                ordinal, name, payload.site.file, payload.site.line)
+            values = payload.components
+            if len(values) != width:
+                raise ValueError(
+                    "%s has %d component(s) and its state %r has %d; write one value per "
+                    "component, as a tuple" % (where, len(values), state.name, width))
+            if source_name in self._sources or source_name in names:
+                raise ValueError("the anonymous source %r of %s collides with a declared source "
+                                 "or operator" % (source_name, where))
+            value = _fold_coefficient(coefficient, values)
+            plan.append((source_name, value, self._inline_field_reads(where, value),
+                         payload.site, coefficient))
+        return plan
+
+    @contextmanager
+    def _balance_transaction(self) -> Any:
+        """Restore every table, cache and the definition fingerprint that a balance and its
+        anonymous sources write, if one of them fails (R4)."""
+        saved = [(self, "_sources"), (self, "_retained_rates"), (self, "_rate_contracts"),
+                 (self, "_module_cache"), (self._dsl, "_module_cache")]
+        if self._multi_module is not None:
+            registry = self._multi_module.operator_registry()
+            saved += [(registry, "_by_name"), (registry, "_order"), (registry, "_aliases"),
+                      (self._multi_module, "_rate_contracts")]
+        else:
+            hyp = self._dsl._m
+            saved += [(hyp, "_provider_components"), (hyp, "_source_terms"), (hyp, "_source"),
+                      (hyp, "_rate_operators"), (hyp, "_operator_registry_cache")]
+        self._ensure_balance_registry()
+        with self.owner_path._definition_fingerprint_transaction(), atomic_attrs(*saved):
+            yield
+
+    def _declare_inline_sources(self, state: Any, terms: Any, plan: Any, site: Any) -> Any:
+        """Declare each planned anonymous source through ``Model.source``; return the lifted
+        terms, the origin of each occurrence and the written coefficient of each anonymous one."""
+        lifted, origins, written = [], [], []
+        for term, item in zip(terms, plan, strict=True):
+            if item is None:
+                lifted.append(term)
+                origins.append(site)
+                written.append(None)
+                continue
+            source_name, value, fields, origin, coefficient = item
+            source = self.source(source_name, on=state, value=value, fields=fields)
+            lifted.append(("source", source, 1))
+            origins.append(origin)
+            written.append(coefficient)
+        return tuple(lifted), tuple(origins), tuple(written)
+
+    def _inline_field_reads(self, where: Any, values: Any) -> Any:
+        """The declared field that an inline operand reads, for the source of a multi-state model."""
+        if self._multi_module is None:
+            return None
+        from .._ir.expr import Expr
+        reads = []
+        for value in values:
+            if isinstance(value, Expr):
+                for handle in value.declaration_references():
+                    if (handle.kind == "field" and self._fields.get(handle.local_id) == handle
+                            and handle not in reads):
+                        reads.append(handle)
+        if len(reads) > 1:
+            raise ValueError("%s reads %d fields; a source of a multi-state model reads one, so "
+                             "declare it with model.source(fields=...)" % (where, len(reads)))
+        return reads[0] if reads else None
 
     def _ensure_balance_registry(self) -> None:
         if not hasattr(self, "_retained_rates"):
@@ -476,6 +617,8 @@ class _RateAuthoringMixin(_BoardModel):
                         "model; got %r" % (payload,))
             elif kind == "projection":
                 self._authenticate_rate_projection(payload, target=target)
+            elif kind == "inline":
+                continue  # an operand without terms; ``rate`` declares it as its anonymous source
             else:  # pragma: no cover
                 raise ValueError("unknown rate term kind %r" % (kind,))
         return tuple(terms)
