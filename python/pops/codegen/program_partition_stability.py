@@ -375,7 +375,7 @@ def emit_user_face_stability(value, var, lines, *, block_index):
             terms.append("%s * %s" % (scalar_cpp(beta), token))
         frequency = "user_face_update_frequency_%d_%d" % (value.id, index)
         lines.append("const pops::Real %s = %s;" % (frequency, " + ".join(terms)))
-        proposes = user_face_frequency_rule(value.prog) != ""
+        proposes = user_face_frequency_rule(getattr(value, "prog", None)) != ""
         if proposes:
             lines.append("try {")
         lines.append(
