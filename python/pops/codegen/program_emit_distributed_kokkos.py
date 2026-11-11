@@ -92,6 +92,11 @@ def _shared_array_staging(element, capacity, *, lane, registry, source, earlier,
     operation (a default View holds no allocation), so the operations, their order and their
     operands are those of the inline form. The Array and the earlier domains are passed by
     reference after the inline null check: each names an object every inline spelling reads.
+    When the Array is the typed read of a continuation cell
+    (``std::any_cast<const ArrayRef<...>&>((continuation_N).values.at(k))``), the call evaluates
+    that read once more, outside a phase. It cannot fail there: the same read has just succeeded
+    in the phase of the null check, nothing runs in between but declarations, and the inline
+    form already evaluated it outside a phase, in its descriptor lines.
     """
     from .program_shared_definitions import staging_routine
 
