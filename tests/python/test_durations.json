@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1166,
+    "estimated_count": 1169,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7732,9 +7732,11 @@
       "tests/python/unit/surface/test_quadrature.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
       "tests/python/unit/surface/test_su_t2_scheme_refusals.py",
+      "tests/python/unit/surface/test_su_t2_solve_refusals.py",
       "tests/python/unit/surface/test_su_t3_parity.py",
       "tests/python/unit/surface/test_su_t3_schemes.py",
       "tests/python/unit/surface/test_su_t3_schemes_2d.py",
+      "tests/python/unit/surface/test_su_t3_solves.py",
       "tests/python/unit/time/test_actions_v14.py",
       "tests/python/unit/time/test_advance_outputs_n8.py",
       "tests/python/unit/time/test_affine_moment_explicit_basis.py",
@@ -7849,6 +7851,7 @@
       "tests/python/unit/time/test_realization_contributions.py",
       "tests/python/unit/time/test_realization_delivery_adversarial.py",
       "tests/python/unit/time/test_realization_delivery_loops.py",
+      "tests/python/unit/time/test_relations_n8.py",
       "tests/python/unit/time/test_relations_v09.py",
       "tests/python/unit/time/test_retained_continuation_fields.py",
       "tests/python/unit/time/test_scientific_claims.py",
@@ -8107,7 +8110,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1231,
+    "total_files": 1234,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8569,6 +8572,41 @@
         "tests/python/integration/runtime/test_candidate_guards_n8_native.py": "2886b3cfcacf55b5e9b05df8b3a983c5bf5f57e4365fb2c61a5bb11be497d9bb",
         "tests/python/integration/runtime/test_candidate_guards_n8_dim1_native.py": "23d30bd43bd2c6969ee1e8b07c468bd39564f855873f7718d31c58d145fc06cf",
         "tests/python/unit/time/test_candidate_guards_n8.py": "7c1dfedadaf1576c067559231e527844981969eee4972df0c477765919944a2a"
+      }
+    },
+    "ci_20261111_n15_lot_solves": {
+      "basis": "Unmeasured CI scheduling estimates for the three source-only unit modules of the N15 lot « solves » (ROM-98, pops.solve and cg() on the L1-d case of section 17.1), on the source-only tiers of api_v02_20261013 (5/15/60 s): 60 s for the parity tests of SU-T3, which elaborate, validate and resolve L1-d and its hand-written b6 and N8 form and generate the C++ of both without compiling, as the analogue test_su_t3_parity.py; 15 s for the N8 relation tests and 15 s for the SU-T2 refusals of the solves, which trace small cases, as the analogue test_su_t2_refusals.py. The local receipts come from pytest on a 4-core container; they are not GitHub CI file wall times. Existing weights, the Python shard total, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_su_t3_solves.py": "tests/python/unit/surface/test_su_t3_parity.py",
+        "tests/python/unit/time/test_relations_n8.py": "tests/python/unit/surface/test_su_t2_refusals.py",
+        "tests/python/unit/surface/test_su_t2_solve_refusals.py": "tests/python/unit/surface/test_su_t2_refusals.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/surface/test_su_t3_solves.py": 60,
+        "tests/python/unit/time/test_relations_n8.py": 15,
+        "tests/python/unit/surface/test_su_t2_solve_refusals.py": 15
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_su_t3_solves.py": {
+          "cases": 6,
+          "phase_seconds": 7.2,
+          "session_seconds": 7.5
+        },
+        "tests/python/unit/time/test_relations_n8.py": {
+          "cases": 17,
+          "phase_seconds": 4.6,
+          "session_seconds": 4.9
+        },
+        "tests/python/unit/surface/test_su_t2_solve_refusals.py": {
+          "cases": 16,
+          "phase_seconds": 3.1,
+          "session_seconds": 3.4
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_su_t3_solves.py": "26efcda730662df56ef1703d1c2e2560c4209b452a3d10bea1ce9cfcc2071e52",
+        "tests/python/unit/time/test_relations_n8.py": "2adb81b1a8eb99d5b06cb3f404b0f155a67ce9501bc5345968b4a21cfbbca6f8",
+        "tests/python/unit/surface/test_su_t2_solve_refusals.py": "324bfd2ede063e238dda7012463e33f1b2381fd937474f51861cff08c68bff71"
       }
     }
   },
@@ -9805,5 +9843,8 @@
   "tests/python/unit/surface/test_su_t3_schemes_2d.py": 60,
   "tests/python/integration/runtime/test_candidate_guards_n8_dim1_native.py": 600,
   "tests/python/integration/runtime/test_candidate_guards_n8_native.py": 1200,
-  "tests/python/unit/time/test_candidate_guards_n8.py": 600
+  "tests/python/unit/time/test_candidate_guards_n8.py": 600,
+  "tests/python/unit/surface/test_su_t3_solves.py": 60,
+  "tests/python/unit/time/test_relations_n8.py": 15,
+  "tests/python/unit/surface/test_su_t2_solve_refusals.py": 15
 }

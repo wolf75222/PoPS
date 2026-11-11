@@ -18,6 +18,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-98 (N15, lot « solves »): `pops.unknown`, `pops.solve`, `pops.Tolerance`,
+  `Advance(tolerance=)` and `Program(solvers=)` of spec 0.3, 2.6.7, `cg()` in `pops.lib.solve`
+  (a bridge of MG9 on b6's native conjugate gradients) and `imex_euler` in
+  `pops.lib.time.methods`. A traced method of N8 writes the shape of section 5.5
+  (`unknowns`, `Problem`, `solve(request=p.request)`, `require_success`); the relation is affine
+  in its one unknown, the solve path is the name of the method unless `name=` states one, the
+  request comes from the proposal (SV3), the guess is the state at the start of the attempt and a
+  failed solve fails the attempt (T38). The operator's symmetry and sign derive from the claims of
+  its components (IR16), and `cg()` refuses an operator they do not prove SPD with
+  `PropertyNotDerived` (K4). `two_point()` states its linear map, kappa times b6's Laplacian, on a
+  uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
+  until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
+  case written by hand for b6 and N8 (program IR, artifact, identity, C++).
 - ROM-98 (N15, lot 2b): schemes of one's own on a support of rank two and three. A flux is
   written by its axis components, `model.flux(of=u, value=vector(a, b) * u)`, and lowered on the
   b6 dictionary per axis with the waves dF_a/du of each component; in a scheme,
