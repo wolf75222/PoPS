@@ -6,6 +6,7 @@ from pops.claims import Preserves, Courant, Theorem
 from pops.lib.numerics import upwind, two_point
 from pops.lib.time import ssprk2, imex_euler
 from pops.lib.solve import cg
+from pops.lib.quadrature import GaussLegendre
 
 # Model: du/dt + div(a u - nu grad u) = 0 on a periodic interval.
 domain = pops.Box(x=pops.Periodic(0, 1))
@@ -41,7 +42,7 @@ pops.claim(numerics.of(transport), Preserves(pops.Positive()), assumptions=Coura
 
 # Exact cell averages: the jumps of the initial state, at 0.25 and 0.75, sit on faces of the 256 cells.
 x = domain.x
-initial = {u: pops.project(where(abs(x - 0.5) < 0.25, 1.0, 0.0), quadrature=pops.GaussLegendre(2))}
+initial = {u: pops.project(where(abs(x - 0.5) < 0.25, 1.0, 0.0), quadrature=GaussLegendre(2))}
 
 # Program A: SSPRK2 under the combined restriction.
 program_a = pops.Program(

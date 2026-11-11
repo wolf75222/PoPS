@@ -33,6 +33,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   The library words take `reconstruction=` a cell scheme, and `upwind(speed=f)`, f a function of
   `face`, is `fluxes.upwind`. SU-T3 compares each with the case written by hand for b6, and CF4 a
   scheme in the arithmetic of `fluxes.rusanov` with that face node for node.
+- ROM-93 (N11 lot 1): the right-hand side of a balance is a free algebra (spec 0.3 R7, gap C1).
+  `ddt(U) == -div(F) + k*u*(1 - u)` declares each term-free operand as the anonymous source
+  `<rate>_inline_<k>` of the balance, with its exact coefficient folded in, so it lowers on the
+  native route of a declared source, bit for bit (M03 with an inline radiative loss). A term under
+  any node other than `+`, `-` and an exact scaling (`u * div(F)`, `exp(S)`) raises
+  `TermNotAdditive` at the line that wrote it; a refused balance leaves the model unchanged.
+  `CoverageNotExact` lists every uncovered term with its line, and `rate.inline` selects the
+  anonymous sources. A declared source whose name is not an identifier now runs in a source-only
+  view.
+- ROM-81 (N2, review of the spec of 11/11, P3 and P8): the core knows one quadrature construct,
+  `pops.Quadrature(nodes=, weights=, interval=)` (spec 0.3 D0), in the surface
+  (`import pops.surface as pops`); `GaussLegendre(n)` and `GaussHermite(n)` are functions of the new
+  module `pops.lib.quadrature` that return one, with their parity tests, and the gallery imports
+  them from there. The refused vocabulary of CF2 is the closed, versioned file
+  `tests/python/architecture/frozen_engine/cf2_vocabulary.toml`, each row with the finding that
+  motivates it; CF2 no longer admits a quadrature compound (`GaussHermite`) and refuses a named rule
+  in the core. `python -m tests.python.architecture.frozen_engine.mg6_counts` counts the sites of
+  an exception list by directory and by issue (MG6).
 - ROM-85 (N10, phase 1, lot 1a): the vocabulary of the one array type (spec 0.3 DM1 to DM3, IR1 to
   IR3). `pops._ir.arrays` holds the value types of IR1 (`Array(D, T)`, `Product`, `Variant`,
   `Result`, `Iteration`, `Index`, scalars, and `Untyped` for what the plan cannot type yet);
@@ -52,6 +70,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
   native `MUSCL(<Limiter>())` state bit for bit for the four limiters. `weno5(rep, epsilon=)` is
   the WENO5-Z reconstruction of master's `WENO5()`, bit for bit on the same case.
+- ROM-31 (G13 lot 4): the commit's variable-recovery check of a state publication candidate runs
+  where the candidate lives (spec 0.3 DM8). Each prepared System and AMR block carries a
+  `candidate_recovery_check`, built from the model's declared inversion and ordered admissible
+  set (`include/pops/runtime/recovery/device_candidate_recovery.hpp`), that counts in a Kokkos
+  reduction the cells whose conservative values are not finite or whose recovery is refused.
+  Only the two counts return: the commit no longer copies the state to the host, and the DM8
+  residency test now sees no mesh byte cross in a step. A prepared block without the check is
+  refused at installation.
 - ROM-31 (G13 lot 3): a finite Array whose element is a Field keeps its elements in device
   columns, one per box, element-major (spec 0.3 DM7, MG3), instead of boxing a copy of each
   element in a host cell. Each element is a MultiFab over its own slices (new `Fab` and
@@ -645,6 +671,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   order, their values and schema identities are unchanged. On one 4-core container the Hall source
   goes from 30.0 to 17.7 MB and compiles in 357 s within 4.8 GiB, where it did not fit in 12 GiB
   before.
+- The step body of a generated Program continues in a nested function only after a line that ends
+  a statement, and the brace scan that places these splits skips raw string literals, so a split
+  can no longer leave a statement open. The Hall Program and the eleven other Programs of the F7
+  review keep byte-identical sources. In CI the Hall test now passes in 465 s, and its two-rank
+  twin in 457 s per rank, so its weight in `tests/python/test_durations.json` goes from the 900 s
+  estimate to 520 s.
 
 ## [1.0.0] - 2026-07-16
 

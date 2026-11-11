@@ -5,9 +5,14 @@ A source-only scan of the core paths and of the native component tree (FC6b, CF0
 of section 15.3: physical roles and role guessing, model, closure and equation-of-state names,
 named numerical methods, schemes, limiters, interpolations, approximations, controllers, field
 operators and boundary families, a primitive selected by its spelling, a physical constant in an
-ABI, case identifiers, and so any route table or switch keyed on them (A5, FC4). The scanner and its
-vocabulary are in ``frozen_engine/scan.py``; the early audit of N2 (29/10) completed the vocabulary
-so that the counter-examples of FC2, FC3, FC4 and C43 are refused whatever their spelling.
+ABI, case identifiers, and so any route table or switch keyed on them (A5, FC4). The scanner is
+``frozen_engine/scan.py``; its vocabulary is the closed, versioned file
+``frozen_engine/cf2_vocabulary.toml`` (review of 11/11, P8; ``test_cf2_vocabulary.py``), which the
+early audit of N2 (29/10) completed so that the counter-examples of FC2, FC3, FC4 and C43 are refused
+whatever their spelling.
+
+CF2 is a tripwire. It reads words, so it finds a name, not a formula coded without its name, which
+CF4 finds by swapping bodies; the evidence of G3 is CF1, CF3, CF4 and CF6.
 
 The test starts from the exception list of b6e64c1d (``frozen_engine/cf2_exceptions.txt``, one
 entry ``file:line`` per occurrence of a token that holds a term, with the issue that removes it and
@@ -20,12 +25,13 @@ added by hand lets nothing in and a change to the scanner cannot hide a site una
 requires the list to be empty (section 1.5). The closed list of interfaces of FC6b is asserted by
 ``test_native_interfaces_closed.py``.
 
-Three rules of CF2 come from the amendment of 08/11 (review of N15 lot 1, point 4). The words
+Two rules of CF2 come from the amendment of 08/11 (review of N15 lot 1, point 4). The words
 of ``pops.math`` that 2.6.3 lists (``grad``, ``div``, ``curl``, ``outflow``, ...) are the algebra of
 the core: CF2 admits the definition of each word in ``pops.math`` by an exact rule of the scanner,
 and refuses its name as a selector, an emitter, a kernel or a route key. A refusal table of the
-surface (§21.7) is user-facing error text, so it can name ``laplacian`` or ``cfl_guard``. A compound
-that names a quadrature (``GaussHermite``) is not the closure of one of its words.
+surface (§21.7) is user-facing error text, so it can name ``laplacian`` or ``cfl_guard``. The third
+rule of 08/11, for the compounds that name a quadrature, is gone with P3: the core knows
+``pops.Quadrature`` only, so CF2 has no exception for the name of a rule.
 
 The test reads the source tree only; it does not import ``pops`` or ``_pops``.
 """
@@ -697,13 +703,18 @@ def test_only_a_refusal_table_of_the_surface_is_error_text(source, path, expecte
 
 
 @pytest.mark.parametrize("source, kind, expected", [
-    ("class GaussHermite:\n    pass\nGaussLegendre = 1\n", "python", []),
-    ('rule = "gauss_hermite"\n', "python", []),
-    ("struct GaussHermiteNodes {};", "cpp", []),
+    # a named quadrature rule in a core path is refused (review of 11/11, P3)
+    ("class GaussHermite:\n    pass\n", "python", ["gauss-hermite"]),
+    ('rule = "gauss_hermite"\n', "python", ["gauss-hermite"]),
+    ("GaussLegendre = 1\n", "python", ["legendre"]),
+    ("struct GaussHermiteNodes {};", "cpp", ["gauss-hermite"]),
+    ("auto lobatto_nodes = 3;", "cpp", ["lobatto"]),
     # the Hermite closure keeps its name
     ("def fan_li15_from_hermite(m):\n    pass\n", "python", ["fan-li", "hermite"]),
     ("hermite_raw_edge = 1\n", "python", ["hermite"]),
+    # pops.Quadrature itself names no rule
+    ("class Quadrature:\n    pass\n", "python", []),
 ])
-def test_a_quadrature_compound_names_the_quadrature(source, kind, expected):
+def test_a_named_quadrature_rule_is_refused_in_the_core(source, kind, expected):
     path = "python/pops/x.py" if kind == "python" else "include/pops/x.hpp"
     assert _terms(source, kind, path=path) == expected

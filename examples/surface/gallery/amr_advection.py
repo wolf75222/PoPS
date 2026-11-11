@@ -9,6 +9,7 @@ from pops.math import *
 from pops.lib.numerics import upwind, muscl, vanleer, minmod, linear_prolongation
 from pops.lib.time import ssprk2, subcycle, interpolate, finite, composite_balance
 from pops.lib.output import hdf5
+from pops.lib.quadrature import GaussLegendre
 
 CELLS, LEVELS, RATIO = 64, 3, 2
 AX, AY = 1, Fraction(1, 2)
@@ -55,7 +56,7 @@ program = pops.Program(
     advance=pops.Advance(subcycle(method=ssprk2(rate=model), coarse_fine=prolong, in_time=interpolate), dt=DT,
                          accept=[finite(), composite_balance(atol=1e-11)]),     # all of them accept
     initial={u: pops.project(where((x - 0.3)**2 + (y - 0.3)**2 < Fraction(3, 20)**2, 1.0, 0.0),
-                             quadrature=pops.GaussLegendre(2))},
+                             quadrature=GaussLegendre(2))},
     regrid=pops.Regrid(refine=refine, coarsen=coarsen, fill=prolong, when=pops.every(steps=2)),
 )
 
