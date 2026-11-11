@@ -8437,12 +8437,12 @@
       "local_receipts": {
         "tests/python/unit/surface/test_quadrature.py": {
           "command": "PYTHONPATH=python pytest -q tests/python/unit/surface/test_quadrature.py",
-          "passed": 37,
+          "passed": 40,
           "seconds": 0.54
         }
       },
       "source_sha256": {
-        "tests/python/unit/surface/test_quadrature.py": "c16c62f7feb5b348d32ca4aa28417781d442852aa6e3db1db0a7223a63592024"
+        "tests/python/unit/surface/test_quadrature.py": "5836ca0a56f94a1ad16a997a482924a642f412585706e112d51ac1754fc286fc"
       }
     }
   },

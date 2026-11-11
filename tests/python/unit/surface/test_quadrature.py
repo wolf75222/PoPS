@@ -50,6 +50,23 @@ def test_gauss_hermite_is_exact_for_p_exp_minus_v2_up_to_degree_2n_minus_1(n):
         assert value == pytest.approx(exact, rel=1e-10, abs=1e-12), k
 
 
+@pytest.mark.parametrize("n", [150, 300])
+def test_a_large_gauss_hermite_rule_keeps_its_mass(n):
+    rule = GaussHermite(n)
+    assert all(w > 0 for w in rule.weights)
+    assert _integrate(rule, lambda v: math.exp(-v * v)) == pytest.approx(math.sqrt(math.pi),
+                                                                         rel=1e-13)
+
+
+def test_a_gauss_hermite_rule_too_large_for_binary64_names_its_size():
+    """Review of #759, point 2: past a few hundred nodes the weights underflow and exp(v^2)
+    overflows; the refusal names the size of the rule, not E4."""
+    with pytest.raises(ValueError, match=r"GaussHermite\(400\).*overflow in double precision") \
+            as caught:
+        GaussHermite(400)
+    assert "E4" not in str(caught.value)
+
+
 @pytest.mark.parametrize("rule, n", [(GaussLegendre, 4), (GaussHermite, 24)])
 def test_a_named_rule_is_the_rule_written_by_hand(rule, n):
     named = rule(n)
