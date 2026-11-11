@@ -8,7 +8,8 @@ and the core must not know it (section 15.3, FC2, FC4); a solver is a reference 
 whose natives are qualified substitutions (section 15, SV19). So:
 
   * gate 2a -- ``pops.lib`` may hold the modules of section 2.6.9 (``math``, ``models``,
-    ``numerics``, ``output``, ``solve``, ``time``) beside the b6 packages ``amr`` and ``initial``;
+    ``numerics``, ``output``, ``quadrature``, ``solve``, ``time``) beside the b6 packages ``amr``
+    and ``initial``;
   * gate 2b -- ``pops.lib`` is still a leaf: no ``_pops``/codegen/runtime import at any scope (CF0b,
     whose full scan with its b6 exception list is the next lot of N2, makes this stricter);
   * gate 2c -- the central objects of the core (layouts, runtime parameters, programs, modules,
@@ -39,7 +40,7 @@ LIB = REPO_ROOT / "python" / "pops" / "lib"
 # pops.lib may hold the b6 packages and the modules of section 2.6.9 of spec 0.3. A child outside this
 # set is reviewed here first.
 _B6_LIB_CHILD_DIRS = {"amr", "initial", "models", "time"}
-_SPEC_LIB_MODULES = {"math", "models", "numerics", "output", "solve", "time"}
+_SPEC_LIB_MODULES = {"math", "models", "numerics", "output", "quadrature", "solve", "time"}
 _ALLOWED_LIB_CHILD_DIRS = _B6_LIB_CHILD_DIRS | _SPEC_LIB_MODULES
 
 # The HARD refusal list: lib is a leaf, so it must import none of these at ANY scope (module-scope OR

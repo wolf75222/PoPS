@@ -3158,7 +3158,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 1,
-          "estimated_seconds": 900,
+          "estimated_seconds": 520,
           "ci_ranks": [
             1,
             2
@@ -3170,7 +3170,7 @@
           ],
           "entrypoint": "tests/python/integration/mpi/test_api_v02_hall_mhd_ct_mpi2.py",
           "execution_lane": "serial_and_mpi",
-          "basis": "Unmeasured scheduling estimate including cold generated C++ compilation; not a native receipt. Existing launch watchdog and scientific thresholds remain unchanged."
+          "basis": "Planning weight from CI receipts of the serial test once B03 F7 let its Program compile (see b03_f7_hall_mhd_ct_weight); it includes the cold generated C++ compilation. Existing launch watchdog and scientific thresholds remain unchanged."
         },
         "tests/python/integration/runtime/test_api_v02_history_transfer_native.py": {
           "kind": "native_profile",
@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1160,
+    "estimated_count": 1163,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7060,6 +7060,7 @@
       "tests/python/integration/runtime/test_public_three_stage_screened_fields.py",
       "tests/python/integration/runtime/test_qualification_receipt_native.py",
       "tests/python/integration/runtime/test_rank_one_owned_amr_invalid.py",
+      "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py",
       "tests/python/integration/runtime/test_relations_v09_native.py",
       "tests/python/integration/runtime/test_scientific_spatial_gmres_v14_native.py",
       "tests/python/integration/runtime/test_scientific_spatial_v14_native.py",
@@ -7579,6 +7580,7 @@
       "tests/python/unit/physics/test_ranked_flux_authoring.py",
       "tests/python/unit/physics/test_ranked_gradient_ir.py",
       "tests/python/unit/physics/test_rate_equation_contract.py",
+      "tests/python/unit/physics/test_rate_expression_closure_n11.py",
       "tests/python/unit/physics/test_riemann_formula_hooks.py",
       "tests/python/unit/physics/test_riemann_provider_identity.py",
       "tests/python/unit/physics/test_role_identity_authority.py",
@@ -7725,6 +7727,7 @@
       "tests/python/unit/solvers/test_amr_composite_facade.py",
       "tests/python/unit/solvers/test_cartesian_cg_descriptor.py",
       "tests/python/unit/solvers/test_poisson_screened.py",
+      "tests/python/unit/surface/test_quadrature.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
       "tests/python/unit/surface/test_su_t3_parity.py",
       "tests/python/unit/time/test_actions_v14.py",
@@ -8098,7 +8101,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1225,
+    "total_files": 1228,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8325,7 +8328,7 @@
       }
     },
     "b03_f7_20261107": {
-      "basis": "Scheduling estimate for the B03 family F7 unit file (ROM-18, gap C49), not a CI receipt: it emits the nested, bounds and import distributed Kokkos Programs twice each (shared and inline forms) without compiling them and checks the shared translation-unit definitions on literal inputs. The analogue test_distributed_kokkos_codegen.py emits fourteen Programs of the same builder at 30 s, so 15 s. The local receipt comes from scripts/ci_pytest_timings.py on a 4-core container beside other work; it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace from a complete CI per-file receipt.",
+      "basis": "Scheduling estimate for the B03 family F7 unit file (ROM-18, gap C49), not a CI receipt: it emits the nested, bounds and import distributed Kokkos Programs twice each (shared and inline forms) without compiling them and checks the shared translation-unit definitions on literal inputs. The analogue test_distributed_kokkos_codegen.py emits fourteen Programs of the same builder at 30 s, so 15 s. The local receipt comes from scripts/ci_pytest_timings.py on an idle 4-core container, measured again when the F7 review's follow-up added two cases; it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace from a complete CI per-file receipt.",
       "files": {
         "tests/python/unit/codegen/test_program_code_volume_f7.py": {
           "estimated_seconds": 15,
@@ -8335,12 +8338,12 @@
       },
       "local_receipts": {
         "tests/python/unit/codegen/test_program_code_volume_f7.py": {
-          "cases": 12,
-          "phase_seconds": 0.89,
-          "session_seconds": 1.6
+          "cases": 14,
+          "phase_seconds": 0.82,
+          "session_seconds": 1.53
         }
       },
-      "source_sha256": "68fef40a86300a8afe9b7886827ec7496ed08b4324254dc0ec561140673b1523"
+      "source_sha256": "7fe6d28f3dc422cd76f3e3905fb201c21d2cedc6d752b131123ced87dc8e0d5c"
     },
     "n3_20261107_flux_family": {
       "basis": "Scheduling estimate for the flux family of Linear N3 (ROM-87, lot 1) and ROM-107, not a CI receipt. The file compiles seven artifacts: the CF4 body swap (the L1 upwind body and the L5 Scharfetter-Gummel body on one periodic 24 x 8 case, two SSPRK2 steps each) and master's scalar-advection tutorial 02 five times (native ScalarUpwind under AdaptiveCFL and under FixedDt, upwind(speed=) under FixedDt, then the tutorial as written under AdaptiveCFL with each face, ROM-107), 64 x 64, MUSCL(VanLeer), to t = 0.2. Analogue: test_api_v02_python_face_inputs_native.py, six artifacts, 695 s locally, estimate 850 s. Local run of the file with ROM-107: 402 s for its four tests and seven artifacts (the as-written parity: 118 s), one cloud container, 4 cores, Kokkos Serial Dim2, cold isolated cache.",
@@ -8423,6 +8426,62 @@
       },
       "source_sha256": {
         "tests/python/unit/numerics/test_index_sets_n10.py": "dcf582c8da99d9b3a57a8a879db187f513b4d81118fcbc7f44876dbdc5095f7c"
+      }
+    },
+    "n11_20261108_expression_closure": {
+      "basis": "Unmeasured CI scheduling estimates for N11 lot 1 (ROM-93, rule R7, gap C1), not CI receipts. The unit module traces small board models and plans without compiling, on the 15 s source-only tier of api_v02_20261013, as the analogue test_joint_rate_projection_balance.py. The native module compiles six artifacts (a source-only balance and a transport balance, each inline and declared, explicit Euler on 8 x 8; M03 stiffened-gas Euler with an inline radiative loss, inline and declared, SSPRK2 on 16 x 8) with cold caches, on the 600 s native tier, as the analogue test_balance_multiplicity_runtime.py. The local receipts are pytest session times on a 4-core container beside other local test sessions; they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; the Python shard total is 142, which holds this native file beside the rest of the catalog under the 35 min budget; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/physics/test_rate_expression_closure_n11.py": "tests/python/unit/physics/test_joint_rate_projection_balance.py",
+        "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": "tests/python/integration/runtime/test_balance_multiplicity_runtime.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/physics/test_rate_expression_closure_n11.py": 15,
+        "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": 600
+      },
+      "local_receipts": {
+        "tests/python/unit/physics/test_rate_expression_closure_n11.py": {
+          "cases": 57,
+          "session_seconds": 1.21
+        },
+        "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": {
+          "cases": 3,
+          "session_seconds": 249.5
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/physics/test_rate_expression_closure_n11.py": "ffda6d652aec74c16925bc254d66ca9c2272ef407edea714cc5eb34942416534",
+        "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": "69b67515a06f56055befee3d5c90fdd991698dbdfd1eec832f48f9550b1ce08a"
+      }
+    },
+    "n2_20261111_quadrature": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only unit module of the P3 move of N2 (ROM-81, review of 11/11): pops.Quadrature in the core and GaussLegendre and GaussHermite in pops.lib.quadrature, with their parity tests (CF4). 5 s, the lowest source-only tier of api_v02_20261013: it builds rules with numpy and traces one small case, a lighter analogue of test_su_t2_refusals.py (15 s). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions (no native module), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_quadrature.py": "tests/python/unit/surface/test_su_t2_refusals.py"
+      },
+      "estimated_seconds": {
+        "tests/python/unit/surface/test_quadrature.py": 5
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_quadrature.py": {
+          "command": "PYTHONPATH=python pytest -q tests/python/unit/surface/test_quadrature.py",
+          "passed": 40,
+          "seconds": 0.54
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_quadrature.py": "5836ca0a56f94a1ad16a997a482924a642f412585706e112d51ac1754fc286fc"
+      }
+    },
+    "b03_f7_hall_mhd_ct_weight": {
+      "basis": "CI pytest call durations of the single collected case, which passed each time, once B03 F7 (#724, gap C49) let the Hall Program compile: the batch run of the integration head and two cold launches of the throwaway F7 probe on the PR head. The case compiles its Program cold (isolated native cache), so these times include the generated C++ compilation. The planning weight rounds the larger observation up by about ten percent, as ci430d_shard114_observation does. The F7 review's slowest calibrated runner (1.40 times its container's 558 s, 783 s) would exceed the weight by 263 s, within the ten minutes that the 45-minute step leaves beyond the 2100 s ordinary budget. The MPI2 twin passed in the same batch run in 457.48 s per rank under its unchanged 1200 s launch limit. No deadline, watchdog, threshold or test selection changes; replace from a complete CI per-file timing artifact.",
+      "observed_seconds": {
+        "run 42431743649 job 128595160395 (acc5f6280, batch run, shard 97 of 141, pytest call duration)": 464.92,
+        "run 42401642786 job 128490521081 (92b45c2, F7 probe launch 1, pytest call duration)": 458.18,
+        "run 42401642786 job 128490521081 (92b45c2, F7 probe launch 2, pytest call duration)": 455.44
+      },
+      "previous_weight_seconds": 900,
+      "weights_seconds": {
+        "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 520
       }
     }
   },
@@ -8549,7 +8608,7 @@
   "tests/python/integration/runtime/test_api_v02_flux_correction_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_graph_functions_native.py": 900,
   "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 5100,
-  "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 900,
+  "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 520,
   "tests/python/integration/runtime/test_api_v02_history_transfer_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
   "tests/python/integration/runtime/test_api_v02_implicit_derivatives_native.py": 1200,
@@ -9650,5 +9709,8 @@
   "tests/python/unit/surface/test_su_t3_parity.py": 60,
   "tests/python/integration/runtime/test_field_requests_n8_native.py": 900,
   "tests/python/unit/time/test_field_requests_n8.py": 120,
-  "tests/python/unit/numerics/test_index_sets_n10.py": 30
+  "tests/python/unit/numerics/test_index_sets_n10.py": 30,
+  "tests/python/unit/physics/test_rate_expression_closure_n11.py": 15.0,
+  "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": 600.0,
+  "tests/python/unit/surface/test_quadrature.py": 5
 }

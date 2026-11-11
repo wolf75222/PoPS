@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 
+def _registered_name(handle):
+    """The registry name of a declared source: its ``reg_name``, which differs from its display
+    name when that name is not an identifier (``"my growth"`` registers ``my_growth``)."""
+    return getattr(handle, "reg_name", None) or handle.local_id
+
+
 def lower_source_rate(program, operator, arguments, name, *, global_inputs=None):
     from pops.model.handles import OperatorHandle
     from pops.time.values import _Coeff
@@ -20,7 +26,7 @@ def lower_source_rate(program, operator, arguments, name, *, global_inputs=None)
             payload = occurrence.payload
             registry = program._operator_registries[payload.owner_path]
             registered = (payload.registered_operator_name if isinstance(payload, OperatorHandle)
-                          else registry.target_for_handle(payload.local_id))
+                          else registry.target_for_handle(_registered_name(payload)))
             bodies.append(registry.get(registered).body)
         source_global_inputs(program, SimpleNamespace(body=tuple(bodies)), arguments[0], global_inputs)
     values, coefficients = [], []
@@ -28,9 +34,9 @@ def lower_source_rate(program, operator, arguments, name, *, global_inputs=None)
         handle = occurrence.payload
         if not isinstance(handle, OperatorHandle):
             registry = program._operator_registries[handle.owner_path]
-            registered = registry.target_for_handle(handle.local_id)
+            registered = registry.target_for_handle(_registered_name(handle))
             declaration = registry.get(registered)
-            handle = OperatorHandle(handle.local_id, kind=declaration.kind,
+            handle = OperatorHandle(registered, kind=declaration.kind,
                                     owner=handle.owner_path, signature=declaration.signature,
                                     registered_operator_name=registered)
         inputs = []

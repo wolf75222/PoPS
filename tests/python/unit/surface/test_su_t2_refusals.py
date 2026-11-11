@@ -45,6 +45,9 @@ def _refused(caught, kind, marker, rules, write):
     assert ": %s: " % kind.__name__ in message
     assert "(%s)" % ", ".join(rules) in message
     assert "Write %s" % write in message
+    # ``rule`` is the id the row states, as on the board's refusals; the sentence is ``statement``.
+    assert error.rule == (rules[0] if rules else None)
+    assert ": %s (" % error.statement in message
     return message
 
 
@@ -836,3 +839,28 @@ def test_su13_pops_and_pops_math_have_their_words_only():
     for leaked in ("Expr", "Call", "Any", "annotations", "SpellingRefusal", "operand"):
         with pytest.raises(surface.SymbolNotInSurface):
             getattr(math, leaked)
+
+
+def test_every_row_names_its_rule_by_id_as_the_board_refusals_do():
+    from pops._ir.refusals import TermNotAdditive
+    from pops.surface import _refusal
+
+    rows = [value for value in vars(_refusal).values() if isinstance(value, type)
+            and issubclass(value, _refusal.SurfaceRefusal) and value is not _refusal.SurfaceRefusal]
+    assert rows
+    for row in rows:
+        assert row.rule == (row.rules[0] if row.rules else None), row.__name__
+
+    class BoardRow(_refusal.SurfaceRefusal, TermNotAdditive):
+        pass
+
+    class StatedRow(_refusal.SurfaceRefusal, TermNotAdditive):
+        rules = ("R7", "E3")
+
+    assert BoardRow.rule == StatedRow.rule == TermNotAdditive.rule == "R7"
+    site = _refusal.Site(HERE, 1)
+    refusal = BoardRow("a term is a summand of its balance", write="model.define", site=site)
+    assert isinstance(refusal, TermNotAdditive) and refusal.site is site
+    assert refusal.rule == "R7" and refusal.phase == "tracing"
+    assert refusal.statement == "a term is a summand of its balance"
+    assert str(refusal).startswith("%s:1: BoardRow: a term is a summand of its balance." % HERE)

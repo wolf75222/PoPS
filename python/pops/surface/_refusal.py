@@ -97,16 +97,32 @@ def site_of_traceback(tb: Any) -> Site | None:
 class SurfaceRefusal(Exception):
     """A refusal of the surface: the user's site, the rule in one sentence, the construct to write.
 
+    ``rule`` and ``phase`` follow the board's refusals: ``rule`` is the first id of ``rules``;
+    the sentence is ``statement``.
+
     ``str()`` is the message of SU11: ``file:line: Name: rule (ids). Write construct.``
     """
 
     rules: tuple = ()
+    rule: str | None = None
     phase = "tracing"
     code = "surface_refusal"
 
-    def __init__(self, rule: str, *, write: str | None = None, site: Site | None = None,
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        # ``rule`` is the id of the rule a row states, as on every refusal of the board
+        # (``pops._ir.refusals``): the first of ``rules``. A row without ids keeps the rule of a
+        # board refusal it also subclasses, or has none. The sentence is ``statement``.
+        super().__init_subclass__(**kwargs)
+        if cls.rules:
+            cls.rule = cls.rules[0]
+            return
+        cls.rule = next((base.__dict__["rule"] for base in cls.__mro__[1:]
+                         if not issubclass(base, SurfaceRefusal) and "rule" in base.__dict__),
+                        None)
+
+    def __init__(self, statement: str, *, write: str | None = None, site: Site | None = None,
                  also: Site | None = None) -> None:
-        self.rule = rule
+        self.statement = statement
         self.write = write
         self.site = user_site(2) if site is None else site
         self.also = also
@@ -122,7 +138,7 @@ class SurfaceRefusal(Exception):
 
     def _message(self) -> str:
         where = "<unknown site>" if self.site is None else str(self.site)
-        text = "%s: %s: %s" % (where, type(self).__name__, self.rule)
+        text = "%s: %s: %s" % (where, type(self).__name__, self.statement)
         if self.rules:
             text += " (%s)" % ", ".join(self.rules)
         text += "."
@@ -254,9 +270,9 @@ class NotYetElaborated(SurfaceRefusal, _TracedNotYetElaborated):
     def __init__(self, construct: str, owner: str | None, *, site: Site | None = None) -> None:
         self.construct = construct
         self.owner = owner
-        rule = construct.rstrip(".") if owner is None else \
+        statement = construct.rstrip(".") if owner is None else \
             "%s has no elaborated form yet; %s elaborates it" % (construct, owner)
-        super().__init__(rule, site=user_site(2) if site is None else site)
+        super().__init__(statement, site=user_site(2) if site is None else site)
 
 
 class SpellingRefusal:

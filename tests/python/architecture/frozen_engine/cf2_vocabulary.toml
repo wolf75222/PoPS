@@ -1,0 +1,495 @@
+# The refused vocabulary of CF2 (spec 0.3, CF2, section 15.3, FC2 to FC4; Linear N2, ROM-81).
+#
+# CF2 is a tripwire. It reads words, so it finds a name, not a formula coded without its name, which
+# CF4 finds by swapping bodies; the evidence of G3 is CF1, CF3, CF4 and CF6.
+#
+# This file is the vocabulary, closed and versioned (review of 11/11, P8). scan.py reads it and
+# holds no word of its own; the lists of CF2 and of section 15.3 summarize it. A word enters only
+# with the finding that motivates it, written in `finding`: the site of b6 or the audit that showed
+# the knowledge, or, for a name that section 15.3 lists and the tree does not hold, that fact. A
+# file:line in a finding is at b6e64c1d (the early audit of N2 read a88d1ea, whose core is b6's);
+# the counts of sites are those of cf2_exceptions.txt at 9f13dad.
+#
+# Rules of a change (test_cf2_vocabulary.py):
+# - every change adds a [[versions]] entry whose `version` is one more than the last, whose
+#   `digest` is the digest of the vocabulary as written (scan.vocabulary_digest()) and whose
+#   `change` says what changed and why; `version` names the last entry;
+# - a word added regenerates cf2_exceptions.txt with `refresh_exceptions cf2 --bootstrap`, and the
+#   PR says why (MG6, refresh_exceptions.py); a word taken out, or a narrower rule, is a narrowing
+#   that the PR declares in accepted_narrowings.txt, with its reason;
+# - there is no exception for the name of a quadrature rule or of a base dimension: the core knows
+#   pops.Quadrature and the base of the model only (D0, S3), and their names live in pops.lib.
+#
+# Sections: [[terms]] (a term is a word, or a phrase written with "-", each word optionally followed
+# by an order or version number; "ident:" matches identifiers and paths, never strings; "core:" is
+# refused in the core paths only, so that a qualified substitution of the native tree may name its
+# generic algorithm, FC6); [[literals]] (string literals compared whole and case-sensitively);
+# [[names]] (identifiers or strings compared whole and case-sensitively); [case_identifier];
+# [axis_link] (a component name built from a name and an axis, found by the Python lexer);
+# [[not_after]] (a term preceded by one of these words is another word).
+
+version = 2
+
+[[versions]]
+version = 1
+date = "2026-11-11"
+digest = "bff8b9ddd3aa6d0a91577c644d14e70a147db7a2ea13fd015bb0e8546d4e1089"
+change = "The vocabulary leaves scan.py for this file (review of 11/11, P8): the terms of N2 lot 1, of its early audit (29/10) and of its independent review (30/10), as scan.py held them at 9f13dad, each row with its finding. The quadrature rule of the scanner (hermite after gauss is not the Hermite closure) is removed: since P3 the core names no quadrature rule (D0)."
+
+[[versions]]
+version = 2
+date = "2026-11-11"
+digest = "3acac86f019bd5b86cba66ec33209e0bfbb09b01b3697b2614ad5262842f442a"
+change = "Adds the row of the quadrature rules (gauss-hermite, legendre, lobatto, laguerre, radau; review of 11/11, P3): no site in the core paths or the native tree at this version, so cf2_exceptions.txt is unchanged and no --bootstrap is needed."
+
+[[terms]]
+category = "role"
+rule = "CF2 role vocabulary used as a selector; FC3"
+finding = "C3 and the initial exceptions of ROM-81: b6 selects by role, VariableRole::Density in include/pops/numerics/spatial/primitives/positivity.hpp:63 and the role bindings of include/pops/runtime/builders/factory/model_factory.hpp:196-229; 101 sites at 9f13dad, 28 in include/pops/core/state/variables.hpp."
+words = [
+    "ident:variable-role",
+    "ident:canonical-roles",
+    "ident:role-of",
+    "ident:roles-for",
+]
+
+[[terms]]
+category = "role"
+rule = "CF2 role machinery behind the selector (VariableRole aliases VariableSemantic); FC3, C3"
+finding = "Early audit of N2 (29/10, O2): VariableRole is only an alias (using VariableRole = VariableSemantic, include/pops/core/state/variables.hpp:105), so the alias alone could be renamed away; role_from_name (variables.hpp:109,146), bind_variable_roles (model_factory.hpp:197), ComponentRole, RoleKey and parse_role (python/pops/model/identity.py), role_canonical (python/pops/physics/_coupled_abi.py:9) and the role slot c_rho (include/pops/physics/bricks/elliptic.hpp:90) carry the same knowledge; 252 sites at 9f13dad."
+words = [
+    "ident:variable-semantic",
+    "ident:variable-roles",
+    "ident:component-role",
+    "ident:role-key",
+    "ident:parse-role",
+    "ident:role-token",
+    "ident:role-canonical",
+    "ident:role-from-name",
+    "ident:role-name",
+    "ident:roles-csv",
+    "ident:energy-role",
+    "ident:role-index",
+    "ident:require-density",
+    "ident:from-semantic",
+    "ident:c-rho",
+]
+
+[[terms]]
+category = "role"
+rule = "15.3 physical roles; FC3"
+finding = "Section 15.3 and C3: b6 guesses roles from names (python/pops/physics/aux.py:32-57) and keeps role families (python/pops/model/identity.py:15); 775 sites at 9f13dad, 169 in include/pops/numerics/spatial/nd/conservation_laws.hpp. kinetic-energy, internal-energy and total-energy have no site at 9f13dad: section 15.3 names them, and the term keeps a new one out."
+words = [
+    "momentum",
+    "velocity",
+    "pressure",
+    "temperature",
+    "enthalpy",
+    "kinetic-energy",
+    "internal-energy",
+    "total-energy",
+]
+
+[[terms]]
+category = "model"
+rule = "15.3 named models; CF2 model and family names"
+finding = "Section 15.3 names the models (Euler, Poisson, Vlasov, Maxwell, Hall, Baer-Nunziato, ...); 910 sites at 9f13dad, 74 in include/pops/numerics/elliptic/poisson/poisson_fft_solver.hpp. The names with no site at 9f13dad (navier, stokes, maxwell, hall, baer, nunziato, mhd, boltzmann, fokker, planck, cahn, hilliard, burgers, schrodinger, pitaevskii) are the models of the conformance cases and tutorials, which a core must never name."
+words = [
+    "euler",
+    "navier",
+    "stokes",
+    "poisson",
+    "vlasov",
+    "maxwell",
+    "hall",
+    "baer",
+    "nunziato",
+    "mhd",
+    "boltzmann",
+    "fokker",
+    "planck",
+    "cahn",
+    "hilliard",
+    "burgers",
+    "schrodinger",
+    "pitaevskii",
+]
+
+[[terms]]
+category = "model"
+rule = "15.3 named models: the transport, force and species routes of b6"
+finding = "Early audit of N2 (29/10, O3 and O12): the switch on TransportRouteId::kExb, kCompressible and kIsothermal (include/pops/runtime/builders/factory/model_factory.hpp:90-96), the table kTransportRoutes, Impl::Species and SpeciesCharge, which computes a charge density from the species; 362 sites at 9f13dad, 43 in python/pops/physics/_board_multispecies.py."
+words = [
+    "isothermal",
+    "compressible",
+    "exb",
+    "ex-b",
+    "electrostatic",
+    "drift-diffusion",
+    "maxwellian",
+    "potential-force",
+    "background-density",
+    "multispecies",
+    "ionization",
+    "thermal",
+    "species",
+]
+
+[[terms]]
+category = "model"
+rule = "15.3 physical quantities and forces of named models"
+finding = "Section 15.3, physical quantities and forces of named models: 461 sites at 9f13dad, 59 in include/pops/runtime/config/generated_component_catalog.hpp (lorentz, gravity, electron, ion, sound speed in the catalogue of components). speed-of-sound has no site at 9f13dad and keeps a new one out."
+words = [
+    "magnetic",
+    "electric",
+    "lorentz",
+    "gravity",
+    "gravitational",
+    "charge-density",
+    "electron",
+    "ion",
+    "sound-speed",
+    "speed-of-sound",
+    "acoustic",
+    "mach",
+]
+
+[[terms]]
+category = "closure"
+rule = "15.3 equations of state and closures"
+finding = "Section 15.3 and C29, C30: closures and families of moments in python/pops/moments/ (59 sites in fan_li.py) and the kinetic energy emitted as a C++ string (python/pops/codegen/program_emit_condensed.py:599-624); 365 sites at 9f13dad. The early audit (F1) found that the gaussian sites outside the moments are the gaussian_field initial-data route, owned by G07. levermore and maxent have no site at 9f13dad."
+words = [
+    "equation-of-state",
+    "eos",
+    "ideal-gas",
+    "adiabatic",
+    "hyqmom",
+    "qmom",
+    "fan-li",
+    "levermore",
+    "maxent",
+    "gaussian",
+    "hermite",
+    "bgk",
+]
+
+[[terms]]
+category = "method"
+rule = "15.3 named numerical fluxes and wave-speed estimates; CF2 named methods"
+finding = "Section 15.3 and C21: named numerical fluxes and wave-speed estimates, RusanovFlux and HLLFlux behind select_riemann (include/pops/runtime/builders/compiled/generated_system_block.hpp:1437-1447), ENTROPY_HARTEN (python/pops/numerics/riemann/providers.py:98, early audit O5); 965 sites at 9f13dad, 83 in python/pops/numerics/riemann/providers.py. hlle, hlld, godunov, lax-friedrichs and lax-wendroff have no site at 9f13dad."
+words = [
+    "rusanov",
+    "hll",
+    "hllc",
+    "hlle",
+    "hlld",
+    "roe",
+    "osher",
+    "godunov",
+    "lax-friedrichs",
+    "lax-wendroff",
+    "upwind",
+    "harten",
+    "einfeldt",
+    "davis",
+]
+
+[[terms]]
+category = "method"
+rule = "15.3 named reconstructions or limiters; CF2 named limiters"
+finding = "Section 15.3 and CF2 (R4, 27/10): named reconstructions and limiters, MUSCL and WENO5 pinned in the core by test_lib_boundaries.py at b6, zhang_shu_scale (include/pops/numerics/spatial/primitives/positivity.hpp:42, early audit O5); 436 sites at 9f13dad, 44 in generated_amr_system_block.hpp. eno, van-albada, vanalbada and koren have no site at 9f13dad."
+words = [
+    "muscl",
+    "weno",
+    "eno",
+    "minmod",
+    "superbee",
+    "van-leer",
+    "vanleer",
+    "van-albada",
+    "vanalbada",
+    "koren",
+    "monotonized",
+    "zhang",
+]
+
+[[terms]]
+category = "method"
+rule = "15.3 named time schemes; CF2 named schemes"
+finding = "Section 15.3: named time schemes, the tableaux of python/pops/time/_methods/tableau.py (27 sites) and class IMEXRK with the guard scheme != \"ars222\" (python/pops/runtime/_bricks_time_imex.py:252,298, early audit O6), lie_step beside strang (include/pops/numerics/time/splitting.hpp:23); 217 sites at 9f13dad. patankar, crank-nicolson, adams-bashforth, adams-moulton and rosenbrock have no site at 9f13dad."
+words = [
+    "ssprk",
+    "heun",
+    "strang",
+    "patankar",
+    "bdf",
+    "crank-nicolson",
+    "imex",
+    "dirk",
+    "runge-kutta",
+    "adams-bashforth",
+    "adams-moulton",
+    "rosenbrock",
+    "ars",
+    "imexrk",
+    "lie",
+]
+
+[[terms]]
+category = "method"
+rule = "15.3 named discretizations; CF2 named methods"
+finding = "Section 15.3 and G05: the Scharfetter-Gummel discretization in the core (python/pops/numerics/scharfetter_gummel.py and its exports in python/pops/numerics/__init__.py); 24 sites at 9f13dad."
+words = [
+    "scharfetter",
+    "gummel",
+]
+
+[[terms]]
+category = "method"
+rule = "15.3 named field operators; FC2"
+finding = "FC2 and C28: named native field operators emitted by name (python/pops/codegen/program_emit_ops.py:1531-1567; the overloads of laplacian, gradient and divergence of include/pops/runtime/program/program_context.hpp, 51 sites; early audit O1); 867 sites at 9f13dad. curl has no site at 9f13dad: it is a word of pops.math, whose definition there is admitted (POPS_MATH_WORDS, amendment of 08/11)."
+words = [
+    "laplacian",
+    "curl",
+    "gradient",
+    "divergence",
+]
+
+[[terms]]
+category = "tagging"
+rule = "15.3 named field operators in the refinement predicates of the tag-graph VM (C36)"
+finding = "C36: named field operators in the refinement predicates of the tag-graph VM (python/pops/mesh/_amr/tagging_graph.py, include/pops/runtime/amr/prepared_tagging_execution.hpp); 60 sites at 9f13dad, owned by N12."
+words = [
+    "gradient-above",
+    "gradient-below",
+    "discrete-gradient-stencil",
+]
+
+[[terms]]
+category = "boundary"
+rule = "15.3 named boundary families"
+finding = "Section 15.3 and early audit O7: named boundary families, if (token == \"foextrap\") and HyperbolicBoundaryLaw::NoFlux (include/pops/mesh/boundary/prepared_hyperbolic_boundary.hpp:46,613); 609 sites at 9f13dad, 88 in python/pops/boundary/transport.py, owned by G04."
+words = [
+    "dirichlet",
+    "neumann",
+    "robin",
+    "inflow",
+    "outflow",
+    "reflective",
+    "slip",
+    "foextrap",
+    "no-flux",
+    "zero-flux",
+    "constant-extrapolation",
+]
+
+[[terms]]
+category = "interpolation"
+rule = "CF2 named coarse-fine, temporal or regrid interpolation (C43)"
+finding = "CF2 (R5 and R6, 27/10) and C43: the routes of StateTransfer, FaceTransfer and NodeTransfer and the providers of include/pops/amr/transfer/transfer_provider.hpp:24-35 (LinearProlongation, CoarseFineGhostInterpolation, ConstantInjection; early audit O8), LinearTemporalInterpolationProvider; 171 sites at 9f13dad, owned by G11 and, in the native solvers, N9."
+words = [
+    "conservative-linear",
+    "conservative-injection",
+    "conservative-coarse-fine",
+    "conservative-polynomial",
+    "linear-time-interpolation",
+    "divergence-preserving",
+    "node-multilinear",
+    "linear-prolongation",
+    "coarse-fine-ghost-interpolation",
+    "constant-injection",
+    "linear-temporal-interpolation",
+]
+
+[[terms]]
+category = "approximation"
+rule = "CF2 a named approximation of a history between two instants (T7)"
+finding = "T7 and early audit O9: a named approximation of a history between two instants, row[\"kind\"] in (\"history\", \"dense_output\") (python/pops/runtime/_continuation_transitions.py:229,271) and the LinearInterpolation history depth (python/pops/codegen/program_emit_ops.py:541); 28 sites at 9f13dad, owned by G12."
+words = [
+    "linear-interpolation",
+    "dense-output",
+]
+
+[[terms]]
+category = "controller"
+rule = "15.3 named controllers; controllers are library functions (section 15, 5.11)"
+finding = "Section 15 and 5.11 and early audit O10: controllers are library functions, yet b6 computes the Courant number in the core (active_courant, src/runtime/amr/amr_system.cpp; .def(\"cfl_min_dx\"), python/bindings/core/init/init_system.cpp:1489); 227 sites at 9f13dad, owned by N8."
+words = [
+    "cfl",
+    "courant",
+]
+
+[[terms]]
+category = "route"
+rule = "FC4 a route table or switch keyed on named methods or models (C21)"
+finding = "FC4 and C21: the counter-example of FC4 is select_riemann and switch (parse_riemann_route(...)) (include/pops/runtime/builders/compiled/generated_system_block.hpp:1437,1439); without these terms a slice could rename the labels and keep the route table (early audit O11); 139 sites at 9f13dad."
+words = [
+    "ident:select-riemann",
+    "ident:riemann-route",
+    "ident:limiter-route",
+    "ident:recon-route",
+    "ident:time-route",
+    "ident:transport-route",
+    "ident:source-route-id",
+    "ident:parse-source-route",
+    "ident:source-route-tokens",
+    "ident:elliptic-route",
+    "ident:field-solver-route",
+]
+
+[[terms]]
+category = "constant"
+rule = "15.3 physical constants; CF2 a physical constant in an ABI"
+finding = "Section 15.3 and C20: gamma in the ABI (python/pops/model/module.py:165-180), the twelve kPhysicalDefault* of numerical_defaults.hpp:134-145 and four_pi_G of include/pops/physics/bricks/elliptic.hpp:94 (early audit O4); 599 sites at 9f13dad, 68 in python/pops/runtime/_bricks_model.py."
+words = [
+    "gamma",
+    "physical-default",
+    "q-over-m",
+    "four-pi-g",
+    "vacuum-floor",
+]
+
+[[terms]]
+category = "solver"
+rule = "1.2, 15.1, FC6: a generic solve algorithm in the core paths, which belongs in pops.lib.solve or, as a qualified substitution, in the native component tree (IR24, SV12)"
+finding = "Sections 1.2 and 15.1, FC6, IR24: test_lib_boundaries.py pinned GeometricMG and FFT in the core at b6; the generic solve algorithms that FC6 admits as qualified substitutions belong in pops.lib.solve or the native component tree (independent review of N2, 30/10); 2070 sites at 9f13dad, 145 in include/pops/numerics/elliptic/amr/composite_fac_poisson.hpp, owned by N9."
+words = [
+    "core:cg",
+    "core:conjugate-gradient",
+    "core:bicgstab",
+    "core:bi-cg-stab",
+    "core:gmres",
+    "core:arnoldi",
+    "core:richardson",
+    "core:chebyshev",
+    "core:jacobi",
+    "core:gauss-seidel",
+    "core:geometric-mg",
+    "core:fac",
+    "core:v-cycle",
+    "core:vcycle",
+    "core:fft",
+    "core:fftw",
+    "core:lu",
+]
+
+[[terms]]
+category = "solver"
+rule = "1.2, SV4: a named solve algorithm that FC6 does not admit as a substitution (Newton and its Armijo line search, fixed-point accelerations, Leja actions)"
+finding = "Sections 1.2 and SV4 (independent review of N2, 30/10): Newton with its Armijo line search in the core (src/runtime/amr/amr_system.cpp, 93 sites; python/pops/runtime/_bricks_time_imex.py, 84), which FC6 does not admit as a substitution; 1154 sites at 9f13dad. picard, anderson and leja have no site at 9f13dad."
+words = [
+    "newton",
+    "armijo",
+    "picard",
+    "anderson",
+    "leja",
+]
+
+[[terms]]
+category = "quadrature"
+rule = "D0 and CF2 (review of 11/11, P3): a named quadrature rule in the core, which knows pops.Quadrature only"
+finding = "Review of 11/11, P3: at 9f13dad the core held a placeholder GaussLegendre in the surface of N15 lot 1 (python/pops/surface/_program.py:172), and lot 1 had left GaussHermite out of the surface because CF2 refused hermite (n15/lot1_note.md, lines 56 to 58), so the spec had gained an exception of CF2 for the names of quadrature rules. Since P3 the core knows pops.Quadrature only and the named rules are words of pops.lib.quadrature; no site at version 2, and these words keep a named rule out of the core."
+words = [
+    "gauss-hermite",
+    "legendre",
+    "lobatto",
+    "laguerre",
+    "radau",
+]
+
+[[literals]]
+category = "primitive"
+rule = "CF2 a primitive selected by its spelling"
+finding = "C19 and the \"p\" test of CF2: a primitive named \"p\" changes the emitted code (python/pops/codegen/module_emit_brick.py:623,696); 53 sites at 9f13dad."
+strings = [
+    "p",
+    "rho",
+    "rho_u",
+    "rho_v",
+    "rho_w",
+    "rho_E",
+    "rhou",
+    "rhov",
+    "rhow",
+    "E",
+    "vx",
+    "vy",
+    "vz",
+]
+
+[[literals]]
+category = "role"
+rule = "CF2 role vocabulary used as a selector; FC3"
+finding = "C3: the role tokens \"density\" and \"energy\" of python/pops/physics/aux.py, refused only as whole strings because the words have generic senses (D6, R8); 74 sites at 9f13dad."
+strings = [
+    "density",
+    "energy",
+]
+
+[[literals]]
+category = "boundary"
+rule = "15.3 named boundary families by their token"
+finding = "Early audit O7: if kind not in (\"wall\", \"outlet\") (python/pops/mesh/boundaries/__init__.py:91); 6 sites at 9f13dad. \"inlet\" has no site at 9f13dad."
+strings = [
+    "wall",
+    "outlet",
+    "inlet",
+]
+
+[[literals]]
+category = "method"
+rule = "15.3 the monotonized-central limiter by its route token"
+finding = "Early audit O5: the monotonized-central limiter selected by its route token \"mc\"; 9 sites at 9f13dad."
+strings = [
+    "mc",
+]
+
+[[names]]
+category = "role"
+rule = "CF2 the members of the role enumeration; FC3"
+finding = "Early audit O2: the members Density and Energy of VariableSemantic (include/pops/core/state/variables.hpp:31,33,89-90) and of the roles of python/pops/model/identity.py; 54 sites at 9f13dad. kDensity and kEnergy have no site at 9f13dad."
+names = [
+    "Density",
+    "Energy",
+    "kDensity",
+    "kEnergy",
+]
+
+[[names]]
+category = "constant"
+rule = "15.3 physical constants in an ABI (C20)"
+finding = "Early audit O4 and C20: the ABI constants qom, cs2, n0, rho0 and B0 (include/pops/runtime/config/model_spec.hpp:121-130); 171 sites at 9f13dad."
+names = [
+    "qom",
+    "cs2",
+    "n0",
+    "rho0",
+    "B0",
+]
+
+[[names]]
+category = "method"
+rule = "15.3 the monotonized-central limiter by its short name"
+finding = "Early audit O5: struct MC (include/pops/numerics/fv/reconstruction.hpp:111) and kMc; 20 sites at 9f13dad."
+names = [
+    "MC",
+    "kMc",
+]
+
+[case_identifier]
+category = "case"
+rule = "15.3 case or profile identifiers"
+finding = "Section 15.3 refuses case and profile identifiers in the core; no site at 9f13dad. L1 and L2 are norms of pops.linalg and M00, M10, ... raw moments, so neither is refused."
+pattern = "^(M(0[1-9]|1[0-9]|2[0-8])|T(0[1-9]|1[0-2]))$"
+
+[axis_link]
+category = "name"
+rule = "FC4 names are presentation: a <name>_<axis> link (C19)"
+finding = "C19: links <name>_<axis> build component names from a variable name and an axis (python/pops/physics/board.py:710-716 at b6); 4 sites at 9f13dad."
+
+[[not_after]]
+term = "robin"
+words = [
+    "round",
+]
+finding = "round_robin (include/pops/parallel/load_balance.hpp) is a load-balancing order, not the Robin boundary family."

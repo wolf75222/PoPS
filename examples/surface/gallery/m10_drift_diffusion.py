@@ -4,6 +4,7 @@ import pops
 from pops.math import *
 from pops.lib.numerics import scharfetter_gummel, poisson_residual, ghosts
 from pops.lib.solve import newton, gmres, cg, bicgstab, block_elimination, multigrid, v_cycle, line_search
+from pops.lib.quadrature import GaussLegendre
 
 L_DEVICE, N_D = 1, 1
 DT, T_END = 1e-3, 1.0
@@ -32,7 +33,7 @@ model.on(contacts, n == n_contact)                           # reads n only: it 
 # The load of the constraint is integrated over each cell (cell.load), which needs a quadrature (defaults of
 # 2.6.9). The midpoint rule is exact here: n is a cell average and the doping jumps on a face.
 numerics = pops.Numerics(
-    represent={n: pops.CellAverage(), psi: pops.CellAverage(quadrature=pops.GaussLegendre(1))},
+    represent={n: pops.CellAverage(), psi: pops.CellAverage(quadrature=GaussLegendre(1))},
     schemes={pops.jointly(drift, diffusion): scharfetter_gummel(),       # D8: one joint flux
              poisson: poisson_residual()},
     boundary=ghosts(),
@@ -54,7 +55,7 @@ joint = coupled(rate=model, constraint=poisson)
 program = pops.Program(
     advance=pops.Advance(joint, dt=DT,
                          tolerance=pops.Tolerance(rtol=1e-8, atol=1e-10)),    # value chosen for the gallery
-    initial={n: pops.project(N_D * (1 + x / L_DEVICE), quadrature=pops.GaussLegendre(1))},   # exact: linear
+    initial={n: pops.project(N_D * (1 + x / L_DEVICE), quadrature=GaussLegendre(1))},   # exact: linear
     solvers={joint: newton(                              # the Jacobian is exact unless stated (SU9)
         linear=gmres(restart=30, preconditioner=block_elimination(
             order=[psi, n], inner={psi: cg(preconditioner=multigrid(cycle=v_cycle())), n: bicgstab()})),

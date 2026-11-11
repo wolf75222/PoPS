@@ -16,6 +16,7 @@
 #include <pops/numerics/spatial/operators/cartesian_operator.hpp>
 #include <pops/numerics/spatial/operators/masked_operator.hpp>
 #include <pops/runtime/config/route_ids.hpp>
+#include <pops/runtime/recovery/device_candidate_recovery.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
@@ -1152,6 +1153,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     return recovery_report(outcome);
   };
   result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
+  result.candidate_recovery_check = make_model_candidate_recovery_check<Dim>(model);
 
   if constexpr (requires(const Model& value, const typename Model::State& state,
                          const ProviderValues<provider_count>& providers) {
@@ -1337,6 +1339,7 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
     return recovery_report(outcome);
   };
   result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
+  result.candidate_recovery_check = make_model_candidate_recovery_check<Dim>(model);
   if constexpr (path_conservative_model<Model>) {
     result.physical_boundary_route = PreparedPhysicalBoundaryRoute::path_residual;
     const auto spatial = nd::prepare_cartesian_operator<Dim, Model, NoSlope, ModelPathFlux<Model>,
