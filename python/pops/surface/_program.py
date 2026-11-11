@@ -12,8 +12,9 @@ reports without compiling (SU12).
 ``tolerance=pops.Tolerance(rtol=, atol=)`` is the request of the solves of the method (SV3), and
 ``pops.Program(solvers={imex: cg()})`` their solvers, keyed by the method or ``method.name``.
 
-The step rule that is a function of ``cell``, the acceptances, the outputs, the claims, compile, bind and run have no elaborated form in this lot; each refuses with
-``NotYetElaborated`` and the lot that elaborates it.
+The step rule that is a function of ``cell``, the acceptances, the outputs, the claims, compile,
+bind and run have no elaborated form in this lot; each refuses with ``NotYetElaborated`` and the
+lot that elaborates it.
 """
 from __future__ import annotations
 

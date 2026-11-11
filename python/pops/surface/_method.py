@@ -24,7 +24,8 @@ from pops.time._program import traced_method as _n8
 
 from ._model import Balance, Model, Term
 from ._refusal import (
-    AmbiguousElaboration, AmbiguousSolvePath, ClosedBodyViolation, IncrementNotDerivable, IncrementTypeMismatch, NotYetElaborated, Site,
+    AmbiguousElaboration, AmbiguousSolvePath, ClosedBodyViolation, IncrementNotDerivable,
+    IncrementTypeMismatch, NotYetElaborated, Site,
     SurfaceRefusal, SymbolicTruthValue, UnknownSolvePath, site_of_traceback, user_site,
 )
 

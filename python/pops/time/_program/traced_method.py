@@ -905,9 +905,8 @@ class _Component:
         """The claims of the linear map that the evaluation of this component states (IR16)."""
         from pops.time._program.relations import LinearClaims
 
-        claims = getattr(self._evaluate, "linear_claims", None)
-        if not callable(getattr(self._evaluate, "linear_apply", None)) \
-                or not isinstance(claims, LinearClaims):
+        claims = LinearClaims.of(getattr(self._evaluate, "linear_claims", None))
+        if not callable(getattr(self._evaluate, "linear_apply", None)) or claims is None:
             raise NotYetElaborated(
                 "%s(U, t) at an unknown U: the rate of %r states no linear map (linear_apply and "
                 "linear_claims); a rate that its scheme does not realize as a linear map, solved "

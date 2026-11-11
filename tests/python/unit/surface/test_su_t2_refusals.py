@@ -516,10 +516,10 @@ def test_su13_the_star_import_of_pops_math_gives_its_words_only():
 
 def test_su13_a_word_of_a_later_lot_is_importable_and_refuses_its_use():
     with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.Tolerance(rtol=1e-10, atol=1e-12)  # <- su13-later
+        surface.try_solve(None)  # <- su13-later
     message = str(caught.value)
     assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("su13-later"))
-    assert "pops.Tolerance has no elaborated form yet; a later lot of N15 with the solves of N9" \
+    assert "pops.try_solve has no elaborated form yet; a later lot of N15 with the solves of N9" \
         in message
 
 

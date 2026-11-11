@@ -42,8 +42,8 @@ from typing import Any
 from pops._ir.symbolic import SymbolicTruthValueError
 from pops.time._program.traced_method import (
     ClosedBodyViolation, NotYetElaborated, TracedField, TracedScalar, _Atom, _Relational,
-    _Traced, _active_trace, _coefficient, _expansion_add, _expansion_scale, _fraction, _poly_add, _poly_mul,
-    _poly_of, _poly_text, _refuse_foreign,
+    _Traced, _active_trace, _coefficient, _expansion_add, _expansion_scale, _fraction, _poly_add,
+    _poly_mul, _poly_of, _poly_text, _refuse_foreign,
 )
 from pops.time.values import _Coeff
 
@@ -95,8 +95,19 @@ class LinearClaims:
     """The claims of a linear map ``L`` that a component states, with their proof (IR16).
 
     ``symmetric`` and ``negative_semidefinite`` are the claims that the core reads; ``proof`` is
-    the sentence that ``pops.inspect`` reports for them, and ``description`` names the map.
+    the sentence that ``pops.inspect`` reports for them, and ``description`` names the map. A
+    component outside the core states them as a mapping with these four keys.
     """
+
+    @classmethod
+    def of(cls, value: Any) -> LinearClaims | None:
+        """``value`` as claims: claims, or a mapping of the four keys; ``None`` otherwise."""
+        if isinstance(value, cls):
+            return value
+        keys = {"symmetric", "negative_semidefinite", "proof", "description"}
+        if isinstance(value, dict) and set(value) == keys:
+            return cls(**value)
+        return None
 
     __slots__ = ("symmetric", "negative_semidefinite", "proof", "description")
 
@@ -572,8 +583,18 @@ def solve(problem: Any, *, request: Any = None, name: str | None = None) -> Trac
 
     properties = (LinearOperatorProperties.symmetric_positive_definite() if site.spd
                   else LinearOperatorProperties.general())
-    descriptor = solver.linear_solver(request=request, spd=site.spd, path=path,
-                                      claims=site.claims)
+    required = tuple(getattr(solver, "requires", ()))
+    if "symmetric_positive_definite" in required and not site.spd:
+        from pops._ir.refusals import PropertyNotDerived
+
+        stated = "; ".join("%s: %s" % (name, claim.proof) for name, claim in site.claims)
+        raise PropertyNotDerived(
+            "%r needs a symmetric positive definite operator, which the relation of %s does not "
+            "derive (IR16): the operator is a I + sum_k b_k L_k, SPD when a > 0 is a number, every "
+            "b_k a nonpositive multiple of p.dt and every L_k claimed symmetric negative "
+            "semidefinite; the claims stated are %s" % (solver, path, stated or "none"),
+            region=path, property="symmetric_positive_definite")
+    descriptor = solver.linear_solver(request=request)
     site.problem = LinearProblem(operator, rhs, initial_guess=trace.temporal.n, at=point,
                                  properties=properties, nullspace=None)
     site.outcome = program.solve(site.problem, solver=descriptor, name=path.replace("/", "_"))

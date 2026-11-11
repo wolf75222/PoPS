@@ -201,7 +201,7 @@ class _RateSum:
     def linear_claims(self) -> Any:
         from pops.time._program.relations import LinearClaims
 
-        claims = [provider.claims() for provider in self.providers()]
+        claims = [LinearClaims.of(provider.claims()) for provider in self.providers()]
         return LinearClaims(
             symmetric=all(claim.symmetric for claim in claims),
             negative_semidefinite=all(claim.negative_semidefinite for claim in claims),
