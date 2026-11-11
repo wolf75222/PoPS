@@ -74,6 +74,9 @@ def test_a_body_reads_steps_time_indicators_and_parameters() -> None:
     (lambda B: B.state, "largest_cells"),
     (lambda B: B.steps % 2 == 1, "B.steps % k == 0"),
     (lambda B: B.steps > 3, "B.steps % k == 0"),
+    (lambda B: B.steps % 2 != 0, "~(B.steps % k == 0)"),
+    (lambda B: 0 != B.steps % 2, "~(B.steps % k == 0)"),
+    (lambda B: (B.time > 0.5) & (B.steps % 2 != 0), "~(B.steps % k == 0)"),
     (lambda B: B.time + 1.0, "returns a Bool"),
     (lambda B: largest_cells(lambda cell: 1.0), "returns a Bool"),
 ])

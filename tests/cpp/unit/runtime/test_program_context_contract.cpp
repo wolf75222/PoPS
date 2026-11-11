@@ -3371,6 +3371,7 @@ TEST(ProgramContextContract,
 }
 
 #include "solve_outcome_attempt_review.inc"
+#include "solve_gates_review.inc"
 
 TEST(ProgramContextContract, DomainIssuersChangeOnlyAfterSuccessfulRestartFinalization) {
   namespace distributed = runtime::program::distributed;

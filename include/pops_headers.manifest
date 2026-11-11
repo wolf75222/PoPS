@@ -408,6 +408,7 @@ sdk-support pops/runtime/program/source_mask.hpp
 sdk-root pops/runtime/program/accepted_exchange.hpp
 sdk-root pops/runtime/program/prepared_spatial_residual.hpp
 sdk-support pops/runtime/program/collective_step_rejection.hpp
+sdk-support pops/runtime/program/solve_gates.hpp
 sdk-support pops/runtime/program/typed_failure.hpp
 sdk-support pops/runtime/program/distributed_array.hpp
 sdk-support pops/runtime/program/distributed_domain.hpp
@@ -448,6 +449,7 @@ sdk-support pops/runtime/program/amr_program_context_spatial_implicit.inc
 sdk-support pops/runtime/program/amr_program_context_spatial_imex.inc
 sdk-root pops/runtime/program/finite_kokkos.hpp
 sdk-support pops/runtime/program/finite_device_array.hpp
+sdk-support pops/runtime/program/finite_field_array.hpp
 sdk-support pops/runtime/program/finite_structural_storage.hpp
 sdk-root pops/runtime/program/host_face_publication.hpp
 sdk-support pops/runtime/program/amr_program_context_stencil_flux.inc

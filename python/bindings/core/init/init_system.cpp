@@ -1251,6 +1251,8 @@ void bind_system_stepping(py::class_<System>& cls) {
             result["stop"] = static_cast<int>(report.stop);
             result["attempts"] = report.attempts;
             result["rejection"] = report.rejection;
+            result["rejection_phase"] = report.rejection_phase;
+            result["rejection_detail"] = report.rejection_detail;
             result["segment_origin"] = report.segment.origin;
             result["segment_steps"] = report.segment.steps;
             result["outputs"] = samples;

@@ -83,6 +83,20 @@ class CompiledPlanBlock:
                 self.resolved_operations.to_data()))
 
 
+def _data_layout(plan: Any) -> dict[str, Any]:
+    """The layout record of every data value of ``plan`` (DM3), for the manifest only.
+
+    The one reader of ``pops._ir.data_model`` that lot 1a admits under ``python/pops/codegen``:
+    nothing in the lowering or the acceptance reads it before the retyping (lot 1b, MG3).
+    """
+    try:
+        from pops._ir.data_model import data_layout_and_distribution
+
+        return data_layout_and_distribution(plan)
+    except Exception as exc:  # noqa: BLE001 - A1: a report never refuses a compiled plan
+        return {"schema_version": 2, "unreported": "%s: %s" % (type(exc).__name__, exc)}
+
+
 @dataclass(frozen=True, slots=True)
 class CompiledPlanRecord:
     """Detached data required by bind/install; never retains Model or Program builders."""
@@ -114,6 +128,9 @@ class CompiledPlanRecord:
     amr_execution: Any = None
     amr_providers: Mapping[str, Any] = field(default_factory=dict)
     layout_amr_authorities: Mapping[str, Any] = field(default_factory=dict)
+    # The manifest field ``data_layout_and_distribution`` (CC10, DM3; N10 lot 1a): derived from the
+    # resolved plan, reported only, outside the contract identity.
+    data_layout: Mapping[str, Any] = field(default_factory=dict)
     resolved_dimension: int = field(init=False)
     contract_identity: Identity = field(init=False)
 
@@ -165,6 +182,7 @@ class CompiledPlanRecord:
             amr_execution=plan.amr_execution,
             amr_providers=plan.amr_providers,
             layout_amr_authorities=plan.layout_amr_authorities,
+            data_layout=_data_layout(plan),
         )
 
     def __post_init__(self) -> None:
@@ -174,6 +192,7 @@ class CompiledPlanRecord:
         if self.target not in ("system", "amr_system"):
             raise ValueError("CompiledPlanRecord has an unsupported target")
         object.__setattr__(self, "layout", _deep_freeze(self.layout))
+        object.__setattr__(self, "data_layout", _deep_freeze(self.data_layout))
         from pops.mesh import LayoutPlan
         from pops.codegen.lowering_coverage import LoweringCoverageReport
         if type(self.layout_plan) is not LayoutPlan:

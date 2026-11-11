@@ -16,6 +16,10 @@ src/runtime/system/system_fields.cpp). DM8 requires zero; moving that check to t
 next lot of ROM-31, and that lot turns the expected count below into zero. The unified-memory
 allocations alive in each step are reported, for the page-migration condition of DM8 on a GPU
 target (Q03a).
+
+A finite Array whose element is a Field (G13 lot 3) keeps its elements in device columns, one per
+box: the map that builds it and the reads of its elements copy only inside the target memory
+space, and it is no host map.
 """
 import json
 import os
@@ -136,4 +140,35 @@ def test_host_fold_reads_its_carry_and_copies_what_it_does_not_redefine_once(
     # Each iteration maps the carry on the device, after the two maps of the probe.
     assert _allocations(steps) == {
         TARGET_SPACES[report["execution_space"]]: (2 + probe.FOLDS) * LEAVES * probe.STEPS}
+    record_property("residency_steps", json.dumps(steps, sort_keys=True))
+
+
+def test_field_element_array_stays_in_device_columns(
+        residency_tool, tmp_path, isolated_native_cache, kokkos_root, record_property):
+    del isolated_native_cache, kokkos_root
+    _, base, _ = _run("device", residency_tool, tmp_path)
+    windows, steps, report = _run("fields", residency_tool, tmp_path)
+    space = TARGET_SPACES[report["execution_space"]]
+    assert report["metrics"]["passed"] is True, report["metrics"]
+    # No array byte and no other mesh byte reaches the host: the only host copy stays the
+    # commit's recovery check of the state (lot 4).
+    assert all(window["array_data"] == {"count": 0, "bytes": 0} for window in windows), windows
+    assert all(window["mesh_host"] == {"count": 1, "bytes": STATE_FAB_BYTES}
+               for window in windows), windows
+    assert all(window["host_staging"] == {"count": 0, "bytes": 0} for window in windows), windows
+    assert all(window["host_phase"] == {"count": 0, "bytes": 0} for window in windows), windows
+    # One map of Field elements per step: no host map, and its columns are allocated once per
+    # step and per box in the target memory space (one box on this case).
+    assert report["pops_finite_host_map_count"] == 0
+    assert report["pops_finite_field_map_count"] == probe.STEPS
+    assert report["pops_finite_device_to_host_bytes"] == 0
+    assert report["pops_finite_host_to_device_bytes"] == 0
+    for step, reference in zip(steps, base, strict=True):
+        assert step["field_column_allocations"] == {space: 1}, step
+        assert reference["field_column_allocations"] == {}, reference
+        # Each element is copied into its slice once and each of the two reads copies one element
+        # out, all inside the target memory space: one Fab of the state each.
+        assert step["field_column"] == {"count": probe.FIELDS + 2,
+                                        "bytes": (probe.FIELDS + 2) * STATE_FAB_BYTES}, step
+        assert reference["field_column"] == {"count": 0, "bytes": 0}, reference
     record_property("residency_steps", json.dumps(steps, sort_keys=True))

@@ -562,6 +562,94 @@ TEST(ContinuationImage, FieldSnapshotIsOwnedAndRestoresExactLayout) {
   EXPECT_THROW(finite_structural::unpack<D>(foreign, snapshot, limits), std::invalid_argument);
 }
 
+TEST(ContinuationImage, FieldArrayKeepsEveryElementInOneDeviceColumnPerBox) {
+  // A finite Array of Fields (spec DM7, MG3): per box, one column holds every element,
+  // element-major; each element is a MultiFab over its own slices.
+  Extent<D> cells{}, ghosts{}, chunk{};
+  for (int d = 0; d < D; ++d) {
+    cells[d] = 4;
+    ghosts[d] = 1;
+    chunk[d] = d == 0 ? 2 : 4;
+  }
+  const auto box = Box<D>::from_extents(cells);
+  const auto layout = mesh::BoxArray<D>::from_domain(box, chunk);
+  ASSERT_EQ(layout.size(), 2u);
+  Extent<D> ranks_extent{};
+  for (int d = 0; d < D; ++d)
+    ranks_extent[d] = 1;
+  const mesh::RankSpace<D> ranks(Index<D>{}, ranks_extent);
+  const auto distribution = mesh::Distribution<D>::replicated(layout, ranks);
+  FiniteDomainRegistry registry;
+  const auto domain = registry.issue(3, 4, 23);
+  std::vector<MultiFab<D>> sources;
+  for (int element = 0; element < 3; ++element) {
+    sources.emplace_back(layout, distribution, Index<D>{}, 2, ghosts);
+    sources.back().set_val(Real(element + 1));
+  }
+
+  finite_device::FieldArrayBuilder<D> builder(domain);
+  for (std::int64_t element = 2; element >= 0; --element) {
+    const auto& slot = builder.store(element, sources[static_cast<std::size_t>(element)]);
+    EXPECT_FALSE(slot.shares_storage_with(sources[static_cast<std::size_t>(element)]));
+  }
+  EXPECT_THROW(builder.store(1, sources[1]), std::logic_error);
+  EXPECT_THROW(builder.store(3, sources[0]), std::out_of_range);
+  MultiFab<D> other_ghosts(layout, distribution, Index<D>{}, 2, Extent<D>{});
+  finite_device::FieldArrayBuilder<D> mismatched(domain);
+  (void)mismatched.store(0, sources[0]);
+  EXPECT_THROW(mismatched.store(1, other_ghosts), std::invalid_argument);
+  EXPECT_THROW(std::move(mismatched).publish(), std::logic_error);
+  const auto array = std::move(builder).publish();
+
+  // One column per local box, each holding the three elements back to back.
+  ASSERT_EQ(array.storage->columns.size(), 2u);
+  for (std::size_t local = 0; local < 2; ++local) {
+    const auto element_size = sources[0].fab(local).size();
+    const auto& column = array.storage->columns[local];
+    EXPECT_EQ(column.extent(0), 3 * element_size);
+    EXPECT_EQ(column.label(), std::string(finite_device::kFieldColumnLabel));
+    for (std::int64_t element = 0; element < 3; ++element)
+      EXPECT_EQ(array.element(element).fab(local).storage().data(),
+                column.data() + element * element_size);
+    auto host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, column);
+    for (std::size_t i = 0; i < host.extent(0); ++i)
+      EXPECT_EQ(host(i), Real(i / element_size + 1));
+  }
+  EXPECT_THROW((void)array.element(3), std::out_of_range);
+
+  // Reading an element copies it out of its slices into owned storage.
+  const MultiFab<D> copy(array.element(1));
+  EXPECT_FALSE(copy.shares_storage_with(array.element(1)));
+  EXPECT_NE(copy.fab(0).storage().data(), array.element(1).fab(0).storage().data());
+
+  // Continuation transport lends the elements and rebuilds the columns.
+  auto field_type = scalar(ContinuationKind::Field);
+  field_type.field_owner = 0;
+  field_type.field_components = 2;
+  field_type.scientific_contract = "role/read-write/owner0";
+  auto type = scalar(ContinuationKind::Array);
+  type.family = 23;
+  type.capacity = 4;
+  type.children = {field_type};
+  constexpr std::uint64_t budget = 1024 * 1024;
+  const finite_structural::Limits limits{budget, budget, budget};
+  const auto packed = finite_structural::pack<D>(type, std::any(array), limits);
+  ASSERT_EQ(packed->members().size(), 3u);
+  const auto unpacked = finite_structural::unpack<D>(type, packed, limits);
+  const auto* rebuilt = std::any_cast<finite_device::FieldArray<D>>(&unpacked);
+  ASSERT_NE(rebuilt, nullptr);
+  EXPECT_EQ(rebuilt->domain, domain);
+  ASSERT_EQ(rebuilt->storage->columns.size(), 2u);
+  EXPECT_NE(rebuilt->storage->columns[0].data(), array.storage->columns[0].data());
+  for (std::size_t local = 0; local < 2; ++local) {
+    auto host =
+        Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, rebuilt->storage->columns[local]);
+    const auto element_size = sources[0].fab(local).size();
+    for (std::size_t i = 0; i < host.extent(0); ++i)
+      EXPECT_EQ(host(i), Real(i / element_size + 1));
+  }
+}
+
 TEST(ContinuationImage, FieldExpressionCodecPreservesSharedBasesAndRejectsMissingAlias) {
   Extent<D> cells{}, ranks_extent{};
   for (int d = 0; d < D; ++d) {

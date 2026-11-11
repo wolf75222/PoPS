@@ -906,6 +906,7 @@ pops_add_gtest_suite(NAME test_program_runtime SOURCES "${_src}" ${_program_runt
 pops_test_source(_src test_program_context_contract)
 pops_add_gtest_suite(NAME test_program_context_contract SOURCES "${_src}"
   DISCOVERY_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/cpp/unit/runtime/solve_outcome_attempt_review.inc"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/cpp/unit/runtime/solve_gates_review.inc"
   EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
 
 pops_test_source(_src test_checkpoint_history)

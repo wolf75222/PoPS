@@ -97,6 +97,15 @@ def _consumed_solve_action(program: Any, solve: Any) -> tuple[str, tuple[str, ..
     return matches[0]
 
 
+def _trial_site(program: Any, solve: Any) -> Any:
+    """The ``trial_site`` of the outcome that consumes ``solve``: a field request of a traced
+    method (N8 lot 5, T38), or None."""
+    for node in _program_nodes(program):
+        if node.op == "solve_outcome" and len(node.inputs) == 1 and node.inputs[0] is solve:
+            return node.attrs.get("trial_site")
+    return None
+
+
 def _append_solve_report_guard(
         program: Any, solve: Any, outcome: str, lines: list[str], *, label: str,
         phase: str | None = None) -> None:
@@ -108,6 +117,15 @@ def _append_solve_report_guard(
     by the coarser status name at the Python/C++ program boundary.
     """
     action_kind, action_statuses = _consumed_solve_action(program, solve)
+    site = _trial_site(program, solve)
+    if site is not None:
+        # A field request of a traced method (T38): a retryable site is a rejection of the
+        # attempt ("trial"), a fixed site the failure of the step ("trial_failure"); the message
+        # starts with the stable site name of its AdvanceControl row.
+        if action_kind != "reject_attempt":
+            raise ValueError("a trial site of a field request is consumed with RejectAttempt")
+        phase = "trial" if site["retry_can_change"] else "trial_failure"
+        label = site["site"]
     report = "%s_report" % outcome
     if action_kind == "reject_attempt":
         selected_status = " || ".join(
@@ -143,6 +161,45 @@ def _append_solve_report_guard(
     lines.append("}")
     lines.append(
         "(void)%s.consume(pops::SolveConsumption::kAccept);" % outcome)
+
+
+def gate_refusal_action_cpp(program: Any, solve: Any) -> str:
+    """The action of an SV8 gate refusal: the consumer's own choice for ``safeguard_failure``."""
+    kind, statuses = _consumed_solve_action(program, solve)
+    if kind == "reject_attempt" and "safeguard_failure" in statuses:
+        return "pops::SolveAction::kRejectAttempt"
+    return "pops::SolveAction::kFailRun"
+
+
+def _append_original_residual_gate(
+        program: Any, solve: Any, outcome: str, problem: str, workspace: str, controls: str,
+        rhs: str, components: int, ghosts: int, rtol: str, atol: str, prelude: list[str],
+        lines: list[str]) -> None:
+    """Spec 0.3 SV8: the problem's original residual decides, not the realization's status.
+
+    A solved candidate is accepted only if ||b - A(u)|| <= atol + rtol * ||b - A(0)|| in the
+    request's physical norm. The residual comes from the prepared problem (the generated operator
+    with its boundary relations), through the operator session of the workspace the solve bound,
+    never from the realization's recurrence. A measurement that fails refuses the candidate. The
+    affine field problems that reach this route declare no admissibility predicate; their selection
+    (a gauge) is the problem's projection of the delivered value, and their boundary relations are
+    inside R. One gate costs two residual evaluations and two reductions per solve.
+    """
+    residual = "sv8_residual%d" % solve.id
+    zero = "sv8_zero%d" % solve.id
+    for name in (residual, zero):
+        prelude.append(
+            "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+            "ctx.alloc_scalar_field(%d, %d));" % (name, components, ghosts))
+    lines.append("if (%s.report().solved_value_available()) {" % outcome)
+    lines.append("  pops::PureFieldAlgebra::zero_valid(*%s);" % zero)
+    lines.append(
+        "  (void)pops::runtime::program::apply_measured_original_residual_gate(%s, [&] { "
+        "return pops::runtime::program::prepared_krylov_original_residual("
+        "*%s, *%s, %s.physical_norm, *%s, %s, *%s, %s, %s); }, %s, \"solve_linear\");"
+        % (outcome, problem, workspace, controls, residual, rhs, zero, atol, rtol,
+           gate_refusal_action_cpp(program, solve)))
+    lines.append("}")
 
 
 def _krylov_failure_actions_cpp(program: Any, solve: Any) -> str:
@@ -1646,6 +1703,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         "pops::SolveOutcome %s = ctx.solve_prepared_linear("
         "*%s, *%s, *%s, %s, %s);"
         % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
+    _append_original_residual_gate(
+        program, v, kr, problem_name, workspace_name, controls_name, rhs_tok, op_ncomp,
+        input_ghosts, tol, abs_tol, prelude, lines)
     _append_solve_report_guard(
         program, v, kr, lines, label="solve_linear", phase="solve")
     if fallback_owner is not None:

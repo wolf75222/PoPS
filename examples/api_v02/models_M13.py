@@ -21,7 +21,9 @@ from pops.numerics.stencil_flux import StencilFlux
 from pops.solvers import CG
 from pops.time import FailRun
 from .common import CaseSpec, state_array, non_owner_metrics
-from .models_M01_M14 import _domain, _initial, _ssprk2
+from pops.time._program.memory import State
+from pops.time._program.outputs import Product
+from .models_M01_M14 import _domain, _initial, _stencil_label, _traced_recorded_ssprk2
 
 
 def build_m13(cells=(16, 8), *, photo_frequency=.03):
@@ -93,7 +95,23 @@ def build_m13(cells=(16, 8), *, photo_frequency=.03):
         p.store_history(label+"_potential",potential,depth=1)
         p.store_history(label+"_photo",photo_field,depth=1)
         return transport+impact+photo
-    _ssprk2(case,block,U,evaluate,dt,name="M13_SSPRK2")
+    def flow(state):
+        p=state.prog
+        potential=field.at(state)[field[phi]]
+        transport=p.stencil_flux_divergence(_stencil_label(p,"electron_flux"),state,flux=flux,
+                                            fields=(potential,))
+        photons=radiation.at(state)
+        photo_context=photons.publish({(carrier,"photo_production"):photons[radiation[radiation_unknown]]})
+        impact=p.source(model.module.operator_handle("impact"),state)
+        photo=p.source(model.module.operator_handle("photo"),state,photo_context)
+        return transport+impact+photo
+    def record(state):
+        return Product(stage1_state=state,stage1_potential=field.at(state)[field[phi]],
+                       stage1_photo=radiation.at(state)[radiation[radiation_unknown]])
+    memory=Product(stage1_state=State,stage1_potential=field[phi],
+                   stage1_photo=radiation[radiation_unknown])
+    _traced_recorded_ssprk2(case,block,U,flow,dt,name="M13_SSPRK2",b6=evaluate,
+                            memory=memory,record=record)
     x,y=np.meshgrid((np.arange(cells[0])+.5)*L/cells[0],(np.arange(cells[1])+.5)*Ly/cells[1])
     electron=.02*(1+.15*np.sinc(1/cells[0])*np.cos(x)+.05*np.sinc(2/cells[0])*np.cos(2*x))
     ion=electron+.003*np.sinc(1/cells[0])*np.sin(x)

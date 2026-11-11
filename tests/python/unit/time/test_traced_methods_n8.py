@@ -1,18 +1,19 @@
 """N8 lot 1: traced methods elaborated by the b6 builder (spec 0.3, sections 5.2 to 5.4).
 
-The nine profiles whose stages read one rate of their model (M01, M02, M03, M04, M07, M24, M25,
-and since lot 4 the stencil fluxes of M05 and M23, through ``stencil_rate``) now write their step
-as the traced method ``shu_osher_ssprk2`` of ``examples/api_v02/models_M01_M14.py``, in a Program
-that keeps the b6 name of the profile. Their
-b6 builder ``_ssprk2`` stays as the parity reference (MG1). Both routes must elaborate the same
-program: equal serialized IR and equal generated C++ once the presentation names (the values and
-stages, CC2) are renamed by SSA position, once the History metadata capacity that ``_ssprk2``
-writes for a Program without History is set aside (B3: a traced case writes no resource), and
-once the default acceptance ``finite()`` that N8 lot 2 adds to every elaborated Advance is taken
-out, node by node and line by line, after checking it is exactly the assessment of the candidate
-and its compiled control. The C++ of M25 (17 components) takes about two minutes per route to
-generate, so this source-only module compares its IR, and its native run is compared bit for bit
-outside CI (handoff of N8 lot 1). The refusals of E1, T33, T34 and SU10 are tested on M01.
+The nine profiles whose stages read one rate of their model (M01, M02, M03, M04, M07, M24, M25, and
+since lot 4 the stencil fluxes of M05 and M23, through ``stencil_rate``) now write their step as
+the traced method ``shu_osher_ssprk2`` of ``examples/api_v02/models_M01_M14.py``, in a Program that
+keeps the b6 name of the profile. Their b6 builder ``_ssprk2`` stays as the parity reference (MG1);
+for the stencil profiles, that reference is itself checked against the b6 code as it was written.
+Both routes must elaborate the same program: equal serialized IR and equal generated C++ once the
+presentation names (the values and stages, CC2) are renamed by SSA position, once the History
+metadata capacity that ``_ssprk2`` writes for a Program without History is set aside (B3: a traced
+case writes no resource), and once the default acceptance ``finite()`` that N8 lot 2 adds to every
+elaborated Advance is taken out, node by node and line by line, after checking it is exactly the
+assessment of the candidate and its compiled control. The C++ of M25 (17 components) takes about
+two minutes per route to generate, so this source-only module compares its IR, and its native run
+is compared bit for bit outside CI (handoff of N8 lot 1). The refusals of E1, T33, T34 and SU10 are
+tested on M01.
 """
 import base64
 import json
@@ -34,6 +35,8 @@ from pops.time import FixedDt, TimePoint
 from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT, ADVANCE_CONTROL_SCHEMA
 from pops.time._program.elaboration import Advance, Proposal, Retry, elaborate
 from pops.time._program.global_history_storage import prepare_issuance, publish_issuance
+from pops.time._program.memory import State
+from pops.time._program.outputs import Product
 from pops.time._program.traced_method import (
     _GUARDED_TABLES, Candidate, ClosedBodyViolation, IncrementNotDerivable, IncrementTypeMismatch,
     NotYetElaborated, method,
@@ -230,6 +233,37 @@ def test_traced_profile_generates_the_b6_cpp(profile, monkeypatch):
     assert b6_lines == _without_finite_cpp(traced_lines)
     # The stencil profiles (M05, M23) configure their expressions on both routes.
     assert sum("<IR bytes>" in line for line in b6_lines) == int(profile in ("M05", "M23"))
+
+
+@pytest.mark.parametrize("profile, prefix", [("M05", "NS_"), ("M23", "MHD_")])
+def test_the_b6_route_of_a_stencil_profile_is_the_code_of_b6(profile, prefix, monkeypatch):
+    """``_b6_route`` reaches the stencils through ``stencil_rate``, which numbers them by count.
+    b6 wrote ``p.stencil_flux_divergence(prefix + label, u, flux=flux)`` with the stage label of
+    ``_ssprk2``. Both write the same IR and the same C++, byte for byte and names included, so
+    the parity reference of the stencil profiles is the code of b6 (review O3 of N8 lot 4)."""
+    module, build, _ = PROFILES[profile]
+    stencil_rate, given = early.stencil_rate, []
+
+    def recording(prefix, flux):
+        given.append((prefix, flux))
+        return stencil_rate(prefix, flux)
+
+    def b6_code(case, block, state, flow, dt, *, name):
+        ((prefix, flux),) = given
+        return early._ssprk2(case, block, state, lambda p, u, point, label: (
+            p.stencil_flux_divergence(prefix + label, u, flux=flux)), dt, name=name)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "stencil_rate", recording)
+        written = _spec(module, build, patch, b6_code)
+    rebuilt = _spec(module, build, monkeypatch, _b6_route)
+    assert [entry[0] for entry in given] == [prefix]
+    programs = written.case._time, rebuilt.case._time
+    assert [[value.name for value in program._values if value.op == "stencil_flux_divergence"]
+            for program in programs] == [[prefix + "stage0", prefix + "stage1"]] * 2
+    assert canonical_json(programs[0]._serialize(include_provenance=False)) == canonical_json(
+        programs[1]._serialize(include_provenance=False))
+    assert _source(written) == _source(rebuilt)
 
 
 def test_traced_profile_records_its_closed_form(monkeypatch):
@@ -569,7 +603,8 @@ def test_an_exact_proposal_runs_its_nearest_binary64_step(m01, dt):
                               retry=Retry(max_transforms=1)), "transforms"),
     (lambda parts: _elaborate(parts, _stage_formula(lambda B, p, k0, U1, k1: U1)(parts["flow"]),
                               clock=object()), "clocks"),
-    (lambda parts: method(lambda B, p: None, memory=object()), "method memory"),
+    # Lot 5 elaborates an Auxiliary memory; a Scientific one (no role=) stays later (C51, CN6).
+    (lambda parts: method(lambda B, p: None, memory=Product(u=State)), "Scientific memory"),
     (lambda parts: Proposal(parts["dt"], tolerance=1.e-6), "choices"),
 ], ids=["accept", "retry", "clock", "memory", "choices"])
 def test_constructs_of_later_lots_are_refused_by_name(m01, construct, match):

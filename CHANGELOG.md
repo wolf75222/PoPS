@@ -18,6 +18,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-85 (N10, phase 1, lot 1a): the vocabulary of the one array type (spec 0.3 DM1 to DM3, IR1 to
+  IR3). `pops._ir.arrays` holds the value types of IR1 (`Array(D, T)`, `Product`, `Variant`,
+  `Result`, `Iteration`, `Index`, scalars, and `Untyped` for what the plan cannot type yet);
+  `pops._ir.index_sets` the index-set constructors of IR2 with the descriptors of IR3, equal by
+  instance; `pops._ir.data_model` the support placement of each block (co-located blocks share one
+  set of cells, the endpoints of a cross-block interface get one each), a total `ir_type` and the
+  layout record of every data value at every depth of the Program, with its residency
+  (`data_layout_and_distribution`). Nothing in the builder or
+  the lowering reads them before the retyping (architecture test). `scripts/dmt1.py` and the
+  `DM-T1` workflow compare the generated C++ of the 40 API profiles between a pull request and its
+  merge base, without a native build; `scripts/n10_dispatch_inventory.py` lists the field-or-array
+  dispatch lines that the retyping moves.
 - ROM-87 (N3): reconstructions and slope limiters written in Python in `pops.lib.numerics`.
   `Reconstruct(rep, value)` builds a per-axis reconstruction from `value(c, a)` (spec 0.3
   sec. 4.3), `muscl(rep, limiter)` is the MUSCL face value of the catalogue, and `minmod`,
@@ -25,6 +37,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the generated reconstruction policy; on master's tutorial 02, `muscl(U, <limiter>)` gives the
   native `MUSCL(<Limiter>())` state bit for bit for the four limiters. `weno5(rep, epsilon=)` is
   the WENO5-Z reconstruction of master's `WENO5()`, bit for bit on the same case.
+- ROM-31 (G13 lot 3): a finite Array whose element is a Field keeps its elements in device
+  columns, one per box, element-major (spec 0.3 DM7, MG3), instead of boxing a copy of each
+  element in a host cell. Each element is a MultiFab over its own slices (new `Fab` and
+  `MultiFab` constructors over provided storage), so continuation and exchange provenance bind
+  to it as before; a read copies the element out in the target memory space. A map of Field
+  elements counts in `pops_finite_field_map_count`, not as a host map (DM8), and the residency
+  probe reports the column allocations per step (`field_column_allocations`).
 - ROM-31 (G13 lot 2): halo transports choose their host staging. `HaloExchangeContext::staging`
   (`automatic`, `device_direct`, `host_staged`) enters the collective contract; `automatic` posts
   MPI on the pack and unpack buffers when the fields live in host memory, and stages through
@@ -33,6 +52,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   mesh storage, host staging buffers and unified-memory blocks carry the Kokkos labels
   `pops_mesh_array:`, `pops_host_staging:` and `pops_unified:`, which the DM8 residency probe of
   the tests reads per step.
+- ROM-98 (N15, lot 1): level 1 of the user surface of spec 0.3 (section 2.6), as
+  `import pops.surface as pops` until the cut-over of section 21.7. A case states its model
+  (`pops.Box`, `pops.Model`, `model.quantity`, `model.flux`, `model.diffusive_flux`,
+  `model.balance`), its numerics (`pops.Numerics(represent=, schemes=)`) and its program
+  (`pops.Advance`, `pops.Program`, `pops.Case`); building the case traces it into the b6 model,
+  plan and case and the traced methods of N8 (#718), and `pops.inspect(case)` validates and
+  resolves it and reports each choice as stated, derived or default (SU12). The library words
+  `upwind`, `rusanov`, `hll` and `two_point` (`pops.lib.numerics.schemes`) and `forward_euler`,
+  `ssprk2`, `ssprk3` and `rk4` (`pops.lib.time.methods`, `@pops.method`) are written with the
+  surface. The refusals of SU3 to SU14 name the user's file and line, the rule and the construct
+  to write (SU-T2); the L1 case of section 17.1 gives the program IR, the artifact without its
+  provenance, the semantic identity and the C++ of the same case written for b6 and N8 (SU-T3);
+  `scripts/surface_lint.py` lints the gallery of `examples/surface/gallery` and the library
+  (SU-T1). Decisions: SD86 to SD95 of the adjudication of the surface. At level 1 a box is
+  periodic, a rank 2 or 3 case has diffusive fluxes only, and a term of a balance weighs 1 or
+  -1; a weight or a duration of SU10 that is an expression of `pops.math` waits for open point
+  16. `pops` and `pops.math` export their word lists and nothing else (SU13).
 - ROM-17: qualification receipts and SDK cohorts. `scripts/qualification_receipt.py` records a
   qualification stage by stage (E, G, C, loaded, advanced, S) with the source, the installed
   SDK, the DSOs mapped in the process, the backend and the ranks; `scripts/sdk_cohort.py`
@@ -52,6 +88,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- A `format-bench` job of `ci.yml`, aggregated by `gate`, replays
+  `scripts/test_check_clang_format.sh`, the bench of `scripts/check_clang_format.sh`, on every full
+  plan and when the plan sees the script, the bench or a style file (`.clang-format`,
+  `_clang-format`, `.clang-format-ignore`, at any depth) change: the cases of the check run in a
+  throwaway repository with their own probe files and style, so none depends on the tree. Style
+  files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
+  check works from the repository root; outside a git repository it stops with status 2; against a
+  base that is not an ancestor of the checkout it starts from their merge base.
 - ROM-95 (N12, lot 3a, part 1): the scalar advection AMR tutorials 05-14, the IMEX AMR final
   example, the field diffusion example and the scalar AMR migration workflow write their tagging
   as regions of `cell` (`Tag(lambda cell: cell.value(q) > c)`, `gradient_norm` for 09) instead of
@@ -80,6 +124,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   receives the same bits, which can change with the rank count and the MPI reduction algorithm,
   and `tests/cpp/unit/parallel/test_reduction_collectives.cpp` checks the transport at two, three
   and four ranks.
+- ROM-90 (N9, lot 2): a Program mesh solve is decided by its original residual, outside its
+  realization (spec 0.3 SV8). After the generated `solve_linear` (prepared Krylov) or a uniform
+  `ImplicitStage` returns a solved candidate, the generated code measures the problem's own
+  residual R(u) = b - A(u) on that candidate and the request scale ||R(0)||, in the request norm,
+  and refuses the candidate unless ||R(u)|| <= atol + rtol * scale
+  (`include/pops/runtime/program/solve_gates.hpp`). A refusal is `safeguard_failure` with the
+  action the outcome's consumer selects, and the candidate rolls back like a failed solve; a gate
+  that cannot be measured refuses as `invalid_evaluation`. `benchmarks/n9_m08/` holds the M08
+  gap bench (generated CG against the native field solve, ABBA, OD9 threshold 0.9) and its ROMEO
+  job script (SV-T1).
 - Move the review material of the API 0.4.0 and API 0.2 work (`docs/development/api_040/`,
   `docs/review/`, `tests/review/`, `outputs/`, `docs/dev/`; 3,281 files) out of the code tree
   into an archive with a SHA-256 manifest, described in `docs/development/review_archive.md`.
@@ -149,12 +203,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `speed=` stays Rusanov with the R9 speed until a face reads F(1).n (CF15, ROM-106).
   `rusanov(F, Uh, smax=)` keeps the third parameter of section 4.4 as gap C46 of the index
   (adjudication section 20, item 4), until a row of 2.6.9 or N15 closes it.
-- Evaluate a `riemann.User` face residual on the transport prepared at bind, like the native face:
-  no field is allocated per evaluation, the face carrier is copied only when a Program reads it,
-  and the stability frequency is read from the recorded face speeds, on the prepared transport in
-  the pass that validates the residual, elsewhere in one pass. The generated face policy tests its
-  outputs and the operands that could conceal a non-finite value, and refuses the same faces with
-  the same cause (ROM-100, core ledger entry).
+- Evaluate a `riemann.User` face residual on the transport prepared at bind whenever that
+  transport can observe the block's faces, periodic or bounded: no boundary session is allocated
+  per evaluation. A Program that reads only the stability frequency allocates what the native face
+  allocates; a Program that reads the faces still allocates the capture path's candidate and backup
+  residuals per evaluation, and the face carrier is copied only when a Program reads it. The
+  stability frequency is read from the recorded face speeds, on the prepared transport in the pass
+  that validates the residual, elsewhere in one pass. The generated face policy tests its outputs
+  and the operands that could conceal a non-finite value, and refuses the same faces with the same
+  cause (ROM-100, core ledger entry).
 - Preserve positive periodic energy for discontinuous symmetric tensor coefficients through
   weighted cross gradients and congruence to harmonic normal faces; retain constant-tensor,
   scalar and explicit physical metric laws and account for cross terms in the exact diagonal.
@@ -226,13 +283,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   writing the regrid in both places is refused). The body reads `B.steps % k == 0`
   (`pops.lib.time.every(k)`), `B.time`, runtime parameters and indicators of the accepted state,
   `pops.amr.largest_cells(f)` and `smallest_cells(f)`, the largest or the smallest value of a
-  function of `cell` over the valid cells of every level; it is two-valued, as the `cond` of IR4.
+  function of `cell` over the valid cells of every level (covered coarse cells included, so for a
+  nonlinear `f` it is not the composite extremum); it is two-valued, as the `cond` of IR4.
   The decision is generated into the compiled Program with the criterion; after each accepted step
   the core reduces each indicator over the patches and the ranks, calls the generated decision and
   regrids when it is true, with no Python in the step. An indicator that is not finite fails the
   step. In this lot an indicator reads the cell itself (`cell.shift` is refused), and a checkpoint
   of a Program that writes a `Regrid` is refused, since a restart replays its regrids from the
-  cadence.
+  cadence. The native file also runs on every rank of MPI1 and MPI2 worlds
+  (`tests/python/integration/mpi/test_public_regrid_decision_mpi{1,2}.py`).
 
 - The PoPS programming-model migration carries qualified expression identities, signed occurrences,
   typed accesses and exact numerical-operation coverage through resolution and native emission.

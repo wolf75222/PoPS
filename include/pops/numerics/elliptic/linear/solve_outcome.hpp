@@ -138,6 +138,19 @@ class [[nodiscard]] SolveOutcome final {
   /// The numerical report remains unchanged; only the publication reservation ends.
   void discard_candidate() { (void)consume(SolveConsumption::kDiscardCandidate); }
 
+  /// Spec 0.3 SV8: the gates of the problem decide success, and the realization's own status is
+  /// evidence. A gate that refuses a solved candidate turns this unconsumed outcome into a failure
+  /// with the gate's status, action and reason; its publication hooks then roll the candidate back
+  /// at consumption, as for any failed solve. The caller decides the gate identically on every
+  /// rank, from values that every rank holds bit for bit, so the disposition stays collective.
+  void refuse_candidate(SolveStatus status, SolveAction action, std::string reason) {
+    if (consumed_)
+      throw std::logic_error("cannot refuse an already consumed SolveOutcome");
+    if (!report_.solved_value_available())
+      throw std::logic_error("a gate refuses only a solved SolveOutcome candidate");
+    report_.mark_failed(status, action, std::move(reason));
+  }
+
   SolveReport consume(SolveConsumption action) {
     if (consumed_)
       throw std::logic_error("SolveOutcome has already been consumed");

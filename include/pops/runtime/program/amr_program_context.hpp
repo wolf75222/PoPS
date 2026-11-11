@@ -23,6 +23,7 @@
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/runtime/program/solve_gates.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/spatial/nd/face_frequency.hpp>
 #include <pops/numerics/time/amr/levels/amr_subcycling.hpp>

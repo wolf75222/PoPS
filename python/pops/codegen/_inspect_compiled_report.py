@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._frozen_data import thaw_data
 from pops._report import Report
 
 
@@ -80,7 +81,7 @@ class CompiledReport(Report):
                  fields: Any, program: Any, inputs: Any, artifacts: Any, status: Any,
                  env: Any = None, runtime: Any = None, capabilities: Any = None,
                  options: Any = None, module_manifest: Any = None,
-                 lowering_coverage: Any = None) -> None:
+                 lowering_coverage: Any = None, data_layout_and_distribution: Any = None) -> None:
         self.name = name
         self.backend = backend
         self.platform = platform
@@ -103,6 +104,10 @@ class CompiledReport(Report):
         # carries a bare dsl.Model with no backing Module -- absent, never fabricated.
         self.module_manifest = dict(module_manifest) if module_manifest else None
         self.lowering_coverage = dict(lowering_coverage) if lowering_coverage else None
+        # DM3, CC10 (N10 lot 1a): layout, distribution and origin of every data value, with the
+        # support placement of each block; None for an artifact that carries no resolved plan.
+        self.data_layout_and_distribution = (
+            thaw_data(data_layout_and_distribution) if data_layout_and_distribution else None)
 
     def to_dict(self) -> dict:
         """A plain-dict view of the whole report (JSON-ready)."""
@@ -115,7 +120,10 @@ class CompiledReport(Report):
                 "capabilities": dict(self.capabilities), "options": dict(self.options),
                 "module_manifest": dict(self.module_manifest) if self.module_manifest else None,
                 "lowering_coverage": (
-                    dict(self.lowering_coverage) if self.lowering_coverage else None)}
+                    dict(self.lowering_coverage) if self.lowering_coverage else None),
+                "data_layout_and_distribution": (
+                    thaw_data(self.data_layout_and_distribution)
+                    if self.data_layout_and_distribution else None)}
 
     def __str__(self) -> str:
         lines = ["compiled problem %r" % self.name]
@@ -340,7 +348,9 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
         inputs={"states": states, "params": req_params, "aux": req_aux},
         artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env,
         runtime=runtime, capabilities=capability_report, options=_compiled_options(compiled),
-        module_manifest=module_manifest, lowering_coverage=lowering_coverage)
+        module_manifest=module_manifest, lowering_coverage=lowering_coverage,
+        data_layout_and_distribution=getattr(
+            getattr(compiled, "plan", None), "data_layout", None))
 
 
 def _compiled_options(compiled: Any) -> dict:
