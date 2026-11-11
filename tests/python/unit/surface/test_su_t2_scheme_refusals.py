@@ -352,3 +352,24 @@ def test_a_later_kind_names_its_lot():
     with pytest.raises(surface.NotYetElaborated, match="face.gradient"):
         kinds.Gradient  # noqa: B018
     assert kinds.Flux is kinds.Flux
+
+
+def test_a_stated_speed_that_reads_a_cell_under_a_reconstruction_names_its_lot():
+    """U2 of the review of #760 at bdc25ca2: upwind(speed=f) whose f reads the average of a cell
+    under a reconstruction is refused like a face scheme that does (R1)."""
+    @surface.scheme
+    def centre(cell, term, axis):
+        return Reconstruct(cell.value(term.quantity))
+
+    domain, model, u, flux, _ = _model()
+    u0 = model.data("u0", surface.Scalar(domain))
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
+                              initial={u: u0})
+
+    def speed(face):
+        return face.left_cell.value(u)
+
+    numerics = _numerics(u, flux, upwind(speed=speed, reconstruction=centre()))
+    with pytest.raises(surface.NotYetElaborated, match="stencil faces of N7a"):
+        surface.Case(model=model, numerics=numerics, program=program,
+                     layout={domain: surface.Uniform(cells=8)})
