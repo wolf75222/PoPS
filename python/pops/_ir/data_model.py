@@ -224,7 +224,7 @@ def _published_fields(value: Any, placements: Placements, program: str) -> Any:
     if not bindings or len(bindings) != len(inputs):
         return A.Untyped("a field publication whose bindings do not name its inputs one by one")
     members = []
-    for binding, source in zip(bindings, inputs):
+    for binding, source in zip(bindings, inputs, strict=True):
         source_type = ir_type(source, placements, program=program)
         if isinstance(source_type, A.Untyped):
             return source_type
