@@ -548,6 +548,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-18 (#699 follow-up, found by DM-T2 of ROM-85): a generated package compiled for its one
+  resolved route lost up to 19 % per step on M01 against b6 (face kernel x1.65), with bit-identical
+  states. GCC sizes its inlining budget on the whole translation unit (`inline-unit-growth`), and
+  the single-route package is a small unit: the budget ran out before the metric accessors, so
+  every face called `cell_measure`, `reference_cell` and `face_measure` through the PLT. Those
+  accessors are now `POPS_HD_FORCEINLINE`, and the prescribed boundary trace of a face, taken on two
+  faces of a row, is out of line (`POPS_HD_OUTLINE`). The face body no longer depends on how many
+  routes the package instantiates; results stay bit for bit, no threshold changes.
 - ROM-17: build PoPS against conda-forge's Kokkos 5.2.2. Its HWLOC TPL names the prefix's
   `include/` with a trailing separator next to Kokkos' own `include`, so the include contract kept
   both spellings and counted four defining headers instead of two, and configuration stopped.

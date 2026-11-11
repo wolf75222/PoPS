@@ -357,6 +357,17 @@ struct PrescribedFaceTrace {
     const int ordinal = 2 * Axis + (high ? 1 : 0);
     if (!prescribed[ordinal])
       return;
+    prescribe<Axis>(model, state, face, traces, low, high, ordinal);
+  }
+
+ private:
+  /// The prescribed boundary-face branch runs on two faces of a row. Out of line on the host
+  /// (POPS_HD_OUTLINE), it keeps the interior face body that inlines operator() small whatever the
+  /// inlining budget of the package (ROM-18/#699).
+  template <int Axis, class Model, class Pair>
+  POPS_HD_OUTLINE void prescribe(const Model& model, const FieldView<const Real, Dim>& state,
+                                 const FaceIndex<Dim, Axis>& face, Pair& traces, bool low,
+                                 bool high, int ordinal) const {
     auto& trace = low ? traces.left : traces.right;
     auto& status = low ? traces.left_status : traces.right_status;
     status = nd::StateConversionStatus::NonFiniteState;
