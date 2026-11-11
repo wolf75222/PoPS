@@ -533,7 +533,8 @@ def _emit_advance_control(program: Any) -> str:
 
 def _refuse_advance_memory_route(program: Any, target: str) -> str:
     """The method memory of an elaborated Advance (T27, N8 lot 5) runs on the Uniform route:
-    a member has no regrid policy (CN7), so the AMR route refuses it, as it refuses Outputs."""
+    a member has no regrid policy (CN7), so the AMR route refuses it, as it refuses Outputs. The
+    admissibility guards of a method body (IR4, N8 lot 6) are refused there too."""
     control = getattr(program, "_advance_control", None)
     if target != "system" and control is not None and control.memory:
         from pops.time._program.traced_method import NotYetElaborated
@@ -541,6 +542,12 @@ def _refuse_advance_memory_route(program: Any, target: str) -> str:
             "the method memory of an elaborated Advance runs on the Uniform route; a member has "
             "no regrid policy (HistoryPolicyMissing, CN7), and the AMR route of the compiled "
             "control is a later lot of N8")
+    if target != "system" and control is not None and any(
+            row["guard"] == "admissibility" for row in control.trial_failures):
+        from pops.time._program.traced_method import NotYetElaborated
+        raise NotYetElaborated(
+            "the admissibility guards of a traced method (IR4, N8 lot 6) run on the Uniform "
+            "route; their trial phases on the AMR route are a later lot of N8")
     return ""
 
 

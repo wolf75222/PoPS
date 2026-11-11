@@ -392,6 +392,7 @@ class ProgramContext {
       continuation_control_consensus();
     }
     drain_program_value_writes_();
+    attempt_epoch_ = system_->begin_attempt_epoch_();
     current_dt_ = dt;
     stage_time_ = ::pops::amr::Rational(0, 1);
     logical_phase_begin_ = ::pops::amr::Rational(0, 1);
@@ -2495,8 +2496,33 @@ class ProgramContext {
             runtime_lane))
       throw std::invalid_argument(
           "Program prepared linear solve workspace lane contract differs across MPI ranks");
+    system_->count_prepared_solve_();
     return system_->track_solve_outcome(
         pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls));
+  }
+
+  /// One prepared solve whose dependency set excludes the proposal (spec 0.3 T7 across attempts,
+  /// N8 lot 6): the epoch and the duration of the attempt that last completed it.
+  struct AttemptReuseSlot {
+    std::uint64_t epoch = 0;
+    double dt = 0.0;
+  };
+
+  /// Whether ``slot`` holds the solution of this accepted step at this duration: an earlier
+  /// attempt of the step completed the solve, and its solution buffer is the one to read.
+  ///
+  /// The dt in the key is defensive. run_advance keeps dt fixed across the attempts of a step
+  /// today, and a CN8 resize does not change it. CN8 and Transform must open a new epoch
+  /// explicitly when they change the state a fixed site reads, and Reject(next=) with another dt
+  /// must take the dt out of the key and open a new epoch instead (review A3).
+  bool attempt_slot_reused(const AttemptReuseSlot& slot) const {
+    return slot.epoch == attempt_epoch_ && slot.dt == current_dt_;
+  }
+
+  /// Record that this attempt completed the solve of ``slot``, after its guard accepted it.
+  void complete_attempt_slot(AttemptReuseSlot& slot) const {
+    slot.epoch = attempt_epoch_;
+    slot.dt = current_dt_;
   }
 
   OperatorEvaluationSnapshot operator_evaluation_snapshot(OperatorFingerprint authority,
@@ -3297,6 +3323,7 @@ class ProgramContext {
   mutable std::uint64_t operator_snapshot_revision_ = 0;
   mutable std::optional<OperatorEvaluationSnapshot> active_operator_snapshot_;
   mutable double current_dt_ = 0.0;
+  mutable std::uint64_t attempt_epoch_ = 0;
   mutable ::pops::amr::Rational stage_time_{0, 1};
   mutable int auxiliary_evaluation_sequence_ = 0;
   mutable ::pops::amr::Rational logical_phase_begin_{0, 1};

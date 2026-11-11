@@ -767,6 +767,14 @@ struct System<Dim>::Impl {
   bool external_step_transaction_committed_ = false;
   bool external_restart_transaction_ = false;
   std::vector<std::unique_ptr<AcceptedSnapshot>> parent_step_transactions_;
+  /// Spec 0.3 T7 across the attempts of one step (N8 lot 6). Outside every step transaction:
+  /// a rejected attempt keeps them. ``attempt_epoch_`` names the accepted step that the current
+  /// attempt computes; run_advance sets ``attempt_retry_mark_`` before a retry of the same step,
+  /// and any other call of step() starts a new epoch. ``prepared_solves_`` counts the prepared
+  /// linear solves that ran, for the solve count of a compiled run.
+  std::uint64_t attempt_epoch_ = 0;
+  bool attempt_retry_mark_ = false;
+  std::int64_t prepared_solves_ = 0;
 
   explicit Impl(const SystemConfig<Dim>& config)
       : domain_(config),

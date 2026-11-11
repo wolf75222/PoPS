@@ -15,7 +15,8 @@ at b6, ``RejectAttempt`` on the traced route) and its ``trial_site``. The remain
 equal. The C++ parity takes the b6 code with its stores elided (and, for M08 and M09, its reads
 memoized), which the IR parity shows to be the b6 Program without its store-only nodes, so that
 the SSA positions, which the generated identifiers carry, agree; the set-aside is then line by
-line (A2).
+line (A2). Since N8 lot 6 it also sets aside the reuse of each stage-0 solve, a fixed site, across
+the attempts of one step (T7), after checking its exact shape.
 """
 import base64
 import json
@@ -333,6 +334,11 @@ def _set_aside_requests(lines, profile, *, traced):
         if "pops::KrylovFailureActions{" in line:
             assert actions in line
             line = line.replace(actions, "<failure actions>")
+        if "apply_measured_original_residual_gate(" in line:
+            # N9's residual gate (SV8) takes the same consume action as the request.
+            gate = ', pops::SolveAction::%s, "solve_linear");' % action
+            assert line.endswith(gate)
+            line = line[:-len(gate)] + ', <gate action>, "solve_linear");'
         consume = re.match(r"(\s*)const pops::SolveReport (kr\d+)_report = \2\.consume\(", line)
         if consume:
             indent, kr = consume.groups()
@@ -362,6 +368,54 @@ def _set_aside_requests(lines, profile, *, traced):
         out.append(line)
         index += 1
     assert seen == len(_sites(profile))
+    return out
+
+
+def _attempt_reuse(lines, fixed):
+    """Set aside the reuse of a fixed-site solve across the attempts of one step (N8 lot 6, T7),
+    after checking its exact shape: the slot of the prelude, the flag, the guard of the initial
+    guess, the block around the solve that records the slot, and the counter of a reuse. What
+    remains is b6's solve, line for line. ``fixed`` is the number of fixed sites."""
+    out, index, slots, blocks = [], 0, set(), 0
+    while index < len(lines):
+        line = lines[index]
+        slot = re.fullmatch(r"\s*auto attempt_slot(\d+) = std::make_shared<std::remove_cvref_t<"
+                            r"decltype\(ctx\)>::AttemptReuseSlot>\(\);", line)
+        if slot:
+            slots.add(slot.group(1))
+            index += 1
+            continue
+        flag = re.fullmatch(r"(\s*)const bool attempt_reused(\d+) = ctx\.attempt_slot_reused\("
+                            r"\*attempt_slot\2\);", line)
+        if flag:
+            indent, solve = flag.groups()
+            assert solve in slots
+            guess = lines[index + 1]
+            prefix = indent + "if (!attempt_reused%s) " % solve
+            assert guess.startswith(prefix + "pops::PureFieldAlgebra::zero_valid(")
+            out.append(indent + guess[len(prefix):])
+            index += 2
+            while lines[index] != indent + "if (!attempt_reused%s) {" % solve:
+                out.append(lines[index])
+                index += 1
+            index += 1
+            while lines[index] != indent + "  ctx.complete_attempt_slot(*attempt_slot%s);" % solve:
+                assert lines[index].startswith(indent + "  ")
+                out.append(lines[index][2:] if lines[index].startswith(indent + "  ") else
+                           lines[index])
+                index += 1
+            assert lines[index + 1] == indent + "}"
+            count = re.fullmatch(r"(\s*)if \(attempt_reused%s\) \+\+(.+)\[1\]; else "
+                                 r"\+\+\2\[0\];" % solve, lines[index + 2])
+            assert count and count.group(1) == indent
+            out.append(indent + "++%s[0];" % count.group(2))
+            index += 3
+            blocks += 1
+            continue
+        assert "attempt_reused" not in line and "attempt_slot" not in line
+        out.append(line)
+        index += 1
+    assert blocks == len(slots) == fixed
     return out
 
 
@@ -442,6 +496,8 @@ def test_field_profile_generates_the_b6_cpp(profile, monkeypatch):
     assert traced_lines[start:start + 3] == CONTROL_LINES
     del traced_lines[start:start + 3]
     traced_lines = _history_lines(traced_lines, members)
+    traced_lines = _attempt_reuse(traced_lines, sum(
+        not site["retry_can_change"] for site in _sites(profile)))
     b6_lines = _set_aside_requests(b6_lines, profile, traced=False)
     traced_lines = _set_aside_requests(traced_lines, profile, traced=True)
     assert _digests("\n".join(b6_lines)).splitlines() == _digests(
@@ -466,7 +522,7 @@ def test_the_stage_zero_request_is_a_fixed_site(profile, monkeypatch):
     guards = [row for row in control.to_data()["trial_failures"] if row["guard"] != "solve"]
     assert guards and all(row["guard"] == "field_evaluation" and row["variant"] is None
                           and not row["classified"]
-                          and row["lot"] == "N8 candidate guards (M15 to M21)" for row in guards)
+                          and row["lot"] == "N8 field_evaluation guards" for row in guards)
     assert AdvanceControl.from_data(control.to_data()) == control
 
 

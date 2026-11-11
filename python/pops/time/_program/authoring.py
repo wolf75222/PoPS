@@ -1,5 +1,6 @@
 """Program control flow, field ops, reductions and decorator authoring."""
 from __future__ import annotations
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 from pops.identity.scalar import scalar_literal
 from pops.time._program.dump import _ProgramDump
@@ -113,7 +114,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
 
     def _acceptance_guard_value(
         self, name: str, value: ProgramValue, condition: ProgramValue, action: Any,
-        *, numerical_stability: bool = False, assessment: Any = None,
+        *, numerical_stability: bool = False, assessment: Any = None, trial_site: Any = None,
     ) -> ProgramValue:
         from pops.time.solve_outcome import FailRun, RejectAttempt
         if not isinstance(action, (RejectAttempt, FailRun)):
@@ -123,6 +124,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             attrs["numerical_stability"] = "pops.authored-stability-admission@1"
         if assessment is not None:
             attrs["assessment"] = assessment
+        if trial_site is not None:
+            attrs["trial_site"] = trial_site
         return self._new(
             value.vtype, "acceptance_guard", (value, condition),
             attrs, value.name, value.block,
@@ -153,12 +156,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         from pops.time._step.transaction import (
             AcceptanceGuard, GuardRole, ProjectAndRecheck,
         )
-        if not isinstance(name, str) or not name:
-            raise ValueError("guard: name must be a non-empty string")
-        if not isinstance(value, ProgramValue) or not value.is_field():
-            raise TypeError("guard: value must be a State/RHS/scalar_field ProgramValue")
-        if not isinstance(condition, ProgramValue) or condition.vtype != "bool":
-            raise TypeError("guard: condition must be a scalar Bool ProgramValue")
+        self._guard_operands(name, value, condition)
         role = GuardRole.INVARIANT if role is None else role
         if type(role) is not GuardRole:
             raise TypeError("guard: role must be a GuardRole")
@@ -169,8 +167,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
                                  "compose any projection explicitly before its guard")
             from .stability_admission import require_candidate_dependency
             require_candidate_dependency(condition, value)
-        validate_input_regions(
-            self, (value, condition), self._current_region(), "acceptance guard")
+        self._guard_regions(value, condition)
 
         if isinstance(action, (RejectAttempt, FailRun)):
             if recheck is not None:
@@ -223,6 +220,42 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             self, (candidate, condition), self._current_region(), "Advance assessment")
         guarded = self._acceptance_guard_value(name, candidate, condition, RejectAttempt(),
                                                assessment=ADVANCE_ASSESSMENT_CONTRACT)
+        self._register_acceptance_guard(AcceptanceGuard(name, GuardRole.INVARIANT,
+                                                        RejectAttempt()))
+        return guarded
+
+    def _guard_operands(self, name: Any, value: Any, condition: Any) -> None:
+        """The operands of an acceptance guard: ``guard`` and ``_trial_guard`` check the same."""
+        if not isinstance(name, str) or not name:
+            raise ValueError("guard: name must be a non-empty string")
+        if not isinstance(value, ProgramValue) or not value.is_field():
+            raise TypeError("guard: value must be a State/RHS/scalar_field ProgramValue")
+        if not isinstance(condition, ProgramValue) or condition.vtype != "bool":
+            raise TypeError("guard: condition must be a scalar Bool ProgramValue")
+
+    def _guard_regions(self, value: Any, condition: Any) -> None:
+        validate_input_regions(
+            self, (value, condition), self._current_region(), "acceptance guard")
+
+    @atomic_authoring
+    def _trial_guard(self, name: Any, value: Any, condition: Any, trial_site: Any) -> Any:
+        """Gate a value of a traced method by an admissibility predicate (spec 0.3 IR4, T38).
+
+        ``cond(p, then=value, otherwise=fail(NotAdmissible))`` of a method body, lowered as
+        ``guard(name, value, condition, action=RejectAttempt())`` with the same checks: a false
+        ``condition`` rejects the attempt with the stable failure site of ``trial_site``, a
+        retryable site in the phase ``trial`` and a fixed site in ``trial_failure``.
+        """
+        from pops.time.solve_outcome import RejectAttempt
+        from pops.time._step.transaction import AcceptanceGuard, GuardRole
+        self._guard_operands(name, value, condition)
+        if not isinstance(trial_site, Mapping) or set(trial_site) != {
+                "site", "retry_can_change", "variant"} or trial_site["site"] != name:
+            raise TypeError("trial guard: trial_site holds site (the guard name), "
+                            "retry_can_change and variant")
+        self._guard_regions(value, condition)
+        guarded = self._acceptance_guard_value(name, value, condition, RejectAttempt(),
+                                               trial_site=dict(trial_site))
         self._register_acceptance_guard(AcceptanceGuard(name, GuardRole.INVARIANT,
                                                         RejectAttempt()))
         return guarded
