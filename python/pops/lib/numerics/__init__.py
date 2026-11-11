@@ -10,6 +10,8 @@ formula becomes the generated C++ (G2).
 * :mod:`.reconstructions` -- the per-axis ``Reconstruct`` builder, ``muscl`` and ``weno5`` (N3).
 * :mod:`.limiters` -- the slope limiters ``minmod``, ``vanleer``, ``mc`` and ``superbee`` (N3),
   passed uncalled to ``muscl``.
+* :mod:`.boundaries` -- ``ghosts()``, the boundary policy of 2.6.9, written with the surface
+  (N15 lot B): the ghost 2g - u_k of a value and u_1 of no data.
 * :mod:`.face_flux` -- the ``FaceFlux`` builder of the N7a pilot, realized by the b6
   ``StencilFlux`` native (IR24). The spelling is provisional: in spec 0.3 a case imports
   ``FaceFlux`` from ``pops.discrete``, which re-exports the builders of ``pops.lib`` (sec. 2.6.4,
@@ -23,5 +25,15 @@ from .reconstructions import Reconstruct, muscl, weno5
 
 __all__ = [
     "FaceFlux", "RealizedFaceFlux", "realize_face_flux", "hll", "rusanov", "upwind",
-    "Reconstruct", "muscl", "weno5", "mc", "minmod", "superbee", "vanleer",
+    "Reconstruct", "muscl", "weno5", "mc", "minmod", "superbee", "vanleer", "ghosts",
 ]
+
+
+def __getattr__(name):
+    """``ghosts``, the boundary policy written with the surface (:mod:`.boundaries`), imported on
+    first use so that importing this package does not import the surface."""
+    if name == "ghosts":
+        from .boundaries import ghosts
+
+        return ghosts
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
