@@ -2496,9 +2496,11 @@ class ProgramContext {
             runtime_lane))
       throw std::invalid_argument(
           "Program prepared linear solve workspace lane contract differs across MPI ranks");
-    system_->count_prepared_solve_();
-    return system_->track_solve_outcome(
+    SolveOutcome outcome = system_->track_solve_outcome(
         pops::solve_prepared_affine_outcome(problem, workspace, solution, rhs, controls));
+    system_->count_prepared_solve_(outcome.report().iters,
+                                   static_cast<double>(outcome.report().residual_norm));
+    return outcome;
   }
 
   /// One prepared solve whose dependency set excludes the proposal (spec 0.3 T7 across attempts,
