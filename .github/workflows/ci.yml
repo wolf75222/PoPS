@@ -143,6 +143,7 @@ jobs:
       openmp_required: ${{ steps.decide.outputs.openmp_required }}
       compile_cache_required: ${{ steps.decide.outputs.compile_cache_required }}
       cpp_prewarm_required: ${{ steps.decide.outputs.cpp_prewarm_required }}
+      format_bench_required: ${{ steps.decide.outputs.format_bench_required }}
       cpp_matrix: ${{ steps.decide.outputs.cpp_matrix }}
       python_matrix: ${{ steps.decide.outputs.python_matrix }}
       python_dimensions: ${{ steps.decide.outputs.python_dimensions }}
@@ -201,6 +202,27 @@ jobs:
           path: format-diff.patch
           if-no-files-found: ignore
           retention-days: 7
+
+  # Banc du controle de style (N5, ROM-84) : sur tout plan complet, et quand le plan voit changer le
+  # script, son banc ou un fichier de style (.clang-format, _clang-format, .clang-format-ignore, a
+  # toute profondeur), le banc rejoue les cas du script dans un depot git jetable, avec ses propres
+  # fichiers sondes et son propre style : aucun cas ne lit un fichier de l'arbre, aucun n'est saute.
+  # Quelques secondes, sans build. Le plan complet couvre une modification de ce job et les
+  # evenements qui ne planifient aucun diff (push, nuit, dispatch).
+  format-bench:
+    name: clang-format (banc du script)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [changes, set-mode]
+    if: needs.set-mode.outputs.format_bench_required == 'true'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: Install clang-format (version epinglee)
+        run: pipx install clang-format==19.1.7
+      - name: test_check_clang_format.sh
+        run: bash scripts/test_check_clang_format.sh
 
   # PREWARM C++ NATIF. Trois runners compilent une partition exacte et disjointe des objets runtime
   # communs a tous les shards. Ils publient uniquement des entrees ccache et leur contrat exact
@@ -974,7 +996,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "141"
+      SHARD_TOTAL: "142"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1545,7 +1567,7 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, set-mode, format, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, mpi-dim1, mpi-python, kokkos-openmp, mg8-tutorials]
+    needs: [changes, set-mode, format, format-bench, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, mpi-dim1, mpi-python, kokkos-openmp, mg8-tutorials]
     if: always()
     steps:
       - uses: actions/checkout@v7
@@ -1553,11 +1575,13 @@ jobs:
           fetch-depth: 1
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} format=${{ needs.format.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} mpi-python=${{ needs.mpi-python.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }} mg8-tutorials=${{ needs.mg8-tutorials.result }}"
+          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} format=${{ needs.format.result }} format-bench=${{ needs.format-bench.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} mpi-python=${{ needs.mpi-python.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }} mg8-tutorials=${{ needs.mg8-tutorials.result }}"
           python3 scripts/ci_route_mode.py check \
             --gate changes "${{ needs.changes.result }}" true \
             --gate set-mode "${{ needs.set-mode.result }}" true \
             --gate format "${{ needs.format.result }}" true \
+            --gate format-bench "${{ needs.format-bench.result }}" \
+              "${{ needs.set-mode.outputs.format_bench_required }}" \
             --gate gate-cpp "${{ needs.gate-cpp.result }}" true \
             --gate gate-python-architecture \
               "${{ needs.gate-python-architecture.result }}" \

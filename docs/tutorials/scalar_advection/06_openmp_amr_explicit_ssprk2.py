@@ -37,7 +37,7 @@ from pops.initial import InitialCondition
 from pops.layouts import AMR
 from pops.lib.amr import StateTransfer
 from pops.lib.initial import Gaussian
-from pops.math import ValueExpr, ddt, div
+from pops.math import ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
@@ -187,8 +187,8 @@ coarsen_threshold = case.param(RuntimeParam("coarsen_u", default=0.20))
 
 tagging = AMRTagging(
     rules=(
-        Tag(ValueExpr(tracer_U) > case.value(refine_threshold)),
-        Coarsen(ValueExpr(tracer_U) < case.value(coarsen_threshold)),
+        Tag(lambda cell: cell.value(tracer_U) > case.value(refine_threshold)),
+        Coarsen(lambda cell: cell.value(tracer_U) < case.value(coarsen_threshold)),
         Buffer(cells=2),
     ),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

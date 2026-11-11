@@ -294,6 +294,8 @@ if(POPS_NATIVE_DIM STREQUAL "2")
       tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py
       tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py
       tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py
+      tests/python/integration/mpi/test_public_regrid_decision_mpi1.py
+      tests/python/integration/mpi/test_public_regrid_decision_mpi2.py
       tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py
       tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py
       tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py

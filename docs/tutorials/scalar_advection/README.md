@@ -338,8 +338,8 @@ coarsen_threshold = case.param(RuntimeParam("coarsen_u", default=0.20))
 
 tagging = AMRTagging(
     rules=(
-        Tag(ValueExpr(tracer_U) > case.value(refine_threshold)),
-        Coarsen(ValueExpr(tracer_U) < case.value(coarsen_threshold)),
+        Tag(lambda cell: cell.value(tracer_U) > case.value(refine_threshold)),
+        Coarsen(lambda cell: cell.value(tracer_U) < case.value(coarsen_threshold)),
         Buffer(cells=2),
     ),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
@@ -370,6 +370,10 @@ Le ratio spatial et le ratio temporel valent ici tous deux `2`, mais ce sont deu
 independants. La hierarchie ne deduit pas le programme des horloges. `AMR` fournit le tagger
 symbolique et le clusterer Berger-Rigoutsos.
 
+Chaque regle est une fonction de `cell`. PoPS la trace une fois, puis genere le critere en C++ dans
+le programme compile, comme les autres regions. `cell.value(tracer_U)` lit l'etat de la cellule
+marquee.
+
 Lancer les variantes OpenMP :
 
 ```bash
@@ -393,12 +397,17 @@ C++/Kokkos effectue les calculs sur les cellules.
 que les cellules dont la valeur depasse un seuil. Deux seuils evitent les decisions contradictoires :
 
 ```python
-gradient_magnitude = norm(grad(ValueExpr(tracer_U)))
+gradient_stencil = finite_volume.amr_indicator_stencil(dimension=len(frame.axes))
+
+
+def gradient_magnitude(cell):
+    return gradient_norm(cell, tracer_U, axes=frame.axes, stencil=gradient_stencil)
+
 
 tagging = AMRTagging(
     rules=(
-        Tag(gradient_magnitude > case.value(refine_threshold)),
-        Coarsen(gradient_magnitude < case.value(coarsen_threshold)),
+        Tag(lambda cell: gradient_magnitude(cell) > case.value(refine_threshold)),
+        Coarsen(lambda cell: gradient_magnitude(cell) < case.value(coarsen_threshold)),
         Buffer(cells=2),
     ),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
@@ -406,7 +415,9 @@ tagging = AMRTagging(
 )
 ```
 
-PoPS deduit le stencil, l'ordre et les halos du gradient a partir de la methode spatiale.
+Le stencil du gradient vient de la methode spatiale (`amr_indicator_stencil`).
+`pops.lib.amr.gradient_norm` lit les cellules voisines avec `cell.shift` et divise par la largeur
+des cellules du niveau.
 
 ```bash
 python docs/tutorials/scalar_advection/09_openmp_amr_gradient_ssprk2.py

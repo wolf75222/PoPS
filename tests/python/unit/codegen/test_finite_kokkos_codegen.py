@@ -364,3 +364,37 @@ def test_mirror_copies_read_only_labelled_control_views():
         assert re.search(r'finite_collective::allocate_view\(%s, \w+, "pops_finite_control:%s", '
                          % (source, source), cpp)
     assert 'Kokkos::deep_copy' not in cpp and 'create_mirror' not in cpp
+
+
+def test_field_element_map_fills_device_columns_without_boxing_or_host_map():
+    # G13 lot 3 (DM7, MG3): Field elements go into one device column per box; a read copies its
+    # element out of its slices with its provenance, as a boxed element was.
+    p = Program("field_element_array")
+    q = typed_state(p, "material", state_name="U")
+    _ = q.n
+    domain = p.range_set(3, capacity=3, ownership="replicated")
+    output = p.map(domain, lambda b, i: b.value("scaled", b.float64(b.index_value(i) + 1) * q.n))
+    read = output[p.index(domain, 2)]
+    p.commit(q.next, p.value("accepted", read, at=q.next.point))
+    assert p.validate()
+    cpp = emit_cpp_program(p)
+    assert cpp == emit_cpp_program(detach_compiled_program(p))
+    prefix = 'finite_%d' % output.id
+    assert '#include <pops/runtime/program/finite_field_array.hpp>' in cpp
+    assert 'pops_algebra_finite::FieldArrayBuilder %s_fields{' % prefix in cpp
+    region = cpp[cpp.index('%s_fields{' % prefix):cpp.index('std::move(%s_fields).publish()' % prefix)]
+    assert '%s_fields.store(%s_index, ' % (prefix, prefix) in region
+    assert 'ctx.continuation_bind_field_provenance(' in region
+    assert '%s_fields.lifetime()' % prefix in region
+    for boxed in ('std::any', 'assign_any', 'allocate_values', 'own_structural_field', 'mirror'):
+        assert boxed not in region
+    # A Field map is no host map (DM8): it has its own counter.
+    assert 'pops_finite_field_map_invocations.fetch_add(1, std::memory_order_relaxed);' in cpp
+    assert 'pops_finite_host_map_invocations.fetch_add' not in cpp
+    assert 'extern "C" std::uint64_t pops_finite_field_map_count() {' in cpp
+    assert 'const pops_algebra_finite::FieldArray %s_array = std::move(%s_fields).publish();' % (
+        prefix, prefix) in cpp
+    assert 'ctx.own_structural_field((%s_array).element(' % prefix in cpp
+    assert _rows(cpp, 'pops-finite-map-placement@1') == [{
+        'backend': 'host', 'reason': 'result requires structural storage beyond scalar/Product leaves',
+        'ssa': output.id, 'storage': 'device columns per box of the Field elements; no host staging'}]

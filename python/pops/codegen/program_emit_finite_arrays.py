@@ -39,9 +39,13 @@ def finite_cpp_helpers():
 #include <pops/runtime/program/finite_kokkos.hpp>
 #include <pops/runtime/program/finite_collective_execution.hpp>
 #include <pops/runtime/program/finite_structural_storage.hpp>
+#include <pops/runtime/program/finite_field_array.hpp>
 namespace {
 std::atomic<std::uint64_t> pops_finite_kernel_launches{0};
 std::atomic<std::uint64_t> pops_finite_host_map_invocations{0};
+// Maps whose element is a Field: the host loop only launches the body's field kernels, and the
+// elements stay in device columns, so they are not host maps (DM8).
+std::atomic<std::uint64_t> pops_finite_field_map_invocations{0};
 std::atomic<std::int64_t> pops_finite_kernel_last_failure{-1};
 // Array bytes that this Program copies between the device and the host (DM8, PF2).
 pops::runtime::program::finite_device::Residency pops_finite_residency;
@@ -51,6 +55,9 @@ extern "C" std::uint64_t pops_finite_kokkos_launch_count() {
 }
 extern "C" std::uint64_t pops_finite_host_map_count() {
   return pops_finite_host_map_invocations.load(std::memory_order_relaxed);
+}
+extern "C" std::uint64_t pops_finite_field_map_count() {
+  return pops_finite_field_map_invocations.load(std::memory_order_relaxed);
 }
 extern "C" const char* pops_finite_kokkos_execution_space() {
   return Kokkos::DefaultExecutionSpace::name();
@@ -76,6 +83,8 @@ using Index = pops::runtime::program::finite_structural::Index;
 using Record = pops::runtime::program::finite_structural::Record;
 using Array = pops::runtime::program::finite_structural::Array;
 using DeviceArray = pops::runtime::program::finite_device::Array;
+using FieldArray = pops::runtime::program::finite_device::FieldArray<pops::kNativeDimension>;
+using FieldArrayBuilder = pops::runtime::program::finite_device::FieldArrayBuilder<pops::kNativeDimension>;
 using pops::runtime::program::finite_structural::make_values;
 }
 '''
@@ -100,11 +109,22 @@ def finite_cpp_type(signature):
         return "pops_algebra_finite::Record"
     if kind == "array":
         from .program_emit_finite_kokkos import device_array
+        if field_array(signature):
+            return "pops_algebra_finite::FieldArray"
         return "pops_algebra_finite::" + ("DeviceArray" if device_array(signature) else "Array")
     if kind in ("state", "rhs", "scalar_field"):
         return "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>"
     return {"scalar":"pops::Real", "int64":"std::int64_t", "bool":"bool",
             "index_set":"pops_algebra_finite::DomainRef", "index":"pops_algebra_finite::Index"}[kind]
+
+
+_FIELD_LEAVES = ("state", "rhs", "scalar_field")
+
+
+def field_array(signature):
+    """A replicated Array whose element is a Field keeps one device column per box (DM7)."""
+    return (signature["vtype"] == "array" and signature.get("ownership") != "contiguous_distributed"
+            and signature["element"]["vtype"] in _FIELD_LEAVES)
 
 
 def _packed(signature, token, lines, prefix):
@@ -130,6 +150,21 @@ def _unpacked(signature, token):
 
 def _unpacked_cell(signature, token):
     return _unpacked(signature, "std::any_cast<const %s&>(%s)" % (finite_cpp_type(signature), token))
+
+
+def _store_field(builder, index, field, lines, prefix):
+    """Copy one Field element into its device slices and bind its provenance, under one vote."""
+    from .program_emit_structured_control import _reject_if
+    lines += ["{", "bool %s_exhausted = false;" % prefix, "std::exception_ptr %s_error;" % prefix,
+              "try {",
+              "  const auto& %s_slot = %s.store(%s, %s);" % (prefix, builder, index, field),
+              "  ctx.continuation_bind_field_provenance(%s, %s_slot, %s.lifetime());" % (field, prefix, builder),
+              "} catch (const std::bad_alloc&) { %s_exhausted = true; }" % prefix,
+              "catch (const std::length_error&) { %s_exhausted = true; }" % prefix,
+              "catch (...) { %s_error = std::current_exception(); }" % prefix,
+              'pops::collectively_rethrow_exception(%s_error, ctx.prepared_execution_lane(), "finite field Array element");' % prefix]
+    _reject_if("%s_exhausted" % prefix, lines, "finite array allocation capacity exhausted")
+    lines.append("}")
 
 
 def _store_cell(value, destination, lines, prefix):
@@ -176,18 +211,24 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
     from .program_emit_finite_kokkos import emit_map, device_array, host_snapshots, storage_type, _leaves
     if emit_map(value, var, lines):
         return
-    lines.append("pops_finite_host_map_invocations.fetch_add(1, std::memory_order_relaxed);")
     scan = value.op == "finite_scan"
     domain = value.inputs[1] if scan else value.inputs[0]
     signature = value.attrs["array_signature"] if scan else value_signature(value)
     element = signature["element"]
+    fields = field_array(signature)
+    counter = "pops_finite_field_map_invocations" if fields else "pops_finite_host_map_invocations"
+    lines.append("%s.fetch_add(1, std::memory_order_relaxed);" % counter)
     domain_token = var[domain.id]
     _check_domain(value_signature(domain),domain_token,lines)
     prefix = "finite_%d"%value.id
     # A host body still publishes device columns: one counted copy per column (PF2).
     device = device_array(signature)
     columns = []
-    if device:
+    if fields:
+        # Field elements go straight into the device columns of the Array (no host copy).
+        builder = prefix + "_fields"
+        lines.append("pops_algebra_finite::FieldArrayBuilder %s{%s};" % (builder, domain_token))
+    elif device:
         for leaf, _ in _leaves(element, None):
             name = "%s_host_%d" % (prefix, len(columns))
             lines.append("pops::runtime::program::finite_device::HostView<%s> %s;" % (storage_type(leaf), name))
@@ -216,7 +257,9 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
     _emit_region(program,value.attrs["body_block"],sub,model,body,prelude,block_idx,field_plans,target)
     result = sub[value.attrs["body"].id]
     emitted = result["value"] if scan else result
-    if device:
+    if fields:
+        _store_field(builder, index, emitted, body, prefix + "_element")
+    elif device:
         for (leaf, name), (_, token) in zip(columns, _leaves(element, emitted), strict=True):
             stored = "static_cast<unsigned char>(%s)" % token if leaf["vtype"] == "bool" else token
             body.append("%s(%s) = %s;" % (name, index, stored))
@@ -231,7 +274,10 @@ def _emit_array_region(program,value,var,model,lines,prelude,block_idx,field_pla
     lines.append("}")
     # The only publication freezes the private buffer after every element succeeded.
     output = prefix+"_array"
-    if device:
+    if fields:
+        lines.append("const %s %s = std::move(%s).publish();" % (finite_cpp_type(signature), output, builder))
+        _uniform_element(signature, output, lines)
+    elif device:
         lines.append("%s %s;" % (finite_cpp_type(signature), output))
         lines.append("pops::runtime::program::finite_collective::publish_host(%s);" % ", ".join(
             (output, domain_token, "&pops_finite_residency", "ctx.prepared_execution_lane()",
@@ -299,6 +345,21 @@ def emit_finite_op(program,value,var,model,lines,prelude,block_idx,field_plans,t
         array,index = (var[item.id] for item in value.inputs)
         from .program_emit_finite_kokkos import (HOST_COLUMNS, device_array, leaf_count, storage_type,
                                                  _tree, _TYPES)
+        if field_array(value_signature(value.inputs[0])):
+            _reject_if("!(%s).domain || !(%s).domain->visible() || !(%s).storage || (%s).domain != (%s).domain || "
+                       "(%s).offset < 0 || (%s).offset >= (%s).domain->size || "
+                       "(%s).storage->elements.size() != std::size_t((%s).domain->size)"
+                       %(array,array,array,index,array,index,index,array,array,array),lines,
+                       "Array access requires the same live domain instance and an in-range Index")
+            # The element is copied out of its device slices into Program-owned storage, with
+            # its provenance, as a boxed element was (no host access).
+            from .program_emit_structured_control import _slots, _copy
+            signature = value_signature(value)
+            source = "(%s).element((%s).offset)" % (array, index)
+            output = _slots(signature, source, value.id, "array_read", lines)
+            _copy(signature, output, source, lines)
+            var[value.id] = output
+            return
         if device_array(value_signature(value.inputs[0])):
             signature = value_signature(value)
             _reject_if("!(%s).domain || !(%s).domain->visible() || !(%s).columns || (%s).domain != (%s).domain || "

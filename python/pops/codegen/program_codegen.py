@@ -358,7 +358,8 @@ def _emit_cpp_program_impl(
         has_dt_bound=has_dt_bound,
         dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
         advance_control=(_emit_advance_control(program)
-                         + _emit_advance_outputs(program, authority, target)),
+                         + _emit_advance_outputs(program, authority, target)
+                         + _refuse_advance_memory_route(program, target)),
         module_metadata=(_emit_module_metadata(program, authority)
                          + _emit_uniform_history_metadata(program, target)),
         program_params=_emit_program_params(program, authority),
@@ -528,6 +529,19 @@ def _emit_advance_control(program: Any) -> str:
             "// one step (Retry.max_attempts, T38). System::run_advance repeats a rejected proposal.\n"
             "extern \"C\" int pops_program_advance_max_attempts() { return %d; }\n"
             % control.max_attempts)
+
+
+def _refuse_advance_memory_route(program: Any, target: str) -> str:
+    """The method memory of an elaborated Advance (T27, N8 lot 5) runs on the Uniform route:
+    a member has no regrid policy (CN7), so the AMR route refuses it, as it refuses Outputs."""
+    control = getattr(program, "_advance_control", None)
+    if target != "system" and control is not None and control.memory:
+        from pops.time._program.traced_method import NotYetElaborated
+        raise NotYetElaborated(
+            "the method memory of an elaborated Advance runs on the Uniform route; a member has "
+            "no regrid policy (HistoryPolicyMissing, CN7), and the AMR route of the compiled "
+            "control is a later lot of N8")
+    return ""
 
 
 def _emit_advance_outputs(program: Any, model: Any, target: str) -> str:

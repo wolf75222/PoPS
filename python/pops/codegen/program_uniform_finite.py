@@ -221,6 +221,16 @@ def _traverse(nodes, token, root, depth, lines):
                     _push_record_child(child, offset, lines)
                     lines += ["break;", "}"]
                 lines += ["default: --top; break;", "}"]
+        elif kind == "array" and not distributed and _fields(sig):
+            _cell(lines)
+            lines.append(
+                "const auto* value = std::any_cast<pops_algebra_finite::FieldArray>(cell);"
+            )
+            _reject_if(
+                "!value", lines, "replicated Array has an invalid storage type"
+            )
+            _field_array(sig, "(*value)", lines)
+            lines.append("--top;")
         elif kind == "array" and not distributed and _device(sig):
             _cell(lines)
             lines.append(
@@ -379,7 +389,30 @@ def _device_array(signature, token, lines):
     )
 
 
+def _fields(signature):
+    from .program_emit_finite_arrays import field_array
+
+    return field_array(signature)
+
+
+def _field_array(signature, token, lines):
+    """A Field Array is replicated by its domain; its elements' local cells are not (as a Field)."""
+    from .program_emit_finite_arrays import _check_domain
+    from .program_emit_structured_control import _reject_if
+
+    _check_domain(signature, "(%s).domain" % token, lines)
+    _reject_if(
+        "!(%s).storage || (%s).storage->elements.size() != std::size_t((%s).domain->size)"
+        % (token, token, token),
+        lines,
+        "replicated Field Array has an invalid buffer",
+    )
+
+
 def _array(signature, token, lines):
+    if _fields(signature):
+        _field_array(signature, token, lines)
+        return
     if _device(signature):
         _device_array(signature, token, lines)
         return

@@ -63,6 +63,7 @@ _ALLOWED_POPS_IMPORT_ROOTS = (
     "pops.descriptors",
     "pops.params",
     "pops.regions",  # the typed index maps of IR9 (spec 0.3 SU15), their one public home
+    "pops.surface",  # the user surface (spec 0.3 2.6) with which the library writes its words (A4)
     "pops.lib",  # intra-lib composition
 )
 
@@ -279,11 +280,35 @@ _CPP_DEFINITION = re.compile(r"\b(?:struct|class|using|enum\s+class|enum)\s+([A-
 _CPP_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
+def method_homes_in(rel, text, kind, refused=_METHOD_TERMS):
+    """(path, line, term, name) of every definition of one file named after a numerical method: a
+    Python class, function or module-level binding, a C++ struct, class, enum or type alias. A
+    name with a generic sense (scan.GENERIC_SENSES) is no method, and neither is the definition of
+    a word of pops.math in the module pops.math (2.6.3, curl), which CF2 admits by the same rule
+    (scan.math_definitions)."""
+    lines = text.splitlines()
+    if kind == "python":
+        tree = ast.parse(text)
+        admitted = scan.math_definitions(rel, tree)
+        named = [(node.lineno, node.name) for node in ast.walk(tree)
+                 if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                 and id(node) not in admitted]
+        named += [(node.lineno, target.id) for node in tree.body if isinstance(node, ast.Assign)
+                  for target in node.targets
+                  if isinstance(target, ast.Name) and id(target) not in admitted]
+    else:
+        blanked = _CPP_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
+        named = [(blanked.count("\n", 0, match.start()) + 1, match.group(1))
+                 for match in _CPP_DEFINITION.finditer(blanked)]
+    return [(rel, line, term, name) for line, name in named
+            for term in scan.terms_in(name, "ident") & refused
+            if scan.generic_sense(rel, term, lines[line - 1]) is None]
+
+
 def method_homes_in_core():
-    """(path, line, term, name) of every core definition named after a numerical method: a Python
-    class, function or module-level binding, a C++ struct, class, enum or type alias. In the native
-    tree, a qualified substitution may be named after its generic algorithm (scan.CORE_ONLY, FC6);
-    a name with a generic sense (scan.GENERIC_SENSES) is no method."""
+    """(path, line, term, name) of every core definition named after a numerical method
+    (method_homes_in). In the native tree, a qualified substitution may be named after its generic
+    algorithm (scan.CORE_ONLY, FC6)."""
     engine = scan.load_cf0()
     homes = []
     for rel in scan.frozen_engine_files(engine):
@@ -292,20 +317,7 @@ def method_homes_in_core():
             continue
         refused = _METHOD_TERMS - scan.CORE_ONLY if engine.is_native(rel) else _METHOD_TERMS
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        lines = text.splitlines()
-        if kind == "python":
-            tree = ast.parse(text)
-            named = [(node.lineno, node.name) for node in ast.walk(tree)
-                     if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))]
-            named += [(node.lineno, target.id) for node in tree.body if isinstance(node, ast.Assign)
-                      for target in node.targets if isinstance(target, ast.Name)]
-        else:
-            blanked = _CPP_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
-            named = [(blanked.count("\n", 0, match.start()) + 1, match.group(1))
-                     for match in _CPP_DEFINITION.finditer(blanked)]
-        homes.extend((rel, line, term, name) for line, name in named
-                     for term in scan.terms_in(name, "ident") & refused
-                     if scan.generic_sense(rel, term, lines[line - 1]) is None)
+        homes.extend(method_homes_in(rel, text, kind, refused))
     return homes
 
 
@@ -334,6 +346,27 @@ def test_method_homes_scan_sees_the_b6_natives():
     assert ("python/pops/solvers/elliptic/_descriptor.py", "GeometricMG") in names
     assert ("python/pops/solvers/elliptic/_descriptor.py", "FFT") in names
     assert ("python/pops/solvers/krylov/__init__.py", "BiCGStab") in names
+
+
+def test_a_word_of_pops_math_is_no_method_home_in_pops_math_only():
+    """Gate 2e reads the admission of CF2 (scan.math_definitions): curl, a word of pops.math
+    (2.6.3), defined at the top level of pops.math is no method home; a kernel named after it, a
+    nested definition, a definition outside pops.math and laplacian, which is no word of 2.6.3,
+    are."""
+    source = ('curl = _later("curl", _N11)\n'
+              "def outflow(q):\n    return q\n"
+              "def curl_kernel(e):\n    def curl(v):\n        return v\n    return e\n"
+              "class LaplacianEmitter:\n    pass\n"
+              "def laplacian(e):\n    return e\n")
+    found = {(name, line) for _, line, _, name in
+             method_homes_in("python/pops/surface/math.py", source, "python")}
+    assert found == {("curl_kernel", 4), ("curl", 5), ("LaplacianEmitter", 8), ("laplacian", 10)}
+    for rel in scan.POPS_MATH_MODULES:
+        assert ("curl", 1) not in {(name, line) for _, line, _, name
+                                   in method_homes_in(rel, source, "python")}
+    elsewhere = {(name, line) for _, line, _, name in
+                 method_homes_in("python/pops/surface/_expr.py", source, "python")}
+    assert ("curl", 1) in elsewhere and ("curl_kernel", 4) in elsewhere
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ def test_m4_uses_the_complete_canonical_mpi_orchestrator_inventory():
     runner = _load_runner()
     data = runner.tomllib.loads(runner.TEST_MANIFEST.read_text(encoding="utf-8"))
     rows = runner.selection.manifest_python_mpi_orchestrators(data)
-    assert len(rows) == 29
+    assert len(rows) == 31
     assert sum("partitions" in row for row in rows) == 12
     assert runner._python_mpi_orchestrators() == {row["path"] for row in rows}
 

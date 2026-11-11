@@ -17,6 +17,7 @@
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
+#include <pops/runtime/program/solve_gates.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/spatial/nd/face_frequency.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
@@ -2754,9 +2755,14 @@ class ProgramContext {
   }
 
   /// One flux-only residual whose faces are observed: copied into `faces` and/or reduced to their
-  /// incident-face frequency. Like neg_div_flux_default_into, a block that the bound prepared
-  /// group transport can evaluate goes through it, so its scratch, prepared once, is reused by
-  /// every evaluation; any other block prepares its own boundary session.
+  /// incident-face frequency. A block whose faces the bound prepared group transport can observe
+  /// (System::has_prepared_group_face_observation) goes through it, so its scratch, prepared once,
+  /// is reused by every evaluation; any other block prepares its own boundary session. This is not
+  /// the route of neg_div_flux_default_into: a bounded block whose physical faces the group
+  /// evaluates at the point, with no omitted interface face, goes through the group here, while
+  /// neg_div_flux_default_into prepares a boundary session for it per evaluation
+  /// (System::requires_block_boundary_session). The Outflow row of
+  /// test_api_v02_python_faces_native.py compares the two routes on such a block.
   void neg_div_flux_default_observed_into_(int program_block, field_type& state_value,
                                            field_type& rhs, int rate_id,
                                            std::vector<nd::FaceField<Dim>>* faces,

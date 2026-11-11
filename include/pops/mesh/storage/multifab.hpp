@@ -81,6 +81,34 @@ class MultiFab {
     fabs_ = std::move(allocated);
   }
 
+  /// Assemble a field from local Fabs already built over this layout, in local order (for
+  /// example Fabs over the slices of a finite Array of fields, see `Fab`). Each Fab must have the
+  /// box of its global patch, `ncomp` components and `ghosts`.
+  MultiFab(layout_type layout, distribution_type distribution, rank_type local_rank, int ncomp,
+           ghost_type ghosts, std::vector<fab_type> local_fabs)
+      : layout_(std::move(layout)),
+        distribution_(std::move(distribution)),
+        local_rank_(local_rank),
+        ncomp_(ncomp),
+        ghosts_(ghosts) {
+    validate_metadata_();
+    local_global_indices_ = distribution_.local_box_indices(local_rank_);
+    global_to_local_.assign(layout_.size(), not_local);
+    if (local_fabs.size() != local_global_indices_.size())
+      throw std::invalid_argument("pops::MultiFab: local Fab count differs from the distribution");
+    for (std::size_t local = 0; local < local_global_indices_.size(); ++local) {
+      const std::size_t global = local_global_indices_[local];
+      const fab_type& candidate = local_fabs[local];
+      if (!(candidate.box() == layout_[global]) || candidate.ncomp() != ncomp_)
+        throw std::invalid_argument("pops::MultiFab: local Fab differs from its layout patch");
+      for (int axis = 0; axis < Dim; ++axis)
+        if (candidate.ghosts()[axis] != ghosts_[axis])
+          throw std::invalid_argument("pops::MultiFab: local Fab differs from the field ghosts");
+      global_to_local_[global] = local;
+    }
+    fabs_ = std::move(local_fabs);
+  }
+
   MultiFab(const MultiFab& other)
       : layout_(other.layout_),
         distribution_(other.distribution_),
@@ -168,7 +196,8 @@ class MultiFab {
 
   const box_type& box(std::size_t local) const { return fab(local).box(); }
 
-  /// Storage is always deep-owned; only the same object can expose the same owned allocation set.
+  /// Storage is deep-owned, or a disjoint slice of a finite-array column (see `Fab`); only the
+  /// same object can expose the same elements.
   bool shares_storage_with(const MultiFab& other) const noexcept { return this == &other; }
 
   /// Process-local identity of this storage incarnation, including an empty MPI rank.

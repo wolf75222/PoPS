@@ -28,7 +28,7 @@ def test_m3_uses_the_complete_canonical_mpi_orchestrator_inventory():
     runner = _load_runner()
     data = runner.tomllib.loads(runner.TEST_MANIFEST.read_text(encoding="utf-8"))
     rows = runner.selection.manifest_python_mpi_orchestrators(data)
-    assert len(rows) == 29
+    assert len(rows) == 31
     assert sum("partitions" in row for row in rows) == 12
     assert runner._python_mpi_orchestrators() == {row["path"] for row in rows}
 
@@ -435,6 +435,8 @@ def test_m3_mpi_python_proof_is_exact_and_manifest_owned(monkeypatch):
         "tests/python/integration/mpi/test_public_imex_nonautonomous_field_mpi2.py",
         "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi1.py",
         "tests/python/integration/mpi/test_public_nonlinear_mixed_field_mpi2.py",
+        "tests/python/integration/mpi/test_public_regrid_decision_mpi1.py",
+        "tests/python/integration/mpi/test_public_regrid_decision_mpi2.py",
         "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi1.py",
         "tests/python/integration/mpi/test_public_scalar_bound_capture_mpi2.py",
         "tests/python/integration/mpi/test_public_spatial_interaction_mpi1.py",

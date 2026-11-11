@@ -97,3 +97,13 @@ metrics = [
 ]
 job_script = "benchmarks/romeo/adc757_heterogeneous_numerics.sbatch"
 submit_script = "benchmarks/romeo/submit_adc757_heterogeneous_numerics.sh"
+
+[campaigns.n9_m08_gap]
+routine_ci = false
+source = "benchmarks/n9_m08"
+measurement_schema = "pops.n9.m08_gap.v1"
+protocol = "paired_ABBA"
+metric = "program_cg_throughput_over_native_cg"
+minimum_ratio = 0.9
+job_script = "benchmarks/romeo/n9_m08_gap.sbatch"
+submit_script = "benchmarks/romeo/submit_n9_m08_gap.sh"
