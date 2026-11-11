@@ -392,6 +392,17 @@ def test_a_numeric_zero_is_the_identity_but_a_scaled_term_and_an_empty_balance_a
     assert _observed(model) == before
 
 
+def test_the_empty_sum_is_the_zero_rate_of_b6():
+    # R7 refuses no empty balance; the b6 zero identity (test_implicit_stage_request) declares it
+    # as the empty sum, which registers a balance with no occurrence and no anonymous source.
+    from pops.math import RateExpr
+
+    model, state, _u, _flux = _scalar()
+    rate = model.rate("still", equation=ddt(state) == RateExpr(()))
+    assert rate.occurrences == ()
+    assert rate.inline == ()
+
+
 def test_the_anonymous_sources_are_named_after_the_balance_and_selected_by_handle():
     model, (flux, diffusion), rate = _logistic_transport()
     assert [source.name for source in rate.inline] == ["A_inline_1"]

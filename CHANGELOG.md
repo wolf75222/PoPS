@@ -611,6 +611,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-93 (N11 lot 1 follow-up): the empty sum `ddt(U) == RateExpr(())` is again the zero rate of b6 and
+  reaches the prepared IR as the zero identity; lot 1 had refused it. Spec 0.3 R7 refuses no empty
+  balance. The bare literal `ddt(U) == 0` stays refused, as in b6.
+
 - ROM-85 (#749 follow-up): `scripts/dmt1.py emit` failed on M15 in the gate-python shards, which
   export a Kokkos root for their native tests: the real `compile_native` that it runs
   authenticates that root against the Kokkos contract of `_pops`, which it never loads. `emit` now
