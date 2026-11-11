@@ -6643,7 +6643,7 @@
       }
     },
     "ci_20261030_n8_traced_methods": {
-      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 1 traced-method modules (ROM-89), on the api_v02_20261013 tiers: 300 s for the source-only module, which resolves seven profiles twice (traced method and b6 builder) and generates the C++ of six of them twice without compiling, as the analogue test_program_source_kernel_reuse.py; 600 s for three Dim2 native profile cases with two cold C++ compilations each (the traced route and the b6 reference), in the 300/600/900/1200 s native profile tiers. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container (unit from the source checkout, native with a Kokkos 4.4.01 Serial build of _pops, each beside other local test sessions); they are not GitHub CI file wall times. Existing weights, the 135 Python shards (the full and partial packs stay within the ordinary budget with these two rows), native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 1 traced-method modules (ROM-89), on the api_v02_20261013 tiers: 300 s for the source-only module, which resolves seven profiles twice (traced method and b6 builder) and generates the C++ of six of them twice without compiling, as the analogue test_program_source_kernel_reuse.py; 600 s for three Dim2 native profile cases with two cold C++ compilations each (the traced route and the b6 reference), in the 300/600/900/1200 s native profile tiers. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container (unit from the source checkout, native with a Kokkos 4.4.01 Serial build of _pops, each beside other local test sessions); they are not GitHub CI file wall times. Existing weights, the 135 Python shards (the full and partial packs stay within the ordinary budget with these two rows), native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts. Refreshed on 08/11 with N8 lot 5 (#742's review point O2): the source hashes and the local receipts are those of the modules after lot 5, merged with the integration head acc5f62, one module per session on the same container.",
       "analogues": {
         "tests/python/integration/runtime/test_traced_methods_n8_native.py": "tests/python/integration/runtime/test_api_v02_euler_correction_native.py",
         "tests/python/unit/time/test_traced_methods_n8.py": "tests/python/unit/codegen/test_program_source_kernel_reuse.py"
@@ -6654,23 +6654,23 @@
       },
       "local_receipts": {
         "tests/python/integration/runtime/test_traced_methods_n8_native.py": {
-          "cases": 3,
-          "phase_seconds": 315.63,
-          "session_seconds": 316.95
+          "cases": 5,
+          "phase_seconds": 296.14,
+          "session_seconds": 296.88
         },
         "tests/python/unit/time/test_traced_methods_n8.py": {
-          "cases": 69,
-          "phase_seconds": 271.62,
-          "session_seconds": 273.16
+          "cases": 75,
+          "phase_seconds": 150.71,
+          "session_seconds": 151.53
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_traced_methods_n8_native.py": "60fc4ee4a4f7592ab788b0a2877a736cc1c6c121435ea0af04c31faa58f0d6ab",
-        "tests/python/unit/time/test_traced_methods_n8.py": "79baf38571ccdfc63ea2ef55a9829f12ac6054e6244cae0ce81ce7ac2c9d0fe6"
+        "tests/python/integration/runtime/test_traced_methods_n8_native.py": "de421e432c41b53cec357a5a0ebdb2e63add1e3f0540eb7d12f5f78cee94674a",
+        "tests/python/unit/time/test_traced_methods_n8.py": "b6acb6dc13b9c09c41ec32df26d084b979e95bf7180e3990b7044a89f19ca0c8"
       }
     },
     "ci_20261030_n8_compiled_control": {
-      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 2 compiled-control modules (ROM-89), on the api_v02_20261013 tiers: 30 s for the source-only module, which elaborates M01 a few times and generates its C++ without compiling, as the analogue test_authored_stability_admission.py; 600 s for the Dim2 native module, which compiles four M01 artifacts once per module (the traced route and the b6 reference on M01's face, the traced route and Retry(3) on b6's native face, since the merge of #694 and #700) and runs compiled and b6 runs of up to 80 steps, as the analogue test_traced_methods_n8_native.py; since the review of 5ded6fd it also compiles advance_run.hpp once with a fused multiply-add, a few seconds. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session on an otherwise idle machine (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Lot 2 also changes the bytes of the lot 1 unit module, whose receipt in the lot 1 section comes from the same container: back to back there, that module takes 245 s at ba9c86d and 253 s with lot 2, so the container, not lot 2, accounts for most of its gap to the earlier lot 1 receipt, and its 300 s estimate stays. On the integration head of N8 lot 1 (137 shards since #700) the full and partial packs with these two rows still hold 2100 s at most at 137 shards (136 would hold a multi-file shard of 2115 s), so the shard total stays 137. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 2 compiled-control modules (ROM-89), on the api_v02_20261013 tiers: 30 s for the source-only module, which elaborates M01 a few times and generates its C++ without compiling, as the analogue test_authored_stability_admission.py; 600 s for the Dim2 native module, which compiles four M01 artifacts once per module (the traced route and the b6 reference on M01's face, the traced route and Retry(3) on b6's native face, since the merge of #694 and #700) and runs compiled and b6 runs of up to 80 steps, as the analogue test_traced_methods_n8_native.py; since the review of 5ded6fd it also compiles advance_run.hpp once with a fused multiply-add, a few seconds. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session on an otherwise idle machine (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Lot 2 also changes the bytes of the lot 1 unit module, whose receipt in the lot 1 section comes from the same container: back to back there, that module takes 245 s at ba9c86d and 253 s with lot 2, so the container, not lot 2, accounts for most of its gap to the earlier lot 1 receipt, and its 300 s estimate stays. On the integration head of N8 lot 1 (137 shards since #700) the full and partial packs with these two rows still hold 2100 s at most at 137 shards (136 would hold a multi-file shard of 2115 s), so the shard total stays 137. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts. Refreshed on 08/11 with N8 lot 5 (#742's review point O2): the source hashes and the local receipts are those of the modules after lot 5, merged with the integration head acc5f62, one module per session on the same container.",
       "analogues": {
         "tests/python/integration/runtime/test_compiled_control_n8_native.py": "tests/python/integration/runtime/test_traced_methods_n8_native.py",
         "tests/python/unit/time/test_compiled_control_n8.py": "tests/python/unit/time/test_authored_stability_admission.py"
@@ -6682,22 +6682,22 @@
       "local_receipts": {
         "tests/python/integration/runtime/test_compiled_control_n8_native.py": {
           "cases": 9,
-          "phase_seconds": 226.21,
-          "session_seconds": 227.39
+          "phase_seconds": 140.78,
+          "session_seconds": 141.59
         },
         "tests/python/unit/time/test_compiled_control_n8.py": {
           "cases": 24,
-          "phase_seconds": 15.04,
-          "session_seconds": 16.52
+          "phase_seconds": 6.55,
+          "session_seconds": 7.2
         }
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_compiled_control_n8_native.py": "23938764040aa52eeb64f7a0201a71d5e7cc233b3594defa2fe9a05b209e8bd5",
-        "tests/python/unit/time/test_compiled_control_n8.py": "463329f2ed93ac72395c4326ae50abe37fc45da2f63d1b0214f7010a1fa77d83"
+        "tests/python/unit/time/test_compiled_control_n8.py": "6ddbce08a96af26a7cbf00a2602ad7ee050211cca7bc49d8a1593884d726b8eb"
       }
     },
     "ci_20261107_n8_advance_outputs": {
-      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 3 Output modules (ROM-89), on the api_v02_20261013 tiers: 30 s for the source-only module, which elaborates M01 with Outputs a few times and generates its C++ without compiling, as the analogue test_compiled_control_n8.py; 600 s for the Dim2 native module, which compiles two M01 artifacts once per module (the traced route with four Outputs and without Outputs) and runs compiled runs of up to 80 steps to each output time, as the analogue test_compiled_control_n8_native.py. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 3 Output modules (ROM-89), on the api_v02_20261013 tiers: 30 s for the source-only module, which elaborates M01 with Outputs a few times and generates its C++ without compiling, as the analogue test_compiled_control_n8.py; 600 s for the Dim2 native module, which compiles two M01 artifacts once per module (the traced route with four Outputs and without Outputs) and runs compiled runs of up to 80 steps to each output time, as the analogue test_compiled_control_n8_native.py. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts. Refreshed on 08/11 with N8 lot 5 (#742's review point O2): the source hashes and the local receipts are those of the modules after lot 5, merged with the integration head acc5f62, one module per session on the same container.",
       "analogues": {
         "tests/python/integration/runtime/test_advance_outputs_n8_native.py": "tests/python/integration/runtime/test_compiled_control_n8_native.py",
         "tests/python/unit/time/test_advance_outputs_n8.py": "tests/python/unit/time/test_compiled_control_n8.py"
@@ -6708,19 +6708,19 @@
       },
       "local_receipts": {
         "tests/python/integration/runtime/test_advance_outputs_n8_native.py": {
-          "cases": 4,
-          "phase_seconds": 89.59,
-          "session_seconds": 90.39
+          "cases": 5,
+          "phase_seconds": 80.99,
+          "session_seconds": 82.03
         },
         "tests/python/unit/time/test_advance_outputs_n8.py": {
-          "cases": 8,
-          "phase_seconds": 3.71,
-          "session_seconds": 4.49
+          "cases": 9,
+          "phase_seconds": 4.02,
+          "session_seconds": 4.74
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_advance_outputs_n8_native.py": "7912a20beb7cbc72e78019779bbcb3d256269e3e6d287ee63d1b9b6fa111e3d1",
-        "tests/python/unit/time/test_advance_outputs_n8.py": "addb8823e6580318f7e52e4acc2bb92aab30a204dd4923c370437773e92c427a"
+        "tests/python/integration/runtime/test_advance_outputs_n8_native.py": "e73cd0badcb17e532767ce5b544ae3c7e314fccbf378ff69ff2b143a6b62343c",
+        "tests/python/unit/time/test_advance_outputs_n8.py": "616d55dbad07e77094ce76c0936456a11ce60c89bcbc15468065aced52b72723"
       }
     },
     "declared_hardware_profiles": {
@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1159,
+    "estimated_count": 1162,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6957,6 +6957,7 @@
       "tests/python/integration/runtime/test_fan_li15_full_eight_storage_runtime.py",
       "tests/python/integration/runtime/test_fan_li15_public_composition_runtime.py",
       "tests/python/integration/runtime/test_field_publication_instances_runtime.py",
+      "tests/python/integration/runtime/test_field_requests_n8_native.py",
       "tests/python/integration/runtime/test_final_condensed_uniform_runtime.py",
       "tests/python/integration/runtime/test_final_imex_original_reception.py",
       "tests/python/integration/runtime/test_final_strang_order_runtime.py",
@@ -7506,6 +7507,7 @@
       "tests/python/unit/numerics/test_finite_volume_composite.py",
       "tests/python/unit/numerics/test_flux_correction_v02.py",
       "tests/python/unit/numerics/test_hall_independent_oracle.py",
+      "tests/python/unit/numerics/test_index_sets_n10.py",
       "tests/python/unit/numerics/test_indicator_stencils.py",
       "tests/python/unit/numerics/test_lib_numerics_faces.py",
       "tests/python/unit/numerics/test_lib_numerics_reconstructions.py",
@@ -7772,6 +7774,7 @@
       "tests/python/unit/time/test_extension_closure_v14.py",
       "tests/python/unit/time/test_fibre_representation.py",
       "tests/python/unit/time/test_field_representation_v02.py",
+      "tests/python/unit/time/test_field_requests_n8.py",
       "tests/python/unit/time/test_field_sampling.py",
       "tests/python/unit/time/test_field_solve_outcome.py",
       "tests/python/unit/time/test_field_storage_topology_v02.py",
@@ -8097,7 +8100,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1224,
+    "total_files": 1227,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8378,8 +8381,54 @@
         "tests/python/unit/surface/test_su_t3_parity.py": "67515bc956d7c75900c7f48687bc7095ee43b0c34a0528e529e967fbe34d081c"
       }
     },
+    "ci_20261108_n8_field_requests": {
+      "basis": "Unmeasured CI scheduling estimates for the two N8 lot 5 field-request modules (ROM-89), on the api_v02_20261013 tiers: 120 s for the source-only module, which elaborates M08, M09, M10, M11 and M13 on the traced route and on b6, and generates and compares the C++ of all five twice without compiling, as the analogue test_traced_methods_n8.py on fewer profiles; 900 s for the Dim2 native module, which compiles the five profiles twice each (the traced route and the b6 reference), runs them bitwise against each other, and compiles M08 with three CG budgets for the failure-site sweep, in the 300/600/900/1200 s native profile tiers. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_field_requests_n8_native.py": "tests/python/integration/runtime/test_traced_methods_n8_native.py",
+        "tests/python/unit/time/test_field_requests_n8.py": "tests/python/unit/time/test_traced_methods_n8.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_field_requests_n8_native.py": 900,
+        "tests/python/unit/time/test_field_requests_n8.py": 120
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_field_requests_n8_native.py": {
+          "cases": 7,
+          "phase_seconds": 649.96,
+          "session_seconds": 650.71
+        },
+        "tests/python/unit/time/test_field_requests_n8.py": {
+          "cases": 44,
+          "phase_seconds": 71.44,
+          "session_seconds": 72.91
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_field_requests_n8_native.py": "fee1fc3604be24c7c00b5c7d3e27a557dfc348cfcd7be387da6364536cefa253",
+        "tests/python/unit/time/test_field_requests_n8.py": "2b534894c1b99057cea75f8323e0d7fc53c96287d98252ff12d4fdd466d9d43d"
+      }
+    },
+    "ci_20261107_n10_index_sets": {
+      "basis": "Unmeasured CI scheduling estimate for the N10 phase 1 lot 1a module (ROM-85, index sets of IR2, descriptors of IR3, value types of IR1): 30 s on the api_v02_20261013 source-only tier, twice the analogue test_typed_index_maps_n7.py: it resolves seven small programs (M01, M10, M12, M18, T06 and the T10 multi-block example) without compilation, runs one DM-T1 emission of M15 in a subprocess (no compiler) and runs no seeded samples. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/numerics/test_index_sets_n10.py": "tests/python/unit/numerics/test_typed_index_maps_n7.py"
+      },
+      "estimated_seconds": {
+        "tests/python/unit/numerics/test_index_sets_n10.py": 30
+      },
+      "local_receipts": {
+        "tests/python/unit/numerics/test_index_sets_n10.py": {
+          "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_index_sets_n10.py",
+          "passed": 16,
+          "seconds": 26.34
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/numerics/test_index_sets_n10.py": "dcf582c8da99d9b3a57a8a879db187f513b4d81118fcbc7f44876dbdc5095f7c"
+      }
+    },
     "n11_20261108_expression_closure": {
-      "basis": "Unmeasured CI scheduling estimates for N11 lot 1 (ROM-93, rule R7, gap C1), not CI receipts. The unit module traces small board models and plans without compiling, on the 15 s source-only tier of api_v02_20261013, as the analogue test_joint_rate_projection_balance.py. The native module compiles six artifacts (a source-only balance and a transport balance, each inline and declared, explicit Euler on 8 x 8; M03 stiffened-gas Euler with an inline radiative loss, inline and declared, SSPRK2 on 16 x 8) with cold caches, on the 600 s native tier, as the analogue test_balance_multiplicity_runtime.py. The local receipts are pytest session times on a 4-core container beside other local test sessions; they are not GitHub CI file wall times. Existing weights, the Python shard total, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for N11 lot 1 (ROM-93, rule R7, gap C1), not CI receipts. The unit module traces small board models and plans without compiling, on the 15 s source-only tier of api_v02_20261013, as the analogue test_joint_rate_projection_balance.py. The native module compiles six artifacts (a source-only balance and a transport balance, each inline and declared, explicit Euler on 8 x 8; M03 stiffened-gas Euler with an inline radiative loss, inline and declared, SSPRK2 on 16 x 8) with cold caches, on the 600 s native tier, as the analogue test_balance_multiplicity_runtime.py. The local receipts are pytest session times on a 4-core container beside other local test sessions; they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; the Python shard total is 142, which holds this native file beside the rest of the catalog under the 35 min budget; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/physics/test_rate_expression_closure_n11.py": "tests/python/unit/physics/test_joint_rate_projection_balance.py",
         "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": "tests/python/integration/runtime/test_balance_multiplicity_runtime.py"
@@ -9626,6 +9675,9 @@
   "tests/python/integration/amr/test_regrid_decision_native.py": 900,
   "tests/python/unit/surface/test_su_t2_refusals.py": 15,
   "tests/python/unit/surface/test_su_t3_parity.py": 60,
+  "tests/python/integration/runtime/test_field_requests_n8_native.py": 900,
+  "tests/python/unit/time/test_field_requests_n8.py": 120,
+  "tests/python/unit/numerics/test_index_sets_n10.py": 30,
   "tests/python/unit/physics/test_rate_expression_closure_n11.py": 15.0,
   "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": 600.0
 }

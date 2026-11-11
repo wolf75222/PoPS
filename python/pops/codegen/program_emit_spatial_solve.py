@@ -20,6 +20,7 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
     )
     from pops.codegen.program_emit_solve import (
         _append_solve_report_guard, _consumed_solve_action, _solve_stage_fraction,
+        gate_refusal_action_cpp,
     )
     from pops.codegen.program_emit_kernels import _coeff_cpp
 
@@ -94,6 +95,11 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
     lines.append("};")
     report, outcome = stem + "_report", stem + "_outcome"
     seed = "nullptr" if len(value.inputs) == 1 else "&(%s)" % variables[value.inputs[1].id]
+    gate_residual, gate_zero = stem + "_sv8_residual", stem + "_sv8_zero"
+    prelude += ["auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+                "ctx.scratch_state_like(ctx.state(%d)));" % (name, owner)
+                for name in (gate_residual, gate_zero)]
+    seed_value = "*" + gate_zero if len(value.inputs) == 1 else variables[value.inputs[1].id]
     action_kind, _ = _consumed_solve_action(program, value)
     action = "pops::SolveAction::kRejectAttempt" if action_kind == "reject_attempt" \
         else "pops::SolveAction::kFailRun"
@@ -102,6 +108,8 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
         "try {",
         "  %s = %s->solve(%s, %s, ctx.prepared_execution_lane());"
         % (report, workspace, seed, callback),
+        *_original_residual_gate(report, workspace, seed_value, callback, gate_residual, gate_zero,
+                                 options["tolerance"], gate_refusal_action_cpp(program, value)),
         "} catch (const pops::runtime::program::StepAttemptRejected& failure) {",
         "  %s.mark_failed(failure.status(), %s, failure.what());" % (report, action),
         "  %s.evaluations = %s->residual_evaluations();" % (report, workspace),
@@ -139,3 +147,35 @@ def emit_spatial_solve(program: Any, value: Any, base: Any, variables: Any, mode
     variables[value.id] = result
     from .program_emit_spatial_representation import emit_spatial_representation
     emit_spatial_representation(program, value, variables, model, lines, block_indices, target)
+
+
+def _original_residual_gate(report: str, workspace: str, seed: str, callback: str,
+                            residual: str, zero: str, tolerance: Any, action: str) -> list[str]:
+    """Spec 0.3 SV8: the stage's own residual decides, not the realization's status.
+
+    After a solved report, the generated residual F is evaluated at the seed (zero when the stage
+    has none) and at the candidate, and the candidate is refused unless ||F(q)|| <= atol + rtol *
+    ||F(q0)|| in the request's norm (the summed l2 norm, ``spatial_residual_l2``). The request of a
+    stage with untyped convergence stops at tolerance * max(1, ||F(q0)||), so atol = rtol =
+    tolerance; that bound is never below it. The candidate is evaluated last, so the evaluation
+    that the accepted faces follow is still the candidate's. Both evaluations run inside the
+    solve's failure handling and outside the realization's evaluation count.
+    """
+    tol = scalar_cpp(tolerance)
+    lane = "ctx.prepared_execution_lane()"
+    zero_seed = ["    pops::PureFieldAlgebra::zero_valid(*%s);" % zero] if seed == "*" + zero else []
+    return [
+        "  if (%s.solved_value_available()) {" % report,
+        "    pops::runtime::program::OriginalResidualGate gate;",
+        "    gate.atol = %s;" % tol,
+        "    gate.rtol = %s;" % tol,
+        *zero_seed,
+        "    %s(%s, *%s, 0);" % (callback, seed, residual),
+        "    gate.scale = pops::runtime::program::summed_l2_norm(*%s, %s);" % (residual, lane),
+        "    %s(%s->candidate(), *%s, 0);" % (callback, workspace, residual),
+        "    gate.norm = pops::runtime::program::summed_l2_norm(*%s, %s);" % (residual, lane),
+        "    (void)pops::runtime::program::apply_original_residual_gate(%s, gate, %s, "
+        "\"spatial_implicit\");" % (report, action),
+        "  }",
+    ]
+

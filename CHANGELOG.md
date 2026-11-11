@@ -27,6 +27,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `CoverageNotExact` lists every uncovered term with its line, and `rate.inline` selects the
   anonymous sources. A declared source whose name is not an identifier now runs in a source-only
   view.
+- ROM-85 (N10, phase 1, lot 1a): the vocabulary of the one array type (spec 0.3 DM1 to DM3, IR1 to
+  IR3). `pops._ir.arrays` holds the value types of IR1 (`Array(D, T)`, `Product`, `Variant`,
+  `Result`, `Iteration`, `Index`, scalars, and `Untyped` for what the plan cannot type yet);
+  `pops._ir.index_sets` the index-set constructors of IR2 with the descriptors of IR3, equal by
+  instance; `pops._ir.data_model` the support placement of each block (co-located blocks share one
+  set of cells, the endpoints of a cross-block interface get one each), a total `ir_type` and the
+  layout record of every data value at every depth of the Program, with its residency
+  (`data_layout_and_distribution`). Nothing in the builder or
+  the lowering reads them before the retyping (architecture test). `scripts/dmt1.py` and the
+  `DM-T1` workflow compare the generated C++ of the 40 API profiles between a pull request and its
+  merge base, without a native build; `scripts/n10_dispatch_inventory.py` lists the field-or-array
+  dispatch lines that the retyping moves.
 - ROM-87 (N3): reconstructions and slope limiters written in Python in `pops.lib.numerics`.
   `Reconstruct(rep, value)` builds a per-axis reconstruction from `value(c, a)` (spec 0.3
   sec. 4.3), `muscl(rep, limiter)` is the MUSCL face value of the catalogue, and `minmod`,
@@ -121,6 +133,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   receives the same bits, which can change with the rank count and the MPI reduction algorithm,
   and `tests/cpp/unit/parallel/test_reduction_collectives.cpp` checks the transport at two, three
   and four ranks.
+- ROM-90 (N9, lot 2): a Program mesh solve is decided by its original residual, outside its
+  realization (spec 0.3 SV8). After the generated `solve_linear` (prepared Krylov) or a uniform
+  `ImplicitStage` returns a solved candidate, the generated code measures the problem's own
+  residual R(u) = b - A(u) on that candidate and the request scale ||R(0)||, in the request norm,
+  and refuses the candidate unless ||R(u)|| <= atol + rtol * scale
+  (`include/pops/runtime/program/solve_gates.hpp`). A refusal is `safeguard_failure` with the
+  action the outcome's consumer selects, and the candidate rolls back like a failed solve; a gate
+  that cannot be measured refuses as `invalid_evaluation`. `benchmarks/n9_m08/` holds the M08
+  gap bench (generated CG against the native field solve, ABBA, OD9 threshold 0.9) and its ROMEO
+  job script (SV-T1).
 - Move the review material of the API 0.4.0 and API 0.2 work (`docs/development/api_040/`,
   `docs/review/`, `tests/review/`, `outputs/`, `docs/dev/`; 3,281 files) out of the code tree
   into an archive with a SHA-256 manifest, described in `docs/development/review_archive.md`.

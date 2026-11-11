@@ -18,10 +18,19 @@ to ``until``, is a frontier that the run lands on; a time within four units in t
 ``until`` is ``until``, as master merges a consumer deadline into the end of its run. Their values
 come back in ``RunResult.outputs``, one ``Publication`` per evaluation.
 
+The failure sites of the field requests of a method (T38, N8 lot 5) are classified: a retryable
+site (phase ``trial``) rejects the attempt, as an assessment does, and the next attempt repeats the
+proposal; when every attempt is spent the run raises ``BudgetExhausted`` tagged ``trial``, whose
+payload holds the ``SolveFailed`` of the last attempt as its ``cause``. A fixed site (phase
+``trial_failure``), whose dependency set excludes the proposal, ends the step after its first
+attempt, which is not counted as a rejection: the run raises ``SolveFailed`` tagged ``trial``. Both
+leave the accepted state of the step. The Auxiliary memory of the method (T27) is read after a run
+as ``continuation.memory``, slot one of the History ring of each member (``MemoryView``).
+
 This lot runs a Uniform artifact of one layout to the frontier ``until``. Writers and callbacks of
-Outputs, assessments other than ``finite()``, transforms, the T38 classification of trial failures (a
-trial failure still leaves the run as the native error that raised it, the accepted state
-restored), the continuation codec and the AMR and multi-layout routes are later lots of N8.
+Outputs, assessments other than ``finite()``, transforms, the classification of the other trial
+failures (a native error that no site classifies still leaves the run as that error, the accepted
+state restored), the continuation codec and the AMR and multi-layout routes are later lots of N8.
 """
 from __future__ import annotations
 
@@ -30,14 +39,16 @@ from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Any
 
-from pops.time._program.control import AdvanceControl
+from pops.time._program.control import AdvanceControl, memory_rings
 from pops.time._program.elaboration import Proposal
+from pops.time._program.memory import MemoryView
 from pops.time._program.outputs import EveryDt, OutputRegion, Product
 
 DEFAULT_MAX_STEPS = 1_000_000
 """``max_steps`` when a run leaves it out: master's (``_runtime_instance.py:1598@bb9``), CC14."""
 
-_REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET = 0, 1, 2
+_REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET, _TRIAL_FAILURE = 0, 1, 2, 3
+_TRIAL_PHASES = ("trial", "trial_failure")
 
 
 class RunFailed(RuntimeError):
@@ -55,11 +66,19 @@ class BudgetExhausted(RunFailed):
     """A budget of the run (``max_steps``) or of a step (``Retry.max_attempts``) was spent."""
 
 
+class SolveFailed(RunFailed):
+    """A field solve of the trial failed at a fixed failure site, which a retry cannot change
+    (T38, T39): the step ends after its first attempt."""
+
+
 class Failure:
     """The failure that ended a run: its T39 variant, its origin tag and its payload.
 
-    The origin is ``"assessment"`` when the assessments of one step rejected every attempt of
-    its budget, and ``None`` for ``max_steps``, a budget of the run rather than of an attempt.
+    The origin of a spent attempt budget is the phase of the rejections of its step:
+    ``"assessment"`` when the assessments rejected every attempt, ``"trial"`` when a retryable
+    failure site of the trial did (the payload's ``cause`` is the ``SolveFailed`` of the last
+    attempt). A ``SolveFailed`` at a fixed site is tagged ``"trial"``. ``max_steps``, a budget of
+    the run rather than of an attempt, has the origin ``None``.
     """
 
     __slots__ = ("variant", "origin", "payload")
@@ -79,12 +98,22 @@ class Failure:
 
     def describe(self) -> str:
         payload = self.payload
-        if payload["budget"] == "max_steps":
+        if self.variant is BudgetExhausted and payload["budget"] == "max_steps":
             return ("%s: max_steps=%d accepted steps ended the run at t=%r before until=%r"
                     % (self.variant.__name__, payload["max_steps"], payload["time"],
                        payload["until"]))
-        return ("%s: the assessments rejected all %d attempt(s) of the step from t=%r; last: %s"
-                % (self.variant.__name__, payload["attempts"], payload["time"],
+        if self.variant is SolveFailed:
+            if "attempts" not in payload:
+                return "%s at the trial site %s: %s" % (
+                    self.variant.__name__, payload["site"], payload["reason"])
+            return ("%s: the fixed failure site %s ended the step from t=%r after %d attempt(s), "
+                    "which a retry cannot change (T38): %s"
+                    % (self.variant.__name__, payload["site"], payload["time"],
+                       payload["attempts"], payload["reason"]))
+        rejecting = ("the assessments" if self.origin == "assessment"
+                     else "the trial site %s" % payload["cause"].payload["site"])
+        return ("%s: %s rejected all %d attempt(s) of the step from t=%r; last: %s"
+                % (self.variant.__name__, rejecting, payload["attempts"], payload["time"],
                    payload["rejection"]))
 
     def __repr__(self) -> str:
@@ -93,14 +122,18 @@ class Failure:
 
 
 class Continuation:
-    """The last accepted continuation: its time, its macro step and the next proposal (5.2)."""
+    """The last accepted continuation: its time, its macro step, the next proposal (5.2) and the
+    Auxiliary memory of the method (T27), a ``MemoryView`` of no member for a method without
+    memory."""
 
-    __slots__ = ("time", "macro_step", "proposal")
+    __slots__ = ("time", "macro_step", "proposal", "memory")
 
-    def __init__(self, time: float, macro_step: int, proposal: Proposal) -> None:
+    def __init__(self, time: float, macro_step: int, proposal: Proposal,
+                 memory: MemoryView | None = None) -> None:
         object.__setattr__(self, "time", time)
         object.__setattr__(self, "macro_step", macro_step)
         object.__setattr__(self, "proposal", proposal)
+        object.__setattr__(self, "memory", memory)
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("Continuation is immutable")
@@ -222,6 +255,16 @@ def _binary64(value: Any, where: str) -> float:
     return result
 
 
+def _trial_site(report: Mapping[str, Any]) -> dict:
+    """The site and the reason of the trial rejection of ``report``: its detail is the message of
+    the generated solve guard, ``<site> failed: <reason>`` (codegen/program_emit_solve.py)."""
+    site, separator, reason = report["rejection_detail"].partition(" failed: ")
+    if report["rejection_phase"] not in _TRIAL_PHASES or not separator:
+        raise RuntimeError("a trial rejection names its failure site: %r"
+                           % report["rejection_detail"])
+    return {"site": site, "reason": reason}
+
+
 class Simulation:
     """A bound artifact whose Program elaborates an Advance, run by ``System::run_advance``."""
 
@@ -310,8 +353,9 @@ class Simulation:
         finally:
             # A failure of a trial leaves the accepted state of its step; the next proposal is
             # the one of this run (T28, next=None).
-            self._continuation = Continuation(runtime.time(), runtime.macro_step(),
-                                              Proposal(dt))
+            time, macro_step = runtime.time(), runtime.macro_step()
+            self._continuation = Continuation(time, macro_step, Proposal(dt), MemoryView(
+                runtime, time, macro_step, memory_rings(self._control)))
         time = runtime.time()
         report = dict(report)
         published: dict[Any, list] = {region.output: [] for region in self._outputs}
@@ -329,9 +373,22 @@ class Simulation:
                 "budget": "max_steps", "max_steps": max_steps, "steps": report["steps"],
                 "time": time, "until": until})
         elif stop == _ATTEMPT_BUDGET:
-            failure = Failure(BudgetExhausted, "assessment", {
-                "budget": "max_attempts", "max_attempts": self._control.max_attempts,
-                "attempts": report["attempts"], "time": time, "rejection": report["rejection"]})
+            phase = report["rejection_phase"]
+            payload = {"budget": "max_attempts", "max_attempts": self._control.max_attempts,
+                       "attempts": report["attempts"], "time": time,
+                       "rejection": report["rejection"]}
+            if phase == "trial":
+                payload["cause"] = Failure(SolveFailed, "trial", _trial_site(report))
+            elif phase != "assessment":
+                raise RuntimeError("System::run_advance spent an attempt budget on a rejection "
+                                   "of phase %r" % phase)
+            failure = Failure(BudgetExhausted, phase, payload)
+        elif stop == _TRIAL_FAILURE:
+            if report["rejection_phase"] != "trial_failure":
+                raise RuntimeError("System::run_advance ended a step at a fixed failure site "
+                                   "without its phase")
+            failure = Failure(SolveFailed, "trial", dict(
+                _trial_site(report), time=time, attempts=report["attempts"]))
         elif stop != _REACHED or time != until:
             raise RuntimeError("System::run_advance returned without reaching its frontier")
         result = RunResult(
@@ -352,4 +409,4 @@ class Simulation:
 
 
 __all__ = ["BudgetExhausted", "Continuation", "DEFAULT_MAX_STEPS", "Failure", "Publication",
-           "RunFailed", "RunResult", "RunState", "Simulation"]
+           "RunFailed", "RunResult", "RunState", "Simulation", "SolveFailed"]

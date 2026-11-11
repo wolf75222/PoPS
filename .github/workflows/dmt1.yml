@@ -1,0 +1,89 @@
+name: DM-T1
+
+# Spec 0.3 DM-T1 (section 10) stays in CI (section 16.12): the generated C++ of the 40 API
+# profiles, the Program unit and one model unit per block, compared byte for byte between the
+# head of a pull request and its merge base. No native build: scripts/dmt1.py captures every unit
+# where the real path hands it to the compiler. The 29 mesh profiles are gated, the 11 array
+# profiles reported. A pull request that changes kernels on purpose declares the profiles that
+# change by adding their ids to tests/dmt1_declared_changes.txt; only the lines it adds count,
+# and the job fails on any undeclared difference of a gated profile (N10, ROM-85).
+on:
+  pull_request:
+    paths:
+      - 'python/pops/_ir/**'
+      - 'python/pops/codegen/**'
+      - 'python/pops/time/**'
+      - 'examples/api_v02/**'
+      - 'scripts/dmt1.py'
+      - 'tests/dmt1_declared_changes.txt'
+      - '.github/workflows/dmt1.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: dmt1-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dmt1:
+    name: ubuntu-latest / DM-T1 generated C++ identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install the source-only dependencies
+        run: pip install --upgrade pip numpy
+
+      - name: Prepare the merge base
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          else
+            base=$(git rev-parse HEAD^1)
+          fi
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+          git worktree add --detach "$RUNNER_TEMP/base" "$base"
+          # The base may predate the script: the head's capture runs on both trees.
+          cp scripts/dmt1.py "$RUNNER_TEMP/base/scripts/dmt1.py"
+          git diff "$base"...HEAD -- tests/dmt1_declared_changes.txt \
+            | sed -n 's/^+\([^+].*\)$/\1/p' > "$RUNNER_TEMP/declared.txt"
+          echo "declared by this change:"; cat "$RUNNER_TEMP/declared.txt"
+
+      - name: Emit the units of the head and of the base
+        run: |
+          python3 scripts/dmt1.py emit "$RUNNER_TEMP/head.jsonl" > "$RUNNER_TEMP/head.log" 2>&1 &
+          head_pid=$!
+          (cd "$RUNNER_TEMP/base" && python3 scripts/dmt1.py emit "$RUNNER_TEMP/base.jsonl") \
+            > "$RUNNER_TEMP/base.log" 2>&1 &
+          base_pid=$!
+          status=0
+          wait "$head_pid" || status=1
+          wait "$base_pid" || status=1
+          tail -n 45 "$RUNNER_TEMP/head.log" "$RUNNER_TEMP/base.log"
+          exit "$status"
+
+      - name: Compare
+        run: |
+          python3 scripts/dmt1.py compare "$RUNNER_TEMP/base.jsonl" "$RUNNER_TEMP/head.jsonl" \
+            --declared "$RUNNER_TEMP/declared.txt"
+
+      - name: Keep the digests
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dmt1-digests
+          path: |
+            ${{ runner.temp }}/head.jsonl
+            ${{ runner.temp }}/base.jsonl
+          if-no-files-found: ignore
