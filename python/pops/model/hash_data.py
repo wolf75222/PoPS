@@ -143,7 +143,7 @@ def _function_identity(function: Any, active: frozenset[int]) -> Any:
         "kind": "function",
         "module": module,
         "qualname": qualname,
-        "code": _code_identity(code),
+        "code": _code_identity(_without_docstring(code, function.__doc__)),
         "defaults": canonical_hash_data(
             function.__defaults__, where="operator body defaults"),
         "kwdefaults": canonical_hash_data(
@@ -183,6 +183,45 @@ def _callable_reference(value: Any) -> Any:
     if callable(value) and not isinstance(value, type):
         return {"kind": "callable_instance_reference", "class": _type_identity(type(value))}
     raise TypeError("recursive operator body dependency is not a supported callable")
+
+
+def _without_docstring(code: types.CodeType, docstring: Any) -> types.CodeType:
+    """Return @p code as compiled without its docstring (CC2: documentation is not identity).
+
+    CPython 3.11 to 3.13 (checked) store a function docstring as ``co_consts[0]``, and a function
+    without one keeps ``None`` there, adding a needed ``None`` later in first-use order. On another
+    layout the fold finds no match and the identity stays exact. When the bytecode never loads
+    slot 0, the docstring is replaced by ``None`` and a later ``None`` slot is folded into slot 0,
+    so the constants and bytecode equal those of the same body without the docstring. A docstring
+    that the body also loads as a literal, or an instruction with an extended argument, keeps the
+    code unchanged: the identity then stays exact rather than guessed.
+    """
+    import dis
+
+    constants = code.co_consts
+    if not isinstance(docstring, str) or not constants or constants[0] != docstring \
+            or type(constants[0]) is not str:
+        return code
+    loads = [instruction for instruction in dis.get_instructions(code)
+             if instruction.opcode in dis.hasconst]
+    if any(instruction.arg == 0 for instruction in loads):
+        return code
+    if any(instruction.opname == "EXTENDED_ARG" for instruction in dis.get_instructions(code)):
+        return code
+    none_slots = [index for index, value in enumerate(constants) if index and value is None]
+    if not none_slots:
+        return code.replace(co_consts=(None, *constants[1:]))
+    folded = none_slots[0]
+    remap = {index: (0 if index == folded else index - (index > folded))
+             for index in range(len(constants))}
+    bytecode = bytearray(code.co_code)
+    for instruction in loads:
+        if instruction.arg is None:
+            return code
+        bytecode[instruction.offset + 1] = remap[instruction.arg]
+    folded_constants = (None, *(value for index, value in enumerate(constants)
+                                if index not in (0, folded)))
+    return code.replace(co_consts=folded_constants, co_code=bytes(bytecode))
 
 
 def _code_identity(code: types.CodeType) -> Any:

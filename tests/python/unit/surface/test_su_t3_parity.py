@@ -199,9 +199,13 @@ def test_l1_gives_the_artifact_and_semantic_identity_of_the_hand_written_case(l1
 
 
 def test_l1_provenance_names_the_line_of_the_surface_case(l1):
-    operators = _artifact(l1["resolved"])["payload"]["blocks"]["advection_diffusion"]["model"][
-        "manifest"]["operators"]
+    # N11 lot 2a (CC2, C48): source spans are provenance, kept in the full snapshot and out of the
+    # artifact projection.
+    full = json.loads(l1["resolved"].snapshot._canonical_json)
+    operators = full["blocks"]["advection_diffusion"]["model"]["manifest"]["operators"]
     assert operators
+    assert all("provenance" not in operator for operator in _artifact(l1["resolved"])[
+        "payload"]["blocks"]["advection_diffusion"]["model"]["manifest"]["operators"])
     for operator in operators:
         primary = operator["provenance"]["primary"]
         assert (primary["file"], int(primary["line"]["$scalar"]["value"])) == (
