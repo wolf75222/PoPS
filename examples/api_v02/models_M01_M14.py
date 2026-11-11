@@ -31,6 +31,8 @@ from pops.projection import ConservativeCellAverage
 from pops.solvers import CG
 from pops.time import FailRun, FixedDt
 from pops.time._program.elaboration import Advance, Proposal, elaborate
+from pops.time._program.memory import Auxiliary, State
+from pops.time._program.outputs import Product
 from pops.time._program.traced_method import Candidate, method
 
 from .common import CaseSpec, non_owner_metrics, state_array
@@ -114,6 +116,39 @@ def _traced_ssprk2(case, block, state, flow, dt, *, name):
     """
     return elaborate(Advance(shu_osher_ssprk2(flow=flow)), case=case, state=block[state],
                      proposal=Proposal(dt), name=name)
+
+
+def recorded_ssprk2(memory, record):
+    """``shu_osher_ssprk2`` that returns an Auxiliary memory, ``record(U1)`` (N8 lot 5, T27).
+
+    ``memory`` declares the members, ``Product(stage1_state=State, ...)``, and ``record`` gives
+    their values from the stage-1 state of the attempt. No component of PoPS reads them; the
+    checks of the profiles read them after the run, as they read b6's History rings.
+    """
+    @method(memory=memory, role=Auxiliary())
+    def shu_osher_ssprk2_recorded(B, p, flow):
+        k0 = flow(B.state, B.time)
+        U1 = B.state + p.dt*k0
+        k1 = flow(U1, B.time + p.dt)
+        return Candidate(.5*B.state + .5*(U1 + p.dt*k1), B.time + p.dt, memory=record(U1))
+    return shu_osher_ssprk2_recorded
+
+
+def _traced_recorded_ssprk2(case, block, state, flow, dt, *, name, memory, record, b6):
+    """The traced route of the profiles whose stages request a field (N8 lot 5, T6).
+
+    ``b6`` is the evaluator of the b6 builder, kept verbatim: the parity tests select the b6
+    route, ``_ssprk2(case, block, state, b6, dt, name=name)``, by patching this function (MG1).
+    """
+    del b6
+    return elaborate(Advance(recorded_ssprk2(memory, record)(flow=flow)), case=case,
+                     state=block[state], proposal=Proposal(dt), name=name)
+
+
+def _stencil_label(program, suffix):
+    """``stage<k>_<suffix>``, k counting the stencils of the Program, as b6 names them."""
+    count = sum(1 for value in program._values if value.op == "stencil_flux_divergence")
+    return "stage%d_%s" % (count, suffix)
 
 
 def stencil_rate(prefix, flux):
@@ -567,21 +602,43 @@ def _poisson(case,phi,rhs):
         solver=CG(max_iter=2000,rel_tol=1.e-12,abs_tol=1.e-13)))
 
 
+def _publish_potential(observation,potential,unknown,carrier,potential_target):
+    """Publish the potential, or its gradient, of one observation to the carrier field inputs."""
+    if potential_target is None:
+        gradient=observation.gradient(unknown,dimension=2)
+        return observation.publish({(carrier,"potential_grad_x"):(gradient,0),
+                                    (carrier,"potential_grad_y"):(gradient,1)})
+    return observation.publish({(carrier,potential_target):potential})
+
+
 def _live_field_evaluator(field,phi,model,block,U,rate,*,potential_target=None):
     module=model.module;carrier=block[module.field_handle(module.field_spaces()["fields"])]
     def evaluate(program,state,point,label):
         observation=field.observe(program.solve(field,values={block[U]:state},at=point).consume(action=FailRun()))
         potential=observation[field[phi]]
-        if potential_target is None:
-            gradient=observation.gradient(field[phi],dimension=2)
-            context=observation.publish({(carrier,"potential_grad_x"):(gradient,0),
-                                         (carrier,"potential_grad_y"):(gradient,1)})
-        else:
-            context=observation.publish({(carrier,potential_target):potential})
+        context=_publish_potential(observation,potential,field[phi],carrier,potential_target)
         program.store_history(label+"_state",state,depth=1)
         program.store_history(label+"_potential",potential,depth=1)
         return rate(state,context)
     return evaluate
+
+
+def _field_flow(field,phi,model,block,rate,*,potential_target=None):
+    """The component of _live_field_evaluator: one request of ``field`` at the stage state (T6)."""
+    module=model.module;carrier=block[module.field_handle(module.field_spaces()["fields"])]
+    def flow(state):
+        request=field.at(state)
+        context=_publish_potential(request,request[field[phi]],field[phi],carrier,potential_target)
+        return rate(state,context)
+    return flow
+
+
+def _potential_memory(field,phi):
+    """The Auxiliary memory of the live-field profiles: the stage-1 state and its potential."""
+    memory=Product(stage1_state=State,stage1_potential=field[phi])
+    def record(state):
+        return Product(stage1_state=state,stage1_potential=field.at(state)[field[phi]])
+    return dict(memory=memory,record=record)
 
 
 def _field_metrics(initial,cells,lengths,*,rhs_offset,minimum=None):
@@ -612,7 +669,8 @@ def build_m08(cells=(16,16)):
     case=pops.Case("M08_live_guiding_center");block=case.block("fluid",model)
     plan=DiscretizationPlan();plan.rates.add(rate,_fv(flux,U));case.numerics(plan,block=block)
     field=_poisson(case,phi,U[0]);dt,end=.002,.004
-    _ssprk2(case,block,U,_live_field_evaluator(field,phi,model,block,U,rate),dt,name="M08_SSPRK2")
+    _traced_recorded_ssprk2(case,block,U,_field_flow(field,phi,model,block,rate),dt,name="M08_SSPRK2",
+        b6=_live_field_evaluator(field,phi,model,block,U,rate),**_potential_memory(field,phi))
     x,y=np.meshgrid(2*np.pi*(np.arange(cells[0])+.5)/cells[0],2*np.pi*(np.arange(cells[1])+.5)/cells[1])
     initial=(np.sinc(1/cells[0])*np.sin(x)+.3*np.sinc(2/cells[1])*np.cos(2*y))[None];subject=block[U]
     from .continuum_transport_oracles import guiding_center_ssprk2
@@ -643,7 +701,8 @@ def build_m09(cells=(16,16)):
     case=pops.Case("M09_complete_Euler_Poisson_PDE");block=case.block("fluid",model)
     plan=DiscretizationPlan();plan.rates.add(rate,_fv(flux,U));case.numerics(plan,block=block)
     field=_poisson(case,phi,U[0]-1);dt,end=.001,.002
-    _ssprk2(case,block,U,_live_field_evaluator(field,phi,model,block,U,rate),dt,name="M09_SSPRK2")
+    _traced_recorded_ssprk2(case,block,U,_field_flow(field,phi,model,block,rate),dt,name="M09_SSPRK2",
+        b6=_live_field_evaluator(field,phi,model,block,U,rate),**_potential_memory(field,phi))
     x,y=np.meshgrid(2*np.pi*(np.arange(cells[0])+.5)/cells[0],2*np.pi*(np.arange(cells[1])+.5)/cells[1])
     rho=1+.1*np.sinc(1/cells[0])*np.cos(x)+.05*np.sinc(1/cells[1])*np.sin(y)
     initial=np.stack((rho,.1*rho,.05*rho,2.5+.00625*rho));subject=block[U]
@@ -715,7 +774,12 @@ def build_m10(cells=(16,8)):
         program.store_history(label+"_state",state,depth=1)
         program.store_history(label+"_potential",potential,depth=1)
         return program.stencil_flux_divergence(label+"_fitted_face",state,flux=face,fields=(potential,))
-    _ssprk2(case,block,U,evaluate,dt,name="M10_SSPRK2")
+    def flow(state):
+        potential=field.at(state)[field[phi]]
+        return state.prog.stencil_flux_divergence(_stencil_label(state.prog,"fitted_face"),state,
+                                                  flux=face,fields=(potential,))
+    _traced_recorded_ssprk2(case,block,U,flow,dt,name="M10_SSPRK2",b6=evaluate,
+                            **_potential_memory(field,phi))
     x,y=np.meshgrid((np.arange(cells[0])+.5)*lengths[0]/cells[0],
                     (np.arange(cells[1])+.5)*lengths[1]/cells[1])
     initial=(1+.1*np.sinc(1/cells[0])*np.cos(x)+.04*np.sinc(1/cells[1])*np.sin(y))[None]
@@ -799,7 +863,12 @@ def build_m11(cells=(12, 8)):
         program.store_history(label+"_state",state,depth=1)
         program.store_history(label+"_potential",potential,depth=1)
         return program.stencil_flux_divergence(label+"_mass_flux",state,flux=flux,fields=(potential,))
-    _ssprk2(case,block,U,evaluate,dt,name="M11_SSPRK2")
+    def flow(state):
+        potential=field.at(state)[field[phi]]
+        return state.prog.stencil_flux_divergence(_stencil_label(state.prog,"mass_flux"),state,
+                                                  flux=flux,fields=(potential,))
+    _traced_recorded_ssprk2(case,block,U,flow,dt,name="M11_SSPRK2",b6=evaluate,
+                            **_potential_memory(field,phi))
     x,y=np.meshgrid((np.arange(cells[0])+.5)*lengths[0]/cells[0],
                     (np.arange(cells[1])+.5)*lengths[1]/cells[1])
     rho0=.2+.01*np.sinc(1/cells[0])*np.cos(x)

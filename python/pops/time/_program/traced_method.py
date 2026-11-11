@@ -47,6 +47,7 @@ from fractions import Fraction
 from typing import Any, NoReturn
 
 from pops._ir.symbolic import SymbolicTruthValueError
+from pops.time._program.product import Product
 from pops.time.points import Clock, StagePoint, TimePoint
 from pops.time.value_metadata import CoeffPolynomial, _exact_number
 from pops.time.values import ProgramValue, _Affine, _Coeff
@@ -74,6 +75,80 @@ class NotYetElaborated(NotImplementedError):
     """A construct of section 5 that this elaborator does not lower yet; the message names the issue that does."""
 
     code = "not_yet_elaborated"
+
+
+# --- method memory (T27, CN4, C51; N8 lot 5) ------------------------------------------------
+# The declaration side of ``method(memory=..., role=...)``; ``memory.py`` holds the runtime side
+# (``MemoryView``, ``MemoryUndefined``) and re-exports these names.
+
+class _StateType:
+    """``State``: the type placeholder of section 5.2, resolved to the type of ``B.state``."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "State"
+
+
+State = _StateType()
+
+
+class Auxiliary:
+    """``Auxiliary()``: the CN4 role of a memory that a rejection may change and that no
+    scientific claim reads (T37). Its argument (persisted) is gap C46, not elaborated here."""
+
+    __slots__ = ()
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if args or kwargs:
+            raise NotYetElaborated("Auxiliary(...): the arguments of Auxiliary (gap C46) are "
+                                   "elaborated with the continuation of G07")
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is Auxiliary
+
+    def __hash__(self) -> int:
+        return hash(Auxiliary)
+
+    def __repr__(self) -> str:
+        return "Auxiliary()"
+
+
+def _is_field_unknown(value: Any) -> bool:
+    """A qualified field unknown, ``field[unknown]``: a field Handle that is not the field."""
+    from pops.model import Handle
+    from pops.problem.handles import FieldHandle
+
+    return isinstance(value, Handle) and value.kind == "field" \
+        and not isinstance(value, FieldHandle)
+
+
+def declared_memory(memory: Any, role: Any) -> tuple:
+    """The members ``((name, type), ...)`` of ``method(memory=..., role=...)``, checked."""
+    if memory is None:
+        if role is not None:
+            raise TypeError("method(role=...) states the role of a memory; this method declares "
+                            "none")
+        return ()
+    if type(memory) is not Product or not len(memory):
+        raise TypeError("method(memory=...) is a Product of member types, "
+                        "Product(name=State, ...), got %r" % (memory,))
+    if role is None:
+        raise NotYetElaborated(
+            "method(memory=...) without role= is a Scientific memory (roles of section 2.6), "
+            "which enters B and needs a startup (CN6); this lot elaborates "
+            "role=Auxiliary() only (gap C51)")
+    if type(role) is not Auxiliary:
+        raise NotYetElaborated("method(role=%r): this lot elaborates the role Auxiliary() of a "
+                               "method memory only (CN4, gap C51)" % (role,))
+    members = []
+    for name, kind in memory.items():
+        if kind is not State and not _is_field_unknown(kind):
+            raise TypeError(
+                "method(memory=...): member %r has the type %r; this lot takes State or the "
+                "qualified field unknown that the member observes, field[unknown]" % (name, kind))
+        members.append((name, kind))
+    return tuple(members)
 
 
 # --- exact expansions -------------------------------------------------------------------------
@@ -177,12 +252,41 @@ class _Trace:
         self.evaluations: list = []   # (ordinal, component, stage ordinal)
         self.tolerated: list = []     # (where, weight sum) of binary64 weights within 1e-12
         self.state_atom = _Atom("B.state")
+        self.evaluation: _Evaluation | None = None   # the component evaluation in progress
+        self.requests: dict = {}      # T7 key -> FieldRequest (field_requests.py)
+        self.request_ids: set = set()  # every node that a field request of the trace emitted
+        self.request_reads: dict = {}  # node id -> (FieldRequest, unknown) of each read
+        self.body_requests = 0
 
     def require_active(self, what: str) -> None:
         if not self.active:
             raise ClosedBodyViolation(
                 "%s was traced by a method whose trace has ended; a method body reads only B, p "
                 "and its components (T33)" % what)
+
+
+class _Evaluation:
+    """The component evaluation in progress: what ``field.at(U)`` reads from the trace (T6)."""
+
+    __slots__ = ("index", "component", "state", "given", "point", "first", "reused")
+
+    def __init__(self, index: int, component: str, state: Any, given: Any, point: Any,
+                 first: int) -> None:
+        self.index = index
+        self.component = component
+        self.state = state      # the TracedField that the evaluation reads
+        self.given = given      # its builder value, the state the component is given
+        self.point = point      # the stage point of the evaluation
+        self.first = first      # the first SSA id of the evaluation
+        self.reused: set = set()  # nodes of the requests that this evaluation made or reused
+
+
+_TRACES: list = []
+
+
+def _active_trace() -> _Trace | None:
+    """The method trace whose body or component runs now, if any."""
+    return _TRACES[-1] if _TRACES and _TRACES[-1].active else None
 
 
 # The tables of a Program that a closed body changes only through its Candidate (T33):
@@ -657,14 +761,20 @@ class _Component:
         value, materialized = self._value_at(state, point, ordinal, time.c)
         trace.stages.append((ordinal, time.c, materialized))
         before, first = _guarded_tables(program), program._next_id
-        rate = self._evaluate(value)
+        current = _Evaluation(evaluation, self._name, state, value, point, first)
+        trace.evaluation = current
+        try:
+            rate = self._evaluate(value)
+        finally:
+            trace.evaluation = None
         changed = _changed_tables(before, _guarded_tables(program))
         if changed:
             raise ClosedBodyViolation(
                 "the component %r changed the %s of its Program: a component evaluates a rate, "
                 "and publishes no state, history or step control outside the Candidate (T33)"
                 % (self._name, ", ".join(changed)))
-        _require_rate(program, rate, self._name, _issued_since(program, first), value)
+        _require_rate(program, rate, self._name, _issued_since(program, first), value,
+                      requests=trace.request_ids, reused=current.reused)
         trace.evaluations.append((evaluation, self._name, ordinal))
         atom = _Atom("%s#%d" % (self._name, evaluation), evaluation)
         return TracedField(trace, rate, ((atom, _ONE),))
@@ -716,9 +826,23 @@ def _held_values(node: Any) -> Any:
             yield from _held_values(item)
 
 
-def _require_rate(program: Any, rate: Any, component: str, created: list, given: Any) -> None:
+# The vocabulary of a field solve, which a component reaches through field.at(U) only (T6).
+_FIELD_SOLVE_OPS = frozenset((
+    "field_problem_load", "field_problem_coefficients", "matrix_free_operator", "solve_linear",
+    "solve_outcome", "solve_outcome_component", "field_component",
+    "field_publication",
+))
+
+
+def _require_rate(program: Any, rate: Any, component: str, created: list, given: Any, *,
+                  requests: Any = frozenset(), reused: Any = frozenset()) -> None:
     """What a component returns: rates of its Program that this evaluation computed from the
-    state ``given`` and at its point, without reading the step size (T33, T4)."""
+    state ``given`` and at its point, without reading the step size (T33, T4).
+
+    The nodes of field requests (``requests``, T6) are placed by PoPS at the stage of the
+    evaluation, with b6's base point for the matrix-free operator and its apply body: they are
+    exempt from the time rule. The nodes of the requests that this evaluation made or reused
+    (``reused``) count as given, since T7 proves a reused request identical."""
     terms = (list(rate.terms) if isinstance(rate, _Affine)
              else [(rate, None)] if isinstance(rate, ProgramValue) else None)
     if not terms or any(not (isinstance(value, ProgramValue) and value.is_field())
@@ -745,7 +869,14 @@ def _require_rate(program: Any, rate: Any, component: str, created: list, given:
             "the component %r returned a rate that this evaluation did not compute, such as a "
             "rate kept from an earlier evaluation: a component evaluates a rate at the state and "
             "time it is given (T33, T4)" % component)
+    manual = sorted({value.name for value in created
+                     if value.op in _FIELD_SOLVE_OPS and value.id not in requests})
+    if manual:
+        raise ClosedBodyViolation(
+            "the component %r solves or observes a field itself (%s): a component requests a "
+            "field with field.at(U) (T6)" % (component, ", ".join(manual)))
     computed.add(given.id)
+    computed |= set(reused)
     outside = sorted({read.name for value in created
                       for read in (*value.inputs, *_held_values(value.attrs))
                       if read.id not in computed})
@@ -754,7 +885,8 @@ def _require_rate(program: Any, rate: Any, component: str, created: list, given:
             "the component %r read %s, which it was not given and did not compute: a component "
             "evaluates a rate from the state it is given (T33, T4)" % (component, ", ".join(outside)))
     elsewhere = [value.name for value in created
-                 if value.point is not None and value.point != given.point]
+                 if value.point is not None and value.point != given.point
+                 and value.id not in requests]
     if elsewhere:
         raise ClosedBodyViolation(
             "the component %r evaluated %s at another time than the state it is given: a "
@@ -784,9 +916,12 @@ class Candidate:
             _refuse_foreign(time, "Candidate(time=...)")
             raise TypeError("Candidate(time=...) takes a time of the attempt, B.time + c*p.dt")
         state._same_trace(time, "Candidate(state, time)")
+        if memory is not None:
+            if type(memory) is not Product:
+                raise TypeError("Candidate(memory=...) is a Product of the members that the "
+                                "method declares, Product(name=value, ...), got %r" % (memory,))
         for label, value, owner in (
                 ("increment", increment, "the increment records of section 8"),
-                ("memory", memory, "method memory (section 9)"),
                 ("observations", observations, "candidate observations"),
                 ("evidence", evidence, "candidate evidence"),
                 ("interval_output", interval_output, "interval outputs")):
@@ -812,10 +947,13 @@ class MethodTrace:
     """
 
     __slots__ = ("name", "components", "stages", "evaluations", "increment", "candidate",
-                 "tolerated")
+                 "tolerated", "memory", "requests")
 
     def __init__(self, name: str, components: tuple, stages: tuple, evaluations: tuple,
-                 increment: tuple, candidate: Any, tolerated: tuple = ()) -> None:
+                 increment: tuple, candidate: Any, tolerated: tuple = (), memory: tuple = (),
+                 requests: tuple = ()) -> None:
+        self.memory = memory        # ((name, declared type, value), ...) of the Candidate
+        self.requests = requests    # the FieldRequests of the attempt, in order (T6)
         self.name = name
         self.components = components
         self.stages = stages
@@ -862,10 +1000,14 @@ class SpecializedMethod:
                  for name, evaluate in zip(self.method.component_names, self.components,
                                            strict=True)]
         before = _guarded_tables(program)
+        _TRACES.append(trace)
         try:
             candidate = self.method.body(_Continuation(trace, state), _ProposalView(trace), *views)
+            memory = _candidate_memory(self.method, trace, candidate) \
+                if isinstance(candidate, Candidate) else ()
         finally:
             trace.active = False
+            _TRACES.remove(trace)
         changed = _changed_tables(before, _guarded_tables(program))
         if changed:
             raise ClosedBodyViolation(
@@ -887,20 +1029,20 @@ class SpecializedMethod:
                               at=temporal.next.point)
         _require_state(value, "Candidate(state=...) is a state")
         return MethodTrace(self.name, tuple(self.method.component_names), tuple(trace.stages),
-                           tuple(trace.evaluations), increment, value, tuple(trace.tolerated))
+                           tuple(trace.evaluations), increment, value, tuple(trace.tolerated),
+                           memory, tuple(trace.requests.values()))
 
 
 class Method:
     """A recorded method body ``f(B, p, *components) -> Candidate``; calling it specializes it."""
 
-    __slots__ = ("body", "name", "component_names", "memory", "policies")
+    __slots__ = ("body", "name", "component_names", "memory", "policies", "role", "members")
 
-    def __init__(self, body: Callable, *, memory: Any = None, policies: Any = None) -> None:
+    def __init__(self, body: Callable, *, memory: Any = None, policies: Any = None,
+                 role: Any = None) -> None:
         if not callable(body):
             raise TypeError("method(f): f must be a function f(B, p, *components)")
-        if memory is not None:
-            raise NotYetElaborated("method(memory=...): method memory (section 9, T27) is "
-                                   "elaborated by a later lot of N8")
+        members = declared_memory(memory, role)
         if policies:
             raise NotYetElaborated("method(policies=...): memory policies (CN5, CN7) are "
                                    "elaborated by a later lot of N8")
@@ -916,6 +1058,8 @@ class Method:
         self.component_names = tuple(parameter.name for parameter in parameters[2:])
         self.memory = memory
         self.policies = policies
+        self.role = role
+        self.members = members
 
     def __call__(self, *components: Any, **named: Any) -> SpecializedMethod:
         names = self.component_names
@@ -937,8 +1081,59 @@ class Method:
         return SpecializedMethod(self, tuple(bound[key] for key in names))
 
 
-def method(f: Callable | None = None, *, memory: Any = None, policies: Any = None) -> Any:
-    """Record ``f(B, p, *components) -> Candidate`` as a method (5.2); usable as ``@method``."""
+def method(f: Callable | None = None, *, memory: Any = None, policies: Any = None,
+           role: Any = None) -> Any:
+    """Record ``f(B, p, *components) -> Candidate`` as a method (5.2); usable as ``@method``.
+
+    ``memory=Product(name=T, ...)`` with ``role=Auxiliary()`` declares the method memory that its
+    Candidate returns (T27, CN4; ``role=`` is gap C51), see ``memory.py``."""
     if f is None:
-        return lambda body: Method(body, memory=memory, policies=policies)
-    return Method(f, memory=memory, policies=policies)
+        return lambda body: Method(body, memory=memory, policies=policies, role=role)
+    return Method(f, memory=memory, policies=policies, role=role)
+
+
+def _candidate_memory(method: Method, trace: _Trace, candidate: Candidate) -> tuple:
+    """The members of ``candidate.memory``, checked against the declaration of ``method``."""
+    members = method.members
+    memory = candidate.memory
+    if not members:
+        if memory is not None:
+            raise TypeError("the method %r returns Candidate(memory=...) but declares no memory; "
+                            "write method(memory=Product(...), role=...)" % method.name)
+        return ()
+    if memory is None or list(memory) != [name for name, _ in members]:
+        raise TypeError("the method %r declares the memory %s; its Candidate returns %s"
+                        % (method.name, ", ".join(name for name, _ in members),
+                           "none" if memory is None else ", ".join(memory)))
+    result = []
+    for name, kind in members:
+        value = memory[name]
+        where = "Candidate(memory=...) member %r" % name
+        if kind is State:
+            if isinstance(value, ProgramValue) and value.prog is trace.program \
+                    and value.id in trace.request_reads:
+                raise TypeError("%s is a State, a traced state of the body, not the field "
+                                "observation %r" % (where, value.name))
+            if not isinstance(value, TracedField):
+                _refuse_foreign(value, where)
+                raise TypeError("%s is a State, a traced state of the body" % where)
+            if value._trace is not trace:
+                raise ClosedBodyViolation("%s is a state of another method trace (T33)" % where)
+            if value._value is None:
+                raise NotYetElaborated(
+                    "%s is a combination that no evaluation materialized; a memory never adds a "
+                    "stage" % where)
+            node = value._value
+        else:
+            read = trace.request_reads.get(getattr(value, "id", None)) \
+                if isinstance(value, ProgramValue) and value.prog is trace.program else None
+            if read is None:
+                _refuse_foreign(value, where)
+                raise ClosedBodyViolation(
+                    "%s is not a read of a field request of this attempt, field.at(U)[unknown] "
+                    "(T33)" % where)
+            if read[1] is not kind and read[1] != kind:
+                raise TypeError("%s observes %r, not the declared %r" % (where, read[1], kind))
+            node = value
+        result.append((name, kind, node))
+    return tuple(result)

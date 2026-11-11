@@ -124,6 +124,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   receives the same bits, which can change with the rank count and the MPI reduction algorithm,
   and `tests/cpp/unit/parallel/test_reduction_collectives.cpp` checks the transport at two, three
   and four ranks.
+- ROM-90 (N9, lot 2): a Program mesh solve is decided by its original residual, outside its
+  realization (spec 0.3 SV8). After the generated `solve_linear` (prepared Krylov) or a uniform
+  `ImplicitStage` returns a solved candidate, the generated code measures the problem's own
+  residual R(u) = b - A(u) on that candidate and the request scale ||R(0)||, in the request norm,
+  and refuses the candidate unless ||R(u)|| <= atol + rtol * scale
+  (`include/pops/runtime/program/solve_gates.hpp`). A refusal is `safeguard_failure` with the
+  action the outcome's consumer selects, and the candidate rolls back like a failed solve; a gate
+  that cannot be measured refuses as `invalid_evaluation`. `benchmarks/n9_m08/` holds the M08
+  gap bench (generated CG against the native field solve, ABBA, OD9 threshold 0.9) and its ROMEO
+  job script (SV-T1).
 - Move the review material of the API 0.4.0 and API 0.2 work (`docs/development/api_040/`,
   `docs/review/`, `tests/review/`, `outputs/`, `docs/dev/`; 3,281 files) out of the code tree
   into an archive with a SHA-256 manifest, described in `docs/development/review_archive.md`.
