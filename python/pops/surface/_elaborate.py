@@ -41,7 +41,7 @@ from pops.projection import ConservativeCellAverage
 from pops.time._program import elaboration as _n8
 
 from ._derive import derivative, unit_flux
-from ._expr import Arith, Call, is_number, text
+from ._expr import Arith, Call, Predicate, is_number, text
 from ._geometry import FRAME_AXES, Box, Coordinate, MathConstant
 from ._method import MethodValue, _Trace, specialize, translate
 from ._model import (
@@ -221,8 +221,13 @@ class _Elaboration:
 
     # The model.
 
-    def lower(self, value: Any) -> Any:
-        """The b6 expression of a value of the model."""
+    def lower(self, value: Any, inputs: dict | None = None) -> Any:
+        """The b6 expression of a value of the model; ``inputs`` gives the b6 expressions of the
+        reads of the entities of a scheme, inside the body of a scheme (lot 2)."""
+        if inputs is not None:
+            scheme = self._scheme_value(value, inputs)
+            if scheme is not None:
+                return scheme
         if is_number(value):
             return _number(value)
         if isinstance(value, MathConstant):
@@ -239,7 +244,7 @@ class _Elaboration:
             raise NotYetElaborated("the coordinate %s read in a value of the model" % value,
                                    "a later lot of N15 with the coordinate fields of G03")
         if isinstance(value, Arith):
-            args = [self.lower(arg) for arg in value.args]
+            args = [self.lower(arg, inputs) for arg in value.args]
             if value.op == "neg":
                 return -args[0]
             left, right = args
@@ -247,14 +252,46 @@ class _Elaboration:
                     "*": lambda: left * right, "/": lambda: left / right,
                     "**": lambda: left ** right}[value.op]()
         if isinstance(value, Call) and value.word == "abs":
-            return abs(self.lower(value.args[0]))
+            return abs(self.lower(value.args[0], inputs))
         if isinstance(value, Call) and value.word in ("exp", "expm1", "log", "sqrt", "sin", "cos"):
-            return getattr(_pm, value.word)(self.lower(value.args[0]))
+            return getattr(_pm, value.word)(self.lower(value.args[0], inputs))
         if isinstance(value, Term):
             raise NotYetElaborated("the term %s read in the value of another" % value, _LATER,
                                    site=value.site)
         raise NotYetElaborated("%s in a value of the model" % text(value),
                                "N11 (expression closure, C1)")
+
+    def _scheme_value(self, value: Any, inputs: dict) -> Any:
+        """The words that only the body of a scheme lowers in this lot: the reads of its entities,
+        ``where`` and its comparisons, ``largest`` and ``smallest`` (b6 ``where``, ``maximum`` and
+        ``minimum``, whose derivative stays the one of b6). ``None`` for every other value."""
+        from ._scheme import SchemeLeaf, is_radius_pair
+
+        if isinstance(value, SchemeLeaf):
+            if value.key in inputs:
+                return inputs[value.key]
+            return self.lower(value.expansion, inputs)
+        if ("speed",) in inputs and is_radius_pair(value):
+            return inputs[("speed",)]
+        if isinstance(value, Predicate):
+            if value.op not in ("<", "<=", ">", ">="):
+                raise NotYetElaborated("%s in the body of a scheme" % text(value), _LATER)
+            left, right = (self.lower(arg, inputs) for arg in value.args)
+            return {"<": lambda: left < right, "<=": lambda: left <= right,
+                    ">": lambda: left > right, ">=": lambda: left >= right}[value.op]()
+        if isinstance(value, Call) and value.word == "where":
+            predicate, then, otherwise = value.args
+            then_value, otherwise_value = self.lower(then, inputs), self.lower(otherwise, inputs)
+            return _pm.where(self.lower(predicate, inputs), lambda: then_value,
+                             lambda: otherwise_value)
+        if isinstance(value, Call) and value.word in ("largest", "smallest"):
+            fold = _pm.maximum if value.word == "largest" else _pm.minimum
+            items = [self.lower(arg, inputs) for arg in value.args]
+            result = items[0]
+            for item in items[1:]:
+                result = fold(result, item)
+            return result
+        return None
 
     def code(self, value: Any) -> str:
         """The b6 spelling of a value, for the report."""
@@ -414,9 +451,13 @@ class _Elaboration:
                 slope = derivative(term.value, term.quantity) if isinstance(term, Flux) else None
                 speed = unit_flux(term.value, term.quantity) if isinstance(term, Flux) else None
                 realization = scheme.realize(TermView(term, terms[term], states[term.quantity],
-                                                      slope=slope, unit_flux=speed))
+                                                      slope=slope, unit_flux=speed,
+                                                      lower=self.lower))
                 plan.rates.add(view, realization)
                 choices = [Choice("scheme", scheme, "stated")]
+                choices.extend(Choice("option %s" % name, value, origin)
+                               for name, value, origin in getattr(scheme, "option_choices",
+                                                                  list)())
                 if speed is not None:
                     choices.append(Choice("speed", "s = F(1)·n = %s" % text(speed), "derived"))
                 self.rows.append(Row(

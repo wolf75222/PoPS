@@ -1,7 +1,7 @@
 {
  "source": {
   "spec": "pops_api_spec_v0_3.md",
-  "sha256": "e55e5757141925e4c5f4e04a4f9348b70c187c0f98969b85e3272f031083937a",
+  "sha256": "f4a01da779124367f56670cf0e366fa8945cfbd4af4c66667b776ef965d5a3cc",
   "sections": [
    {
     "section": "2.6.2",
@@ -28,14 +28,14 @@
     "section": "2.6.8",
     "lines": [
      737,
-     932
+     934
     ]
    },
    {
     "section": "2.6.9",
     "lines": [
-     933,
-     1098
+     935,
+     1100
     ]
    }
   ],
@@ -272,7 +272,9 @@
   "Program",
   "Project",
   "PropertyNotDerived",
+  "Q",
   "Quadrature",
+  "R",
   "Realizable",
   "RealizationMismatch",
   "Recompute",
@@ -424,6 +426,7 @@
   "coarse_fine_faces",
   "coarsen",
   "coarser",
+  "coefficient",
   "collision",
   "collisions",
   "column_indices",
@@ -463,6 +466,7 @@
   "ddt",
   "debye_length",
   "decide",
+  "decode",
   "def",
   "default",
   "defect",
@@ -509,6 +513,7 @@
   "eliminate",
   "ell",
   "elliptic",
+  "encode",
   "end",
   "energy",
   "eps",
@@ -867,6 +872,7 @@
   "repair",
   "replace_contribution",
   "represent",
+  "representation",
   "require",
   "require_success",
   "resources",
@@ -1000,6 +1006,7 @@
   "term",
   "terms",
   "then",
+  "theta",
   "threads",
   "through",
   "tile",

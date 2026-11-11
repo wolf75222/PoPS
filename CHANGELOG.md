@@ -18,6 +18,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-98 (N15, lot 2): `@pops.scheme` with the entities `face`, `cell`, `term` and `axis` of
+  spec 0.3, 2.6.4 (rows 377 and 702 of 2.6). A scheme records its options at its call and runs
+  when `pops.Numerics` receives it, once per key and once per axis, so a refusal names the line of
+  its body and of `Numerics` (SU5). A `FaceFlux` under a flux lowers to the b6 `riemann.User` face
+  (`face.left(u)`, `face.right(u)`, `face.normal`, `dot(term.law(...), face.normal)` as `fL`/`fR`,
+  `largest` of the two spectral radii as `s`; stability `abs(speed)`, or `s` without `speed=`); a
+  `Reconstruct` lowers to `reconstruction.User` with `formal_order` the number of cells read, a
+  bound of its stencil that `pops.inspect` reports as not claimed. `pops.surface.discrete` holds
+  `FaceFlux`, `Reconstruct`, `spectral_radius`, `slowest_speed`, `fastest_speed`, `kinds` and
+  `forms` (`NormalComponent`, renamed from `NormalVelocity` with the spec of 11/11), the other
+  builders and reductions refused with their lot. `pops.math` elaborates `largest`, `smallest` and
+  `dot(term.law(...), face.normal)` in a scheme; `term.expect` compares exact normal forms (CC2).
+  The library words take `reconstruction=` a cell scheme, and `upwind(speed=f)`, f a function of
+  `face`, is `fluxes.upwind`. SU-T3 compares each with the case written by hand for b6, and CF4 a
+  scheme in the arithmetic of `fluxes.rusanov` with that face node for node.
 - ROM-93 (N11 lot 1): the right-hand side of a balance is a free algebra (spec 0.3 R7, gap C1).
   `ddt(U) == -div(F) + k*u*(1 - u)` declares each term-free operand as the anonymous source
   `<rate>_inline_<k>` of the balance, with its exact coefficient folded in, so it lowers on the

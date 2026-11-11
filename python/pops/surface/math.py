@@ -5,7 +5,8 @@ This lot elaborates the field algebra (``+ - * / **``, unary minus, ``abs``, ``p
 exact), the elementary functions that the expressions of b6 lower (``exp``, ``expm1``, ``log``,
 ``sqrt``, ``sin``, ``cos``), the differential words of a balance (``ddt``, ``grad``, ``div``) and
 the predicate words, whose refusals SU4 and SU11 state (``where``, ``equal``, ``all_of``,
-``any_of``, ``none_of``). Every other word of 2.6.3 is importable and refuses its call with
+``any_of``, ``none_of``), and, in the body of a scheme (lot 2), ``largest``, ``smallest`` and
+``dot(term.law(...), face.normal)``. Every other word of 2.6.3 is importable and refuses its call with
 ``NotYetElaborated``, which names the lot that elaborates it, ``curl`` and ``outflow`` included:
 CF2 admits the definition of a word of 2.6.3 in this module, by a top-level ``def`` or assignment,
 and refuses the word everywhere else (FC2, R20).
@@ -35,8 +36,8 @@ _TRACES = "a later lot of N15 with the boundary relations of G04"
 _LATER = {
     "log1p": _N11, "cbrt": _N11, "sign": _N11, "clamp": _N11, "tan": _N11, "atan": _N11,
     "atan2": _N11, "sinh": _N11, "cosh": _N11, "tanh": _N11, "erf": _N11, "erfc": _N11,
-    "largest": _N11, "smallest": _N11, "vector": _N11, "component": _N11, "unit": _N11,
-    "identity": _N11, "dot": _N11, "outer": _N11, "contract": _N11, "transpose": _N11,
+    "vector": _N11, "component": _N11, "unit": _N11,
+    "identity": _N11, "outer": _N11, "contract": _N11, "transpose": _N11,
     "matrix_trace": _N11, "determinant": _N11, "inverse": _N11, "solve_small": _N11,
     "symmetric_eigen": _N11, "norm": _N11, "reflect": _N11, "sum_over": _N11,
     "derivative": _N11, "jvp": _N11, "vjp": _N11,
@@ -163,6 +164,35 @@ def _combination(word: str) -> _Any:
 all_of, any_of, none_of = (_combination(word) for word in ("all_of", "any_of", "none_of"))
 
 
+def _extremum(word: str) -> _Any:
+    @_surface_entry
+    def extremum(values: _Any) -> _Expr:
+        if isinstance(values, tuple):
+            raise TypeError("%s takes a list of values, %s([a, b]); a tuple is a point, a size or "
+                            "an interval (SU14)" % (word, word))
+        if not isinstance(values, list) or not values:
+            raise TypeError("%s takes a nonempty list of values, %s([a, b])" % (word, word))
+        return _Call(word, tuple(_value(item, word) for item in values))
+
+    extremum.__name__ = extremum.__qualname__ = word
+    extremum.__doc__ = ("``%s([a, b, ...])``, pointwise; lot 2 of N15 lowers it in the body of a "
+                        "scheme (b6 ``%s``), its derivative being the lot 2 of N11 (2.6.3)."
+                        % (word, "maximum" if word == "largest" else "minimum"))
+    return extremum
+
+
+largest, smallest = (_extremum(word) for word in ("largest", "smallest"))
+
+
+@_surface_entry
+def dot(a: _Any, b: _Any) -> _Any:
+    """``dot(a, b)``; lot 2 of N15 elaborates ``dot(term.law(...), face.normal)``, the normal
+    component of the flux of the key in a face scheme, and leaves the others to N11 (2.6.3)."""
+    from ._scheme import dot as _dot
+
+    return _dot(a, b)
+
+
 def _later(word: str, owner: str) -> _Any:
     def later(*args: _Any, **kwargs: _Any) -> _Any:
         raise _NotYetElaborated("the word %s of pops.math" % word, owner).with_traceback(None)
@@ -181,7 +211,7 @@ outflow = _later("outflow", _TRACES)
 
 __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
     "Fraction", "pi", "infinity", "ddt", "grad", "div", "curl", *_ELEMENTARY, "where", "equal",
-    "all_of", "any_of", "none_of", "outflow", *_LATER]
+    "all_of", "any_of", "none_of", "largest", "smallest", "dot", "outflow", *_LATER]
 
 
 def __getattr__(name: str) -> _Any:

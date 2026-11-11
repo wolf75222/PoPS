@@ -170,11 +170,13 @@ _PY_FAILURE_HELPER = re.compile(r"^_?(warn|fail|error|raise|reject|refuse|abort)
 # A refusal table of the surface (§21.7, CF2): in the package of the surface (SURFACE_PACKAGE), a
 # dictionary bound to a name _EARLIER or _EARLIER_<WHAT>, whose keys are the spellings of earlier
 # texts that the surface refuses and whose values are their messages, each a string or a call that
-# builds the refusal (SpellingRefusal(...)). The whole table is user-facing error text. A table with
+# builds the refusal (SpellingRefusal(...)); or bound to a name _LATER_<WHAT>, whose keys are the
+# words of 2.6.4 that the surface refuses with NotYetElaborated (P13) and whose values are the
+# sentences that name the lot that elaborates them (N15 lot 2, review of #760, R3). The whole table is user-facing error text. A table with
 # any other value is code, and so is a table under another name: a dictionary of names to names is
 # a route table, so a value that is a bare or dotted name (``"laplacian_kernel"``, ``"pops.x"``) is
 # not a message.
-_PY_REFUSAL_TABLE = re.compile(r"^_EARLIER(_[A-Z0-9]+)*$")
+_PY_REFUSAL_TABLE = re.compile(r"^(_EARLIER(_[A-Z0-9]+)*|_LATER(_[A-Z0-9]+)+)$")
 _PY_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 SURFACE_PACKAGE = "python/pops/surface/"
 

@@ -46,13 +46,15 @@ class TermView:
     state handle of its quantity; ``coefficient`` the k of a diffusive flux F = -k grad(u).
     ``slope`` is dF/du, the wave speed that R9 derives and the elaborated flux carries, or
     ``None`` when this lot derives none; ``unit_flux`` is F(1) when F = F(1) u, else ``None``.
+    ``lower(value, inputs)`` is the b6 expression of a value of the model whose reads of the
+    entities of a scheme are given by ``inputs`` (``@pops.scheme``, lot 2).
     """
 
     __slots__ = ("term", "kind", "quantity", "value", "elaborated", "state", "coefficient",
-                 "slope", "unit_flux", "site")
+                 "slope", "unit_flux", "site", "lower")
 
     def __init__(self, term: Term, elaborated: Any, state: Any, slope: Any = None,
-                 unit_flux: Any = None) -> None:
+                 unit_flux: Any = None, lower: Any = None) -> None:
         self.term = term
         self.kind = term.kind
         self.quantity = term.quantity
@@ -63,10 +65,18 @@ class TermView:
         self.slope = slope
         self.unit_flux = unit_flux
         self.site = term.site
+        self.lower = lower
 
     def reads_quantity(self, value: Any) -> bool:
         """Whether a value reads a quantity of the model, so varies with the state."""
         return any(isinstance(node, Quantity) for node in walk(value))
+
+    def face_function(self, function: Any, where: str, reconstructed: bool = False) -> Any:
+        """A plain function of ``face`` given as an option, ``upwind(speed=f)``, run on the face
+        of the key: the function of the b6 face of ``pops.lib.numerics.fluxes`` that lowers it."""
+        from ._scheme import face_function
+
+        return face_function(function, self, where, reconstructed)
 
     def reads_derivative(self, value: Any) -> bool:
         """Whether a value reads the derivative of a field, ``grad(...)``."""
@@ -171,6 +181,15 @@ class Numerics:
             raise LevelMismatch("schemes={%s: ...} holds a time method, a choice of the program"
                                 % key, write="the method in pops.Advance(...), and a scheme "
                                              "of the numerics under the key")
+        from ._scheme import SurfaceScheme, UserScheme
+
+        if isinstance(scheme, SurfaceScheme):
+            from ._refusal import NotAPopsOperation
+
+            raise NotAPopsOperation(
+                "schemes={%s: %s} holds the scheme uncalled; a call states its options and runs "
+                "nothing (SU5)" % (key, scheme.name), write="%s()" % scheme.name,
+                site=self.site)
         if not isinstance(scheme, SchemeValue):
             if callable(scheme):
                 name = getattr(scheme, "__name__", "the word")
@@ -185,6 +204,15 @@ class Numerics:
                 "%s covers the keys of kind %s, and %s is a %s" % (
                     scheme, " or ".join(scheme.kinds), key, key.kind),
                 write="a scheme of the kind of the key", site=scheme.site)
+        if isinstance(scheme, UserScheme):
+            # SU5: PoPS runs the scheme when pops.Numerics receives it; a refusal names the line of
+            # the scheme and the line of this call.
+            from ._refusal import SurfaceRefusal
+
+            try:
+                scheme.check_key(key)
+            except SurfaceRefusal as refusal:
+                raise refusal.traced_at(self.site).with_traceback(None) from None
 
     def scheme_of(self, term: Term) -> Any:
         for key, scheme in self.schemes:
