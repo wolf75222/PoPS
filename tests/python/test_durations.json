@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1165,
+    "estimated_count": 1166,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7732,6 +7732,7 @@
       "tests/python/unit/surface/test_su_t2_scheme_refusals.py",
       "tests/python/unit/surface/test_su_t3_parity.py",
       "tests/python/unit/surface/test_su_t3_schemes.py",
+      "tests/python/unit/surface/test_su_t3_schemes_2d.py",
       "tests/python/unit/time/test_actions_v14.py",
       "tests/python/unit/time/test_advance_outputs_n8.py",
       "tests/python/unit/time/test_affine_moment_explicit_basis.py",
@@ -8103,7 +8104,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1230,
+    "total_files": 1231,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8511,6 +8512,25 @@
       "source_sha256": {
         "tests/python/unit/surface/test_su_t2_scheme_refusals.py": "5e335719433a0393a230b5ec1705eeb48f3e77b4fe935615b56be742f91f3f8f",
         "tests/python/unit/surface/test_su_t3_schemes.py": "520e1feff79968f1dd72100fa808094be1cce5c17b3dd9236644e816cb0fd161"
+      }
+    },
+    "ci_20261111_n15_surface_lot2b": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only unit module of N15 lot 2b (ROM-98, schemes on a support of rank two), on the source-only tiers of api_v02_20261013 (5/15/60 s): 60 s, as the analogue test_su_t3_schemes.py, since it elaborates, validates and resolves six 2D cases and two 3D cases and their hand-written b6 forms and generates their C++ without compiling. The local receipt comes from pytest on a 4-core container; it is not a GitHub CI file wall time. Existing weights, the Python shard total, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_su_t3_schemes_2d.py": "tests/python/unit/surface/test_su_t3_schemes.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/surface/test_su_t3_schemes_2d.py": 60
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_su_t3_schemes_2d.py": {
+          "cases": 16,
+          "phase_seconds": 24.3,
+          "session_seconds": 25.3
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_su_t3_schemes_2d.py": "40ffa1d0fa7b379638c5b0c39479a6ca417eebdcded912d538582ce5b560a96d"
       }
     }
   },
@@ -9743,5 +9763,6 @@
   "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": 600.0,
   "tests/python/unit/surface/test_quadrature.py": 5,
   "tests/python/unit/surface/test_su_t2_scheme_refusals.py": 5,
-  "tests/python/unit/surface/test_su_t3_schemes.py": 60
+  "tests/python/unit/surface/test_su_t3_schemes.py": 60,
+  "tests/python/unit/surface/test_su_t3_schemes_2d.py": 60
 }

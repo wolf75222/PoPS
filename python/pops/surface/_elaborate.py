@@ -40,7 +40,6 @@ from pops.problem import Case as _Case
 from pops.projection import ConservativeCellAverage
 from pops.time._program import elaboration as _n8
 
-from ._derive import derivative, unit_flux
 from ._expr import Arith, Call, Predicate, is_number, text
 from ._geometry import FRAME_AXES, Box, Coordinate, MathConstant
 from ._method import MethodValue, _Trace, specialize, translate
@@ -149,6 +148,19 @@ def _dissipation(coefficient: Any) -> str:
     if _derived_sign(coefficient) == 1:
         return "established: %s > 0" % text(coefficient)
     return "not established: the sign of %s is not derived" % text(coefficient)
+
+
+def _per_axis(values: tuple | None) -> Any:
+    """A value per axis as the surface writes it: the scalar on a support of rank one, else
+    ``vector(...)`` of the components (lot 2b)."""
+    if values is None:
+        return None
+    return values[0] if len(values) == 1 else Call("vector", tuple(values))
+
+
+def _per_axis_text(values: tuple, spell: Any) -> str:
+    return spell(values[0]) if len(values) == 1 else \
+        "vector(%s)" % ", ".join(spell(value) for value in values)
 
 
 def _number(value: Any) -> Any:
@@ -375,20 +387,27 @@ class _Elaboration:
         return elaborated
 
     def flux(self, b6: Any, frame: Any, term: Flux, name: str, origin: str, state: Any) -> Any:
-        (axis,) = frame.axes
-        slope = derivative(term.value, term.quantity)
-        waves = None if slope is None else {axis: (self.lower(slope),)}
+        axes = frame.axes
+        slopes = term.slopes()
+        waves = None if slopes is None else {
+            axis: (self.lower(slope),) for axis, slope in zip(axes, slopes, strict=True)}
         handle = b6.flux(name, state=state, frame=frame,
-                         components={axis: (self.lower(term.value),)}, waves=waves)
+                         components={axis: (self.lower(component),) for axis, component
+                                     in zip(axes, term.components, strict=True)}, waves=waves)
         choices = [Choice("name", name, origin)]
         choices.append(Choice("waves", "none: dF/%s is not derived in this lot" % term.quantity
-                              if slope is None else "dF/d%s = %s" % (term.quantity, text(slope)),
-                              "derived"))
+                              if slopes is None else "dF/d%s = %s"
+                              % (term.quantity, _per_axis_text(slopes, text)), "derived"))
+        names = FRAME_AXES[:len(axes)]
         self.rows.append(Row(
             "model.flux(of=%s, value=%s)" % (term.quantity, text(term.value)), "model",
-            "%s = model.flux(%r, state=%s, frame=frame, components={x: (%s,)}, waves=%s)"
-            % (name, name, term.quantity.name, self.code(term.value),
-               "None" if slope is None else "{x: (%s,)}" % self.code(slope)), choices))
+            "%s = model.flux(%r, state=%s, frame=frame, components={%s}, waves=%s)"
+            % (name, name, term.quantity.name,
+               ", ".join("%s: (%s,)" % (axis, self.code(component))
+                         for axis, component in zip(names, term.components, strict=True)),
+               "None" if slopes is None else "{%s}" % ", ".join(
+                   "%s: (%s,)" % (axis, self.code(slope))
+                   for axis, slope in zip(names, slopes, strict=True))), choices))
         return handle
 
     def diffusive(self, b6: Any, term: DiffusiveFlux, name: str, origin: str, state: Any) -> Any:
@@ -448,8 +467,8 @@ class _Elaboration:
                 view = rates[balance].select(terms[term])
                 selections[term] = view
                 scheme = self.numerics.scheme_of(term)
-                slope = derivative(term.value, term.quantity) if isinstance(term, Flux) else None
-                speed = unit_flux(term.value, term.quantity) if isinstance(term, Flux) else None
+                slope = _per_axis(term.slopes()) if isinstance(term, Flux) else None
+                speed = _per_axis(term.unit_fluxes()) if isinstance(term, Flux) else None
                 realization = scheme.realize(TermView(term, terms[term], states[term.quantity],
                                                       slope=slope, unit_flux=speed,
                                                       lower=self.lower))
