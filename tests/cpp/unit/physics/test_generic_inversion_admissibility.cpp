@@ -4,6 +4,7 @@
 #include <pops/physics/admissibility/admissibility.hpp>
 #include <pops/physics/inversion/inversion.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
+#include <pops/runtime/recovery/device_candidate_recovery.hpp>
 
 #include <gtest/gtest.h>
 
@@ -317,6 +318,134 @@ TEST(GenericInversionAdmissibility, IdentityModelUsesTypedStateCandidateInEveryD
   exercise_identity_model_recovery<1>();
   exercise_identity_model_recovery<2>();
   exercise_identity_model_recovery<3>();
+}
+
+// A recovery that can refuse: density first, velocity = momentum / density, admissible only for a
+// positive density. A zero density gives an infinite velocity, which the finite constraint refuses.
+struct PositiveDensityModel {
+  using State = pops::StateVec<2>;
+  using Prim = pops::StateVec<2>;
+  static constexpr int dimension = pops::kNativeDimension;
+  static constexpr int n_vars = 2;
+  using pops_device_capture_members = pops::DeviceCaptureMembers<>;
+
+  POPS_HD Prim to_primitive(const State& state) const {
+    Prim primitive{};
+    primitive[0] = state[0];
+    primitive[1] = state[1] / state[0];
+    return primitive;
+  }
+  POPS_HD State to_conservative(const Prim& primitive) const {
+    State state{};
+    state[0] = primitive[0];
+    state[1] = primitive[0] * primitive[1];
+    return state;
+  }
+  POPS_HD bool recovery_admissible(const Prim& primitive, int* failing_component) const {
+    if (primitive[0] > pops::Real(0))
+      return true;
+    if (failing_component != nullptr)
+      *failing_component = 0;
+    return false;
+  }
+};
+
+// Cell kinds by ordinal: recovered, non-finite conservative, negative density, zero density.
+POPS_HD inline void census_cell_values(std::int64_t ordinal, pops::Real& density,
+                                       pops::Real& momentum) {
+  switch (ordinal % 5) {
+    case 1:
+      density = std::numeric_limits<pops::Real>::quiet_NaN();
+      momentum = pops::Real(1);
+      return;
+    case 2:
+      density = pops::Real(-1);
+      momentum = pops::Real(1);
+      return;
+    case 3:
+      density = pops::Real(0);
+      momentum = pops::Real(1);
+      return;
+    default:
+      density = pops::Real(2 + ordinal % 3);
+      momentum = pops::Real(3);
+  }
+}
+
+TEST(GenericInversionAdmissibility, DeviceCandidateCensusMatchesThePreparedHostRecovery) {
+  ensure_kokkos();
+  constexpr int D = pops::kNativeDimension;
+  pops::Extent<D> cells{}, ghosts{}, ranks_extent{};
+  for (int axis = 0; axis < D; ++axis) {
+    cells[axis] = 4;
+    ghosts[axis] = 1;
+    ranks_extent[axis] = 1;
+  }
+  const auto box = pops::Box<D>::from_extents(cells);
+  const auto layout = pops::mesh::BoxArray<D>::from_domain(box, cells);
+  const pops::mesh::RankSpace<D> ranks(pops::Index<D>{}, ranks_extent);
+  const auto distribution = pops::mesh::Distribution<D>::replicated(layout, ranks);
+  pops::MultiFab<D> candidate(layout, distribution, pops::Index<D>{}, 2, ghosts);
+  pops::MultiFab<D> active(layout, distribution, pops::Index<D>{}, 1, ghosts);
+  // Ghost cells hold NaN: the census reads valid cells only.
+  candidate.set_val(std::numeric_limits<pops::Real>::quiet_NaN());
+  active.set_val(pops::Real(1));
+  ASSERT_EQ(candidate.local_size(), 1u);
+  const pops::Box<D> valid = candidate.fab(0).box();
+  const pops::Index<D> lower = valid.lo;
+  const pops::Extent<D> extent = valid.extent();
+  const auto values = candidate.fab(0).view();
+  const auto mask = active.fab(0).view();
+  Kokkos::parallel_for(
+      "census-cells", Kokkos::RangePolicy<Kokkos::IndexType<std::int64_t>>(0, valid.numPts()),
+      KOKKOS_LAMBDA(const std::int64_t ordinal) {
+        const auto index = pops::detail::cell_index_from_ordinal(lower, extent, ordinal);
+        census_cell_values(ordinal, values(index, 0), values(index, 1));
+        // The negative-density cells are inactive.
+        mask(index) = ordinal % 5 == 2 ? pops::Real(0) : pops::Real(1);
+      });
+  Kokkos::fence();
+
+  // The reference: the prepared host recovery on each cell, after the finite check.
+  pops::PreparedModelVariableInversionRecovery<PositiveDensityModel> recovery(
+      PositiveDensityModel{});
+  pops::CandidateRecoveryCensus expected, expected_active;
+  for (std::int64_t ordinal = 0; ordinal < valid.numPts(); ++ordinal) {
+    pops::Real conservative[2]{};
+    census_cell_values(ordinal, conservative[0], conservative[1]);
+    const bool finite = std::isfinite(conservative[0]) && std::isfinite(conservative[1]);
+    const bool recovered = finite && recovery.recover(conservative).outcome.publication_permitted();
+    pops::CandidateRecoveryCensus cell;
+    cell.nonfinite_conservative = finite ? 0 : 1;
+    cell.unrecoverable = finite && !recovered ? 1 : 0;
+    expected.nonfinite_conservative += cell.nonfinite_conservative;
+    expected.unrecoverable += cell.unrecoverable;
+    if (ordinal % 5 != 2) {
+      expected_active.nonfinite_conservative += cell.nonfinite_conservative;
+      expected_active.unrecoverable += cell.unrecoverable;
+    }
+  }
+  const std::int64_t points = valid.numPts();
+  const auto kind_count = [points](std::int64_t kind) {
+    return points / 5 + (points % 5 > kind ? 1 : 0);
+  };
+  // Every kind is present and the host recovery refuses exactly the negative and zero densities.
+  ASSERT_GT(kind_count(3), 0);
+  EXPECT_EQ(expected.nonfinite_conservative, kind_count(1));
+  EXPECT_EQ(expected.unrecoverable, kind_count(2) + kind_count(3));
+  EXPECT_EQ(expected_active.unrecoverable, kind_count(3));
+
+  const auto check = pops::make_model_candidate_recovery_check<D>(PositiveDensityModel{});
+  const pops::CandidateRecoveryCensus all = check(candidate, nullptr);
+  EXPECT_EQ(all.nonfinite_conservative, expected.nonfinite_conservative);
+  EXPECT_EQ(all.unrecoverable, expected.unrecoverable);
+  const pops::CandidateRecoveryCensus masked = check(candidate, &active);
+  EXPECT_EQ(masked.nonfinite_conservative, expected_active.nonfinite_conservative);
+  EXPECT_EQ(masked.unrecoverable, expected_active.unrecoverable);
+
+  pops::MultiFab<D> narrow(layout, distribution, pops::Index<D>{}, 1, ghosts);
+  EXPECT_THROW((void)check(narrow, nullptr), std::invalid_argument);
+  EXPECT_THROW((void)check(candidate, &candidate), std::invalid_argument);
 }
 
 TEST(GenericInversionAdmissibility, DiagnosticAndScheduleCollisionsFailClosed) {

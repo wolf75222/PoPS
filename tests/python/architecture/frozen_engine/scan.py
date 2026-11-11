@@ -12,6 +12,11 @@ non-alphanumeric characters and at camel-case boundaries (``HLLCFlux`` -> ``hllc
 order or version number (``weno5``, ``ssprk2``). A term never matches a fragment of a longer word,
 so no pattern is wider than the name it refuses.
 
+CF2 is a tripwire. It reads words, so it finds a name, not a formula coded without its name, which
+CF4 finds by swapping bodies; the evidence of G3 is CF1, CF3, CF4 and CF6. The refused vocabulary is
+the closed, versioned file ``cf2_vocabulary.toml`` (review of 11/11, P8), which this module reads;
+each of its rows carries the finding that motivates it.
+
 The vocabulary refuses proper names (Rusanov, Poisson, Dirichlet), physical quantities and the
 machinery that selects them (the role enumeration, route tables and their switches: FC3, FC4), not
 category nouns (flux, limiter, reconstruction, Riemann problem, closure, moment). It also refuses
@@ -25,13 +30,15 @@ refused only as a whole identifier or string; a term inside a longer term is the
 rounding bound gamma_n, the slope of a level-set fit) are listed, with their reason, in
 ``GENERIC_SENSES`` below.
 
-Three rules of CF2 (amendment of 08/11 after the review of N15 lot 1) keep the scanner on the
+Two rules of CF2 (amendment of 08/11 after the review of N15 lot 1) keep the scanner on the
 knowledge it refuses. The words of ``pops.math`` that 2.6.3 lists are the algebra of the core: in
 the module ``pops.math`` the definition of such a word is admitted (``POPS_MATH_WORDS``), while its
 name stays refused as a selector, an emitter, a kernel or a route key, there and everywhere else.
 The refusal tables of the surface (§21.7), whose keys are refused spellings (``laplacian``,
-``cfl_guard``) and whose values are their messages, are user-facing error text. A compound that
-names a quadrature (``GaussHermite``) names the quadrature, not the closure of one of its words.
+``cfl_guard``) and whose values are their messages, are user-facing error text. The third rule of
+08/11, which read a compound naming a quadrature (``GaussHermite``) as the quadrature, is gone: the
+core knows ``pops.Quadrature`` only and a named rule lives in ``pops.lib.quadrature`` (P3, D0), so
+CF2 has no exception for the name of a rule.
 
 The module imports neither ``pops`` nor ``_pops``. ``python -m
 tests.python.architecture.frozen_engine.scan`` prints every occurrence in the format of
@@ -42,6 +49,7 @@ from __future__ import annotations
 import ast
 import bisect
 import dataclasses
+import hashlib
 import json
 import pathlib
 import re
@@ -548,117 +556,49 @@ def split_words(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------------------------
-# CF2 vocabulary (spec 0.3, section 15.3, FC2-FC4 and CF2).
-#
+# CF2 vocabulary (spec 0.3, section 15.3, FC2-FC4 and CF2): the closed, versioned file
+# cf2_vocabulary.toml (review of 11/11, P8). This module holds no word of its own.
+# ---------------------------------------------------------------------------------------------
+VOCABULARY_FILE = HERE / "cf2_vocabulary.toml"
+
+
+def load_vocabulary(path: pathlib.Path = VOCABULARY_FILE) -> dict:
+    """The parsed vocabulary file: its sections and its [[versions]]."""
+    return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+def vocabulary_digest(data: dict) -> str:
+    """The digest of a vocabulary as written, every section but ``version`` and ``versions``: the
+    digest that the [[versions]] entry of its version records."""
+    words = {key: value for key, value in data.items() if key not in ("version", "versions")}
+    canonical = json.dumps(words, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_VOCABULARY_DATA = load_vocabulary()
+VOCABULARY_VERSION = _VOCABULARY_DATA["version"]
 # Each row: (category, source rule, terms). A term is one word or a phrase of words written with
 # "-" ("crank-nicolson" matches the words crank, nicolson in a row); every word may carry a trailing
 # order or version number. A term marked "ident:" matches identifiers and paths only, never strings.
-# ---------------------------------------------------------------------------------------------
-CF2_VOCABULARY = (
-    ("role", "CF2 role vocabulary used as a selector; FC3",
-     "ident:variable-role ident:canonical-roles ident:role-of ident:roles-for"),
-    ("role", "CF2 role machinery behind the selector (VariableRole aliases VariableSemantic); "
-     "FC3, C3",
-     "ident:variable-semantic ident:variable-roles ident:component-role ident:role-key "
-     "ident:parse-role ident:role-token ident:role-canonical ident:role-from-name ident:role-name "
-     "ident:roles-csv ident:energy-role ident:role-index ident:require-density ident:from-semantic "
-     "ident:c-rho"),
-    ("role", "15.3 physical roles; FC3",
-     "momentum velocity pressure temperature enthalpy kinetic-energy internal-energy total-energy"),
-    ("model", "15.3 named models; CF2 model and family names",
-     "euler navier stokes poisson vlasov maxwell hall baer nunziato mhd boltzmann fokker planck "
-     "cahn hilliard burgers schrodinger pitaevskii"),
-    ("model", "15.3 named models: the transport, force and species routes of b6",
-     "isothermal compressible exb ex-b electrostatic drift-diffusion maxwellian potential-force "
-     "background-density multispecies ionization thermal species"),
-    ("model", "15.3 physical quantities and forces of named models",
-     "magnetic electric lorentz gravity gravitational charge-density electron ion sound-speed "
-     "speed-of-sound acoustic mach"),
-    ("closure", "15.3 equations of state and closures",
-     "equation-of-state eos ideal-gas adiabatic hyqmom qmom fan-li levermore maxent gaussian "
-     "hermite bgk"),
-    ("method", "15.3 named numerical fluxes and wave-speed estimates; CF2 named methods",
-     "rusanov hll hllc hlle hlld roe osher godunov lax-friedrichs lax-wendroff upwind harten "
-     "einfeldt davis"),
-    ("method", "15.3 named reconstructions or limiters; CF2 named limiters",
-     "muscl weno eno minmod superbee van-leer vanleer van-albada vanalbada koren monotonized "
-     "zhang"),
-    ("method", "15.3 named time schemes; CF2 named schemes",
-     "ssprk heun strang patankar bdf crank-nicolson imex dirk runge-kutta adams-bashforth "
-     "adams-moulton rosenbrock ars imexrk lie"),
-    ("method", "15.3 named discretizations; CF2 named methods",
-     "scharfetter gummel"),
-    # curl, like grad and div, is also a word of pops.math (2.6.3), whose definition there is
-    # admitted (POPS_MATH_WORDS); everywhere else, and as a selector, an emitter, a kernel or a
-    # route key, it is refused.
-    ("method", "15.3 named field operators; FC2", "laplacian curl gradient divergence"),
-    ("tagging", "15.3 named field operators in the refinement predicates of the tag-graph VM (C36)",
-     "gradient-above gradient-below discrete-gradient-stencil"),
-    # outflow, the empty relation, is the one word of pops.math among the boundary families (R20,
-    # SD43): its definition there is admitted (POPS_MATH_WORDS); its NoData form selects nothing.
-    ("boundary", "15.3 named boundary families",
-     "dirichlet neumann robin inflow outflow reflective slip foextrap no-flux zero-flux "
-     "constant-extrapolation"),
-    ("interpolation", "CF2 named coarse-fine, temporal or regrid interpolation (C43)",
-     "conservative-linear conservative-injection conservative-coarse-fine conservative-polynomial "
-     "linear-time-interpolation divergence-preserving node-multilinear linear-prolongation "
-     "coarse-fine-ghost-interpolation constant-injection linear-temporal-interpolation"),
-    ("approximation", "CF2 a named approximation of a history between two instants (T7)",
-     "linear-interpolation dense-output"),
-    ("controller", "15.3 named controllers; controllers are library functions (section 15, 5.11)",
-     "cfl courant"),
-    ("route", "FC4 a route table or switch keyed on named methods or models (C21)",
-     "ident:select-riemann ident:riemann-route ident:limiter-route ident:recon-route "
-     "ident:time-route ident:transport-route ident:source-route-id ident:parse-source-route "
-     "ident:source-route-tokens ident:elliptic-route ident:field-solver-route"),
-    ("constant", "15.3 physical constants; CF2 a physical constant in an ABI",
-     "gamma physical-default q-over-m four-pi-g vacuum-floor"),
-    # Solve algorithms are pops.lib.solve words (1.2, the table of 1.4, SV4). The generic ones
-    # that FC6 admits as qualified substitutions (Krylov methods, multigrid with its cycles and
-    # smoothers, FFT, dense factorization) may live in the native component tree, so they are
-    # refused in the core paths only (marked "core:"; IR24, CF0 placement list). The FC6b
-    # interfaces themselves (krylov_driver, multigrid_cycle, dense_banded_factorization) are not
-    # terms; the fft interface, once a core file declares it, is a GENERIC_SENSES entry.
-    ("solver", "1.2, 15.1, FC6: a generic solve algorithm in the core paths, which belongs in "
-     "pops.lib.solve or, as a qualified substitution, in the native component tree (IR24, SV12)",
-     "core:cg core:conjugate-gradient core:bicgstab core:bi-cg-stab core:gmres core:arnoldi "
-     "core:richardson core:chebyshev core:jacobi core:gauss-seidel core:geometric-mg core:fac "
-     "core:v-cycle core:vcycle core:fft core:fftw core:lu"),
-    ("solver", "1.2, SV4: a named solve algorithm that FC6 does not admit as a substitution "
-     "(Newton and its Armijo line search, fixed-point accelerations, Leja actions)",
-     "newton armijo picard anderson leja"),
-)
-
+CF2_VOCABULARY = tuple((row["category"], row["rule"], " ".join(row["words"]))
+                       for row in _VOCABULARY_DATA["terms"])
 # Exact string literals, compared whole and case-sensitively.
-# A primitive selected by its spelling (CF2, the "p" test) and the role tokens of b6
-# (python/pops/physics/aux.py) whose word also has a generic sense.
-EXACT_LITERALS = (
-    ("primitive", "CF2 a primitive selected by its spelling",
-     ("p", "rho", "rho_u", "rho_v", "rho_w", "rho_E", "rhou", "rhov", "rhow", "E", "vx", "vy",
-      "vz")),
-    ("role", "CF2 role vocabulary used as a selector; FC3", ("density", "energy")),
-    ("boundary", "15.3 named boundary families by their token", ("wall", "outlet", "inlet")),
-    ("method", "15.3 the monotonized-central limiter by its route token", ("mc",)),
-)
+EXACT_LITERALS = tuple((row["category"], row["rule"], tuple(row["strings"]))
+                       for row in _VOCABULARY_DATA["literals"])
 # Exact names, compared whole and case-sensitively with an identifier or a string literal: names
 # too short or too generic as words (MC, n0) that are knowledge only spelled exactly so. Each is
 # reported as `name`.
-EXACT_NAMES = (
-    ("role", "CF2 the members of the role enumeration; FC3",
-     ("Density", "Energy", "kDensity", "kEnergy")),
-    ("constant", "15.3 physical constants in an ABI (C20)", ("qom", "cs2", "n0", "rho0", "B0")),
-    ("method", "15.3 the monotonized-central limiter by its short name", ("MC", "kMc")),
-)
+EXACT_NAMES = tuple((row["category"], row["rule"], tuple(row["names"]))
+                    for row in _VOCABULARY_DATA["names"])
 # A component name built from a variable name and an axis name, the <name>_<axis> links of b6 (C19).
 AXIS_LINK = "name-axis-link"
-# Case and profile identifiers (15.3), as whole identifiers or strings: M01-M28, T01-T12. L1, L2 are
-# norms in the core (pops.linalg) and M00, M10, ... raw moments, so neither is refused.
-CASE_IDENTIFIER = re.compile(r"^(M(0[1-9]|1[0-9]|2[0-8])|T(0[1-9]|1[0-2]))$")
-# A term preceded by one of these words is another word: round_robin is a load-balancing order,
-# not the Robin boundary family, and GaussHermite is a quadrature (2.6.2), not the Hermite closure
-# (CF2: a compound that names a quadrature names the quadrature; GaussLegendre holds no term). (The
-# conjugate gradient is its own term, conjugate-gradient, which shadows the gradient operator.)
-NOT_AFTER = {"robin": frozenset({"round"}), "hermite": frozenset({"gauss"})}
+# Case and profile identifiers (15.3), as whole identifiers or strings.
+CASE_IDENTIFIER = re.compile(_VOCABULARY_DATA["case_identifier"]["pattern"])
+# A term preceded by one of these words is another word: round_robin is a load-balancing order, not
+# the Robin boundary family. (The conjugate gradient is its own term, conjugate-gradient, which
+# shadows the gradient operator.) No entry admits the name of a quadrature rule or of a base
+# dimension (D0, S3): the core names neither.
+NOT_AFTER = {row["term"]: frozenset(row["words"]) for row in _VOCABULARY_DATA["not_after"]}
 
 # The module pops.math: b6's module and the module of the surface (N15) that §21.7 makes pops.math.
 POPS_MATH_MODULES = ("python/pops/math.py", "python/pops/surface/math.py")
@@ -710,8 +650,8 @@ _EXACT_NAME = {name: (category, source)
 TERM_INFO = {term.label: (term.category, term.source) for term in VOCABULARY}
 TERM_INFO.update({'"%s"' % literal: info for literal, info in _EXACT.items()})
 TERM_INFO.update({"`%s`" % name: info for name, info in _EXACT_NAME.items()})
-TERM_INFO["case-identifier"] = ("case", "15.3 case or profile identifiers")
-TERM_INFO[AXIS_LINK] = ("name", "FC4 names are presentation: a <name>_<axis> link (C19)")
+for _key, _label in (("case_identifier", "case-identifier"), ("axis_link", AXIS_LINK)):
+    TERM_INFO[_label] = (_VOCABULARY_DATA[_key]["category"], _VOCABULARY_DATA[_key]["rule"])
 
 
 def _strip_order(word: str) -> str:

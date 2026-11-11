@@ -57,9 +57,9 @@ def test_moved_catalogs_are_gone_from_lib():
 
 def test_lib_keeps_only_preimplemented_public_contracts():
     # Implementations are grouped by public contract family; there is no second bundle DSL. Spec 0.3
-    # section 2.6.9 adds the library modules math, numerics, output and solve (test_lib_boundaries.py
-    # gate 2a), each a package or a single file.
-    modules = {"math", "numerics", "output", "solve"}
+    # section 2.6.9 adds the library modules math, numerics, output, quadrature (review of 11/11,
+    # P3) and solve (test_lib_boundaries.py gate 2a), each a package or a single file.
+    modules = {"math", "numerics", "output", "quadrature", "solve"}
     allowed = {"amr", "initial", "models", "time", "__init__.py", "__pycache__"} | modules \
         | {name + ".py" for name in modules}
     unexpected = []

@@ -123,6 +123,11 @@ def _measurement(n, levels):
     artifact = pops.compile(resolved)
     runtime = pops.bind(artifact, resources={"execution_context": artifact_execution_context(artifact)})
     assert runtime.n_levels() == levels
+    if levels == 1:
+        # Spec 0.3 SV8 (N9): one level runs the flat Krylov fallback of CompositeTensorFAC, whose
+        # solved candidate the original-residual gate decides before it is accepted.
+        generated = "\n".join(row.program._generated_cpp or "" for row in artifact.layout_programs)
+        assert generated.count("pops::runtime::program::apply_measured_original_residual_gate(") == 1
     boxes = list(runtime.patch_boxes())
     if levels == 2:
         fine_cells = sum(np.prod(np.array(upper)-lower+1) for level, lower, upper in boxes if level == 1)

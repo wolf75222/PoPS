@@ -13,6 +13,7 @@ from pops.lib.numerics import pointwise, hll
 from pops.lib.time import ssprk2, cfl_limit
 from pops.lib.output import hdf5
 from pops.lib.solve import newton, dense_lu
+from pops.lib.quadrature import GaussHermite, GaussLegendre
 
 CELLS, CFL, T_END = 200, 0.4, 0.5     # each a value chosen for the gallery
 
@@ -57,7 +58,7 @@ density = 1 + sin(2 * pi * x) / 2                # value chosen for the gallery
 program = pops.Program(
     advance=pops.Advance(ssprk2(rate=model), dt=cfl_limit(flux, cfl=CFL),
                          tolerance=pops.Tolerance(rtol=1e-10, atol=1e-12)),     # value chosen for the gallery
-    initial={mom: pops.project(pops.record(m0=density, m1=0, m2=density / 2), quadrature=pops.GaussLegendre(2)),
+    initial={mom: pops.project(pops.record(m0=density, m1=0, m2=density / 2), quadrature=GaussLegendre(2)),
              lam: pops.record(l0=log(density / sqrt(pi)), l1=0, l2=-1)},
     solvers={closure: newton(linear=dense_lu())},     # the Jacobian is exact unless stated (SU9)
 )
@@ -65,7 +66,7 @@ program = pops.Program(
 outputs = [pops.Output(pops.record(mom=mom), when=pops.every(time=0.1), write=hdf5("moment_closure.h5"))]
 
 case = pops.Case(model=model, numerics=numerics, program=program,
-                 layout={space: pops.Uniform(cells=CELLS), velocity: pops.GaussHermite(24)}, outputs=outputs)
+                 layout={space: pops.Uniform(cells=CELLS), velocity: GaussHermite(24)}, outputs=outputs)
 artifact = pops.compile(case, target=pops.OpenMP())     # value chosen for the gallery
 simulation = pops.bind(artifact)
 result = simulation.run(until=T_END)

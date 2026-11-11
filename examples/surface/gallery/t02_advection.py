@@ -3,6 +3,7 @@ from pops.math import *
 from pops.lib.numerics import upwind, muscl, vanleer, ghosts
 from pops.lib.time import ssprk2, cfl_limit
 from pops.lib.output import npz
+from pops.lib.quadrature import GaussLegendre
 
 NX, NY = 64, 64
 AX, AY = 1.0, 0.25
@@ -30,7 +31,7 @@ y = domain.y
 bump = FAR_FIELD + AMPLITUDE * exp(-BETA * ((x - X0)**2 + (y - Y0)**2))
 program = pops.Program(
     advance=pops.Advance(ssprk2(rate=model), dt=cfl_limit(advection, cfl=CFL, max_dt=MAX_DT)),
-    initial={u: pops.project(bump, quadrature=pops.GaussLegendre(1))},
+    initial={u: pops.project(bump, quadrature=GaussLegendre(1))},
 )
 outputs = [pops.Output(pops.record(u=u), when=[0.0, T_END],
                        write=npz("results/02_openmp_explicit_ssprk2.npz"))]

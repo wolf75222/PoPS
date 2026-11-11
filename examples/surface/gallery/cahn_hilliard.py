@@ -13,6 +13,7 @@ from pops.claims import Dissipates, Theorem
 from pops.lib.numerics import two_point
 from pops.lib.solve import newton, gmres
 from pops.lib.output import hdf5
+from pops.lib.quadrature import GaussLegendre
 
 square = pops.Box(x=pops.Periodic(0, 1), y=pops.Periodic(0, 1))
 
@@ -79,7 +80,7 @@ y = square.y
 program = pops.Program(
     advance=pops.Advance(eyre, dt=1e-4, tolerance=pops.Tolerance(rtol=1e-8, atol=1e-10)),
     initial={c: pops.project(sin(2 * pi * x) * sin(4 * pi * y) / 20 - cos(6 * pi * y) / 50,
-                             quadrature=pops.GaussLegendre(2))},
+                             quadrature=GaussLegendre(2))},
     solvers={eyre: newton(linear=gmres(restart=50))},
 )
 outputs = [pops.Output(pops.record(c=c, mu=mu), when=pops.every(time=0.01), write=hdf5("cahn_hilliard.h5")),

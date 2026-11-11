@@ -20,6 +20,11 @@ def test_hierarchy_krylov_delivers_only_after_success_and_keeps_provider_selecti
     assert begin < end
     between = source[begin:end]
     assert "solved_value_available()" in between
+    # Spec 0.3 SV8 (N9 lot 2): the flat Krylov fallback is gated on its original residual before
+    # the outcome is consumed, as on the uniform route.
+    gate = "pops::runtime::program::apply_measured_original_residual_gate(kr%d," % solve.id
+    assert between.count(gate) == 1
+    assert between.index(gate) < between.index("kr%d.consume(" % solve.id)
     assert "throw" in between
     assert "ctx.prepare_spatial_collectively([&]() {" in between
     assert "pops::PureFieldAlgebra::copy_allocated(delivered, *sf_sol%d);" % solve.id in source

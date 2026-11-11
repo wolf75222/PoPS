@@ -1,7 +1,8 @@
 """SU-T1 (spec 0.3, 2.6.7; SD79): the lint of the user surface, over the gallery and the library.
 
 The gallery of the surface (``examples/surface/gallery``, the cases and library drafts of
-``/mnt/project-files/dsl/cases/after/`` as R12c left them, pinned here by hash) and every module
+``/mnt/project-files/dsl/cases/after/`` as R12c left them, with the quadrature rules imported from
+``pops.lib.quadrature`` since the review of 11/11 (P3, D0); pinned here by hash) and every module
 of ``pops.lib`` that is written with the surface pass the lint of ``scripts/surface_lint.py``. One
 module is excepted where it reaches b6: ``pops.lib.numerics.schemes`` returns the b6 realization
 of each scheme word until the words are written with ``@pops.scheme`` (A4, the bridge of N15
@@ -29,21 +30,21 @@ SPEC.loader.exec_module(lint)
 
 GALLERY = ROOT / "examples" / "surface" / "gallery"
 GALLERY_SHA256 = {
-    "amr_advection.py": "fb58c00c569fb0760e5861bd3a435463fe56b18bb9e459b94459aba68e24e92e",
-    "cahn_hilliard.py": "32cab9d043a7f63dfdcd8fa15968bb8ec284f520f17e5b32b76751f78d9d8729",
-    "euler_gravity.py": "0cf9a8a7a57351cf23057e2ce83e34f4494aef684c18c5852000a2e7f806c8b0",
-    "l1_advection_diffusion.py": "044c5068dc794d4d06187d25e05af8a941592e2a2f5aafb86cae494aabe25c3e",
-    "l2_guiding_centre.py": "991cc89d4b5ff851525ec100a286826d91ad81614cd879b2a06822d9d2f1419c",
+    "amr_advection.py": "1455340c4808d75ed69256b137e6ec3d30c09c115fe49b194e81fcafadcf70fb",
+    "cahn_hilliard.py": "9652af2a0422745809c79937c9ece4d4a1fac2c385b44edfea25d532c5d9d3f6",
+    "euler_gravity.py": "94d3b6b61349584c0e9321466ee9733f7dabb33f9c56610781c36cf8a259964a",
+    "l1_advection_diffusion.py": "7d56e57c4610500d1a6cb09e9472b366936b3735e300c996f707e8e1998c4a26",
+    "l2_guiding_centre.py": "302dc251f447e7425b92d447afcc8d9040876cf1eee99bfa0fea4edc86d8d4fa",
     "l4_two_fluid_drag.py": "8b1a4dd29f75ba8632df993fcfbe2e43fa86c470b6833d9c573d02a008bf173b",
     "lib_methods.py": "a3f35db05eca230fef657f5e11b57d29c0d5b47aa65e39271d2dfb1c3b9fd8ae",
     "lib_models.py": "bfe1d3b06ba66b93d1850d32994b9d1357624adf0c3ead13d9ff9ece3a8be774",
     "lib_schemes.py": "9d249becb65e83a4655e28fd6dca110e1b238805fcc035755468c4d8696f46a9",
-    "m10_drift_diffusion.py": "e4cb3d1cbd29883b0ff1cb4c7e792b8f7f006970a859cb32dc6cd22aebd5ae31",
-    "m19_vlasov_bgk.py": "c0cb230c70792308f888bd7d30ca44419ba449c832174ec9c8c5d9f3dc154088",
+    "m10_drift_diffusion.py": "e90c3636f7ac4c65721937fa0b1520b797024dd3b3d886f306da2e796e9f1cec",
+    "m19_vlasov_bgk.py": "5aa4f38164b3fc1df744ad578d90e479ff688abe7cde4ad13ad2ad4578ba961a",
     "m26_aggregation_diffusion.py":
-        "5e508a7f22f08b34e9200b7af5aa58442d1e09f3d01b2a9fc3a5f93b61c06c2d",
-    "t02_advection.py": "8d72ab706fc85ea30d6545f5197a055fa487bf896057419ebd93a9f3d82765e3",
-    "t05_moment_closure.py": "2f31d68118385281a5b00143edf0e7f6c07e80ad2e42c94f257510820af575ba",
+        "0b765124007990d7449a21484c7b7fc052eaaa6c1feb6b5d5715c8ba2c328caf",
+    "t02_advection.py": "bd01e13a2fa9f47b3b2ac8cc6c721faefa5ee7792c90efb2f7e586b69c46c48e",
+    "t05_moment_closure.py": "5a1d193a9db9392ef41807d8e8f0282ba3d6fd98e41c7910304dbd38dcd4c615",
 }
 LIBRARY = ROOT / "python" / "pops" / "lib"
 # The bridge of N15 lot 1 (python/pops/surface/_numerics.py): the words that it imports to

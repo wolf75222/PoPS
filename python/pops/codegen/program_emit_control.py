@@ -392,11 +392,25 @@ def _statement_characters(entry):
     return count
 
 
+_RAW_LITERAL_PREFIXES = ("u8R", "uR", "UR", "LR", "R")
+
+
+def _opens_raw_literal(physical, index):
+    """Whether the double quote at ``index`` of a line opens a raw string literal."""
+    for prefix in _RAW_LITERAL_PREFIXES:
+        start = index - len(prefix)
+        if start >= 0 and physical.startswith(prefix, start) and not (
+                start and (physical[start - 1].isalnum() or physical[start - 1] == "_")):
+            return True
+    return False
+
+
 def _brace_depths(entries):
     """Effective brace depth before each entry and after the last; ``None`` where unscannable.
 
-    Comments, string and character literals, and the alternative branches of preprocessor
-    conditionals are skipped. A position inside a comment, a literal or a conditional has no depth.
+    Comments, string and character literals (raw literals included, which may span lines), and
+    the alternative branches of preprocessor conditionals are skipped. A position inside a
+    comment, a literal or a conditional has no depth.
     """
     depths, depth, conditionals, state = [], 0, [], None
     for entry in entries:
@@ -420,6 +434,12 @@ def _brace_depths(entries):
                     if physical.startswith("*/", index):
                         state = None
                         index += 1
+                elif state is not None and state.startswith(")"):
+                    # A raw literal ends at its own closing sequence; it has no escapes.
+                    end = physical.find(state, index)
+                    if end < 0:
+                        break
+                    state, index = None, end + len(state) - 1
                 elif state is not None:
                     if char == "\\":
                         index += 1
@@ -430,6 +450,13 @@ def _brace_depths(entries):
                 elif physical.startswith("/*", index):
                     state = "/*"
                     index += 1
+                elif char == '"' and _opens_raw_literal(physical, index):
+                    opening = physical.find("(", index + 1)
+                    delimiter = physical[index + 1:opening]
+                    if opening < 0 or len(delimiter) > 16 or any(
+                            letter in ' )\\\t\v\f' for letter in delimiter):
+                        return None
+                    state, index = ")" + delimiter + '"', opening
                 elif char == '"' or (char == "'" and not (index and physical[index - 1].isalnum())):
                     state = char
                 elif not any(conditionals):
@@ -441,6 +468,20 @@ def _brace_depths(entries):
     return depths
 
 
+def _ends_statement(entries, end):
+    """Whether the last code line before ``entries[end]`` ends with ``;`` or ``}``.
+
+    Blank, comment and preprocessor lines are passed over. A line that ends with a comment does
+    not qualify, which only moves a split to a later boundary.
+    """
+    for index in range(end - 1, -1, -1):
+        for physical in reversed(entries[index].split("\n")):
+            stripped = physical.strip()
+            if stripped and not stripped.startswith(("//", "#")):
+                return stripped.endswith((";", "}"))
+    return False
+
+
 def _chunk_step_body(lines, boundaries):
     """Split the step body into nested noinline functions at top-level operation boundaries.
 
@@ -448,9 +489,11 @@ def _chunk_step_body(lines, boundaries):
     the rest of the step. Every declaration therefore stays in scope for the rest of the step,
     statements run in the same order, locals are destroyed in the same reverse order, exceptions
     propagate unchanged and a return still ends the step, because every install entry places the
-    step body at the end of its native function. Only boundaries outside every brace qualify; a
-    body that cannot be scanned stays one function. The labels of a typed capture stay inside its
-    operation, so no split separates a ``goto`` from its label.
+    step body at the end of its native function. Only boundaries outside every brace and after a
+    line that ends a statement qualify, so no split can leave a statement open (an ``if`` without
+    its body would otherwise govern the rest of the step); a body that cannot be scanned stays one
+    function. The labels of a typed capture stay inside its operation, so no split separates a
+    ``goto`` from its label.
     """
     depths = _brace_depths(lines)
     if depths is None or depths[-1] != 0:
@@ -459,7 +502,8 @@ def _chunk_step_body(lines, boundaries):
     for boundary in boundaries:
         size += sum(_statement_characters(entry) for entry in lines[cursor:boundary])
         cursor = boundary
-        if size >= _STEP_CHUNK_CHARACTERS and boundary < len(lines) and depths[boundary] == 0:
+        if (size >= _STEP_CHUNK_CHARACTERS and boundary < len(lines) and depths[boundary] == 0
+                and _ends_statement(lines, boundary)):
             selected.append(boundary)
             size = 0
     if not selected:

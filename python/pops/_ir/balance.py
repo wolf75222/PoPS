@@ -114,7 +114,13 @@ class DiscreteAccumulationEquation:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class BalanceOccurrence:
-    """One signed occurrence; repeated payloads have distinct ordinal identities."""
+    """One signed occurrence; repeated payloads have distinct ordinal identities.
+
+    Two fields document the occurrence for refusals and inspection and enter no identity
+    (``to_data`` leaves them out): ``origin``, the Python line that wrote the occurrence into its
+    balance (a ``pops.provenance.SourceSpan``), and ``written``, for the anonymous source of an
+    inline operand (R7), the exact coefficient written before it was folded into the source's
+    value (``None`` for a declared term, whose coefficient is the one written)."""
 
     balance: Handle
     ordinal: int
@@ -122,11 +128,16 @@ class BalanceOccurrence:
     payload: Any
     coefficient: Any
     target: Handle
+    origin: Any = None
+    written: Any = None
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         from pops.model.handles import Handle
+        from pops.provenance import SourceSpan
 
+        if self.origin is not None and not isinstance(self.origin, SourceSpan):
+            raise TypeError("balance occurrence origin must be a SourceSpan or None")
         if not isinstance(self.balance, Handle) or self.balance.kind != "local_rate":
             raise TypeError("balance occurrence requires a local_rate Handle")
         if isinstance(self.ordinal, bool) or not isinstance(self.ordinal, int) or self.ordinal < 0:
@@ -184,10 +195,17 @@ class Balance:
 
     @classmethod
     def capture(cls, handle: Handle, target: Handle, terms: Any,
-                accumulation: Accumulation | None = None) -> Balance:
+                accumulation: Accumulation | None = None, *, origins: Any = None,
+                written: Any = None) -> Balance:
+        terms = tuple(terms)
+        origins = (None,) * len(terms) if origins is None else tuple(origins)
+        written = (None,) * len(terms) if written is None else tuple(written)
+        if len(origins) != len(terms) or len(written) != len(terms):
+            raise ValueError("a balance needs one origin and one written coefficient per occurrence")
         return cls(handle, target, tuple(
-            BalanceOccurrence(handle, index, kind, payload, coefficient, target)
-            for index, (kind, payload, coefficient) in enumerate(terms)),
+            BalanceOccurrence(handle, index, kind, payload, coefficient, target, origin, scale)
+            for index, ((kind, payload, coefficient), origin, scale)
+            in enumerate(zip(terms, origins, written))),
             Accumulation(target) if accumulation is None else accumulation)
 
     def select(self, *selectors: Any) -> BalanceView:
@@ -211,7 +229,9 @@ class Balance:
             return resolve_reference_value(value, resolver, memo)
         return Balance.capture(resolve(self.handle), resolve(self.target),
             ((item.kind, resolve(item.payload), item.coefficient) for item in self.occurrences),
-            self.accumulation.resolve_references(resolver))
+            self.accumulation.resolve_references(resolver),
+            origins=tuple(item.origin for item in self.occurrences),
+            written=tuple(item.written for item in self.occurrences))
 
     def to_data(self) -> dict[str, Any]:
         return {"schema": "pops.physical_balance.v1", "handle": _handle_data(self.handle),

@@ -34,18 +34,20 @@ class Expr(ImmutableSymbolic):
         collect_expr_references(self, references, set())
         return tuple(references)
 
+    # A vector, or a term of a balance (RateTerm), owns the operation with an expression: a vector
+    # applies it per component, and a term reads the expression as an operand of its balance (R7).
     def __add__(self, o: Any) -> Any:
-        from .vector_expr import VectorExpr
-        return o.__radd__(self) if isinstance(o, VectorExpr) else Add(self, _wrap(o))
+        owner = _operation_owner(o)
+        return owner.__radd__(self) if owner is not None else Add(self, _wrap(o))
     def __radd__(self, o: Any) -> Any: return Add(_wrap(o), self)
     def __sub__(self, o: Any) -> Any:
-        from .vector_expr import VectorExpr
-        return o.__rsub__(self) if isinstance(o, VectorExpr) else Sub(self, _wrap(o))
+        owner = _operation_owner(o)
+        return owner.__rsub__(self) if owner is not None else Sub(self, _wrap(o))
     def __rsub__(self, o: Any) -> Any: return Sub(_wrap(o), self)
     def __mul__(self, o: Any) -> Any:
-        from .vector_expr import VectorExpr
-        if isinstance(o, VectorExpr):
-            return o.__rmul__(self)
+        owner = _operation_owner(o)
+        if owner is not None:
+            return owner.__rmul__(self)
         # ``kappa_expr * unknown`` is an elliptic reaction term, not an ordinary pointwise
         # multiplication.  Keeping this conversion here makes the natural screened-Poisson
         # spelling work for an explicit ``model.value(RuntimeParam(...))`` while Handles retain
@@ -56,8 +58,8 @@ class Expr(ImmutableSymbolic):
         return Mul(self, _wrap(o))
     def __rmul__(self, o: Any) -> Any: return Mul(_wrap(o), self)
     def __truediv__(self, o: Any) -> Any:
-        from .vector_expr import VectorExpr
-        return o.__rtruediv__(self) if isinstance(o, VectorExpr) else Div(self, _wrap(o))
+        owner = _operation_owner(o)
+        return owner.__rtruediv__(self) if owner is not None else Div(self, _wrap(o))
     def __rtruediv__(self, o: Any) -> Any: return Div(_wrap(o), self)
     def __neg__(self) -> Any: return Neg(self)
     def __pos__(self) -> Any: return self  # +expr = identity (the CoupledSource API writes +k*ne*ng)
@@ -87,6 +89,11 @@ def is_scalar_expression(value: Any) -> bool:
 
 def _wrap(o: Any) -> Any:
     if isinstance(o, Expr):
+        if isinstance(o, RateTerm):
+            # A term of a balance is a summand of its right-hand side, never the operand of
+            # another node (R7): refused where the node is written.
+            from .rate_algebra import OPERAND, refuse
+            raise refuse(o, OPERAND)
         return o
     # Promote a Param through its symbolic node; float(param) would erase runtime identity.
     node = getattr(o, "_node", None)
@@ -101,6 +108,11 @@ def _wrap(o: Any) -> Any:
     if callable(getattr(o, "__pops_scalar_plan__", None)):
         from .finite_linear import lower_finite_scalars
         return lower_finite_scalars((o,))[0]
+    if callable(getattr(o, "__pops_rate_term__", None)):
+        from .rate_algebra import refuse_operand
+        refusal = refuse_operand(o)
+        if refusal is not None:
+            raise refusal
     return Const(o)
 
 class Const(Expr):
@@ -671,11 +683,14 @@ class Laplacian(_EllipticTerm):
 class RateTerm(_BoardNode):
     """A summand of a rate equation right-hand side.
 
-    Divergences and source handles compose through ``+`` / ``-`` into a
-    :class:`RateExpr`, whose signed occurrences the model retains as one balance."""
+    Declared terms (``div`` of a declared flux, a source handle, ...) compose through ``+`` and
+    ``-``, and scale by exact numbers, into a :class:`RateExpr`, whose signed occurrences the model
+    retains as one balance. Algebra without terms (``k*u**2``) joins the sum as an inline operand,
+    which the model declares as an anonymous source of the balance (R7). A term under any other
+    node is refused with ``TermNotAdditive`` (``pops._ir.rate_algebra``)."""
 
     def _rate_terms(self) -> Any:
-        """Return ``[(kind, payload, sign)]`` -- one entry per primitive summand."""
+        """Return ``[(kind, payload, coefficient)]`` -- one entry per summand."""
         raise NotImplementedError
 
     def __neg__(self) -> Any:
@@ -694,16 +709,94 @@ class RateTerm(_BoardNode):
         return _as_rate(other) + (-self)
 
     def __mul__(self, coefficient: Any) -> Any:
+        from .rate_algebra import exact_number, refuse
+        number = exact_number(coefficient)
+        if number is None:
+            raise refuse(self, "a product by %r" % (coefficient,))
         return RateExpr([(kind, payload, multiply_exact_scalars(
-            scale, coefficient, where="rate term coefficient"))
+            scale, number, where="rate term coefficient"))
             for kind, payload, scale in self._rate_terms()])
 
     def __rmul__(self, coefficient: Any) -> Any:
         return self * coefficient
 
+    def __truediv__(self, divisor: Any) -> Any:
+        from .rate_algebra import exact_reciprocal, refuse
+        reciprocal = exact_reciprocal(divisor)
+        if reciprocal is None:
+            raise refuse(self, "a quotient by %r" % (divisor,))
+        return self * reciprocal
+
+    def __rtruediv__(self, other: Any) -> Any:
+        from .rate_algebra import refuse
+        raise refuse(self, "the denominator of a quotient of %r" % (other,))
+
+    # Every other operation that Expr defines would put the term under a node: refused at the
+    # line that writes it (R7). ``==`` stays the equation builder of the board nodes.
+    def _not_additive(self, construct: str) -> Any:
+        from .rate_algebra import refuse
+        return refuse(self, construct)
+
+    def __pow__(self, other: Any) -> Any:
+        raise self._not_additive("a power with exponent %r" % (other,))
+
+    def __rpow__(self, other: Any) -> Any:
+        raise self._not_additive("the exponent of a power of %r" % (other,))
+
+    def __abs__(self) -> Any:
+        raise self._not_additive("an absolute value")
+
+    def __lt__(self, other: Any) -> Any:
+        raise self._not_additive("a comparison with %r" % (other,))
+
+    def __le__(self, other: Any) -> Any:
+        raise self._not_additive("a comparison with %r" % (other,))
+
+    def __gt__(self, other: Any) -> Any:
+        raise self._not_additive("a comparison with %r" % (other,))
+
+    def __ge__(self, other: Any) -> Any:
+        raise self._not_additive("a comparison with %r" % (other,))
+
+
+def rate_term_of(value: Any) -> Any:
+    """The term of a balance that ``value`` denotes, or ``None`` (R7).
+
+    A :class:`RateTerm` is itself; an object of the ``__pops_rate_term__`` protocol (a declared
+    source handle, a nonconservative product handle) is the term that the protocol returns. Every
+    other value, every other ``Expr`` included, denotes no term.
+    """
+    if isinstance(value, RateTerm):
+        return value
+    if isinstance(value, Expr):
+        return None
+    coercion = getattr(value, "__pops_rate_term__", None)
+    if callable(coercion):
+        term = coercion()
+        return term if isinstance(term, RateTerm) else None
+    return None
+
+
+def _operation_owner(o: Any) -> Any:
+    """The operand that owns a binary operation with an expression, or ``None``.
+
+    A vector applies the operation per component; a term of a balance reads the expression as an
+    operand of its balance (R7).
+    """
+    from .vector_expr import VectorExpr
+    if isinstance(o, VectorExpr):
+        return o
+    return rate_term_of(o)
+
 
 def _as_rate(x: Any) -> Any:
-    """Coerce ``x`` to a :class:`RateTerm` or raise a clear error."""
+    """Coerce ``x`` to a :class:`RateTerm`: a term, or what joins one in a balance (R7).
+
+    A term, or an object of the ``__pops_rate_term__`` protocol, is returned as is. Anything else is
+    read by ``pops._ir.rate_algebra.rate_summands``: the number 0 adds nothing, algebra without
+    terms is one inline operand, and an expression that holds terms is read through its additive
+    structure, or refused.
+    """
     if isinstance(x, RateTerm):
         return x
     coercion = getattr(x, "__pops_rate_term__", None)
@@ -712,13 +805,16 @@ def _as_rate(x: Any) -> Any:
         if isinstance(term, RateTerm):
             return term
         raise TypeError("__pops_rate_term__() must return a RateTerm expression")
-    raise TypeError(
-        "a rate equation right-hand side must be a signed sum of div(flux) and source "
-        "terms; got %r" % (x,))
+    from .rate_algebra import rate_summands
+    return RateExpr(rate_summands(x))
 
 
 class RateExpr(RateTerm):
-    """An accumulated sum of rate terms (flux contributions and source handles)."""
+    """An accumulated sum of rate terms (flux contributions and source handles).
+
+    The kind ``"inline"`` holds an operand without terms (``pops._ir.rate_algebra.InlineAlgebra``)
+    while the sum is written; the model declares it as an anonymous source of the balance, so it
+    never reaches a ``BalanceOccurrence``."""
 
     def __init__(self, terms: Any) -> None:
         normalized = []
@@ -726,9 +822,13 @@ class RateExpr(RateTerm):
             if not isinstance(term, (tuple, list)) or len(term) != 3:
                 raise TypeError("a rate term must be a (kind, payload, sign) triple")
             kind, payload, sign = term
-            if kind not in ("flux", "diffusion", "coupled_gradient", "drift", "source", "projection", "nonconservative"):
+            if kind not in ("flux", "diffusion", "coupled_gradient", "drift", "source", "projection", "nonconservative", "inline"):
                 raise ValueError("unknown rate term kind %r" % (kind,))
-            if kind == "projection":
+            if kind == "inline":
+                from .rate_algebra import InlineAlgebra
+                if not isinstance(payload, InlineAlgebra):
+                    raise TypeError("an inline rate term holds an InlineAlgebra operand")
+            elif kind == "projection":
                 from .application import RateApplicationProjection
                 if not isinstance(payload, RateApplicationProjection):
                     raise TypeError("a projection rate term requires a whole typed RateSpace projection")

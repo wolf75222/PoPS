@@ -14,6 +14,7 @@ from pops.lib.numerics import upwind, adjacent_mean, poisson_residual
 from pops.lib.time import ssprk2, cfl_limit
 from pops.lib.solve import auto
 from pops.lib.output import hdf5
+from pops.lib.quadrature import GaussLegendre
 
 CELLS = 128                  # value chosen for the gallery
 CFL, T_END = 0.4, 10.0       # each a value chosen for the gallery
@@ -40,7 +41,7 @@ def drift_speed(face):
 # The load of the constraint is integrated over each cell (cell.load), which needs a quadrature (defaults of
 # 2.6.9); the midpoint rule is exact for a load that is affine in the cell average of rho.
 numerics = pops.Numerics(
-    represent={rho: pops.CellAverage(), phi: pops.CellAverage(quadrature=pops.GaussLegendre(1))},
+    represent={rho: pops.CellAverage(), phi: pops.CellAverage(quadrature=GaussLegendre(1))},
     schemes={drift: upwind(speed=drift_speed), poisson: poisson_residual()},
 )
 

@@ -19,6 +19,7 @@
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
+#include <pops/runtime/recovery/device_candidate_recovery.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -1022,6 +1023,9 @@ struct PreparedAmrSystemBlock {
   std::function<void(const double*, double*)> primitive_to_conservative;
   std::function<RecoveryReport(const double*, double*)> conservative_to_primitive;
   UniformCellRecovery batch_conservative_to_primitive;
+  /// The decision of conservative_to_primitive on every cell of a state publication candidate,
+  /// evaluated in the memory space of the candidate (DM8).
+  CandidateRecoveryCheck<Dim> candidate_recovery_check;
 
   level_block_type prepare_level(runtime_type& runtime, context_type context) const {
     if (!materialize_level)
@@ -1883,6 +1887,7 @@ PreparedAmrSystemBlock<Dim> materialize_system(Request request, Reconstruction r
     return recovery_report(outcome);
   };
   result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
+  result.candidate_recovery_check = make_model_candidate_recovery_check<Dim>(model);
   return result;
 }
 
@@ -2216,6 +2221,7 @@ PreparedAmrSystemBlock<Dim> materialize_state_block(Request request) {
     return recovery_report(outcome);
   };
   result.batch_conservative_to_primitive = make_uniform_variable_inversion_consumer(recovery);
+  result.candidate_recovery_check = make_model_candidate_recovery_check<Dim>(model);
   return result;
 }
 
