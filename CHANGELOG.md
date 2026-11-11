@@ -657,11 +657,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   goes from 30.0 to 17.7 MB and compiles in 357 s within 4.8 GiB, where it did not fit in 12 GiB
   before.
 - The step body of a generated Program continues in a nested function only after a line that ends
-  a statement, and the brace scan that places these splits skips raw string literals, so a split
-  can no longer leave a statement open. The Hall Program and the eleven other Programs of the F7
-  review keep byte-identical sources. In CI the Hall test now passes in 465 s, and its two-rank
-  twin in 457 s per rank, so its weight in `tests/python/test_durations.json` goes from the 900 s
-  estimate to 520 s.
+  with `;` or `}`, never after a preprocessor line, and the brace scan that places these splits
+  skips raw string literals, so a split can no longer follow a statement header such as a bare
+  `if (a)`. The Hall Program and the eleven other Programs of the F7 review keep byte-identical
+  sources. In CI the Hall test now passes in 465 s, and its two-rank twin in 457 s per rank, so
+  its weight in `tests/python/test_durations.json` goes from the 900 s estimate to 520 s.
 
 ## [1.0.0] - 2026-07-16
 
