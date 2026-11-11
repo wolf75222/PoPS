@@ -22,8 +22,9 @@ of N8 (``pops.runtime._simulation``), these constructs of the surface:
   accepted step. N8 lowers both on a lattice fixed when the case is compiled, k h and the k-th
   macro step from the start of the simulation, which is the lattice of the spec only when the
   run starts on it: a later run whose start is off the lattice is refused before it runs
-  (``NotYetElaborated``, naming N8), and a later run that starts on it publishes its times and
-  steps after its start, the start being the end of the run before it, which that run published
+  (``NotYetElaborated``, naming the N8 lot 'run-anchored schedules', ROM-89, which owes the
+  anchoring t0 + k h before the exit of phase 1), and a later run that starts on it publishes
+  its times and steps after its start, the start being the end of the run before it, which that run published
   (review of lot G, F1). ``write=None`` keeps the publications in ``result.outputs`` (2.6.9); a writer of
   ``pops.lib.output`` writes the whole series of the simulation after each run, outside every step
   (CF9), relative to ``directory=``.
@@ -48,8 +49,9 @@ _RESTART = "a later lot of N15 with the continuation and restart of G07 (CN11)"
 _DEFINITIONS = "a later lot of N15 with the definitions of R16 and the reductions of N8"
 _PREDICATE = "a later lot of N8 with the predicates of the when bodies (CC14)"
 _DEFAULT_MAX_STEPS = 1_000_000
-_LATTICE = ("a later lot of N8 with the Outputs whose lattice starts at the start of each run "
-            "(CC14)")
+_LATTICE = ("the N8 lot 'run-anchored schedules' (ROM-89), owed before the exit of phase 1: N8 "
+            "fixes the grid of every(time=h) and every(steps=k) at compile time, from the start "
+            "of the simulation, not of the run (spec 2.6.2)")
 
 
 # --- records and schedules ----------------------------------------------------------------------

@@ -236,7 +236,7 @@ def test_a_later_run_that_starts_off_the_lattice_of_every_is_refused(compiled, t
     first = simulation.run(until=0.01)          # 10 steps, on the lattice of every(steps=10)
     with pytest.raises(surface.NotYetElaborated,
                        match="starts at t0 = 0.01, off the lattice k h of pops.every\\(time=0.004\\)"
-                             ".*later lot of N8"):
+                             ".*the N8 lot 'run-anchored schedules' \\(ROM-89\\)"):
         simulation.run(until=0.015)
     assert first.time == 0.01 and first.steps == 10
     assert simulation._simulation._runtime.time() == 0.01
