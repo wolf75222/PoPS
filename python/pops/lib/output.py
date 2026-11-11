@@ -5,12 +5,13 @@ file, one record per publication with its achieved time (2.6.2). It writes after
 simulation, from the publications that the compiled run returned, outside every step (CF9); its
 path is relative to the ``directory=`` of ``pops.bind``.
 
-``npz(path, metadata=None, overwrite=False)`` writes a NumPy archive. Each field ``f`` of the record
-is the array ``f`` of shape ``(n,) + cells``, the n publications in order, each in the order of the
-support's axes; ``time`` and ``step`` are the achieved time and the accepted macro step of each
-publication; each field of ``metadata``, a ``pops.record`` of numbers, is a scalar array of its
-name, which no field of the record may take. A file that this simulation did not write is refused with ``OutputExists`` unless
-``overwrite=True``, before the first run of the simulation starts. ``hdf5`` is a later lot.
+``npz(path, metadata=None, overwrite=False)`` writes a NumPy archive. Each field ``f`` of the
+record is the array ``f`` of shape ``(n,) + cells``, the n publications in order, each in the order
+of the support's axes; ``time`` and ``step`` are the achieved time and the accepted macro step of
+each publication; each field of ``metadata``, a ``pops.record`` of numbers, is a scalar array of
+its name, which no field of the record may take. A file that this simulation did not write is
+refused with ``OutputExists`` unless ``overwrite=True``, before the first run of the simulation
+starts. ``hdf5`` is a later lot.
 """
 from __future__ import annotations
 
@@ -131,8 +132,9 @@ def hdf5(path: Any, overwrite: bool = False) -> Any:
     import importlib
 
     surface = importlib.import_module("pops.surface")
-    raise surface.NotYetElaborated("hdf5(path), the HDF5 writer", "a later lot of N15 with the writers of "
-                           "pops.lib.output").with_traceback(None)
+    raise surface.NotYetElaborated(
+        "hdf5(path), the HDF5 writer",
+        "a later lot of N15 with the writers of pops.lib.output").with_traceback(None)
 
 
 __all__ = ["Npz", "OutputExists", "hdf5", "npz"]

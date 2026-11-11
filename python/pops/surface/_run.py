@@ -1,4 +1,5 @@
-"""Compile, bind, run and publish a case of the surface (spec 0.3, 2.6.2, 2.6.6, 2.6.8; §5.2, CC14, Q3).
+"""Compile, bind, run and publish a case of the surface (spec 0.3, 2.6.2, 2.6.6, 2.6.8; §5.2, CC14,
+Q3).
 
 Lot G of N15 (the run of the vertical slice of Phase 1, OD31). It elaborates, on the compiled run
 of N8 (``pops.runtime._simulation``), these constructs of the surface:
@@ -24,10 +25,10 @@ of N8 (``pops.runtime._simulation``), these constructs of the surface:
   run starts on it: a later run whose start is off the lattice is refused before it runs
   (``NotYetElaborated``, naming the N8 lot 'run-anchored schedules', ROM-89, which owes the
   anchoring t0 + k h before the exit of phase 1), and a later run that starts on it publishes
-  its times and steps after its start, the start being the end of the run before it, which that run published
-  (review of lot G, F1). ``write=None`` keeps the publications in ``result.outputs`` (2.6.9); a writer of
-  ``pops.lib.output`` writes the whole series of the simulation after each run, outside every step
-  (CF9), relative to ``directory=``.
+  its times and steps after its start, the start being the end of the run before it, which that
+  run published (review of lot G, F1). ``write=None`` keeps the publications in
+  ``result.outputs`` (2.6.9); a writer of ``pops.lib.output`` writes the whole series of the
+  simulation after each run, outside every step (CF9), relative to ``directory=``.
 
 Each other option of these constructs refuses with ``NotYetElaborated`` and the lot that
 elaborates it.

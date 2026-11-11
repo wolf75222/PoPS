@@ -57,7 +57,7 @@ def test_a_record_reads_its_fields_by_name(parts):
     assert value.u is parts.u and value.n == 3
     assert [name for name, _ in value.items()] == ["u", "n"]
     with pytest.raises(AttributeError, match="has the fields u, n"):
-        value.w
+        value.w  # noqa: B018
     with pytest.raises(TypeError, match="at least one field"):
         surface.record()
 
