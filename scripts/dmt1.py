@@ -14,8 +14,11 @@ compiler, with no native module and no compiler:
 
 Five toolchain facts that need ``_pops`` are fixed, equal at every commit: the native dimension
 (the plan's resolved dimension), the C++ standard, the compiler name, the feature key and the ABI
-key. Each unit embeds the 64-hex identities of the program, so byte identity also checks that no
-identity moved.
+key. A sixth, the Kokkos of a native build, is not selected at all: ``emit`` drops the Kokkos
+root overrides (``POPS_KOKKOS_ROOT``, ``Kokkos_ROOT``, ``KOKKOS_ROOT``) from its own environment,
+since no ``_pops`` contract can authenticate them and no unit is compiled (CI sets them for its
+native tests). Each unit embeds the 64-hex identities of the program, so byte identity also checks
+that no identity moved.
 
     dmt1.py emit OUT.jsonl [--units DIR] [ID ...]     # all 40 profiles when no ID is given
     dmt1.py compare BASE.jsonl HEAD.jsonl [--declared FILE]
@@ -29,12 +32,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# The Kokkos root overrides of ``pops.codegen.toolchain._native_kokkos_selection``.
+KOKKOS_ROOTS = ("POPS_KOKKOS_ROOT", "Kokkos_ROOT", "KOKKOS_ROOT")
 PROFILES = tuple("M%02d" % index for index in range(1, 29)) + tuple(
     "T%02d" % index for index in range(1, 13))
 GATED = (
@@ -138,6 +144,9 @@ def _emit_one(identifier, state, drivers, orchestration, units):
 
 
 def emit(out: Path, identifiers, units):
+    for key in KOKKOS_ROOTS:
+        # A root names the Kokkos of a native build; without ``_pops`` nothing authenticates it.
+        os.environ.pop(key, None)
     sys.path.insert(0, str(ROOT))
     sys.path.insert(0, str(ROOT / "python"))
     state, drivers, orchestration = _install_capture()

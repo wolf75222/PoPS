@@ -584,6 +584,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-85 (#749 follow-up): `scripts/dmt1.py emit` failed on M15 in the gate-python shards, which
+  export a Kokkos root for their native tests: the real `compile_native` that it runs
+  authenticates that root against the Kokkos contract of `_pops`, which it never loads. `emit` now
+  drops the Kokkos root overrides from its own environment, as it fixes the other toolchain facts
+  that need `_pops`; the emitted units are unchanged. Its test runs under a Kokkos root everywhere
+  and prints the profile's error and trace when it fails.
 - ROM-17: build PoPS against conda-forge's Kokkos 5.2.2. Its HWLOC TPL names the prefix's
   `include/` with a trailing separator next to Kokkos' own `include`, so the include contract kept
   both spellings and counted four defining headers instead of two, and configuration stopped.
