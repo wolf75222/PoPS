@@ -306,8 +306,8 @@ case.initials.add(InitialCondition(state=plasma_U,
 indicator = ValueExpr(plasma_U)["M00"]
 refine_threshold = case.param(RuntimeParam("refine_weighted_density", default=0.05))
 coarsen_threshold = case.param(RuntimeParam("coarsen_weighted_density", default=0.01))
-tagging = AMRTagging(rules=(Tag(indicator > case.value(refine_threshold)),
-    Coarsen(indicator < case.value(coarsen_threshold)), Buffer(cells=2, selection="refine-requests")),
+tagging = AMRTagging(rules=(Tag(lambda cell: cell.value(indicator) > case.value(refine_threshold)),
+    Coarsen(lambda cell: cell.value(indicator) < case.value(coarsen_threshold)), Buffer(cells=2, selection="refine-requests")),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS)
 transfer = AMRTransfer()
 # Convex parent injection and volume averaging preserve H1 SPD in exact arithmetic.

@@ -122,6 +122,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3a, part 2): the 19 `examples/api_v02` AMR cases and the condensed_fac/01,
+  diocotron/01, 02 and 04, hyqmom (`_amr_hybrid`) and initial_field_ghost/01 tutorials write their
+  tagging as regions of `cell`; the three reviewed api_v02 modules that changed carry new source
+  digests in `profile_implementations.json`. Graph and region runs of condensed_fac/01, hyqmom/02
+  and diocotron/01 are bitwise identical. Only the scalar advection final example still writes the
+  graph; it moves with the VM removal (lot 3c).
 - ROM-95 (N12, lot 3a, part 1): the scalar advection AMR tutorials 05-14, the IMEX AMR final
   example, the field diffusion example and the scalar AMR migration workflow write their tagging
   as regions of `cell` (`Tag(lambda cell: cell.value(q) > c)`, `gradient_norm` for 09) instead of

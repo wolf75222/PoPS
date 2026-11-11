@@ -248,7 +248,7 @@ def build_temporal_field(
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(pm.ValueExpr(marker_block[marker]) > case.value(threshold)),
+                Tag(lambda cell: cell.value(pm.ValueExpr(marker_block[marker])) > case.value(threshold)),
                 Buffer(cells=1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

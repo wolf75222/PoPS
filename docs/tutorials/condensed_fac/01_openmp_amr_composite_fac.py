@@ -299,7 +299,7 @@ initial_state = np.ascontiguousarray(np.stack((
 refine_threshold = case.param(RuntimeParam("refine_marker", default=0.20))
 tagging = AMRTagging(
     rules=(
-        Tag(ValueExpr(marker_U) > case.value(refine_threshold)),
+        Tag(lambda cell: cell.value(ValueExpr(marker_U)) > case.value(refine_threshold)),
         Buffer(cells=1),
     ),
     hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
