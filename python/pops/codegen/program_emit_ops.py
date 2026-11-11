@@ -1157,7 +1157,9 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             raise ValueError("stencil flux delegate requires an explicit resolved block owner")
         from .program_emit_stencil_flux import emit_stencil_flux
         from .program_value_authority import delegated_output_boundaries
-        publication = emit_stencil_flux(v, var, lines, block=bidx, target=target)
+        from .program_models import model_for_node
+        publication = emit_stencil_flux(v, var, lines, block=bidx, target=target,
+                                        model=None if model is None else model_for_node(model, v))
         output_setup_end, delegated_before_write = delegated_output_boundaries(
             v, var, lines, _profile_start, bidx, publication)
     elif v.op == "diffusive_rhs":

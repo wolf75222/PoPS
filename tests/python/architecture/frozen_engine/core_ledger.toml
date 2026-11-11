@@ -156,3 +156,43 @@ paths = [
   "src/runtime/system/system_impl.hpp",
   "src/runtime/system/system_program.cpp",
 ]
+
+[[mechanism]]
+id = "stencil-body-reads-a-runtime-parameter-of-its-model"
+issue = "ROM-87"
+rule = "IR26"
+pre_freeze = true
+what = """
+The body of a StencilFlux may read a RuntimeParam of a model, as the body of a riemann.User face
+already does (codegen/user_riemann_lowering.py): the Program accepts the read only when the
+parameter is a RuntimeParam declared by the model of the block of the state that the stencil reads
+(BlockHandle.accepts) and refuses any other by its name; the generated face binds the block's
+table, ctx.program_params(block), once per evaluation on the host, captured by value into the face
+closure, and reads params.get(i) with the model's stable index; the bind routing
+(program_param_entries) lists the stencil as a reader of that table. The value is bind data: two
+values give the same artifact hash and the same C++. A parameter that no formula of the model
+reads has no slot in the table and is refused by its name. Every stencil that reads no runtime
+parameter keeps the code it had."""
+structures = [
+  { case = "M05", builder = "build_m05", structure = "2-D compressible Navier-Stokes, viscous face stencil, four components" },
+  { case = "M23", builder = "build_m23", structure = "2-D Hall MHD, face stencil of the Hall and ohmic terms, eight components" },
+]
+measurement = """
+On d06bb2c, the coefficient of each stencil is a Python float folded into its body: build_m05
+with viscosity 0.01 and 0.02, and build_m23 with hall 0.1 and 0.2, resolve to different artifact
+hashes, so every value is a new compile; read as a runtime parameter, it is one artifact. The
+surface needs it: L1 of §17.1 writes nu as model.parameter with Positive(), and once upwind() is a
+riemann.User body, two_point() is realized by a StencilFlux beside it (the native Diffusion beside
+a riemann.User face is refused by b6), so without the read L1 has no realization
+(n3/question_kappa_parametre.md). tests/python/unit/numerics/test_stencil_runtime_parameter.py:
+two defaults of nu give the same artifact hash and C++; the native run of one artifact bound with
+nu = 0.01 and 0.05 gives each its own step, to 1e-13 of the closed form
+(tests/python/integration/runtime/test_stencil_runtime_parameter_native.py)."""
+refusal_set = "removed: the refusal of a RuntimeParamRef in a stencil body ('stencil body contains an unsupported scalar operation') for a RuntimeParam of the block's own model read by one of its formulas; added: a parameter of another model, a non-runtime parameter, or one that no formula of the model reads, each refused by its name"
+paths = [
+  "python/pops/codegen/program_emit_ops.py",
+  "python/pops/codegen/program_emit_params.py",
+  "python/pops/codegen/program_emit_stencil_flux.py",
+  "python/pops/model/stencil_expression.py",
+  "python/pops/time/_program/stencil_flux.py",
+]
