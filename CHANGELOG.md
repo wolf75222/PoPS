@@ -18,6 +18,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-81 (N2, review of the spec of 11/11, P3 and P8): the core knows one quadrature construct,
+  `pops.Quadrature(nodes=, weights=, interval=)` (spec 0.3 D0), in the surface
+  (`import pops.surface as pops`); `GaussLegendre(n)` and `GaussHermite(n)` are functions of the new
+  module `pops.lib.quadrature` that return one, with their parity tests, and the gallery imports
+  them from there. The refused vocabulary of CF2 is the closed, versioned file
+  `tests/python/architecture/frozen_engine/cf2_vocabulary.toml`, each row with the finding that
+  motivates it; CF2 no longer admits a quadrature compound (`GaussHermite`) and refuses a named rule
+  in the core. `python -m tests.python.architecture.frozen_engine.mg6_counts` counts the sites of
+  an exception list by directory and by issue (MG6).
 - ROM-85 (N10, phase 1, lot 1a): the vocabulary of the one array type (spec 0.3 DM1 to DM3, IR1 to
   IR3). `pops._ir.arrays` holds the value types of IR1 (`Array(D, T)`, `Product`, `Variant`,
   `Result`, `Iteration`, `Index`, scalars, and `Untyped` for what the plan cannot type yet);
