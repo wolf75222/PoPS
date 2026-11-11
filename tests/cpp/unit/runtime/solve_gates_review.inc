@@ -59,6 +59,34 @@ TEST(SolveGates, BoundIsAtolPlusRtolTimesScale) {
   EXPECT_NE(above.find("SV8 gate original_residual"), std::string::npos) << above;
 }
 
+TEST(SolveGates, AcceptsTheResidualThatTheRealizationsQuotientAccepts) {
+  using namespace sv8_gate_test;
+  // At atol = 0 a Krylov realization stops on r / ref <= rtol. Find residuals one ulp above the
+  // rounded product rtol * ref that this quotient still accepts: the gate must accept them too.
+  const Real rtol = Real(1e-10);
+  int edges = 0;
+  for (int i = 1; i <= 100000 && edges < 32; ++i) {
+    const Real scale = Real(1) + Real(i) * Real(0.0137);
+    const Real above = std::nextafter(rtol * scale, Real(2));
+    if (!(above / scale <= rtol))
+      continue;
+    ++edges;
+    EXPECT_TRUE(gate(above, Real(0), rtol, scale).refusal().empty())
+        << "scale=" << scale << " residual=" << above;
+  }
+  ASSERT_GT(edges, 0) << "no one-ulp edge found; the case would not test the quotient";
+  // A residual whose quotient is above rtol is still refused, as is any residual when the scale
+  // is zero and the residual is above atol.
+  const Real scale = Real(3);
+  Real refused = std::nextafter(rtol * scale, Real(2));
+  while (refused / scale <= rtol)
+    refused = std::nextafter(refused, Real(2));
+  EXPECT_NE(gate(refused, Real(0), rtol, scale).refusal().find("original_residual"),
+            std::string::npos);
+  EXPECT_NE(gate(Real(1e-300), Real(0), rtol, Real(0)).refusal().find("original_residual"),
+            std::string::npos);
+}
+
 TEST(SolveGates, RefusalsFollowTheOrderOfRelationsSolve) {
   using namespace sv8_gate_test;
   const Real nan = std::numeric_limits<Real>::quiet_NaN();
