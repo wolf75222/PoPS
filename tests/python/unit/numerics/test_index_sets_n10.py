@@ -110,7 +110,8 @@ def test_type_constructors_refuse_what_is_not_a_type():
     with pytest.raises(ValueError, match="each field once"):
         A.Product(("a", A.Float64), ("a", A.Int64))
     with pytest.raises(ValueError, match="at least one field"):
-        A.Product()
+        A.Variant()
+    assert A.Product().fields == () and repr(A.Product()) == "Product()"  # review of #749, R1
     with pytest.raises(ValueError, match="Bool, Int64 or Float64"):
         A.Scalar("Float32")
     assert not A.is_type(A.NotData("operator"))
@@ -272,6 +273,25 @@ def test_the_manifest_reports_the_values_of_the_control_bodies():
     assert len(report["values"]) > len(first) and nested
     assert any(row["role"] == "state" and row["layout"] == "Patches" for row in nested)
     assert report["untyped"] == sum(1 for row in report["values"] if row["layout"] == "untyped")
+    # Lot 1b: the iterate is typed with the state of its body, so nothing of M18 stays untyped;
+    # every record names its node, and two nodes never share one (review of #749, R3).
+    iterations = [row for row in report["values"] if row["spelling"] == "iteration_result"]
+    assert iterations and all(row["type"].startswith("Iteration(state=Product(") for row in iterations)
+    assert report["untyped"] == 0
+    nodes = [row["node"] for row in report["values"]]
+    assert len(set(nodes)) == len(nodes) and all(type(node) is int for node in nodes)
+
+
+def test_a_field_publication_is_a_product_of_its_bound_components():
+    # Lot 1b (§3.1): ``fields`` binds one source component per published name.
+    from pops._ir.data_model import data_layout_and_distribution
+
+    report = data_layout_and_distribution(_plan("M08"))
+    published = [row for row in report["values"] if row["spelling"] == "fields"]
+    assert published and report["untyped"] == 0
+    for row in published:
+        assert row["type"].startswith("Product(potential_grad_x=Array(Entities("), row
+        assert ", potential_grad_y=Array(Entities(" in row["type"] and row["layout"] == "members"
 
 
 def test_a_field_without_a_block_reads_its_component_count_from_its_attributes():
@@ -298,14 +318,19 @@ def test_every_record_states_a_residency_read_from_the_rule_of_g13():
         "device: views of the default memory space"}
     from pops.time._graph.value_traversal import walk_program_nodes
 
+    from pops.codegen.program_emit_finite_arrays import field_array
+
     plan = _plan("T06")  # replicated finite arrays, some of flat elements and some structured
-    rows = {row["value"]: row for row in data_layout_and_distribution(plan)["values"]}
+    rows = {row["node"]: row for row in data_layout_and_distribution(plan)["values"]}
     finite = [value for value in walk_program_nodes(plan.time._values) if value.vtype == "array"]
     residencies = set()
     for value in finite:
-        row = rows[str(value.name if getattr(value, "name", None) else value.id)]
-        device = device_array(value_signature(value))
-        assert row["residency"].startswith("device" if device else "host"), row
+        row = rows[value.id]
+        signature = value_signature(value)
+        # R4: an array of fields keeps a column per box (G13 lot 3) before the flat rule.
+        expected = ("device: one column per box" if field_array(signature)
+                    else "device: columns" if device_array(signature) else "host")
+        assert row["residency"].startswith(expected), row
         residencies.add(row["residency"])
     assert residencies == {"device: columns of the default memory space",
                            "host: structural cells"}
@@ -341,3 +366,16 @@ def test_a_live_field_value_asks_the_one_function():
     values = list(plan.time._values)
     assert values and all(value.is_field() is is_field_leaf(value) for value in values)
     assert any(value.is_field() for value in values)
+
+
+def test_an_array_of_fields_is_resident_as_g13_lot_3_stores_it():
+    # Review of #749, R4: ``field_array`` (G13 lot 3) is read before the flat rule of G13 lot 1.
+    from pops._ir.data_model import _finite_residency
+
+    field = {"vtype": "scalar_field", "block": None, "space": None}
+    assert _finite_residency({"vtype": "array", "family": 0, "element": field}) == (
+        "device: one column per box of the default memory space")
+    assert _finite_residency({"vtype": "array", "family": 0, "element": {"vtype": "scalar"}}) == (
+        "device: columns of the default memory space")
+    assert _finite_residency({"vtype": "array", "family": 0, "element": field,
+                              "ownership": "contiguous_distributed"}) == "host: structural cells"

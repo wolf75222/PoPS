@@ -8407,22 +8407,22 @@
       }
     },
     "ci_20261107_n10_index_sets": {
-      "basis": "Unmeasured CI scheduling estimate for the N10 phase 1 lot 1a module (ROM-85, index sets of IR2, descriptors of IR3, value types of IR1): 30 s on the api_v02_20261013 source-only tier, twice the analogue test_typed_index_maps_n7.py: it resolves seven small programs (M01, M10, M12, M18, T06 and the T10 multi-block example) without compilation, runs one DM-T1 emission of M15 in a subprocess (no compiler) and runs no seeded samples. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimate for the N10 phase 1 module (ROM-85, lots 1a and 1b: index sets of IR2, descriptors of IR3, value types of IR1, the one kind function): 40 s on the api_v02_20261013 source-only tier, about twice the analogue test_typed_index_maps_n7.py: it resolves eight small programs (M01, M08, M10, M12, M18, T06 and the T10 multi-block example) without compilation, runs one DM-T1 emission of M15 in a subprocess (no compiler) and runs no seeded samples. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module) that shared the machine with a benchmark; it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/numerics/test_index_sets_n10.py": "tests/python/unit/numerics/test_typed_index_maps_n7.py"
       },
       "estimated_seconds": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": 30
+        "tests/python/unit/numerics/test_index_sets_n10.py": 40
       },
       "local_receipts": {
         "tests/python/unit/numerics/test_index_sets_n10.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_index_sets_n10.py",
-          "passed": 16,
-          "seconds": 26.34
+          "passed": 20,
+          "seconds": 40.08
         }
       },
       "source_sha256": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": "dcf582c8da99d9b3a57a8a879db187f513b4d81118fcbc7f44876dbdc5095f7c"
+        "tests/python/unit/numerics/test_index_sets_n10.py": "dbe8f76f4719530a5cc5d6cf4d7e931670e67b8d7f4a6c3967dcdb16d3130ad1"
       }
     }
   },
@@ -9650,5 +9650,5 @@
   "tests/python/unit/surface/test_su_t3_parity.py": 60,
   "tests/python/integration/runtime/test_field_requests_n8_native.py": 900,
   "tests/python/unit/time/test_field_requests_n8.py": 120,
-  "tests/python/unit/numerics/test_index_sets_n10.py": 30
+  "tests/python/unit/numerics/test_index_sets_n10.py": 40
 }

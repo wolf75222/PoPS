@@ -88,6 +88,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-85 (N10, phase 1, lot 1b): one function tells a field leaf from a finite array. Every line of
+  `python/pops` that compared a `vtype` spelling to ask « field » or « finite array » now asks
+  `pops._ir.data_model` (`value_kind`, `is_field_leaf`, `is_finite_array`, `is_finite_index`,
+  `field_role`), which reads the kind from the head of the IR type of the spelling; role tests
+  (`state`, `rhs`) stay. The architecture test keeps the builder and the lowering on these functions
+  only, and `scripts/n10_dispatch_inventory.py` lists role rows only. The generated C++ of the 40
+  API profiles is unchanged (DM-T1). The layout records (`data_layout_and_distribution`, schema 3)
+  name their node, type an `iterate` result as `Iteration(S)`, a field publication as the product of
+  its bound components and a product without members as `Product()`, read G13's field-element rule
+  before its flat rule for the residency, and give each row still untyped the lot that types it.
 - A `format-bench` job of `ci.yml`, aggregated by `gate`, replays
   `scripts/test_check_clang_format.sh`, the bench of `scripts/check_clang_format.sh`, on every full
   plan and when the plan sees the script, the bench or a style file (`.clang-format`,

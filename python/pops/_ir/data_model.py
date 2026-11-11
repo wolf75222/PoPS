@@ -37,15 +37,14 @@ __all__ = [
 ]
 
 _FIELD_ROLES = {"state": "state", "rhs": "rhs", "scalar_field": "field", "vector_field": "field"}
-# Spellings of the §3.1 table that a later lot types, with that lot (review of #749, optional).
+# Spellings of the §3.1 table that a later lot types, with that lot (note §3.10, review of #749 R2).
 _LATER = {
-    "vector_field": "lot 1b types it with the frame's axes (a field leaf)",
-    "iteration_result": "lot 1b types it with its body's state (IR1 Iteration)",
-    "fields": "lot 1b types it as a product of its field leaves",
-    "field_topology": "lot 4 types the hierarchy value of a topology (DM13)",
-    "state_geometry": "lot 3 provides the geometry arrays from the plan (DM6)",
-    "csr": "lot 4 types it as a product of range-set arrays (DM4)",
-    "mask": "lot 4 types it as an array of Bool (DM4)",
+    "vector_field": ("no builder spells a value so: Local.vector_field returns a scalar_field of d "
+                     "components, typed as a field leaf"),
+    "field_topology": "lot 3 of phase 1 types the hierarchy value of a topology (DM13)",
+    "state_geometry": "lot 3 of phase 1 provides the geometry arrays from the plan (DM6)",
+    "csr": "lot 4 of phase 1 types it as a product of range-set arrays (DM4)",
+    "mask": "phase 2 types it as an array of Bool with the one codec (DM4, CN11)",
 }
 _CONTINUATION = frozenset((
     "continuation_base", "continuation_candidate", "continuation_assessment",
@@ -184,7 +183,9 @@ def _signature_type(signature: Any, placements: Placements, program: str,
     if kind in ("product", "variant"):
         members = signature.get("members")
         if not members:
-            return A.Untyped("a %s record without members, which IR1 does not type" % kind)
+            if kind == "product":
+                return A.Product()
+            return A.Untyped("a variant without cases, which IR1 does not type")
         rows = tuple((name, _signature_type(child, placements, program))
                      for name, child in members)
         return A.Variant(*rows) if kind == "variant" else A.Product(*rows)
@@ -215,6 +216,24 @@ def _signature_type(signature: Any, placements: Placements, program: str,
     return A.Untyped("value type %r is in no row of the §3.1 table" % (kind,))
 
 
+def _published_fields(value: Any, placements: Placements, program: str) -> Any:
+    """``Product(component=Array(D, Float64), ...)``: one source component per binding (§3.1)."""
+    attrs = getattr(value, "attrs", None) or {}
+    bindings = tuple(attrs.get("bindings") or ()) if hasattr(attrs, "get") else ()
+    inputs = tuple(getattr(value, "inputs", ()) or ())
+    if not bindings or len(bindings) != len(inputs):
+        return A.Untyped("a field publication whose bindings do not name its inputs one by one")
+    members = []
+    for binding, source in zip(bindings, inputs):
+        source_type = ir_type(source, placements, program=program)
+        if isinstance(source_type, A.Untyped):
+            return source_type
+        if not isinstance(source_type, A.Array):
+            return A.Untyped("a field publication of a %r input" % (source.vtype,))
+        members.append((str(binding["component"]), A.Array(source_type.domain, A.Float64)))
+    return A.Product(*members)
+
+
 def ir_type(value: Any, placements: Placements, *, program: str = "program") -> Any:
     """The IR type of one Program value; ``Untyped`` with a reason, never an exception (A1)."""
     kind = value.vtype
@@ -225,10 +244,17 @@ def ir_type(value: Any, placements: Placements, *, program: str = "program") -> 
     attrs = getattr(value, "attrs", None) or {}
     if hasattr(attrs, "get") and attrs.get("storage_allocation") == _ON_TOPOLOGY:
         return A.Untyped("a field allocated on a topology lives on the levels of the hierarchy "
-                         "that the topology names (DM13, lot 4)")
+                         "that the topology names (DM13, lot 3 of phase 1)")
     if count is None and hasattr(attrs, "get"):
         # A ``scalar_field()`` without a block carries its component count here (review T3).
         count = attrs.get("ncomp")
+    if kind == "iteration_result":
+        state = attrs.get("state_signature") if hasattr(attrs, "get") else None
+        if state is None:
+            return A.Untyped("an iteration without the signature of its state")
+        return A.Iteration(_signature_type(state, placements, program))
+    if kind == "fields":
+        return _published_fields(value, placements, program)
     try:
         from pops.time.value_signatures import value_signature
 
@@ -249,6 +275,7 @@ class LayoutRecord:
     """The layout of one data value of the plan (DM3), as the manifest reports it."""
 
     value: str
+    node: int
     spelling: str
     role: str | None
     type: str
@@ -258,7 +285,8 @@ class LayoutRecord:
     residency: str
 
     def to_data(self) -> dict[str, Any]:
-        return {"value": self.value, "spelling": self.spelling, "role": self.role,
+        return {"value": self.value, "node": self.node, "spelling": self.spelling,
+                "role": self.role,
                 "type": self.type, "layout": self.layout, "distribution": self.distribution,
                 "origin": self.origin, "residency": self.residency}
 
@@ -283,9 +311,12 @@ _FIELD_RESIDENCY = "device: views of the default memory space"
 
 
 def _finite_residency(signature: Any) -> str:
-    """G13's rule, read where it is written (``device_array``), never restated here."""
+    """G13's rules, read where they are written (``field_array``, then ``device_array``)."""
+    from pops.codegen.program_emit_finite_arrays import field_array
     from pops.codegen.program_emit_finite_kokkos import device_array
 
+    if field_array(signature):
+        return "device: one column per box of the default memory space"
     if device_array(signature):
         return "device: columns of the default memory space"
     return "host: structural cells"
@@ -348,11 +379,11 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
             layout = distribution = origin = residency = "untyped"
         records.append(LayoutRecord(
             value=str(value.name if getattr(value, "name", None) else value.id),
-            spelling=value.vtype, role=_FIELD_ROLES.get(value.vtype), type=repr(value_type),
+            node=int(value.id), spelling=value.vtype, role=_FIELD_ROLES.get(value.vtype), type=repr(value_type),
             layout=layout, distribution=distribution, origin=origin,
             residency=residency).to_data())
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "placements": {block: configuration.identity
                        for block, configuration in sorted(placements.configurations.items())},
         "values": records,
