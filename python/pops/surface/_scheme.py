@@ -32,7 +32,6 @@ import inspect as _inspect
 from fractions import Fraction
 from typing import Any
 
-from ._derive import derivative
 from ._expr import Arith, Call, Expr, Predicate, Relation, is_number, text, walk
 from ._geometry import Coordinate, MathConstant
 from ._method import ENTITY_PARAMETERS
@@ -81,6 +80,8 @@ _LATER_KINDS = {
                 "cell.gradient(e, scheme=)",
 }
 _N11 = "N11 (expression closure, C1)"
+_PER_AXIS_RECONSTRUCTION = ("a later lot of N15 with a reconstruction lowered per axis "
+                            "(reconstruction.User has one body for the axes)")
 _PER_AXIS = ("a later lot of N15 with a face lowered per axis (riemann.User has one body for the "
              "axes)")
 
@@ -91,13 +92,15 @@ class SchemeLeaf(Expr):
     """A read of an entity: the trace of a quantity on a side of the face, the normal of the face,
     or the value of a quantity at a cell along the axis of a reconstruction."""
 
-    __slots__ = ("key", "quantity", "_spelling", "expansion")
+    __slots__ = ("key", "quantity", "_spelling", "expansion", "rank")
 
-    def __init__(self, key: tuple, quantity: Any, spelling: str, expansion: Any = None) -> None:
+    def __init__(self, key: tuple, quantity: Any, spelling: str, expansion: Any = None,
+                 rank: int = 1) -> None:
         self.key = key
         self.quantity = quantity
         self._spelling = spelling
         self.expansion = expansion
+        self.rank = rank
 
     def _text(self, precedence: int) -> str:
         return self._spelling
@@ -108,11 +111,12 @@ class LawValue(Expr):
     axes, which ``dot(term.law(...), face.normal)`` projects on the normal. ``side`` is the side
     of the face when the state is the bare trace ``face.left(u)`` or ``face.right(u)``."""
 
-    __slots__ = ("value", "side")
+    __slots__ = ("value", "side", "components")
 
-    def __init__(self, value: Any, side: str | None) -> None:
+    def __init__(self, value: Any, side: str | None, components: tuple) -> None:
         self.value = value
         self.side = side
+        self.components = components
 
     def children(self) -> tuple:
         return (self.value,)
@@ -344,14 +348,14 @@ def _wave(term: Any, value: Any, normal: Any, word: str) -> Any:
     if not isinstance(normal, SchemeLeaf) or normal.key != ("normal",):
         raise TypeError("%s(term, u, n) takes the normal of the face, face.normal, as n; got %r"
                         % (word, normal))
-    slope = derivative(key.value, key.quantity)
-    if slope is None:
+    slopes = key.slopes()
+    if slopes is None:
         raise AmbiguousElaboration(
             "%s(term, u, n) under %s = %s, whose wave speed dF/d%s is not derived in this lot, so "
             "the law declares none" % (word, key, text(key.value), key.quantity),
             write="FaceFlux(..., speed=s) with a speed of the scheme's own, or a flux whose "
                   "derivative is derived", site=user_site(3))
-    return substitute(slope, {key.quantity: value}) * normal
+    return normal_dot(tuple(substitute(slope, {key.quantity: value}) for slope in slopes), normal)
 
 
 def spectral_radius(term: Any, value: Any, normal: Any) -> Any:
@@ -400,6 +404,26 @@ def _nonnegative(value: Any) -> bool:
     return is_number(value) and value >= 0
 
 
+def normal_dot(components: tuple, normal: SchemeLeaf) -> Any:
+    """The dot product of a vector given by its components on the axes with ``face.normal``:
+    the component times the normal on a support of rank one (where a vector is written as its
+    scalar), else c_1 n_1 + ... + c_d n_d over the components of the canonical normal, which is
+    the component of the axis of the face and one body for every axis (lot 2b)."""
+    if len(components) == 1:
+        return components[0] * normal
+    if len(components) != normal.rank:
+        raise SupportMismatch(
+            "a vector of %d components dotted with the normal of a support of rank %d"
+            % (len(components), normal.rank),
+            write="vector(%s), one component per axis" % ", ".join(["..."] * normal.rank),
+            site=user_site(4))
+    total: Any = None
+    for index, component in enumerate(components):
+        term = component * SchemeLeaf(("normal", index), None, "face.normal[%d]" % index)
+        total = term if total is None else total + term
+    return total
+
+
 def _is_normal(value: Any) -> bool:
     return isinstance(value, SchemeLeaf) and value.key == ("normal",)
 
@@ -416,7 +440,10 @@ def dot(a: Any, b: Any) -> Any:
             if a.side is not None:
                 return SchemeLeaf(("flux", a.side), None,
                                   "dot(term.law(states={u: face.%s(u)}), face.normal)" % a.side)
-            return a.value * b
+            return normal_dot(a.components, b)
+        if isinstance(a, Call) and a.word == "vector":
+            # vector(...) built of the components on the axes, the velocity of upwind(speed=f)
+            return normal_dot(tuple(a.args), b)
         spelled = text(a) if isinstance(a, Expr) or is_number(a) else repr(a)
         raise SupportMismatch(
             "dot(e, face.normal) projects a flux on the normal, and %s is a scalar" % spelled,
@@ -516,7 +543,8 @@ class FaceEntity(_Unread):
 
     @property
     def normal(self) -> Any:
-        return SchemeLeaf(("normal",), None, "face.normal")
+        return SchemeLeaf(("normal",), None, "face.normal",
+                          rank=self._key.quantity.support.rank)
 
     def left(self, value: Any) -> Any:
         return _traced(self._key, value, "left", "face.left")
@@ -605,8 +633,9 @@ class TermEntity(_Unread):
             raise NotYetElaborated("term.law(gradients=...)", _DIFFUSIVE)
         if isinstance(key, DiffusiveFlux):
             raise NotYetElaborated("term.law of the diffusive flux %s" % key, _DIFFUSIVE)
+        components = getattr(key, "components", (key.value,))
         if states is None:
-            return LawValue(key.value, None)
+            return LawValue(key.value, None, components)
         if not isinstance(states, dict):
             raise TypeError("term.law(states={q: value}) takes a table keyed by quantities")
         table = {}
@@ -620,7 +649,8 @@ class TermEntity(_Unread):
         (trace,) = table.values() if len(table) == 1 else (None,)
         if isinstance(trace, SchemeLeaf) and trace.key[0] == "trace":
             side = trace.key[1]
-        return LawValue(substitute(key.value, table), side)
+        return LawValue(substitute(key.value, table), side,
+                        tuple(substitute(component, table) for component in components))
 
     def expect(self, form: Any) -> None:
         """Refuse the scheme unless the key has the form (CC2); return nothing."""
@@ -799,10 +829,18 @@ class UserScheme(SchemeValue):
                 return traced
         axes = key.quantity.support.axes
         if self.scheme.is_cell:
-            (axis,) = axes[:1]
-            builder = self._run({"cell": CellEntity(key, axis), "axis": axis,
+            builder = None
+            for axis in axes:
+                ran = self._run({"cell": CellEntity(key, axis), "axis": axis,
                                  "term": TermEntity(key)}, key)
-            _reads(builder.value, ("sample",), self, "cell")
+                _reads(ran.value, ("sample",), self, "cell")
+                if builder is None:
+                    builder = ran
+                elif normal_form(builder.value) != normal_form(ran.value):
+                    raise NotYetElaborated(
+                        "the scheme %s, whose trace along the axis %s differs from the one along "
+                        "the axis %s" % (self, axis, axes[0]), _PER_AXIS_RECONSTRUCTION,
+                        site=self.site)
             traced = Traced(builder, None)
         else:
             builder = None
@@ -914,9 +952,11 @@ def _same_face(one: FaceFlux, other: FaceFlux) -> bool:
 
 def _face_inputs(uL: Any, uR: Any, fL: Any, fR: Any, n: Any, s: Any) -> dict:
     # A cell read is lowered to the trace only where the face has no reconstruction (traced).
-    return {("trace", "left"): uL[0], ("trace", "right"): uR[0], ("flux", "left"): fL[0],
-            ("flux", "right"): fR[0], ("normal",): n[0], ("speed",): s,
-            ("cell", "left"): uL[0], ("cell", "right"): uR[0]}
+    inputs = {("trace", "left"): uL[0], ("trace", "right"): uR[0], ("flux", "left"): fL[0],
+              ("flux", "right"): fR[0], ("normal",): n[0], ("speed",): s,
+              ("cell", "left"): uL[0], ("cell", "right"): uR[0]}
+    inputs.update({("normal", index): n[index] for index in range(3)})
+    return inputs
 
 
 def _reads(value: Any, allowed: tuple, scheme_: Any, entity: str, site: Any = None) -> None:
@@ -928,6 +968,12 @@ def _reads(value: Any, allowed: tuple, scheme_: Any, entity: str, site: Any = No
                 "%s returns %s, the flux of the key, a vector, where a scalar is taken"
                 % (scheme_, node),
                 write="dot(term.law(...), face.normal), its normal component", site=site)
+        if isinstance(node, SchemeLeaf) and node.key == ("normal",) and node.rank > 1:
+            raise SupportMismatch(
+                "%s uses face.normal, a vector of %d components, where a scalar is taken"
+                % (scheme_, node.rank),
+                write="dot(e, face.normal) of a vector e, such as dot(term.law(...), "
+                      "face.normal)", site=site)
         if isinstance(node, SchemeLeaf) and node.key[0] not in allowed:
             raise TypeError("%s reads %s, which a %s scheme does not receive"
                             % (scheme_, node, entity))
@@ -995,11 +1041,12 @@ def face_function(function: Any, view: TermView, where: str, reconstructed: bool
     lower = view.lower
 
     def lowered(face: Any) -> Any:
-        return lower(value, {("trace", "left"): face.left(view.state)[0],
-                             ("trace", "right"): face.right(view.state)[0],
-                             ("cell", "left"): face.left(view.state)[0],
-                             ("cell", "right"): face.right(view.state)[0],
-                             ("normal",): face.normal[0]})
+        inputs = {("trace", "left"): face.left(view.state)[0],
+                  ("trace", "right"): face.right(view.state)[0],
+                  ("cell", "left"): face.left(view.state)[0],
+                  ("cell", "right"): face.right(view.state)[0], ("normal",): face.normal[0]}
+        inputs.update({("normal", index): face.normal[index] for index in range(3)})
+        return lower(value, inputs)
 
     return lowered
 
@@ -1017,7 +1064,7 @@ def check_plain_function(value: Any, where: str) -> None:
 __all__ = [
     "Builder", "CellEntity", "FaceEntity", "FaceFlux", "Reconstruct", "SchemeLeaf",
     "LawValue", "SurfaceScheme", "TermEntity", "UserScheme", "Word", "Words",
-    "check_plain_function", "dot", "formal_order", "is_radius_pair",
+    "check_plain_function", "dot", "formal_order", "is_radius_pair", "normal_dot",
     "fastest_speed", "forms", "kinds", "normal_form", "realize_reconstruction", "scheme",
     "slowest_speed", "spectral_radius", "substitute",
 ]

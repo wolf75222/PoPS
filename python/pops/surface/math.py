@@ -36,7 +36,7 @@ _TRACES = "a later lot of N15 with the boundary relations of G04"
 _LATER = {
     "log1p": _N11, "cbrt": _N11, "sign": _N11, "clamp": _N11, "tan": _N11, "atan": _N11,
     "atan2": _N11, "sinh": _N11, "cosh": _N11, "tanh": _N11, "erf": _N11, "erfc": _N11,
-    "vector": _N11, "component": _N11, "unit": _N11,
+    "component": _N11, "unit": _N11,
     "identity": _N11, "outer": _N11, "contract": _N11, "transpose": _N11,
     "matrix_trace": _N11, "determinant": _N11, "inverse": _N11, "solve_small": _N11,
     "symmetric_eigen": _N11, "norm": _N11, "reflect": _N11, "sum_over": _N11,
@@ -185,6 +185,19 @@ largest, smallest = (_extremum(word) for word in ("largest", "smallest"))
 
 
 @_surface_entry
+def vector(*components: _Any) -> _Expr:
+    """``vector(c_1, ..., c_d)``, a vector of one component per axis. Lot 2b of N15 elaborates it
+    as the value of a flux, ``model.flux(of=u, value=vector(a, b) * u)``, and in
+    ``dot(vector(...), face.normal)`` in a scheme; its other uses belong to N11 (2.6.3)."""
+    if len(components) == 1 and isinstance(components[0], (list, tuple)):
+        raise TypeError("vector(c_1, ..., c_d) takes its components as arguments, "
+                        "vector(a, b), not a sequence")
+    if not components:
+        raise TypeError("vector(c_1, ..., c_d) takes one component per axis")
+    return _Call("vector", tuple(_value(item, "vector") for item in components))
+
+
+@_surface_entry
 def dot(a: _Any, b: _Any) -> _Any:
     """``dot(a, b)``; lot 2 of N15 elaborates ``dot(term.law(...), face.normal)``, the normal
     component of the flux of the key in a face scheme, and leaves the others to N11 (2.6.3)."""
@@ -211,7 +224,7 @@ outflow = _later("outflow", _TRACES)
 
 __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
     "Fraction", "pi", "infinity", "ddt", "grad", "div", "curl", *_ELEMENTARY, "where", "equal",
-    "all_of", "any_of", "none_of", "largest", "smallest", "dot", "outflow", *_LATER]
+    "all_of", "any_of", "none_of", "largest", "smallest", "vector", "dot", "outflow", *_LATER]
 
 
 def __getattr__(name: str) -> _Any:
