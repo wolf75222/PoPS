@@ -8515,7 +8515,7 @@
       }
     },
     "ci_20261111_n15_surface_lot2b": {
-      "basis": "Unmeasured CI scheduling estimate for the source-only unit module of N15 lot 2b (ROM-98, schemes on a support of rank two), on the source-only tiers of api_v02_20261013 (5/15/60 s): 60 s, as the analogue test_su_t3_schemes.py, since it elaborates, validates and resolves six 2D cases and their hand-written b6 forms and generates their C++ without compiling. The local receipt comes from pytest on a 4-core container; it is not a GitHub CI file wall time. Existing weights, the Python shard total, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimate for the source-only unit module of N15 lot 2b (ROM-98, schemes on a support of rank two), on the source-only tiers of api_v02_20261013 (5/15/60 s): 60 s, as the analogue test_su_t3_schemes.py, since it elaborates, validates and resolves six 2D cases and two 3D cases and their hand-written b6 forms and generates their C++ without compiling. The local receipt comes from pytest on a 4-core container; it is not a GitHub CI file wall time. Existing weights, the Python shard total, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/surface/test_su_t3_schemes_2d.py": "tests/python/unit/surface/test_su_t3_schemes.py"
       },
@@ -8524,13 +8524,13 @@
       },
       "local_receipts": {
         "tests/python/unit/surface/test_su_t3_schemes_2d.py": {
-          "cases": 13,
-          "phase_seconds": 19.3,
-          "session_seconds": 20.3
+          "cases": 16,
+          "phase_seconds": 24.3,
+          "session_seconds": 25.3
         }
       },
       "source_sha256": {
-        "tests/python/unit/surface/test_su_t3_schemes_2d.py": "f09776ccb79a0a6bc25db8ab1fe0ba568553f64ff2ea4792099dbef98239745e"
+        "tests/python/unit/surface/test_su_t3_schemes_2d.py": "40ffa1d0fa7b379638c5b0c39479a6ca417eebdcded912d538582ce5b560a96d"
       }
     }
   },

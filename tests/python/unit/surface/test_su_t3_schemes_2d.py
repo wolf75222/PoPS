@@ -1,4 +1,4 @@
-"""SU-T3, CF4 and SU-T2 (spec 0.3, 2.6.7) for a scheme of one's own on a support of rank two, lot
+"""SU-T3, CF4 and SU-T2 (spec 0.3, 2.6.7) for a scheme of one's own on a support of rank two and three, lot
 2b of N15 (ROM-98).
 
 A flux of a support of rank d is a vector of d components, ``model.flux(of=u, value=vector(a, b)
@@ -18,7 +18,7 @@ from pops import math as pm
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
 from pops.domain import CartesianDomain
-from pops.frames import Cartesian2D
+from pops.frames import Cartesian2D, Cartesian3D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
@@ -264,6 +264,95 @@ def test_inspect_reports_the_components_and_the_waves_per_axis():
         str(report)
 
 
+# --- SU-T3 on a support of rank three (R2 of the review of #763) ---------------------------------
+
+def _surface_case3(scheme):
+    domain = surface.Box(x=surface.Periodic(0, 1), y=surface.Periodic(0, 1),
+                         z=surface.Periodic(0, 1))
+    model = surface.Model("advection")
+    u = model.quantity("u", surface.Scalar(domain))
+    a = model.constant("a", value=1.0)
+    b = model.constant("b", value=0.5)
+    c = model.constant("c", value=0.25)
+    u0 = model.data("u0", surface.Scalar(domain))
+    advection = model.flux(of=u, value=vector(a, b, c) * u)
+    model.balance(ddt(u) == -div(advection))
+    numerics = surface.Numerics(represent={u: surface.CellAverage()},
+                                schemes={advection: scheme})
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
+                              initial={u: u0})
+    return surface.Case(model=model, numerics=numerics, program=program,
+                        layout={domain: surface.Uniform(cells=(8, 8, 8))})
+
+
+def _hand_case3(face):
+    frame = CartesianDomain("box", lower=(0.0, 0.0, 0.0),
+                            upper=(1.0, 1.0, 1.0)).frame(Cartesian3D())
+    x, y, z = frame.axes
+    model = pops.Model("advection", frame=frame)
+    a = model.value(model.param(ConstParam("a", 1.0)))
+    b = model.value(model.param(ConstParam("b", 0.5)))
+    c = model.value(model.param(ConstParam("c", 0.25)))
+    u = model.state("u", components=("u",))
+    flux_u = model.flux("flux_u", state=u, frame=frame,
+                        components={x: (a * u[0],), y: (b * u[0],), z: (c * u[0],)},
+                        waves={x: (a,), y: (b,), z: (c,)})
+    rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u))
+    plan = DiscretizationPlan()
+    selection = rate.select(flux_u)
+    realization = face(flux_u, u, a, b, c)
+    if not isinstance(realization, FiniteVolume):
+        realization = FiniteVolume(flux=flux_u, variables=variables.Conservative(u),
+                                   reconstruction=reconstruction.FirstOrder(),
+                                   riemann=realization)
+    plan.rates.add(selection, realization)
+    case = pops.Case("advection")
+    block = case.block("advection", model)
+    case.numerics(plan, block=block)
+    case.initials.add(InitialCondition(state=block[u], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+
+    def transport(state):
+        return selection(state)
+
+    elaborate(Advance(_n8_ssprk2(rate=transport)), case=case, state=block[u],
+              proposal=Proposal(0.001))
+    return case, Uniform(CartesianGrid(frame=frame, cells=(8, 8, 8),
+                                       periodic=PeriodicAxes((x, y, z))))
+
+
+def test_the_normal_component_at_a_state_on_a_support_of_rank_three():
+    """dot(term.law(states={q: 1}), face.normal) at rank 3 is a n0 + b n1 + c n2 written by hand:
+    each of the three components meets its component of the canonical normal."""
+    def face(flux_u, u, a, b, c):
+        def speed(n):
+            return a * 1 * n[0] + b * 1 * n[1] + c * 1 * n[2]
+
+        def body(uL, uR, fL, fR, s, *, n):
+            sn = speed(n)
+            return (pm.where(sn > 0, lambda: sn * uL[0], lambda: sn * uR[0]),)
+
+        def stability(uL, uR, fL, fR, s, *, n):
+            return abs(speed(n))
+
+        return riemann.User(body=body, state=u, stability=stability)
+
+    _assert_same(_surface_case3(linear_upwind()), _hand_case3(face))
+
+
+
+def test_upwind_with_a_stated_velocity_on_a_support_of_rank_three():
+    """upwind(speed=f), f(face) = dot(vector(a, b, c), face.normal), against fluxes.upwind with
+    a n0 + b n1 + c n2 written by hand."""
+    def speed(face):
+        return dot(vector(1.0, 0.5, 0.25), face.normal)
+
+    def hand(flux_u, u, a, b, c):
+        return fluxes.upwind(flux_u, u, speed=lambda face: 1.0 * face.normal[0]
+                             + 0.5 * face.normal[1] + 0.25 * face.normal[2])
+
+    _assert_same(_surface_case3(upwind(speed=speed)), _hand_case3(hand))
+
 # --- SU-T2 on a support of rank two ----------------------------------------------------------------
 
 def test_a_scalar_flux_on_a_support_of_rank_two_names_vector():
@@ -305,3 +394,16 @@ def test_a_face_that_differs_by_axis_names_its_lot():
 
     with pytest.raises(surface.NotYetElaborated, match="face lowered per axis"):
         _surface_case(lambda a, b: by_axis())
+
+
+def test_a_cell_scheme_that_differs_by_axis_names_its_lot():
+    """R1 of the review of #763: the runs of a cell scheme on the axes are compared on every axis,
+    so a trace that differs by axis is refused, never the trace of the first axis on all."""
+    @surface.scheme
+    def by_axis_cell(cell, term, axis):
+        q = term.quantity
+        first = axis is axis.support.axes[0]
+        return Reconstruct(cell.value(q) if first else cell.shift(axis, 1).value(q))
+
+    with pytest.raises(surface.NotYetElaborated, match="reconstruction lowered per axis"):
+        _surface_case(lambda a, b: local_lax_friedrichs(reconstruction=by_axis_cell()))
