@@ -20,6 +20,12 @@ from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes, LayoutPlanBuilder, LayoutRepresentation, LayoutMappingOperation, LayoutSynchronization, PhysicalSupportMap, native_physical_mapping
 
 
+
+def _component_above(subject, component, threshold):
+    """The refine region of one adaptive layout, written as a function of cell (DM13b)."""
+    from pops.math import ValueExpr
+    return lambda cell: cell.value(ValueExpr(subject)[component]) > threshold
+
 def route(tmp_path, *, adaptive=False):
     unit = PhysicalDimension()
     x = PhysicalSupport((("x", "shared interval"),))
@@ -83,7 +89,7 @@ def route(tmp_path, *, adaptive=False):
         for handle in (state, out):
             transfer = AMRTransfer(); transfer.state(handle, StateTransfer()); transfers.append(transfer)
         descriptors = tuple(AMR(grid=descriptor.mesh, hierarchy=AMRHierarchy(max_levels=2,
-            ratios=((2, 1) if index == 0 else (2, 2),)), tagging=AMRTagging(rules=(Tag(__import__("pops.math", fromlist=["ValueExpr"]).ValueExpr((state,out)[index])[("a","s")[index]] > validated.value(threshold)), Buffer(cells=0, selection="refine-requests")),
+            ratios=((2, 1) if index == 0 else (2, 2),)), tagging=AMRTagging(rules=(Tag(_component_above((state,out)[index], ("a","s")[index], validated.value(threshold))), Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid.frozen(), transfer=transfers[index], execution=AMRExecution.synchronous())
             for index, descriptor in enumerate(descriptors))

@@ -96,6 +96,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3b): a criterion written as regions of `cell` now compiles on a plan with
+  several layouts. `pops.compile` generates each adaptive layout's criterion into that layout's
+  Program slice, and the layout's AmrSystem installs the entry of its own slice; no native code
+  changes. `Regrid(criterion, when)` on a plan with several layouts stays refused (write
+  `tagging=` and `regrid=` on each adaptive layout). The multi-layout AMR cases of the test suite
+  (physical maps, interstage maps, m19, sol61) write regions; on three adaptive layouts, graph and
+  region routes give bitwise identical hierarchies.
 - ROM-95 (N12, lot 3a, part 2): the 19 `examples/api_v02` AMR cases and the condensed_fac/01,
   diocotron/01, 02 and 04, hyqmom (`_amr_hybrid`) and initial_field_ghost/01 tutorials write their
   tagging as regions of `cell`; the three reviewed api_v02 modules that changed carry new source
