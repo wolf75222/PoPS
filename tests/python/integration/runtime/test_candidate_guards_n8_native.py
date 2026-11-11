@@ -11,10 +11,13 @@ T7 across the attempts of one step (design note, revision 2, section 5): under R
 CG budget at which M08's stage-1 solve fails alone, the stage-0 solve, a fixed site, runs at the
 first attempt only. The run report counts the prepared solves that ran, every attempt included.
 """
+import re
+
 import numpy as np
 import pytest
 
 import pops
+import pops.codegen.program_field_reuse as field_reuse
 import examples.api_v02.models_M01_M14 as early
 import examples.api_v02.models_M15_M18 as moments
 import examples.api_v02.models_M15_orders as orders
@@ -88,7 +91,19 @@ def _m08_route(attempts, substeps):
     return route
 
 
-def _m08(world, monkeypatch, attempts, max_iter, substeps=1):
+def _sabotaged_publish(publish):
+    """A wrong reuse, for the sabotage proof of review A2: the attempt that keeps the solve of
+    its fixed site zeroes the solution instead of reading it."""
+    def sabotaged(value, var, lines, *, target, reused=None):
+        if reused is not None:
+            (solution,) = {match.group(1) for line in lines for match in [re.search(
+                r"ctx\.solve_prepared_linear\(\*\w+, \*\w+, \*(\w+),", line)] if match}
+            lines.append("if (%s) pops::PureFieldAlgebra::zero_valid(*%s);" % (reused, solution))
+        return publish(value, var, lines, target=target, reused=reused)
+    return sabotaged
+
+
+def _m08(world, monkeypatch, attempts, max_iter, substeps=1, *, sabotage=False):
     with monkeypatch.context() as patch:
         patch.setattr(early, "_traced_recorded_ssprk2", _m08_route(attempts, substeps))
         if max_iter is not None:
@@ -96,14 +111,22 @@ def _m08(world, monkeypatch, attempts, max_iter, substeps=1):
         spec = collective_call(world, early.build_m08)
     plan = collective_call(world, lambda: pops.resolve(pops.validate(spec.case),
                                                        layout=spec.layout))
-    artifact = compile_profile_plan_once(
-        world, plan, route="N8 lot 6 M08 CG(max_iter=%s) Retry(%d) substeps %d" % (
-            max_iter, attempts, substeps),
-        compile_artifact=pops.compile)
+    with monkeypatch.context() as patch:
+        if sabotage:
+            patch.setattr(field_reuse, "publish_field_solve",
+                          _sabotaged_publish(field_reuse.publish_field_solve))
+        artifact = compile_profile_plan_once(
+            world, plan, route="N8 lot 6 M08 CG(max_iter=%s) Retry(%d) substeps %d%s" % (
+                max_iter, attempts, substeps, " sabotaged reuse" if sabotage else ""),
+            compile_artifact=pops.compile)
     runtime = collective_call(world, lambda: pops.bind(artifact, initial_values={
         subject: value.copy() for subject, value in spec.initial_values.items()},
         resources={"execution_context": artifact_execution_context(artifact)}))
     return spec, runtime, Simulation(runtime)
+
+
+def _bits(native):
+    return np.float64(native["last_prepared_solve_residual"]).tobytes()
 
 
 def test_a_retry_keeps_the_solve_of_its_fixed_site(
@@ -135,15 +158,29 @@ def test_a_retry_keeps_the_solve_of_its_fixed_site(
         # Attempt 1 solves both stages; attempts 2 and 3 solve stage 1 only.
         assert native["prepared_solves"] == 1 + 3
     # Review A2: no attempt of the step is accepted, so the reuse is checked by value. The
-    # stage-1 solve reads the stage-0 solution; its failure detail, residual included, is the
-    # same at the third attempt, which reused that solution, as at the first, which solved it.
+    # stage-1 solve reads the stage-0 solution through its right-hand side; the iteration count
+    # and the final residual norm of its failed report are bitwise the same at the third attempt,
+    # which reused that solution, as at the only attempt of Retry(1), which solved it.
     spec, _, simulation = _m08(world, monkeypatch, 1, max_iter)
     first = failed(spec, simulation)
+    solved = first.result.diagnostics["native"]
     with collective_check(world):
         assert type(first) is BudgetExhausted and first.result.rejections == 1
-        assert first.result.diagnostics["native"]["prepared_solves"] == 2
+        assert solved["prepared_solves"] == 2
         assert first.result.failure.payload["cause"].payload == \
             error.result.failure.payload["cause"].payload
+        assert solved["last_prepared_solve_iterations"] == max_iter
+        assert np.isfinite(solved["last_prepared_solve_residual"])
+        assert solved["last_prepared_solve_residual"] > 0.0
+        assert (native["last_prepared_solve_iterations"], _bits(native)) == (
+            solved["last_prepared_solve_iterations"], _bits(solved))
+    # The sabotage proof: a reuse that zeroes the kept solution changes that residual.
+    spec, _, simulation = _m08(world, monkeypatch, 3, max_iter, sabotage=True)
+    wrong = failed(spec, simulation)
+    with collective_check(world):
+        assert type(wrong) is BudgetExhausted and wrong.result.rejections == 3
+        assert wrong.result.diagnostics["native"]["prepared_solves"] == 1 + 3
+        assert _bits(wrong.result.diagnostics["native"]) != _bits(solved)
     # The same step accepted: every attempt is the first of its step, and solves both stages.
     spec, _, simulation = _m08(world, monkeypatch, 3, None)
     result = collective_call(world, lambda: simulation.run(spec.t_end))

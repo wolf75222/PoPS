@@ -1608,8 +1608,9 @@ class System {
   /// step, a new one otherwise. A generated solve whose dependency set excludes the proposal
   /// keeps its solution for the later attempts of its epoch.
   POPS_EXPORT std::uint64_t begin_attempt_epoch_();
-  /// Count one prepared linear solve that ran (the solve count of AdvanceRunReport).
-  POPS_EXPORT void count_prepared_solve_() noexcept;
+  /// Count one prepared linear solve that ran, with the iteration count and the final residual
+  /// norm of its report (the solve count and the last solve of AdvanceRunReport).
+  POPS_EXPORT void count_prepared_solve_(int iterations, double residual_norm) noexcept;
   /// Internal result boundary shared by field, local-source and Program prepared-linear solves.
   [[nodiscard]] POPS_EXPORT SolveOutcome track_solve_outcome(SolveOutcome outcome) const noexcept;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains
