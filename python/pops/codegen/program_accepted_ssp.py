@@ -82,6 +82,13 @@ def successful_guard_input(value):
         if value.attrs["assessment"] == ADVANCE_ASSESSMENT_CONTRACT \
                 and type(value.attrs.get("action")) is RejectAttempt:
             allowed.add("assessment")
+    site = value.attrs.get("trial_site")
+    if site is not None and type(value.attrs.get("action")) is RejectAttempt \
+            and set(site) == {"site", "retry_can_change", "variant"} \
+            and site["site"] == value.attrs.get("guard"):
+        # An admissibility guard of a traced method (IR4, N8 lot 6) rejects its attempt; it
+        # never mutates the value that it gates.
+        allowed.add("trial_site")
     if (
         set(value.attrs) != allowed
         or type(value.attrs.get("action")) not in (FailRun, RejectAttempt)
