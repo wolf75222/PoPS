@@ -1,41 +1,41 @@
 {
  "source": {
   "spec": "pops_api_spec_v0_3.md",
-  "sha256": "e935fd32a85f382879fc2add7fb4a24a7eb756f97b074a4bb23e987e3a9714a5",
+  "sha256": "e55e5757141925e4c5f4e04a4f9348b70c187c0f98969b85e3272f031083937a",
   "sections": [
    {
     "section": "2.6.2",
     "lines": [
-     332,
-     406
+     336,
+     410
     ]
    },
    {
     "section": "2.6.3",
     "lines": [
-     407,
-     421
+     411,
+     425
     ]
    },
    {
     "section": "2.6.4",
     "lines": [
-     422,
-     538
+     426,
+     542
     ]
    },
    {
     "section": "2.6.8",
     "lines": [
-     731,
-     925
+     737,
+     932
     ]
    },
    {
     "section": "2.6.9",
     "lines": [
-     926,
-     1084
+     933,
+     1098
     ]
    }
   ],
@@ -185,6 +185,7 @@
   "Dissipates",
   "DualLoad",
   "E",
+  "E_max",
   "EdgeCirculation",
   "EdgeFlux",
   "EffectInWhere",
@@ -244,8 +245,8 @@
   "NoData",
   "None",
   "Norm",
+  "NormalComponent",
   "NormalFlux",
-  "NormalVelocity",
   "Normalization",
   "NotAdmissible",
   "NotDiffusive",
@@ -271,6 +272,7 @@
   "Program",
   "Project",
   "PropertyNotDerived",
+  "Quadrature",
   "Realizable",
   "RealizationMismatch",
   "Recompute",
@@ -842,6 +844,7 @@
   "record",
   "reduce",
   "reduced",
+  "reduced_field",
   "ref",
   "refine",
   "reflect",
@@ -1057,6 +1060,7 @@
   "wave_speeds",
   "weak_fluxes",
   "weight",
+  "weights",
   "when",
   "where",
   "width",

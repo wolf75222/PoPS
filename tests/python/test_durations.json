@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1160,
+    "estimated_count": 1161,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7725,6 +7725,7 @@
       "tests/python/unit/solvers/test_amr_composite_facade.py",
       "tests/python/unit/solvers/test_cartesian_cg_descriptor.py",
       "tests/python/unit/solvers/test_poisson_screened.py",
+      "tests/python/unit/surface/test_quadrature.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
       "tests/python/unit/surface/test_su_t3_parity.py",
       "tests/python/unit/time/test_actions_v14.py",
@@ -8098,7 +8099,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1225,
+    "total_files": 1226,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8423,6 +8424,25 @@
       },
       "source_sha256": {
         "tests/python/unit/numerics/test_index_sets_n10.py": "dcf582c8da99d9b3a57a8a879db187f513b4d81118fcbc7f44876dbdc5095f7c"
+      }
+    },
+    "n2_20261111_quadrature": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only unit module of the P3 move of N2 (ROM-81, review of 11/11): pops.Quadrature in the core and GaussLegendre and GaussHermite in pops.lib.quadrature, with their parity tests (CF4). 5 s, the lowest source-only tier of api_v02_20261013: it builds rules with numpy and traces one small case, a lighter analogue of test_su_t2_refusals.py (15 s). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions (no native module), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_quadrature.py": "tests/python/unit/surface/test_su_t2_refusals.py"
+      },
+      "estimated_seconds": {
+        "tests/python/unit/surface/test_quadrature.py": 5
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_quadrature.py": {
+          "command": "PYTHONPATH=python pytest -q tests/python/unit/surface/test_quadrature.py",
+          "passed": 37,
+          "seconds": 0.54
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_quadrature.py": "c16c62f7feb5b348d32ca4aa28417781d442852aa6e3db1db0a7223a63592024"
       }
     }
   },
@@ -9650,5 +9670,6 @@
   "tests/python/unit/surface/test_su_t3_parity.py": 60,
   "tests/python/integration/runtime/test_field_requests_n8_native.py": 900,
   "tests/python/unit/time/test_field_requests_n8.py": 120,
-  "tests/python/unit/numerics/test_index_sets_n10.py": 30
+  "tests/python/unit/numerics/test_index_sets_n10.py": 30,
+  "tests/python/unit/surface/test_quadrature.py": 5
 }

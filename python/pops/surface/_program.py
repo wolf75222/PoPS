@@ -23,6 +23,7 @@ from ._geometry import Box
 from ._method import MethodValue, SurfaceMethod
 from ._model import Datum, Model, Quantity
 from ._numerics import Numerics, SchemeValue
+from ._quadrature import Quadrature
 from ._refusal import (
     AmbiguousElaboration, LevelMismatch, NotYetElaborated, SpellingRefusal, surface_entry,
     user_site,
@@ -169,7 +170,6 @@ def _later_layout(name: str, owner: str) -> Any:
 
 
 AMR = _later_layout("AMR", "a later lot of N15 with the hierarchies of N12 and T08")
-GaussLegendre = _later_layout("GaussLegendre", "a later lot of N15 with the quadratures of G03")
 
 
 def _positive_number(value: Any) -> bool:
@@ -213,6 +213,10 @@ class Case:
         for support, value in layout.items():
             if not isinstance(support, Box):
                 raise TypeError("pops.Case(layout=...) is keyed by supports, got %r" % (support,))
+            if isinstance(value, Quadrature):
+                raise NotYetElaborated("pops.Case(layout={%r: pops.Quadrature(...)}), a quadrature "
+                                       "rule as the layout of a support (D0)" % (support,),
+                                       "a later lot of N15 with the supports of G03")
             if not isinstance(value, Uniform):
                 raise TypeError("pops.Case(layout={%r: ...}) takes pops.Uniform(cells=c), got %r"
                                 % (support, value))
