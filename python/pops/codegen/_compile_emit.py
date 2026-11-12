@@ -515,6 +515,24 @@ def selects_catalogue_routes(model: Any) -> bool:
                 or getattr(impl, "_user_face", None) is not None)
 
 
+def reads_static_geometry_by_source_face(model: Any) -> bool:
+    """Whether the package of *model* reads static geometry arrays through its face authored in
+    source (N17, C1; the words of ``pops.lib.numerics`` since N3 lot 1).
+
+    Such a package installs no catalogue route: its block materializes the source face on the
+    physical normals and measures of the arrays, on the cell values as traces. A trace authored in
+    source is a stencil of the logical box, which resolution refuses on a mapped layout.
+    """
+    impl = getattr(model, "_m", model)
+    return (not getattr(impl, "_program_only_storage_axes", ())
+            and getattr(impl, "_user_reconstruction", None) is None
+            and getattr(impl, "_user_face", None) is not None)
+
+
+# The geometry of a package whose face is authored in source and reads the static arrays.
+_STATIC_GEOMETRY_FACE_CPP = "pops::GeneratedStaticGeometryFace"
+
+
 def normalize_native_geometry(geometry: Any) -> str | None:
     """Return the geometry contract a package reads beside its route, or ``None`` for the box.
 
@@ -1058,12 +1076,20 @@ def emit_cpp_native_loader(
         getattr(getattr(m, "_m", m), "_user_face", None))
     user_face_captures = bool(user_face_descriptor is not None and
                               user_face_descriptor.options["runtime_captures"])
+    # A face authored in source reads the static arrays through its own package (N3 lot 1): the
+    # package names that geometry instead of a catalogue route.
+    source_face_geometry = (normalize_native_geometry(native_geometry) is not None
+                            and native_route is None and reads_static_geometry_by_source_face(m))
+    if source_face_geometry and target != "system":
+        raise ValueError("emit_cpp_native_loader: static geometry arrays are read on a System")
     route_cpp = _native_route_cpp(
-        native_route, None if storage_only else native_geometry)
+        native_route, None if storage_only or source_face_geometry else native_geometry)
     if route_cpp and not selects_catalogue_routes(m):
         raise ValueError(
             "emit_cpp_native_loader: a catalogue native route cannot specialize a state-storage "
             "or source-authored numerical package")
+    if source_face_geometry:
+        route_cpp = _STATIC_GEOMETRY_FACE_CPP
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
     if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
         raise ValueError("emit_cpp_native_loader requires one lowercase 64-hex model identity")

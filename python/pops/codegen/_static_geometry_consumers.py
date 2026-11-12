@@ -9,12 +9,19 @@ an allowlist: a consumer joins it when it reads the arrays and a test shows it.
 * the explicit finite-volume rate of a block whose traces are the cell values (formal order one)
   and whose face law reads only what a physical normal provides: the normal flux F.n and a bound
   of the normal spectral radius, with the provider pack of each trace (the requirements that the
-  face descriptor declares). The rule reads capabilities, never the name of a method (CF2);
+  face descriptor declares). The rule reads capabilities, never the name of a method (CF2), and
+  serves a face of the catalogue and a face authored in source alike (``riemann.User``, the words
+  of ``pops.lib.numerics`` since N3 lot 1), whose input ``n`` is then the physical unit normal of
+  the face; a trace authored in source reads a stencil of the logical box and stays refused;
 * transport boundaries that extend the interior state alone: a ghost state of the state, without
   a formula on its components, a characteristic closure, a field, the clock or a parameter;
 * the two-point diffusion of a Program, of one component with a diagonal coefficient, on node
   positions (a graded box, of rank one to three), with conormal, value or periodic ends whose data
   reads no coordinate;
+* the divergence of a stencil flux (``StencilFlux``, the realization of ``two_point()`` since N3
+  lot 1) on node positions, whose row of axis a reads the two cells of its face and the spacing of
+  a alone: the arrays give that spacing as the distance across the face, whose faces are
+  orthogonal to the line of the centroids, and the measures of its faces and cells;
 * states and linear combinations of a Program, a fixed step, initial values bound as arrays;
 * the reductions that a block owns, which are raw algebra over the cell values and weigh nothing
   by a measure, and the finite assessment of an elaborated Advance that reads them (isfinite and
@@ -27,7 +34,8 @@ import dataclasses
 from typing import Any
 
 STATIC_GEOMETRY_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs",
-                                         "reduce", "scalar_isfinite", "acceptance_guard"})
+                                         "stencil_flux_divergence", "reduce", "scalar_isfinite",
+                                         "acceptance_guard"})
 # What a physical face normal provides to a face law: the normal flux F.n, a bound of the normal
 # spectral radius, and the provider pack of each trace.
 NORMAL_FACE_CAPABILITIES = frozenset({"physical_flux", "provider_pack", "stability_bound"})
@@ -94,12 +102,13 @@ def _check_finite_volume(layout: Any, block: Any, method: Any) -> None:
                 "block %r reconstructs traces of formal order %r; on a mapped layout the faces "
                 "read the cell values (formal order %d)"
                 % (block.name, order, STATIC_GEOMETRY_TRACE_ORDER), formal_order=order)
-    for part, descriptor in (("reconstruction", method.reconstruction), ("face", method.riemann)):
-        if "source_identity" in (getattr(descriptor, "options", None) or {}):
-            _refuse(layout, "static_geometry_source_numerics_unavailable",
-                    "block %r authors its %s in source; on a mapped layout the faces are one "
-                    "resolved catalogue route that reads the arrays" % (block.name, part),
-                    part=part)
+    # A face authored in source is a law of the face inputs (the traces, F.n, the normal speed
+    # bound and n), served by the capability rule below; a trace authored in source is a stencil
+    # of the logical box.
+    if "source_identity" in (getattr(method.reconstruction, "options", None) or {}):
+        _refuse(layout, "static_geometry_source_numerics_unavailable",
+                "block %r authors its reconstruction in source; on a mapped layout the traces are "
+                "the cell values" % block.name, part="reconstruction")
     requirements = getattr(method.riemann, "requirements", None) or {}
     required = frozenset(requirements.get("capabilities", ()))
     unserved = sorted(required - NORMAL_FACE_CAPABILITIES)
@@ -111,6 +120,39 @@ def _check_finite_volume(layout: Any, block: Any, method: Any) -> None:
     if method.sampling:
         _refuse(layout, "static_geometry_sampling_unavailable",
                 "block %r samples its faces; a sampled face reads logical positions" % block.name)
+
+
+def _check_stencil(layout: Any, value: Any, rank: int, kind: str) -> None:
+    """A stencil flux reads, on the faces of axis a, the two cells of the face and the spacing of
+    a, which the arrays of node positions give as the distance across the face."""
+    from pops.model.stencil_expression import row_leaf_names
+    from pops.time._program.stencil_flux import validate_stencil_flux
+
+    block = value.block
+    name = getattr(block, "name", block)
+    if kind != "nodes":
+        _refuse(layout, "static_geometry_stencil_unavailable",
+                "block %r divides a stencil flux by the spacings of a %s of rank %d; the arrays "
+                "serve the stencil of node positions, whose faces are orthogonal to the line of "
+                "the centroids" % (name, kind, rank), rank=rank, kind=kind)
+    declaration = validate_stencil_flux(value)
+    for axis, row in enumerate(declaration.rows):
+        leaves = row_leaf_names(row)
+        two_cells = {tuple(-1 if d == axis else 0 for d in range(rank)), (0,) * rank}
+        reads = []
+        if any(symbol.name in leaves and tuple(offset) not in two_cells
+               for offset, _, symbol in declaration.samples):
+            reads.append("a cell beyond the two cells of its face")
+        if any(symbol.name in leaves for d, symbol in enumerate(declaration.spacing) if d != axis):
+            reads.append("the spacing of another axis")
+        if any(symbol.name in leaves for _, _, _, symbol in declaration.field_samples):
+            reads.append("a field")
+        if reads:
+            _refuse(layout, "static_geometry_stencil_unavailable",
+                    "block %r reads, on the faces of axis %d of a stencil flux, %s; on node "
+                    "positions a stencil reads the two cells of its face and the spacing of its "
+                    "axis, which is the distance across the face" % (name, axis, " and ".join(reads)),
+                    axis=axis, reads=reads)
 
 
 def _extends_the_state(provider: Any) -> bool:
@@ -194,6 +236,8 @@ def validate_static_geometry_consumers(plan: Any) -> None:
                 source != "default" for source in (value.attrs.get("sources") or ()))):
             _refuse(layout, "static_geometry_consumer_unavailable",
                     "a rate with named fluxes or named sources")
+        if value.op == "stencil_flux_divergence":
+            _check_stencil(layout, value, reading.rank, reading.kind)
         if value.op == "reduce" and value.block is None:
             _refuse(layout, "static_geometry_consumer_unavailable",
                     "a reduction %r that no block owns, which observes a field or an interaction "

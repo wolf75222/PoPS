@@ -73,6 +73,14 @@ struct GeneratedStaticGeometryRoute : GeneratedResolvedRoute<Variables, Reconstr
   static constexpr bool reads_static_geometry = true;
 };
 
+/// The geometry of a package whose face is authored in source (riemann.User, the words of
+/// pops.lib.numerics since N3 lot 1) and whose layout is served by static geometry arrays (N17,
+/// C1): its block materializes that face on the physical normals, face measures and cell measures
+/// of the arrays, with the cell values as traces. It names no catalogue route.
+struct GeneratedStaticGeometryFace {
+  static constexpr bool reads_static_geometry = true;
+};
+
 template <class Routes>
 inline constexpr bool route_reads_static_geometry = [] {
   if constexpr (requires { Routes::reads_static_geometry; })
@@ -1824,8 +1832,10 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
 }
 
 /// A source-authored face body is instantiated only by its owning package and
-/// still flows through the ordinary shared conservative face operator.
-template <class Request, class Numerical>
+/// still flows through the ordinary shared conservative face operator. `Geometry` is
+/// GeneratedStaticGeometryFace for a package compiled for static geometry arrays (N17, C1), whose
+/// block reads the cell values as traces and the physical normals and measures of the arrays.
+template <class Geometry = GeneratedCatalogueRoutes, class Request, class Numerical>
   requires requires { Numerical::source_identity; } && (!ReconstructionPolicy<Numerical>)
 auto prepare_generated_system_block(Request request, Numerical numerical)
     -> PreparedSystemBlock<Request::dimension> {
@@ -1835,6 +1845,25 @@ auto prepare_generated_system_block(Request request, Numerical numerical)
     throw std::invalid_argument("generated System face source identity differs from package");
   if constexpr (path_conservative_model<Model>) {
     throw std::invalid_argument("source face needs a composed path face policy");
+  } else if constexpr (route_reads_static_geometry<Geometry>) {
+    using generated_system_detail::StaticArraysBlockGeometry;
+    if (parse_limiter_route(request.routes.limiter, "generated System face block") !=
+        LimiterRouteId::kNone)
+      throw std::invalid_argument(
+          "a source face on static geometry arrays reads the cell values as its traces");
+    switch (parse_recon_route(request.routes.reconstruction, "generated System face block")) {
+      case ReconRouteId::kConservative:
+        return generated_system_detail::materialize_block<Dim, Model, NoSlope, Numerical,
+                                                          nd::ReconstructionVariables::Conservative,
+                                                          StaticArraysBlockGeometry>(
+            std::move(request), NoSlope{}, numerical);
+      case ReconRouteId::kPrimitive:
+        return generated_system_detail::materialize_block<Dim, Model, NoSlope, Numerical,
+                                                          nd::ReconstructionVariables::Primitive,
+                                                          StaticArraysBlockGeometry>(
+            std::move(request), NoSlope{}, numerical);
+    }
+    throw std::logic_error("generated face reconstruction route escaped its exhaustive selector");
   } else {
     switch (parse_recon_route(request.routes.reconstruction, "generated System face block")) {
       case ReconRouteId::kConservative:

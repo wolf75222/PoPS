@@ -2826,9 +2826,18 @@ class ProgramContext {
       std::exception_ptr error;
       try {
         boundary->transport().with_boundary_scratch(state_value, [&](auto& scratch) {
-          if (transport_frequency)
-            local_frequency = nd::maximum_incident_face_frequency(
-                state_value, scratch.cartesian_operator.face_speeds(), geometry(), frequency_rule);
+          // A layout served by static geometry arrays weighs each face speed by the measures of
+          // its face and cell (N17, C1); the uniform box by its spacings.
+          if (transport_frequency) {
+            if (const auto arrays = system_->static_geometry())
+              local_frequency = nd::maximum_incident_face_frequency(
+                  state_value, scratch.cartesian_operator.face_speeds(), arrays->view(),
+                  frequency_rule);
+            else
+              local_frequency = nd::maximum_incident_face_frequency(
+                  state_value, scratch.cartesian_operator.face_speeds(), geometry(),
+                  frequency_rule);
+          }
           if (faces)
             *faces = scratch.generated_faces;
         });
