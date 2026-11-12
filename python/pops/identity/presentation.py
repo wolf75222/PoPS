@@ -20,9 +20,9 @@ order), and :meth:`PresentationMap.project` rewrites an already canonical JSON p
 
 Every other name (quantities, components, parameters, fields, terms, the Program and its nodes,
 frames, realizations, Python bodies) is kept: those are the kinds that gap C52 lists. A name of a
-projected kind that the map does not know (an owner of another case, a layout no block uses, a model
-that is not a block model) keeps itself: it is never replaced by the label of another owner. Such a
-name still enters the identities, as before this lot (the residuals of N11 lot 2b-i).
+projected kind that the map does not know is refused, except in three kept categories (K1-K3 below,
+the residuals of N11 lot 2b-i): such a name keeps itself, still enters the identities as before
+this lot, and is never replaced by the label of another owner.
 """
 from __future__ import annotations
 
@@ -40,10 +40,30 @@ _OWNER_KINDS = frozenset(
 _OWNER_RECORD_KEYS = frozenset(("schema_version", "nodes", "definition_fingerprint"))
 _HANDLE_PREFIX = "pops.handle.v"
 _AUTHORING = "#authoring="
+# pops.model.registry._operator_registry_fingerprint: the content of a standalone registry, no name.
+_REGISTRY_FINGERPRINT = "pops.operator-registry:sha256:"
 # A projected definition fingerprint keeps the shape the owner records accept.
 _PROJECTED_FINGERPRINT = "pops.module.projected:sha256:%s"
 _DIGEST = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 _LABEL_SEGMENT = re.compile(r"^[a-z_]+:[^:/]+$")
+
+
+# A label is ``$`` and its kind; an owner name cannot start with ``$`` (``ReservedOwnerNameError``),
+# so a name kept in a preimage can never equal a label (review A2 of #797).
+LABEL_PREFIX = "$"
+_PRESENTATION_KINDS = frozenset(("case", "block", "model_definition", "layout"))
+
+
+class ReservedOwnerNameError(ValueError):
+    """An owner name of the reserved label form (``$...``), refused where the owner is named."""
+
+
+def require_owner_name(kind: str, name: Any) -> None:
+    """Refuse a case, block, model definition or layout name that starts with ``$``."""
+    if kind in _PRESENTATION_KINDS and isinstance(name, str) and name.startswith(LABEL_PREFIX):
+        raise ReservedOwnerNameError(
+            "%s name %r is reserved: a name starting with %r is a presentation label "
+            "(spec 0.3 CC2, N11 lot 2b)" % (kind.replace("_", " "), name, LABEL_PREFIX))
 
 
 class PresentationProjectionError(ValueError):
@@ -67,6 +87,7 @@ class PresentationMap:
     block_models: tuple[int, ...]
     layouts: tuple[str, ...] = ()
     digests: tuple[tuple[str, str], ...] = ()
+    layouts_open: bool = False
 
     def __post_init__(self) -> None:
         for kind, names in (("block", self.blocks), ("layout", self.layouts)):
@@ -80,42 +101,58 @@ class PresentationMap:
             raise ValueError("PresentationMap model definitions must be distinct")
 
     # -- labels -----------------------------------------------------------------------------
-    # A name the map does not know keeps itself: an owner outside this case (a layout record a
-    # test builds under its own case), a layout no block uses (a synthetic AMR bootstrap storage),
-    # a layout the Program captured before resolve (the validated snapshot has no compile layout).
-    # Keeping it is the residual of N11 lot 2b-i: such a name still enters the identities, as
-    # before, and is never replaced by the label of another owner.
+    # A name of a projected kind is refused when the map does not know it, except in the kept
+    # categories below (the residuals of N11 lot 2b-i, each pinned by a test of
+    # tests/python/unit/problem/test_identity_names.py). A kept name still enters the identities,
+    # as before this lot, and is never given another owner's label.
+    #
+    # K1  a layout handle the Program captured before resolve, in a validated snapshot, which has no
+    #     compile layout yet (``layouts_open``); the resolved snapshot numbers it.
+    # K2  the model definition of an authoring path (``#authoring=<serial>``, no fingerprint) that is
+    #     not exactly one block model: a model outside the case, which validation then refuses with
+    #     its own reason, or a name two block models share.
+    # K3  a model definition fingerprinted by its standalone operator registry
+    #     (``pops.operator-registry:``), which the Program reads without a block.
     def case_label(self, name: str) -> str:
-        return "$case" if self.case is not None and name == self.case else name
+        if self.case is None or name != self.case:
+            raise PresentationProjectionError(
+                "case name %r is not the case of this presentation map" % (name,))
+        return "$case"
 
     def block_label(self, name: str) -> str:
-        return "$block%d" % self.blocks.index(name) if name in self.blocks else name
+        try:
+            return "$block%d" % self.blocks.index(name)
+        except ValueError:
+            raise PresentationProjectionError(
+                "block name %r is not a block of this case" % (name,)) from None
 
     def layout_label(self, name: str) -> str:
-        return "$layout%d" % self.layouts.index(name) if name in self.layouts else name
+        if name in self.layouts:
+            return "$layout%d" % self.layouts.index(name)
+        if self.layouts_open:
+            return name  # K1
+        raise PresentationProjectionError(
+            "layout name %r is not a layout of this compile" % (name,))
 
     def model_index(self, name: str, fingerprint: str | None) -> int | None:
-        """The position of the block model ``name`` (``fingerprint``), or None.
-
-        None for a model definition that is not one block model of the case: a model the Program
-        reads without a block (its definition fingerprint is then its operator registry's, or
-        an earlier one), a model outside the case (refused by validation with its own reason),
-        or a name two block models share when no fingerprint tells them apart (an authoring path).
-        """
+        """The position of the block model ``name`` (``fingerprint``), or None if none is."""
         matches = [
             index for index, (model, recorded, _) in enumerate(self.models)
             if model == name and (fingerprint is None or recorded == fingerprint)
         ]
         return matches[0] if len(matches) == 1 else None
 
-    def model_label(self, name: str, fingerprint: str | None) -> str:
-        """``$model<k>`` for a block model; any other model definition keeps its name.
-
-        Keeping it is the residual of N11 lot 2b-i: such a name still enters the identities, as
-        before; it is never replaced by the label of another model.
-        """
+    def model_label(self, name: str, fingerprint: str | None, *, authoring: bool = False) -> str:
         index = self.model_index(name, fingerprint)
-        return name if index is None else "$model%d" % index
+        if index is not None:
+            return "$model%d" % index
+        if authoring and fingerprint is None:
+            return name  # K2
+        if _is_registry_fingerprint(fingerprint):
+            return name  # K3
+        raise PresentationProjectionError(
+            "model definition %r (fingerprint %r) is not one model of this case"
+            % (name, fingerprint))
 
     def block_model_label(self, block: str) -> str:
         return "$model%d" % self.block_models[self.blocks.index(block)]
@@ -124,8 +161,12 @@ class PresentationMap:
         if fingerprint is None:
             return None
         matches = {free for _, recorded, free in self.models if recorded == fingerprint}
-        # The fingerprint of a model definition outside the block models is kept with its name.
-        return next(iter(matches)) if len(matches) == 1 else fingerprint
+        if len(matches) == 1:
+            return next(iter(matches))
+        if _is_registry_fingerprint(fingerprint):
+            return fingerprint  # K3: the registry fingerprint holds no owner name
+        raise PresentationProjectionError(
+            "definition fingerprint %r belongs to no model of this case" % (fingerprint,))
 
     def _digest_table(self) -> dict[str, str]:
         table = {original: projected for original, projected in self.digests}
@@ -149,23 +190,23 @@ class PresentationMap:
             "block_models": list(self.block_models),
             "layouts": list(self.layouts),
             "digests": [list(row) for row in self.digests],
+            "layouts_open": self.layouts_open,
         }
 
     # -- structured records -----------------------------------------------------------------
-    def _node_name(self, kind: str, name: str, fingerprint: str | None) -> str:
+    def _node_name(self, kind: str, name: str, fingerprint: str | None, *,
+                   authoring: bool = False) -> str:
         if kind == "case":
             return self.case_label(name)
         if kind == "block":
             return self.block_label(name)
         if kind == "model_definition":
-            return self.model_label(name, fingerprint)
+            return self.model_label(name, fingerprint, authoring=authoring)
         if kind == "layout":
             return self.layout_label(name)
         return name
 
     def project_owner_record(self, record: Any) -> dict[str, Any]:
-        if self._foreign([(node["kind"], node["name"]) for node in record["nodes"]]):
-            return dict(record)
         fingerprint = record["definition_fingerprint"]
         return {
             "schema_version": record["schema_version"],
@@ -189,21 +230,15 @@ class PresentationMap:
         if parsed is None:
             raise PresentationProjectionError("%r is not a canonical owner string" % (text,))
         nodes, fingerprint = parsed
-        if self._foreign(nodes):
-            return text + authoring
         projected = self.projected_fingerprint(fingerprint)
         segments = []
         for kind, name in nodes:
-            label = self._node_name(kind, name, fingerprint)
+            label = self._node_name(kind, name, fingerprint, authoring=bool(authoring))
             segment = "%s:%s" % (kind, quote(label, safe=""))
             if kind == "model_definition" and projected is not None:
                 segment += "@%s" % quote(projected, safe="")
             segments.append(segment)
         return "/".join(segments) + authoring
-
-    def _foreign(self, nodes: Any) -> bool:
-        """Whether an owner path belongs to another case: none of its names is then projected."""
-        return any(kind == "case" and name != self.case for kind, name in nodes)
 
     def project_qualified_id(self, text: str) -> str:
         parts = text.split("::")
@@ -212,9 +247,11 @@ class PresentationMap:
         kind = unquote(parts[2])
         owner = self.project_owner_string(parts[1])
         local = parts[3]
-        parsed = _parse_owner_string(_split_authoring(parts[1])[0])
-        if kind in ("block", "layout") and parsed is not None and not self._foreign(parsed[0]):
-            local = quote(self._node_name(kind, unquote(local), None), safe="")
+        if kind in ("block", "layout"):
+            # The local id is quoted: a raw ``:`` starts a suffix of the label that holds the
+            # qualified id (``<layout>:amr-bootstrap:<digest>`` in an AMR lowering coverage row).
+            local, separator, suffix = local.partition(":")
+            local = quote(self._node_name(kind, unquote(local), None), safe="") + separator + suffix
         return "::".join((parts[0], owner, parts[2], local, *parts[4:]))
 
     def project_string(self, text: str, digests: Any = None) -> str:
@@ -336,11 +373,6 @@ class _Projection:
             return self.map.block_model_label(block)
         raise ValueError("unknown presentation kind %r" % (kind,))
 
-    def _foreign_handle(self, qualified_id: Any) -> bool:
-        parts = qualified_id.split("::") if isinstance(qualified_id, str) else ()
-        parsed = _parse_owner_string(_split_authoring(parts[1])[0]) if len(parts) > 1 else None
-        return parsed is not None and self.map._foreign(parsed[0])
-
     def _mapping(self, value: dict[str, Any], path: tuple[Any, ...]) -> dict[str, Any]:
         if set(value) == _OWNER_RECORD_KEYS and isinstance(value.get("nodes"), list):
             return self.map.project_owner_record(value)
@@ -355,8 +387,7 @@ class _Projection:
             # The original key stays on the path, so a rule below a block key finds its block.
             result[projected_key] = self.walk(item, path + (key,))
         if "qualified_id" in value and "local_id" in value \
-                and value.get("kind") in ("block", "layout") and isinstance(value["local_id"], str) \
-                and not self._foreign_handle(value["qualified_id"]):
+                and value.get("kind") in ("block", "layout") and isinstance(value["local_id"], str):
             result["local_id"] = self.map._node_name(value["kind"], value["local_id"], None)
         if value.get("op") == "state" and isinstance(value.get("block"), dict) \
                 and value.get("name") == value["block"].get("local_id") \
@@ -405,6 +436,10 @@ def _lookup(table: dict[tuple[Any, ...], str], path: tuple[Any, ...]) -> str | N
     return None
 
 
+def _is_registry_fingerprint(fingerprint: str | None) -> bool:
+    return fingerprint is not None and fingerprint.startswith(_REGISTRY_FINGERPRINT)
+
+
 def _split_authoring(text: str) -> tuple[str, str]:
     """Split an authoring path into its owner string and its ``#authoring=<serial>`` suffix."""
     base, separator, serial = text.rpartition(_AUTHORING)
@@ -440,8 +475,11 @@ def projected_fingerprint(digest: str) -> str:
 
 
 __all__ = [
+    "LABEL_PREFIX",
     "PRESENTATION_SCHEMA_VERSION",
     "PresentationMap",
     "PresentationProjectionError",
+    "ReservedOwnerNameError",
+    "require_owner_name",
     "projected_fingerprint",
 ]

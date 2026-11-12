@@ -79,7 +79,7 @@ def _compiled(blocks, artifact_directory, *, ghost_depth=2):
     schema = BindSchema.from_problem(problem)
     snapshot = problem.freeze()
     layout_plan, layout_coverage = resolved_layout_contract(
-        None, target="system", block_names=blocks)
+        None, target="system", block_names=blocks, owner=problem.owner_path)
     plan = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="system",

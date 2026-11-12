@@ -98,10 +98,13 @@ def presentation_map(problem: Any, *, layout: Any = None) -> PresentationMap:
         models=tuple(models),
         block_models=tuple(block_models),
         layouts=_layout_names(layout, tuple(blocks)),
+        # K1: without a compile layout (a validated case) a layout the Program captured is not
+        # numbered yet; the resolved snapshot numbers it.
+        layouts_open=layout is None,
     )
     return PresentationMap(
         case=names.case, blocks=names.blocks, models=names.models,
-        block_models=names.block_models, layouts=names.layouts,
+        block_models=names.block_models, layouts=names.layouts, layouts_open=names.layouts_open,
         digests=_named_digests(problem, layout, names),
     )
 

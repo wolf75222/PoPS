@@ -14,7 +14,9 @@ import json
 import pytest
 
 import pops
-from pops.identity.presentation import PresentationMap, PresentationProjectionError
+from pops.identity.presentation import (
+    PresentationMap, PresentationProjectionError, ReservedOwnerNameError,
+)
 from pops.problem._snapshot import AuthoringSnapshot
 from tests.python.support.presentation_case import FIRST, RENAMED, resolve_named_case
 
@@ -122,50 +124,106 @@ def test_realization_names_are_kept_under_c52():
         assert other[key] != value, key
 
 
-def test_the_map_never_gives_an_unknown_owner_another_label():
-    names = PresentationMap(case="c", blocks=("a",), models=(("m", None, "x:sha256:" + "0" * 64),),
+_FP = "pops.module:sha256:" + "0" * 64
+
+
+def test_the_map_refuses_a_name_it_does_not_know():
+    names = PresentationMap(case="c", blocks=("a",), models=(("m", _FP, _FP),),
                             block_models=(0,), layouts=("grid",))
     assert names.project_string("pops.handle.v1::case:c::block::a") \
         == "pops.handle.v1::case:%24case::block::%24block0"
     assert names.project_string("pops.handle.v1::case:c::layout::grid") \
         == "pops.handle.v1::case:%24case::layout::%24layout0"
-    # A name the map does not know keeps itself (residual), within this case or another one.
-    assert names.project_string("pops.handle.v1::case:c::block::b") \
-        == "pops.handle.v1::case:%24case::block::b"
-    assert names.project_string("pops.handle.v1::case:c::layout::bootstrap") \
-        == "pops.handle.v1::case:%24case::layout::bootstrap"
-    # An owner of another case is kept whole: its block ``a`` is not this case's block ``a``.
-    assert names.project_string("pops.handle.v1::case:other::block::a") \
-        == "pops.handle.v1::case:other::block::a"
-    assert names.project({"kind": "block", "local_id": "a",
-                          "qualified_id": "pops.handle.v1::case:other::block::a"}) \
-        == {"kind": "block", "local_id": "a", "qualified_id": "pops.handle.v1::case:other::block::a"}
+    # A label suffix after the quoted local id stays (an AMR lowering coverage row).
+    assert names.project_string("pops.handle.v1::case:c::layout::grid:amr-bootstrap:x") \
+        == "pops.handle.v1::case:%24case::layout::%24layout0:amr-bootstrap:x"
+    # A truly foreign name of a projected kind is refused, never passed through.
+    for foreign in ("pops.handle.v1::case:c::block::b",
+                    "pops.handle.v1::case:other::block::a",
+                    "pops.handle.v1::case:c::layout::other",
+                    "pops.handle.v1::model_definition:other@%s::state::U" % _FP,
+                    "pops.handle.v1::model_definition:m@pops.module%%3Asha256%%3A%s::state::U"
+                    % ("1" * 64)):
+        with pytest.raises(PresentationProjectionError):
+            names.project_string(foreign)
+    with pytest.raises(PresentationProjectionError):
+        names.project({"schema_version": 2, "definition_fingerprint": None,
+                       "nodes": [{"kind": "case", "name": "other"}]})
     # A name of a kept kind passes unchanged.
     assert names.project_string("pops.handle.v1::case:c/descriptor:a::field::a") \
         == "pops.handle.v1::case:%24case/descriptor:a::field::a"
-    # A malformed handle is refused.
-    with pytest.raises(PresentationProjectionError):
-        names.project_qualified_id("pops.handle.v1::case:c")
 
 
-def test_an_authoring_path_is_projected_and_keeps_its_serial():
+def test_an_owner_name_cannot_take_the_form_of_a_label():
+    """Review A2 of #797: a name kept in a preimage can never equal a generated label.
+
+    Without the refusal, ``pops.Case("$block0")`` was accepted, and its kept ``block:$block0``
+    spelled the label of another case's first block: two preimages could collide.
+    """
+    from pops.mesh import LayoutPlanBuilder
+
+    with pytest.raises(ReservedOwnerNameError, match="case name '\\$block0' is reserved"):
+        pops.Case("$block0")
+    with pytest.raises(ReservedOwnerNameError, match="model definition name"):
+        pops.Model("$model0")
+    case = pops.Case("pair")
+    with pytest.raises(ReservedOwnerNameError, match="block name"):
+        case.block("$block0", pops.Model("m"))
+    with pytest.raises(ReservedOwnerNameError, match="layout name"):
+        LayoutPlanBuilder(case.owner_path.canonical()).layout("$layout0", None)
+    # Every label the projection writes starts with ``$``, every owner name it keeps does not.
+    first = resolve_named_case(FIRST)
+    strings = list(_strings(first.snapshot.semantic_to_dict()))
+    assert any(text.startswith("$block") or "%24block" in text for text in strings)
+    assert all(name[:1] != "$" for name in (*FIRST["blocks"], *FIRST["models"], FIRST["case"]))
+
+
+def test_k1_a_layout_captured_before_resolve_keeps_its_name_until_resolve():
+    validated = PresentationMap(case="c", blocks=("a",), models=(("m", _FP, _FP),),
+                                block_models=(0,), layouts=("default",), layouts_open=True)
+    assert validated.project_string("pops.handle.v1::case:c::layout::amr") \
+        == "pops.handle.v1::case:%24case::layout::amr"
+    # On the public route: the Program captures a LayoutPlanBuilder layout before resolve.
+    from examples.api_v02.continuation_regrid_auxiliary import build_continuation_regrid_auxiliary
+
+    spec, providers = build_continuation_regrid_auxiliary()
+    validated_case = pops.validate(spec.case)
+    assert "::layout::amr" in json.dumps(validated_case.snapshot.semantic_to_dict())
+    resolved = pops.resolve(validated_case, layout=spec.layout, layout_providers=providers)
+    assert "::layout::amr" not in json.dumps(resolved.snapshot.semantic_to_dict())
+
+
+def test_k2_an_authoring_path_outside_the_block_models_keeps_its_name():
     # A runtime capture of a model parameter names its model by an authoring path, without a
     # definition fingerprint (pops.model.ownership.OwnerPath.__str__).
-    fingerprint = "x:sha256:" + "0" * 64
-    names = PresentationMap(case="c", blocks=("a",), models=(("m", fingerprint, fingerprint),),
-                            block_models=(0,))
+    names = PresentationMap(case="c", blocks=("a",), models=(("m", _FP, _FP),), block_models=(0,))
     assert names.project_string("pops.handle.v1::model_definition:m#authoring=3::parameter::k") \
         == "pops.handle.v1::model_definition:%24model0#authoring=3::parameter::k"
-    # A model outside the case keeps its name: validation refuses it with its own reason.
+    # A model outside the case: validation refuses it with its own reason.
     assert names.project_string("pops.handle.v1::model_definition:other#authoring=3::parameter::k") \
         == "pops.handle.v1::model_definition:other#authoring=3::parameter::k"
-    # Two models of one name are told apart only by their fingerprint: the name is kept.
+    # Two models of one name are told apart only by their fingerprint.
+    other = "pops.module:sha256:" + "1" * 64
     homonyms = PresentationMap(case="c", blocks=("a", "b"),
-                               models=(("m", fingerprint, fingerprint),
-                                       ("m", "y:sha256:" + "1" * 64, "y:sha256:" + "1" * 64)),
+                               models=(("m", _FP, _FP), ("m", other, other)),
                                block_models=(0, 1))
     assert homonyms.project_string("pops.handle.v1::model_definition:m#authoring=3::parameter::k") \
         == "pops.handle.v1::model_definition:m#authoring=3::parameter::k"
+
+
+def test_k3_a_model_read_by_the_program_without_a_block_keeps_its_name():
+    registry = "pops.operator-registry:sha256:" + "2" * 64
+    names = PresentationMap(case="c", blocks=(), models=(), block_models=())
+    record = {"schema_version": 2, "definition_fingerprint": registry,
+              "nodes": [{"kind": "model_definition", "name": "equations"}]}
+    assert names.project(record) == record
+    # On the public route: a scientific graph case with no block (N9 spatial v14).
+    from examples.api_v02.scientific_spatial_v14 import build_scientific_spatial_v14
+
+    spec = build_scientific_spatial_v14(count=3)
+    resolved = pops.resolve(pops.validate(spec.case), layout=spec.layout)
+    assert "periodic_diffusion_reaction_equations" in json.dumps(
+        resolved.snapshot.semantic_to_dict())
 
 
 _USER_MODULE = "{comment}half = {half}\n"
