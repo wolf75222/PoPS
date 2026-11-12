@@ -17,6 +17,7 @@ F^d of the canonical form of R7 (2.6.6).
 """
 from __future__ import annotations
 
+import math as _math
 from fractions import Fraction
 from typing import Any
 
@@ -718,6 +719,12 @@ class Model:
                         raise NotYetElaborated(
                             "model.on(..., %s == %s), boundary data that read %s"
                             % (quantity, text(data), text(node)), _BOUNDARY)
+                    number = node.value if isinstance(node, (ModelConstant, MathConstant)) \
+                        else node if is_number(node) else None
+                    if number is not None and not _math.isfinite(float(number)):
+                        raise ValueError("model.on(..., %s == %s): the boundary data reads %s, "
+                                         "which is not finite" % (quantity, text(data),
+                                                                  text(node)))
                 return quantity, data
         raise NotYetElaborated(
             "model.on(..., %s), a relation of form NormalFlux, Characteristic, NormalComponent "

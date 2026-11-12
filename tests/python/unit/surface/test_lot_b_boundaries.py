@@ -327,3 +327,23 @@ def test_upwind_with_boundaries():
     case = _case(parts, scheme=upwind())
     resolved = _resolved(case.elaborated.case, case.elaborated.layout)
     assert resolved.snapshot.semantic_identity
+
+
+def test_a_policy_that_departs_from_the_laws_deeper_than_one_cell_is_refused():
+    @surface.scheme
+    def deep(face, term, depth):
+        if term.form is forms.Value:
+            return Ghost(2 * term.data - face.inner(depth).value(term.quantity))
+        return Ghost(face.inner(depth).value(term.quantity))   # u_k, not u_1, past depth 1
+
+    parts = _parts()
+    _inflow_outflow(parts)
+    with pytest.raises(surface.NotYetElaborated, match="not a ghost law of b6"):
+        _case(parts, boundary=deep()).elaborated  # noqa: B018
+
+
+def test_boundary_data_that_is_not_finite_is_refused_at_the_relation():
+    parts = _parts()
+    for value in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="not finite"):
+            parts.model.on(parts.sides.x_min, parts.u == value)

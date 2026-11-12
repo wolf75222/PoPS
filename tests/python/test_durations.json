@@ -8616,13 +8616,13 @@
           "session_seconds": 63.32
         },
         "tests/python/unit/surface/test_lot_b_boundaries.py": {
-          "cases": 15,
-          "session_seconds": 19.07
+          "cases": 17,
+          "session_seconds": 19.43
         }
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py": "5c39385e47a56d204372c322760f9404d978df7a191c8b72d8c80c47608abf56",
-        "tests/python/unit/surface/test_lot_b_boundaries.py": "9bab51b642f7ab253ff17850620a3781dd1a182bca8c2888a84abacdbe9a4582"
+        "tests/python/unit/surface/test_lot_b_boundaries.py": "d06d2051348d48f4db47714f491bc3cc529b5b666632d873778f37e02a2bd2b7"
       }
     }
   },
