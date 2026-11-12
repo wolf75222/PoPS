@@ -651,6 +651,21 @@ class System {
                               double kappa_min = 0.0, double face_open_eps = 0.0,
                               double cut_theta_min = 0.0);
 
+  /// Runtime-private native seam (N17, C1): generate the static geometry arrays of a mapped layout
+  /// from the analytic programs of its coordinate map, one postfix program per component, and, for
+  /// a chart (@p kind "chart"), the stated tensor rule on [0, 1]; node positions (@p kind "nodes")
+  /// state no rule. The arrays are certified (finite, positive, oriented, closed, one periodic
+  /// seam) or refused, on every rank alike; they are installed once, before any block, and never
+  /// beside an embedded boundary. Python reaches this only from the resolved layout, at bind.
+  POPS_EXPORT void install_static_geometry(const std::string& identity, const std::string& kind,
+                                           const std::vector<std::vector<std::string>>& opcodes,
+                                           const std::vector<std::vector<double>>& literals,
+                                           const std::vector<double>& rule_nodes,
+                                           const std::vector<double>& rule_weights);
+  /// The static geometry arrays of the mapped layout, or null on the uniform logical box. Generated
+  /// block preparers and Program operators that read the arrays retain this owner.
+  [[nodiscard]] POPS_EXPORT std::shared_ptr<const StaticGeometry<Dim>> static_geometry() const;
+
   /// Sets ONLY the level-set transport mode: "none" | "staircase" | "cutcell". Useful to toggle
   /// the mode after installing a generic analytic level set, or to reset it to "none"
   /// (back to the full cartesian path, bit-identical). Requesting a mode != "none" without a prepared
@@ -1171,6 +1186,10 @@ class System {
   /// mutation.  Only unqualified Cartesian kernels use this seam; local_transform and
   /// solve_local_nonlinear are mask-qualified.
   POPS_EXPORT void require_cartesian_generated_operator(int b, const std::string& operation) const;
+  /// Preflight one generated Program operator that reads the static geometry arrays of a mapped
+  /// layout (N17, C1) instead of the uniform spacings of the logical box: the arrays must be
+  /// installed. Every unqualified Cartesian operator is refused on such a System.
+  POPS_EXPORT void require_static_geometry_operator(int b, const std::string& operation) const;
   /// The maximum |wave speed| of block @p b evaluated on @p U -- the SAME per-block reduction
   /// step_cfl reads (BlockState::max_speed, the HasStabilitySpeed / max_wave_speed closure set at
   /// add_block time): a collective reduction over the block's cells. This Uniform entry point uses

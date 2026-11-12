@@ -41,6 +41,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
   until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
   case written by hand for b6 and N8 (program IR, artifact, identity, C++).
+- ROM-110 (N17, L1a): static geometry arrays of a structured configuration (C1). A layout whose
+  coordinate map reads neither the clock nor a discrete input (`MovingControlVolumes` over a
+  logical `Uniform` grid with a clock-free `GeometryEvolution`) is read at resolution as static
+  geometry arrays instead of being refused with `native_geometry_evolution_unavailable`: a map of
+  rank one as node positions with exact node differences, a chart of rank two with the rule that
+  its layout states (D0b). The System generates them once at bind, the same on every rank (cell
+  measures and centroids; face area vectors, measures, unit normals and centroids; distances and
+  widths), and refuses them collectively unless their certificates hold (positive measures,
+  det DX > 0, closed cells, identified seams). The generated faces of a block then read the
+  physical normal (F.n, bounded by sum_k |n_k| rho(A_k)) and the measures of the arrays, and the
+  prepared diffusion of a Program reads their distances and measures. The consumers it serves are
+  stated as capability rules at resolution; the others are refused there with a
+  `static_geometry_*` code. A box layout is unchanged. The two graphs of C1 are
+  `examples/api_v02/models_static_geometry.py`; core ledger entry
+  `static-geometry-arrays-of-a-structured-configuration`.
 - ROM-98 (N15, lot D-E, part E): the projection of an analytic initial value (spec 0.3, 2.6.2,
   CN12, SU9; OD31). `initial={u: pops.project(e, quadrature=Q)}` averages e over each cell by
   the rule Q (one `pops.Quadrature` or one per axis) mapped onto the cell, and

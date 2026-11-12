@@ -88,6 +88,17 @@ concept PreparedMetricProvider =
     prepared_metric_detail::prepared_metric_axes<Dim, Provider>(
         std::make_integer_sequence<int, Dim>{});
 
+/// Whether a prepared metric publishes the physical unit normal of every face (a mapped
+/// configuration served by generated geometry arrays, N17). Its faces are not aligned with a
+/// logical axis: every consumer that evaluates a face along its logical axis refuses such a metric
+/// at compile time, and the face evaluation reads the published normal instead.
+template <class Metric>
+inline constexpr bool metric_has_physical_face_normals = [] {
+  if constexpr (requires { Metric::physical_face_normals; })
+    return static_cast<bool>(Metric::physical_face_normals);
+  return false;
+}();
+
 /// Validated, allocation-free binding of a coordinate map to an inclusive integer domain.  The
 /// map type is retained in the provider type, so Cartesian and polar queries never share a run-time
 /// dispatch path.  Coordinates outside the domain remain defined for ghost-cell kernels.

@@ -173,6 +173,33 @@ def install_embedded_boundary(sim: Any, normalized_layout: Any) -> None:
     )
 
 
+def install_static_geometry(sim: Any, normalized_layout: Any) -> None:
+    """Install the static geometry arrays of a mapped layout in the Uniform native System.
+
+    A coordinate map that reads no clock is read at resolution as static geometry arrays (N17, C1).
+    Bind lowers its components to the analytic VM, with the stated rule of a chart, and the native
+    System generates and certifies the arrays before the first block; no Python callback reaches a
+    kernel. A box layout or a moving map installs nothing here.
+    """
+    from pops.mesh._static_geometry import layout_static_geometry
+
+    reading = layout_static_geometry(normalized_layout)
+    if reading is None:
+        return
+    from pops.runtime._analytic_expression_lowering import lower_analytic_components
+
+    lowered = lower_analytic_components(reading.components, frame_id=reading.frame_id)
+    rule = reading.rule or {"nodes": (), "weights": ()}
+    sim._s._install_static_geometry(
+        normalized_layout.handle.qualified_id,
+        reading.kind,
+        [list(opcodes) for opcodes, _ in lowered],
+        [list(literals) for _, literals in lowered],
+        [float.fromhex(node) for node in rule["nodes"]],
+        [float.fromhex(weight) for weight in rule["weights"]],
+    )
+
+
 def flow_bootstrap_tagging(
     sim: Any,
     bootstrap: Any,
