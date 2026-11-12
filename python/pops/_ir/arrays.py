@@ -48,9 +48,9 @@ Int64 = Scalar("Int64")
 Float64 = Scalar("Float64")
 
 
-def _fields(kind: str, fields: Any) -> tuple[tuple[str, Any], ...]:
+def _fields(kind: str, fields: Any, *, empty: bool = False) -> tuple[tuple[str, Any], ...]:
     rows = tuple(fields)
-    if not rows:
+    if not rows and not empty:
         raise ValueError("a %s has at least one field" % kind)
     names = []
     for row in rows:
@@ -68,14 +68,18 @@ def _fields(kind: str, fields: Any) -> tuple[tuple[str, Any], ...]:
 
 @dataclass(frozen=True, init=False)
 class Product:
-    """The record type ``Product(name=T, ...)``, its fields in their written order."""
+    """The record type ``Product(name=T, ...)``, its fields in their written order.
+
+    ``Product()`` is the empty record (spec 0.3, IR1): a Program product with no member has it.
+    """
 
     fields: tuple[tuple[str, Any], ...]
 
     def __init__(self, *pairs, **named):
         if pairs and named:
             raise TypeError("a Product takes (name, type) pairs or keywords, not both")
-        object.__setattr__(self, "fields", _fields("Product", pairs or tuple(named.items())))
+        object.__setattr__(self, "fields",
+                           _fields("Product", pairs or tuple(named.items()), empty=True))
 
     @property
     def names(self) -> tuple[str, ...]:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any
+from pops._ir.data_model import field_role
 
 
 def _store(program: Any, name: str) -> Any:
@@ -53,7 +54,7 @@ def validate_read(program: Any, node: Any) -> Any:
     width = program._histories_ncomp[name]
     if type(lag) is not int or not 1 <= lag <= program._histories[name]:
         raise ValueError("independent history read has a foreign lag")
-    if (node.vtype != "scalar_field" or node.inputs or node.block is not None
+    if (field_role(node) != "field" or node.inputs or node.block is not None
             or node.state_ref is not None or node.space != source.space
             or type(node.attrs.get("ncomp")) is not int or node.attrs["ncomp"] != width
             or node.point != TimePoint(source.clock, step=-lag)

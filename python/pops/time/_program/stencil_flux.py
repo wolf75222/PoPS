@@ -1,5 +1,6 @@
 """Program construction of a closed native conservative face stencil."""
 from typing import TYPE_CHECKING
+from pops._ir.data_model import field_role
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -81,7 +82,7 @@ def _validate_fields(state, fields, flux):
     if len(fields) != len(flux.field_components):
         raise ValueError("stencil field input arity differs from its closed declaration")
     for field, width in zip(fields, flux.field_components, strict=True):
-        if (field.vtype != "scalar_field" or type(field.space) is not FieldSpace
+        if (field_role(field) != "field" or type(field.space) is not FieldSpace
                 or len(field.space.components) != width
                 or field.space.centering != "cell" or field.space.representation != "field"
                 or any(unit is None for unit in field.space.units)):

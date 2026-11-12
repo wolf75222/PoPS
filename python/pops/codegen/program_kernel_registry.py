@@ -13,6 +13,7 @@ import hashlib
 from typing import Any
 
 from pops._structural_data import canonical_json
+from pops._ir.data_model import value_kind
 
 _ACTIVE: ContextVar[dict[str, Any] | None] = ContextVar("pops_device_kernels", default=None)
 
@@ -113,9 +114,9 @@ def device_environment(kernel, captures, environment, signature):
                     _TYPES[leaf["vtype"]], _path(source, path)
                 ),
             )
-        elif sig["vtype"] == "index_set":
+        elif value_kind(sig) == "index_set":
             result[value.id] = domain(source)
-        elif sig["vtype"] == "index":
+        elif value_kind(sig) == "index":
             result[value.id] = {
                 "domain": domain(source["domain"]),
                 "offset": kernel.capture("std::int64_t", source["offset"]),

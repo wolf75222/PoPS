@@ -16,6 +16,7 @@ from pops.time.values import ProgramValue
 
 from . import bcs
 from .problem import FieldProblem, FieldProblemError
+from pops._ir.data_model import field_role
 
 
 def _identity(handle: Handle) -> Any:
@@ -414,10 +415,10 @@ def validate_field_apply(node: Any) -> None:
     out, value, coefficient = node.inputs
     size = node.attrs.get("ncomp")
     if type(size) is not int or size < 1 or any(
-            part.vtype != "scalar_field" or part.attrs.get("ncomp") != size
+            field_role(part) != "field" or part.attrs.get("ncomp") != size
             for part in (out, value)):
         raise FieldProblemError("field.native.apply", "field apply changes its exact unknown width")
-    if coefficient.vtype != "scalar_field" or coefficient.attrs.get("ncomp") not in (size, size * size) \
+    if field_role(coefficient) != "field" or coefficient.attrs.get("ncomp") not in (size, size * size) \
             or coefficient.attrs.get("unknown_ncomp") != size:
         raise FieldProblemError("field.native.apply", "field coefficient matrix changes its exact unknown width")
     if coefficient.op != "field_problem_coefficients" or any(

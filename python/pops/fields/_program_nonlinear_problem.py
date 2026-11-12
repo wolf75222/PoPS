@@ -17,6 +17,7 @@ from .problem import FieldProblemError
 from ._program_problem import _identity, _physical_boundary, _unknown_index
 from ._program_expression import (encode_field_expression, field_expression_cpp,
                                   field_expression_dependencies)
+from pops._ir.data_model import field_role
 
 CONTRACT = "pops.spatial-field-residual@1"
 CAPTURED_DIFFUSION_CONTRACT = "pops.spatial-field-residual@2"
@@ -64,7 +65,7 @@ def validate_field_seed_product(program: Any, seed: Any, source: Any, point: Any
         raise SolveRequestError("unknown_type_mismatch", "typed field seed lost its original product authority")
     if program._issued_values.get(id(seed)) is not seed or program._canonical_value(seed) is not seed:
         raise SolveRequestError("unknown_type_mismatch", "typed field seed is not the current Program-issued product")
-    if type(seed.space) is not FieldSpace or seed.vtype != "scalar_field" or seed.state_ref is not None or seed.point != point:
+    if type(seed.space) is not FieldSpace or field_role(seed) != "field" or seed.state_ref is not None or seed.point != point:
         raise SolveRequestError("unknown_type_mismatch", "typed field seed changed its physical space or exact point")
     expected = {"contract": SEED_PRODUCT, "problem_identity": source["field_problem_identity"],
                 "unknown_components": source["unknown_components"], "space": seed.space.to_data(),
@@ -83,7 +84,7 @@ def validate_field_seed_product(program: Any, seed: Any, source: Any, point: Any
 
 def _product_width(value: Any) -> int | None:
     """Authenticate scalar-product arithmetic without rewriting legacy SSA data."""
-    if value.vtype != "scalar_field":
+    if field_role(value) != "field":
         return None
     if type(value.attrs.get("ncomp")) is int and value.attrs["ncomp"] > 0:
         return value.attrs["ncomp"]
@@ -329,7 +330,7 @@ def build_nonlinear_field_request(program: Any, request: Any, prepared: Any, *, 
         validate_input_regions(program, (value,), program._current_region(), "field residual binding")
     if seed is not None and _product_width(seed) != residual.prototype.attrs["ncomp"]:
         raise SolveRequestError("unknown_type_mismatch", "field product seed width/type differs")
-    if seed is not None and seed.op == "pointwise_expression" and seed.vtype == "scalar_field" and "field_product_seed" not in seed.attrs:
+    if seed is not None and seed.op == "pointwise_expression" and field_role(seed) == "field" and "field_product_seed" not in seed.attrs:
         raise SolveRequestError("unknown_type_mismatch", "typed field seed lost its original product authority")
     if seed is not None and "field_product_seed" in seed.attrs:
         validate_field_seed_product(program, seed, residual.source_contract, residual.prototype.point)
@@ -414,7 +415,7 @@ def validate_nonlinear_field_request(program: Any, token: Any) -> None:
     captures = token.inputs[2:2 + count]
     seed = None if seed_index is None else token.inputs[-1]
     product_seed = seed is not None and "field_product_seed" in seed.attrs
-    if seed is not None and seed.op == "pointwise_expression" and seed.vtype == "scalar_field" and not product_seed:
+    if seed is not None and seed.op == "pointwise_expression" and field_role(seed) == "field" and not product_seed:
         raise SolveRequestError("equation_identity_drift", "typed field seed lost its original product authority")
     if token.attrs.get("seed_product_contract") != (SEED_PRODUCT if product_seed else None) or \
             (not product_seed and "seed_product_contract" in token.attrs):

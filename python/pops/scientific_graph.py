@@ -18,6 +18,7 @@ import hashlib
 import json
 
 from pops._ir.quantity import PhysicalDimension
+from pops._ir.data_model import is_field_leaf, is_finite_array, value_kind
 
 
 DIMENSIONLESS = PhysicalDimension()
@@ -160,11 +161,11 @@ def _meaning_data(data) -> _Meaning:
             return {key: visit(child) for key, child in signature["members"]}
         if kind == "variant":
             return _Sum(tuple((key, visit(child)) for key, child in signature["members"]))
-        if kind == "array":
+        if is_finite_array(kind):
             return _Array(_domain(signature), visit(signature["element"]))
-        if kind in ("index", "index_set", "bool", "int64"):
+        if kind in ("bool", "int64") or value_kind(kind) in ("index_set", "index"):
             return _Discrete(kind)
-        if kind in ("state", "rhs", "scalar_field"):
+        if is_field_leaf(kind):
             return tuple(_Scalar(unit, context, data.get("affine", "linear"),
                                  data.get("affine_origin"), domain=domain) for unit in units)
         if kind == "scalar":
@@ -187,11 +188,11 @@ def _untyped(signature) -> _Meaning:
         return {key: _untyped(child) for key, child in signature["members"]}
     if kind == "variant":
         return _Sum(tuple((key, _untyped(child)) for key, child in signature["members"]))
-    if kind in ("bool", "int64", "index", "index_set"):
+    if kind in ("bool", "int64") or value_kind(kind) in ("index_set", "index"):
         return _Discrete(kind)
     if kind == "scalar": return _Scalar(DIMENSIONLESS)
-    if kind == "array": return _Array(_domain(signature), _untyped(signature["element"]))
-    if kind in ("state", "rhs", "scalar_field"):
+    if is_finite_array(kind): return _Array(_domain(signature), _untyped(signature["element"]))
+    if is_field_leaf(kind):
         return tuple(_Scalar(DIMENSIONLESS) for _ in signature["space"].components)
     raise TypeError("untyped scientific real payload needs a declared schema")
 
@@ -1062,11 +1063,11 @@ def scientific_packet_schema(signature, scientific):
             return
         if sig['vtype'] == 'product':
             for key, child in sig['members']: covered(child, (*path,key))
-        elif sig['vtype'] == 'array':
+        elif is_finite_array(sig):
             covered(sig['element'], (*path,'[]'))
         elif sig['vtype'] == 'variant':
             for tag, child in sig['members']: covered(child, (*path,tag))
-        elif sig['vtype'] in ('scalar','state','rhs','scalar_field'):
+        elif sig['vtype'] == 'scalar' or is_field_leaf(sig):
             raise TypeError('scientific Continuation schema does not cover real path '+repr(path))
     covered(signature)
     return tuple(entries)
@@ -1123,7 +1124,7 @@ def validate_scientific_packet_data(schema):
 
 def _scientific_at(signature, path):
     for key in path:
-        if signature['vtype'] == 'array' and key == '[]':
+        if is_finite_array(signature) and key == '[]':
             signature = signature['element']
         elif signature['vtype'] in ('product','variant') and key in dict(signature['members']):
             signature = dict(signature['members'])[key]

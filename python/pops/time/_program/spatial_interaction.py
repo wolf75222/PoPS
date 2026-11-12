@@ -5,12 +5,13 @@ from pops.time._program.value_validation import require_top_level, validate_inpu
 from pops.time._authoring import atomic_authoring
 from pops.model.spaces import FieldSpace
 from pops._ir.quantity import PhysicalDimension
+from pops._ir.data_model import field_role
 
 
 def _midpoint_spaces(field, state):
     """Authenticate an explicit piecewise-constant sampling map, never a cast."""
     from pops.model.spaces import StateSpace
-    if field.vtype != "scalar_field" or type(field.space) is not FieldSpace:
+    if field_role(field) != "field" or type(field.space) is not FieldSpace:
         raise TypeError("midpoint sampling requires a typed computed cell field")
     if state.vtype != "state" or type(state.space) is not StateSpace:
         raise TypeError("midpoint sampling requires an exact State template")
@@ -69,8 +70,8 @@ def validate_spatial_scratch(value):
             or value.attrs.get("spatial_port_storage") != "pops.computed-cell-field@1"):
         raise ValueError("computed cell scratch lost its storage contract")
     source = value.inputs[0]
-    if (source.vtype != "scalar_field" or type(source.space) is not FieldSpace
-            or value.vtype != "scalar_field" or value.space != source.space
+    if (field_role(source) != "field" or type(source.space) is not FieldSpace
+            or field_role(value) != "field" or value.space != source.space
             or source.block is None or value.block != source.block
             or value.point != source.point or value.state_ref is not None
             or value.attrs.get("ncomp") != len(source.space.components)):
@@ -87,7 +88,7 @@ def validate_computed_laplacian(value):
     from pops.time.field_sampling import scalar_co_location
     scalar_co_location(output, source, "computed Laplacian")
     if (output is source
-            or value.vtype != "scalar_field" or value.space != source.space
+            or field_role(value) != "field" or value.space != source.space
             or value.block != source.block or value.point != source.point
             or value.state_ref is not None
             or value.attrs.get("ncomp") != len(source.space.components)):
@@ -223,7 +224,7 @@ def transfer_closed_issuances(source, target, remap):
 
 def interaction_contract(value):
     from pops.fields.spatial_interaction import kernel_cpp
-    if value.op != "spatial_interaction" or value.vtype != "scalar_field" or len(value.inputs) != 1:
+    if value.op != "spatial_interaction" or field_role(value) != "field" or len(value.inputs) != 1:
         raise ValueError("invalid spatial interaction SSA contract")
     attrs = value.attrs
     required = {"contract", "kernel", "measure", "quadrature", "realization", "max_workspace_bytes", "components", "ncomp", "source_scope"}

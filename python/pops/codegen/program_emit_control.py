@@ -17,6 +17,7 @@ from typing import Any
 import json
 from pops.codegen._rhs_coherence import plan_rhs_coherence
 from pops.time.references import block_name
+from pops._ir.data_model import field_role, is_field_leaf, is_finite_index
 
 
 def _detached_coupled_quantity_identity(quantity: Any, source: Any) -> Any:
@@ -351,7 +352,7 @@ def _emit_commit_group(commits: Any, bases: Any, var: Any, *, phase: int) -> lis
         if committed.vtype == "state_geometry":
             lines.append("ctx.commit_moving_interval(%s);" % source)
             continue
-        if committed.vtype == "scalar_field":
+        if field_role(committed) == "field":
             token = "commit_source_%d_%d" % (base.id, phase)
             lines.append("auto* %s = &%s;" % (token, source))
             lines.append("if (%s->ghosts() != %s.ghosts()) {" % (token, destination))
@@ -1285,7 +1286,7 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
     """Lower two captured regions to a genuinely lazy C++ ``if``/``else`` value branch."""
     from pops.time._program.versioned_values import CAPABILITY_TYPES
 
-    if (v.vtype in ("product", "variant", "int64", "result", "index_set", "index", "array", "field_topology")
+    if (is_finite_index(v) or v.vtype in ("product", "variant", "int64", "result", "field_topology")
             or v.vtype in CAPABILITY_TYPES
             or v.inputs[0].op == "variant_is" or var.get(("structured_control",), False)):
         from .program_emit_structured_control import emit_structured_branch
@@ -1298,7 +1299,7 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
     _uniform_int("std::int64_t(bool(%s))" % var[cond.id], lines,
                  "branch choice differs across execution ranks")
     x = ("b%d" if v.vtype == "bool" else "s%d") % v.id
-    is_field = v.vtype in ("state", "rhs", "scalar_field")
+    is_field = is_field_leaf(v)
     if is_field:
         from .program_emit_structured_control import _slots, value_signature
         x = _slots(value_signature(v), None, v.id, "branch", lines)
