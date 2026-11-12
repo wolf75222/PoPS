@@ -143,6 +143,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-93 with ROM-25 (N11 lot 2a, G07): source spans leave every artifact identity (spec 0.3 CC2,
+  gap C48). The same case loaded from two checkout paths, or with comment lines inserted, now has
+  one `snapshot.artifact_hash`, one `plan_identity` and one compiled `artifact_identity`: the time
+  program of the compile context is projected without provenance, and `ModuleManifest.artifact_data()`
+  drops each operator's source span from the snapshot projection and the binary evidence. The full
+  snapshot (`snapshot.hash`) and the manifest keep file and line as provenance. A docstring no
+  longer changes the identity of a Python operator body, as a comment or a line shift already did.
+  `ARTIFACT_SCHEMA_VERSION` is 7, so every artifact hash changes once; semantic identities do not.
 - A `format-bench` job of `ci.yml`, aggregated by `gate`, replays
   `scripts/test_check_clang_format.sh`, the bench of `scripts/check_clang_format.sh`, on every full
   plan and when the plan sees the script, the bench or a style file (`.clang-format`,
