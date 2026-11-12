@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/core/model/physical_model.hpp>
+#include <pops/physics/bricks/elliptic.hpp>
 #include <pops/mesh/geometry/static_geometry.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
@@ -1203,9 +1204,17 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
     add_poisson_rhs<Dim>(model, state, rhs);
   };
-  // The closure adds nothing for a model without elliptic_rhs: a cells rule reads that (N8).
-  result.poisson_source_empty = !requires(
-      const Model& provider, const typename Model::State& value) { provider.elliptic_rhs(value); };
+  // The closure adds nothing for a model without elliptic_rhs, or whose elliptic brick is
+  // NoElliptic (a composite without Poisson coupling): a cells rule reads that (N8).
+  result.poisson_source_empty = [] {
+    if constexpr (requires(const Model& provider) { provider.ell; })
+      return std::is_same_v<std::remove_cvref_t<decltype(std::declval<const Model&>().ell)>,
+                            NoElliptic>;
+    else
+      return !requires(const Model& provider, const typename Model::State& value) {
+        provider.elliptic_rhs(value);
+      };
+  }();
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
     generated_system_detail::publish_conservative_state(model, primitive, conservative);
   };

@@ -12,10 +12,15 @@ outflow, SSPRK2 and ``rusanov()`` at first order, under ``dt=`` a function of ``
    (``FaceFrequencyStop``, ``kFaceFrequency``) with the faces' frequency F; ``pops.run`` on the same
    artifact retries once at fraction / F, the step that master's ``AdaptiveCFL`` retries at;
 3. L1's program A (spec 17.1: advection-diffusion, ``upwind()`` and ``two_point()``,
-   ``dt=combined_limit``): 0 attempts lost on the compiled route, and the margin of each step
-   against the guard's frontier, ``dt F / phi - 1`` in ulp, under its 32 eps tolerance;
-4. a cell at rest in a moving state (Burgers) bounds nothing: no failure, with and without
-   ``max_dt``; a state at rest everywhere without ``max_dt`` steps to the frontier (2.6.9).
+   ``dt=combined_limit``) on the square, as N3 lot 1 elaborates L1 in two dimensions
+   (``test_stencil_adaptive_cfl_native.py``): 0 attempts lost on the compiled route, and the
+   margin of the step against the guard's frontier, ``dt F / phi - 1`` in ulp, under its 32 eps
+   tolerance;
+4. a cell at rest in a moving state (Burgers along x) bounds nothing: no failure, with and
+   without ``max_dt``; a state at rest everywhere without ``max_dt`` steps to the frontier
+   (2.6.9). A NaN speed fails by name at its cell (C4).
+
+The module runs in the Dim=2 process; L1 on the interval is a Dim=1 case of its own.
 
 The slice to ``T_END`` and to three frontiers, bit for bit against #788's compiled stability rule
 and master's ``AdaptiveCFL``, is ``test_surface_lot_d_step_rule_native.py``.
@@ -168,7 +173,7 @@ def test_a_refused_face_stops_the_compiled_run_and_pops_run_retries(slices, tmp_
 
 # --- L1, program A (spec 17.1): the exit case under the guard's 32 eps -----------------------------
 
-L1_CELLS, NU, L1_END = 256, 1e-2, 0.05
+L1_CELLS, NU, L1_END = 64, 1e-3, 0.05
 
 
 @pytest.fixture(scope="module")
@@ -178,25 +183,27 @@ def l1(tmp_path_factory, native_cxx, kokkos_root):
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
-        domain = surface.Box(x=surface.Periodic(0, 1))
+        domain = surface.Box(x=surface.Periodic(0, 1), y=surface.Periodic(0, 1))
         model = surface.Model("advection_diffusion")
         u = model.quantity("u", surface.Scalar(domain))
         a = model.constant("a", value=1.0)
         nu = model.parameter("nu", default=NU)
-        advection = model.flux(of=u, value=a * u)
+        advection = model.flux(of=u, value=vector(a, a) * u)
         diffusion = model.diffusive_flux(of=u, value=-nu * grad(u))
         model.balance(ddt(u) == -div(advection + diffusion))
         numerics = surface.Numerics(represent={u: surface.CellAverage()},
                                     schemes={advection: upwind(), diffusion: two_point()})
 
         def combined_limit(cell):
+            # c_a + 2 d r_d <= 1 on the square: upwind's |a| / h on the largest axis and the
+            # four faces of two_point(), 4 nu / h^2
             h = cell.width(domain.x)
-            return 1 / (abs(a) / h + 2 * nu / h**2)
+            return 1 / (abs(a) / h + 4 * nu / h**2)
 
         program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=combined_limit),
                                   initial={u: 0.5})
         case = surface.Case(model=model, numerics=numerics, program=program,
-                            layout={domain: surface.Uniform(cells=L1_CELLS)})
+                            layout={domain: surface.Uniform(cells=(L1_CELLS, L1_CELLS))})
         yield surface.compile(case, target=surface.OpenMP()), u, nu
 
 
@@ -204,12 +211,12 @@ def test_l1_program_a_loses_no_attempt_under_the_guard(l1, tmp_path, record_prop
     artifact, u, nu = l1
     result = surface.bind(artifact, params={nu: NU}, directory=tmp_path).run(until=L1_END)
     assert result.failure is None and result.time == L1_END and result.rejections == 0
-    # every step but the last is the bound E = 1 / (|a| / h + 2 nu / h^2), in binary64 as the
-    # kernel writes it; F = |a| / h + 2 nu / h^2 is the guard's frontier (upwind's |a| / h on the
-    # largest axis and two_point's two faces, 2 nu / h^2), and phi = 1 (a function by hand)
+    # every step but the last is the bound E = 1 / (|a| / h + 4 nu / h^2), in binary64 as the
+    # kernel writes it; F = |a| / h + 4 nu / h^2 is the guard's frontier (upwind's |a| / h on the
+    # largest axis and the four faces of two_point()), and phi = 1 (a function by hand)
     h = 1.0 / L1_CELLS
-    dt = 1.0 / (abs(1.0) / h + 2.0 * NU / h ** 2)
-    exact = Fraction(dt) * (1 / Fraction(h) + 2 * Fraction(NU) / Fraction(h) ** 2)
+    dt = 1.0 / (abs(1.0) / h + 4.0 * NU / h ** 2)
+    exact = Fraction(dt) * (1 / Fraction(h) + 4 * Fraction(NU) / Fraction(h) ** 2)
     margin = float(exact - 1) / EPS
     record_property("l1_margin_ulp", margin)
     assert abs(margin) < 32.0
@@ -218,15 +225,15 @@ def test_l1_program_a_loses_no_attempt_under_the_guard(l1, tmp_path, record_prop
 
 # --- a cell at rest (2.6.9, C4) ----------------------------------------------------------------------
 
-REST_CELLS, REST_END = 64, 0.05
+REST_CELLS, REST_END = (64, 4), 0.05
 
 
 def _burgers(max_dt):
-    domain = surface.Box(x=surface.Periodic(0, 1))
+    domain = surface.Box(x=surface.Periodic(0, 1), y=surface.Periodic(0, 1))
     model = surface.Model("burgers")
     u = model.quantity("u", surface.Scalar(domain))
     u0 = model.data("u0", surface.Scalar(domain))
-    flux = model.flux(of=u, value=u * u / 2)
+    flux = model.flux(of=u, value=vector(u * u / 2, 0 * u))
     model.balance(ddt(u) == -div(flux))
     numerics = surface.Numerics(represent={u: surface.CellAverage()}, schemes={flux: rusanov()})
     program = surface.Program(
@@ -248,14 +255,18 @@ def burgers(tmp_path_factory, native_cxx, kokkos_root):
 
 
 @pytest.mark.parametrize("max_dt", [None, MAX_DT])
+def _step_profile():
+    x = (np.arange(REST_CELLS[0]) + 0.5) / REST_CELLS[0]
+    return np.repeat(np.where(x < 0.5, 0.0, 1.0)[:, None], REST_CELLS[1], axis=1)
+
+
 def test_a_cell_at_rest_bounds_nothing(burgers, tmp_path, max_dt):
     artifact, u0 = burgers[max_dt]
-    x = (np.arange(REST_CELLS) + 0.5) / REST_CELLS
-    moving = surface.bind(artifact, data={u0: np.where(x < 0.5, 0.0, 1.0)},
+    moving = surface.bind(artifact, data={u0: _step_profile()},
                           directory=tmp_path / "moving").run(until=REST_END)
     assert moving.failure is None and moving.time == REST_END and moving.rejections == 0
     # the first step is the moving cells' cfl h / 1, below max_dt
-    assert moving.steps >= math.ceil(REST_END / (CFL / REST_CELLS))
+    assert moving.steps >= math.ceil(REST_END / (CFL / REST_CELLS[0]))
     rest = surface.bind(artifact, data={u0: np.zeros(REST_CELLS)},
                         directory=tmp_path / "rest").run(until=REST_END)
     assert rest.failure is None and rest.time == REST_END
@@ -267,9 +278,8 @@ def test_a_speed_that_is_not_a_number_fails_by_name(burgers, tmp_path):
     """C4: the predicate's speed is an observed operation, so a NaN cell fails the step bound by
     name at its cell, though s > 0 is false there and the where takes the finite cap."""
     artifact, u0 = burgers[MAX_DT]
-    x = (np.arange(REST_CELLS) + 0.5) / REST_CELLS
-    initial = np.where(x < 0.5, 0.0, 1.0)
-    initial[7] = np.nan
+    initial = _step_profile()
+    initial[7, 2] = np.nan
     with pytest.raises(Exception, match="step_bound_nonfinite") as caught:
         surface.bind(artifact, data={u0: initial}, directory=tmp_path).run(until=REST_END)
-    assert "at the cell (7, " in str(caught.value) or "at the cell (7)" in str(caught.value)
+    assert "at the cell (7, 2)" in str(caught.value)
