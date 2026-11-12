@@ -71,7 +71,7 @@ def main():
     import numpy as np
     import pops
     from examples.api_v02 import models_M01_M14 as cases
-    from pops.lib.numerics import hll
+    from examples.api_v02.b6_numerics import hll
 
     timer = None
     if os.environ.get("KOKKOS_TOOLS_LIBS"):

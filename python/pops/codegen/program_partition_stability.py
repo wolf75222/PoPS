@@ -396,8 +396,11 @@ def _face_step_frequency_rejection(frequency, alpha):
     once (spec 0.3, 21.6: its guard with Retry(max_attempts=2)). The refusal carries the
     frequency of the step, the faces' frequency over the stage budget, that the refused attempt
     recorded at the state the guard checks (ROM-108): the retry's step is the strategy's number
-    over that frequency (2.6.9, s_a from the recorded speeds), and the guard admits it. The
-    payload is the binary64 frequency in C hexadecimal notation.
+    over that frequency (2.6.9, s_a from the recorded speeds). A face whose speeds do not depend
+    on the state records the same frequency again, and the guard admits the retry. A nonlinear
+    face (Euler, Burgers) records its speeds at the retry's own stage states, which can be faster;
+    the guard then refuses the retry too, and that second refusal stops the run, as
+    Retry(max_attempts=2) states. The payload is the binary64 frequency in C hexadecimal notation.
     """
     from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA
 

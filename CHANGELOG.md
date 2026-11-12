@@ -769,7 +769,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the frequency that the refused attempt's faces recorded (typed payload
   `pops.face-step-frequency@1`), and `AdaptiveCFL` retries once with its step capped at cfl over
   that frequency (spec 21.6, `Retry(max_attempts=2)`). A face that records the radius is never
-  refused, so its steps are unchanged.
+  refused, so its steps are unchanged. A nonlinear face records its speeds at the retry's own
+  stage states; when they are faster, the retry is refused too and that second refusal stops the
+  run. A refusal that `AdaptiveCFL` does not retry says why in its `retry stopped` note. AMR
+  runs take the same retry, once per macro step (native test on tutorial 06).
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
   and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step

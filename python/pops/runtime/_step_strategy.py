@@ -424,7 +424,7 @@ class _PreparedStepAttempts:
         engine: Any,
         controller: StepController[Any],
         attempt: Callable[[], int | None],
-        retry: Callable[[BaseException, int], bool] | None = None,
+        retry: Callable[[BaseException, int], bool | str] | None = None,
         retry_budget: int | None = None,
         accept: Callable[[int], None] | None = None,
     ) -> None:
@@ -475,7 +475,12 @@ class _PreparedStepAttempts:
                 error, "finite retry budget exhausted after %d attempt(s), budget=%s"
                 % (self.attempts, self._retry_budget))
             return False
-        if not bool(self._retry(error, self.attempts)):
+        verdict = self._retry(error, self.attempts)
+        if isinstance(verdict, str):
+            # A controller that names why it declines this refusal says so in the note.
+            self._stop_retry(error, verdict)
+            return False
+        if not bool(verdict):
             self._stop_retry(error, "controller cannot make a permitted retry proposal")
             return False
         return True
@@ -637,16 +642,20 @@ class AdaptiveCFLController(StepController[AdaptiveCFL]):
                 lambda: native.step_cfl(number, max_dt=max_dt[0], min_dt=min_dt),
             )
 
-        def retry(error: BaseException, _attempts: int) -> bool:
+        def retry(error: BaseException, _attempts: int) -> bool | str:
             # Spec 0.3, 21.6: one retry, whose step is the bound of the speeds that the refused
             # attempt's faces recorded (2.6.9; ROM-108). The guard refused dt > cfl / frequency,
-            # so the retry's cap is below the refused step.
+            # so the retry's cap is below the refused step. A nonlinear face can record faster
+            # speeds at the retry's stages; its second refusal then stops the run.
             frequency = _face_step_frequency(error)
             if frequency is None:
-                return False
+                return ("only a face step refusal is retried, and this refusal carries no "
+                        "recorded face frequency (%s)" % FACE_STEP_FREQUENCY_SCHEMA)
             bound = number / frequency
-            if not bound < max_dt[0] or bound < min_dt:
-                return False
+            if not bound < max_dt[0]:
+                return "the step of the recorded face frequency does not shorten the refused step"
+            if bound < min_dt:
+                return "the step of the recorded face frequency is below dt_min"
             max_dt[0] = bound
             return True
 

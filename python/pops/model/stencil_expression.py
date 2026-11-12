@@ -3,8 +3,15 @@
 This module owns expression leaves and traversal. It has no numerical solver,
 mesh execution, or model selection authority. The numerical descriptor retains
 its rank, width, bounds, and halo declarations independently.
+
+Besides its own leaves (samples, spacing, declared scalars), a body may read a
+runtime parameter of a model (``RuntimeParamRef``), as the body of a
+``riemann.User`` face does: the generated face reads it from
+``ctx.program_params(block)`` when it runs, and the Program checks that the
+parameter is one of the model of the block that it reads (N3 lot 1).
 """
 from pops._ir import expr as ir
+from pops._ir.values import RuntimeParamRef
 from pops._ir.control_expr import Where, Rounded
 from pops._ir.expr import Var, _wrap
 from pops._ir.visitors import _children
@@ -71,7 +78,8 @@ def validate_closed_stencil(rows, samples, field_samples, spacing, *, exact=Fals
     permitted = {ir.Const, ir.Var, ir.Add, ir.Sub, ir.Mul, ir.Div, ir.Pow,
                  ir.Neg, ir.Abs, ir.Sqrt, ir.Exp, ir.Sin, ir.Cos, ir.Log,
                  ir.Expm1, ir.Sign, ir.Minimum, ir.Maximum, ir.Compare,
-                 ir.BooleanAnd, ir.BooleanOr, ir.BooleanNot, Where, Rounded}
+                 ir.BooleanAnd, ir.BooleanOr, ir.BooleanNot, Where, Rounded,
+                 RuntimeParamRef}
     leaves = {v.name: v for *_, v in samples}
     leaves.update((v.name, v) for *_, v in field_samples)
     leaves.update((v.name, v) for v in spacing)
@@ -91,3 +99,17 @@ def validate_closed_stencil(rows, samples, field_samples, spacing, *, exact=Fals
                     or exact and value is not expected):
                 raise ValueError("stencil body captured a foreign variable")
         pending.extend(_children(value))
+
+
+def runtime_parameters(rows):
+    """The runtime parameters that the rows read, by name, in first-read order."""
+    found, pending, seen = {}, [x for row in rows for x in row], set()
+    while pending:
+        value = pending.pop(0)
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        if type(value) is RuntimeParamRef:
+            found.setdefault(value.name, value)
+        pending.extend(_children(value))
+    return tuple(found.values())

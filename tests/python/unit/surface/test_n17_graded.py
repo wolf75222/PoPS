@@ -27,7 +27,7 @@ from examples.api_v02.models_graded_spacing import (
 )
 from pops._report import DiagnosticError
 from pops.codegen._static_geometry_consumers import static_geometry_layouts
-from pops.lib.numerics.schemes import two_point
+from pops.lib.numerics import two_point
 from pops.lib.time.methods import ssprk2
 from pops.mesh import MovingControlVolumes
 from pops.surface.math import ddt, div, erf, expm1, grad, pi, sin, tanh

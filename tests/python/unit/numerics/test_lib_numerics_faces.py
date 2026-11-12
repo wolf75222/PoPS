@@ -1,4 +1,5 @@
-"""N3a, ROM-99: the Rusanov, upwind and HLL faces of pops.lib.numerics are Python bodies.
+"""N3a, ROM-99: the b6 Rusanov, upwind and HLL faces (examples/api_v02/b6_numerics.py,
+the parity oracles of N3 lot 1) are Python bodies.
 
 Source-level checks only; the native parity runs in
 tests/python/integration/runtime/test_api_v02_python_faces_native.py.
@@ -13,7 +14,7 @@ from pops._report import DiagnosticError
 from pops.codegen.user_riemann_lowering import emit_user_face_policy, prepare_user_face_carrier
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.lib.numerics import hll, rusanov, upwind
+from examples.api_v02.b6_numerics import hll, rusanov, upwind
 from pops.numerics import reconstruction, riemann
 from pops.numerics.riemann.user import authenticated_user_face
 

@@ -9,7 +9,7 @@ surface).
 
 * ``build_graded_ring``: a scalar on the periodic ring 0 <= x < 1 whose nodes are
   s - A sin(2 pi s) / (2 pi), dense at the seam and sparse at x = 1/2, with the two-point diffusion
-  or the Rusanov advection of ``pops.lib.numerics.schemes`` and the SSPRK2 of
+  or the Rusanov advection of ``pops.lib.numerics`` and the SSPRK2 of
   ``pops.lib.time.methods``;
 * ``build_graded_plane``: the Rusanov advection of a scalar at the velocity (1, 1/2) on the
   periodic plane, x graded as the ring and y uniform;
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import pops.surface as pops
 from pops.lib.numerics.boundaries import ghosts
-from pops.lib.numerics.schemes import rusanov, two_point
+from pops.lib.numerics import rusanov, two_point
 from pops.lib.quadrature import GaussLegendre
 from pops.lib.time.methods import ssprk2
 from pops.surface.discrete import FaceFlux

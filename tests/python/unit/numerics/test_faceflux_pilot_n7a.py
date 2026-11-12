@@ -20,7 +20,7 @@ import pytest
 import pops
 import examples.api_v02.models_M01_M14 as cases
 from examples.api_v02.faceflux_pilot import navier_stokes_scheme, scharfetter_gummel_scheme
-from pops.lib.numerics import FaceFlux, realize_face_flux
+from pops.lib.numerics.face_flux import FaceFlux, realize_face_flux
 from pops.model.hash_data import canonical_hash_data
 from pops.regions import Incidence, cell, face
 
