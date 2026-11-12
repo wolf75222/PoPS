@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 from collections.abc import Callable
+from pops._ir.data_model import is_finite_index
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -43,7 +44,7 @@ def new_typed(program, signature, op, inputs, attrs, *, point=None, name=None) -
     attrs = dict(attrs)
     if signature.get("field_authority") is not None:
         attrs["field_authority"] = signature["field_authority"]
-    if signature["vtype"] in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
+    if is_finite_index(signature) or signature["vtype"] in ("product", "variant", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
         attrs["signature"] = signature
         if point is None:
             point = signature.get("point")

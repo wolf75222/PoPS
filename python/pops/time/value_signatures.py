@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal, TypedDict, TypeVar, cast, overload
+from pops._ir.data_model import is_field_leaf, is_finite_index
 
 
 if TYPE_CHECKING:
@@ -155,16 +156,16 @@ def _validate_signature_shape(signature):
                         raise TypeError("signature current dependency function must be a string-keyed record")
 
 
-_LEAVES = frozenset(("state", "rhs", "scalar_field", "scalar", "bool", "int64"))
+_SCALAR_LEAVES = frozenset(("scalar", "bool", "int64"))
 
 
 def value_signature(value) -> ValueSignature:
-    if value.vtype in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
+    if is_finite_index(value) or value.vtype in ("product", "variant", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
         return cast("ValueSignature", value.attrs["signature"])
     if value.vtype == "result":
         return cast("ValueSignature", {"vtype": "result", "success": value.attrs["success_signature"],
                 "point": value.point})
-    if value.vtype not in _LEAVES:
+    if not (is_field_leaf(value) or value.vtype in _SCALAR_LEAVES):
         raise TypeError("structured control cannot carry value type %r" % value.vtype)
     signature = dict(vtype=value.vtype, block=value.block, space=value.space,
                      state_ref=value.state_ref, field_context=value.field_context, point=value.point)

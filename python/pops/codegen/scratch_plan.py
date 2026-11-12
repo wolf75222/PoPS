@@ -37,6 +37,7 @@ from pops.solvers._prepared_preconditioner_registry import (
     prepared_preconditioner_allocation_plan_from_identity,
 )
 from pops.codegen.krylov_contract import validated_krylov_footprint
+from pops._ir.data_model import field_role
 
 # Scratch-allocating op families. A scratch buffer is owned by one flat node; we bucket each by the
 # vtype of the buffer it stages so a caller sees the state / rhs / scalar-field split the spec asks
@@ -186,7 +187,7 @@ def _scratch_family(op: Any, vtype: Any) -> str:
     if op in _SCALAR_FIELD_OPS:
         return "scalar_field"
     # A residual scratch op (none today fall through, but be explicit): bucket by produced vtype.
-    if vtype == "scalar_field":
+    if field_role(vtype) == "field":
         return "scalar_field"
     return "state"
 

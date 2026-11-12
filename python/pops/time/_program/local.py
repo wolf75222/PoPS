@@ -19,6 +19,7 @@ from pops.time.value_metadata import positive_scalar_literal
 from pops.time.values import (
     ProgramValue, _Coeff, _Operator, _exact_number, _residual_wants_guess,
     _resolve_handle)
+from pops._ir.data_model import field_role
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -492,13 +493,13 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError("scalar_field: initial requires an explicit target topology")
         if ncomp is None:
             ncomp = len(like.space.components) if (isinstance(like, ProgramValue)
-                and like.space is not None and like.vtype == "scalar_field") else 1
+                and like.space is not None and field_role(like) == "field") else 1
         if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
             raise ValueError("scalar_field: ncomp must be a positive integer (got %r)" % (ncomp,))
         if like is not None:
             require_owned(self, like, "scalar field prototype")
             from pops.model.spaces import FieldSpace
-            if (like.vtype == "scalar_field" and type(like.space) is FieldSpace
+            if (field_role(like) == "field" and type(like.space) is FieldSpace
                     and like.attrs.get("scalar_storage") is None and like.block is not None):
                 if ncomp != len(like.space.components):
                     raise ValueError("computed cell scratch must preserve the declared component shape")
@@ -532,7 +533,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                 "vector_field requires exactly 1, 2, or 3 scalar components")
         for axis, component in enumerate(components):
             if not (isinstance(component, ProgramValue)
-                    and component.vtype == "scalar_field"):
+                    and field_role(component) == "field"):
                 raise ValueError(
                     "vector_field component %d must be a scalar_field value" % axis)
             if int(component.attrs.get("ncomp", 1)) != 1:
@@ -642,6 +643,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         validate_input_regions(self, (operator,), self._current_region(), "set_apply")
         if operator.attrs["apply_block"] is not None:
             raise ValueError("set_apply: operator '%s' already has an apply" % operator.name)
+        # The authoring body itself, kept outside the IR: a reference solver of pops.lib.solve
+        # (SV9) applies the operator inside its own region by calling it again (N9 lot 4).
+        bodies = self.__dict__.setdefault("_operator_apply_bodies", {})
+        bodies[operator.id] = body_fn
         # The apply ops (the in/out placeholders + the body) live in the operator's OWN sub-block, NOT
         # the flat SSA list: they are re-emitted as the C++ apply lambda, never walked at the top level.
         sub = []
@@ -672,7 +677,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             self._recording.pop()
         block = sub
         result = result if result is not None else out_sf
-        if isinstance(result, ProgramValue) and result.vtype != "scalar_field":
+        if isinstance(result, ProgramValue) and field_role(result) != "field":
             raise ValueError("set_apply: body_fn must return the result scalar_field (out <- A(in))")
         apply_region = self._region_for_block(sub)
         require_affine_region(self, result, apply_region, "set_apply")
@@ -681,7 +686,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             result_values = (result,) if isinstance(result, ProgramValue) else tuple(
                 term for term, _coefficient in result.terms)
             for value in (*block, *result_values):
-                if value.vtype != "scalar_field":
+                if field_role(value) != "field":
                     continue
                 if (value.attrs.get("scalar_storage") != scalar_attrs["scalar_storage"]
                         or value.attrs.get("scalar_sampling_contract")
@@ -749,9 +754,9 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         For a typed computed-cell port, ``out`` is an allocation prototype. The returned SSA
         field owns fresh storage, so reusing the prototype cannot overwrite earlier results.
         """
-        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and field_role(out) == "field"):
             raise ValueError("laplacian: out must be a scalar_field value")
-        if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
+        if not (isinstance(in_, ProgramValue) and field_role(in_) == "field"):
             raise ValueError("laplacian: in must be a scalar_field value")
         from pops.time.field_sampling import scalar_co_location
         scalar_co_location(out, in_, "laplacian")
@@ -777,9 +782,9 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         @p phi are scalar_field values. Lowered to ``ctx.gradient(out, phi)``.
         A typed computed-cell ``out`` is an allocation prototype; each result owns fresh storage.
         """
-        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and field_role(out) == "field"):
             raise ValueError("gradient: out must be a scalar_field value")
-        if not (isinstance(phi, ProgramValue) and phi.vtype == "scalar_field"):
+        if not (isinstance(phi, ProgramValue) and field_role(phi) == "field"):
             raise ValueError("gradient: phi must be a scalar_field value")
         output_components = int(out.attrs.get("ncomp", 1))
         if output_components not in (1, 2, 3):
@@ -806,9 +811,9 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         :meth:`gradient`; native binding authenticates its width against the resolved domain.
         A typed computed-cell ``out`` is an allocation prototype; each result owns fresh storage.
         """
-        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and field_role(out) == "field"):
             raise ValueError("divergence: out must be a scalar_field value")
-        if not (isinstance(flux, ProgramValue) and flux.vtype == "scalar_field"):
+        if not (isinstance(flux, ProgramValue) and field_role(flux) == "field"):
             raise ValueError("divergence: flux must be a scalar_field value")
         if int(out.attrs.get("ncomp", 1)) != 1:
             raise ValueError("divergence: out must have exactly one component")
@@ -857,9 +862,9 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         if not self._recording:
             raise ValueError("rhs_jacvec may only be recorded inside a matrix_free_operator apply "
                              "(call it from the set_apply body_fn)")
-        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and field_role(out) == "field"):
             raise ValueError("rhs_jacvec: out must be the apply sub-block's out scalar_field value")
-        if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
+        if not (isinstance(in_, ProgramValue) and field_role(in_) == "field"):
             raise ValueError("rhs_jacvec: in_ must be the apply sub-block's in scalar_field value")
         if not (isinstance(iterate, ProgramValue) and iterate.vtype == "state"):
             raise ValueError("rhs_jacvec: iterate must be the frozen Newton-iterate State (iterate=...)")
@@ -937,9 +942,9 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         ``L(phi) = -div(A grad phi) = -out``, so build it as ``-1 * P.apply_laplacian_coeff(out, in_,
         A)`` via the affine algebra. Emitted INLINE (ctx.fill_boundary + pops::apply_laplacian), no
         coupling/schur call."""
-        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and field_role(out) == "field"):
             raise ValueError("apply_laplacian_coeff: out must be a scalar_field value")
-        if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
+        if not (isinstance(in_, ProgramValue) and field_role(in_) == "field"):
             raise ValueError("apply_laplacian_coeff: in_ must be a scalar_field value")
         # The exact-ranked condensed bundle carries one row-major Dim*Dim tensor field.
         if not (isinstance(coeffs, ProgramValue) and coeffs.vtype == "condensed_coeffs"):

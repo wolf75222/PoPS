@@ -1,6 +1,7 @@
 """The user surface of spec 0.3, section 2.6: level 1 (the model, the numerics and the program).
 
-This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2. Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
+This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2, and the solves of
+the lot « solves » (``pops.unknown``, ``pops.solve``, ``pops.Tolerance``, ``solvers=``). Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
 imports it as ``import pops.surface as pops`` and ``from pops.surface.math import *``; the words
 of the library that it elaborates are ``pops.lib.numerics.schemes`` (``upwind``, ``rusanov``,
 ``two_point``) and ``pops.lib.time.methods`` (``forward_euler``, ``ssprk2``, ``ssprk3``, ``rk4``).
@@ -17,15 +18,18 @@ from typing import Any as _Any
 from . import discrete, math
 from ._elaborate import Choice, Report, Row
 from ._geometry import Box, Periodic
-from ._method import Candidate, method
+from ._method import Candidate, method, solve, unknown
 from ._model import Components, Model, Positive, Scalar, Tensor, Vector
 from ._numerics import CellAverage, Numerics, SchemeValue, TermView
 from ._scheme import check_plain_function, scheme
 from ._program import (
-    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Uniform, bind, claim, compile, inspect,
+    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Tolerance, Uniform, bind, claim, compile,
+    inspect,
 )
+from ._project import project
+from . import _solver
 from ._quadrature import Quadrature
-from ._run import BudgetExhausted, Output, RunFailed, every, record
+from ._run import BudgetExhausted, Output, RunFailed, SolveFailed, every
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
@@ -33,7 +37,9 @@ from ._refusal import (
     RealizationMismatch, ReservedName, SupportMismatch, SurfaceRefusal,
     SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, UnknownName,
 )
+from ._refusal import AmbiguousSolvePath, UnknownSolvePath
 from ._refusal import SpellingRefusal as _SpellingRefusal
+from ._solver import PropertyNotDerived, choose, fail, record, solver
 
 _N8_ASSESS = "N8 phase 1 (the assessments of T28)"
 _N8_LATER = "a later lot of N8"
@@ -49,16 +55,15 @@ _LATER_N15 = "a later lot of N15"
 # P3), and GaussLegendre and GaussHermite are words of pops.lib.quadrature, outside the core.
 _LATER = {
     "Accept": _N8_ASSESS, "Reject": _N8_ASSESS, "Stop": _N8_ASSESS, "Transform": _N8_ASSESS,
-    "assess": _N8_ASSESS, "fail": _N8_ASSESS, "refuse": _N8_ASSESS, "Finite": _N8_ASSESS,
+    "assess": _N8_ASSESS, "refuse": _N8_ASSESS, "Finite": _N8_ASSESS,
     "Observed": _N8_ASSESS, "Admissible": _N8_ASSESS, "NotAdmissible": _N8_ASSESS,
     "transform": _N8_ASSESS,
-    "Tolerance": _SOLVES, "solve": _SOLVES, "try_solve": _SOLVES, "unknown": _SOLVES,
-    "solver": _SOLVES, "Norm": _SOLVES, "Dense": _SOLVES, "Affine": _SOLVES,
-    "eliminate": _SOLVES, "SolveFailed": _SOLVES, "Normalization": _SOLVES,
+    "try_solve": _SOLVES, "Norm": _SOLVES, "Dense": _SOLVES, "Affine": _SOLVES,
+    "eliminate": _SOLVES, "Normalization": _SOLVES,
     "Scientific": _RUN, "Bitwise": _RUN, "Reproducible": _RUN, "Cache": _RUN,
     "Regrid": _HIERARCHY, "Level": _HIERARCHY, "invalidate": _HIERARCHY, "remap": _HIERARCHY,
     "restrict_onto": _HIERARCHY, "replace_contribution": _HIERARCHY,
-    "project": _REPRESENT, "CellTotal": _REPRESENT,
+    "CellTotal": _REPRESENT,
     "PointValue": _REPRESENT, "FaceNormalIntegral": _REPRESENT, "EdgeCirculation": _REPRESENT,
     "DualLoad": _REPRESENT, "Covector": _REPRESENT, "reconstruct": _REPRESENT,
     "Weak": _REPRESENT, "Pointwise": _REPRESENT, "Approximate": _REPRESENT,
@@ -70,7 +75,7 @@ _LATER = {
     "Swept": "a later lot of N15 with the moving configurations of D18",
     "jointly": "a later lot of N15 with the joint realizations of G05",
     "multistep": "a later lot of N8 (T27)", "substep": _N8_LATER, "try_substep": _N8_LATER,
-    "exact_flow": _N8_LATER, "choose": _N8_LATER, "action": _N8_LATER, "predictor": _N8_LATER,
+    "exact_flow": _N8_LATER, "action": _N8_LATER, "predictor": _N8_LATER,
     "step_change": _N8_LATER, "step_duration": _N8_LATER, "step_start": _N8_LATER,
     "Controller": "N8 phase 2 (controllers)", "Fixed": "N8 phase 2 (controllers)",
     "Frozen": _N8_LATER, "Revolve": _N8_LATER, "recompute": _N8_LATER, "Off": _N8_LATER,
@@ -151,6 +156,11 @@ def _later(name: str, owner: str) -> _Any:
 for _name, _owner in _LATER.items():
     globals()[_name] = _later(_name, _owner)
 
+# @pops.solver and the words of its body (N9 lot 4, SV9). pops.choose and pops.fail are
+# elaborated inside a solver only; elsewhere they refuse with the lot that owns them. pops.record is
+# the record of a solver inside one and the record of the run (N15 lot G) elsewhere.
+_solver.OUTSIDE_OWNERS.update({"pops.choose": _N8_LATER, "pops.fail": _N8_ASSESS})
+
 
 def __getattr__(name: str) -> _Any:
     """Refuse a name that the surface does not have (SU3, SU13, §21.7); export nothing."""
@@ -167,15 +177,20 @@ def __getattr__(name: str) -> _Any:
 __all__ = [
     "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
     "Model", "Numerics", "OpenMP", "Output", "Periodic", "Positive", "Program", "Quadrature",
-    "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "every", "inspect",
-    "record", "discrete", "math", "method", "scheme",
+    "Resources", "Scalar", "Tensor", "Tolerance", "Uniform", "Vector", "bind", "claim", "compile",
+    "every", "inspect", "project", "record", "discrete", "math", "method", "scheme", "solve",
+    "unknown",
+    # @pops.solver and the words of its body (N9 lot 4); pops.fail takes the variants of T39
+    # listed with the failures of a run below
+    "PropertyNotDerived", "choose", "fail", "solver",
     # the refusals of §14.1 that this lot raises, and the values that the library reads
     "AmbiguousElaboration", "AntiDiffusive", "ClosedBodyViolation", "ContradictsDerivation",
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
     "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
-    # the failures of a run (T39), lot G
-    "BudgetExhausted", "RunFailed",
+    "AmbiguousSolvePath", "UnknownSolvePath",
+    # the failures of a run (T39), lot G, which a solver also fails with (N9 lot 4)
+    "BudgetExhausted", "RunFailed", "SolveFailed",
     "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]

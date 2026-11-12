@@ -15,9 +15,9 @@ from pops.graph_functions import GraphFunction, _Codec, graph
 from pops.time._program.structured_control import new_typed, value_signature
 from pops.time.values import ProgramValue
 from pops.time.variant_types import Bool, Failure, Float64, Int64, Product, Result, ValueType, Variant, as_type, type_of
+from pops._ir.data_model import is_finite_array, value_kind
 
 
-_DISCRETE = frozenset({'bool', 'int64', 'index_set', 'index'})
 _NONDIF_CODE = 91001
 DerivativeErrors = Failure(differential=Product(code=Int64))
 
@@ -28,11 +28,11 @@ def tangent_type(value_type):
     kind = signature['vtype']
     if kind == 'scalar':
         return ValueType(signature)
-    if kind in _DISCRETE:
+    if kind in ('bool', 'int64') or value_kind(kind) in ('index_set', 'index'):
         return Product()
     if kind == 'product':
         return Product(**{key: tangent_type(ValueType(child)) for key, child in signature['members']})
-    if kind == 'array':
+    if is_finite_array(kind):
         return ValueType(dict(signature, element=tangent_type(ValueType(signature['element'])).signature))
     if kind == 'variant':
         return Variant(**{key: tangent_type(ValueType(child)) for key, child in signature['members']})
@@ -444,7 +444,7 @@ class _Forward:
             elif op == 'variant_unreachable':
                 tangent = new_typed(p, tangent_type(ValueType(value_signature(value))).signature,
                                     'variant_unreachable', tuple(ds), {})
-            elif value.vtype in _DISCRETE:
+            elif value.vtype in ('bool', 'int64') or value_kind(value.vtype) in ('index_set', 'index'):
                 if op == 'compare' and not self.comparison_proof.invariant(record):
                     value = self.checked_comparison(value)
                 tangent = p.product()

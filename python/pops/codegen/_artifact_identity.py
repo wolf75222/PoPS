@@ -11,11 +11,13 @@ def model_artifact_spec(
     declare_auxiliary_providers: bool = True,
     toolchain_capture: Any = None,
     native_route: Any = None,
+    native_geometry: Any = None,
 ) -> tuple[Any, Any]:
     """Return semantic and artifact-spec identities for one formula model.
 
     A package compiled for one catalogue route records it; a package keeping every route adds no
-    component, so its identity is unchanged.
+    component, so its identity is unchanged. A package that reads static geometry arrays records
+    their contract; a package of the logical box adds none.
     """
     from pops.codegen.cache import (
         _dsl_optflags, _platform_cache_key, _precision_cache_key, _registry_cache_key,
@@ -67,6 +69,7 @@ def model_artifact_spec(
                 else float(wave_speeds["im_tol"]).hex()
             ),
             **({"native_route": "/".join(native_route)} if native_route is not None else {}),
+            **({"native_geometry": native_geometry} if native_geometry is not None else {}),
         },
         flags=[_platform_cache_key(), *_dsl_optflags(),
                *deterministic_component_link_flags(()),

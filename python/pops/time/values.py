@@ -24,6 +24,7 @@ from pops.time.value_metadata import (
     CoeffPolynomial, CoefficientLiteralError, _exact_add, _exact_divide, _exact_multiply,
     _exact_negate, _exact_number, _freeze_attr, validate_program_value_identity,
 )
+from pops._ir.data_model import is_field_leaf, is_finite_array, value_kind
 
 
 if TYPE_CHECKING:
@@ -287,7 +288,6 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
 
     prog: _ValueProgram[ProgramValue]
 
-    _FIELD = ("state", "rhs", "scalar_field")
     _SCALAR = ("scalar", "bool", "int64")  # runtime values: never a Python bool / index
 
     def __pops_finite_components__(self, dofs):
@@ -343,7 +343,8 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return point_clock(self.point, "ProgramValue.clock")
 
     def is_field(self) -> Any:
-        return self.vtype in ProgramValue._FIELD
+        # The one function of N10 lot 1b: a field leaf is an Array over the cells of a support.
+        return is_field_leaf(self)
 
     def __eq__(self, other: Any) -> Any:
         if self.vtype == "int64":
@@ -440,9 +441,9 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         return self.prog._boolean_op((self,), "not")
 
     def __getitem__(self, component):
-        if self.vtype == "array":
+        if is_finite_array(self):
             return self.prog.at(self, component)
-        if self.vtype in ("index", "index_set"):
+        if value_kind(self) in ("index_set", "index"):
             raise TypeError("finite domains and indices have no component projection")
         if self.vtype == "product":
             return self.prog._product_get(self, component)

@@ -1479,6 +1479,11 @@ void System<Dim>::require_cartesian_generated_operator(int block,
     throw std::out_of_range("System generated Program operator block index is out of range");
   if (operation.empty())
     throw std::invalid_argument("System generated Program operator identity cannot be empty");
+  if (p_->static_geometry_)
+    throw std::runtime_error("System generated Program operator '" + operation + "' on block " +
+                             std::to_string(block) +
+                             " reads the uniform spacings of the logical box; this System "
+                             "carries static geometry arrays (N17), which it does not read");
   if (p_->embedded_boundary_ &&
       p_->embedded_boundary_->mode() != runtime::system::PreparedEmbeddedBoundaryMode::inactive) {
     throw std::runtime_error(

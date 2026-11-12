@@ -27,6 +27,7 @@ from pops.time.operator_resolution import resolve_operator_handle
 from pops.time._program.constants import _ProgramConstants
 from pops.time._program.value_validation import require_compatible_spaces
 from pops.time.values import ProgramValue, _Coeff, _is_field_value
+from pops._ir.data_model import field_role
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -133,11 +134,11 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
         ``charge_component`` replaces the first term by that component of State: this is the
         algebraically folded Gauss-law projection and does not require an old potential.
         """
-        if not (isinstance(out, ProgramValue) and out.vtype == "scalar_field"):
+        if not (isinstance(out, ProgramValue) and field_role(out) == "field"):
             raise ValueError("condensed_rhs: out must be a scalar_field value")
         if phi_n is None and charge_component is not None:
             phi_n = out
-        if not (isinstance(phi_n, ProgramValue) and phi_n.vtype == "scalar_field"):
+        if not (isinstance(phi_n, ProgramValue) and field_role(phi_n) == "field"):
             raise ValueError("condensed_rhs: phi_n must be a scalar_field value")
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("condensed_rhs: a State value is required (state=...)")
@@ -183,7 +184,7 @@ class _ProgramCondensed(_ProgramConstants, _ProgramBase):
             raise ValueError("condensed_reconstruct: phi must be a scalar_field or State value (phi=...)")
         if phi.block not in (None, state.block):
             raise ValueError("condensed_reconstruct: state and phi must belong to the same block")
-        if phi.vtype in ("state", "rhs"):
+        if field_role(phi) in ("state", "rhs"):
             require_compatible_spaces(
                 state.space, phi.space, "condensed_reconstruct phi", typed_pair=True)
         opname = self._condensed_operator_name(linear_operator, state)

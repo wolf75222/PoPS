@@ -22,6 +22,7 @@ import pops.codegen.program_field_reuse as field_reuse
 import examples.api_v02.models_M01_M14 as early
 from pops.runtime._simulation import Simulation
 from pops.time._program.elaboration import Advance, Proposal, Retry, elaborate
+from tests.python.unit.time.test_reuse_across_stages_n8 import _guarded_route
 from pops.time._program.traced_method import Candidate, method
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.native_execution_context import artifact_execution_context
@@ -141,6 +142,21 @@ def test_twice_solves_once_per_step_and_ends_bitwise_like_two_solves(
         assert on_counters == (1, 1) and off_counters == (2, 0)
         _bitwise(on_states, off_states)
         _no_negative_zero(on_states)
+
+
+def test_a_guard_between_the_requests_keeps_both_solves(
+        monkeypatch, isolated_native_cache, native_cxx, kokkos_root):
+    """Review R1 of #781: ``twice`` with a guard of ``B.state`` between its two requests (a real
+    barrier of the elaborated IR) solves twice per step and reuses nothing: counters (2, 0)."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    _, world = native_profile(dimension=2, scope="N8 reuse across stages guarded M10")
+    spec, runtime = _bind(world, monkeypatch, early.build_m10, _guarded_route, "twice guarded M10")
+    result = collective_call(world, lambda: Simulation(runtime).run(spec.t_end))
+    counters = _counters(world, runtime)
+    with collective_check(world):
+        assert result.steps > 0 and result.rejections == 0
+        assert result.diagnostics["native"]["prepared_solves"] == 2 * result.steps
+        assert counters == (2, 0)
 
 
 # --- reject-then-accept (lot C) ------------------------------------------------------------------

@@ -52,6 +52,9 @@ struct CompiledSystemBlockPreparation {
   BoundaryTopology<Dim> topology;
   std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>> provider_storage;
   std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan;
+  /// The static geometry arrays of a mapped layout (N17, C1), or null on the uniform logical box.
+  /// A package compiled for the box refuses non-null arrays; one compiled for them refuses null.
+  std::shared_ptr<const StaticGeometry<Dim>> static_geometry;
 };
 
 namespace compiled_system_detail {
@@ -92,7 +95,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block_from_authority(
     std::array<bool, Dim> periodicity,
     std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>> provider_storage,
     std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan,
-    NewtonOptions newton = {}, bool newton_diagnostics = false) {
+    std::shared_ptr<const StaticGeometry<Dim>> static_geometry, NewtonOptions newton = {},
+    bool newton_diagnostics = false) {
   static_assert(Dim >= 1 && Dim <= 3);
   static_assert(
       requires { Model::dimension; },
@@ -127,7 +131,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block_from_authority(
   PreparedSystemBlock<Dim> prepared = invoke_package_preparer(
       Request{name, std::move(model), std::move(routes), std::move(geometry),
               BoundaryTopology<Dim>::axis_periodic(periodicity), std::move(provider_storage),
-              std::move(provider_plan)});
+              std::move(provider_plan), std::move(static_geometry)});
 
   // Authoritative structural metadata comes from compile-time model facts and the resolved install
   // request, never from an independently mutable runtime description.
@@ -173,7 +177,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
   return compiled_system_detail::prepare_compiled_system_block_from_authority<Dim>(
       name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, evolve,
       stride, positivity_floor, installer.geometry(), installer.periodicity(),
-      std::move(provider_storage), std::move(provider_plan), newton, newton_diagnostics);
+      std::move(provider_storage), std::move(provider_plan), installer.static_geometry(), newton,
+      newton_diagnostics);
 }
 
 /// Prepare through the direct facade surface retained for in-process and test-owned Systems.
@@ -195,7 +200,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
       name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, evolve,
       stride, positivity_floor, system.prepared_block_geometry(),
       system.prepared_block_periodicity(), std::move(provider_storage), std::move(provider_plan),
-      newton, newton_diagnostics);
+      system.static_geometry(), newton, newton_diagnostics);
 }
 
 /// Stage the RuntimeInstance world lane Python bind installs when the C++ convenience path

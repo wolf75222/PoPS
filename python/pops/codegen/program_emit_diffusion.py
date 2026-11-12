@@ -159,7 +159,23 @@ def _boundary_cpp(law):
     return "std::array<pops::runtime::program::DiffusiveBoundary<pops::kNativeDimension>, %s>{{%s}}" % (extent, ", ".join(rows))
 
 
-def _prepared_diffusion_type(selected):
+def program_reads_static_geometry(model_graph):
+    """Whether the Program's layout is served by static geometry arrays (N17, C1)."""
+    layout_plan = getattr(model_graph, "scalar_layout_plan", None)
+    if layout_plan is None:
+        return False
+    from pops.codegen._static_geometry_consumers import static_geometry_layouts
+
+    return bool(static_geometry_layouts(layout_plan))
+
+
+def _prepared_diffusion_type(selected, static_geometry=False):
+    if static_geometry:
+        # Resolution serves the scalar diagonal law of node positions of rank one only.
+        if selected.get("coupled") or selected.get("tensor") or len(selected["variables"]) != 1:
+            raise ValueError("static geometry arrays serve scalar diagonal diffusion only")
+        return ("pops::runtime::program::PreparedDiffusion<"
+                "pops::kNativeDimension, 1, false, false, true>")
     if selected.get("coupled"):
         return ("pops::runtime::program::PreparedCoupledGradient<"
                 "pops::kNativeDimension, %d>" % len(selected["variables"]))
@@ -171,9 +187,12 @@ def _prepared_diffusion_type(selected):
 
 
 def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
-                                provider_plans=None, bidx=0, target="system"):
+                                provider_plans=None, bidx=0, target="system",
+                                static_geometry=False):
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
+    if static_geometry and target != "system":
+        raise ValueError("static geometry arrays are read by a Uniform native install only")
     if target == "amr_system":
         from pops.codegen.program_rhs_input_trace import requires_rhs_input_trace
         if requires_rhs_input_trace(v):
@@ -188,14 +207,16 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
     preparation = "%s, %s, %s" % (
         state_var, _boundary_cpp(selected["physical"]),
         "true" if target == "amr_system" else "false")
-    lines = ["ctx.require_cartesian_generated_operator(%d, \"diffusive_face_evaluation\");" % bidx,
+    lines = [("ctx.require_static_geometry_operator(%d, \"diffusive_face_evaluation\");"
+              if static_geometry else
+              "ctx.require_cartesian_generated_operator(%d, \"diffusive_face_evaluation\");") % bidx,
         # AMR geometry/lane getters are collective; acquire them on every rank before
         # the cache conditionally invokes its strictly local matching predicate.
         "const auto %s_geometry = ctx.geometry();" % prepared_var,
         "const auto& %s_lane = ctx.prepared_execution_lane();" % prepared_var,
         "auto& %s = ctx.prepared_resource<%s>(%d, %d, "
         "[&](const auto& resource) { return resource.matches_preparation(%s_geometry, %s_lane, %s); }, ctx, %s);" % (
-            prepared_var, _prepared_diffusion_type(selected), v.id, bidx,
+            prepared_var, _prepared_diffusion_type(selected, static_geometry), v.id, bidx,
             prepared_var, prepared_var, preparation, preparation)]
     if any(row.kind == "flux" for row in v.attrs["physical_balance"].occurrences):
         lines.append("std::vector<pops::nd::FaceField<pops::kNativeDimension>> %s_transport_faces;" % prepared_var)
@@ -204,7 +225,7 @@ def _emit_diffusive_preparation(v, state_var, prepared_var, node_model,
 
 def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                         prepared_var=None, *, defer_explicit_bound=False,
-                        output_publication=None):
+                        output_publication=None, static_geometry=False):
     if target not in {"system", "amr_system"}:
         raise ValueError("diffusion execution requires a Uniform or AMR native install scope")
     setup_start = len(lines)
@@ -252,7 +273,7 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
     if prepared_var is None:
         prepared_var="diffusion_prepared_%d" % v.id
         lines.extend(_emit_diffusive_preparation(v,state_var,prepared_var,node_model,
-                                                 provider_plans,bidx,target))
+                                                 provider_plans,bidx,target,static_geometry))
     if output_publication is None:
         # Residual/implicit callers retain the original return API and ordering.
         lines.append(allocation)

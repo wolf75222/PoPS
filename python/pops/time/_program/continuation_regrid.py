@@ -8,6 +8,7 @@ from __future__ import annotations
 from .structured_control import new_typed, value_signature
 from .value_validation import require_owned
 from .versioned_values import _cap
+from pops._ir.data_model import field_role
 
 
 REGRID_OPS = frozenset((
@@ -38,7 +39,7 @@ def topology(program, field, *, level, side, dimension):
     context = _context(program)
     require_owned(program, field, "regrid topology Field")
     signature = value_signature(field)
-    if signature["vtype"] not in ("state", "scalar_field"):
+    if field_role(signature) not in ("state", "field"):
         raise TypeError("regrid topology requires an immutable native Field template")
     if signature.get("field_authority") is None and signature.get("block") not in context["blocks"]:
         raise ValueError("regrid Field has no declared scientific storage owner")

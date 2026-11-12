@@ -6,9 +6,9 @@ two stages written as the builders' b6 Program (``_ssprk2``), with the step stra
 ``AdaptiveCFL(cfl=--cfl)`` (rebound in the builders' module while they build), compiles each
 route, binds the same initial data and runs to ``--steps`` times the builder's step (the default
 lets AdaptiveCFL take about a dozen steps on 16 x 8 cells). For each route it reports the
-accepted steps, the final clock, the reason of a refused attempt, and the final state against
-the native route (bitwise equality, L1 and L-infinity differences), and the strategy that each
-compiled Program carries.
+accepted steps, the attempts that a retry lost (ROM-108), the final clock, the reason of a refused
+attempt, the final state against the native route (bitwise equality, L1 and L-infinity
+differences), and the strategy that each compiled Program carries.
 
 ``--rule incident_sum`` builds the Python faces with the guard of the base, before ROM-107: the
 face frequency sum_a s_a / h_a against cfl (``StepStrategy.face_frequency_rule``), which is the
@@ -99,10 +99,12 @@ def main():
         try:
             report = pops.run(runtime, t_end=args.steps*spec.dt, max_steps=args.steps,
                               console=False)
-            steps = report.accepted_steps
+            steps, rejected = report.accepted_steps, report.rejected_steps
         except Exception as error:  # the refusal of the base is the measurement
             refusal, steps = "%s: %s" % (type(error).__name__, str(error).splitlines()[0]), None
-        results[route] = {"accepted_steps": steps, "macro_step": int(runtime.macro_step()),
+            rejected = None
+        results[route] = {"accepted_steps": steps, "rejected_attempts": rejected,
+                          "macro_step": int(runtime.macro_step()),
                           "time": float(runtime.time()), "refusal": refusal,
                           "strategy": type(spec.case._time._step_strategy).__name__}
         states[route] = np.asarray(runtime.state_global("fluid"), dtype=float)

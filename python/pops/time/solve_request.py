@@ -16,6 +16,7 @@ from pops.blockage import Blockage, BlockageClass, BlockageValueError
 from pops.time.canonical_data import CanonicalData
 from pops.time.points import TimePoint
 from pops.time.residual_common import residual_name
+from pops._ir.data_model import field_role
 
 
 class SolveRequestError(BlockageValueError):
@@ -119,7 +120,7 @@ class SolveUnknown:
         if not isinstance(self.template, ProgramValue):
             raise SolveRequestError(
                 "invalid_unknown", "unknown template must be a typed state or field ProgramValue")
-        if self.template.vtype not in ("state", "scalar_field"):
+        if field_role(self.template) not in ("state", "field"):
             raise SolveRequestError(
                 "invalid_unknown", "unknown template must be a typed state or field ProgramValue",
                 blockage=Blockage(

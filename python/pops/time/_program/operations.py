@@ -25,6 +25,7 @@ from pops.time.values import (
     _to_affine,
 )
 from pops.provenance import ProvenanceRecord, source_span
+from pops._ir.data_model import field_role
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -390,8 +391,8 @@ class _ProgramCore(
         aff = _Affine(raw)._merge()
         if not aff:
             raise ValueError("linear_combine: empty combination")
-        if any(v.vtype == "scalar_field" for v, _ in aff) and not all(
-                v.vtype == "scalar_field" for v, _ in aff):
+        if any(field_role(v) == "field" for v, _ in aff) and not all(
+                field_role(v) == "field" for v, _ in aff):
             raise ValueError("linear_combine: scalar fields cannot mix with State/Rate values")
         points = {value.point for value, _ in aff}
         advances_time = any(
@@ -412,7 +413,7 @@ class _ProgramCore(
         # through the block-qualified endpoint.  Two distinct known blocks are a type error; silently
         # choosing the first would make a cross-block commit possible.  Unqualified scratch terms may
         # participate alongside one qualified value, but cannot manufacture a block on their own.
-        if all(v.vtype == "scalar_field" for v, _ in aff):
+        if all(field_role(v) == "field" for v, _ in aff):
             blocks = {v.block for v, _ in aff if v.block is not None}
             if len(blocks) > 1:
                 raise ValueError(

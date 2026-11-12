@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from functools import wraps
+from pops._ir.data_model import is_finite_array, value_kind
 
 _TRANSPORT_BYTES: ContextVar[int | None] = ContextVar("pops_ad_transport_bytes", default=None)
 
@@ -70,12 +71,11 @@ from pops.time.variant_types import Float64, Product, ValueType
 
 DOMAIN_MISMATCH = 91002
 TAG_MISMATCH = 91003
-_DISCRETE = frozenset({'bool', 'int64', 'index', 'index_set'})
 
 
 def _contains_distributed(signature):
     kind = signature['vtype']
-    if kind == 'array':
+    if is_finite_array(kind):
         return signature.get('ownership') != 'replicated' or _contains_distributed(signature['element'])
     return kind in ('product', 'variant') and any(_contains_distributed(child) for _, child in signature['members'])
 
@@ -153,11 +153,11 @@ def zero_like(p, primal):
     kind = signature['vtype']
     if kind == 'scalar':
         return _constant(p, signature, 0.)
-    if kind in _DISCRETE:
+    if kind in ('bool', 'int64') or value_kind(kind) in ('index_set', 'index'):
         return p.product()
     if kind == 'product':
         return p.product(**{key: zero_like(p, primal[key]) for key, _ in signature['members']})
-    if kind == 'array':
+    if is_finite_array(kind):
         return _structural_array_map(p, primal, lambda q, item, i: zero_like(q, item), _tangent(signature['element']))
     if kind == 'variant':
         typ = _tangent(signature)
@@ -170,12 +170,12 @@ def check_tangent(p, primal, direction):
     """Check dependent runtime shape, preserving the supplied tangent's real values."""
     signature = value_signature(primal)
     kind = signature['vtype']
-    if kind in _DISCRETE or kind == 'scalar':
+    if kind in ('bool', 'int64', 'scalar') or value_kind(kind) in ('index_set', 'index'):
         return direction
     if kind == 'product':
         return p.product(**{key: check_tangent(p, primal[key], direction[key])
                             for key, _ in signature['members']})
-    if kind == 'array':
+    if is_finite_array(kind):
         direction = same_domains(p, primal, direction)
         return _structural_array_map(p, primal, lambda q, item, i:
             check_tangent(q, item, _select_global(q, direction, i) if _contains_distributed(signature['element']) else q.at(direction, q.index(q.domain(direction),i))), _tangent(signature['element']))
@@ -195,12 +195,12 @@ def coordinate_map(p, primal, scalar, path=(), *, leaf_type=None, leaf_initial=N
     kind = signature['vtype']
     if kind == 'scalar':
         return scalar(p, path)
-    if kind in _DISCRETE:
+    if kind in ('bool', 'int64') or value_kind(kind) in ('index_set', 'index'):
         return p.product()
     if kind == 'product':
         return p.product(**{key: coordinate_map(p, primal[key], scalar, (*path, ('field', key)), leaf_type=leaf_type, leaf_initial=leaf_initial)
                             for key, _ in signature['members']})
-    if kind == 'array':
+    if is_finite_array(kind):
         if signature.get('ownership') != 'replicated':
             return _distributed_coordinate_map(p, primal, scalar, path, leaf_type=leaf_type, leaf_initial=leaf_initial)
         return _structural_array_map(p, primal, lambda q, item, i:
@@ -227,12 +227,12 @@ def basis_like(p, primal, path):
     if kind == 'product' and step[0] == 'field':
         return p.product(**{key: (basis_like(p, primal[key], rest) if key == step[1]
                                 else zero_like(p, primal[key])) for key, _ in signature['members']})
-    if kind == 'array' and step[0] == 'distributed_gid':
+    if is_finite_array(kind) and step[0] == 'distributed_gid':
         domain, selected_domain, gid = p.domain(primal), step[1][0], step[1][1]
         primal = require(p, primal, p.same_domain(domain, selected_domain), DOMAIN_MISMATCH)
         return _structural_array_map(p, primal, lambda q,item,i:q.branch(i==gid,
             lambda r:basis_like(r,item,rest),lambda r:zero_like(r,item)), _tangent(signature['element']))
-    if kind == 'array' and step[0] == 'index':
+    if is_finite_array(kind) and step[0] == 'index':
         domain, selected = p.domain(primal), step[1]
         # The selected Index was issued by coordinate_map on this same primal.
         selected = require(p, selected, p.same_domain(domain, p.domain(selected)), DOMAIN_MISMATCH)
@@ -257,7 +257,7 @@ def coordinate_dot(p, left, right):
     if kind == 'product':
         return sum((coordinate_dot(p, left[key], right[key]) for key, _ in signature['members']),
                    p.float64(0.))
-    if kind == 'array':
+    if is_finite_array(kind):
         right = same_domains(p, left, right)
         entries = _structural_array_map(p, left, lambda q,item,i: coordinate_dot(q, item,
             _select_global(q,right,i) if _contains_distributed(signature['element']) else q.at(right,q.index(q.domain(right),i))), Float64)
@@ -274,10 +274,10 @@ def coordinate_count(p, primal):
     signature = value_signature(primal)
     kind = signature['vtype']
     if kind == 'scalar': return p.int64(1)
-    if kind in _DISCRETE: return p.int64(0)
+    if kind in ('bool', 'int64') or value_kind(kind) in ('index_set', 'index'): return p.int64(0)
     if kind == 'product':
         return sum((coordinate_count(p, primal[key]) for key, _ in signature['members']), p.int64(0))
-    if kind == 'array':
+    if is_finite_array(kind):
         from pops.time.variant_types import Int64
         counts = _structural_array_map(p, primal, lambda q,item,i: coordinate_count(q,item), Int64)
         return array_reduce(p, counts, p.int64(0), lambda q, carry, item: carry+item)
@@ -289,7 +289,7 @@ def coordinate_count(p, primal):
 
 def has_dynamic_coordinates(signature):
     kind = signature['vtype']
-    return kind in ('array', 'variant') or (kind == 'product' and
+    return kind == 'variant' or is_finite_array(kind) or (kind == 'product' and
         any(has_dynamic_coordinates(child) for _, child in signature['members']))
 
 
@@ -300,12 +300,12 @@ def mapped_coordinate_type(signature, leaf_type=None):
     from pops.time.variant_types import Variant
     kind = signature['vtype']
     if kind == 'scalar': return leaf_type
-    if kind in _DISCRETE: return Product()
+    if kind in ('bool', 'int64') or value_kind(kind) in ('index_set', 'index'): return Product()
     if kind == 'product':
         return Product(**{key: mapped_coordinate_type(child, leaf_type) for key, child in signature['members']})
     if kind == 'variant':
         return Variant(**{key: mapped_coordinate_type(child, leaf_type) for key, child in signature['members']})
-    if kind == 'array':
+    if is_finite_array(kind):
         return ValueType(dict(signature, element=mapped_coordinate_type(signature['element'], leaf_type).signature))
     raise NotImplementedError('coordinate receipt map has no rule for '+kind)
 
@@ -315,11 +315,11 @@ def coordinate_extract(p, primal, mapped, scalar):
     signature = value_signature(primal)
     kind = signature['vtype']
     if kind == 'scalar': return scalar(p, mapped)
-    if kind in _DISCRETE: return p.product()
+    if kind in ('bool', 'int64') or value_kind(kind) in ('index_set', 'index'): return p.product()
     if kind == 'product':
         return p.product(**{key: coordinate_extract(p, primal[key], mapped[key], scalar)
                             for key, _ in signature['members']})
-    if kind == 'array':
+    if is_finite_array(kind):
         mapped = same_domains(p, primal, mapped)
         return _structural_array_map(p, primal, lambda q,item,i:
             coordinate_extract(q,item,_select_global(q,mapped,i) if _contains_distributed(signature['element']) else q.at(mapped,q.index(q.domain(mapped),i)),scalar), _tangent(signature['element']))
@@ -337,11 +337,11 @@ def static_dimension(signature):
     """Return only a dimension proved statically; native cardinalities remain unknown."""
     kind = signature['vtype']
     if kind == 'scalar': return 1
-    if kind in _DISCRETE: return 0
+    if kind in ('bool', 'int64') or value_kind(kind) in ('index_set', 'index'): return 0
     if kind == 'product':
         sizes = [static_dimension(child) for _, child in signature['members']]
         return None if any(size is None for size in sizes) else sum(sizes)
-    if kind in ('array', 'variant'): return None
+    if kind == 'variant' or is_finite_array(kind): return None
     raise NotImplementedError('no finite real dimension for '+kind)
 
 
@@ -349,12 +349,12 @@ def _coordinate_fold(p, primal, initial, body, path):
     """Visit live coordinates in native order; the carry may contain distributed arrays."""
     sig=value_signature(primal);kind=sig['vtype']
     if kind=='scalar': return body(p,initial,path)
-    if kind in _DISCRETE: return initial
+    if kind in ('bool', 'int64') or value_kind(kind) in ('index_set', 'index'): return initial
     if kind=='product':
         for key,_ in sig['members']:
             initial=_coordinate_fold(p,primal[key],initial,body,(*path,('field',key)))
         return initial
-    if kind=='array' and sig['ownership']=='replicated':
+    if is_finite_array(kind) and sig['ownership']=='replicated':
         domain=p.domain(primal)
         return p.fold(initial,p.size(domain),lambda q,carry,k:
             _coordinate_fold(q,q.at(primal,q.index(domain,k)),carry,body,
@@ -362,7 +362,7 @@ def _coordinate_fold(p, primal, initial, body, path):
     if kind=='variant':
         return p.match(primal,**{tag:lambda q,item,tag=tag:
             _coordinate_fold(q,item,initial,body,(*path,('tag',tag))) for tag,_ in sig['members']})
-    if kind=='array':
+    if is_finite_array(kind):
         domain=p.domain(primal)
         return p.fold(initial,p.size(domain),lambda q,carry,gid:
             _coordinate_fold(q,_select_global(q,primal,gid),carry,body,
@@ -381,7 +381,7 @@ def _coordinate_assign(p, primal, current, path, value, *, leaf_type=None):
     if kind=='product' and step[0]=='field':
         return p.product(**{key:_coordinate_assign(p,primal[key],current[key],rest,value,leaf_type=leaf_type)
             if key==step[1] else current[key] for key,_ in sig['members']})
-    if kind=='array':
+    if is_finite_array(kind):
         domain=p.domain(primal)
         current=same_domains(p,primal,current)
         if step[0]=='distributed_gid':
@@ -430,9 +430,9 @@ def _fill_coordinates(p, primal, leaf):
     sig=value_signature(primal);kind=sig['vtype']
     if kind=='scalar':
         return p.product(**{key:leaf[key] for key,_ in value_signature(leaf)['members']})
-    if kind in _DISCRETE:return p.product()
+    if kind in ('bool', 'int64') or value_kind(kind) in ('index_set', 'index'):return p.product()
     if kind=='product':return p.product(**{key:_fill_coordinates(p,primal[key],leaf) for key,_ in sig['members']})
-    if kind=='array':
+    if is_finite_array(kind):
         from pops.time.variant_types import type_of
         return _structural_array_map(p,primal,lambda q,item,i:_fill_coordinates(q,item,leaf),
                                      mapped_coordinate_type(sig['element'],type_of(leaf)))

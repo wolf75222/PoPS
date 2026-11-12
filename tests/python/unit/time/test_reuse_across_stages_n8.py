@@ -21,7 +21,9 @@ import pops.codegen.program_field_reuse as reuse
 import examples.api_v02.models_M01_M14 as early
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
+from pops.runtime._simulation import NotAdmissible
 from pops.time._program.elaboration import Advance, Proposal, elaborate
+from pops.time._program.guards import cond, fail
 from pops.time._program.traced_method import Candidate, method
 from pops.time.value_metadata import CoeffPolynomial
 
@@ -284,10 +286,51 @@ def test_a_path_conservative_rate_is_a_barrier():
     assert reuse._crosses(_node("rhs", attrs={"path_conservative": False}))
 
 
+def bounded(value):
+    """A predicate component of the M10 state that every finite state satisfies."""
+    return value.prog.min(value) > -1.0e300
+
+
+@method
+def twice_guarded(B, p, flow, bounded):
+    """``twice`` with a guard of ``B.state`` between its two requests: an ``acceptance_guard``,
+    off the crossing list, that the elaborated IR places between the two solves."""
+    k0 = flow(B.state, B.time)
+    U = cond(bounded(B.state), lambda: B.state, lambda: fail(NotAdmissible))
+    k1 = flow(B.state, B.time + p.dt)
+    return Candidate(U + .5*p.dt*(k0 + k1), B.time + p.dt)
+
+
+def _guarded_route(case, block, state, flow, dt, *, name, memory, record, b6):
+    return elaborate(Advance(twice_guarded(flow=flow, bounded=bounded)), case=case,
+                     state=block[state], proposal=Proposal(dt), name=name)
+
+
+def test_a_real_barrier_between_two_requests_keeps_both_solves(monkeypatch):
+    """Review R1 of #781: the guard sits between the two top-level requests, so the walk refuses
+    and the C++ solves twice with no traced reuse: two prepared solves, each counted as a solve
+    unless the attempt reuses it (lot 6), as without the lot. The native counterpart reads the
+    counters (2, 0) (``test_reuse_across_stages_n8_native.py``)."""
+    spec = _spec(early.build_m10, monkeypatch, _guarded_route)
+    program = spec.case._time
+    first, second = _solves(program)
+    values = list(program._values)
+    between = [value.op for value in values[_position(values, first) + 1:_position(values, second)]]
+    assert "acceptance_guard" in between
+    assert not reuse._no_barrier(program, first, second)
+    source = _cpp(spec)
+    assert source.count("ctx.solve_prepared_linear(") == 2
+    lines = _counter_lines(source)
+    assert len(lines) == 2 and all(
+        re.fullmatch(r"if \(attempt_reused\d+\) \+\+\(\*field_counters_0\)\[1\]; "
+                     r"else \+\+\(\*field_counters_0\)\[0\];", line) for line in lines)
+
+
 @pytest.mark.parametrize("op", BARRIERS[:6])
-def test_a_barrier_between_two_requests_keeps_both_solves(op, monkeypatch):
+def test_the_walk_refuses_a_barrier_inserted_between_two_requests(op, monkeypatch):
     """The proof reads the top-level IR between the two solves, so an operation that never
-    reaches ``observe_operation`` is a barrier too."""
+    reaches ``observe_operation`` is a barrier too. The walk alone, on the IR of ``twice`` with a
+    node inserted; the next test elaborates a real barrier and reads its C++."""
     program = _spec(early.build_m10, monkeypatch, _twice_route).case._time
     first, second = _solves(program)
     assert reuse._no_barrier(program, first, second)

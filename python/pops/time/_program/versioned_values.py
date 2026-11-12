@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
+from pops._ir.data_model import is_field_leaf, is_finite_array, value_kind
 
 if TYPE_CHECKING:
     from pops.time.value_signatures import ValueSignature
@@ -124,11 +125,11 @@ def _fields(signature, path=()):
     while pending:
         node, prefix = pending.pop()
         kind = node["vtype"]
-        if kind in ("state", "rhs", "scalar_field"):
+        if is_field_leaf(kind):
             yield prefix, node
         elif kind in ("product", "variant"):
             pending.extend((child, (*prefix, key)) for key, child in reversed(node["members"]))
-        elif kind == "array":
+        elif is_finite_array(kind):
             pending.append((node["element"], (*prefix, "[]")))
 
 
@@ -152,11 +153,11 @@ def _persistable(signature):
             validate_bundle_signature(signature)
         for _, child in signature["members"]:
             _persistable(child)
-    elif kind == "array":
+    elif is_finite_array(kind):
         if signature.get("ownership") not in ("replicated", "contiguous_distributed"):
             raise NotImplementedError("continuation Array ownership has no native structural codec")
         _persistable(signature["element"])
-    elif kind not in ("scalar", "int64", "bool", "index_set", "index", "state", "rhs", "scalar_field"):
+    elif kind not in ("scalar", "int64", "bool") and value_kind(kind) not in ("field", "index_set", "index"):
         raise TypeError("unsupported persistent continuation leaf %r" % kind)
 
 

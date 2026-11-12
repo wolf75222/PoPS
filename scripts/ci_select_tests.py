@@ -86,6 +86,7 @@ PYTHON_BROAD_FILES = {
     "scripts/ci_import_closure.py",
     "scripts/ci_pytest_timings.py",
     "scripts/ci_python_dimensions.py",
+    "scripts/ci_native_build_runner.py",
     "scripts/ci_python_mpi.py",
     "scripts/ci_python_hardware.py",
     "tests/python/native_dimensions.json",
@@ -109,6 +110,7 @@ PYTHON_BROAD_PREFIXES = (
     "include/pops/core/",
     "include/pops/parallel/",
     ".github/actions/setup-kokkos/",
+    ".github/actions/native-module-for-runner/",
     "python/bindings/",
     "tests/python/support/",
 )

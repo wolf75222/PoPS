@@ -8,6 +8,7 @@ from typing import Any
 from pops.identity import Identity, canonical_bytes
 from pops.fields._program_expression import field_expression_cpp
 from pops.time._program.serialization import _json_ready
+from pops._ir.data_model import field_role
 
 
 def hierarchy_field_solve(value: Any) -> Any:
@@ -251,7 +252,7 @@ def field_observation_reduction(value: Any, var: Any, *, target: str) -> str:
     from .program_emit_versioned import schema_cpp
     signature = value_signature(source)
     authority = signature.get("field_authority")
-    if (source.vtype != "scalar_field" or source.block is not None or not isinstance(authority, Mapping)
+    if (field_role(source) != "field" or source.block is not None or not isinstance(authority, Mapping)
             or authority.get("kind") != "field_problem" or authority.get("version") != 1
             or type(authority.get("components")) is not int or authority["components"] < 1):
         raise ValueError("unowned reduction requires an exact independent Field provider type")

@@ -22,6 +22,7 @@ from pops.time._program.versioned_values import VERSIONED_OPS
 from pops.time._program.distributed_arrays import GLOBAL_OPS as _DISTRIBUTED, LOCAL_OPS as _LOCAL
 from pops.time.variant_types import ValueType, as_type, instantiate
 from pops.time.values import ProgramValue, _Coeff
+from pops._ir.data_model import is_finite_index
 
 
 _BLOCKS = ("body_block", "cond_block", "true_block", "false_block")
@@ -172,7 +173,7 @@ class _Codec:
                     raise ValueError("GraphFunction cannot capture ambient dt; pass a scalar duration")
                 return (dict(value.powers),), lambda children: {"$coefficient": children[0]}
             if isinstance(value, Mapping):
-                if value.get("vtype") in ("index_set", "index", "array") \
+                if is_finite_index(value) \
                         and value.get("family") in self.local_families:
                     signature = dict(value)
                     family = signature.pop("family")
@@ -592,7 +593,7 @@ def _formals(inputs):
             space = structural_state_space(sig["space"])
             if space is not None:
                 program._state_spaces[sig["state_ref"]] = space
-        if sig["vtype"] in ("index_set", "index", "array"):
+        if is_finite_index(sig):
             program._next_finite_domain_identity = max(program._next_finite_domain_identity,
                                                        sig["family"]+1)
             if "element" in sig:

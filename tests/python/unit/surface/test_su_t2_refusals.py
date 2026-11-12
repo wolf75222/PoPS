@@ -516,16 +516,17 @@ def test_su13_the_star_import_of_pops_math_gives_its_words_only():
 
 def test_su13_a_word_of_a_later_lot_is_importable_and_refuses_its_use():
     with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.Tolerance(rtol=1e-10, atol=1e-12)  # <- su13-later
+        surface.try_solve(None)  # <- su13-later
     message = str(caught.value)
     assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("su13-later"))
-    assert "pops.Tolerance has no elaborated form yet; a later lot of N15 with the solves of N9" \
+    assert "pops.try_solve has no elaborated form yet; a later lot of N15 with the solves of N9" \
         in message
 
 
 def test_su13_curl_and_outflow_are_words_of_pops_math_of_later_lots():
     """``curl`` and ``outflow`` of 2.6.3 are importable from ``pops.math`` (CF2 admits their
-    definition there, R20) and refuse their use with the lot that elaborates them."""
+    definition there, R20); ``curl`` refuses its use with the lot that elaborates it, and
+    ``outflow(u)`` is the relation of ``model.on`` whose piece carries no data (lot B)."""
     namespace = {}
     exec("from pops.surface.math import *", namespace)
     assert {"curl", "outflow"} <= set(namespace)
@@ -533,10 +534,7 @@ def test_su13_curl_and_outflow_are_words_of_pops_math_of_later_lots():
     with pytest.raises(surface.NotYetElaborated) as caught:
         surface.math.curl(u)
     assert "the word curl of pops.math has no elaborated form yet; N11" in str(caught.value)
-    with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.math.outflow(u)
-    assert "the word outflow of pops.math has no elaborated form yet; a later lot of N15 with " \
-        "the boundary relations of G04" in str(caught.value)
+    assert repr(surface.math.outflow(u)) == "outflow(u)"
 
 
 def test_su13_laplacian_is_a_spelling_that_pops_math_refuses():

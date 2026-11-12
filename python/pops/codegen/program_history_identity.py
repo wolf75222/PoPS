@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from pops._ir.data_model import field_role
 
 
 SCALAR_OUTPUT_HISTORY_SPACE = "scalar-output-field-v1"
@@ -137,7 +138,7 @@ def history_space_identity(program: Any, name: str) -> str:
                 validate_read(program, value)
                 continue
             if (value.op != "store_history" or len(value.inputs) != 1
-                    or value.inputs[0].vtype != "scalar_field" or value.block != owner):
+                    or field_role(value.inputs[0]) != "field" or value.block != owner):
                 return "scalar-field"
             stored = True
         stack.extend(value.inputs)
