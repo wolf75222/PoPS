@@ -28,6 +28,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
   sliver step at a frontier, when a CFL step ends within four ulp short of it or when
   `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-89 (N8, « Ancrage des calendriers au départ du run », spec §5.2): a schedule counts from
+  the start of each run. `every(time=h)` publishes at `t0 + k h`, computed exactly from the run's
+  start `t0` and rounded once, and `every(steps=k)` counts the accepted steps of the run, for an
+  Output as for `Regrid(criterion, every(k))` (the AMR hierarchy keeps the step its run started
+  at; `pops.run` starts a run, `pops.step` continues the current one). A lattice time within four
+  ulp of `until`, below or above, is published at `until`; this also applies to a first run,
+  where a lattice time a few ulp above `until` used to be dropped (lists keep the one-sided rule,
+  four ulp below). A later run
+  of the surface off the lattice of the first one is no longer refused, and no publication is
+  repeated at the time and step where the previous run ended. Rows and identities are unchanged.
 - ROM-98 (N15, lot « solves »): `pops.unknown`, `pops.solve`, `pops.Tolerance`,
   `Advance(tolerance=)` and `Program(solvers=)` of spec 0.3, 2.6.7, `cg()` in `pops.lib.solve`
   (a bridge of MG9 on b6's native conjugate gradients) and `imex_euler` in
