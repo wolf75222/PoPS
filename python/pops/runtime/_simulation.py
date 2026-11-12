@@ -18,10 +18,13 @@ step.
 
 The Outputs of the Advance (``pops.time._program.outputs``, CC14) are evaluated by the same native
 call: once at the start of the run, on the state from which it starts, then after each publication
-they are due on, with its achieved time. Each time of their ``at`` that lies ahead of the run, up
-to ``until``, is a frontier that the run lands on; a time within four units in the last place below
-``until`` is ``until``, as master merges a consumer deadline into the end of its run. Their values
-come back in ``RunResult.outputs``, one ``Publication`` per evaluation.
+they are due on, with its achieved time. Both schedules are anchored at the start of each run
+(spec 5.2): ``every(k)`` is due after the k-th, 2k-th, ... accepted step of the run, and
+``every_dt(h)`` gives the times t0 + k h of the run, t0 its start. Each time of their ``at`` that
+lies ahead of the run, up to ``until``, is a frontier that the run lands on; a time within four
+units in the last place below ``until`` is ``until``, as master merges a consumer deadline into the
+end of its run, and so is a time of ``every_dt`` within four units above it (``_ahead``). Their
+values come back in ``RunResult.outputs``, one ``Publication`` per evaluation.
 
 The failure sites of the field requests of a method (T38, N8 lot 5) are classified: a retryable
 site (phase ``trial``) rejects the attempt, as an assessment does, and the next attempt repeats the
@@ -51,7 +54,7 @@ from pops.time._program.elaboration import Proposal, StepRule
 from pops.time._program.traced_method import NotYetElaborated
 from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA, CellStepBound
 from pops.time._program.memory import MemoryView
-from pops.time._program.outputs import EveryDt, OutputRegion, Product
+from pops.time._program.outputs import EveryDt, OutputRegion, Product, landing
 
 DEFAULT_MAX_STEPS = 1_000_000
 """``max_steps`` when a run leaves it out: master's (``_runtime_instance.py:1598@bb9``), CC14."""
@@ -199,25 +202,30 @@ class Publication:
             self.time, self.macro_step, ", ".join(self.values))
 
 
-def _ahead(times: tuple, start: float, until: float) -> list:
+def _ahead(times: tuple, start: float, until: float, *, anchored: bool) -> list:
     """The output times that are frontiers of a run from ``start`` to ``until``.
 
-    A time within four units in the last place below ``until`` is ``until`` itself, as master
-    merges a consumer deadline into the end of its run. The merge is one-sided on purpose, as in
-    master, whose run loop takes a deadline only when it is at most ``t_end``, then lands on
-    ``t_end`` when ``_same_physical_time`` holds (``_runtime_instance.py:1782-1787``, « a threshold
-    one ULP above t_end is a future occurrence, not an end-of-run sample »): a tolerance never
-    extends the requested run, so a time after ``until``, however close, stays ahead for a later
-    run, which lands on it.
+    ``outputs.landing`` places each time (design note of N8 « Ancrage des calendriers au départ du
+    run », D5). A time within four units in the last place below ``until`` is ``until`` itself, as
+    master merges a consumer deadline into the end of its run. For a list of times
+    (``anchored=False``) the merge is one-sided on purpose, as in master, whose run loop takes a
+    deadline only when it is at most ``t_end``, then lands on ``t_end`` when
+    ``_same_physical_time`` holds (``_runtime_instance.py:1782-1787``, « a threshold one ULP above
+    t_end is a future occurrence, not an end-of-run sample »): a listed time is absolute, so a time
+    after ``until``, however close, stays ahead for a later run, which lands on it. The times of
+    ``every_dt`` (``anchored=True``) are the run's own t0 + k h, which no later run inherits: one
+    within four units above ``until`` lands on it too. A landed time that is not after ``start``
+    is dropped, so a run of zero length publishes only its start.
     """
-    frontiers = []
+    frontiers: list = []
     for time in times:
-        if not time > start or time > until:
+        if not time > start:
             continue
-        if until - time <= 4.0 * max(math.ulp(time), math.ulp(until)):
-            time = until
-        if not frontiers or time > frontiers[-1]:
-            frontiers.append(time)
+        landed = landing(time, until, anchored=anchored)
+        if landed is None or not landed > start:
+            continue
+        if not frontiers or landed > frontiers[-1]:
+            frontiers.append(landed)
     return frontiers
 
 
@@ -418,9 +426,10 @@ class Simulation:
         for region in self._outputs:
             output = region.output
             at = output.at
-            times = () if at is None else at.times(start, until) if type(at) is EveryDt else at
+            anchored = type(at) is EveryDt
+            times = () if at is None else at.times(start, until) if anchored else at
             schedule.append((0 if output.when is None else output.when.steps,
-                             _ahead(times, start, until),
+                             _ahead(times, start, until, anchored=anchored),
                              [item for _, kind, item in region.record if kind == "array"]))
         try:
             report = self._run_native(until, dt, max_steps, schedule, None if rule is None else (

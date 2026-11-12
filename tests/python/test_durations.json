@@ -1249,7 +1249,7 @@
             "pops.run("
           ],
           "reason": "native Model/Program compilation, binding and runtime reception; existing complete runtime estimate tier",
-          "source_sha256": "ad92e1b18551b87da161089db519065a0ffdb3bc605e8d1615a0be5c578ba610"
+          "source_sha256": "ac6940198cfc13e18588cdc0a4666dedad26e60bc43f1ee8525d38ffce055050"
         },
         "tests/python/integration/runtime/test_uniform_accepted_storage_observation.py": {
           "analogue": "tests/python/integration/runtime/test_combined_diffusion_exchange_ledger.py",
@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1195,
+    "estimated_count": 1198,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7541,6 +7541,7 @@
       "tests/python/unit/numerics/test_principal_grouping_contract.py",
       "tests/python/unit/numerics/test_principal_storage_route.py",
       "tests/python/unit/numerics/test_region_facts_n7.py",
+      "tests/python/unit/numerics/test_representation_definition_v2.py",
       "tests/python/unit/numerics/test_retained_stencil_v02.py",
       "tests/python/unit/numerics/test_scoped_stencil_v02.py",
       "tests/python/unit/numerics/test_state_storage.py",
@@ -7749,6 +7750,7 @@
       "tests/python/unit/surface/test_lot_e_project.py",
       "tests/python/unit/surface/test_lot_g_run.py",
       "tests/python/unit/surface/test_n3_lot1_library_words.py",
+      "tests/python/unit/surface/test_published_representation.py",
       "tests/python/unit/surface/test_quadrature.py",
       "tests/python/unit/surface/test_solver_reference_n9.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
@@ -7879,6 +7881,7 @@
       "tests/python/unit/time/test_reuse_across_stages_n8.py",
       "tests/python/unit/time/test_scientific_claims.py",
       "tests/python/unit/time/test_scientific_distributed_v14.py",
+      "tests/python/unit/time/test_scientific_erasure_inventory.py",
       "tests/python/unit/time/test_scientific_erasure_v15.py",
       "tests/python/unit/time/test_scientific_formals_v15.py",
       "tests/python/unit/time/test_scientific_graph_v14.py",
@@ -8133,7 +8136,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1260,
+    "total_files": 1263,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8442,22 +8445,22 @@
       }
     },
     "ci_20261107_n10_index_sets": {
-      "basis": "Unmeasured CI scheduling estimate for the N10 phase 1 module (ROM-85, lots 1a and 1b: index sets of IR2, descriptors of IR3, value types of IR1, the one kind function): 60 s on the api_v02_20261013 source-only tier, about twice the analogue test_typed_index_maps_n7.py: it resolves nine small programs (M01, M08, M10, M12, M18, T06, T08 and the T10 multi-block example) without compilation, runs one DM-T1 emission of M15 in a subprocess (no compiler) and runs no seeded samples; one test parses python/pops (review of #777, P2). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module) that shared the machine with a benchmark; it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimate for the N10 phase 1 module (ROM-85, lots 1a, 1b and 3a: index sets of IR2, descriptors of IR3, value types of IR1, the one kind function, the DM5 report and refusal): 120 s on the api_v02_20261013 source-only tier, about four times the analogue test_typed_index_maps_n7.py: it resolves nine small programs (M01, M08, M10, M12, M18, T06, T08 and the T10 multi-block example) and three examples (distributed_algebra_v14, distributed_program_checks, continuation_regrid_amr) without compilation, runs one DM-T1 emission of M15 in a subprocess (no compiler) and runs no seeded samples; one test parses python/pops (review of #777, P2). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module) that ran alone; it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/numerics/test_index_sets_n10.py": "tests/python/unit/numerics/test_typed_index_maps_n7.py"
       },
       "estimated_seconds": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": 60
+        "tests/python/unit/numerics/test_index_sets_n10.py": 120
       },
       "local_receipts": {
         "tests/python/unit/numerics/test_index_sets_n10.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_index_sets_n10.py",
-          "passed": 25,
-          "seconds": 48.58
+          "passed": 32,
+          "seconds": 92.0
         }
       },
       "source_sha256": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": "86d272d813080b64e422b51c826af47ab67b247f5c21087f2220612a5b29999c"
+        "tests/python/unit/numerics/test_index_sets_n10.py": "ffcd3a826daf486e6ae40765168b673707e5494be62179e720ae85554dfceaa2"
       }
     },
     "n11_20261108_expression_closure": {
@@ -8894,6 +8897,24 @@
         "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": "d98b823128733a7a9bb70fb75c4f2ff47c08ff5301fcdec63064bc38297236c4"
       }
     },
+    "g03_20261112_representation_definition": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only module of G03 lot R-a (ROM-21, contract pops.executable-representation-definition@2): exact normal forms, rate and load weights by exact rational moments, identities and refusals, and the normalized layout rows of two N17 graphs and of a moving map (no compile), no native module and no compile. 5 s, the lower source-only tier of api_v02_20261013 (5/15/60 s), above its source-only analogue (2 s). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/numerics/test_representation_definition_v2.py": "tests/python/unit/codegen/test_representation_arity.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/numerics/test_representation_definition_v2.py": 5
+      },
+      "local_receipts": {
+        "tests/python/unit/numerics/test_representation_definition_v2.py": {
+          "pytest_seconds": 2.42,
+          "tests": 36
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/numerics/test_representation_definition_v2.py": "864eb5edc4f1d5ee7c4e57d3ef15fec56ce8c54419cf55333d9176f3938ee5a5"
+      }
+    },
     "ci_20261112_n15_surface_lot_d": {
       "basis": "Unmeasured CI scheduling estimates for the two modules of N15 lot D-E, part D (ROM-98, OD31: dt=cfl_limit(flux, cfl=, max_dt=), the step rule of the surface elaborated onto N8's compiled step rule), on the api_v02_20261013 tiers: 60 s for the source-only module, which resolves eight level-1 cases and emits the C++ of three of them and of their hand-written b6 forms, as the analogue test_su_t3_schemes_2d.py (60 s); 600 s for the Dim2 native module, which compiles two artifacts once per module (the surface advection with inflow, outflow and cfl_limit, and its hand-written b6 form) and runs five compiled runs of 29 steps at most on 64 x 64 cells, as the analogue test_surface_lot_b_boundaries_native.py (two artifacts, 600 s). The local receipts come from pytest on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
@@ -8917,6 +8938,31 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py": "859d18725cee9625ac24a692900b9ac724bb9407c7cac1a20f0ab18d015c75cd",
         "tests/python/unit/surface/test_lot_d_step_rule.py": "9a9eb9a96f8e111f678014715bd906ae7d7b4f9350259def80235a7e3ae4d4b2"
+      }
+    },
+    "g03_20261112_erasure": {
+      "basis": "Unmeasured CI scheduling estimates for the two source-only modules of G03 lot E (ROM-21, scientific_type_erasure_contract). The surface module elaborates five small surface cases (no compile) and checks the identities of their published arrays and the refusal of bind before the native bind: 15 s, the middle source-only tier of api_v02_20261013 (5/15/60 s), as its analogue. The inventory module builds a few Programs and parses three test modules: 5 s, the lower tier. The local receipts are pytest sessions on a 4-core container (Python 3.12, source checkout, no native module); they are not GitHub CI file wall times. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_published_representation.py": "tests/python/unit/surface/test_lot_g_run.py",
+        "tests/python/unit/time/test_scientific_erasure_inventory.py": "tests/python/unit/time/test_scientific_erasure_v15.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/surface/test_published_representation.py": 15,
+        "tests/python/unit/time/test_scientific_erasure_inventory.py": 5
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_published_representation.py": {
+          "pytest_seconds": 3.3,
+          "tests": 9
+        },
+        "tests/python/unit/time/test_scientific_erasure_inventory.py": {
+          "pytest_seconds": 0.66,
+          "tests": 11
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_published_representation.py": "e127b713ad6d1397a9c393c880617b832533637f1e219ec996e1a94847682ba9",
+        "tests/python/unit/time/test_scientific_erasure_inventory.py": "39411ada0693e0779516f54919a90300af026f7ef55b28ea9367bd542d711a35"
       }
     }
   },
@@ -10144,7 +10190,7 @@
   "tests/python/unit/surface/test_su_t3_parity.py": 60,
   "tests/python/integration/runtime/test_field_requests_n8_native.py": 900,
   "tests/python/unit/time/test_field_requests_n8.py": 120,
-  "tests/python/unit/numerics/test_index_sets_n10.py": 60,
+  "tests/python/unit/numerics/test_index_sets_n10.py": 120,
   "tests/python/unit/physics/test_rate_expression_closure_n11.py": 15.0,
   "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": 600.0,
   "tests/python/unit/surface/test_quadrature.py": 5,
@@ -10178,6 +10224,9 @@
   "tests/python/integration/runtime/test_stencil_runtime_parameter_native.py": 300,
   "tests/python/unit/surface/test_n3_lot1_library_words.py": 60,
   "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": 600,
+  "tests/python/unit/numerics/test_representation_definition_v2.py": 5,
   "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py": 600,
-  "tests/python/unit/surface/test_lot_d_step_rule.py": 60
+  "tests/python/unit/surface/test_lot_d_step_rule.py": 60,
+  "tests/python/unit/surface/test_published_representation.py": 15,
+  "tests/python/unit/time/test_scientific_erasure_inventory.py": 5
 }

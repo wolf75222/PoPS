@@ -20,7 +20,11 @@ ADVANCE_CONTROL_SCHEMA = "pops.advance-control@1"
 
 ADVANCE_CONTROL_OUTPUTS_SCHEMA = "pops.advance-control@2"
 """Schema of ``AdvanceControl.to_data`` for an Advance with Outputs (CC14): schema 1 and the
-schedule and record shape of each Output."""
+schedule and record shape of each Output. The schedule rows ``{"every": k}`` and
+``{"every_dt": h}`` count from the start of each run, in schemas 2 to 4: the k-th, 2k-th, ...
+accepted step of the run, and the times t0 + k h of the run, t0 its start (N8 « Ancrage des
+calendriers au départ du run »). The rows and the Program identity are those written before that
+lot; only the run reads them anchored."""
 
 ADVANCE_CONTROL_MEMORY_SCHEMA = "pops.advance-control@3"
 """Schema of ``AdvanceControl.to_data`` for an Advance whose method has memory or field requests

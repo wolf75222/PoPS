@@ -127,7 +127,7 @@ class Elaborated:
     """What a case elaborates into: the b6 case, its layout and block, the rows of its report."""
 
     __slots__ = ("case", "layout", "block", "model", "plan", "states", "names", "advance", "rows",
-                 "params", "outputs")
+                 "params", "outputs", "representations")
 
     def __init__(self, **fields: Any) -> None:
         for name in self.__slots__:
@@ -142,6 +142,27 @@ def elaborate_case(case: Any) -> Elaborated:
         return _Elaboration(case).run()
     except SurfaceRefusal as refusal:
         raise refusal.traced_at(case.site) from None
+
+
+def elaborated_representation(quantity: Any, support: Box) -> Any:
+    """The elaborated identity of a quantity's representation (G03 lot E, K4).
+
+    b6's state carries neither the support nor the representation of the quantity it elaborates
+    (``b6.state(name, components=(name,))``), so two quantities of equal shape on two supports, or
+    under two representations, would be interchangeable once elaborated. The surface keeps, beside
+    each state, ``Representation(space, definition)`` of contract @2 (G03 lot R): the space is the
+    support's coordinates and the scalar value, never the quantity's name (P10), and the definition
+    is the one of ``pops.CellAverage()``, the representation that the surface elaborates today.
+    Nothing of it enters b6, so no identity or manifest of a case changes (N16 5.5). Published
+    arrays carry it, and ``bind`` reads it back (``surface/_run.py``)."""
+    from pops.model.spaces import Space
+    from pops._ir.quantity import PhysicalSupport
+    from pops.representations.definition import ElaboratedRepresentation, cell_average
+    coordinates = tuple(
+        (name, ("periodic[%r, %r)" if periodic else "[%r, %r]") % (float(lower), float(upper)))
+        for name, (lower, upper, periodic) in zip(support._names, support.bounds(), strict=True))
+    space = Space("scalar", components=("value",), support=PhysicalSupport(coordinates))
+    return ElaboratedRepresentation(space, cell_average(support.rank))
 
 
 # b6 selects a term of a balance whose weight is 1 or -1 only (the partitions of a physical
@@ -836,9 +857,11 @@ class _Elaboration:
             schedule = ("every(%d)" % output.every_steps if output.every_steps is not None
                         else "at=every_dt(%r)" % output.every_time if output.every_time is not None
                         else "at=%r" % (output.times,))
-            if output.every_steps is not None or output.every_time is not None:
-                schedule += (", the lattice from the start of the simulation; a later run that "
-                             "starts off it is refused (N8)")
+            if output.every_steps is not None:
+                schedule += (", after every k-th accepted step of each run, counted from its "
+                             "start t0 (N8)")
+            elif output.every_time is not None:
+                schedule += ", at t0 + k h, t0 the start of each run (N8)"
             self.rows.append(Row(
                 repr(output), "program",
                 "Output(lambda B, interval: Product(%s), %s), evaluated by the compiled run (CC14)"
@@ -1163,7 +1186,9 @@ class _Elaboration:
         return Elaborated(case=case6, layout=layout, block=block, model=b6, plan=plan,
                           states=states, names=self.names, advance=advance,
                           rows=tuple(self.rows), params=dict(self.params),
-                          outputs=self.lowered_outputs)
+                          outputs=self.lowered_outputs,
+                          representations={quantity: elaborated_representation(quantity, support)
+                                           for quantity in states})
 
 
 def inspect_case(case: Any) -> Report:

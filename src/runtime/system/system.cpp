@@ -462,9 +462,9 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     segment.macro_step = static_cast<std::int64_t>(p_->macro_step_);
     if (duration.lands && p_->t != frontier)
       throw std::logic_error("System::run_advance did not publish its frontier exactly");
+    // every(k) counts the accepted steps of this run (spec 5.2), incremented above.
     for (std::size_t output = 0; output < outputs.size(); ++output)
-      if (runtime::program::advance_output_due(
-              output, p_->t, static_cast<std::int64_t>(p_->macro_step_), outputs, cursors))
+      if (runtime::program::advance_output_due(output, p_->t, report.steps, outputs, cursors))
         evaluate(output);
   }
   return finish(AdvanceRunStop::kReached);
