@@ -18,10 +18,31 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
 namespace pops {
+
+namespace {
+
+/// The fraction that a path rhs reads while the attempts of one step run (step_cfl, or
+/// run_advance with a step rule), set for the scope and restored on every exit.
+class StepFractionScope {
+ public:
+  StepFractionScope(double& slot, double fraction) : slot_(slot), prior_(slot) {
+    slot_ = fraction;
+  }
+  ~StepFractionScope() { slot_ = prior_; }
+  StepFractionScope(const StepFractionScope&) = delete;
+  StepFractionScope& operator=(const StepFractionScope&) = delete;
+
+ private:
+  double& slot_;
+  double prior_;
+};
+
+}  // namespace
 
 POPS_EXPORT std::string abi_key() {
   return detail::abi_key_string();
@@ -216,8 +237,9 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
       .scalar(until)
       .scalar(proposal)
       .presence(rule != nullptr)
-      .scalar(rule ? rule->cfl : 0.0)
+      .scalar(rule ? rule->fraction : 0.0)
       .scalar(rule ? rule->max_dt : 0.0)
+      .scalar(rule ? rule->speed_floor : 0.0)
       .scalar(max_steps)
       .scalar(max_attempts)
       .scalar(p_->t)
@@ -250,11 +272,11 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
         "System::run_advance requires a finite frontier, a finite positive proposal and a "
         "non-negative step budget");
   if (rule != nullptr) {
-    if (!std::isfinite(rule->cfl) || !(rule->cfl > 0.0) || std::isnan(rule->max_dt) ||
-        !(rule->max_dt > 0.0))
+    if (!std::isfinite(rule->fraction) || !(rule->fraction > 0.0) || std::isnan(rule->max_dt) ||
+        !(rule->max_dt > 0.0) || !std::isfinite(rule->speed_floor) || !(rule->speed_floor > 0.0))
       throw std::invalid_argument(
-          "System::run_advance step rule requires a finite positive cfl and a positive max_dt "
-          "or +infinity");
+          "System::run_advance step rule requires a finite positive fraction, a positive max_dt "
+          "or +infinity and a finite positive speed floor");
     // The rule selects once per step, on the accepted state: a bound that reads anything else
     // could give a retry another value (review P2 of the lot note).
     if (!p_->coupling_.dt_bounds.empty())
@@ -322,23 +344,18 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     if (rule != nullptr) {
       // b6's selection on the accepted state, taken once for the attempts of the step; the step
       // starts its own segment, so the landing rules are those of a single proposal.
-      step_proposal = select_step_cfl_(rule->cfl, static_cast<double>(kCflSpeedFloor),
-                                       rule->max_dt, 0.0);
+      step_proposal = select_step_(rule->fraction, rule->speed_floor, rule->max_dt, 0.0);
       segment = {step_proposal, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
     }
     const auto duration = runtime::program::advance_attempt_duration(
         p_->t, step_proposal, frontier, segment.origin, segment.steps);
     if (rule != nullptr && (duration.lands || duration.dt != step_proposal))
       p_->last_dt_reason_ = "frontier";  // cut or landed by the frontier (review P1)
-    // The attempts of a rule run at its Courant number, as step_cfl's execution does: a path rhs
-    // checks its budget against it.
-    struct CourantScope {
-      double& active;
-      double prior;
-      ~CourantScope() { active = prior; }
-    } courant{p_->active_program_step_courant_, p_->active_program_step_courant_};
+    // The attempts of a rule run at its fraction, as step_cfl's execution does: a path rhs checks
+    // its budget against it.
+    std::optional<StepFractionScope> fraction_scope;
     if (rule != nullptr)
-      p_->active_program_step_courant_ = rule->cfl;
+      fraction_scope.emplace(p_->active_program_step_courant_, rule->fraction);
     // The epoch before the first attempt of this step: a retry keeps the epoch of the step only
     // when an earlier attempt opened it, so an attempt rejected before its begin_step never
     // lends a later one the epoch of the previous accepted step (review of the code, O1).
@@ -1078,12 +1095,14 @@ void System<Dim>::rollback_restart_transaction() {
 }
 
 template <int Dim>
-double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
-  const double selected = select_step_cfl_(cfl, speed_floor, max_dt, min_dt);
+double System<Dim>::step_cfl(double fraction, double speed_floor, double max_dt,
+                             double min_dt) {
+  const double selected = select_step_(fraction, speed_floor, max_dt, min_dt);
   const ExecutionLane& lane = prepared_boundary_execution_lane();
-  const double prior_courant = p_->active_program_step_courant_;
-  p_->active_program_step_courant_ = cfl;
-  try {
+  {
+    // The step runs at its fraction (a path rhs checks its budget against it), restored after the
+    // step on every exit, before the attempt count moves.
+    const StepFractionScope fraction_scope(p_->active_program_step_courant_, fraction);
     p_->execute_step_transaction(
         lane.communicator(),
         [&] {
@@ -1096,18 +1115,13 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
           ++solve_outcome_authority_->attempt;
           rollback_field_publication_transaction();
         });
-  } catch (...) {
-    p_->active_program_step_courant_ = prior_courant;
-    throw;
   }
-  p_->active_program_step_courant_ = prior_courant;
   ++solve_outcome_authority_->attempt;
   return selected;
 }
 
 template <int Dim>
-double System<Dim>::select_step_cfl_(double cfl, double speed_floor, double max_dt,
-                                     double min_dt) {
+double System<Dim>::select_step_(double cfl, double speed_floor, double max_dt, double min_dt) {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   runtime::program::require_step_transaction_control(
       lane, 10, static_cast<long>(step_transaction_depth()),
@@ -1599,7 +1613,7 @@ template void System<kNativeDimension>::commit_restart_transaction();
 template void System<kNativeDimension>::finalize_restart_transaction() noexcept;
 template void System<kNativeDimension>::rollback_restart_transaction();
 template double System<kNativeDimension>::step_cfl(double, double, double, double);
-template double System<kNativeDimension>::select_step_cfl_(double, double, double, double);
+template double System<kNativeDimension>::select_step_(double, double, double, double);
 template double System<kNativeDimension>::active_program_step_courant() const;
 template int System<kNativeDimension>::macro_step() const;
 template void System<kNativeDimension>::mark_bound();

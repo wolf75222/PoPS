@@ -1,5 +1,7 @@
 """The one-shot rejection of N8 lot « reuse across stages » is a test-only C++ patch: no shipped
-source names it, and only the native test of the lot applies it."""
+source names it, and only the native tests of N8 apply it (this lot's, and the Retry proof of
+« Règle de pas compilée »); the test duration table names their tests."""
+
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,8 @@ USERS = {
     "tests/python/support/one_shot_rejection.py",
     "tests/python/architecture/test_one_shot_rejection_is_test_only.py",
     "tests/python/integration/runtime/test_reuse_across_stages_n8_native.py",
+    "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py",
+    "tests/python/test_durations.json",
 }
 
 

@@ -1210,6 +1210,8 @@ void bind_system_physics(py::class_<System>& cls) {
 
 // Stepping + profiling + custom-integrator primitives (field solve, step/advance/CFL, eval_rhs/state).
 void bind_system_stepping(py::class_<System>& cls) {
+  // The floor of step_cfl's default and of a step rule's selection: one value for both routes.
+  const double speed_floor = static_cast<double>(kCflSpeedFloor);
   cls.def("solve_fields",
           [](System& system) { return consume_solve_outcome(system.solve_fields()); })
       .def(
@@ -1222,7 +1224,7 @@ void bind_system_stepping(py::class_<System>& cls) {
       // One compiled run of the installed Advance; the interpreter only receives its counters.
       .def(
           "_run_advance",
-          [](System& system, double until, double proposal, std::int64_t max_steps,
+          [speed_floor](System& system, double until, double proposal, std::int64_t max_steps,
              const std::vector<std::tuple<std::int64_t, std::vector<double>,
                                           std::vector<std::string>>>& outputs,
              const std::optional<std::pair<double, double>>& rule) {
@@ -1230,10 +1232,12 @@ void bind_system_stepping(py::class_<System>& cls) {
             schedule.reserve(outputs.size());
             for (const auto& [every_steps, at, arrays] : outputs)
               schedule.push_back({every_steps, at, arrays});
-            // rule = (cfl, max_dt): the step rule of the Advance, max_dt +inf when it has none.
+            // rule = (fraction, max_dt): the step rule of the Advance, max_dt +inf when it has
+            // none; its floor is step_cfl's default.
             std::optional<pops::runtime::program::AdvanceStepRule> step_rule;
             if (rule)
-              step_rule = pops::runtime::program::AdvanceStepRule{rule->first, rule->second};
+              step_rule = pops::runtime::program::AdvanceStepRule{rule->first, rule->second,
+                                                                  speed_floor};
             const auto report = system.run_advance(until, proposal, max_steps, schedule,
                                                    step_rule ? &*step_rule : nullptr);
             py::list samples;
@@ -1426,7 +1430,7 @@ void bind_system_stepping(py::class_<System>& cls) {
            "the dt used. speed_floor (ADC-645): the floor applied to the reduced max wave speed "
            "(w = max(w, speed_floor), so a quiescent system cannot divide by zero); defaults to "
            "the historical kCflSpeedFloor (1e-30), bit-identical.",
-           py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor),
+           py::arg("cfl"), py::arg("speed_floor") = speed_floor,
            py::arg("max_dt") = std::numeric_limits<double>::infinity(), py::arg("min_dt") = 0.0)
       .def("enable_profiling", &System::enable_profiling,
            "Spec 3 profiling (ADC-459): start timing the step phases (step, field_solve). Disabled "

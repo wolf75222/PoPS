@@ -31,7 +31,7 @@ admissibility guard of the method body (IR4, N8 lot 6), whose variant is ``NotAd
 
 ADVANCE_CONTROL_STEP_RULE_SCHEMA = "pops.advance-control@4"
 """Schema of ``AdvanceControl.to_data`` for an Advance whose proposals a step rule chooses (N8 lot
-« Règle de pas compilée »): schema 3, whose ``proposal`` is ``{"rule": "cfl", "cfl": ...}`` with
+« Règle de pas compilée »): schema 3, whose ``proposal`` is ``{"rule": "stability", "fraction": ...}`` with
 ``max_dt`` when the rule has one, instead of ``{"dt": ...}``. Only a Program with a rule records
 it, so the record and the identity of every Program without one are unchanged."""
 
@@ -44,7 +44,7 @@ _MAX_ATTEMPTS = 2**31 - 1
 
 class AdvanceControl:
     """The assessments, the retry budget and the first proposal of one elaborated Advance, or its
-    step rule: ``step_rule`` is ``None`` or ``(cfl, max_dt)``, ``max_dt`` ``None`` when the rule
+    step rule: ``step_rule`` is ``None`` or ``(fraction, max_dt)``, ``max_dt`` ``None`` when the rule
     has no cap, and ``first_dt`` is ``None`` exactly when there is a rule."""
 
     __slots__ = ("assessments", "max_attempts", "max_transforms", "first_dt", "outputs",
@@ -65,10 +65,10 @@ class AdvanceControl:
             raise ValueError("AdvanceControl.max_transforms is 0 until transforms are lowered")
         if step_rule is not None:
             if type(step_rule) is not tuple or len(step_rule) != 2:
-                raise TypeError("AdvanceControl.step_rule is (cfl, max_dt) or None")
-            cfl, max_dt = step_rule
-            if type(cfl) is not float or not math.isfinite(cfl) or cfl <= 0.0:
-                raise ValueError("AdvanceControl.step_rule cfl is a finite positive binary64")
+                raise TypeError("AdvanceControl.step_rule is (fraction, max_dt) or None")
+            fraction, max_dt = step_rule
+            if type(fraction) is not float or not math.isfinite(fraction) or fraction <= 0.0:
+                raise ValueError("AdvanceControl.step_rule fraction is a finite positive binary64")
             if max_dt is not None and (type(max_dt) is not float or not math.isfinite(max_dt)
                                        or max_dt <= 0.0):
                 raise ValueError("AdvanceControl.step_rule max_dt is None or a finite positive "
@@ -131,8 +131,8 @@ class AdvanceControl:
             if self.first_dt is None:
                 raise RuntimeError("AdvanceControl without a step rule lost its first_dt")
             return {"dt": self.first_dt.hex()}
-        cfl, max_dt = self.step_rule
-        proposal = {"rule": "cfl", "cfl": cfl.hex()}
+        fraction, max_dt = self.step_rule
+        proposal = {"rule": "stability", "fraction": fraction.hex()}
         if max_dt is not None:
             proposal["max_dt"] = max_dt.hex()
         return proposal
@@ -158,11 +158,11 @@ class AdvanceControl:
         if not isinstance(proposal, dict) or any(type(value) is not str
                                                  for value in proposal.values()):
             raise ValueError("Advance control record has a malformed proposal")
-        if ruled and (set(proposal) not in ({"rule", "cfl"}, {"rule", "cfl", "max_dt"})
-                      or proposal["rule"] != "cfl") or not ruled and set(proposal) != {"dt"}:
+        if ruled and (set(proposal) not in ({"rule", "fraction"}, {"rule", "fraction", "max_dt"})
+                      or proposal["rule"] != "stability") or not ruled and set(proposal) != {"dt"}:
             raise ValueError("Advance control record has a malformed proposal")
         step_rule = None if not ruled else (
-            float.fromhex(proposal["cfl"]),
+            float.fromhex(proposal["fraction"]),
             float.fromhex(proposal["max_dt"]) if "max_dt" in proposal else None)
         control = cls(assessments=tuple((row["assess"], row["origin"]) for row in accept),
                       max_attempts=retry["max_attempts"], max_transforms=retry["max_transforms"],

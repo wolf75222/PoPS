@@ -152,8 +152,8 @@ class Continuation:
 
     def __repr__(self) -> str:
         if type(self.proposal) is StepRule:
-            return "Continuation(time=%r, macro_step=%d, proposal=StepRule(cfl=%r, max_dt=%r))" % (
-                self.time, self.macro_step, self.proposal.cfl, self.proposal.max_dt)
+            return "Continuation(time=%r, macro_step=%d, proposal=%r)" % (
+                self.time, self.macro_step, self.proposal)
         return "Continuation(time=%r, macro_step=%d, proposal=Proposal(dt=%r))" % (
             self.time, self.macro_step, self.proposal.dt)
 
@@ -298,7 +298,8 @@ def _run_data(start: float, until: float, dt: float, rule: Any, max_steps: int) 
     if rule is None:
         data["proposal"] = dt.hex()
     else:
-        data["rule"] = {"cfl": rule[0].hex(), "max_dt": None if rule[1] is None else rule[1].hex()}
+        data["rule"] = {"fraction": rule[0].hex(),
+                        "max_dt": None if rule[1] is None else rule[1].hex()}
     data["max_steps"] = max_steps
     return data
 

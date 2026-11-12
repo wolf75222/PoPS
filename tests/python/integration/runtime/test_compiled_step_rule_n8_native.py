@@ -3,9 +3,10 @@
 The slice's physics written by hand for b6 and N8: master's tutorial 02, ``ddt(u) == -div((1,
 0.25) u)`` on 64 x 64 cells, MUSCL(VanLeer) with Rusanov (the upwind of this linear flux), inflow
 at the far field on x_min and y_min, outflow on x_max and y_max, SSPRK2. The Advance is elaborated
-from ``StepRule(cfl=0.45, max_dt=...)``: ``Simulation.run`` takes each step's proposal from b6's
-CFL selection in ``System::run_advance``, and ``pops.run`` on the same artifact takes master's
-``AdaptiveCFL`` route through ``System::step_cfl``. Both reach the same steps and the same state
+from ``StepRule(0.45, max_dt, strategy=AdaptiveCFL(0.45, max_dt))``, as the slice's
+``cfl_limit`` builds it: ``Simulation.run`` takes each step's proposal from b6's CFL selection in
+``System::run_advance``, and ``pops.run`` on the same artifact takes master's ``AdaptiveCFL``
+route through ``System::step_cfl``. Both reach the same steps and the same state
 bit for bit. A mutant that drops ``max_dt`` is caught; a rejected attempt is retried with the dt
 that master selects again on the restored state.
 """
@@ -29,6 +30,7 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.projection import ConservativeCellAverage
 from pops.runtime._simulation import BudgetExhausted, Simulation
+from pops.time import AdaptiveCFL
 from pops.time._program.elaboration import Advance, Proposal, Retry, StepRule, elaborate
 from pops.time._program.outputs import Output, Product
 from pops.time._program.traced_method import Candidate, method
@@ -152,6 +154,11 @@ def _parity(rule_rows, master_rows):
         _bitwise(left, right)
 
 
+def _slice_rule(max_dt):
+    """The rule as the slice's library word gives it: the fraction and the builder's strategy."""
+    return StepRule(CFL, max_dt, strategy=AdaptiveCFL(CFL, max_dt))
+
+
 @pytest.fixture(scope="module")
 def artifacts(tmp_path_factory, native_cxx, kokkos_root):
     del native_cxx, kokkos_root
@@ -160,11 +167,11 @@ def artifacts(tmp_path_factory, native_cxx, kokkos_root):
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
         yield {
-            "slice": _compile(StepRule(CFL, MAX_DT)),
-            "binding": _compile(StepRule(CFL, BINDING)),
-            "retry": _compile(StepRule(CFL, MAX_DT), attempts=2),
-            "rejected": _compile(StepRule(CFL, MAX_DT), patch, attempts=2),
-            "outputs": _compile(StepRule(CFL, MAX_DT),
+            "slice": _compile(_slice_rule(MAX_DT)),
+            "binding": _compile(_slice_rule(BINDING)),
+            "retry": _compile(_slice_rule(MAX_DT), attempts=2),
+            "rejected": _compile(_slice_rule(MAX_DT), patch, attempts=2),
+            "outputs": _compile(_slice_rule(MAX_DT),
                                 outputs=(Output(_snapshot, at=FRONTIERS[:2]),)),
         }
 

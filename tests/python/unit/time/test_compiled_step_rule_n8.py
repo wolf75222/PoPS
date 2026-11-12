@@ -26,7 +26,7 @@ def test_a_rule_records_schema_four_and_round_trips(max_dt):
     control = _control(step_rule=(0.45, max_dt))
     data = control.to_data()
     assert data["schema"] == ADVANCE_CONTROL_STEP_RULE_SCHEMA == "pops.advance-control@4"
-    expected = {"rule": "cfl", "cfl": (0.45).hex()}
+    expected = {"rule": "stability", "fraction": (0.45).hex()}
     if max_dt is not None:
         expected["max_dt"] = max_dt.hex()
     assert data["proposal"] == expected
@@ -59,7 +59,7 @@ def test_a_record_that_mixes_rule_and_dt_is_refused(change):
     elif change == "dt under schema 4":
         data["proposal"] = {"dt": (0.001).hex()}
     elif change == "another rule":
-        data["proposal"]["rule"] = "error"
+        data["proposal"]["rule"] = "cfl"
     elif change == "a stray key":
         data["proposal"]["min_dt"] = (0.001).hex()
     else:
@@ -70,11 +70,11 @@ def test_a_record_that_mixes_rule_and_dt_is_refused(change):
 
 @pytest.mark.parametrize("options, message", [
     (dict(first_dt=0.001), "no first_dt"),
-    (dict(step_rule=(0.0, None)), "cfl"),
-    (dict(step_rule=(float("inf"), None)), "cfl"),
+    (dict(step_rule=(0.0, None)), "fraction"),
+    (dict(step_rule=(float("inf"), None)), "fraction"),
     (dict(step_rule=(0.45, -1.0)), "max_dt"),
     (dict(step_rule=(0.45, float("nan"))), "max_dt"),
-    (dict(step_rule=(1, None)), "cfl"),
+    (dict(step_rule=(1, None)), "fraction"),
     (dict(step_rule=None), "first_dt"),
 ])
 def test_a_malformed_rule_is_refused(options, message):
@@ -105,19 +105,35 @@ def _parts(monkeypatch):
     return seen
 
 
-@pytest.mark.parametrize("rule", [StepRule(0.45), StepRule(0.45, max_dt=0.005)])
-def test_a_rule_elaborates_master_adaptive_cfl_and_its_control(rule, monkeypatch):
+def _rule(max_dt=None):
+    """As the slice's library word gives it: the fraction and the builder's strategy."""
+    return StepRule(0.45, max_dt, strategy=AdaptiveCFL(0.45, max_dt))
+
+
+@pytest.mark.parametrize("max_dt", [None, 0.005])
+def test_a_rule_elaborates_its_strategy_and_its_control(max_dt, monkeypatch):
+    rule = _rule(max_dt)
     parts = _parts(monkeypatch)
     elaboration = elaborate(Advance(_euler(rate=parts["flow"]), retry=Retry(max_attempts=2)),
                             case=parts["case"], state=parts["block"][parts["state"]],
                             proposal=rule, name="probe")
-    strategy = elaboration.program._step_strategy
-    assert type(strategy) is AdaptiveCFL
-    assert (strategy.cfl, strategy.max_dt) == (rule.cfl, rule.max_dt)
-    assert elaboration.control.step_rule == (rule.cfl, rule.max_dt)
+    assert elaboration.program._step_strategy is rule.strategy
+    assert elaboration.control.step_rule == (rule.fraction, rule.max_dt) == (0.45, max_dt)
     assert elaboration.control.first_dt is None
     ir = elaboration.program._serialize(include_provenance=False)
     assert ir["version"] == 33 and ir["advance_control"] == elaboration.control.to_data()
+
+
+def test_a_rule_without_a_strategy_does_not_elaborate(monkeypatch):
+    """The core does not name the builder's strategy (CF2): the rule's library word gives it."""
+    parts = _parts(monkeypatch)
+    rule = StepRule(0.45)
+    assert rule.strategy is None and repr(rule) == "StepRule(fraction=0.45, max_dt=None)"
+    with pytest.raises(TypeError, match="names no strategy"):
+        elaborate(Advance(_euler(rate=parts["flow"])), case=parts["case"],
+                  state=parts["block"][parts["state"]], proposal=rule)
+    with pytest.raises(TypeError, match="registered StepStrategy"):
+        StepRule(0.45, strategy=object())
 
 
 def test_a_proposal_still_elaborates_a_fixed_step(monkeypatch):

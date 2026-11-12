@@ -8657,13 +8657,13 @@
       }
     },
     "ci_20261112_n8_compiled_step_rule": {
-      "basis": "Unmeasured CI scheduling estimates for the two N8 \u00ab R\u00e8gle de pas compil\u00e9e \u00bb modules (ROM-89), on the api_v02_20261013 tiers: 15 s for the source-only module (the control record of schema 4 and the elaboration of a StepRule, no C++); 600 s for the Dim2 native module, which compiles master's tutorial 02 at 64 x 64 cells five times (the slice's rule, a binding max_dt, Retry(2) with and without the one-shot rejection, an Output) and runs each against master's AdaptiveCFL bit for bit. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the two N8 \u00ab R\u00e8gle de pas compil\u00e9e \u00bb modules (ROM-89), on the api_v02_20261013 tiers: 15 s for the source-only module (the control record of schema 4 and the elaboration of a StepRule, no C++); 360 s for the Dim2 native module (about 2.8 times its local receipt, the ratio of the reuse lot), which compiles master's tutorial 02 at 64 x 64 cells five times (the slice's rule, a binding max_dt, Retry(2) with and without the one-shot rejection, an Output) and runs each against master's AdaptiveCFL bit for bit. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py": "tests/python/integration/runtime/test_compiled_control_n8_native.py",
         "tests/python/unit/time/test_compiled_step_rule_n8.py": "tests/python/unit/time/test_compiled_control_n8.py"
       },
       "estimates_seconds": {
-        "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py": 600,
+        "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py": 360,
         "tests/python/unit/time/test_compiled_step_rule_n8.py": 15
       },
       "local_receipts": {
