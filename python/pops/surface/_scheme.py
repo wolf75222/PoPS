@@ -1215,7 +1215,7 @@ class UserScheme(SchemeValue):
                         site=self.site)
             traced = Traced(builder, None)
         elif isinstance(key, DiffusiveFlux):
-            traced = self._traced_diffusive(key, axes)
+            traced = self._traced_diffusive(key, tuple(axes))
         else:
             builder = None
             for axis in axes:
@@ -1241,7 +1241,7 @@ class UserScheme(SchemeValue):
         self._traced.append((key, traced))
         return traced
 
-    def _traced_diffusive(self, key: Term, axes: tuple) -> Traced:
+    def _traced_diffusive(self, key: DiffusiveFlux, axes: tuple) -> Traced:
         """The face of a diffusive key, run once per axis: it reads the two traces and
         ``face.distance``, names no reconstruction and states no speed; its frequency is derived
         (D10 of N3)."""
@@ -1256,7 +1256,8 @@ class UserScheme(SchemeValue):
             _reads(ran.value, _DIFFUSIVE_READS + ("normal",), self, "face")
             if ran.reconstruction is not None:
                 raise NotYetElaborated(
-                    "the scheme %s under the diffusive flux %s names a reconstruction" % (self, key),
+                    "the scheme %s under the diffusive flux %s names a reconstruction"
+                    % (self, key),
                     _DIFFUSIVE_FORMS, site=self.site)
             if ran.speed is not None:
                 raise TypeError("the scheme %s states FaceFlux(speed=) under the diffusive flux "
@@ -1315,22 +1316,27 @@ class UserScheme(SchemeValue):
         builder = traced.builder
         lower = view.lower
 
+        body: Any
+        stability: Any
         if reads_speed_pair(builder.value, builder.speed):
             # The pair (sL, sR) of the slowest and the fastest wave speeds united over the two
             # traces is the face input speeds of riemann.User (R9), as the b6 HLL reads it.
-            def body(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any,
-                     speeds: Any) -> tuple:
+            def body_of_pair(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any,
+                             speeds: Any) -> tuple:
                 return (lower(builder.value, _face_inputs(uL, uR, fL, fR, n, s, speeds)),)
+            body = body_of_pair
         else:
-            def body(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> tuple:
+            def body_of_traces(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> tuple:
                 return (lower(builder.value, _face_inputs(uL, uR, fL, fR, n, s)),)
+            body = body_of_traces
 
         if builder.speed is None:
             # The larger spectral radius of R9 at the two traces: the fallback of cell.speed
             # (2.6.4, SD44), and the bound that b6 requires of every user face (N1).
-            def stability(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> Any:
+            def radius(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> Any:
                 del uL, uR, fL, fR, n
                 return s
+            stability = radius
         else:
             # A speed may be signed (upwind follows the orientation of the face); b6 reads a
             # nonnegative bound, so a speed that is not nonnegative by its form is taken in
@@ -1338,14 +1344,16 @@ class UserScheme(SchemeValue):
             signed = not _nonnegative(builder.speed)
 
             if reads_speed_pair(builder.speed):
-                def stability(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any,
-                              speeds: Any) -> Any:
+                def bound_of_pair(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any,
+                                  speeds: Any) -> Any:
                     bound = lower(builder.speed, _face_inputs(uL, uR, fL, fR, n, s, speeds))
                     return abs(bound) if signed else bound
+                stability = bound_of_pair
             else:
-                def stability(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> Any:
+                def bound_of_traces(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> Any:
                     bound = lower(builder.speed, _face_inputs(uL, uR, fL, fR, n, s))
                     return abs(bound) if signed else bound
+                stability = bound_of_traces
 
         recon = reconstruction.FirstOrder() if traced.reconstruction is None else \
             realize_reconstruction(builder.reconstruction, traced.reconstruction, view)

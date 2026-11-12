@@ -92,7 +92,7 @@ def _stated_speed(face, speed):
 
 def _function_of_face(speed):
     """`speed` itself, a function of face passed uncalled (SU5), or None."""
-    if speed is not None and (not callable(speed) or isinstance(speed, type)):
+    if speed is not None and (isinstance(speed, type) or not hasattr(speed, "__call__")):
         raise TypeError("upwind(speed=f) takes a function of face, def f(face): ..., got %r"
                         % (speed,))
     return speed
