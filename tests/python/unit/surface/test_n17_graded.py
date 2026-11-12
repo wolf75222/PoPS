@@ -25,7 +25,6 @@ from examples.api_v02.models_graded_spacing import (
     BOX_CELLS, RING_CELLS, build_graded_box, build_graded_plane, build_graded_ring,
     build_wall_layer, ring_nodes,
 )
-from pops._report import DiagnosticError
 from pops.codegen._static_geometry_consumers import static_geometry_layouts
 from pops.lib.numerics import two_point
 from pops.lib.time.methods import ssprk2
@@ -91,6 +90,23 @@ def test_graded_boxes_of_rank_two_and_three_are_node_positions(build, rank):
     case, _, _ = build()
     _, reading = _reading(case)
     assert (reading.kind, reading.rank) == ("nodes", rank)
+
+
+def test_a_face_that_reads_signed_wave_speeds_is_refused_on_the_arrays():
+    """The words of pops.lib.numerics are faces authored in source (N3 lot 1). On the arrays a
+    face reads the normal flux F.n, the bound of its normal spectral radius and the provider pack,
+    which a physical normal provides: rusanov() resolves on the graded plane, and hll(), which
+    reads the slowest and the fastest wave speeds of the term, is refused before any C++, by the
+    same capability rule as the native HLL (CF2)."""
+    from pops.codegen._static_geometry_consumers import StaticGeometryConsumerError
+    from pops.lib.numerics import hll
+
+    _, reading = _reading(build_graded_plane()[0])
+    assert (reading.kind, reading.rank) == ("nodes", 2)
+    with pytest.raises(StaticGeometryConsumerError) as caught:
+        surface.inspect(build_graded_plane(scheme=hll())[0])
+    assert caught.value.code == "static_geometry_riemann_unavailable"
+    assert "wave_speeds" in str(caught.value)
 
 
 def test_the_node_function_is_called_once_with_the_logical_coordinate():
@@ -251,22 +267,19 @@ def test_the_box_of_rank_three_grades_two_axes_and_keeps_the_third():
 
 def test_probe_3_elaborates_its_wall_layout_and_waits_on_g04_for_its_relations():
     """Probe 3 (note, 6.3), marched in time: its layout, pops.Graded with the wall nodes
-    tanh(3 s) / tanh(3), elaborates to node positions (their arrays nest from 32 to 256 cells in
-    test_n17_graded_ring_native.py); the case is refused at validation, as its uniform reference
-    is, because a value relation under a diffusion has no realization yet (G04). The pin flips
-    when G04 lands."""
-    refusal = "a resolved spatial method must expose boundary_stencil_requirements()"
-    case, _, _ = build_wall_layer()
+    tanh(3 s) / tanh(3), elaborates to node positions under the advection of the probe (their
+    arrays nest from 32 to 256 cells in test_n17_graded_ring_native.py). The whole case is refused
+    when it is built, as its uniform reference is: its diffusion, a stencil flux since N3 lot 1,
+    crosses the walls, whose value relations under a diffusion G04 elaborates. The pin flips when
+    G04 lands."""
+    case, _, _ = build_wall_layer(diffusion=False)
     assert isinstance(case.elaborated.layout, MovingControlVolumes)
     row = _layout_row_of(case)
     assert row.elaborated.startswith("MovingControlVolumes(Uniform(CartesianGrid(")
-    with pytest.raises(DiagnosticError) as caught:
-        surface.inspect(case)
-    assert refusal in str(caught.value)
-    reference, _, _ = build_wall_layer(graded=False)
-    with pytest.raises(DiagnosticError) as caught:
-        surface.inspect(reference)
-    assert refusal in str(caught.value)
+    for graded in (True, False):
+        with pytest.raises(surface.MissingBoundaryRealization) as caught:
+            build_wall_layer(graded=graded)
+        assert "elaborated by G04" in str(caught.value), graded
 
 
 def test_probe_3_steady_layer_waits_on_gmres_of_n9():

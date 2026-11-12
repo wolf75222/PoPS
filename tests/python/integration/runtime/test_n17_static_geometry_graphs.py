@@ -196,3 +196,34 @@ def test_graph_1_runs_on_the_physical_faces_of_the_annulus(isolated_native_cache
         assert varied_report.accepted_steps == ANNULUS_STEPS
         expected = annulus_oracle(perturbed, ANNULUS_STEPS, ANNULUS_DT)
         np.testing.assert_allclose(np.asarray(varied_state), expected, rtol=1e-13, atol=0.0)
+
+
+def _source_rusanov(flux, state):
+    """master's Rusanov written in source: the riemann.User body of examples/api_v02/b6_numerics.py,
+    the parity body of rusanov() (N3 lot 1)."""
+    from examples.api_v02.b6_numerics import rusanov
+
+    return rusanov(flux, state).riemann
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_graph_1_runs_a_face_authored_in_source_on_the_physical_normals(
+        isolated_native_cache, native_cxx, kokkos_root):
+    """The words of pops.lib.numerics are faces authored in source since N3 lot 1. On the arrays
+    such a face reads what a physical normal provides: the normal fluxes F.n, the bound of the
+    normal spectral radius and, by name, n, which is the physical unit normal of the face. master's
+    Rusanov written in source takes the steps of the oracle of the catalogue face on the chords of
+    the annulus, and the stability guard of a source face, which reads the measures of the arrays,
+    admits them."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    perturbed = perturbed_annulus_state()
+    world, runtime, report, _ = run_graph(
+        lambda: build_annulus_free_stream(state=perturbed, faces=_source_rusanov), dimension=2,
+        scope="N17 graph 1 annulus source face", steps=ANNULUS_STEPS, dt=ANNULUS_DT)
+    state = collective_call(world, lambda: runtime.state_global("gas"))
+    with collective_check(world):
+        assert report.accepted_steps == ANNULUS_STEPS
+        expected = annulus_oracle(perturbed, ANNULUS_STEPS, ANNULUS_DT)
+        np.testing.assert_allclose(np.asarray(state), expected, rtol=1e-13, atol=0.0)

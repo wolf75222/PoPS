@@ -89,7 +89,9 @@ def build_annulus_free_stream(*, geometry=GaussLegendre(2), faces=riemann.Rusano
     """Isothermal Euler in Cartesian components on the 4 x 8 annulus, a constant state.
 
     The keywords name the variants that the refusal tests of the static reading use; ``state``
-    replaces the constant state by cell averages of shape (3, 8, 4), (rho, mx, my) by (theta, r)."""
+    replaces the constant state by cell averages of shape (3, 8, 4), (rho, mx, my) by (theta, r).
+    ``faces`` is a face descriptor, or a function of the flux and the state that returns one, as a
+    face authored in source (``riemann.User``) is written."""
     frame = CartesianDomain("n17_annulus_logical", (1.0, 0.0),
                             (2.0, 2*math.pi)).frame(Cartesian2D())
     x, y = frame.axes          # below the surface the axes of the frame name the image components
@@ -104,6 +106,8 @@ def build_annulus_free_stream(*, geometry=GaussLegendre(2), faces=riemann.Rusano
                       waves={x: (vx - SOUND_SPEED, vx, vx + SOUND_SPEED),
                              y: (vy - SOUND_SPEED, vy, vy + SOUND_SPEED)})
     rate = model.rate("isothermal_euler", equation=pm.ddt(U) == -pm.div(flux))
+    if callable(faces):
+        faces = faces(flux, U)
     case = pops.Case("N17_graph_1_annulus_free_stream")
     block = case.block("gas", model)
     plan = DiscretizationPlan()

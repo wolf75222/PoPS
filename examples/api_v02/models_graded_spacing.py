@@ -18,9 +18,10 @@ surface).
   widths and the diffusion inventory of a graded box);
 * ``build_wall_layer``: the case of probe 3 (section 6.3 of the note) on its graded layout, the
   nodes tanh(3 s) / tanh(3) of the wall at x = 1 written with exp (tanh is a word of N11), marched
-  in time by SSPRK2 where the probe solves its steady layer once with gmres (N9). Its layout
-  elaborates and its arrays nest; the case is refused at validation, as on its uniform reference,
-  until G04 realizes a value relation under a diffusion.
+  in time by SSPRK2 where the probe solves its steady layer once with gmres (N9). The case is
+  refused when it is built, as its uniform reference is: its diffusion, a stencil flux since N3
+  lot 1, crosses the walls, whose value relations under a diffusion G04 elaborates. Without its
+  diffusion (``diffusion=False``) the case elaborates on the same layout, whose arrays nest.
 
 Each builder returns the case with its evolved quantity and its datum; the initial values and the
 oracles live in the tests that run them.
@@ -81,28 +82,31 @@ def wall_nodes(s):
     return (1 - growth) * (1 + edge) / ((1 + growth) * (1 - edge))
 
 
-def build_graded_ring(term="diffusion", cells=RING_CELLS):
-    """A scalar on the graded ring, diffused by two_point() or advected by rusanov()."""
+def build_graded_ring(term="diffusion", cells=RING_CELLS, dt=None):
+    """A scalar on the graded ring, diffused by two_point() or advected by rusanov(); ``dt``
+    replaces the step of the term (the tests of the stability guard)."""
     ring = pops.Box(x=pops.Periodic(0, 1))
     model = pops.Model("graded_ring_" + term)
     u = model.quantity("u", pops.Scalar(ring))
     u0 = model.data("u0", pops.Scalar(ring))
     if term == "diffusion":
         flux = model.diffusive_flux(of=u, value=-CONDUCTIVITY * grad(u))
-        scheme, dt = two_point(), RING_DIFFUSION_DT
+        scheme, step = two_point(), RING_DIFFUSION_DT
     else:
         flux = model.flux(of=u, value=RING_SPEED * u)
-        scheme, dt = rusanov(), RING_ADVECTION_DT
+        scheme, step = rusanov(), RING_ADVECTION_DT
     model.balance(ddt(u) == -div(flux))
     numerics = pops.Numerics(represent={u: pops.CellAverage()}, schemes={flux: scheme})
-    program = pops.Program(advance=pops.Advance(ssprk2(rate=model), dt=dt), initial={u: u0})
+    step = dt if dt is not None else step
+    program = pops.Program(advance=pops.Advance(ssprk2(rate=model), dt=step), initial={u: u0})
     layout = pops.Graded(base=pops.Uniform(cells=cells), nodes={ring.x: ring_nodes})
     case = pops.Case(model=model, numerics=numerics, program=program, layout={ring: layout})
     return case, u, u0
 
 
-def build_graded_plane(cells=PLANE_CELLS):
-    """A scalar advected by rusanov() on the periodic plane, x graded and y uniform."""
+def build_graded_plane(cells=PLANE_CELLS, scheme=None):
+    """A scalar advected by rusanov() on the periodic plane, x graded and y uniform; ``scheme``
+    replaces rusanov() (the refusal tests of the static arrays)."""
     plane = pops.Box(x=pops.Periodic(0, 1), y=pops.Periodic(0, 1))
     model = pops.Model("graded_plane")
     u = model.quantity("u", pops.Scalar(plane))
@@ -111,7 +115,8 @@ def build_graded_plane(cells=PLANE_CELLS):
     b = model.constant("b", value=PLANE_VELOCITY[1])
     advection = model.flux(of=u, value=vector(a, b) * u)
     model.balance(ddt(u) == -div(advection))
-    numerics = pops.Numerics(represent={u: pops.CellAverage()}, schemes={advection: rusanov()})
+    numerics = pops.Numerics(represent={u: pops.CellAverage()},
+                             schemes={advection: rusanov() if scheme is None else scheme})
     program = pops.Program(advance=pops.Advance(ssprk2(rate=model), dt=PLANE_DT),
                            initial={u: u0})
     layout = pops.Graded(base=pops.Uniform(cells=cells), nodes={plane.x: ring_nodes})
@@ -144,20 +149,27 @@ def centred(face, term):
                      + dot(term.law(states={q: right}), face.normal)) / 2)
 
 
-def build_wall_layer(cells=WALL_CELLS, graded=True):
+def build_wall_layer(cells=WALL_CELLS, graded=True, diffusion=True):
     """The case of probe 3 on the wall nodes, marched in time: -eps u'' + a u' = 0 with u(0) = 0
     and u(1) = 1, a centred face and the two-point diffusion; ``graded=False`` gives the uniform
-    reference of the probe, the same case on pops.Uniform(cells=cells)."""
+    reference of the probe, the same case on pops.Uniform(cells=cells). ``diffusion=False`` drops
+    the diffusion, whose walls wait on G04, and keeps the support, the relations, the centred face
+    and the layout: that case elaborates, and the static arrays of the probe's layout are read
+    from it."""
     sheath = pops.Box(x=(0, 1))
     model = pops.Model("wall_layer")
     u = model.quantity("u", pops.Scalar(sheath))
     advection = model.flux(of=u, value=WALL_SPEED * u)
-    diffusion = model.diffusive_flux(of=u, value=-LAYER_WIDTH * grad(u))
-    model.balance(ddt(u) == -div(advection) - div(diffusion))
+    schemes = {advection: centred()}
+    if diffusion:
+        layer = model.diffusive_flux(of=u, value=-LAYER_WIDTH * grad(u))
+        model.balance(ddt(u) == -div(advection) - div(layer))
+        schemes[layer] = two_point()
+    else:
+        model.balance(ddt(u) == -div(advection))
     model.on(sheath.boundary.x_min, u == 0)
     model.on(sheath.boundary.x_max, u == 1)
-    numerics = pops.Numerics(represent={u: pops.CellAverage()},
-                             schemes={advection: centred(), diffusion: two_point()},
+    numerics = pops.Numerics(represent={u: pops.CellAverage()}, schemes=schemes,
                              boundary=ghosts())
     program = pops.Program(advance=pops.Advance(ssprk2(rate=model), dt=WALL_DT),
                            initial={u: pops.project(sheath.x, quadrature=GaussLegendre(1))})
