@@ -683,6 +683,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   observation computes it from the same recorded speeds (`nd::FaceFrequencyRule`), and FixedDt
   and the combined transport-diffusion certificate keep the incident sum. Tutorial 02 as written
   takes the native face's steps with `upwind(speed=)` (core ledger entry).
+- ROM-108: under `AdaptiveCFL`, a `riemann.User` face whose recorded speed exceeds the spectral
+  radius of every cell no longer stops the run at its first step. `System::step_cfl` proposes
+  from the radius, while spec 0.3 (2.6.9, `cfl_limit`) takes s_a from the speeds that the faces
+  record, so the face's guard refused the proposal (reason 503). The guard's refusal now carries
+  the frequency that the refused attempt's faces recorded (typed payload
+  `pops.face-step-frequency@1`), and `AdaptiveCFL` retries once with its step capped at cfl over
+  that frequency (spec 21.6, `Retry(max_attempts=2)`). A face that records the radius is never
+  refused, so its steps are unchanged.
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
   and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step
