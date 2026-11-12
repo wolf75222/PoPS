@@ -214,9 +214,11 @@ class SolveEvidence:
 
     @property
     def correction_norm(self) -> Any:
+        # A NotImplementedError: pops.time core does not import the elaborator's NotYetElaborated.
         raise NotImplementedError(
-            "SolveOutcome evidence correction_norm (SV5) is not measured by the prepared Krylov "
-            "route or the reference CG yet; a later lot of N9 adds it")
+            "SolveOutcome evidence correction_norm (SV5) has no elaborated form yet on the "
+            "prepared Krylov route or the reference CG; the later N9 lot « Évidence des solves » "
+            "elaborates it")
 
     def __repr__(self) -> str:
         return "<SolveEvidence of %s>" % self._outcome.name

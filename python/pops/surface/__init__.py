@@ -26,6 +26,7 @@ from ._program import (
 )
 from . import _solver
 from ._quadrature import Quadrature
+from ._run import BudgetExhausted, Output, RunFailed, SolveFailed, every
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
@@ -34,9 +35,7 @@ from ._refusal import (
     SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, UnknownName,
 )
 from ._refusal import SpellingRefusal as _SpellingRefusal
-from ._solver import (
-    BudgetExhausted, PropertyNotDerived, SolveFailed, choose, fail, record, solver,
-)
+from ._solver import PropertyNotDerived, choose, fail, record, solver
 
 _N8_ASSESS = "N8 phase 1 (the assessments of T28)"
 _N8_LATER = "a later lot of N8"
@@ -58,7 +57,6 @@ _LATER = {
     "Tolerance": _SOLVES, "solve": _SOLVES, "try_solve": _SOLVES, "unknown": _SOLVES,
     "Norm": _SOLVES, "Dense": _SOLVES, "Affine": _SOLVES,
     "eliminate": _SOLVES, "Normalization": _SOLVES,
-    "Output": _RUN, "every": _RUN, "RunFailed": _RUN,
     "Scientific": _RUN, "Bitwise": _RUN, "Reproducible": _RUN, "Cache": _RUN,
     "Regrid": _HIERARCHY, "Level": _HIERARCHY, "invalidate": _HIERARCHY, "remap": _HIERARCHY,
     "restrict_onto": _HIERARCHY, "replace_contribution": _HIERARCHY,
@@ -155,10 +153,10 @@ def _later(name: str, owner: str) -> _Any:
 for _name, _owner in _LATER.items():
     globals()[_name] = _later(_name, _owner)
 
-# @pops.solver and the words of its body (N9 lot 4, SV9). pops.record, pops.choose and pops.fail
-# are elaborated inside a solver only; elsewhere they refuse with the lot that owns them.
-_solver.OUTSIDE_OWNERS.update({"pops.record": _RUN, "pops.choose": _N8_LATER,
-                               "pops.fail": _N8_ASSESS})
+# @pops.solver and the words of its body (N9 lot 4, SV9). pops.choose and pops.fail are
+# elaborated inside a solver only; elsewhere they refuse with the lot that owns them. pops.record is
+# the record of a solver inside one and the record of the run (N15 lot G) elsewhere.
+_solver.OUTSIDE_OWNERS.update({"pops.choose": _N8_LATER, "pops.fail": _N8_ASSESS})
 
 
 def __getattr__(name: str) -> _Any:
@@ -175,16 +173,19 @@ def __getattr__(name: str) -> _Any:
 
 __all__ = [
     "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
-    "Model", "Numerics", "OpenMP", "Periodic", "Positive", "Program", "Quadrature",
-    "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "inspect",
-    "discrete", "math", "method", "scheme",
-    # @pops.solver and the words of its body (N9 lot 4)
-    "BudgetExhausted", "PropertyNotDerived", "SolveFailed", "choose", "fail", "record", "solver",
+    "Model", "Numerics", "OpenMP", "Output", "Periodic", "Positive", "Program", "Quadrature",
+    "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "every", "inspect",
+    "record", "discrete", "math", "method", "scheme",
+    # @pops.solver and the words of its body (N9 lot 4); pops.BudgetExhausted and
+    # pops.SolveFailed are the variants of T39 that a run raises and a solver fails with
+    "BudgetExhausted", "PropertyNotDerived", "SolveFailed", "choose", "fail", "solver",
     # the refusals of §14.1 that this lot raises, and the values that the library reads
     "AmbiguousElaboration", "AntiDiffusive", "ClosedBodyViolation", "ContradictsDerivation",
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
     "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
+    # the failures of a run (T39), lot G
+    "BudgetExhausted", "RunFailed",
     "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]

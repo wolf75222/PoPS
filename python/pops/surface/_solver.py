@@ -28,9 +28,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._refusal import NotYetElaborated, SurfaceRefusal, SymbolicTruthValue, surface_entry
+from . import _run
+from ._run import BudgetExhausted, SolveFailed
 
 _ENTITIES = ("problem", "region")
 _N9_LATER = "a later lot of N9"
+_N9_EVIDENCE = "the later N9 lot « Évidence des solves »"
 _G10 = "G10 (the generated operator of a term)"
 
 
@@ -42,31 +45,22 @@ class PropertyNotDerived(SurfaceRefusal, ValueError):
 
 # --- the failures (T39) -------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class FailureVariant:
-    """A variant of the closed sum of T39 that a solver raises with ``pops.fail``."""
-
-    name: str
-
-    def __repr__(self) -> str:
-        return "pops.%s" % self.name
-
-
-BudgetExhausted = FailureVariant("BudgetExhausted")
-SolveFailed = FailureVariant("SolveFailed")
+# The variants of T39 are the classes that a run raises (N15 lot G); a solver fails with them by
+# name, and its outcome reports the same name and reason on the native route and the reference.
+FAILURE_VARIANTS = (BudgetExhausted, SolveFailed)
 
 # The failure codes of the lowered region and the (variant, reason) each one carries. Code 1 is
 # the budget of Program.iterate itself; the reference never relies on it (it fails at its cap).
 FAILURE_CODES = {
-    (BudgetExhausted.name, "iteration limit"): 11,
-    (SolveFailed.name, "breakdown"): 21,
-    (SolveFailed.name, "invalid evaluation"): 22,
-    (SolveFailed.name, "unverified solved value"): 23,
+    (BudgetExhausted.__name__, "iteration limit"): 11,
+    (SolveFailed.__name__, "breakdown"): 21,
+    (SolveFailed.__name__, "invalid evaluation"): 22,
+    (SolveFailed.__name__, "unverified solved value"): 23,
 }
 FAILURES_BY_CODE = {code: key for key, code in FAILURE_CODES.items()}
-FAILURES_BY_CODE[1] = (BudgetExhausted.name, "iteration limit")
+FAILURES_BY_CODE[1] = (BudgetExhausted.__name__, "iteration limit")
 # Code 3 of iterate, origin 2: a native evaluation that the region rejected, a value not finite.
-FAILURES_BY_CODE[3] = (SolveFailed.name, "invalid evaluation")
+FAILURES_BY_CODE[3] = (SolveFailed.__name__, "invalid evaluation")
 
 
 # --- the lowering context -----------------------------------------------------------------------
@@ -301,18 +295,21 @@ def _number_scalar(context: _Lowering, number: Any, name: str) -> Any:
 
 @dataclass(frozen=True)
 class _Failure:
-    variant: FailureVariant
+    variant: type
     reason: str
 
     @property
     def code(self) -> int:
-        return FAILURE_CODES[(self.variant.name, self.reason)]
+        return FAILURE_CODES[(self.variant.__name__, self.reason)]
 
 
 @surface_entry
-def record(**fields: Any) -> Record:
-    """``pops.record(name=value, ...)`` inside a solver (IR4 ``Product``)."""
-    _active("pops.record")
+def record(**fields: Any) -> Record | _run.Record:
+    """``pops.record(name=value, ...)``: a solver's record inside a solver (IR4 ``Product``), the
+    run's record elsewhere (N15 lot G)."""
+    if not _ACTIVE:
+        # Outside a solver, pops.record is the record of the run (N15 lot G).
+        return _run.record(**fields)
     for name, item in fields.items():
         if not isinstance(item, (Field, Scalar, int, float)) or isinstance(item, bool):
             raise TypeError("pops.record takes fields and scalars of the solver, got %s=%r"
@@ -324,11 +321,12 @@ def record(**fields: Any) -> Record:
 def fail(variant: Any, *, payload: str) -> _Failure:
     """``pops.fail(variant, payload=reason)`` in an arm of ``pops.choose`` (IR4 ``fail``, T39)."""
     _active("pops.fail")
-    if not isinstance(variant, FailureVariant):
+    if variant not in FAILURE_VARIANTS:
         raise TypeError("pops.fail takes a variant of T39 (pops.SolveFailed, "
                         "pops.BudgetExhausted), got %r" % (variant,))
-    if (variant.name, payload) not in FAILURE_CODES:
-        raise NotYetElaborated("pops.fail(%r, payload=%r)" % (variant, payload), _N9_LATER)
+    if (variant.__name__, payload) not in FAILURE_CODES:
+        raise NotYetElaborated("pops.fail(pops.%s, payload=%r)" % (variant.__name__, payload),
+                               _N9_LATER)
     return _Failure(variant, payload)
 
 
@@ -805,9 +803,8 @@ class ReferenceEvidence:
 
     @property
     def correction_norm(self) -> Any:
-        raise NotImplementedError(
-            "evidence correction_norm (SV5) is not measured by the reference CG yet; %s adds it"
-            % _N9_LATER)
+        raise NotYetElaborated("evidence correction_norm (SV5) of the reference CG",
+                               _N9_EVIDENCE)
 
 
 __all__ = [

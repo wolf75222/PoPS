@@ -121,7 +121,8 @@ class Report:
 class Elaborated:
     """What a case elaborates into: the b6 case, its layout and block, the rows of its report."""
 
-    __slots__ = ("case", "layout", "block", "model", "plan", "states", "names", "advance", "rows")
+    __slots__ = ("case", "layout", "block", "model", "plan", "states", "names", "advance", "rows",
+                 "params", "outputs")
 
     def __init__(self, **fields: Any) -> None:
         for name in self.__slots__:
@@ -194,6 +195,8 @@ class _Elaboration:
         self.rows: list = []
         self.values: dict = {}
         self.names: dict = {}
+        self.params: dict = {}
+        self.lowered_outputs: tuple = ()
 
     # The support and its frame.
 
@@ -336,7 +339,9 @@ class _Elaboration:
             if isinstance(parameter.admissible, Positive):
                 options["domain"] = _Positive()
             param = RuntimeParam(parameter.name, **options)
-            self.values[parameter] = b6.value(b6.param(param))
+            handle = b6.param(param)
+            self.params[parameter] = handle
+            self.values[parameter] = b6.value(handle)
             choices = [Choice("default", parameter.default, "stated")]
             if parameter.admissible is not None:
                 choices.append(Choice("admissible", parameter.admissible, "stated"))
@@ -539,10 +544,12 @@ class _Elaboration:
         retry = _n8.Retry() if advance.attempts is None else _n8.Retry(
             max_attempts=advance.attempts)
         (quantity,) = states
+        outputs = self.outputs(block)
         try:
             elaboration = _n8.elaborate(_n8.Advance(specialized, retry=retry), case=case6,
                                         state=block[states[quantity]],
-                                        proposal=_n8.Proposal(float(advance.dt)))
+                                        proposal=_n8.Proposal(float(advance.dt)),
+                                        outputs=outputs)
         except Exception as error:
             translated = translate(error, trace)
             if translated is error:
@@ -561,6 +568,32 @@ class _Elaboration:
                     "default" if advance.attempts is None else "stated"),
              Choice("accept", "finite()", "default")]))
         return elaboration
+
+    def outputs(self, block: Any) -> tuple:
+        """The Outputs of N8 of the case's outputs, in their order (CC14; lot G)."""
+        lowered = []
+        for output in self.case.outputs:
+            for quantity in output.quantities():
+                if quantity.model is not self.model:
+                    raise ValueError("pops.Output(%r) publishes %s, a quantity of another model"
+                                     % (output.record, quantity))
+            value = output.lowered(block)
+            lowered.append(value)
+            schedule = ("every(%d)" % output.every_steps if output.every_steps is not None
+                        else "at=every_dt(%r)" % output.every_time if output.every_time is not None
+                        else "at=%r" % (output.times,))
+            if output.every_steps is not None or output.every_time is not None:
+                schedule += (", the lattice from the start of the simulation; a later run that "
+                             "starts off it is refused (N8)")
+            self.rows.append(Row(
+                repr(output), "program",
+                "Output(lambda B, interval: Product(%s), %s), evaluated by the compiled run (CC14)"
+                % (", ".join("%s=B.state" % name for name, _ in output.record.items()), schedule),
+                [Choice("when", output.when, "stated"),
+                 Choice("write", "result.outputs" if output.write is None else output.write,
+                        "default" if output.write is None else "stated")]))
+        self.lowered_outputs = tuple(lowered)
+        return self.lowered_outputs
 
     def initial(self, case6: Any, block: Any, states: dict) -> None:
         from pops.lib.initial import BindArray   # the datum supplied at bind (Q3), a b6 value
@@ -649,7 +682,8 @@ class _Elaboration:
         layout = self.layout(support, frame)
         return Elaborated(case=case6, layout=layout, block=block, model=b6, plan=plan,
                           states=states, names=self.names, advance=advance,
-                          rows=tuple(self.rows))
+                          rows=tuple(self.rows), params=dict(self.params),
+                          outputs=self.lowered_outputs)
 
 
 def inspect_case(case: Any) -> Report:

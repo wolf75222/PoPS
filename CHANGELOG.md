@@ -25,7 +25,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   true-residual check), and its failures are variants of T39 with their reason. The native CG
   is a substitution of its Trace class (SV13): the same iteration counts on the Trace problems at
   one and two ranks. `outcome.evidence` (iterations, residual norm, reason; SV5) is readable after
-  consumption on both routes and emitted only when read; `correction_norm` is refused.
+  consumption on both routes and emitted only when read; `correction_norm`, and the evidence of a
+  solve kept across attempts (N8 lot 6), are refused with `NotYetElaborated` naming the N9 lot
+  « Évidence des solves ». `pops.fail` takes the run's `pops.SolveFailed` and
+  `pops.BudgetExhausted` (N15 lot G), and `pops.record` is a solver's record inside a solver and
+  the run's record elsewhere.
+- ROM-98 (N15, lot G): a case of the surface compiles, binds and runs (spec 0.3, 2.6.2, 2.6.6,
+  §5.2, CC14; OD31). `pops.compile(case, target=pops.OpenMP())`, `pops.bind(artifact,
+  params={b: v}, data={u0: array}, resources=pops.Resources(threads=n), directory=d)` and
+  `simulation.run(until=t, max_steps=n)` run the b6 compile and the compiled run of N8; arrays
+  are in the order of the support's axes. `pops.Output(pops.record(u=u), when=[t1, t2] |
+  pops.every(time=h) | pops.every(steps=k), write=npz(path, metadata=pops.record(...)))` lowers
+  to the Outputs of N8, and `pops.lib.output.npz` writes the series of an Output after each run.
+  `pops.RunFailed` and `pops.BudgetExhausted` carry the surface `RunResult`. A 2D periodic case
+  runs bit for bit as the same case written by hand for b6.
 - ROM-98 (N15, lot 2b): schemes of one's own on a support of rank two and three. A flux is
   written by its axis components, `model.flux(of=u, value=vector(a, b) * u)`, and lowered on the
   b6 dictionary per axis with the waves dF_a/du of each component; in a scheme,
@@ -142,6 +155,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-93 with ROM-25 (N11 lot 2a, G07): source spans leave every artifact identity (spec 0.3 CC2,
+  gap C48). The same case loaded from two checkout paths, or with comment lines inserted, now has
+  one `snapshot.artifact_hash`, one `plan_identity` and one compiled `artifact_identity`: the time
+  program of the compile context is projected without provenance, and `ModuleManifest.artifact_data()`
+  drops each operator's source span from the snapshot projection and the binary evidence. The full
+  snapshot (`snapshot.hash`) and the manifest keep file and line as provenance. A docstring no
+  longer changes the identity of a Python operator body, as a comment or a line shift already did.
+  `ARTIFACT_SCHEMA_VERSION` is 7, so every artifact hash changes once; semantic identities do not.
 - A `format-bench` job of `ci.yml`, aggregated by `gate`, replays
   `scripts/test_check_clang_format.sh`, the bench of `scripts/check_clang_format.sh`, on every full
   plan and when the plan sees the script, the bench or a style file (`.clang-format`,

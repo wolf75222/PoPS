@@ -1775,9 +1775,13 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         input_ghosts, tol, abs_tol, prelude, lines)
     if _solve_evidence_requested(program, v):
         if reused:
-            raise ValueError(
-                "the evidence (SV5) of a solve that a retry keeps across attempts (N8 lot 6) is "
-                "not elaborated: the kept attempt's report is not stored in its slot")
+            from pops.time._program.traced_method import NotYetElaborated
+
+            raise NotYetElaborated(
+                "outcome.evidence (SV5) of %s, a solve that a retry keeps across the attempts of "
+                "its step (N8 lot 6), has no elaborated form yet; the later N9 lot "
+                "« Évidence des solves » elaborates it, with correction_norm, by storing the kept "
+                "attempt's report in its slot" % v.name)
         # SV5: the evidence is the report the gates left, copied before its consumption; a report
         # that is not solved fails at the guard below, so a read after it is a solved one.
         lines.append("const pops::SolveReport %s_evidence = %s.report();" % (kr, kr))

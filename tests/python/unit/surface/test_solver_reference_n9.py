@@ -13,6 +13,7 @@ import pytest
 
 import pops
 import pops.surface as surface
+from pops.surface import _solver
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.lib.solve import cg, krylov
@@ -99,14 +100,28 @@ def test_a_solver_takes_the_two_entities():
             return problem
 
 
-@pytest.mark.parametrize("word, owner", [
-    ("record", "the run of N8"), ("choose", "a later lot of N8"), ("fail", "N8 phase 1")])
+@pytest.mark.parametrize("word, owner", [("choose", "a later lot of N8"), ("fail", "N8 phase 1")])
 def test_the_body_words_refuse_outside_a_solver(word, owner):
-    arguments = {"record": ((), {"a": 1.0}),
-                 "choose": ((None,), {"then": None, "otherwise": None}),
+    arguments = {"choose": ((None,), {"then": None, "otherwise": None}),
                  "fail": ((surface.SolveFailed,), {"payload": "breakdown"})}[word]
     with pytest.raises(surface.NotYetElaborated, match=owner):
         getattr(surface, word)(*arguments[0], **arguments[1])
+
+
+def test_record_outside_a_solver_is_the_record_of_the_run():
+    from pops.surface._run import Record as RunRecord
+
+    value = surface.record(a=1.0)
+    assert isinstance(value, RunRecord) and value.a == 1.0
+
+
+def test_the_failure_variants_are_the_run_classes():
+    from pops.surface._run import RunFailed
+
+    assert issubclass(surface.SolveFailed, RunFailed) and issubclass(surface.BudgetExhausted, RunFailed)
+    with pytest.raises(TypeError, match="variant of T39"):
+        with _solver._lowering(_solver._Lowering(None, "t")):
+            surface.fail(RunFailed, payload="breakdown")
 
 
 def test_require_refuses_an_operator_not_derived_spd():
@@ -129,7 +144,7 @@ def test_max_iterations_is_a_positive_integer(bad):
 def test_the_evidence_is_read_after_consumption_only():
     program, outcome = _program(_reference())
     evidence = outcome.evidence
-    with pytest.raises(NotImplementedError, match="correction_norm"):
+    with pytest.raises(surface.NotYetElaborated, match="« Évidence des solves »"):
         _ = evidence.correction_norm
     assert evidence.iterations.vtype == "int64"
     assert evidence.residual_norm.vtype == "scalar"
@@ -182,3 +197,34 @@ def test_the_solve_reduces_six_pairings_in_its_program():
     pairings = [value for value in _walk(program._values)
                 if value.op == "reduce" and value.attrs.get("kind") == "dot_all"]
     assert len(pairings) == 6
+
+
+def _m08_source_with_evidence(retry_can_change):
+    """The C++ of M08 (N8 lot 6) when the case reads the evidence of its stage-0 (fixed site,
+    kept across attempts) or stage-1 (retryable) solve."""
+    import examples.api_v02.models_M01_M14 as early
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.time.solve_outcome import SolveEvidence
+
+    spec = early.build_m08()
+    program = spec.case._time
+    (outcome,) = [value for value in program._values if value.op == "solve_outcome"
+                  and value.attrs["trial_site"]["retry_can_change"] is retry_can_change]
+    _ = SolveEvidence(program, outcome).iterations
+    resolved = pops.resolve(pops.validate(spec.case), layout=spec.layout)
+    return emit_cpp_program(resolved.time, model_graph=ProgramModelGraph.from_resolved_blocks(
+        resolved.blocks)), outcome.inputs[0].id
+
+
+def test_the_evidence_of_a_solve_kept_across_attempts_is_not_yet_elaborated():
+    from pops.time._program.traced_method import NotYetElaborated
+
+    with pytest.raises(NotYetElaborated, match="« Évidence des solves »") as refusal:
+        _m08_source_with_evidence(False)
+    assert "kept attempt's report" in str(refusal.value)
+    assert "N8 lot 6" in str(refusal.value)
+
+
+def test_the_evidence_of_a_retryable_solve_is_emitted():
+    source, solve = _m08_source_with_evidence(True)
+    assert "const pops::SolveReport kr%d_evidence = kr%d.report();" % (solve, solve) in source
