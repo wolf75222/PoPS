@@ -20,7 +20,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
-from pops.lib.numerics import rusanov
+from examples.api_v02.b6_numerics import rusanov
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import (CoordinatedFace, CoordinatedFiniteVolume, Diffusion,
                            DiscretizationPlan, FaceBalance,
@@ -191,10 +191,11 @@ def _periodic_metrics(initial, *, block="fluid", components=(0,), tolerance=2.e-
 
 
 def build_m01(cells=(16, 8), *, scheme=rusanov, signed_wave_speeds=False):
-    """``scheme(flux, state)`` realizes the transport; the default is pops.lib.numerics.rusanov.
+    """``scheme(flux, state)`` realizes the transport; the default is the b6 ``rusanov`` of
+    ``examples.api_v02.b6_numerics``.
 
     ``signed_wave_speeds=True`` also declares the signed pair of each axis (R9), which the native
-    ``riemann.HLL()`` route and pops.lib.numerics.hll require.
+    ``riemann.HLL()`` route and examples.api_v02.b6_numerics.hll require.
     """
     frame, layout = _domain("M01_periodic", cells)
     model = pops.Model("M01_authored_transport", frame=frame)
@@ -299,10 +300,11 @@ def _euler(model, frame, *, gamma, pressure_offset=0., electromagnetic=False,
 
 def build_m03(cells=(16,8), *, gamma=1.4, pressure_offset=.2, scheme=rusanov,
               signed_wave_speeds=False):
-    """``scheme(flux, state)`` realizes the transport; the default is pops.lib.numerics.rusanov.
+    """``scheme(flux, state)`` realizes the transport; the default is the b6 ``rusanov`` of
+    ``examples.api_v02.b6_numerics``.
 
     ``signed_wave_speeds=True`` also declares the signed pair of each axis (R9), which the native
-    ``riemann.HLL()`` route and pops.lib.numerics.hll require.
+    ``riemann.HLL()`` route and examples.api_v02.b6_numerics.hll require.
     """
     if gamma <= 1 or pressure_offset < 0:
         raise ValueError("the selected gas domain requires gamma>1,p_inf>=0")

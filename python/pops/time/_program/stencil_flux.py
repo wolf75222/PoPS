@@ -9,6 +9,10 @@ else:
 
 from pops.time._authoring import atomic_authoring
 
+# The operation that this module builds, named once: the method of the program below, the op of its
+# values, and the elaborator of the surface, which enters a diffusive face through it (N3 lot 1).
+OPERATION = "stencil_flux_divergence"
+
 
 class _ProgramStencilFlux(_ProgramBase):
     @atomic_authoring
@@ -39,7 +43,8 @@ class _ProgramStencilFlux(_ProgramBase):
         for parameter in parameters:
             require_owned(self, parameter, "stencil scalar parameter")
         _validate_parameters(parameters, flux)
-        return self._new("rhs", "stencil_flux_divergence", (state, *fields, *parameters), {"stencil_flux": flux},
+        _validate_runtime_parameters(state, flux)
+        return self._new("rhs", OPERATION, (state, *fields, *parameters), {"stencil_flux": flux},
                          name, state.block, space=rate_space_for(state.space),
                          field_context=state.field_context)
 
@@ -47,7 +52,7 @@ class _ProgramStencilFlux(_ProgramBase):
 def validate_stencil_flux(value):
     from pops.numerics.stencil_flux import StencilFlux
     from pops.time.expressions import component_names
-    if (value.op != "stencil_flux_divergence" or len(value.inputs) < 1
+    if (value.op != OPERATION or len(value.inputs) < 1
             or value.inputs[0].vtype != "state"
             or value.block != value.inputs[0].block
             or value.state_ref != value.inputs[0].state_ref):
@@ -59,7 +64,29 @@ def validate_stencil_flux(value):
     end = 1 + len(flux.field_components)
     _validate_fields(value.inputs[0], value.inputs[1:end], flux)
     _validate_parameters(value.inputs[end:], flux)
+    _validate_runtime_parameters(value.inputs[0], flux)
     return flux
+
+
+def _validate_runtime_parameters(state, flux):
+    """A runtime parameter that the body reads is a RuntimeParam declared by the model of the
+    block of ``state``, as for the body of a ``riemann.User`` face: the generated face reads its
+    current value from ``ctx.program_params(block)``, so the value is not in the identity. Any
+    other parameter is refused by its name (N3 lot 1)."""
+    from pops.model.stencil_expression import runtime_parameters
+    block = getattr(state.state_ref, "block_ref", None)
+    for node in runtime_parameters(flux.rows):
+        handle = node.handle
+        if handle is None:
+            raise ValueError("stencil flux reads the runtime parameter %r without its declaring "
+                             "handle" % node.name)
+        if handle.param_kind != "runtime":
+            raise ValueError("stencil flux reads %r, a %s parameter; a stencil body reads a "
+                             "RuntimeParam" % (node.name, handle.param_kind))
+        declaration = handle.declaration_ref if handle.is_instance else handle
+        if block is None or not _declares(block, declaration):
+            raise ValueError("stencil flux reads the runtime parameter %r, which the model of the "
+                             "block of its state does not declare" % node.name)
 
 
 def _validate_parameters(parameters, flux):
@@ -113,3 +140,15 @@ def _validate_fields(state, fields, flux):
                 source.id == state.id and source.block == state.block
                 and source.state_ref == state.state_ref for source in load.inputs):
             raise ValueError("stencil field was not solved from this exact State")
+
+
+def _declares(block, declaration):
+    """Whether the model of ``block`` declares ``declaration``, in its authoring form or in the
+    resolved form that a resolved Program carries."""
+    if block.accepts(declaration):
+        return True
+    try:
+        resolved = declaration._resolved()
+    except Exception:  # an authoring handle of no resolved model is not the block's
+        return False
+    return resolved is not None and block.accepts(resolved)

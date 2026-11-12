@@ -38,6 +38,13 @@ _MODEL_PARAM_OPS = frozenset({
 })
 
 
+def _reads_model_params(v: Any) -> bool:
+    """Whether an op lowers model coefficients: one of the ops above, or a stencil, whose body may
+    read a runtime parameter of the model of its block, as the body of a riemann.User face does
+    (N3 lot 1); its value is routed through the same block table."""
+    return v.op in _MODEL_PARAM_OPS or "stencil_flux" in getattr(v, "attrs", {})
+
+
 def _required_param_block_index(block_idx: Any, block: Any, value: Any) -> int:
     """Route a parameter-reading node through an exact Program block declaration."""
     if block is None:
@@ -128,6 +135,9 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
             if f != "default" and f in flux:
                 for axis_terms in flux[f].values():
                     out += list(axis_terms)
+    elif "stencil_flux" in v.attrs:
+        from pops.model.stencil_expression import runtime_parameters
+        out.extend(runtime_parameters(v.attrs["stencil_flux"].rows))
     elif v.op == "solve_local_nonlinear":
         for w in v.attrs.get("residual_block", []):
             if w.op == "source":
@@ -226,7 +236,7 @@ def program_param_entries(program: Any, model: Any) -> list:
     model_params = {}
     entries = []
     for v in _parameter_read_sites(program, model):
-        if v.op not in _MODEL_PARAM_OPS:
+        if not _reads_model_params(v):
             continue
         emit_model = model_for_node(model, v)
         impl = _formula_carrier(emit_model)
