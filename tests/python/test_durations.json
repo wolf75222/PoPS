@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1200,
+    "estimated_count": 1202,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7083,6 +7083,7 @@
       "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py",
       "tests/python/integration/runtime/test_surface_lot_e_project_native.py",
       "tests/python/integration/runtime/test_surface_lot_g_run_native.py",
+      "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py",
       "tests/python/integration/runtime/test_symbolic_path_adversarial_runtime.py",
       "tests/python/integration/runtime/test_symbolic_path_four_state_runtime.py",
       "tests/python/integration/runtime/test_symbolic_path_param_runtime.py",
@@ -7752,6 +7753,7 @@
       "tests/python/unit/surface/test_lot_e_project.py",
       "tests/python/unit/surface/test_lot_g_run.py",
       "tests/python/unit/surface/test_n3_lot1_library_words.py",
+      "tests/python/unit/surface/test_n3_lot2_muscl.py",
       "tests/python/unit/surface/test_published_representation.py",
       "tests/python/unit/surface/test_quadrature.py",
       "tests/python/unit/surface/test_solver_reference_n9.py",
@@ -8138,7 +8140,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1265,
+    "total_files": 1267,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8967,6 +8969,31 @@
         "tests/python/unit/time/test_scientific_erasure_inventory.py": "39411ada0693e0779516f54919a90300af026f7ef55b28ea9367bd542d711a35"
       }
     },
+    "n3_20261113_lot2_muscl": {
+      "basis": "Unmeasured CI scheduling estimates for the two modules of N3 lot 2 (ROM-87), muscl and its four limiters written with the surface, on the api_v02_20261013 tiers. 90 s for the source-only module, which elaborates, validates and resolves fourteen surface cases and their hand-written b6 forms, generates their C++ without compiling it, compiles four small policy programs with the native limiters (as the analogue test_lib_numerics_reconstructions.py) and resolves the AMR case of the scalar advection twice. 1200 s for the Dim2 native module, which compiles eight artifacts once per limiter (the surface advection with upwind(reconstruction=muscl(limiter=X)) and its hand-written b6 form with master's MUSCL, for the four limiters) and runs eight compiled runs of 50 steps on 16 x 8 cells, twice the artifacts of the analogue test_surface_lot_e_project_native.py (900 s). The local receipts come from pytest on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": "tests/python/integration/runtime/test_surface_lot_e_project_native.py",
+        "tests/python/unit/surface/test_n3_lot2_muscl.py": "tests/python/unit/numerics/test_lib_numerics_reconstructions.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
+        "tests/python/unit/surface/test_n3_lot2_muscl.py": 90
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": {
+          "cases": 4,
+          "session_seconds": 316.01
+        },
+        "tests/python/unit/surface/test_n3_lot2_muscl.py": {
+          "cases": 24,
+          "session_seconds": 31.5
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": "1b56bb0e19dbe393d54e9be407e8e94e3cce583763aee41db93f53cd409318b2",
+        "tests/python/unit/surface/test_n3_lot2_muscl.py": "5e02066ad264d3d8bb12fe34e46cd8b506cbf0a8b7cd0c420672c29dc3b6969b"
+      }
+    },
     "n11_20261112_identity_names": {
       "basis": "Unmeasured CI scheduling estimates for N11 lot 2b-i (ROM-93 with G07 ROM-25, rule CC2, gap C47), not CI receipts. The unit module resolves the two-block transport case of tests/python/support/presentation_case.py under six choices of names, the SU-T3 hand case twice and three small user modules written to temporary directories, without compiling, on the tier of its analogue test_su_t3_schemes_2d.py doubled for the extra resolves. The native module compiles the two-block case five times (two names, a term name, an emitter digest, an optimization flag), runs one step, checkpoints and refuses one restart, on the 600 s native tier, as the analogue test_identity_provenance_free_native.py. The local receipts are pytest session times on a 4-core container beside other local test sessions; they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
@@ -8979,7 +9006,7 @@
       },
       "local_receipts": {
         "tests/python/unit/problem/test_identity_names.py": {
-          "cases": 10,
+          "cases": 13,
           "session_seconds": 96.6
         },
         "tests/python/integration/runtime/test_identity_names_native.py": {
@@ -8989,7 +9016,7 @@
         }
       },
       "source_sha256": {
-        "tests/python/unit/problem/test_identity_names.py": "11b90f07a4c755d5da241bfd00359199d47d373698dda65080e917f0978e99fa",
+        "tests/python/unit/problem/test_identity_names.py": "a6aecbeda3ee491fedf1711221670ef408862aaff4f9e10a3a938f8d1c0032d6",
         "tests/python/integration/runtime/test_identity_names_native.py": "1408e7a527154201cc77f1a1f08e389737903dcd64f1ee86cbbc329fa5fa2441"
       }
     }
@@ -10257,6 +10284,8 @@
   "tests/python/unit/surface/test_lot_d_step_rule.py": 60,
   "tests/python/unit/surface/test_published_representation.py": 15,
   "tests/python/unit/time/test_scientific_erasure_inventory.py": 5,
+  "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
+  "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
   "tests/python/unit/problem/test_identity_names.py": 120.0,
   "tests/python/integration/runtime/test_identity_names_native.py": 600.0
 }
