@@ -15,7 +15,7 @@ import numpy
 import pytest
 
 import pops.surface as surface
-from pops.lib.numerics.schemes import two_point, upwind
+from pops.lib.numerics import two_point, upwind
 from pops.lib.time.methods import ssprk2
 from pops.representations.definition import (
     ElaboratedRepresentation, cell_average, cell_total,

@@ -8934,7 +8934,7 @@
         }
       },
       "source_sha256": {
-        "tests/python/unit/surface/test_published_representation.py": "e6d529348ab43fe66d91d99ffca6472c2d4e0cad9cc70198be420db517f8d1ff",
+        "tests/python/unit/surface/test_published_representation.py": "e127b713ad6d1397a9c393c880617b832533637f1e219ec996e1a94847682ba9",
         "tests/python/unit/time/test_scientific_erasure_inventory.py": "39411ada0693e0779516f54919a90300af026f7ef55b28ea9367bd542d711a35"
       }
     }
