@@ -606,9 +606,11 @@ def _face_step_frequency(error: BaseException) -> float | None:
     if getattr(error, "typed_failure_schema", None) != FACE_STEP_FREQUENCY_SCHEMA:
         return None
     payload = getattr(error, "typed_failure_payload", None)
+    if not isinstance(payload, bytes):
+        return None
     try:
         frequency = float.fromhex(payload.decode("ascii"))
-    except (AttributeError, UnicodeDecodeError, ValueError, OverflowError):
+    except (UnicodeDecodeError, ValueError, OverflowError):
         return None
     return frequency if math.isfinite(frequency) and frequency > 0.0 else None
 

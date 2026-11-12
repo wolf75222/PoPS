@@ -212,10 +212,12 @@ class _FaceGuardNative(_Native):
             if self.refusals is not None:
                 self.refusals -= 1
             error = _native_evaluation_rejection()
-            if self.payload:
+            if self.payload is not False:
                 from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA
                 error.typed_failure_schema = FACE_STEP_FREQUENCY_SCHEMA
-                error.typed_failure_payload = float(self.frequency).hex().encode("ascii")
+                # payload=None: the schema without its bytes
+                error.typed_failure_payload = (
+                    float(self.frequency).hex().encode("ascii") if self.payload else None)
             raise error
         self.t += dt
         self.cursor += 1
@@ -234,6 +236,7 @@ def test_adaptive_cfl_retries_once_at_the_step_of_the_recorded_face_frequency():
 
 @pytest.mark.parametrize("native, attempts", [
     (_FaceGuardNative(4.0, payload=False), 1),  # a refusal without the frequency of its step
+    (_FaceGuardNative(4.0, payload=None), 1),  # the face schema without payload bytes
     (_FaceGuardNative(4.0, refusals=2), 2),  # the retry is refused too: one retry only
     (_FaceGuardNative(1.0, refusals=1), 1),  # the cap would not lower the refused proposal
 ])
