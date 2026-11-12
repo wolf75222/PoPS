@@ -1,182 +1,141 @@
-"""Rusanov, upwind and HLL face fluxes written in Python (spec 0.3 section 4.4, 2.6.9, P11, A4).
+"""The scheme words of a flux and of a diffusive flux, written with ``@pops.scheme`` (spec 0.3,
+2.6.9; A4, SU5, CF4). N3 lot 1 (ROM-87).
 
-:func:`rusanov`, :func:`upwind` and :func:`hll` return the finite-volume realization of one
-physical flux ``F`` of the state ``Uh``: a :class:`pops.numerics.spatial.FiniteVolume` whose face is
-a :func:`riemann.User` body. The body runs once, now, and its expressions become the generated C++
-face policy; no native numerical flux is named, and the native ``riemann.Rusanov()`` /
-``riemann.HLL()`` routes are not called. The native face loop that runs the body is the same for
-every flux: it holds no formula, which the body-swap parity of CF4 checks with the L1 upwind body
-and the L5 Scharfetter-Gummel body (tests/python/integration/runtime/test_lib_face_body_swap_native.py).
+``upwind()``, ``rusanov()``, ``hll()`` and ``two_point()`` are what ``pops.Numerics(schemes={F:
+s})`` takes, each called with its options. Each is a scheme of the surface, the same object a case
+writes by hand: a copy of a body written in a case elaborates into the same program, the same
+semantic identity and the same C++ (CF4). The bodies are those of the gallery
+(``examples/surface/gallery/lib_schemes.py``, D8), in the arithmetic of the b6 bodies that they
+replace (``examples/api_v02/b6_numerics.py``, the parity oracles, D5): ``0.5 * x``, never
+``x / 2``, and ``x * (1.0 / y)`` for the quotient of hll, so that the generated C++ is the one of
+b6 operation by operation (P1).
 
-A face body reads, for one face and its canonical positive normal ``n``:
-
-* ``uL``, ``uR``: the two traces of ``Uh`` (one expression per component);
-* ``fL``, ``fR``: the normal physical fluxes F(uL).n and F(uR).n, generated from the components of
-  ``F``;
-* ``s``: the larger spectral radius of ``F`` at the two traces along ``n``, generated from the wave
-  speeds that ``F`` declares with ``waves=`` (R9);
-* ``n``, the normal itself, and ``speeds``, the pair (sL, sR) of the slowest and the fastest wave
-  speeds that the model declares along ``n`` (``Model.wave_speeds`` or
-  ``wave_speeds_from_jacobian``, R9), united over the two traces. The face evaluates these two
-  only where an expression reads them (CF15, ROM-99).
-
-Each flux records the speed that its row of 2.6.9 states (SD44; adjudication section 20):
-:func:`rusanov` the speed it dissipates with, :func:`upwind` with ``speed=f`` the magnitude of
-f(face), :func:`hll` max(|sL|, |sR|) of the pair it uses.
-
-The speed function given as an option takes the arguments of section 4.4: ``smax(uL, uR, n)`` for
-:func:`rusanov` (the third parameter of section 4.4's ``rusanov(F, Uh, smax)``) and
-``speed(face)`` for :func:`upwind`. The ``spectral_radius(F, u, n)`` of section 4.3 belongs to this
-module but is not written yet; the face reads its larger value over the two traces as the input
-``s``.
+* ``rusanov()``: the mean of the two normal fluxes less s (u_R - u_L) / 2, s the larger spectral
+  radius of the two sides (R9), recorded as its speed.
+* ``upwind()``: without ``speed``, the flux must be F(1) u, linear in its scalar quantity, which
+  ``term.expect`` checks, naming ``rusanov()`` and ``hll()`` in its refusal (D9); the face is then
+  the one of ``rusanov()``, whose spectral radius is |F(1)·n| on both sides: the upwind flux of
+  F(1) u, with master's arithmetic (D1). With ``speed=f``, s = f(face) is the signed normal speed
+  and nothing is checked: s u_L where s > 0, s u_R elsewhere, |s| recorded (SD44).
+* ``hll()``: master's HLL with the slowest and the fastest wave speeds united over the two traces.
+* ``two_point()``: F(u_f, g_f)·n with the face mean u_f and the two-point normal derivative g_f of
+  each gradient variable (SD51); b6 realizes it by a ``StencilFlux`` whose frequency it derives
+  (D7, D10).
 """
-from __future__ import annotations
-
-from collections.abc import Callable
-from typing import Any
-
-from pops import math as pm
+import pops.surface as pops
+from pops.surface.math import dot, largest, smallest, where
+from pops.surface.discrete import FaceFlux, spectral_radius, slowest_speed, fastest_speed
 
 
-def _realization(F: Any, Uh: Any, face: Any, reconstruction: Any) -> Any:
-    from pops.numerics import reconstruction as reconstructions, variables
-    from pops.numerics.spatial import FiniteVolume
+# Fluxes of a transport term
 
-    if reconstruction is None:
-        reconstruction = reconstructions.FirstOrder()
-    return FiniteVolume(flux=F, variables=variables.Conservative(Uh),
-                        reconstruction=reconstruction, riemann=face)
-
-
-def _face(body: Callable[..., tuple], Uh: Any, stability: Callable[..., Any]) -> Any:
-    from pops.numerics import riemann
-
-    return riemann.User(body=body, state=Uh, stability=stability)
-
-
-class _Face:
-    """The face that :func:`upwind` gives its speed function (section 4.4).
-
-    ``face.normal`` is the canonical normal n, and ``face.left(Uh)`` and ``face.right(Uh)`` are
-    the two traces of the realized state. Section 4.3 evaluates any expression on either side;
-    this face holds the traces of ``Uh`` only, so it refuses any other expression.
-    """
-
-    __slots__ = ("normal", "_state", "_traces")
-
-    def __init__(self, state: Any, left: Any, right: Any, normal: Any) -> None:
-        self.normal = normal
-        self._state = state
-        self._traces = (left, right)
-
-    def _trace(self, side: int, value: Any) -> Any:
-        if value is not self._state:
-            raise TypeError("upwind(speed=): the face holds the traces of the realized state only")
-        return self._traces[side]
-
-    def left(self, value: Any) -> Any:
-        return self._trace(0, value)
-
-    def right(self, value: Any) -> Any:
-        return self._trace(1, value)
+@pops.scheme
+def rusanov(face, term, reconstruction=None):
+    """F* = (F(uL).n + F(uR).n) / 2 - s (uR - uL) / 2, s the larger spectral radius of the two
+    sides (R9), which the flux records as its speed."""
+    q = term.quantity
+    n = face.normal
+    left = face.left(q)
+    right = face.right(q)
+    speed = largest([spectral_radius(term, left, n), spectral_radius(term, right, n)])
+    flux_left = dot(term.law(states={q: left}), n)
+    flux_right = dot(term.law(states={q: right}), n)
+    return FaceFlux(0.5 * (flux_left + flux_right) - 0.5 * speed * (right - left),
+                    reconstruction=reconstruction, speed=speed)
 
 
-def rusanov(F: Any, Uh: Any, smax: Callable[..., Any] | None = None, *,
-            reconstruction: Any = None) -> Any:
-    """Rusanov (local Lax-Friedrichs) flux of ``F`` on ``Uh``.
-
-    F* = (F(uL).n + F(uR).n) / 2 - smax (uR - uL) / 2, with ``smax`` recorded as the speed of the
-    flux. ``smax(uL, uR, n)`` gives the face speed from the two traces and the normal (section
-    4.4); ``smax=None`` takes the face input ``s``, the larger spectral radius of the two traces
-    (R9), which gives master's Rusanov. ``reconstruction=None`` is first order.
-
-    ``smax=`` is the third parameter of the signature in section 4.4; the row ``rusanov`` of
-    2.6.9 does not list it, so it stands as gap C46 of the index (adjudication section 20, item
-    4). It goes when C46 closes, by a row of the index or by N15; ``hll(speeds=)`` is already gone.
-    """
-    if smax is not None and not callable(smax):
-        raise TypeError("rusanov(smax=) requires a speed function smax(uL, uR, n)")
-
-    def speed(uL, uR, fL, fR, s, *, n):
-        del fL, fR
-        return s if smax is None else smax(uL, uR, n)
-
-    def body(uL, uR, fL, fR, s, *, n):
-        face_speed = speed(uL, uR, fL, fR, s, n=n)
-        return tuple(.5*(fl + fr) - .5*face_speed*(ur - ul)
-                     for ul, ur, fl, fr in zip(uL, uR, fL, fR, strict=True))
-
-    return _realization(F, Uh, _face(body, Uh, speed), reconstruction)
-
-
-def upwind(F: Any, Uh: Any, speed: Callable[..., Any] | None = None, *,
-           reconstruction: Any = None) -> Any:
-    """Upwind flux of ``F`` on ``Uh`` (row ``upwind`` of 2.6.9, section 4.4).
-
-    With ``speed=f``, s = f(face) is the signed normal speed at the face, for example the velocity
-    of the case dotted with ``face.normal``; ``face.left(Uh)`` and ``face.right(Uh)`` are the two
-    traces. F* = s uL where s > 0, else s uR, component by component, and the flux records |s| as
-    its speed (SD44; adjudication section 20). Nothing is checked against ``F``: the stated speed
-    is the case's.
-
-    ``speed=None`` is section 4.4's form: :func:`rusanov` with the larger spectral radius of R9,
-    which is the upwind flux of a scalar flux linear in u. The row of 2.6.9 instead takes
-    s = F(1).n and refuses a flux that is not F(1) u (``RealizationMismatch``, naming ``rusanov()``
-    and ``hll()``); that needs the scheme to read the form of its key (``term.expect``) and a face
-    input F(1).n, which the face of ``riemann.User`` does not have (CF15, ROM-87 handoff).
-    """
-    if speed is None:
-        return rusanov(F, Uh, reconstruction=reconstruction)
-    if not callable(speed):
-        raise TypeError("upwind(speed=) requires a speed function speed(face)")
-
-    def stated(uL, uR, n):
-        return speed(_Face(Uh, uL, uR, n))
-
-    def body(uL, uR, fL, fR, s, *, n):
-        del fL, fR, s
-        sign = stated(uL, uR, n)
-        return tuple(pm.where(sign > 0, lambda ul=ul: sign*ul, lambda ur=ur: sign*ur)
-                     for ul, ur in zip(uL, uR, strict=True))
-
-    def recorded(uL, uR, fL, fR, s, *, n):
-        del fL, fR, s
-        return abs(stated(uL, uR, n))
-
-    return _realization(F, Uh, _face(body, Uh, recorded), reconstruction)
+@pops.scheme
+def upwind(face, term, speed=None, reconstruction=None):
+    """F* = s u_L where s > 0 and s u_R elsewhere, s being recorded as the speed of the flux.
+    Without `speed`, the flux must be F(u) = F(1) u, linear in the scalar state u: term.expect
+    refuses another flux (RealizationMismatch, whose message names rusanov() and hll()), and the
+    face is the one of rusanov(), whose spectral radius is |F(1).n| on both sides, so that it is
+    the upwind flux in master's arithmetic. With `speed=f`, s = f(face) is the normal speed, the
+    velocity of the term dotted with face.normal, whose sign follows the orientation of the face,
+    and nothing is checked: u is upwinded at that speed, which pops.inspect reports as stated. On
+    a product support `speed=` is a table keyed by factor, `speed={velocity: f}`, and a factor
+    that the table omits takes the derived speed (SD73)."""
+    q = term.quantity
+    n = face.normal
+    left = face.left(q)
+    right = face.right(q)
+    stated = _stated_speed(face, speed)
+    if stated is None:                      # Python data, decided once at authoring time (E4)
+        term.expect(term.law(states={q: 1}) * q,
+                    write="rusanov() or hll(), which take the wave speeds of the flux")
+        radius = largest([spectral_radius(term, left, n), spectral_radius(term, right, n)])
+        flux_left = dot(term.law(states={q: left}), n)
+        flux_right = dot(term.law(states={q: right}), n)
+        return FaceFlux(0.5 * (flux_left + flux_right) - 0.5 * radius * (right - left),
+                        reconstruction=reconstruction, speed=radius)
+    s = stated(face)
+    return FaceFlux(where(s > 0, s * left, s * right), reconstruction=reconstruction, speed=s)
 
 
-def hll(F: Any, Uh: Any, *, reconstruction: Any = None) -> Any:
-    """Harten-Lax-van Leer flux of ``F`` on ``Uh`` (row ``hll`` of 2.6.9).
-
-    F* = F(uL).n where sL >= 0, F(uR).n where sR <= 0, and otherwise
-    (sR F(uL).n - sL F(uR).n + sL sR (uR - uL)) / (sR - sL). (sL, sR) is the face input
-    ``speeds``: the slowest and the fastest wave speeds that the model declares along the face
-    normal (``Model.wave_speeds`` or ``wave_speeds_from_jacobian``, R9), united over the two
-    traces, as the native ``riemann.HLL()`` takes them. A case whose model declares none is
-    refused when it is validated. The flux records max(|sL|, |sR|) as its speed, the larger
-    spectral radius of the two traces (adjudication section 20). The row states no other way to
-    give the pair, so the pilot's ``speeds=`` option is gone (I22, CF16).
-    """
-    def body(uL, uR, fL, fR, s, *, speeds):
-        del s
-        lower, upper = speeds
-
-        def component(ul, ur, fl, fr):
-            # The two-wave state exists only where sL < 0 < sR, so sR - sL > 0 there.
-            def two_wave():
-                return (upper*fl - lower*fr + lower*upper*(ur - ul))*(1./(upper - lower))
-            return pm.where(lower >= 0, lambda: fl,
-                            lambda: pm.where(upper <= 0, lambda: fr, two_wave))
-
-        return tuple(component(*row) for row in zip(uL, uR, fL, fR, strict=True))
-
-    def recorded(uL, uR, fL, fR, s, *, speeds):
-        del uL, uR, fL, fR, s
-        lower, upper = speeds
-        return pm.maximum(abs(lower), abs(upper))
-
-    return _realization(F, Uh, _face(body, Uh, recorded), reconstruction)
+def _stated_speed(face, speed):
+    """The stated speed at the face: `speed` itself, or the entry of a table {factor: f} whose
+    factor holds face.axis, the handle of the axis that this run of the scheme covers (SD42),
+    compared with `is` to the axes of each factor; None where no speed is stated there, so that
+    the speed is derived."""
+    if not isinstance(speed, dict):
+        return _function_of_face(speed)
+    for factor in speed:
+        axes = getattr(factor, "axes", None)
+        if axes is None:
+            raise TypeError("upwind(speed={factor: f}) keys its table by the factors of a product "
+                            "support; %r is not one" % (factor,))
+        for axis in axes:
+            if axis is face.axis:
+                return _function_of_face(speed[factor])
+    return None
 
 
-__all__ = ["rusanov", "upwind", "hll"]
+def _function_of_face(speed):
+    """`speed` itself, a function of face passed uncalled (SU5), or None."""
+    if speed is not None and (not callable(speed) or isinstance(speed, type)):
+        raise TypeError("upwind(speed=f) takes a function of face, def f(face): ..., got %r"
+                        % (speed,))
+    return speed
+
+
+@pops.scheme
+def hll(face, term, reconstruction=None):
+    """F* = F_L where s_L >= 0, F_R where s_R <= 0, and
+    (s_R F_L - s_L F_R + s_L s_R (u_R - u_L)) / (s_R - s_L) elsewhere, with F_L = F(u_L).n,
+    F_R = F(u_R).n, s_L the smaller of the two slowest speeds and s_R the larger of the two
+    fastest speeds (R9), as master's HLL. The flux records the larger of |s_L| and |s_R| as its
+    speed."""
+    q = term.quantity
+    n = face.normal
+    left = face.left(q)
+    right = face.right(q)
+    slow = smallest([slowest_speed(term, left, n), slowest_speed(term, right, n)])
+    fast = largest([fastest_speed(term, left, n), fastest_speed(term, right, n)])
+    flux_left = dot(term.law(states={q: left}), n)
+    flux_right = dot(term.law(states={q: right}), n)
+    star = (fast * flux_left - slow * flux_right + slow * fast * (right - left)) \
+        * (1.0 / (fast - slow))
+    return FaceFlux(where(slow >= 0, flux_left, where(fast <= 0, flux_right, star)),
+                    reconstruction=reconstruction, speed=largest([abs(slow), abs(fast)]))
+
+
+# The flux of a diffusive term
+
+@pops.scheme
+def two_point(face, term):
+    """F* = F(u_f, g_f).n, with u_f = (u_L + u_R) / 2 the face mean of each quantity and
+    g_f = (w_R - w_L) / face.distance n the two-point normal gradient of each w that the law
+    differentiates, a gradient variable or a first-order input (E2, SD51)."""
+    states = {r: face.average(r) for r in term.quantities}
+    gradients = {w: face.normal_gradient(w) * face.normal for w in _differentiated(term)}
+    return FaceFlux(dot(term.law(states=states, gradients=gradients), face.normal))
+
+
+def _differentiated(term):
+    """Every w that gradients= must give: the gradient variables of the key, then its first-order
+    inputs, the fields whose gradient the law reads as a first-order transport input, in the
+    order of the law (E2, SD51)."""
+    return term.gradient_variables + term.first_order_inputs
+
+
+__all__ = ["hll", "rusanov", "two_point", "upwind"]

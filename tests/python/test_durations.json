@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1175,
+    "estimated_count": 1177,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7070,6 +7070,7 @@
       "tests/python/integration/runtime/test_scoped_flux_wave_runtime.py",
       "tests/python/integration/runtime/test_shared_interface_runtime.py",
       "tests/python/integration/runtime/test_spec3_runtime_end_to_end.py",
+      "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py",
       "tests/python/integration/runtime/test_stencil_flux_v02_native.py",
       "tests/python/integration/runtime/test_stencil_runtime_parameter_native.py",
       "tests/python/integration/runtime/test_surface_lot_g_run_native.py",
@@ -7735,6 +7736,7 @@
       "tests/python/unit/solvers/test_cartesian_cg_descriptor.py",
       "tests/python/unit/solvers/test_poisson_screened.py",
       "tests/python/unit/surface/test_lot_g_run.py",
+      "tests/python/unit/surface/test_n3_lot1_library_words.py",
       "tests/python/unit/surface/test_quadrature.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
       "tests/python/unit/surface/test_su_t2_scheme_refusals.py",
@@ -8113,7 +8115,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1240,
+    "total_files": 1242,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8646,6 +8648,31 @@
       "source_sha256": {
         "tests/python/unit/numerics/test_stencil_runtime_parameter.py": "37089b956bb48db8f032e6ea17cb7df458c7d3534cbd23ffd4b09649639af981",
         "tests/python/integration/runtime/test_stencil_runtime_parameter_native.py": "6dfbabf1e5330684c038a22851d1010cb57c2fcf93df3ff5b09da18f9cc544a3"
+      }
+    },
+    "n3_20261112_lot1_library_words": {
+      "basis": "Unmeasured CI scheduling estimates for the two test modules of N3 lot 1 (ROM-87), the scheme words of pops.lib.numerics written with @pops.scheme. 60 s for the source-only unit module, which elaborates, validates and resolves twenty surface cases and their hand-written b6 forms and generates their C++ without compiling, as the analogue test_su_t3_parity.py; 600 s for the native module, which compiles three transport and diffusion artifacts cold (isolated native cache) and steps each once, as the analogue test_lib_face_body_swap_native.py. The local receipts come from pytest on a 4-core container; they are not GitHub CI file wall times. Existing weights, the Python shard total, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_n3_lot1_library_words.py": "tests/python/unit/surface/test_su_t3_parity.py",
+        "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": "tests/python/integration/runtime/test_lib_face_body_swap_native.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/surface/test_n3_lot1_library_words.py": 60,
+        "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": 600
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_n3_lot1_library_words.py": {
+          "cases": 15,
+          "session_seconds": 18.7
+        },
+        "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": {
+          "cases": 2,
+          "session_seconds": 228.2
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_n3_lot1_library_words.py": "95d37145f60c7464755a4947ad719748ba1052f135edf47cb456a774b74c97a6",
+        "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": "0cf492844cf666a44b0545db3601415878bbbb4d3bcaca62db1fbf51d9743e24"
       }
     }
   },
@@ -9888,5 +9915,7 @@
   "tests/python/unit/problem/test_identity_provenance_free.py": 15.0,
   "tests/python/integration/runtime/test_identity_provenance_free_native.py": 600.0,
   "tests/python/unit/numerics/test_stencil_runtime_parameter.py": 15,
-  "tests/python/integration/runtime/test_stencil_runtime_parameter_native.py": 300
+  "tests/python/integration/runtime/test_stencil_runtime_parameter_native.py": 300,
+  "tests/python/unit/surface/test_n3_lot1_library_words.py": 60,
+  "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": 600
 }

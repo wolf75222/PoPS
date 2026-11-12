@@ -267,7 +267,7 @@ def build_m16(*,cells=16,steps=4,dt=1e-5,omega=.2,oblique_refusal=False,scheme=N
     oblique_refusal=True supplies the correlated Gaussian whose DFx-DFy has
     nonreal eigenvalues: a successful native evolution must fail reception.
     ``scheme(flux, state)`` realizes the transport instead of the native HLL,
-    for example pops.lib.numerics.hll.
+    for example examples.api_v02.b6_numerics.hll.
     """
     import numpy as np
     from examples.migration.scientific.api040_m17_oracle import gaussian_mixture

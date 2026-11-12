@@ -2,11 +2,11 @@
 
 Spec 0.3 CF4: a face loop passes its parity test with two generated bodies from scientifically
 distinct cases, the L1 upwind flux and the L5 Scharfetter-Gummel flux, and a native that embeds a
-formula fails the second body. The loop under test is the one every ``pops.lib.numerics`` flux
+formula fails the second body. The loop under test is the one every b6 flux of ``examples/api_v02/b6_numerics.py``
 compiles to: the generated ``riemann.User`` face policy (``pops.generated.riemann.face/v2``) inside
 the native finite-volume transport. Its two bodies:
 
-* L1: ``upwind(F, U, speed=f)`` of ``pops.lib.numerics``, f the velocity dotted with the face
+* L1: ``upwind(F, U, speed=f)`` of the b6 oracles, f the velocity dotted with the face
   normal; the velocity is positive along x and negative along y, so each face takes both
   branches of the row of 2.6.9 (s uL where s > 0, else s uR).
 * L5: the Scharfetter-Gummel face of L5 (section 5.10, D8), written in the case as a
@@ -30,7 +30,7 @@ import pytest
 from examples.api_v02.common import CaseSpec
 from examples.api_v02.models_M01_M14 import _domain, _initial, _periodic_metrics, _ssprk2
 from pops import math as pm
-from pops.lib.numerics import upwind
+from examples.api_v02.b6_numerics import upwind
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.riemann.user import authenticated_user_face
 from pops.numerics.spatial import FiniteVolume

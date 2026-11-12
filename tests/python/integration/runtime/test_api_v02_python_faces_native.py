@@ -1,4 +1,4 @@
-"""N3a, ROM-99: Rusanov and HLL written in Python (pops.lib.numerics) against b6's native routes.
+"""N3a, ROM-99: Rusanov and HLL written in Python (the b6 bodies, examples/api_v02/b6_numerics.py) against b6's native routes.
 
 Each pair compiles the same case twice, once with the native face and once with the Python face,
 binds the same initial data and takes the same fixed steps. The two final states must agree to
@@ -34,7 +34,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
-from pops.lib.numerics import hll, rusanov
+from examples.api_v02.b6_numerics import hll, rusanov
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan
 from pops.projection import ConservativeCellAverage

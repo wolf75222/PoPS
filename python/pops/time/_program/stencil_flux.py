@@ -8,6 +8,10 @@ else:
 
 from pops.time._authoring import atomic_authoring
 
+# The operation that this module builds, named once: the method of the program below, the op of its
+# values, and the elaborator of the surface, which enters a diffusive face through it (N3 lot 1).
+OPERATION = "stencil_flux_divergence"
+
 
 class _ProgramStencilFlux(_ProgramBase):
     @atomic_authoring
@@ -39,7 +43,7 @@ class _ProgramStencilFlux(_ProgramBase):
             require_owned(self, parameter, "stencil scalar parameter")
         _validate_parameters(parameters, flux)
         _validate_runtime_parameters(state, flux)
-        return self._new("rhs", "stencil_flux_divergence", (state, *fields, *parameters), {"stencil_flux": flux},
+        return self._new("rhs", OPERATION, (state, *fields, *parameters), {"stencil_flux": flux},
                          name, state.block, space=rate_space_for(state.space),
                          field_context=state.field_context)
 
@@ -47,7 +51,7 @@ class _ProgramStencilFlux(_ProgramBase):
 def validate_stencil_flux(value):
     from pops.numerics.stencil_flux import StencilFlux
     from pops.time.expressions import component_names
-    if (value.op != "stencil_flux_divergence" or len(value.inputs) < 1
+    if (value.op != OPERATION or len(value.inputs) < 1
             or value.inputs[0].vtype != "state"
             or value.block != value.inputs[0].block
             or value.state_ref != value.inputs[0].state_ref):

@@ -20,7 +20,7 @@ import numpy
 import pytest
 
 import pops.surface as surface
-from pops.lib.numerics.schemes import two_point, upwind
+from pops.lib.numerics import two_point, upwind
 from pops.lib.time.methods import ssprk2
 from pops.surface.math import all_of, ddt, div, exp, grad, sqrt, where
 
@@ -233,9 +233,10 @@ def test_su4_membership_compares_with_the_relation_and_is_refused():
 def test_su5_a_scheme_word_is_always_called():
     domain, model, u, u0, advection, diffusion = _transport()
     schemes = {advection: upwind, diffusion: two_point()}
-    with pytest.raises(TypeError) as caught:
+    with pytest.raises(surface.NotAPopsOperation) as caught:
         surface.Numerics(represent={u: surface.CellAverage()}, schemes=schemes)  # <- su5-scheme
-    _python_error(caught, TypeError, "su5-scheme", ("always called", "write upwind()"))
+    _refused(caught, surface.NotAPopsOperation, "su5-scheme", ("SU4", "SU5"), "upwind()")
+    assert "holds the scheme uncalled" in str(caught.value)
 
 
 def test_su5_a_method_is_called_with_its_options():
@@ -613,21 +614,20 @@ def test_upwind_refuses_a_flux_that_is_not_linear_in_its_quantity():
     burgers = model.flux(of=u, value=u**2 / 2)
     model.balance(ddt(u) == -div(burgers))
     represent = {u: surface.CellAverage()}
-    numerics = surface.Numerics(represent=represent, schemes={burgers: upwind()})  # <- d5-upwind
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3), initial={u: u0})
     with pytest.raises(surface.RealizationMismatch) as caught:
-        surface.Case(model=model, numerics=numerics, program=program, layout=_layout(domain))
+        surface.Numerics(represent=represent, schemes={burgers: upwind()})  # <- d5-upwind
     message = _refused(caught, surface.RealizationMismatch, "d5-upwind", ("D5", "§2.6.4"),
                        "rusanov() or hll(), which take the wave speeds of the flux")
-    assert " (in pops/lib/numerics/schemes.py:" in message
-    assert "the flux of u is u**2 / 2" in message
+    assert " (in pops/lib/numerics/fluxes.py:" in message
+    assert "and it is u**2 / 2" in message
+    del domain, u0
 
 
 def test_a_scheme_covers_the_keys_of_its_kind():
     domain, model, u, u0, advection, diffusion = _transport()
-    schemes = {advection: two_point(), diffusion: two_point()}  # <- d5-kind
+    schemes = {advection: two_point(), diffusion: two_point()}
     with pytest.raises(surface.RealizationMismatch) as caught:
-        surface.Numerics(represent={u: surface.CellAverage()}, schemes=schemes)
+        surface.Numerics(represent={u: surface.CellAverage()}, schemes=schemes)  # <- d5-kind
     _refused(caught, surface.RealizationMismatch, "d5-kind", ("D5", "§2.6.4"),
              "a scheme of the kind of the key")
 
@@ -788,12 +788,10 @@ def test_two_point_takes_a_coefficient_that_does_not_vary_with_the_state():
     advection = model.flux(of=u, value=a * u)
     diffusion = model.diffusive_flux(of=u, value=-u * grad(u))
     model.balance(ddt(u) == -div(advection + diffusion))
-    numerics = surface.Numerics(represent={u: surface.CellAverage()},
-                                schemes={advection: upwind(), diffusion: two_point()})  # <- d5-k
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
-                              initial={u: u0})
     with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.Case(model=model, numerics=numerics, program=program, layout=_layout(domain))
+        surface.Numerics(represent={u: surface.CellAverage()},
+                         schemes={advection: upwind(), diffusion: two_point()})  # <- d5-k
+    del domain, a, nu, u0
     _later(caught, "d5-k", ("two_point() under", "varies with the state", "face means of 2.6.4"))
 
 
@@ -801,12 +799,9 @@ def test_upwind_refuses_an_affine_flux():
     domain, model, u, a, nu, u0 = _model()
     advection = model.flux(of=u, value=a * u + a)
     model.balance(ddt(u) == -div(advection))
-    numerics = surface.Numerics(represent={u: surface.CellAverage()},
-                                schemes={advection: upwind()})  # <- d5-affine
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
-                              initial={u: u0})
     with pytest.raises(surface.RealizationMismatch) as caught:
-        surface.Case(model=model, numerics=numerics, program=program, layout=_layout(domain))
+        surface.Numerics(represent={u: surface.CellAverage()}, schemes={advection: upwind()})  # <- d5-affine
+    del domain, nu, u0
     _refused(caught, surface.RealizationMismatch, "d5-affine", ("D5", "§2.6.4"),
              "rusanov() or hll(), which take the wave speeds of the flux")
 
