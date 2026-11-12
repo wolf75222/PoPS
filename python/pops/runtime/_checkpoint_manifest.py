@@ -373,6 +373,7 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
         runtime_kind=runtime_kind,
     )
     semantic, artifact, bind = _runtime_identities(owner)
+    _refuse_renamed_owners(owner, manifest, payload, semantic, artifact, runtime_kind=runtime_kind)
     for field, current, domain in (
         ("semantic_identity", semantic, "semantic"),
         ("artifact_identity", artifact, "artifact"),
@@ -386,6 +387,35 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
     if "abi_key" not in files or str(payload["abi_key"]) != str(abi_key()):
         raise ValueError("checkpoint ABI identity does not match the loaded runtime")
     return restart
+
+
+def _refuse_renamed_owners(owner: Any, manifest: Any, payload: Any, semantic: Identity,
+                           artifact: Identity, *, runtime_kind: str) -> None:
+    """Refuse, by name, a checkpoint of the same program under other owner names.
+
+    Since N11 lot 2b-i the semantic identity holds no case, block, model or layout name (CC2,
+    C47), while the artifact and bind identities still do, through the binary and the block
+    members. Such a checkpoint is refused here with its reason; a restart across renamed owners
+    maps the members through their positions, which is N11 lot 2b-ii. A member is never looked
+    up under another block's name.
+    """
+    recorded_semantic = _identity_from_json(manifest["semantic_identity"])
+    recorded_artifact = _identity_from_json(manifest["artifact_identity"])
+    if recorded_semantic.token != semantic.token or recorded_artifact.token == artifact.token:
+        return
+    files = _payload_files(payload)
+    names: Any = getattr(owner, "block_names", None)
+    if not callable(names):
+        names = getattr(getattr(owner, "_bound_snapshot", None), "block_names", None)
+    missing = []
+    if runtime_kind == "uniform" and callable(names):
+        block_names: Any = names()
+        missing = ["state_%s" % name for name in block_names if "state_%s" % name not in files]
+    raise ValueError(
+        "checkpoint was written by the same program under other owner names (equal semantic "
+        "identity, another artifact identity)%s; a restart across renamed case, block, model or "
+        "layout names is not supported before N11 lot 2b-ii"
+        % (": no member %s" % ", ".join(missing) if missing else ""))
 
 
 def checkpoint_run_identity(payload: Any) -> Identity | None:

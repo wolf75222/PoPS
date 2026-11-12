@@ -172,6 +172,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-93 with ROM-25 (N11 lot 2b-i, G07): owner names leave the identities (spec 0.3 CC2, gap
+  C47). The case, block, model definition and layout names are presentation names: a case renamed
+  in every owner keeps its semantic identity, `snapshot.artifact_hash` and `plan_identity`, while
+  the full snapshot keeps the names. `pops.identity.presentation` projects the canonical preimages
+  (`$case`, `$block<k>` in registration order, `$model<k>` and `$layout<k>` in first use); the names
+  of quantities, terms, the Program, frames and realizations (`reconstruction.User`, `riemann.User`,
+  `@pops.scheme`) stay in the identities while gap C52 is open. A compiled artifact carries
+  `program_id` (domain `program`: the plan identity, the compile choices of each layout Program and
+  `codegen_source_authority()`), shown by `inspect()`, the runtime inspection and the run report.
+  A module outside PoPS read by a callback is identified in the artifact projection by the values
+  it supplies, not by its source digest. A checkpoint of the same program under other owner names
+  is refused by name until N11 lot 2b-ii. `ARTIFACT_SCHEMA_VERSION` is 8; semantic identities of
+  every case change once.
 - ROM-93 with ROM-25 (N11 lot 2a, G07): source spans leave every artifact identity (spec 0.3 CC2,
   gap C48). The same case loaded from two checkout paths, or with comment lines inserted, now has
   one `snapshot.artifact_hash`, one `plan_identity` and one compiled `artifact_identity`: the time

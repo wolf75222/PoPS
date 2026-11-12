@@ -582,7 +582,7 @@ def _public_structural_fields(value: Any, path: str) -> dict[str, Any]:
             stored_names.add(slot)
     stored_names.difference_update({"__dict__", "__weakref__", "_frozen", "_snapshot",
                                     "_canonical_json", "_hash", "_artifact_canonical_json",
-                                    "_artifact_hash"})
+                                    "_artifact_hash", "_presentation"})
     if stored_names:
         for name in sorted(stored_names):
             if not isinstance(name, str) or name.startswith("__"):

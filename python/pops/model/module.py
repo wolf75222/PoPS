@@ -930,6 +930,13 @@ class Module(ModuleFreezable):
         with local_expression_identity(self.owner_path):
             return module_content_hash(self)
 
+    def _name_free_module_hash(self) -> str:
+        """:meth:`module_hash` without the module name, a presentation name (CC2, N11 lot 2b)."""
+        from ._module_hash import module_content_hash
+        from pops._ir.quantity import local_expression_identity
+        with local_expression_identity(self.owner_path):
+            return module_content_hash(self, name_free=True)
+
     def __repr__(self) -> str:
         return "Module(%r, operators=[%s])" % (self.name, ", ".join(self._registry.names()))
 
