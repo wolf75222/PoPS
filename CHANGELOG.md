@@ -22,7 +22,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py`, with its upwind
   flux (in master's arithmetic) and its SSPRK2 written in the case file. The pieces that PoPS does
   not run yet are listed in `tests/gates/vertical_slice.toml` in the order of the file (statement,
-  refusal, owner): `ghosts` imported from `pops.lib.numerics` (the switch of N3);
+  refusal, owner): `ghosts` imported from `pops.lib.numerics` (a small lot of N3);
   `muscl(limiter=vanleer)` left the list with N3 lot 2 (#795).
   `tests/python/integration/surface/test_vertical_slice_t02.py`
   runs the file and checks that it stops on the first piece; the list only shrinks

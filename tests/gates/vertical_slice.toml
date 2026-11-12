@@ -11,10 +11,12 @@ gate = "vertical-slice"
 # phase 1 (S1 to S6 of the note, section 5); the test then runs the file to its end.
 case = "examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py"
 
-# ghosts() is written with the surface in pops.lib.numerics.boundaries (N15 lot B, #774); the
-# package re-exports it with the switch to one API (docstring of pops.lib.numerics).
+# ghosts() is written with the surface in pops.lib.numerics.boundaries (N15 lot B, #774). Since
+# #778 the package imports pops.surface through .fluxes, so nothing keeps it from re-exporting
+# ghosts(): a small lot of N3 (branch n3/rom-87-ghosts-export) adds the line, before the exit of
+# phase 1 (review R1 of #798).
 [[piece]]
 id = "B-import"
 statement = "from pops.lib.numerics import muscl, vanleer, ghosts"
 refusal = "ImportError: cannot import name 'ghosts' from 'pops.lib.numerics'"
-owner = "N3 (ROM-87), the switch to one API: pops.lib.numerics re-exports ghosts()"
+owner = "N3 (ROM-87), the lot n3/rom-87-ghosts-export: pops.lib.numerics re-exports ghosts(), before the exit of phase 1"
