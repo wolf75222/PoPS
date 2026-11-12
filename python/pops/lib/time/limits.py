@@ -4,12 +4,14 @@
 ``pops.Advance(method, dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2))`` bounds each step by the
 smallest value over the cells of
 
-    f(cell) = where(s > 0, (cfl * w) / s, M)
+    f(cell) = (cfl * w) / s
 
-with ``w`` the smallest width of the cell over the axes, ``s`` the largest spectral radius of the
-fluxes at the cell value over the axes (``cell.speed(F, a)``, R9), and ``M`` the cap ``max_dt``, or
-+infinity without one (2.6.9: a cell at rest bounds nothing). With ``max_dt`` the value is
-``smallest([that, max_dt])``. On a uniform layout this is master's ``cfl . h_min / max speed``
+with ``w`` the smallest width of the cell over the axes and ``s`` the largest spectral radius of
+the fluxes at the cell value over the axes (``cell.speed(F, a)``, R9). A cell at rest bounds
+nothing (2.6.9): its quotient is +infinity in IEEE 754, the value of E that the step rule admits,
+since a constant of an expression is finite. With ``max_dt`` the value is
+``smallest([where(s > 0, (cfl * w) / s, max_dt), max_dt])``: the cell at rest takes the cap, and
+the quotient, an observed operation (C4), is not computed there. On a uniform layout this is master's ``cfl . h_min / max speed``
 (``include/pops/runtime/system.hpp:872-874@bb9``), operation for operation; there is no speed
 floor, unlike b6's ``max(s, 1e-30)``. ``cfl_limit([advection, drift], cfl=)`` keeps the smallest
 of their limits.
@@ -118,8 +120,11 @@ def cfl_limit(flux: Any = None, *, cfl: Any = None, max_dt: Any = None, **earlie
         widths = [cell.width(axis) for axis in axes]
         s = speeds[0] if len(speeds) == 1 else largest(speeds)
         w = widths[0] if len(widths) == 1 else smallest(widths)
-        bound = where(s > 0, (number * w) / s, _math.inf if cap is None else cap)
-        return bound if cap is None else smallest([bound, cap])
+        if cap is None:
+            # a cell at rest bounds nothing: (cfl * w) / 0 is +infinity in IEEE 754, E itself,
+            # which the step rule admits (2.6.9); pops.math has no infinite literal to write
+            return (number * w) / s
+        return smallest([where(s > 0, (number * w) / s, cap), cap])
 
     limit.__name__ = "cfl_limit"
     limit.__qualname__ = "cfl_limit"

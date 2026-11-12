@@ -680,14 +680,16 @@ def test_a_construct_of_a_later_lot_names_the_lot_that_elaborates_it():
     def stable_step(cell):
         return 1e-3 * cell.width(domain.x)
 
-    advance = surface.Advance(ssprk2(rate=model), dt=stable_step)  # <- later-dt
+    # a function of cell elaborates (N8 « dt= as a function of cell »); the solve requests of the
+    # step that it bounds are a later lot (D5)
+    advance = surface.Advance(ssprk2(rate=model), dt=stable_step,
+                              tolerance=surface.Tolerance(rtol=1e-8))  # <- later-dt
     with pytest.raises(surface.NotYetElaborated) as caught:
         surface.Case(model=model, numerics=_numerics(u, advection, diffusion),
                      program=surface.Program(advance=advance, initial={u: 1.0}),
                      layout=_layout(domain))
-    assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("later-dt"))
-    assert "N8 « dt= as a function of cell », its core entry (design note D2) elaborates it" \
-        in str(caught.value)
+    assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("later-dt") - 1)
+    assert "a later lot of N8 (the solve requests of a step rule, 5.5)" in str(caught.value)
     with pytest.raises(surface.NotYetElaborated) as caught:
         surface.CUDA()  # <- later-cuda
     assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("later-cuda"))

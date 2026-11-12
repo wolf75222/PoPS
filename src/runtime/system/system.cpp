@@ -432,8 +432,8 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
               frequency = std::numeric_limits<double>::infinity();
           }
           const ExecutionLane& lane = prepared_boundary_execution_lane();
-          frequency = static_cast<double>(all_reduce_max(static_cast<Real>(frequency),
-                                                         lane.communicator()));
+          frequency = static_cast<double>(
+              all_reduce_max(static_cast<Real>(frequency), lane.communicator()));
           if (frequency > 0.0) {
             report.attempts = attempt;
             report.face_frequency = frequency;
@@ -1517,13 +1517,13 @@ void System<Dim>::require_cells_rule_plan_() const {
   const char* refused = nullptr;
   int evolving = 0;
   if (p_->explicit_default_poisson_requested_)
-    refused = "a default Poisson solve";
+    refused = "a default Poisson solve (set_poisson)";
   for (const typename Impl::Species& block : p_->sp) {
     if (!block.evolve)
       continue;
     ++evolving;
-    if (block.add_poisson_rhs)
-      refused = "a default Poisson solve";
+    if (block.add_poisson_rhs && !block.poisson_source_empty)
+      refused = "a default Poisson solve (the Poisson source of an evolving block)";
     else if (!block.stability_consumer_qid.empty())
       refused = "an auxiliary refreshed before the stability selection";
     else if (block.source_frequency)
@@ -1772,6 +1772,7 @@ template double System<kNativeDimension>::select_step_(double, double, double, d
 template double System<kNativeDimension>::step_bound();
 template void System<kNativeDimension>::step_at_fraction(double, double);
 template void System<kNativeDimension>::require_cells_rule_plan_() const;
+template const std::string& System<kNativeDimension>::step_bound_identity() const noexcept;
 template double System<kNativeDimension>::active_program_step_courant() const;
 template int System<kNativeDimension>::macro_step() const;
 template void System<kNativeDimension>::mark_bound();

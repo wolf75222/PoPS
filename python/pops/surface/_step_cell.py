@@ -64,7 +64,7 @@ class StepCell:
     def value(self, quantity: Any) -> SchemeLeaf:
         if not isinstance(quantity, Quantity):
             raise TypeError("cell.value(u) takes an unknown of the model, got %r" % (quantity,))
-        if quantity not in self._unknowns:
+        if not any(quantity is unknown for unknown in self._unknowns):
             raise TypeError("cell.value(%s): %s is not an unknown that the advance steps"
                             % (quantity, quantity))
         return SchemeLeaf(value_key(quantity), quantity, "cell.value(%s)" % quantity)
@@ -78,6 +78,10 @@ class StepCell:
         if isinstance(flux, DiffusiveFlux) or not isinstance(flux, Flux):
             raise TypeError("cell.speed(F, axis) takes a transport flux of the model, "
                             "model.flux(of=u, value=...), got %r" % (flux,))
+        if not any(flux.quantity is unknown for unknown in self._unknowns):
+            raise TypeError("cell.speed(%s, %s): a flux of %s, which is not an unknown that the "
+                            "advance steps (a flux of another model?)"
+                            % (text(flux), getattr(axis, "name", axis), flux.quantity))
         index = self._axis(axis, "speed")
         slopes = flux.slopes()
         if slopes is None:

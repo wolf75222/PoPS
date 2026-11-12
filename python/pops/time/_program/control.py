@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any
 
 ADVANCE_CONTROL_SCHEMA = "pops.advance-control@1"
@@ -36,6 +37,7 @@ ADVANCE_CONTROL_STEP_RULE_SCHEMA = "pops.advance-control@4"
 it, so the record and the identity of every Program without one are unchanged."""
 
 ADVANCE_CONTROL_CELLS_SCHEMA = "pops.advance-control@6"
+_CELLS_BOUND_ID = re.compile(r"pops\.cells-step-bound\.v1::[0-9a-f]{64}")
 """Schema of ``AdvanceControl.to_data`` for an Advance whose step bound is a function of ``cell``
 (N8 « dt= as a function of cell », D2): schema 4, whose ``proposal`` is ``{"rule": "cells",
 "fraction": ..., "bound": ...}``, the Courant budget that the rule declares and the identity of the
@@ -94,8 +96,9 @@ class AdvanceControl:
             if type(fraction) is not float or not math.isfinite(fraction) \
                     or not 0.0 < fraction <= 1.0:
                 raise ValueError("AdvanceControl.step_bound fraction is a binary64 in (0, 1]")
-            if type(identity) is not str or not identity:
-                raise ValueError("AdvanceControl.step_bound identity is the bound's qualified id")
+            if type(identity) is not str or not _CELLS_BOUND_ID.fullmatch(identity):
+                raise ValueError("AdvanceControl.step_bound identity is the bound's qualified id, "
+                                 "pops.cells-step-bound.v1::<sha256>")
             if first_dt is not None:
                 raise ValueError("AdvanceControl with a step bound has no first_dt: the bound "
                                  "chooses every proposal")

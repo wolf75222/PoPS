@@ -28,6 +28,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
   sliver step at a frontier, when a CFL step ends within four ulp short of it or when
   `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-89 (N8, « dt= as a function of cell »): `pops.Advance(method, dt=f)`, with `f` a function
+  of `cell` (spec 0.3, 2.6.2, 2.6.4, 2.6.9, PF8), elaborates. Each step is the smallest value,
+  over the valid cells of the evolving block at the accepted state, of the bound E that `f`
+  returns, reduced over the ranks; the Program generates it (`pops_program_advance_step_bound`)
+  in the order E writes it, in double, without rewriting a quotient into a product by a
+  reciprocal. The step runs under the Courant budget φ that the rule declares
+  (`step_fraction`): `cfl_limit` declares its `cfl`, a function written by hand takes 1, the
+  budget of a fixed step. `pops.inspect` shows E, φ and its origin. Its control is
+  `pops.advance-control@6` (IR version 36), `{"rule": "cells", "fraction", "bound"}`; every
+  Program without a cells rule keeps its record and identity. `pops.run` on the artifact takes
+  the `CellStepBound` strategy. E NaN, -infinity or with a non-finite operation fails the run
+  with `step_bound_nonfinite`, E zero or negative with `step_bound_nonpositive`, both naming the
+  first cell; E +infinity on every cell steps to the frontier.
+  - `cfl_limit(flux, cfl=, max_dt=None)` is now a plain function of `cell`: `(cfl * w) / s`,
+    or `smallest([where(s > 0, (cfl * w) / s, max_dt), max_dt])` with a cap. It has no speed
+    floor, unlike b6's `max(s, 1e-30)`: a state at rest everywhere without `max_dt` takes one
+    step to the frontier where b6 proposes `cfl * h / 1e-30`. A cell at rest bounds nothing
+    (+infinity, 2.6.9), written as the IEEE quotient because a constant of an expression is
+    finite. `cfl_limit(..., cfl=1.5)` is refused by name: the Courant number of a step rule is
+    in (0, 1]; #788's bridge accepted any positive finite `cfl`, as master's `AdaptiveCFL`.
+    #788's refusals (a transport flux left out, a diffusive flux, waves not derived) stay in
+    `cfl_limit`'s body. `pops.StepRuleValue` and the MG9 entry of `cfl_limit` are removed.
+  - A face guard that refuses an attempt with the faces' frequency (`pops.face-step-frequency@1`,
+    ROM-108) stops the compiled run by name (`kFaceFrequency`), with the frequency reduced over
+    the ranks (`FaceFrequencyStop`): the compiled retry is a later lot of N8. `pops.run` retries
+    once at φ / F, as `AdaptiveCFL` at cfl / F.
+  - Refused with their lot: a function of cell beside `tolerance=`; under an adaptive layout or
+    on a Program of several blocks; a runtime parameter that E reads and no kernel of the method
+    reads (its value is installed with the parameters of a kernel; a later lot of N8 « dt= as a
+    function of cell » installs it for the bound); and, by the run, the plans on which b6's
+    selection does more than read speeds: a default Poisson solve (`set_poisson`, or the Poisson
+    source of an evolving block; a generated block whose model has no `elliptic_rhs` has none),
+    an auxiliary refreshed before the selection, source and parabolic frequencies,
+    `stability_dt`, substeps or a stride, coupled frequencies, other than one evolving block,
+    `add_dt_bound` and `set_dt_bound`.
 - ROM-98 (N15, lot D-E, part D): `dt=cfl_limit(flux, cfl=, max_dt=None)` (spec 0.3, 2.6.2,
   2.6.9, SD44, SD70; OD31). `from pops.lib.time import cfl_limit`;
   `pops.Advance(method, dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2))` elaborates onto N8's

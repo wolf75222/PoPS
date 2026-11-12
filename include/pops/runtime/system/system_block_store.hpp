@@ -82,6 +82,7 @@ class SystemBlockStore {
     /// Exact compact provider dependency plan also consumed by stability estimates.
     std::string stability_consumer_qid;
     ConstResidual add_poisson_rhs;
+    bool poisson_source_empty = false;
 
     VariableSet cons_vars;
     VariableSet prim_vars;

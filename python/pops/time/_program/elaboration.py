@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.time._program.api import Program as _Builder
 from pops.time._program.control import AdvanceControl
@@ -35,6 +35,9 @@ from pops.time._program.traced_method import (
 )
 from pops.time._step.strategy import FixedDt
 from pops.time._step.transaction import ensure_step_strategy
+
+if TYPE_CHECKING:
+    from pops.time._step.bound import StepBound
 
 
 class Proposal:
@@ -152,7 +155,7 @@ class Elaboration:
 
     __slots__ = ("advance", "proposal", "program", "trace", "control")
 
-    def __init__(self, advance: Advance, proposal: Proposal | StepRule, program: Any,
+    def __init__(self, advance: Advance, proposal: Proposal | StepRule | StepBound, program: Any,
                  trace: MethodTrace, control: AdvanceControl) -> None:
         self.advance = advance
         self.proposal = proposal

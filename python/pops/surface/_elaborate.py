@@ -24,7 +24,7 @@ import math as _math
 from decimal import Decimal
 from fractions import Fraction
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, cast
 
 from pops import math as _pm
 from pops.domain import CartesianDomain
@@ -735,7 +735,7 @@ class _Elaboration:
                 raise type(error)("pops.Advance(dt=%s): %s" % (name, error)) from None
             proposal: Any = StepBound(lowered, self.support().rank, fraction, origin)
         else:
-            proposal = _n8.Proposal(float(rule), request=request)
+            proposal = _n8.Proposal(float(cast(float, rule)), request=request)
         try:
             elaboration = _n8.elaborate(_n8.Advance(specialized, retry=retry), case=case6,
                                         state=block[states[quantity]], proposal=proposal,

@@ -1203,6 +1203,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
     add_poisson_rhs<Dim>(model, state, rhs);
   };
+  // The closure adds nothing for a model without elliptic_rhs: a cells rule reads that (N8).
+  result.poisson_source_empty = !requires(
+      const Model& provider, const typename Model::State& value) { provider.elliptic_rhs(value); };
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
     generated_system_detail::publish_conservative_state(model, primitive, conservative);
   };

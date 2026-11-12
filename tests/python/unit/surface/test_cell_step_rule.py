@@ -4,9 +4,9 @@
 ``pops.Advance(method, dt=f)`` takes a plain function of ``cell`` (SU5). The elaborator runs it once
 with the cell of a step rule, whose reads are ``value``, ``width`` and ``speed``, and lowers the
 bound it returns to a b6 expression over the cell reads of the block state and the widths of the
-cell. ``cell.speed(F, axis)`` is the spectral radius of F at the cell value (R9; D3 (a)). Until the
-compiled step bound of the core lands, elaboration stops at the core boundary with
-``NotYetElaborated``, which names the bound.
+cell. ``cell.speed(F, axis)`` is the spectral radius of F at the cell value (R9; D3 (a)). The
+elaborated Advance carries the bound as its first proposal, under the Courant budget that the
+function declares: 1, that of a fixed step, for a function written by hand (C2, review rev 3 P3).
 """
 import types
 
@@ -53,8 +53,8 @@ def _limit(parts):
 
 
 def _bound(build, monkeypatch):
-    """The bound and its b6 expression, as the elaborator builds them before the core boundary
-    (``surface.Case`` elaborates the case it builds)."""
+    """The bound and its b6 expression, as the elaborator builds them (``surface.Case`` elaborates
+    the case it builds)."""
     seen = {}
     original = _elaborate._Elaboration.step_bound
 
@@ -63,8 +63,7 @@ def _bound(build, monkeypatch):
         return seen["result"]
 
     monkeypatch.setattr(_elaborate._Elaboration, "step_bound", spy)
-    with pytest.raises(NotYetElaborated, match="dt= as a function of cell"):
-        build()
+    build()
     return seen["result"]
 
 
@@ -113,13 +112,30 @@ def test_a_speed_that_reads_the_value_lowers_to_a_cell_read(monkeypatch):
     assert read[2] == ()
 
 
-def test_the_refusal_names_the_bound_and_the_lot():
+def test_a_function_written_by_hand_takes_the_budget_of_a_fixed_step():
     parts = _parts()
-    with pytest.raises(NotYetElaborated) as caught:
-        _case(parts, _limit(parts))
-    message = str(caught.value)
-    assert "pops.Advance(dt=limit)" in message
-    assert "cell.width(x)" in message and "its core entry" in message
+    case = _case(parts, _limit(parts))
+    bound = case.elaborated.case._time._advance_step_bound
+    assert (bound.fraction, bound.origin) == (1.0, "default")
+    assert case.elaborated.case._time._advance_control.step_bound[0] == 1.0
+    rows = {choice.name: choice for row in case.elaborated.rows for choice in row.choices}
+    assert rows["fraction"].origin == "default"
+    assert "that of a fixed step" in str(rows["fraction"].value)
+    assert "limit, the smallest over the cells of" in str(rows["dt"].value)
+
+
+def test_a_declared_budget_is_read_from_the_rule():
+    parts = _parts()
+    limit = _limit(parts)
+    limit.step_fraction = 0.5
+    bound = _case(parts, limit).elaborated.case._time._advance_step_bound
+    assert (bound.fraction, bound.origin) == (0.5, "stated")
+    for wrong, error in ((1.5, ValueError), (0.0, ValueError), (float("nan"), ValueError),
+                         (True, TypeError), ("0.5", TypeError)):
+        limit.step_fraction = wrong
+        with pytest.raises(error, match=r"pops.Advance\(dt=limit\): the step_fraction of a "
+                                        r"step rule"):
+            _case(parts, limit)
 
 
 @pytest.mark.parametrize("read", ["shift", "center", "measure", "load", "level"])

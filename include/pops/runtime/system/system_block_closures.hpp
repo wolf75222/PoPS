@@ -315,6 +315,9 @@ struct PreparedSystemBlock {
   SystemBlockClosures<Dim> closures;
   std::function<Real(const field_type&, const ExecutionLane&)> maximum_speed;
   std::function<void(const field_type&, field_type&)> poisson_rhs;
+  /// poisson_rhs adds nothing (a generated block whose model has no elliptic_rhs): the runtime
+  /// does not take its presence for a Poisson source (N8 « dt= as a function of cell »).
+  bool poisson_source_empty = false;
   std::function<void(const double*, double*)> primitive_to_conservative;
   std::function<RecoveryReport(const double*, double*)> conservative_to_primitive;
   UniformCellRecovery batch_conservative_to_primitive;
