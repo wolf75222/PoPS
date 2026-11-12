@@ -210,6 +210,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-85 (N10, phase 1, lot 3a): strict mode on `Patches` (spec 0.3 DM5). The layout record
+  (`data_layout_and_distribution`, schema 4) lists every general access of the plan
+  (`general_accesses`: node, op, array, layout and IR8 provenance of the index) for `at` and the
+  local access with an index that is not the map's argument, the imports by requests or CSR and
+  the scatters; none reaches `Patches` or `LevelPatches`. A field leaf given to one of them
+  (or to `gather`, `scatter_reduce`) raises `GeneralAccessOnPatches` (rule DM5), which is a
+  `TypeError` as before and a `ValueError` like the other typed refusals. `state_geometry` is
+  left to G03 (ALE) instead of lot 3. The native type name of a field in the versioned lowering
+  is decided by `is_field_leaf` (review of #777, R1), and the inventory script names the forms it
+  does not see (R2). The generated C++ is unchanged.
 - ROM-85 (N10, phase 1, lot 1b): one function tells a field leaf from a finite array. Every line of
   `python/pops` that compared a `vtype` spelling to ask « field » or « finite array » now asks
   `pops._ir.data_model` (`value_kind`, `is_field_leaf`, `is_finite_array`, `is_finite_index`,
@@ -709,6 +719,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-17 (B02): `scripts/setup_env.sh` works again on a fresh macOS env. Its Darwin SDK capture loads
+  `_native_toolchain.py` with `PYTHONPATH` unset, and that module imports `pops` since 6603aec4, so a
+  first setup stopped on `ModuleNotFoundError` reported as an invalid SDKROOT. The capture now puts the
+  checkout's `python/` alone on `sys.path`, and the error names the Python failure.
 - ROM-93 (N11 lot 1 follow-up): the empty sum `ddt(U) == RateExpr(())` is again the zero rate of b6 and
   reaches the prepared IR as the zero identity; lot 1 had refused it. Spec 0.3 R7 refuses no empty
   balance. The bare literal `ddt(U) == 0` stays refused, as in b6.
