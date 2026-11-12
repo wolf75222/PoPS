@@ -53,9 +53,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   and `abs`, and `tanh`, `expm1`, `erf` or a power whose exponent is not a number wait for N11.
   The logical nodes are lower + (upper - lower) (k / c), so graded nodes nest bitwise across
   resolutions, and the two copies of a seam face share their distance. The two-point diffusion of
-  the arrays serves node positions of every rank; a chart stays of rank two. The cases are
+  the arrays serves node positions of every rank; a chart stays of rank two. The words of
+  `pops.lib.numerics` (N3 lot 1) are served on the arrays: a face authored in source
+  (`riemann.User`, `rusanov()`, `upwind()`) reads the cell values as traces and the physical unit
+  normal as `n`, on node positions and on a chart, and its step guard (503) weighs each face bound
+  by the measure of the face over the measure of the cell; a `StencilFlux` (`two_point()`) on
+  node positions reads the distance across each face as its spacing, the face and cell measures
+  of the arrays, and the conductance f d |S| / |K| as its frequency. A stencil that reads a
+  farther cell, another spacing or a field, or a stencil on a chart, is refused at resolution
+  (`static_geometry_stencil_unavailable`). The cases are
   `examples/api_v02/models_graded_spacing.py`: a graded ring, a plane, a box of rank three and
-  the wall layout of probe 3.
+  the wall layout of probe 3, refused when it is built until G04 elaborates the relations of its
+  walls under a diffusion.
 - ROM-110 (N17, L1a): static geometry arrays of a structured configuration (C1). A layout whose
   coordinate map reads neither the clock nor a discrete input (`MovingControlVolumes` over a
   logical `Uniform` grid with a clock-free `GeometryEvolution`) is read at resolution as static
