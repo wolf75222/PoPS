@@ -7,8 +7,10 @@ compiled Program). ``when`` is a closed body over the accepted continuation ``B`
 Bool (T33): PoPS calls it once with a :class:`RegridContinuation` and keeps the Boolean expression
 that it returns. The body reads
 
-- ``B.steps``, the number of accepted steps, as ``B.steps % k == 0``: ``pops.lib.time.every(k)`` is
-  this body, true after every k-th accepted step;
+- ``B.steps``, the number of accepted steps of the run, counted from its start (spec 5.2; a run
+  starts at ``pops.run``, at ``AmrSystem.run``, at a restored clock or at the bind, and
+  ``pops.step`` continues it), as ``B.steps % k == 0``: ``pops.lib.time.every(k)`` is this body,
+  true after every k-th accepted step of the run;
 - ``B.time``, the accepted time;
 - an indicator of the accepted state, ``largest_cells(f)`` or ``smallest_cells(f)``: the largest or
   the smallest value of ``f``, a function of ``cell`` read like a refinement region, over the valid
@@ -61,7 +63,7 @@ def _not_a_predicate(self: Any, context: Any, *, action: str) -> Any:
 
 
 class EveryAcceptedSteps(Expr):
-    """``B.steps % k == 0``: true after every k-th accepted step (5.11, ``every``)."""
+    """``B.steps % k == 0``: true after every k-th accepted step of the run (5.11, ``every``)."""
 
     def __init__(self, k: int) -> None:
         self.k = k

@@ -9,6 +9,7 @@ the IR, the control record and the C++ of lot 2. What this lot does not lower is
 ``tests/python/integration/runtime/test_advance_outputs_n8_native.py`` runs it.
 """
 import math
+from fractions import Fraction
 
 import pytest
 
@@ -24,7 +25,7 @@ from pops.time._program.control import (
 )
 from pops.time._program.elaboration import Advance, Proposal, elaborate
 from pops.time._program.outputs import (
-    Output, Product, cell_max, cell_min, cell_sum, every, every_dt,
+    Output, Product, cell_max, cell_min, cell_sum, every, every_dt, landing,
 )
 from pops.time._program.traced_method import ClosedBodyViolation, NotYetElaborated
 from pops.time._schedule.api import _every_dt_lattice_time
@@ -107,19 +108,132 @@ def test_every_dt_lands_on_the_lattice_of_b6():
     assert lattice.times(0.15, 0.15) == ()
     with pytest.raises(ValueError, match="below the binary64 resolution"):
         every_dt(1e-300).times(1.0, 2.0)
+    with pytest.raises(ValueError, match="below the binary64 resolution"):
+        every_dt(1e-17).times(1.0, 2.0)
 
 
 def test_a_time_within_four_units_below_until_is_until():
     below = math.nextafter(math.nextafter(0.1, 0.0), 0.0)
-    assert _ahead((below, 0.1), 0.0, 0.1) == [0.1]
-    assert _ahead((0.0, 0.05, 0.1, 0.2), 0.0, 0.1) == [0.05, 0.1]
-    assert _ahead((0.05,), 0.05, 0.1) == []
+    assert _ahead((below, 0.1), 0.0, 0.1, anchored=False) == [0.1]
+    assert _ahead((0.0, 0.05, 0.1, 0.2), 0.0, 0.1, anchored=False) == [0.05, 0.1]
+    assert _ahead((0.05,), 0.05, 0.1, anchored=False) == []
     far = 0.1 - 8 * math.ulp(0.1)
-    assert _ahead((far,), 0.0, 0.1) == [far]
-    # One-sided, as master: a time one unit above until never extends the run; the next run
-    # lands on it.
+    assert _ahead((far,), 0.0, 0.1, anchored=False) == [far]
+    # One-sided for a list, as master: a time one unit above until never extends the run; the
+    # next run lands on it.
     above = math.nextafter(0.1, 1.0)
-    assert _ahead((above,), 0.0, 0.1) == [] and _ahead((above,), 0.1, 0.2) == [above]
+    assert _ahead((above,), 0.0, 0.1, anchored=False) == []
+    assert _ahead((above,), 0.1, 0.2, anchored=False) == [above]
+
+
+# --- run-anchored schedules (N8 « Ancrage des calendriers au départ du run », note rev 2, §7) ---
+
+STEPS = (0.1, 0.01, 0.004, 0.05, 1e-3, 0.7, 2.5e-5, 1 / 3, 1 / 7)
+
+
+def _r1(start, h, k):
+    """D1: dec(t0) + k dec(h), rounded once."""
+    return float(Fraction(repr(start)) + Fraction(repr(h)) * k)
+
+
+@pytest.mark.parametrize("h", STEPS)
+def test_a_first_run_is_the_lattice_of_b6(h):
+    """From t0 = 0 the anchored times are b6's lattice, bit for bit, for k <= 20000."""
+    until = _every_dt_lattice_time(20000, h)
+    times = every_dt(h).times(0.0, until)
+    assert len(times) == 20000
+    assert all(time == _every_dt_lattice_time(k, h) for k, time in enumerate(times, 1))
+
+
+@pytest.mark.parametrize("h", (0.1, 0.01, 0.004, 0.05, 1e-3, 0.7, 2.5e-5))
+def test_a_run_that_starts_on_the_grid_keeps_the_lattice(h):
+    """Property 2: from t0 = binary64(j dec(h)), with j dec(h) of at most 15 digits, the times are
+    the absolute lattice."""
+    for j in (1, 3, 7, 40, 123, 999):
+        start = _every_dt_lattice_time(j, h)
+        assert len(repr(start).replace(".", "").replace("e-", "").lstrip("0")) <= 17
+        until = _every_dt_lattice_time(j + 50, h)
+        assert every_dt(h).times(start, until) == tuple(
+            _every_dt_lattice_time(j + k, h) for k in range(1, 51))
+
+
+@pytest.mark.parametrize("start, h, expected", [
+    (0.25, 0.1, (0.35, 0.45, 0.55)),
+    (0.035, 0.01, (0.045, 0.055, 0.065, 0.075, 0.085, 0.095)),
+    (0.1 + 0.2, 0.1, (0.4, 0.5, 0.6000000000000001, 0.7000000000000001, 0.8)),
+])
+def test_a_run_off_the_grid_counts_from_its_start(start, h, expected):
+    """Property 3: the times are dec(t0) + k dec(h), rounded once; index 0 is t0 itself."""
+    lattice = every_dt(h)
+    assert lattice.time(0, start) == start
+    for k, time in enumerate(expected, 1):
+        assert lattice.time(k, start) == _r1(start, h, k) == time
+    assert lattice.times(start, expected[-1]) == expected
+
+
+def test_the_landing_rule_of_until():
+    """D5: within four ulp of until, below or above, an anchored time is until; a listed time is
+    until only from below, and a time above it belongs to a later run."""
+    until = 0.6
+    unit = math.ulp(until)
+    for n in range(1, 5):
+        above = until + n * unit
+        assert landing(above, until, anchored=True) == until
+        assert landing(above, until, anchored=False) is None
+        below = until - n * unit
+        assert landing(below, until, anchored=True) == until == landing(below, until,
+                                                                          anchored=False)
+    five = until + 5 * unit
+    assert landing(five, until, anchored=True) is None and landing(five, until,
+                                                                     anchored=False) is None
+    assert landing(until - 5 * unit, until, anchored=True) == until - 5 * unit
+    # S3: from 0.1 + 0.2 to 0.6 the anchored times end on 0.6 itself, the list stays one-sided
+    start = 0.1 + 0.2
+    assert every_dt(0.1).times(start, 0.6) == (0.4, 0.5, 0.6)
+    assert _ahead(every_dt(0.1).times(start, 0.6), start, 0.6, anchored=True) == [0.4, 0.5, 0.6]
+    assert _ahead((0.6000000000000001,), start, 0.6, anchored=False) == []
+    # a landed time that is not after the start is dropped: a run of zero length
+    assert every_dt(0.1).times(0.6, 0.6) == ()
+    assert _ahead((0.6000000000000001,), 0.6, 0.6, anchored=True) == []
+
+
+def test_the_steps_of_one_third_land_on_until():
+    """h = 1/3: R1 can lie one ulp above an until written as a multiple of h; it lands."""
+    h = 1 / 3
+    lattice = [_every_dt_lattice_time(k, h) for k in range(10)]
+    assert _r1(lattice[8], h, 1) == 3.0 and lattice[9] == 2.9999999999999996
+    assert every_dt(h).times(lattice[8], lattice[9]) == (lattice[9],)
+    assert every_dt(h).times(17.0, 53 * h) == (17.333333333333332, 17.666666666666664)
+    # the absolute lattice of lot 3 gives the same two lists
+    assert [t for t in (_every_dt_lattice_time(k, h) for k in range(50, 54))
+            if 17.0 < t <= 53 * h] == [17.333333333333332, 17.666666666666664]
+
+
+def _ulps(left, right):
+    return abs(Fraction(left) - Fraction(right)) / Fraction(max(math.ulp(left), math.ulp(right)))
+
+
+def test_the_bound_of_four_ulp():
+    """§2.4: t0 and until written as a literal, a sum of two literals or a multiple of the step,
+    the m-th anchored time lies within four ulp of until; the lemma holds in Fraction."""
+    worst = Fraction(0)
+    for h in (0.1, 0.01, 0.004, 0.7, 1 / 3, 1 / 7):
+        dec_h = Fraction(repr(h))
+        for j in (1, 2, 5, 13, 77):
+            for m in (1, 2, 3, 9):
+                tau0 = dec_h * j
+                # t0 as a literal, a sum of two literals and a multiple of the step
+                starts = (float(tau0), float(dec_h * (j - 1)) + h, j * h)
+                for t0 in starts:
+                    # until as a literal, a sum of two literals, from the run's start, a multiple
+                    for until in (float(tau0 + m * dec_h), float(dec_h * (j + m - 1)) + h,
+                                  t0 + m * h, (j + m) * h):
+                        t_m = every_dt(h).time(m, t0)
+                        distance = _ulps(t_m, until)
+                        worst = max(worst, distance)
+                        assert distance <= 4, (h, j, m, t0, until, t_m)
+                        assert every_dt(h).times(t0, until)[-1] == until
+    assert worst <= 4
 
 
 # --- elaboration -------------------------------------------------------------------------------
