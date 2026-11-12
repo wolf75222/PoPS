@@ -42,7 +42,8 @@ _LATER = {
     "vector_field": ("no builder spells a value so: Local.vector_field returns a scalar_field of d "
                      "components, typed as a field leaf"),
     "field_topology": "lot 3 of phase 1 types the hierarchy value of a topology (DM13)",
-    "state_geometry": "lot 3 of phase 1 provides the geometry arrays from the plan (DM6)",
+    "state_geometry": ("G03 types it: the swept geometry of a moving state, held by the runtime "
+                       "and checked against its coordinate law (ALE: R26, D18, D21, probe M28)"),
     "csr": "lot 4 of phase 1 types it as a product of range-set arrays (DM4)",
     "mask": "phase 2 types it as an array of Bool with the one codec (DM4, CN11)",
 }
@@ -357,6 +358,56 @@ def _layout(value: Any, value_type: Any, placements: Placements, plan: Any) -> t
     return "Local", "every rank", "plan", unstated
 
 
+# DM5 (N10 lot 3, addendum §3): the general accesses of phase 1, with the input that carries
+# their index (``at`` and the local access take an index; the imports take requests or a CSR).
+_GENERAL_ACCESSES = {
+    "finite_at": 1, "distributed_local_at": 1, "distributed_import": 1,
+    "distributed_import_csr": 1, "distributed_scatter_reduce": 1,
+}
+_ARGUMENTS = frozenset(("finite_index_argument", "distributed_index_argument"))
+_ARRAY_READS = frozenset(_GENERAL_ACCESSES)
+# Op prefixes whose value depends on the run's state: a continuation, a solve or an attempt.
+_COMPUTED_PREFIXES = ("continuation_", "solve", "attempt_")
+
+
+def _provenance(carrier: Any, nodes: tuple[Any, ...]) -> str:
+    """IR8 provenance of an index: ``computed``, ``data`` or ``arithmetic``.
+
+    ``computed`` when the index depends on a field leaf, a continuation or a solve (the run's
+    state); ``data`` when it reads an array and none of those; ``arithmetic`` when it reads only
+    the argument, constants and integer operations.
+    """
+    from pops.time._graph.value_traversal import reachable_values
+
+    reached = reachable_values(carrier, nodes)
+    if any(is_field_leaf(value) or str(value.op).startswith(_COMPUTED_PREFIXES)
+           for value in reached):
+        return "computed"
+    if any(value.op in _ARRAY_READS for value in reached):
+        return "data"
+    return "arithmetic"
+
+
+def _general_accesses(values: tuple[Any, ...], layouts: dict[int, str]) -> list[dict[str, Any]]:
+    """One row per general access of the plan (DM5): its node, op, array, layout and provenance.
+
+    The array is the one the access reaches: the array read, or the array a scatter writes.
+    """
+    rows = []
+    for value in values:
+        position = _GENERAL_ACCESSES.get(value.op)
+        if position is None:
+            continue
+        carrier = value.inputs[position]
+        if carrier.op in _ARGUMENTS:
+            continue  # the index of the map itself: the identity, a typed access
+        array = value if value.op == "distributed_scatter_reduce" else value.inputs[0]
+        rows.append({"node": int(value.id), "op": value.op, "array": int(array.id),
+                     "layout": layouts.get(int(array.id), "untyped"),
+                     "provenance": _provenance(carrier, values)})
+    return rows
+
+
 def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
     """The manifest field ``data_layout_and_distribution`` (CC10) of a resolved plan."""
     try:
@@ -370,7 +421,8 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
     program = str(getattr(plan.time, "name", None) or "program")
     records = []
     # Every depth of the Program: the bodies of its control blocks hold field leaves too (T2).
-    for value in walk_program_nodes(plan.time._values):
+    nodes = tuple(walk_program_nodes(plan.time._values))
+    for value in nodes:
         try:
             value_type = ir_type(value, placements, program=program)
             layout, distribution, origin, residency = _layout(value, value_type, placements, plan)
@@ -382,11 +434,17 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
             node=int(value.id), spelling=value.vtype, role=_FIELD_ROLES.get(value.vtype), type=repr(value_type),
             layout=layout, distribution=distribution, origin=origin,
             residency=residency).to_data())
+    try:
+        accesses = _general_accesses(nodes, {row["node"]: row["layout"] for row in records})
+    except Exception as exc:  # noqa: BLE001 - A1: reported, never refused
+        accesses = [{"untyped": "%s: %s" % (type(exc).__name__, exc)}]
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "placements": {block: configuration.identity
                        for block, configuration in sorted(placements.configurations.items())},
         "values": records,
+        # DM5: no row is on Patches or LevelPatches; the builder refuses a field leaf there.
+        "general_accesses": accesses,
         "untyped": sum(1 for row in records if row["layout"] == "untyped"),
         "unplaced": unplaced,
     }

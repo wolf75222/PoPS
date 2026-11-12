@@ -174,3 +174,49 @@ def test_a_checkpoint_of_a_generated_decision_is_refused(decision_native_cache, 
     with collective_check(world):
         with pytest.raises(NotImplementedError, match="Regrid\\(criterion, when\\)"):
             runtime.checkpoint(directory / "decision.ckpt")
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_every_counts_the_accepted_steps_of_each_run(decision_native_cache) -> None:
+    """N8 « Ancrage des calendriers au départ du run », D6: ``B.steps`` of ``every(2)`` counts the
+    accepted steps of the run. ``pops.run`` starts a run, ``pops.step`` continues the current one.
+    Run 1 ends after an odd number n1 of steps (a ``pops.step`` after ``pops.run`` makes it odd if
+    needed, and continues its count); run 2 then regrids after its own 2nd, 4th, ... step, where
+    the global count would regrid after the odd ones."""
+    del decision_native_cache
+    _, world = native_profile(scope="regrid decision")
+    compiled, _ = _compiled(world, lambda names: every(2))
+    runtime = _bind(world, compiled)
+    executor = runtime._executor
+
+    def decision():
+        return tuple(collective_call(world, executor._last_regrid_decision))
+
+    def regrids():
+        return collective_call(world, lambda: runtime.amr.explain_regrid().regrid_count)
+
+    def macro_step():
+        return int(collective_call(world, runtime.macro_step))
+
+    collective_call(world, lambda: pops.run(runtime, t_end=0.03, console=False))
+    if macro_step() % 2 == 0:
+        collective_call(world, lambda: pops.step(runtime, t_bound=T_END))
+    n1, before = macro_step(), regrids()
+    with collective_check(world):
+        assert n1 % 2 == 1 and n1 >= 3
+        # pops.step continued run 1: its count is the run's, from the bind.
+        assert decision()[:2] == (n1, 0.0)
+    collective_call(world, lambda: pops.run(runtime, t_end=T_END, console=False))
+    n2 = macro_step() - n1
+    with collective_check(world):
+        assert n2 >= 4
+        assert decision()[:2] == (n2, float(n2 % 2 == 0))
+        # every(2) of the run: regrids after its steps 2, 4, ...: n2 // 2 of them. The global
+        # count, n1 odd, would decide on the other parity after every step of run 2.
+        assert regrids() - before == n2 // 2
+        assert decision()[1] != float((n1 + n2) % 2 == 0)
+        assert int(collective_call(world, executor._run_start_step)) == n1
+    collective_call(world, lambda: pops.step(runtime, t_bound=T_END + 0.05))
+    with collective_check(world):
+        assert decision()[0] == n2 + 1  # pops.step continues run 2
