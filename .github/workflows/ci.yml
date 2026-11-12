@@ -608,6 +608,11 @@ jobs:
       - name: MG9 bridges of pops.lib against the base
         run: python3 scripts/mg9_bridges.py check --check-base HEAD^1
 
+      # OD31 (vertical slice of the exit of phase 1): the pieces of the slice's case file that PoPS
+      # does not run yet follow the file, and the list records no more than its first parent.
+      - name: Vertical slice pieces against the base
+        run: python3 scripts/vertical_slice.py check --check-base HEAD^1
+
       - name: M2 temporal gate manifest
         run: python3 scripts/run_m2_gate.py --check-only
 

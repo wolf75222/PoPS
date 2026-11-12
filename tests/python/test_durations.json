@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1195,
+    "estimated_count": 1196,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7102,6 +7102,7 @@
       "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py",
       "tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py",
       "tests/python/integration/runtime/test_w11_child_trace_rollback.py",
+      "tests/python/integration/surface/test_vertical_slice_t02.py",
       "tests/python/unit/amr/test_accepted_halo_preparation.py",
       "tests/python/unit/amr/test_explicit_local_storage_authority.py",
       "tests/python/unit/amr/test_external_amr_providers.py",
@@ -8133,7 +8134,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1260,
+    "total_files": 1261,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8917,6 +8918,24 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py": "859d18725cee9625ac24a692900b9ac724bb9407c7cac1a20f0ab18d015c75cd",
         "tests/python/unit/surface/test_lot_d_step_rule.py": "9a9eb9a96f8e111f678014715bd906ae7d7b4f9350259def80235a7e3ae4d4b2"
+      }
+    },
+    "ci_20261112_vertical_slice": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only test of the vertical slice of the exit of phase 1 (OD31: master's tutorial 02 written in the surface), on the source-only tiers of api_v02_20261013 (5/15/60 s): 15 s, for the lint SU-T1 of the case file, the order of its registry and one run of the file in a fresh directory up to the first piece that PoPS does not run yet, before any compile, as the analogue test_su_t2_refusals.py. The local receipt comes from pytest on a 4-core container; it is not GitHub CI file wall time. When the registry is empty the test runs the file to its end, natively, and this estimate is replaced from a receipt.",
+      "analogues": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "tests/python/unit/surface/test_su_t2_refusals.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": 15
+      },
+      "local_receipts": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": {
+          "cases": 3,
+          "session_seconds": 4.46
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "eff7192ce05bc011a78bcd1dc4031a6034db79eb5b33e7e44e58448fc80d3652"
       }
     }
   },
@@ -10179,5 +10198,6 @@
   "tests/python/unit/surface/test_n3_lot1_library_words.py": 60,
   "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": 600,
   "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py": 600,
-  "tests/python/unit/surface/test_lot_d_step_rule.py": 60
+  "tests/python/unit/surface/test_lot_d_step_rule.py": 60,
+  "tests/python/integration/surface/test_vertical_slice_t02.py": 15
 }

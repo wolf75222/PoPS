@@ -1,0 +1,28 @@
+schema_version = 1
+gate = "vertical-slice"
+# The vertical slice of the exit of phase 1 (OD31; tranche/note_tranche_verticale.md): master's
+# tutorial 02 written in the surface, with its upwind flux and its SSPRK2 written in the case file.
+# Each [[piece]] is a construct of the case file that PoPS does not run yet, in the order in which
+# the file meets it: the statement of the file, the refusal that it raises (its type and the start
+# of its message, exactly), and the owner that lifts it. tests/python/integration/surface/
+# test_vertical_slice_t02.py runs the file and checks that it stops on the first piece, at its
+# statement, with its refusal. The list only shrinks (MG6): scripts/vertical_slice.py check
+# --check-base fails when it records a piece that the base does not. It is empty at the exit of
+# phase 1 (S1 to S6 of the note, section 5); the test then runs the file to its end.
+case = "examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py"
+
+# ghosts() is written with the surface in pops.lib.numerics.boundaries (N15 lot B, #774); the
+# package re-exports it with the switch to one API (docstring of pops.lib.numerics).
+[[piece]]
+id = "B-import"
+statement = "from pops.lib.numerics import muscl, vanleer, ghosts"
+refusal = "ImportError: cannot import name 'ghosts' from 'pops.lib.numerics'"
+owner = "N3 (ROM-87), the switch to one API: pops.lib.numerics re-exports ghosts()"
+
+# Piece C of the note: muscl and its limiters still have their b6 signature ([[earlier]] of
+# tests/gates/mg9_bridges.toml).
+[[piece]]
+id = "C"
+statement = "schemes={advection: upwind(reconstruction=muscl(limiter=vanleer))},"
+refusal = "TypeError: muscl() missing 1 required positional argument: 'rep'"
+owner = "N3 (ROM-87), lot 2: muscl(limiter=) and the limiters written with the surface"

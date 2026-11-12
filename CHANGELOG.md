@@ -18,6 +18,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- OD31 (vertical slice of the exit of phase 1): master's tutorial 02 written in the surface,
+  `examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py`, with its upwind
+  flux (in master's arithmetic) and its SSPRK2 written in the case file. The pieces that PoPS does
+  not run yet are listed in `tests/gates/vertical_slice.toml` in the order of the file (statement,
+  refusal, owner): `ghosts` imported from `pops.lib.numerics` (the switch of N3) and
+  `muscl(limiter=vanleer)` (N3 lot 2). `tests/python/integration/surface/test_vertical_slice_t02.py`
+  runs the file and checks that it stops on the first piece; the list only shrinks
+  (`scripts/vertical_slice.py check --check-base`, a step of the architecture job). The case is the
+  CF1 case `T02-slice` (frozen engine unchanged) and its directory is a case path of CF8.
 - ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
   from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
   `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the
