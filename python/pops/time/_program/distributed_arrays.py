@@ -27,7 +27,7 @@ from pops.time._program.structured_control import (
     failure_signature,
     success_signature,
 )
-from pops.time._program.finite_arrays import _record_body
+from pops.time._program.finite_arrays import _record_body, strict_access
 from pops.time._program.value_validation import require_owned, validate_input_regions
 from pops.time.variant_types import ValueType, Product, Int64, Variant, RuntimeFailure, instantiate
 
@@ -397,6 +397,7 @@ class Distributed:
             _capacity(byte_capacity)
             for item in (values, indices, domain, initial):
                 require_owned(p, item, "distributed scatter input")
+            strict_access(p, values, "distributed scatter")
             source = _distributed(values, "array")
             requests = _distributed(indices, "array")
             target = _distributed(domain, "index_set")
@@ -541,6 +542,7 @@ class Distributed:
         _require_local_region(p, "distributed local access")
         require_owned(p, array, "distributed local array")
         require_owned(p, index, "distributed local index")
+        strict_access(p, array, "distributed local access")
         a = _distributed(array, "array")
         i = _distributed(index, "index")
         if not same_signature(dict(a, vtype="index", element=None), dict(i, element=None)):
@@ -617,6 +619,7 @@ class Distributed:
         _capacity(byte_capacity)
         require_owned(p, source, "distributed source")
         require_owned(p, requests, "distributed requests")
+        strict_access(p, source, "distributed import")
         a = _distributed(source, "array")
         r = _distributed(requests, "array")
         transportable(a["element"])
@@ -687,6 +690,7 @@ class Distributed:
         p = self.program
         require_owned(p, source, "CSR source")
         require_owned(p, csr, "CSR incidence")
+        strict_access(p, source, "CSR import")
         a = _distributed(source, "array")
         c = _distributed(csr, "csr")
         _capacity(byte_capacity)

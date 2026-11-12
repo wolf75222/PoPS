@@ -444,3 +444,79 @@ def test_no_value_is_spelled_vector_field():
     assert not writes, writes
     local = (sources / "time" / "_program" / "local.py").read_text(encoding="utf-8")
     assert '"scalar_field", "vector_field", tuple(components)' in local
+
+
+# -- Lot 3a: DM5 strict mode on Patches (addendum of lot 3, §3) ---------------------------------
+
+def _general_accesses(module, builder):
+    import importlib
+
+    import pops
+    from pops._ir.data_model import data_layout_and_distribution
+
+    spec = getattr(importlib.import_module(module), builder)()
+    report = data_layout_and_distribution(pops.resolve(pops.validate(spec.case), layout=spec.layout))
+    assert report["schema_version"] == 4
+    return report["general_accesses"]
+
+
+@pytest.mark.parametrize("module, builder, ops, provenances", [
+    ("examples.api_v02.distributed_algebra_v14", "build_distributed_algebra",
+     {"distributed_scatter_reduce", "distributed_import_csr"}, {"arithmetic"}),
+    ("examples.api_v02.distributed_program_checks", "build_distributed_program",
+     {"distributed_import", "distributed_import_csr"}, {"arithmetic"}),
+    # The bridge's injection reads tables built from the topology during the run.
+    ("examples.api_v02.continuation_regrid_amr", "build_continuation_regrid_amr",
+     {"finite_at", "distributed_import"}, {"computed"}),
+])
+def test_the_plan_reports_every_general_access_and_none_reaches_patches(
+        module, builder, ops, provenances):
+    rows = _general_accesses(module, builder)
+    assert rows and {row["op"] for row in rows} == ops
+    assert {row["provenance"] for row in rows} == provenances
+    assert all(row["layout"] in ("Replicated", "Contiguous") for row in rows), rows
+    assert all(type(row["node"]) is int and type(row["array"]) is int for row in rows)
+
+
+def test_no_general_access_of_a_profile_reaches_patches():
+    from pops._ir.data_model import data_layout_and_distribution
+
+    seen = set()
+    for profile in ("M01", "M18", "T06", "T08"):
+        report = data_layout_and_distribution(_plan(profile))
+        assert report["schema_version"] == 4, profile
+        for row in report["general_accesses"]:
+            assert row["layout"] not in ("Patches", "LevelPatches"), (profile, row)
+            seen.add(row["op"])
+    assert seen  # the time methods index their finite tables (T06)
+
+
+def test_a_field_leaf_in_a_general_access_is_a_typed_dm5_refusal():
+    from pops._ir.refusals import GeneralAccessOnPatches
+    from pops.time._program.distributed_arrays import Distributed
+    from tests.python.unit.time.test_geometry_ssa import authoring
+
+    _, program, state, _, _ = authoring()
+    domain = program.range_set(3, capacity=3, ownership="replicated")
+    index = program.index(domain, program.int64(0))
+    indices = program.map(domain, lambda b, i: i)
+    before = len(program._values)
+    for access in (lambda: program.at(state.n, index),
+                   lambda: program.gather(state.n, indices),
+                   lambda: Distributed(program).import_values(state.n, indices, byte_capacity=8)):
+        with pytest.raises(GeneralAccessOnPatches, match="field leaf") as refused:
+            access()
+        # Still the TypeError that refused it before lot 3a, so its callers keep catching it.
+        assert isinstance(refused.value, TypeError) and isinstance(refused.value, ValueError)
+        assert refused.value.rule == "DM5" and "phase 1 has no request form" in str(refused.value)
+    assert len(program._values) == before
+
+
+def test_state_geometry_is_left_to_g03():
+    from pops._ir.data_model import _symbolic_placements, ir_type, value_kind
+    from tests.python.unit.time.test_geometry_ssa import authoring
+
+    _, _, _, geometry, _ = authoring()
+    assert geometry.vtype == "state_geometry" and value_kind(geometry) == "other"
+    reason = ir_type(geometry, _symbolic_placements()).reason
+    assert "G03" in reason and "lot 3" not in reason
