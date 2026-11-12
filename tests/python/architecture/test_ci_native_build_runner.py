@@ -136,6 +136,25 @@ def test_every_contract_difference_requests_rebuild(system, change):
     assert report["compiler_changed"] is (change == "compiler")
 
 
+def test_compiler_selector_must_still_resolve_to_the_built_binary(tmp_path):
+    first, second = tmp_path / "g++-13", tmp_path / "g++-14"
+    first.write_bytes(b"same compiler bytes")
+    second.write_bytes(b"same compiler bytes")
+    selector = tmp_path / "g++"
+    selector.symlink_to(first)
+    size, digest = tree.file_digest(str(first))
+    compiler = {"selector": str(selector), "path": str(first.resolve()), "size": size,
+                "sha256": digest}
+    built = {"compiler": compiler, "include_trees": []}
+    assert runner.compare(built, {"compiler": dict(compiler), "include_trees": []},
+                          snapshot=lambda root: {})["compiler_changed"] is False
+    selector.unlink()
+    selector.symlink_to(second)
+    # Same bytes, same recorded path on this runner: only the selector check sees it.
+    assert runner.compare(built, {"compiler": dict(compiler), "include_trees": []},
+                          snapshot=lambda root: {})["compiler_changed"] is True
+
+
 def test_record_must_describe_the_wheel_beside_it(system):
     (system["package"] / "pops-0.3.0-cp312-cp312-linux_x86_64.whl").write_bytes(b"other")
     with pytest.raises(ValueError, match="does not describe the wheel"):

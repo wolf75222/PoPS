@@ -166,8 +166,12 @@ def compare(built: dict, local: dict,
         else:
             differing.append({"root": root, "built": tree, "here": here})
     compiler_keys = ("path", "size", "sha256")
-    compiler_changed = any(built["compiler"].get(key) != local["compiler"].get(key)
-                           for key in compiler_keys)
+    selector = built["compiler"].get("selector")
+    # As the runtime verify does: the baked selector must still resolve to the baked binary.
+    compiler_changed = (any(built["compiler"].get(key) != local["compiler"].get(key)
+                            for key in compiler_keys)
+                        or type(selector) is not str
+                        or os.path.realpath(selector) != built["compiler"].get("path"))
     return {"compiler_changed": compiler_changed, "differing_roots": differing,
             "matching_roots": matching}
 
