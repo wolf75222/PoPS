@@ -23,7 +23,7 @@ from __future__ import annotations
 import math as _math
 from decimal import Decimal
 from fractions import Fraction
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from pops import math as _pm
@@ -182,7 +182,7 @@ class _RateSum:
 
     __slots__ = ("views", "linear", "_providers")
 
-    def __init__(self, views: list, linear: list = ()) -> None:
+    def __init__(self, views: Sequence[Any], linear: Sequence[Any] = ()) -> None:
         self.views = tuple(views)
         self.linear = tuple(linear)
         self._providers: tuple | None = None
@@ -202,7 +202,15 @@ class _RateSum:
     def linear_claims(self) -> Any:
         from pops.time._program.relations import LinearClaims
 
-        claims = [LinearClaims.of(provider.claims()) for provider in self.providers()]
+        claims = []
+        for provider in self.providers():
+            claim = LinearClaims.of(provider.claims())
+            if claim is None:
+                raise NotYetElaborated(
+                    "the linear map %r of a rate read at the unknown of a solve states no claims "
+                    "(symmetric, negative_semidefinite, proof, description; IR16)" % (provider,),
+                    "G10, the operator generated from the term, with the Newton solves of N9")
+            claims.append(claim)
         return LinearClaims(
             symmetric=all(claim.symmetric for claim in claims),
             negative_semidefinite=all(claim.negative_semidefinite for claim in claims),

@@ -192,12 +192,12 @@ def _scale_term(term: tuple, factor: Any, poly: tuple) -> tuple:
     return (term[0] * factor, _poly_mul(term[1], poly))
 
 
-def _lift(trace: Any, unknown: TracedUnknown | None, other: Any, where: str) -> TracedAffine:
+def _lift(trace: Any, unknown: TracedUnknown, other: Any, where: str) -> TracedAffine:
     """``other`` as an affine form in ``unknown``: an unknown, an affine form or a known field."""
     if isinstance(other, _Relational):
         other._same_trace_relational(trace, where)
         affine = other._as_affine()
-        if unknown is not None and affine._unknown is not unknown:
+        if affine._unknown is not unknown:
             raise NotYetElaborated(
                 "%s in two unknowns, %s and %s: a relation in several unknowns is elaborated by "
                 "%s" % (where, unknown.name, affine._unknown.name, _LATER))

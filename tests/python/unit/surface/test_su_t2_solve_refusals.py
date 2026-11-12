@@ -252,3 +252,20 @@ def test_cg_options_outside_this_lot_name_their_lot():
     for word in ("auto", "gmres", "bicgstab", "newton", "jacobi", "richardson", "dense_lu"):
         with pytest.raises(surface.NotYetElaborated, match="N9"):
             getattr(solve, word)()
+
+
+def test_a_linear_map_without_claims_is_refused():
+    """A linear map of a rate that states no claims cannot derive the properties of the operator
+    (IR16): the rate sum refuses it, naming G10, rather than reading claims that are not there."""
+    from pops.surface._elaborate import _RateSum
+
+    class Unclaimed:
+        def claims(self):
+            return None
+
+        def apply(self, P, value):
+            return value
+
+    rate = _RateSum([lambda state: state], [Unclaimed])
+    with pytest.raises(surface.NotYetElaborated, match="states no claims.*G10"):
+        rate.linear_claims  # noqa: B018
