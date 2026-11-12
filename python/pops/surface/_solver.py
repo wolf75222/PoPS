@@ -570,6 +570,7 @@ class _FieldApply:
         self.body = body
 
     def __call__(self, context: _Lowering, state: Any) -> Any:
+        from pops._ir.data_model import field_role
         from pops.fields import CellMidpoint
 
         program = context.program
@@ -581,7 +582,7 @@ class _FieldApply:
         out = program.scalar_field(context.fresh("apply_out"), like=operand)
         result = self.body(_RegionScratch(program, operand), out, operand)
         result = out if result is None else result
-        if getattr(result, "vtype", None) != "scalar_field":
+        if field_role(result) != "field":
             result = program.value(context.fresh("apply_result"), result, at=state.point)
         return program.cell_mean(result, template=state, quadrature=CellMidpoint(),
                                  name=context.fresh("apply"))

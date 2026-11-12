@@ -12,7 +12,6 @@ from collections.abc import Mapping
 from types import MappingProxyType
 import math
 import hashlib
-from pops._ir.data_model import is_finite_array, value_kind
 
 
 def _freeze_data(value):
@@ -74,6 +73,7 @@ class ScientificType:
 
     def __post_init__(self):
         from pops.model.spaces import Space
+        from pops._ir.data_model import is_finite_array, value_kind
         from pops._ir.quantity import PhysicalDimension
         from pops.time.variant_types import ValueType
         if type(self.finite_type) is not ValueType or not isinstance(self.space, Space):

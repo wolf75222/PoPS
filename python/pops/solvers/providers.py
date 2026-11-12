@@ -21,7 +21,6 @@ from pops.solvers._numeric import (
     exact_open_unit_real,
     optional_positive_int,
 )
-from pops._ir.data_model import field_role
 
 
 _HIERARCHY_PROVIDER_SCHEMA_VERSION = 1
@@ -915,6 +914,7 @@ def _author_composite_tensor_fac(
     name: Any,
     provider: PreparedHierarchySolverProvider,
 ) -> Any:
+    from pops._ir.data_model import field_role
     from pops.identity.scalar import scalar_literal
     from pops.fields._prepared_nullspace_registry import (
         PreparedNullspaceContracts,

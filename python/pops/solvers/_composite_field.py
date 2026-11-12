@@ -13,7 +13,6 @@ from .providers import (PreparedHierarchySolverProvider, PreparedHierarchySolver
     PreparedHierarchySolverUseFacts, PreparedHierarchyConvergenceContract,
     PreparedHierarchyFlatExecution, PreparedHierarchySolverNativeEmission,
     register_prepared_hierarchy_solver_provider)
-from pops._ir.data_model import field_role
 
 
 def _options(values, where):
@@ -52,6 +51,7 @@ def _validate(facts, operator, where):
 
 
 def _author(program, problem, prepared, name, provider):
+    from pops._ir.data_model import field_role
     from pops.linalg import LinearProblem
     from pops.fields._prepared_nullspace_registry import PreparedNullspaceContracts, prepared_nullspace_provider_from_identity
     from pops.time.values import _resolve_handle
