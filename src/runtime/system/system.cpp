@@ -30,9 +30,7 @@ namespace {
 /// run_advance with a step rule), set for the scope and restored on every exit.
 class StepFractionScope {
  public:
-  StepFractionScope(double& slot, double fraction) : slot_(slot), prior_(slot) {
-    slot_ = fraction;
-  }
+  StepFractionScope(double& slot, double fraction) : slot_(slot), prior_(slot) { slot_ = fraction; }
   ~StepFractionScope() { slot_ = prior_; }
   StepFractionScope(const StepFractionScope&) = delete;
   StepFractionScope& operator=(const StepFractionScope&) = delete;
@@ -297,9 +295,8 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
   // A run continues the segment that the last compiled run left at this cursor with this
   // proposal; any other run starts one, as master's FixedDt grid does.
   // A run with a step rule has no fixed-proposal segment: each step starts its own below.
-  if (rule == nullptr &&
-      (segment.macro_step != static_cast<std::int64_t>(p_->macro_step_) ||
-       segment.time != p_->t || segment.proposal != proposal))
+  if (rule == nullptr && (segment.macro_step != static_cast<std::int64_t>(p_->macro_step_) ||
+                          segment.time != p_->t || segment.proposal != proposal))
     segment = {proposal, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
   if (rule != nullptr)
     segment = {0.0, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
@@ -347,8 +344,8 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
       step_proposal = select_step_(rule->fraction, rule->speed_floor, rule->max_dt, 0.0);
       segment = {step_proposal, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
     }
-    const auto duration = runtime::program::advance_attempt_duration(
-        p_->t, step_proposal, frontier, segment.origin, segment.steps);
+    const auto duration = runtime::program::advance_attempt_duration(p_->t, step_proposal, frontier,
+                                                                     segment.origin, segment.steps);
     if (rule != nullptr && (duration.lands || duration.dt != step_proposal))
       p_->last_dt_reason_ = "frontier";  // cut or landed by the frontier (review P1)
     // The attempts of a rule run at its fraction, as step_cfl's execution does: a path rhs checks
@@ -1095,8 +1092,7 @@ void System<Dim>::rollback_restart_transaction() {
 }
 
 template <int Dim>
-double System<Dim>::step_cfl(double fraction, double speed_floor, double max_dt,
-                             double min_dt) {
+double System<Dim>::step_cfl(double fraction, double speed_floor, double max_dt, double min_dt) {
   const double selected = select_step_(fraction, speed_floor, max_dt, min_dt);
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   {

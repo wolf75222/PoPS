@@ -1224,10 +1224,11 @@ void bind_system_stepping(py::class_<System>& cls) {
       // One compiled run of the installed Advance; the interpreter only receives its counters.
       .def(
           "_run_advance",
-          [speed_floor](System& system, double until, double proposal, std::int64_t max_steps,
-             const std::vector<std::tuple<std::int64_t, std::vector<double>,
-                                          std::vector<std::string>>>& outputs,
-             const std::optional<std::pair<double, double>>& rule) {
+          [speed_floor](
+              System& system, double until, double proposal, std::int64_t max_steps,
+              const std::vector<
+                  std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>& outputs,
+              const std::optional<std::pair<double, double>>& rule) {
             std::vector<pops::runtime::program::AdvanceOutputSchedule> schedule;
             schedule.reserve(outputs.size());
             for (const auto& [every_steps, at, arrays] : outputs)
@@ -1236,8 +1237,8 @@ void bind_system_stepping(py::class_<System>& cls) {
             // none; its floor is step_cfl's default.
             std::optional<pops::runtime::program::AdvanceStepRule> step_rule;
             if (rule)
-              step_rule = pops::runtime::program::AdvanceStepRule{rule->first, rule->second,
-                                                                  speed_floor};
+              step_rule =
+                  pops::runtime::program::AdvanceStepRule{rule->first, rule->second, speed_floor};
             const auto report = system.run_advance(until, proposal, max_steps, schedule,
                                                    step_rule ? &*step_rule : nullptr);
             py::list samples;
