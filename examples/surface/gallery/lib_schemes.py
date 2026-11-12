@@ -118,7 +118,7 @@ def muscl(cell, term, axis, limiter):
     centre = cell.value(q)
     backward = centre - cell.shift(axis, -1).value(q)
     forward = cell.shift(axis, 1).value(q) - centre
-    return Reconstruct(centre + limiter(backward, forward) / 2)
+    return Reconstruct(centre + 0.5 * limiter(backward, forward))
 
 
 def minmod(a, b):

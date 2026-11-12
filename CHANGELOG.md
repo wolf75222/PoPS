@@ -22,8 +22,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py`, with its upwind
   flux (in master's arithmetic) and its SSPRK2 written in the case file. The pieces that PoPS does
   not run yet are listed in `tests/gates/vertical_slice.toml` in the order of the file (statement,
-  refusal, owner): `ghosts` imported from `pops.lib.numerics` (the switch of N3) and
-  `muscl(limiter=vanleer)` (N3 lot 2). `tests/python/integration/surface/test_vertical_slice_t02.py`
+  refusal, owner): `ghosts` imported from `pops.lib.numerics` (the switch of N3);
+  `muscl(limiter=vanleer)` left the list with N3 lot 2 (#795).
+  `tests/python/integration/surface/test_vertical_slice_t02.py`
   runs the file and checks that it stops on the first piece; the list only shrinks
   (`scripts/vertical_slice.py check --check-base`, a step of the architecture job). The case is the
   CF1 case `T02-slice` (frozen engine unchanged) and its directory is a case path of CF8.
@@ -37,6 +38,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
   sliver step at a frontier, when a CFL step ends within four ulp short of it or when
   `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-89 (N8, « Ancrage des calendriers au départ du run », spec §5.2): a schedule counts from
+  the start of each run. `every(time=h)` publishes at `t0 + k h`, computed exactly from the run's
+  start `t0` and rounded once, and `every(steps=k)` counts the accepted steps of the run, for an
+  Output as for `Regrid(criterion, every(k))` (the AMR hierarchy keeps the step its run started
+  at; `pops.run` starts a run, `pops.step` continues the current one). A lattice time within four
+  ulp of `until`, below or above, is published at `until`; this also applies to a first run,
+  where a lattice time a few ulp above `until` used to be dropped (lists keep the one-sided rule,
+  four ulp below). A later run
+  of the surface off the lattice of the first one is no longer refused, and no publication is
+  repeated at the time and step where the previous run ended. Rows and identities are unchanged.
 - ROM-98 (N15, lot D-E, part D): `dt=cfl_limit(flux, cfl=, max_dt=None)` (spec 0.3, 2.6.2,
   2.6.9, SD44, SD70; OD31). `from pops.lib.time import cfl_limit`;
   `pops.Advance(method, dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2))` elaborates onto N8's

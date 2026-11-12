@@ -198,6 +198,8 @@ class AmrSystem(
         prepared_run.begin(
             self._temporal_restart_state, time=self._s.time(), macro_step=self._s.macro_step()
         )
+        # A run of its own: a Regrid's every(k) counts its accepted steps from here (D6).
+        self._s._mark_run_start()
         from pops.runtime._run_manifest import begin_run
 
         begin_run(

@@ -53,7 +53,7 @@ def test_the_registry_of_the_tree_holds():
     registry = gate.read(ROOT)
     assert registry["case"] == \
         "examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py"
-    assert [piece["id"] for piece in registry["piece"]] == ["B-import", "C"]
+    assert [piece["id"] for piece in registry["piece"]] == ["B-import"]
 
 
 def test_the_pieces_follow_the_order_of_the_case_file(tmp_path):

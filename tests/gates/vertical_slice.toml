@@ -18,11 +18,3 @@ id = "B-import"
 statement = "from pops.lib.numerics import muscl, vanleer, ghosts"
 refusal = "ImportError: cannot import name 'ghosts' from 'pops.lib.numerics'"
 owner = "N3 (ROM-87), the switch to one API: pops.lib.numerics re-exports ghosts()"
-
-# Piece C of the note: muscl and its limiters still have their b6 signature ([[earlier]] of
-# tests/gates/mg9_bridges.toml).
-[[piece]]
-id = "C"
-statement = "schemes={advection: upwind(reconstruction=muscl(limiter=vanleer))},"
-refusal = "TypeError: muscl() missing 1 required positional argument: 'rep'"
-owner = "N3 (ROM-87), lot 2: muscl(limiter=) and the limiters written with the surface"
