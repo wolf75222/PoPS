@@ -135,14 +135,14 @@ def test_one_not_in_span_keeps_rate_weights_and_loses_load_weights():
     assert isinstance(weights, Unknown) and "1 is not in the span" in weights.reason
     # the inventory is formed: MeasureMissing is not raised (delta 5); a conservation claim on
     # the balance is ConservationNotStructural's (IR17), not this lot's
-    assert inventory_weights("u", odd) == ({},)
+    assert inventory_weights("u", odd, layout=None) == ({},)
 
 
 def test_measure_missing_when_no_measure():
     nomeasure = RepresentationDefinition(decode=coefficients[0], rank=1, measure="none")
     assert isinstance(nomeasure.rate_weights(), Unknown)
     with pytest.raises(MeasureMissing) as refused:
-        inventory_weights("u", nomeasure)
+        inventory_weights("u", nomeasure, layout=None)
     assert "MeasureMissing (D4, validate)" in str(refused.value)
     assert "no measure" in str(refused.value)
     assert refused.value.representation == nomeasure.identity
@@ -152,7 +152,7 @@ def test_measure_missing_when_not_normalizable_and_no_rule():
     opaque = RepresentationDefinition(decode=coefficients[0] * call("exp", point.reference[0]),
                                       rank=1)
     with pytest.raises(MeasureMissing):
-        inventory_weights("u", opaque)
+        inventory_weights("u", opaque, layout=None)
     ruled = RepresentationDefinition(decode=coefficients[0] * call("exp", point.reference[0]),
                                      rank=1, pairing=GL2)
     reason = ruled.rate_weights()
@@ -179,14 +179,14 @@ def test_only_the_two_triggers_of_delta_5_are_measure_missing():
         weights = definition.rate_weights()
         assert isinstance(weights, Unknown) and weights.family == LATER_LOT, case
         with pytest.raises(NotYetElaborated, match="N16 lot 2|G08") as refused:
-            inventory_weights("u", definition)
+            inventory_weights("u", definition, layout=None)
         assert not isinstance(refused.value, MeasureMissing), case
     # normalizable but not linear in the coefficients, no rule: no basis, so MeasureMissing, with
     # the reason the delta reads as « not normalizable »
     square = RepresentationDefinition(decode=coefficients[0] * coefficients[0], rank=1)
     with pytest.raises(MeasureMissing, match="not linear in the coefficients, and the "
                                              "representation states no rule"):
-        inventory_weights("u", square)
+        inventory_weights("u", square, layout=None)
 
 
 def _n17_layout(builder):
@@ -214,6 +214,19 @@ def test_moments_of_the_reference_box_are_refused_on_a_chart():
     assert inventory_weights("u", modal, layout=graded) == modal.rate_weights()
     for one_mode in (cell_average(2), cell_total(2), point_value(2)):
         assert inventory_weights("u", one_mode, layout=annulus) == one_mode.rate_weights()
+
+
+def test_the_configuration_is_a_required_keyword_of_the_inventory():
+    """Review of #789 at c7f55b7a, A1: the non-affine guard cannot be skipped by omission. A caller
+    that forgets ``layout=`` is refused; one with no configuration writes ``layout=None`` and so
+    states that the reference-box moments are the weights."""
+    modal = RepresentationDefinition(decode=coefficients[0] + coefficients[1] * point.reference[0],
+                                     rank=1, size=2, pairing=GL2)
+    with pytest.raises(TypeError, match="layout"):
+        inventory_weights("u", modal)  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="layout"):
+        inventory_weights("u", cell_total(1))  # type: ignore[call-arg]
+    assert inventory_weights("u", modal, layout=None) == modal.rate_weights()
 
 
 def test_a_moving_map_is_not_affine():
@@ -325,7 +338,7 @@ def test_a_point_read_inside_an_opaque_atom_is_seen(body):
     weights = definition.rate_weights()
     assert isinstance(weights, Unknown) and weights.family == NO_EXACT_FORM
     with pytest.raises(MeasureMissing, match="states no rule"):
-        inventory_weights("u", definition)
+        inventory_weights("u", definition, layout=None)
     with pytest.raises(ValueError, match="encode is required"):
         RepresentationDefinition(decode=coefficients[0], rank=1, carrier="node")
 
