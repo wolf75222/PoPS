@@ -31,10 +31,26 @@ module = "pops.lib.numerics.ghost_laws"
 route = "pops.boundary.transport.Inflow, pops.boundary.transport.Outflow"
 owner = "G04, the ghost fills generated from the body of the boundary policy (N15)"
 
+# The step rule cfl_limit() of N15 lot D-E, part D (#788), accepted as a bridge by the pilot's
+# ruling (driver, 12/11) and counted in the exit list of phase 1: its value subclasses the
+# surface's StepRuleValue and realizes N8's compiled StepRule paired with b6's AdaptiveCFL of the
+# same fraction and cap. The bridge carries the refusal of dt= as a function of cell; N8 removes
+# the entry when it elaborates dt= as a function of cell (the step rules of 5.11 written with the
+# surface, 2.6.9), and cfl_limit is then written with the surface.
+[[bridge]]
+word = "cfl_limit"
+module = "pops.lib.time.limits"
+route = "pops.time.AdaptiveCFL, through the compiled StepRule of N8 (StepRuleValue)"
+owner = "N8, which elaborates dt= as a function of cell (the step rules of 5.11 written with the surface), before the exit of phase 1"
+refusal = "tests/python/unit/surface/test_lot_d_step_rule.py::test_a_function_of_cell_is_still_a_later_step_rule"
+exit_test = "the slice's case with dt= a function of cell written with the surface, against the steps of cfl_limit(advection, cfl=0.45, max_dt=1e-2) under Simulation.run"
+
+# N3 lot 2: muscl and the four limiters are written with the surface in pops.lib.numerics.limiters;
+# the b6 Reconstruct and weno5 stay until lot 3.
 [[earlier]]
-modules = ["pops.lib.numerics.reconstructions", "pops.lib.numerics.limiters"]
-words = ["Reconstruct", "mc", "minmod", "muscl", "superbee", "vanleer", "weno5"]
-owner = "N3 (ROM-87), lot 2 (muscl and the limiters) and lot 3 (weno5)"
+modules = ["pops.lib.numerics.reconstructions"]
+words = ["Reconstruct", "weno5"]
+owner = "N3 (ROM-87), lot 3 (weno5)"
 
 [[earlier]]
 modules = ["pops.lib.numerics.face_flux"]

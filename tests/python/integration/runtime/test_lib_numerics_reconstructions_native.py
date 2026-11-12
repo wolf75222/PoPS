@@ -8,7 +8,9 @@ up to t = 0.2. Each row compiles it twice, with the native
 being master's ``riemann.ScalarUpwind`` in both so that the reconstruction is the only
 difference, and runs both artifacts from the same initial state. The two runs take the same steps
 and reach the same time; their final states agree to rounding, and their L1 and L-infinity
-differences and bitwise equality are recorded. The ``weno5`` row does the same with the native
+differences and bitwise equality are recorded. Since N3 lot 2 ``muscl`` and the limiters are the
+b6 bodies of ``examples/api_v02/b6_reconstructions.py`` (D5), which the words of the surface equal
+node for node (``tests/python/unit/surface/test_n3_lot2_muscl.py``). The ``weno5`` row does the same with the native
 ``reconstruction.WENO5()`` and ``weno5(U)``.
 
 The tutorial with a Python face flux as well is not a row here: under the tutorial's AdaptiveCFL
@@ -28,7 +30,7 @@ from pops.boundary.transport import Inflow, Outflow
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
-from pops.lib.numerics import mc, minmod, muscl, superbee, vanleer, weno5
+from pops.lib.numerics import weno5
 from pops.math import ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -40,6 +42,8 @@ from pops.time import AdaptiveCFL, StagePoint, TimePoint
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.public_native_profile import compile_profile_plan_once, native_profile
+
+from examples.api_v02.b6_reconstructions import mc, minmod, muscl, superbee, vanleer
 
 # The constants of master's tutorial 02.
 NX, NY = 64, 64

@@ -107,10 +107,10 @@ def schema_cpp(signature, block_idx, *, roles=None, path=()):
                 edges.append(cursor["edge"])
                 cursor = cursor["parent"]
             contract = _field_contract(node, (*path, *reversed(edges)), roles)
-        native = {"bool": "Boolean", "int64": "Int64", "scalar": "Float64",
-                  "product": "Product", "variant": "Variant", "array": "Array",
-                  "index_set": "Domain", "index": "Index", "state": "Field",
-                  "rhs": "Field", "scalar_field": "Field"}[kind]
+        # The kind decides « Field »; the table only encodes the other spellings (N10 R1).
+        native = "Field" if is_field_leaf(kind) else {
+            "bool": "Boolean", "int64": "Int64", "scalar": "Float64", "product": "Product",
+            "variant": "Variant", "array": "Array", "index_set": "Domain", "index": "Index"}[kind]
         if is_finite_index(kind) and node.get("ownership") == "contiguous_distributed":
             native = "Distributed" + native
         dependencies = []

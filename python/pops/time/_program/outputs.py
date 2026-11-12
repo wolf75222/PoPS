@@ -3,10 +3,13 @@
 ``Output(value, when=None, at=None, write=None)`` describes what a run publishes after the
 publications of its accepted steps. ``value(B, interval)`` is a closed body (T33) of the accepted
 continuation ``B``; it returns a ``Product`` of arrays and scalars. ``when=every(k)`` makes the
-Output due after each publication whose accepted macro step is a multiple of k; ``at`` is a tuple
-of physical times or ``every_dt(dt)``, the times k * dt, k = 1, 2, ..., and each of these times is
-a frontier that the run lands on (CC14). A run evaluates each of its Outputs once at its start,
-on the state from which it starts, then after each publication that is due, once for that
+Output due after the k-th, 2k-th, ... accepted step of each run, counted from the start of the run
+(spec 5.2); ``at`` is a tuple of physical times or ``every_dt(dt)``, the times t0 + k dt,
+k = 1, 2, ..., of each run, t0 the start of the run, and each of these times is a frontier that
+the run lands on (CC14). Both schedules are anchored at the start of each run (N8 lot « Ancrage des
+calendriers au départ du run »): on the first run, from t0 = 0, they are b6's lattice and b6's
+step count. A run evaluates each of its Outputs once at its start, on the state from which it
+starts (index 0 of both schedules), then after each publication that is due, once for that
 publication, with the achieved time of the publication.
 
 ``elaborate`` traces each ``value`` once, into a read-only region of the builder, as it traces
@@ -25,7 +28,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from decimal import Decimal, localcontext
+from fractions import Fraction
 from typing import Any
 
 from pops.time._program.product import Product
@@ -34,6 +37,28 @@ from pops.time.values import ProgramValue
 
 _OUTPUT_READONLY_OPS = frozenset({"state", "reduce", "scalar_op"})
 """Operations of a record: the accepted state, its cell reductions and scalar arithmetic."""
+
+
+LANDING_ULPS = 4.0
+"""The landing tolerance at ``until``, in units of ``max(ulp(time), ulp(until))``: master's merge of
+a deadline into the end of its run, and the bound derived for the anchored times (design note of
+the lot, section 2.4: the roundings of t0 + k h and of a t0 and an ``until`` written as a literal,
+a sum of two literals or a multiple of the step)."""
+
+
+def landing(time: float, until: float, *, anchored: bool) -> float | None:
+    """Where a run to ``until`` puts the output time ``time`` (design note of the lot, D5).
+
+    ``until`` when ``time`` lands on it: within ``LANDING_ULPS`` below it, or, for an anchored
+    time (``every_dt``), within ``LANDING_ULPS`` above it too; ``time`` itself when it lies before
+    ``until`` and does not land; ``None`` when it lies after ``until`` and belongs to a later run.
+    A listed time is absolute, so the merge stays one-sided for it, as in master: a later run
+    lands on it. An anchored time is not inherited: the next run anchors at its own start.
+    """
+    unit = LANDING_ULPS * max(math.ulp(time), math.ulp(until))
+    if time <= until:
+        return until if until - time <= unit else time
+    return until if anchored and time - until <= unit else None
 
 
 def _time(value: Any, where: str) -> float:
@@ -48,8 +73,9 @@ def _time(value: Any, where: str) -> float:
 class Every:
     """``every(k)``: a ``when`` body that is true after each k-th accepted step (CC14, DM13b).
 
-    The count is the accepted macro step of the publication, as b6's ``Every`` reads its
-    accepted-step coordinate: a later run continues the cadence of the earlier one.
+    The count is the accepted steps of the run, from its start (spec 5.2): the Output is due after
+    the k-th, 2k-th, ... accepted step of each run, and at its start. On the first run it is b6's
+    count of accepted macro steps; a later run counts again from its own start.
     """
 
     __slots__ = ("steps",)
@@ -73,11 +99,14 @@ class Every:
 
 
 class EveryDt:
-    """``every_dt(dt)``: the output times k * dt, k = 1, 2, ..., each a frontier (CC14).
+    """``every_dt(dt)``: the output times t0 + k * dt, k = 1, 2, ..., of each run, t0 the start of
+    the run, each a frontier (CC14, spec 2.6.2).
 
-    The time of index k is the binary64 rounding of k times the shortest decimal spelling of
-    ``dt``, as b6's ``EveryDt`` lattice (``_every_dt_lattice_time``): ``every_dt(0.1)`` lands on
-    the binary64 value written ``0.3``, not on ``3 * 0.1``.
+    The time of index k is the binary64 value nearest to the exact rational
+    ``dec(t0) + k * dec(dt)``, rounded once, ``dec(x)`` the shortest decimal spelling of ``x``
+    (Python's ``repr``). From t0 = 0 it is b6's ``EveryDt`` lattice (``_every_dt_lattice_time``):
+    ``every_dt(0.1)`` lands on the binary64 value written ``0.3``, not on ``3 * 0.1``. A run from
+    t0 = 0.25 lands on 0.35, 0.45, ...: the numbers the user reads.
     """
 
     __slots__ = ("dt",)
@@ -100,37 +129,36 @@ class EveryDt:
     def __repr__(self) -> str:
         return "every_dt(%r)" % self.dt
 
-    def time(self, index: int) -> float:
-        with localcontext() as context:
-            context.prec = 50
-            return float(Decimal(repr(self.dt)) * index)
+    def time(self, index: int, start: float = 0.0) -> float:
+        """The time of ``index`` in a run that starts at ``start``: ``dec(start) + index *
+        dec(dt)``, rounded once (index 0 is ``start`` itself, since ``repr`` round-trips)."""
+        return float(Fraction(repr(start)) + Fraction(repr(self.dt)) * index)
 
-    def times(self, after: float, until: float) -> tuple[float, ...]:
-        """The times of the lattice that are after ``after`` and not after ``until``."""
-        quotient = after / self.dt
-        if not math.isfinite(quotient):
-            raise ValueError("every_dt(%r) is below the binary64 resolution of the clock at t=%r"
-                             % (self.dt, after))
-        index = max(1, math.floor(quotient))
-        # The rounded quotient is within a few indices of the first time after `after`, unless
-        # the lattice is below the resolution of the clock there.
-        for _ in range(4):
-            if self.time(index) > after:
-                break
-            index += 1
-        else:
-            raise ValueError("every_dt(%r) is below the binary64 resolution of the clock at t=%r"
-                             % (self.dt, after))
-        times = []
+    def times(self, start: float, until: float) -> tuple[float, ...]:
+        """The times of a run from ``start`` to ``until``: the indices 1, 2, ... as ``landing``
+        places them, up to the first that belongs to a later run. A time that lands is ``until``
+        and is the last; a landed time that is not after ``start`` is dropped."""
+        if not math.isfinite(start) or not math.isfinite(until):
+            raise ValueError("every_dt(%r) needs a finite run, from t=%r to t=%r"
+                             % (self.dt, start, until))
+        times: list[float] = []
+        previous, index = start, 1
         while True:
-            value = self.time(index)
-            if not math.isfinite(value) or value > until:
+            try:
+                value = self.time(index, start)
+            except OverflowError:
                 return tuple(times)
-            if times and not value > times[-1]:
+            if not value > previous:
                 raise ValueError("every_dt(%r) is below the binary64 resolution of the clock "
                                  "at t=%r" % (self.dt, value))
-            times.append(value)
-            index += 1
+            landed = landing(value, until, anchored=True)
+            if landed is None:
+                return tuple(times)
+            if landed > start:
+                times.append(landed)
+            if landed == until:
+                return tuple(times)
+            previous, index = value, index + 1
 
 
 def every(k: int) -> Every:
@@ -139,7 +167,8 @@ def every(k: int) -> Every:
 
 
 def every_dt(dt: Any) -> EveryDt:
-    """``every_dt(dt)``: the times k * dt, k = 1, 2, ..., for the ``at`` of an Output."""
+    """``every_dt(dt)``: the times t0 + k * dt, k = 1, 2, ..., of each run, for the ``at`` of an
+    Output."""
     return EveryDt(dt)
 
 
@@ -342,7 +371,11 @@ class OutputRegion:
         return rows
 
     def schedule_data(self) -> dict[str, Any]:
-        """The schedule and the record shape that the compiled control publishes."""
+        """The schedule and the record shape that the compiled control publishes.
+
+        The rows are the schedule as written, ``{"every": k}`` and ``{"every_dt": h}``; both count
+        from the start of each run (k accepted steps of the run, t0 + k h), so the rows and the
+        Program identity do not hold the anchoring (design note of the lot, D3)."""
         at = self.output.at
         return {
             "when": None if self.output.when is None else {"every": self.output.when.steps},
