@@ -40,10 +40,12 @@ module = "pops.lib.numerics.ghost_laws"
 route = "pops.boundary.transport.Inflow, pops.boundary.transport.Outflow"
 owner = "G04, the ghost fills generated from the body of the boundary policy (N15)"
 
+# N3 lot 2: muscl and the four limiters are written with the surface in pops.lib.numerics.limiters;
+# the b6 Reconstruct and weno5 stay until lot 3.
 [[earlier]]
-modules = ["pops.lib.numerics.reconstructions", "pops.lib.numerics.limiters"]
-words = ["Reconstruct", "mc", "minmod", "muscl", "superbee", "vanleer", "weno5"]
-owner = "N3 (ROM-87), lot 2 (muscl and the limiters) and lot 3 (weno5)"
+modules = ["pops.lib.numerics.reconstructions"]
+words = ["Reconstruct", "weno5"]
+owner = "N3 (ROM-87), lot 3 (weno5)"
 
 [[earlier]]
 modules = ["pops.lib.numerics.face_flux"]
