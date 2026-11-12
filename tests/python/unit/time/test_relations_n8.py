@@ -124,7 +124,8 @@ def test_the_solve_takes_the_request_of_the_proposal_and_the_path_of_the_method(
     (site,) = elaboration.trace.solves
     assert site.request is REQUEST and site.path == "imex" and site.spd
     rows = [json.loads(row) for row in elaboration.control.trial_failures]
-    assert rows[-1] == {"site": "imex/solve", "guard": "solve", "variant": "SolveFailed",
+    assert rows[-1] == {"site": "imex/solve", "guard": "solve",
+                        "variant": ["BudgetExhausted", "SolveFailed"],
                         "retry_can_change": True, "classified": True, "lot": None}
 
 

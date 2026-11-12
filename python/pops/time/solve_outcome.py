@@ -94,6 +94,23 @@ _SOLVE_FAILURES = {
 FILTERED_SOLVE_STATUSES = ("singular", "breakdown", "iteration_limit")
 
 
+# The variants of T39 that a solve site of a traced method can report (§3.6): a row of the compiled
+# control lists them, and a rejected attempt maps its status through the table.
+SOLVE_SITE_VARIANTS = ("BudgetExhausted", "SolveFailed")
+
+
+def solve_status_variant(status: str) -> str | None:
+    """The variant of T39 that a solve site reports for an attempt rejected with ``status``, or
+    None when no row of the table rejects an attempt with it: ``iteration_limit`` gives
+    ``BudgetExhausted``, every other rejected status ``SolveFailed`` (SV10). The table holds one
+    variant per status, whatever the source, so the status alone decides."""
+    variants = {row.variant for row in _SOLVE_FAILURES.values()
+                if row.status == status and row.variant is not None}
+    if len(variants) > 1:
+        raise RuntimeError("the table of solve failures gives %r two variants" % status)
+    return variants.pop() if variants else None
+
+
 def solve_failure_disposition(source: str, status: str) -> SolveFailureDisposition:
     """The row of the table of solve failures for a failure of ``source`` (``"body"``, the
     realization's own failure, or ``"gate"``, the SV8 gate of the problem) with ``status``."""
@@ -313,7 +330,8 @@ class FieldSolveOutcome(SolveOutcome):
 
 __all__ = [
     "FILTERED_SOLVE_STATUSES", "FailRun", "FieldSolveOutcome", "RejectAttempt",
-    "ResidualSolution", "SOLVE_EVIDENCE_FIELDS", "SOLVE_STATUSES", "SolveAction",
-    "SolveEvidence", "SolveFailureDisposition", "SolveOutcome", "native_realization",
-    "solve_failure_disposition", "solve_realization_kind",
+    "ResidualSolution", "SOLVE_EVIDENCE_FIELDS", "SOLVE_SITE_VARIANTS", "SOLVE_STATUSES",
+    "SolveAction", "SolveEvidence", "SolveFailureDisposition", "SolveOutcome",
+    "native_realization", "solve_failure_disposition", "solve_realization_kind",
+    "solve_status_variant",
 ]

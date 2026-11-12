@@ -406,3 +406,82 @@ def test_the_candidate_names_the_fields_of_its_evidence():
 
     with pytest.raises(TypeError, match="residual_norm=...\\) takes a field of the result"):
         _program(literal_norm().with_request(rtol=1e-8, atol=0.0))
+
+
+# The variants at a trial site (N9 « La référence sous les solves de relation » §3.6, ruled Q3):
+# the run report carries the rejected status typed, the row of the compiled control lists what the
+# site can report, and the run maps the status through the table of solve failures.
+
+def _sites_control():
+    from pops.time._program.control import AdvanceControl
+
+    return AdvanceControl(
+        assessments=(("finite", "default"),), max_attempts=2, max_transforms=0, first_dt=0.001,
+        trial_failures=(
+            {"site": "m/solve", "guard": "solve", "variant": ["BudgetExhausted", "SolveFailed"],
+             "retry_can_change": False, "classified": True, "lot": None},
+            {"site": "m/positive", "guard": "admissibility", "variant": ["NotAdmissible"],
+             "retry_can_change": True, "classified": True, "lot": None},
+            {"site": "m/load", "guard": "field_evaluation", "variant": [],
+             "retry_can_change": False, "classified": False, "lot": "later"}))
+
+
+def test_the_status_of_a_rejected_solve_gives_its_variant_through_the_table():
+    from pops.time.solve_outcome import SOLVE_SITE_VARIANTS, solve_status_variant
+
+    assert SOLVE_SITE_VARIANTS == ("BudgetExhausted", "SolveFailed")
+    assert solve_status_variant("iteration_limit") == "BudgetExhausted"
+    for status in ("breakdown", "singular", "safeguard_failure", "invalid_evaluation"):
+        assert solve_status_variant(status) == "SolveFailed"
+    for status in ("solved", "capability_failure", "invalid_input", "inadmissible_candidate"):
+        assert solve_status_variant(status) is None
+
+
+@pytest.mark.parametrize("site, status, variant", [
+    ("m/solve", "iteration_limit", "BudgetExhausted"),
+    ("m/solve", "breakdown", "SolveFailed"),
+    ("m/solve", "singular", "SolveFailed"),
+    ("m/solve", "safeguard_failure", "SolveFailed"),
+    ("m/solve", "invalid_evaluation", "SolveFailed"),
+    ("m/positive", "invalid_evaluation", "NotAdmissible"),
+])
+def test_a_trial_site_reports_the_variant_of_its_status(site, status, variant):
+    from pops.runtime import _simulation
+
+    assert _simulation._trial_variant(_sites_control(), site, status) \
+        is _simulation._VARIANTS[variant]
+
+
+@pytest.mark.parametrize("site, status, message", [
+    ("m/solve", "capability_failure", "does not list"),
+    ("m/solve", "", "does not list"),
+    ("m/positive", "iteration_limit", "does not list"),
+    ("m/load", "invalid_evaluation", "no classified row"),
+    ("m/other", "breakdown", "no classified row"),
+])
+def test_a_status_that_the_row_does_not_list_is_an_error(site, status, message):
+    from pops.runtime import _simulation
+
+    with pytest.raises(RuntimeError, match=message):
+        _simulation._trial_variant(_sites_control(), site, status)
+
+
+def test_a_fixed_site_whose_solve_reaches_its_iteration_limit_names_its_budget():
+    from pops.runtime._simulation import BudgetExhausted, SolveFailed, _trial_failure
+
+    report = {"rejection_phase": "trial_failure", "rejection_status": "iteration_limit",
+              "rejection_detail": "m/solve failed: iteration limit"}
+    failure = _trial_failure(_sites_control(), report, time=0.5, attempts=1)
+    assert failure.variant is BudgetExhausted and failure.origin == "trial"
+    assert dict(failure.payload) == {"site": "m/solve", "reason": "iteration limit", "time": 0.5,
+                                     "attempts": 1, "budget": "max_iterations"}
+    described = failure.describe()
+    assert described.startswith("BudgetExhausted: the solve of the fixed failure site m/solve")
+    assert "max_iterations" in described and "iteration limit" in described
+    # As the cause of a spent attempt budget: no attempts of its own.
+    cause = _trial_failure(_sites_control(), dict(report, rejection_phase="trial"))
+    assert cause.describe() == ("BudgetExhausted at the trial site m/solve: its solve reached "
+                                "max_iterations: iteration limit")
+    broken = _trial_failure(_sites_control(), dict(report, rejection_status="breakdown"),
+                            time=0.5, attempts=1)
+    assert broken.variant is SolveFailed and "budget" not in broken.payload

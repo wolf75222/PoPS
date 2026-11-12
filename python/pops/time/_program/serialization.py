@@ -368,6 +368,10 @@ class _ProgramSerialization(_ProgramBase):
                 # Version 33: the step rule of an Advance (N8 « Règle de pas compilée »):
                 # control schema 4, whose proposal is the rule.
                 _raise_ir_version(result, 33)
+            if advance_control.trial_failures:
+                # Version 35: the failure sites of a traced method list their variants (N9 « La
+                # référence sous les solves de relation » §3.6): control schema 5.
+                _raise_ir_version(result, 35)
         cadence = self.cadence_contract()
         if not cadence.is_default:
             result["cadence"] = cadence.to_data()

@@ -12,11 +12,12 @@ case pass on both, the step counts are equal, and the final state and the slot o
 Through ``Simulation.run``, M08's ``continuation.memory`` reads those rings; it is undefined
 before the first accepted step (CN6) and superseded by a later run. With a lowered CG budget,
 M08's stage-0 solve, whose dependency set excludes the proposal, is a fixed failure site: the run
-raises ``SolveFailed`` tagged ``trial`` after one attempt, with no rejection counted. As the budget
-grows, the failing site moves to the stage-1 solve, which reads the proposal: a retryable site,
-whose rejections spend ``Retry.max_attempts`` and end in ``BudgetExhausted`` tagged ``trial``,
-caused by the ``SolveFailed`` of the last attempt (T38, design note O14). Both leave the accepted
-state and the macro step of the step.
+raises ``BudgetExhausted`` tagged ``trial`` with the budget ``max_iterations`` after one attempt,
+with no rejection counted (SV10; ``SolveFailed`` until N9 « La référence sous les solves de
+relation » §3.6). As the budget grows, the failing site moves to the stage-1 solve, which reads the
+proposal: a retryable site, whose rejections spend ``Retry.max_attempts`` and end in
+``BudgetExhausted`` tagged ``trial``, caused by the ``BudgetExhausted`` (``max_iterations``) of the
+last attempt (T38, design note O14). Both leave the accepted state and the macro step of the step.
 """
 import numpy as np
 import pytest
@@ -179,7 +180,10 @@ def test_failure_sites_are_fixed_at_stage_zero_and_retryable_at_stage_one(
     for attempts in (1, 3):
         error = _failure(world, monkeypatch, 1, attempts)
         failure = error.result.failure
-        assert type(error) is SolveFailed and failure.variant is SolveFailed
+        # SV10: a solve that reaches its iteration limit ends as BudgetExhausted, whose budget is
+        # the solve's (N9 « La référence sous les solves de relation » §3.6, ruled Q3).
+        assert type(error) is BudgetExhausted and failure.variant is BudgetExhausted
+        assert failure.payload["budget"] == "max_iterations"
         assert failure.origin == "trial" and failure.payload["site"] == SITE % 0
         assert failure.payload["attempts"] == 1 and error.result.rejections == 0
         assert error.result.steps == 0
@@ -187,7 +191,7 @@ def test_failure_sites_are_fixed_at_stage_zero_and_retryable_at_stage_one(
     # solve converges and the stage-1 solve, which reads the proposal, is the failing site.
     for max_iter in (2, 3):
         error = _failure(world, monkeypatch, max_iter, 3)
-        if type(error) is SolveFailed:
+        if error.result.failure.payload["budget"] == "max_iterations":
             assert error.result.failure.payload["site"] == SITE % 0
             continue
         break
@@ -198,6 +202,7 @@ def test_failure_sites_are_fixed_at_stage_zero_and_retryable_at_stage_one(
         assert type(spent) is BudgetExhausted and failure.origin == "trial"
         assert failure.payload["attempts"] == attempts == spent.result.rejections
         cause = failure.payload["cause"]
-        assert cause.variant is SolveFailed and cause.origin == "trial"
+        assert cause.variant is BudgetExhausted and cause.origin == "trial"
+        assert cause.payload["budget"] == "max_iterations"
         assert cause.payload["site"] == SITE % 1
         assert SITE % 1 in failure.payload["rejection"] and cause.payload["reason"]

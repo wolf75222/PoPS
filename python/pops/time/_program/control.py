@@ -27,13 +27,24 @@ ADVANCE_CONTROL_MEMORY_SCHEMA = "pops.advance-control@3"
 always present. ``memory`` lists each member (T27, CN1): its path, role, type identity, writer,
 readers and ring; ``trial_failures`` lists each failure site of a field request and whether a
 retry can change it (T38), the sites that no lot classifies yet with the lot that will, and each
-admissibility guard of the method body (IR4, N8 lot 6), whose variant is ``NotAdmissible``."""
+admissibility guard of the method body (IR4, N8 lot 6), whose variant is ``NotAdmissible``.
+A control with a failure site records schema 5 since N9 « La référence sous les solves de
+relation », so a record of schema 3 holds memory and no site."""
 
 ADVANCE_CONTROL_STEP_RULE_SCHEMA = "pops.advance-control@4"
 """Schema of ``AdvanceControl.to_data`` for an Advance whose proposals a step rule chooses (N8 lot
 « Règle de pas compilée »): schema 3, whose ``proposal`` is ``{"rule": "stability", "fraction": ...}`` with
 ``max_dt`` when the rule has one, instead of ``{"dt": ...}``. Only a Program with a rule records
 it, so the record and the identity of every Program without one are unchanged."""
+
+ADVANCE_CONTROL_TRIAL_VARIANTS_SCHEMA = "pops.advance-control@5"
+"""Schema of ``AdvanceControl.to_data`` for an Advance with a failure site (N9 « La référence
+sous les solves de relation » §3.6): the keys of schemas 3 and 4, whose ``trial_failures`` rows
+list in ``variant`` the variants of T39 that the site can report (``["BudgetExhausted",
+"SolveFailed"]`` for a solve, ``["NotAdmissible"]`` for an admissibility guard, ``[]`` for a site
+that no lot classifies yet). Its ``proposal`` is either shape, ``{"dt"}`` or the rule of schema 4.
+Only a control with a failure site records it: a control with memory and no site keeps schema 3,
+a control with a rule and no site keeps schema 4."""
 
 ADVANCE_ASSESSMENT_CONTRACT = "pops.advance-assessment@1"
 """Attribute of an acceptance guard that is an assessment of an Advance: its rejection is raised
@@ -85,7 +96,7 @@ class AdvanceControl:
         object.__setattr__(self, "outputs", _outputs(outputs))
         object.__setattr__(self, "memory", _rows(memory, _MEMORY_KEYS, "memory"))
         object.__setattr__(self, "trial_failures",
-                           _rows(trial_failures, _TRIAL_KEYS, "trial failure"))
+                           _trial_rows(_rows(trial_failures, _TRIAL_KEYS, "trial failure")))
         object.__setattr__(self, "step_rule", step_rule)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -104,6 +115,8 @@ class AdvanceControl:
 
     @property
     def schema(self) -> str:
+        if self.trial_failures:
+            return ADVANCE_CONTROL_TRIAL_VARIANTS_SCHEMA
         if self.step_rule is not None:
             return ADVANCE_CONTROL_STEP_RULE_SCHEMA
         if self.memory or self.trial_failures:
@@ -118,7 +131,7 @@ class AdvanceControl:
             "retry": {"max_attempts": self.max_attempts, "max_transforms": self.max_transforms},
             "proposal": self._proposal_data(),
         }
-        full = schema in (ADVANCE_CONTROL_MEMORY_SCHEMA, ADVANCE_CONTROL_STEP_RULE_SCHEMA)
+        full = schema in _FULL_SCHEMAS
         if self.outputs or full:
             data["outputs"] = _thaw(self.outputs)
         if full:
@@ -144,8 +157,7 @@ class AdvanceControl:
                 data.get("schema") == ADVANCE_CONTROL_SCHEMA and set(data) == keys
                 or data.get("schema") == ADVANCE_CONTROL_OUTPUTS_SCHEMA
                 and set(data) == keys | {"outputs"}
-                or data.get("schema") in (ADVANCE_CONTROL_MEMORY_SCHEMA,
-                                          ADVANCE_CONTROL_STEP_RULE_SCHEMA)
+                or data.get("schema") in _FULL_SCHEMAS
                 and set(data) == keys | {"outputs", "memory", "trial_failures"}):
             raise ValueError("Advance control record has another schema")
         accept, retry, proposal = data["accept"], data["retry"], data["proposal"]
@@ -154,10 +166,13 @@ class AdvanceControl:
             raise ValueError("Advance control record has malformed assessments")
         if not isinstance(retry, dict) or set(retry) != {"max_attempts", "max_transforms"}:
             raise ValueError("Advance control record has a malformed retry budget")
-        ruled = data["schema"] == ADVANCE_CONTROL_STEP_RULE_SCHEMA
         if not isinstance(proposal, dict) or any(type(value) is not str
                                                  for value in proposal.values()):
             raise ValueError("Advance control record has a malformed proposal")
+        # Schema 5 admits both proposals; the canonical check below refuses a rule under schema
+        # 3 and a dt under schema 4, as their own branches do.
+        ruled = (data["schema"] == ADVANCE_CONTROL_STEP_RULE_SCHEMA
+                 or data["schema"] == ADVANCE_CONTROL_TRIAL_VARIANTS_SCHEMA and "rule" in proposal)
         if ruled and (set(proposal) not in ({"rule", "fraction"}, {"rule", "fraction", "max_dt"})
                       or proposal["rule"] != "stability") or not ruled and set(proposal) != {"dt"}:
             raise ValueError("Advance control record has a malformed proposal")
@@ -176,8 +191,27 @@ class AdvanceControl:
         return control
 
 
+_FULL_SCHEMAS = (ADVANCE_CONTROL_MEMORY_SCHEMA, ADVANCE_CONTROL_STEP_RULE_SCHEMA,
+                 ADVANCE_CONTROL_TRIAL_VARIANTS_SCHEMA)
 _MEMORY_KEYS = frozenset(("path", "role", "type", "writer", "readers", "ring"))
 _TRIAL_KEYS = frozenset(("site", "guard", "variant", "retry_can_change", "classified", "lot"))
+# The variants that a row lists, by the guard of its site (§3.6).
+_TRIAL_VARIANTS = {"solve": ["BudgetExhausted", "SolveFailed"],
+                   "admissibility": ["NotAdmissible"], "field_evaluation": []}
+
+
+def _trial_rows(rows: tuple) -> tuple:
+    """Check that each failure site lists the variants of its guard, and that a site is classified
+    exactly when it lists one (schema 5)."""
+    for row in _thaw(rows):
+        expected = _TRIAL_VARIANTS.get(row["guard"])
+        if expected is None or row["variant"] != expected \
+                or row["classified"] is not bool(expected):
+            raise ValueError(
+                "the AdvanceControl failure site %r (%s) lists the variants %r; its guard lists %r, "
+                "classified when it lists one" % (row["site"], row["guard"], row["variant"],
+                                                  expected))
+    return rows
 
 
 def _rows(rows: Any, keys: frozenset, what: str) -> tuple:
@@ -254,5 +288,6 @@ def _outputs(outputs: Any) -> tuple:
 
 __all__ = ["ADVANCE_ASSESSMENT_CONTRACT", "ADVANCE_CONTROL_MEMORY_SCHEMA",
            "ADVANCE_CONTROL_OUTPUTS_SCHEMA",
-           "ADVANCE_CONTROL_SCHEMA", "ADVANCE_CONTROL_STEP_RULE_SCHEMA", "AdvanceControl",
+           "ADVANCE_CONTROL_SCHEMA", "ADVANCE_CONTROL_STEP_RULE_SCHEMA",
+           "ADVANCE_CONTROL_TRIAL_VARIANTS_SCHEMA", "AdvanceControl",
            "memory_rings"]

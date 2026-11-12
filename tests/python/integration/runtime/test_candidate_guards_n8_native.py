@@ -176,13 +176,16 @@ def test_a_retry_keeps_the_solve_of_its_fixed_site(
             solved["last_prepared_solve_iterations"], _bits(solved))
     # The sabotage proof: a reuse that zeroes the kept solution is caught. The stage-1 solve of
     # the second attempt then reads another right-hand side and converges, so the first step is
-    # accepted with a wrong potential, and the second step fails at its stage-0 solve: neither
-    # the outcome nor the last residual is the one of the honest reuse.
+    # accepted with a wrong potential, and the second step fails at its stage-0 solve, a fixed
+    # site, by its iteration limit (BudgetExhausted at every solve site, SV10; N9 « La référence
+    # sous les solves de relation », Q3): neither the step nor the last residual is the one of the
+    # honest reuse.
     spec, _, simulation = _m08(world, monkeypatch, 3, max_iter, sabotage=True)
     wrong = failed(spec, simulation)
     with collective_check(world):
-        assert type(wrong) is SolveFailed and wrong.result.steps == 1
+        assert type(wrong) is BudgetExhausted and wrong.result.steps == 1
         assert wrong.result.failure.payload["site"].endswith("flow#0/live_Poisson/solve")
+        assert wrong.result.failure.payload["budget"] == "max_iterations"
         assert (type(wrong), wrong.result.steps, _bits(wrong.result.diagnostics["native"])) != (
             type(error), error.result.steps, _bits(native))
     # The same step accepted: every attempt is the first of its step, and solves both stages.

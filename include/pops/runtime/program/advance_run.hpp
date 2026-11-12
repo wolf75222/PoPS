@@ -108,6 +108,7 @@ struct AdvanceRunReport {
   std::string rejection;             ///< diagnostic of the last rejected attempt, empty when none
   std::string rejection_phase;       ///< phase of that rejection: assessment, trial, trial_failure
   std::string rejection_detail;      ///< its detail; a trial site starts with the site name
+  std::string rejection_status;      ///< its solve status name (solve_status_name), empty when none
   std::int64_t prepared_solves = 0;  ///< prepared linear solves that ran, every attempt included
   /// The iteration count and final residual norm of the last of them; -1 and NaN without one.
   std::int64_t last_prepared_solve_iterations = -1;

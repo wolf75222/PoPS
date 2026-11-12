@@ -200,7 +200,8 @@ def test_l1d_solve_takes_the_key_of_the_method_and_fails_the_attempt(l1d):
     assert site.path == "imex_euler" and site.spd
     assert advance.control.max_attempts == 2
     rows = [json.loads(row) for row in advance.control.trial_failures]
-    assert {"site": "imex_euler/solve", "guard": "solve", "variant": "SolveFailed",
+    assert {"site": "imex_euler/solve", "guard": "solve",
+            "variant": ["BudgetExhausted", "SolveFailed"],
             "retry_can_change": True, "classified": True, "lot": None} in rows
     # T34: the increment derives from the relation, h E(u) + h I(X), I at the stage of the solve.
     described = advance.trace.describe()

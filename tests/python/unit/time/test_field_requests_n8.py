@@ -36,7 +36,7 @@ from pops.fields.problem import FieldProblem
 from pops.problem.handles import FieldHandle
 from pops.time import FailRun
 from pops.time._program import field_requests
-from pops.time._program.control import ADVANCE_CONTROL_MEMORY_SCHEMA, AdvanceControl
+from pops.time._program.control import ADVANCE_CONTROL_TRIAL_VARIANTS_SCHEMA, AdvanceControl
 from pops.time._program.elaboration import Advance, Proposal, elaborate
 from pops.time._program.memory import Auxiliary, State, declared_memory
 from pops.time._program.outputs import Output, Product
@@ -229,7 +229,9 @@ def test_field_profile_authors_the_b6_program(profile, monkeypatch):
         member.replace("stage1", "stage0") for member in members))
     b6_ir = json.loads(canonical_json(b6._serialize(include_provenance=False)))
     traced_ir = json.loads(canonical_json(traced._serialize(include_provenance=False)))
-    assert traced_ir["version"] == 32 and b6_ir["version"] < 30
+    # The failure sites of the requests list their variants: control schema 5, IR 35 (N9 « La
+    # référence sous les solves de relation » §3.6; schema 3 and IR 32 until then).
+    assert traced_ir["version"] == 35 and b6_ir["version"] < 30
     b6_rows = {row["name"]: row for row in b6_ir["histories"]}
     assert [row for row in traced_ir["histories"]] == [b6_rows[member] for member in
                                                       sorted(members)]
@@ -268,7 +270,7 @@ def test_field_profile_authors_the_b6_program(profile, monkeypatch):
                     "version"):
             ir.pop(key, None)
     control = traced_ir.pop("advance_control")
-    assert control["schema"] == ADVANCE_CONTROL_MEMORY_SCHEMA
+    assert control["schema"] == ADVANCE_CONTROL_TRIAL_VARIANTS_SCHEMA
     assert [row["ring"] for row in control["memory"]] == list(members)
     _consume_actions(b6_ir, FailRun().to_data(), None)
     _consume_actions(traced_ir, RejectAttempt().to_data(), _sites(profile))
@@ -517,10 +519,11 @@ def test_the_stage_zero_request_is_a_fixed_site(profile, monkeypatch):
                         for site in _sites(profile)]
     solves = [row for row in control.to_data()["trial_failures"] if row["guard"] == "solve"]
     assert [(row["site"], row["retry_can_change"], row["variant"], row["classified"])
-            for row in solves] == [(site["site"], site["retry_can_change"], "SolveFailed", True)
+            for row in solves] == [(site["site"], site["retry_can_change"],
+                                    ["BudgetExhausted", "SolveFailed"], True)
                                    for site in _sites(profile)]
     guards = [row for row in control.to_data()["trial_failures"] if row["guard"] != "solve"]
-    assert guards and all(row["guard"] == "field_evaluation" and row["variant"] is None
+    assert guards and all(row["guard"] == "field_evaluation" and row["variant"] == []
                           and not row["classified"]
                           and row["lot"] == "N8 field_evaluation guards" for row in guards)
     assert AdvanceControl.from_data(control.to_data()) == control
