@@ -28,6 +28,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
   sliver step at a frontier, when a CFL step ends within four ulp short of it or when
   `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-98 (N15, lot « solves »): `pops.unknown`, `pops.solve`, `pops.Tolerance`,
+  `Advance(tolerance=)` and `Program(solvers=)` of spec 0.3, 2.6.7, `cg()` in `pops.lib.solve`
+  (a bridge of MG9 on b6's native conjugate gradients) and `imex_euler` in
+  `pops.lib.time.methods`. A traced method of N8 writes the shape of section 5.5
+  (`unknowns`, `Problem`, `solve(request=p.request)`, `require_success`); the relation is affine
+  in its one unknown, the solve path is the name of the method unless `name=` states one, the
+  request comes from the proposal (SV3), the guess is the state at the start of the attempt and a
+  failed solve fails the attempt (T38). The operator's symmetry and sign derive from the claims of
+  its components (IR16), and `cg()` refuses an operator they do not prove SPD with
+  `PropertyNotDerived` (K4). `two_point()` states its linear map, kappa times b6's Laplacian, on a
+  uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
+  until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
+  case written by hand for b6 and N8 (program IR, artifact, identity, C++).
 - ROM-98 (N15, lot D-E, part E): the projection of an analytic initial value (spec 0.3, 2.6.2,
   CN12, SU9; OD31). `initial={u: pops.project(e, quadrature=Q)}` averages e over each cell by
   the rule Q (one `pops.Quadrature` or one per axis) mapped onto the cell, and

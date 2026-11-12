@@ -704,6 +704,22 @@ class SolverDefinition:
         self.function = function
         self.options = {name: parameter.default for name, parameter in parameters.items()
                         if name not in _ENTITIES}
+        self.relation_native: Any = None
+        self.requires: tuple = ()
+        self.relation_description: str | None = None
+
+    def bind_relation_native(self, native: Any, *, requires: tuple, description: str) -> Any:
+        """The bound native that a relation solve of a traced method runs under this solver
+        (N15 lot « solves », §5.5): ``native(options, request)`` gives its b6 descriptor and
+        ``requires`` the properties of the operator that it needs (IR16, K4). A bridge of MG9
+        until the N9 lot « La référence sous les solves de relation » runs the reference there.
+        """
+        if not callable(native):
+            raise TypeError("bind_relation_native(native, ...) takes native(options, request)")
+        self.relation_native = native
+        self.requires = tuple(requires)
+        self.relation_description = description
+        return self
 
     @surface_entry
     def __call__(self, *args: Any, **options: Any) -> SolverValue:
@@ -757,6 +773,30 @@ class SolverValue:
 
     def build_program_solve(self, *, program: Any, problem: Any, name: Any = None) -> Any:
         return lower_solver(self, program, problem, name)
+
+    # The protocol of a relation solve of a traced method (N15 lot « solves », §5.5): the
+    # properties of the operator that the solver needs, and the bound native that it runs.
+
+    @property
+    def requires(self) -> tuple:
+        """The properties of the operator that this solver needs (IR16): the relation solve
+        refuses an operator that its claims do not derive with ``PropertyNotDerived`` (K4)."""
+        return self.definition.requires
+
+    def linear_solver(self, *, request: Any) -> Any:
+        """The b6 descriptor that a relation solve runs under this solver, with its request."""
+        native = self.definition.relation_native
+        if native is None:
+            raise NotYetElaborated(
+                "%r under a relation solve of a traced method, whose operator only the bound "
+                "native of cg() solves in this lot" % (self,),
+                "the N9 lot « La référence sous les solves de relation »")
+        return native(self.options, request)
+
+    def describe(self) -> str:
+        description = self.definition.relation_description
+        return "%r, the reference of @pops.solver%s" % (
+            self, "" if description is None else "; a relation solve runs %s" % description)
 
     def __repr__(self) -> str:
         return "%s(%s)" % (self.definition.function.__name__,

@@ -23,7 +23,7 @@ from __future__ import annotations
 import math as _math
 from decimal import Decimal
 from fractions import Fraction
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from pops import math as _pm
@@ -39,6 +39,7 @@ from pops.physics import Model as _Model
 from pops.problem import Case as _Case
 from pops.projection import ConservativeCellAverage
 from pops.time._program import elaboration as _n8
+from pops.time._program import relations as _relations
 
 from ._expr import Arith, Call, Predicate, is_number, text
 from ._geometry import FRAME_AXES, Box, Coordinate, MathConstant
@@ -51,7 +52,7 @@ from ._model import _sign as _derived_sign
 from ._numerics import Numerics, SchemeValue, TermView
 from ._refusal import (
     AmbiguousElaboration, CoverageNotExact, MissingBoundaryRealization, NotYetElaborated,
-    SurfaceRefusal,
+    SurfaceRefusal, UnknownSolvePath,
 )
 
 _LATER = "a later lot of N15"
@@ -189,17 +190,55 @@ def _number(value: Any) -> Any:
 
 
 class _RateSum:
-    """A rate option of a method: the sum of the selections of its terms, in balance order."""
+    """A rate option of a method: the sum of the selections of its terms, in balance order.
 
-    __slots__ = ("views",)
+    At an unknown of a solve, the rate is read as the linear map that the schemes of its terms
+    state (``linear_apply`` and ``linear_claims``, the lot « solves »): each term asks its scheme
+    for the map when a relation reads it, never before, so that an explicit method never needs one.
+    """
 
-    def __init__(self, views: list) -> None:
+    __slots__ = ("views", "linear", "_providers")
+
+    def __init__(self, views: Sequence[Any], linear: Sequence[Any] = ()) -> None:
         self.views = tuple(views)
+        self.linear = tuple(linear)
+        self._providers: tuple | None = None
 
     def __call__(self, state: Any) -> Any:
         result = self.views[0](state)
         for view in self.views[1:]:
             result = result + view(state)
+        return result
+
+    def providers(self) -> tuple:
+        if self._providers is None:
+            self._providers = tuple(linear() for linear in self.linear)
+        return self._providers
+
+    @property
+    def linear_claims(self) -> Any:
+        from pops.time._program.relations import LinearClaims
+
+        claims = []
+        for provider in self.providers():
+            claim = LinearClaims.of(provider.claims())
+            if claim is None:
+                raise NotYetElaborated(
+                    "the linear map %r of a rate read at the unknown of a solve states no claims "
+                    "(symmetric, negative_semidefinite, proof, description; IR16)" % (provider,),
+                    "G10, the operator generated from the term, with the Newton solves of N9")
+            claims.append(claim)
+        return LinearClaims(
+            symmetric=all(claim.symmetric for claim in claims),
+            negative_semidefinite=all(claim.negative_semidefinite for claim in claims),
+            proof="; ".join(claim.proof for claim in claims),
+            description=" + ".join(claim.description for claim in claims))
+
+    def linear_apply(self, P: Any, value: Any) -> Any:
+        providers = self.providers()
+        result = providers[0].apply(P, value)
+        for provider in providers[1:]:
+            result = result + provider.apply(P, value)
         return result
 
 
@@ -212,6 +251,8 @@ class _Elaboration:
         self.rows: list = []
         self.values: dict = {}
         self.names: dict = {}
+        self.linear: dict = {}
+        self.layout_facts: dict = {}
         self.params: dict = {}
         self.lowered_outputs: tuple = ()
 
@@ -495,6 +536,9 @@ class _Elaboration:
                                                       slope=slope, unit_flux=speed,
                                                       lower=self.lower))
                 plan.rates.add(view, realization)
+                self.linear[term] = self._linear(scheme, TermView(
+                    term, terms[term], states[term.quantity], slope=slope, unit_flux=speed,
+                    lower=self.lower), balance)
                 choices = [Choice("scheme", scheme, "stated")]
                 choices.extend(Choice("option %s" % name, value, origin)
                                for name, value, origin in getattr(scheme, "option_choices",
@@ -513,6 +557,23 @@ class _Elaboration:
                                  "ConservativeCellAverage()" % quantity,
                                  [Choice("representation", "pops.CellAverage()", "stated")]))
         return plan, selections
+
+    def _linear(self, scheme: Any, view: TermView, balance: Balance) -> Any:
+        """The linear map of the rate of a term, asked of its scheme when a solve reads it."""
+        weight = next(-coefficient if isinstance(term, DiffusiveFlux) else coefficient
+                      for term, coefficient in balance.occurrences if term is view.term)
+
+        def linear() -> Any:
+            operator = getattr(scheme, "linear_operator", None)
+            if operator is None:
+                raise NotYetElaborated(
+                    "the term %s under %r read at the unknown of a solve: its scheme states no "
+                    "linear map; this lot solves a two_point() diffusion of a constant "
+                    "coefficient" % (view.term, scheme),
+                    "G10, the operator generated from the term, with the Newton solves of N9",
+                    site=view.site)
+            return operator(view, weight=weight, layout=self.layout_facts)
+        return linear
 
     # The program.
 
@@ -541,7 +602,8 @@ class _Elaboration:
                         "the term %s is integrated twice by the method %s" % (term, value.name),
                         write="each term in one rate option of %s" % value.name, site=value.site)
                 covered.append(term)
-            components[name] = _RateSum([selections[term] for term in chosen])
+            components[name] = _RateSum([selections[term] for term in chosen],
+                                        [self.linear[term] for term in chosen])
         for balance in model.balances:
             for term in balance.terms:
                 if not any(term is other for other in covered):
@@ -561,30 +623,80 @@ class _Elaboration:
         retry = _n8.Retry() if advance.attempts is None else _n8.Retry(
             max_attempts=advance.attempts)
         (quantity,) = states
+        request = None if advance.tolerance is None else advance.tolerance.request()
+        realization = self.realization(value)
         outputs = self.outputs(block)
         try:
             elaboration = _n8.elaborate(_n8.Advance(specialized, retry=retry), case=case6,
                                         state=block[states[quantity]],
-                                        proposal=_n8.Proposal(float(advance.dt)),
-                                        outputs=outputs)
+                                        proposal=_n8.Proposal(float(advance.dt), request=request),
+                                        realization=realization, outputs=outputs)
         except Exception as error:
             translated = translate(error, trace)
             if translated is error:
                 raise
+            if isinstance(translated, SurfaceRefusal) and isinstance(
+                    error, (_relations.UnknownSolvePath, _relations.MissingRequest)):
+                translated.site = self.program.site
+                translated.args = (translated._message(),)
             raise translated.with_traceback(None) from None
         self.rows.append(Row(
             repr(advance), "program",
             "elaborate(Advance(%s(%s), retry=Retry(max_attempts=%d)), case=case, state=block[%s], "
-            "proposal=Proposal(%r)), the traced method of N8"
+            "proposal=Proposal(%r%s)%s), the traced method of N8"
             % (value.name, ", ".join(components), retry.max_attempts, quantity.name,
-               float(advance.dt)),
+               float(advance.dt), "" if request is None else ", request=%r" % (request,),
+               "" if not realization else ", realization={%s}" % ", ".join(
+                   "%r: %r" % item for item in realization.items())),
             [Choice("method", "%s, %d evaluations of its rates"
                     % (value.name, len(elaboration.trace.evaluations)), "stated"),
              Choice("dt", advance.dt, "stated"),
              Choice("attempts", retry.max_attempts,
                     "default" if advance.attempts is None else "stated"),
-             Choice("accept", "finite()", "default")]))
+             Choice("accept", "finite()", "default")]
+            + ([Choice("tolerance", advance.tolerance, "stated")]
+               if advance.tolerance is not None else [])))
+        for site in elaboration.trace.solves:
+            self.rows.append(self.solve_row(value, site))
         return elaboration
+
+    def realization(self, value: MethodValue) -> dict:
+        """The realization of N8 that ``solvers=`` states: a method keys every solve of its
+        attempt, ``method.name`` the solve named ``name`` (2.6.2, 5.5)."""
+        realization: dict = {}
+        for key, solver in self.program.solvers:
+            method = key if isinstance(key, MethodValue) else key.method
+            if method is not value:
+                raise UnknownSolvePath(
+                    "the key %r of solvers= names no solve: the advance runs %r" % (key, value),
+                    write="solvers={%s: solver}, keyed by the method of the advance"
+                          % value.name, site=self.program.site)
+            path = "%s/*" % value.name if isinstance(key, MethodValue) \
+                else "%s/%s" % (value.name, key.name)
+            realization[path] = solver
+        return realization
+
+    def solve_row(self, value: MethodValue, site: Any) -> Row:
+        """The row of ``pops.inspect`` of a solve of the method (5.5, K5)."""
+        request = site.request
+        claims = "; ".join("%s: %s" % (name, claim.description) for name, claim in site.claims)
+        proofs = "; ".join(claim.proof for _, claim in site.claims)
+        return Row(
+            "pops.solve(...) in %s" % value.name, "program",
+            "solve(Problem(unknowns=unknowns(U=B.state.space), equations=(rel,)), request=%r%s), "
+            "then require_success: LinearProblem(matrix_free_operator a I + sum_k b_k L_k, "
+            "initial_guess=B.state), solver %s"
+            % (request, "" if site.name is None else ", name=%r" % site.name,
+               site.solver.describe()),
+            [Choice("path", site.path, "derived" if site.name is None else "stated"),
+             Choice("request", request, "stated"),
+             Choice("guess", "the state at the start of the attempt (SV3)", "derived"),
+             Choice("solver", site.solver, "stated"),
+             Choice("implicit operator", claims, "derived"),
+             Choice("SPD certificate", "derived (IR16) from the substituted operator, until "
+                    "IR16 derives it from the face blocks (§17.1): %s" % proofs if site.spd
+                    else "not derived", "derived"),
+             Choice("failure", "SolveFailed fails the attempt (T38)", "derived")])
 
     def outputs(self, block: Any) -> tuple:
         """The Outputs of N8 of the case's outputs, in their order (CC14; lot G)."""
@@ -893,6 +1005,8 @@ class _Elaboration:
         support = self.support()
         relations = self.boundaries(support)
         frame = self.frame(support)
+        self.layout_facts = {"uniform": True, "cartesian": True,
+                             "periodic": all(support.periodic(axis) for axis in support._names)}
         b6 = _Model(model.name, frame=frame)
         self.rows.insert(0, Row("pops.Model(%r)" % model.name, "model",
                                 "model = pops.Model(%r, frame=frame)" % model.name))

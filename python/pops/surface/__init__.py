@@ -1,6 +1,7 @@
 """The user surface of spec 0.3, section 2.6: level 1 (the model, the numerics and the program).
 
-This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2. Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
+This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2, and the solves of
+the lot « solves » (``pops.unknown``, ``pops.solve``, ``pops.Tolerance``, ``solvers=``). Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
 imports it as ``import pops.surface as pops`` and ``from pops.surface.math import *``; the words
 of the library that it elaborates are ``pops.lib.numerics.schemes`` (``upwind``, ``rusanov``,
 ``two_point``) and ``pops.lib.time.methods`` (``forward_euler``, ``ssprk2``, ``ssprk3``, ``rk4``).
@@ -17,12 +18,13 @@ from typing import Any as _Any
 from . import discrete, math
 from ._elaborate import Choice, Report, Row
 from ._geometry import Box, Periodic
-from ._method import Candidate, method
+from ._method import Candidate, method, solve, unknown
 from ._model import Components, Model, Positive, Scalar, Tensor, Vector
 from ._numerics import CellAverage, Numerics, SchemeValue, TermView
 from ._scheme import check_plain_function, scheme
 from ._program import (
-    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Uniform, bind, claim, compile, inspect,
+    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Tolerance, Uniform, bind, claim, compile,
+    inspect,
 )
 from ._project import project
 from . import _solver
@@ -35,6 +37,7 @@ from ._refusal import (
     RealizationMismatch, ReservedName, SupportMismatch, SurfaceRefusal,
     SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, UnknownName,
 )
+from ._refusal import AmbiguousSolvePath, UnknownSolvePath
 from ._refusal import SpellingRefusal as _SpellingRefusal
 from ._solver import PropertyNotDerived, choose, fail, record, solver
 
@@ -55,8 +58,7 @@ _LATER = {
     "assess": _N8_ASSESS, "refuse": _N8_ASSESS, "Finite": _N8_ASSESS,
     "Observed": _N8_ASSESS, "Admissible": _N8_ASSESS, "NotAdmissible": _N8_ASSESS,
     "transform": _N8_ASSESS,
-    "Tolerance": _SOLVES, "solve": _SOLVES, "try_solve": _SOLVES, "unknown": _SOLVES,
-    "Norm": _SOLVES, "Dense": _SOLVES, "Affine": _SOLVES,
+    "try_solve": _SOLVES, "Norm": _SOLVES, "Dense": _SOLVES, "Affine": _SOLVES,
     "eliminate": _SOLVES, "Normalization": _SOLVES,
     "Scientific": _RUN, "Bitwise": _RUN, "Reproducible": _RUN, "Cache": _RUN,
     "Regrid": _HIERARCHY, "Level": _HIERARCHY, "invalidate": _HIERARCHY, "remap": _HIERARCHY,
@@ -175,8 +177,9 @@ def __getattr__(name: str) -> _Any:
 __all__ = [
     "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
     "Model", "Numerics", "OpenMP", "Output", "Periodic", "Positive", "Program", "Quadrature",
-    "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "every", "inspect",
-    "project", "record", "discrete", "math", "method", "scheme",
+    "Resources", "Scalar", "Tensor", "Tolerance", "Uniform", "Vector", "bind", "claim", "compile",
+    "every", "inspect", "project", "record", "discrete", "math", "method", "scheme", "solve",
+    "unknown",
     # @pops.solver and the words of its body (N9 lot 4); pops.fail takes the variants of T39
     # listed with the failures of a run below
     "PropertyNotDerived", "choose", "fail", "solver",
@@ -186,6 +189,7 @@ __all__ = [
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
     "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
+    "AmbiguousSolvePath", "UnknownSolvePath",
     # the failures of a run (T39), lot G, which a solver also fails with (N9 lot 4)
     "BudgetExhausted", "RunFailed", "SolveFailed",
     "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",

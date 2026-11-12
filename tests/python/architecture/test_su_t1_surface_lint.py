@@ -56,6 +56,12 @@ BRIDGE_WORDS = {("Diffusion", "pops.numerics"), ("riemann", "pops.numerics"),
                 # lot 2: upwind(speed=f) is realized by fluxes.upwind, and f is checked to be a
                 # plain function of face (SU5)
                 ("fluxes", "pops.lib.numerics"), ("check_plain_function", "pops.surface")}
+# The cg() bridge of MG9 (lot « solves », python/pops/lib/solve/__init__.py): it returns b6's
+# native CG descriptor and refuses the words of 2.6.9 that N9 elaborates with the NotYetElaborated
+# of the surface; both findings leave with the bridge, when the N9 lot « La référence sous les
+# solves de relation » runs the reference cg under the relation solves of traced methods.
+SOLVE_BRIDGE = "python/pops/lib/solve/__init__.py"
+SOLVE_BRIDGE_WORDS = {("CG", "pops.solvers"), ("NotYetElaborated", "pops.surface")}
 
 
 @pytest.fixture(scope="module")
@@ -90,16 +96,16 @@ def _surface_modules():
 def test_the_library_written_with_the_surface_passes_the_lint(words):
     modules = [path.relative_to(ROOT).as_posix() for path in _surface_modules()]
     assert {"python/pops/lib/time/methods.py", BRIDGE} <= set(modules)
-    bridge = set()
+    bridges = {BRIDGE: set(), SOLVE_BRIDGE: set()}
     for name in modules:
         for finding in lint.lint_file(ROOT / name, words, name=name):
-            if name == BRIDGE and finding.rule == "word" and finding.kind == "F":
+            if name in bridges and finding.rule == "word" and finding.kind == "F":
                 word, module = finding.text.split(" of ", 1)[0][len("the word "):], \
                     finding.text.split(" of ", 1)[1].split(",", 1)[0]
-                bridge.add((word, module))
+                bridges[name].add((word, module))
                 continue
             raise AssertionError(str(finding))
-    assert bridge == BRIDGE_WORDS
+    assert bridges == {BRIDGE: BRIDGE_WORDS, SOLVE_BRIDGE: SOLVE_BRIDGE_WORDS}
 
 
 @pytest.mark.parametrize("source, expected", [

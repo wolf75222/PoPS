@@ -260,6 +260,9 @@ class _Trace:
         self.guards: list = []        # the admissibility guards of the body (guards.py, IR4)
         self.body_guards = 0
         self.predicates: list = []    # the predicate reads domain(U) of the body, consumed by cond
+        self.solves: list = []        # the SolveSites of the body, in order (relations.py, 5.5)
+        self.realization: dict = {}   # solve path -> solver reference (5.5, Realization)
+        self.realized: set = set()    # the keys of the realization that a solve read
 
     def require_active(self, what: str) -> None:
         if not self.active:
@@ -391,11 +394,15 @@ def _refuse_foreign(value: Any, where: str) -> None:
 
 
 class _Traced:
-    """Common behaviour of traced values: no truth value, no number, no hashing, no NumPy coercion."""
+    """Common behaviour of traced values: no truth value, no number, no NumPy coercion.
+
+    A traced value keeps the hash of its identity, so that a dict or a set finds it without an
+    equality; ``==`` builds a relation when one side reads an unknown (5.5, ``relations.py``).
+    """
 
     __slots__ = ("_trace",)
     __array_ufunc__ = None
-    __hash__ = None  # type: ignore[assignment]
+    __hash__ = object.__hash__
 
     def __bool__(self) -> bool:
         raise SymbolicTruthValueError(
@@ -413,11 +420,14 @@ class _Traced:
         self.__float__()
 
     def __eq__(self, other: Any) -> Any:
-        raise NotYetElaborated(
-            "a relation between traced values (section 5.5) is elaborated by a later lot of N8")
+        if isinstance(other, _Relational):
+            return NotImplemented
+        raise TypeError(
+            "a relation (section 5.5) is an equation in the unknowns of unknowns(...); %r == %r "
+            "reads none" % (self, other))
 
     def __ne__(self, other: Any) -> Any:
-        return self.__eq__(other)
+        raise TypeError("a relation is written lhs == rhs (section 5.5); != states no equation")
 
     def __lt__(self, other: Any) -> NoReturn:
         raise NotYetElaborated(
@@ -434,6 +444,36 @@ class _Traced:
                 raise ClosedBodyViolation(
                     "%s mixes values of two method traces; a method body reads only B, p and its "
                     "components (T33)" % where)
+
+
+class _Relational(_Traced):
+    """An unknown of a method body or an affine form in it (``relations.py``, 5.5): its
+    arithmetic and ``==``, which builds a relation, are installed by ``relations.py``."""
+
+    __slots__ = ()
+
+    def _as_affine(self) -> Any:  # pragma: no cover - every subclass defines it
+        raise NotImplementedError
+
+    def _image_by(self, component: Any, c: Any) -> Any:
+        """The image of this value by the linear map of ``component`` at the stage ``c``: an
+        unknown has one (``relations.py``); a combination of an unknown has none in this lot."""
+        raise NotYetElaborated(
+            "%s(...) at a combination of an unknown: this lot elaborates a rate at the unknown "
+            "itself, %s(U, t); others come with a later lot of N8"
+            % (component._name, component._name))
+
+    @staticmethod
+    def _claims_of(value: Any) -> Any:  # pragma: no cover - installed by relations.py
+        """The ``LinearClaims`` of ``value``, or ``None`` (installed by ``relations.py``)."""
+        raise NotImplementedError
+
+    def _same_trace_relational(self, trace: Any, where: str) -> None:
+        self._trace.require_active("a relation")
+        if self._trace is not trace:
+            raise ClosedBodyViolation(
+                "%s mixes values of two method traces; a method body reads only B, p and its "
+                "components (T33)" % where)
 
 
 class TracedScalar(_Traced):
@@ -484,10 +524,14 @@ class TracedScalar(_Traced):
     def __mul__(self, other: Any) -> Any:
         if isinstance(other, TracedField):
             return other.__rmul__(self)
+        if isinstance(other, _Relational):
+            return NotImplemented
         coeff, inexact = self._other(other, "a duration product")
         return self._with(self._coeff * coeff, inexact)
 
     def __rmul__(self, other: Any) -> Any:
+        if isinstance(other, _Relational):
+            return NotImplemented
         coeff, inexact = self._other(other, "a duration product")
         return self._with(coeff * self._coeff, inexact)
 
@@ -560,6 +604,12 @@ class TracedField(_Traced):
         self._inexact = inexact
         self._guards = guards
 
+    @property
+    def space(self) -> Any:
+        """The space of the evolved state, which every field of this lot's methods lives in."""
+        self._trace.require_active("a traced value")
+        return self._trace.temporal.n.space
+
     def _builder(self) -> Any:
         if self._guards and self._value is None:
             raise NotYetElaborated(
@@ -597,18 +647,24 @@ class TracedField(_Traced):
         return other, ((0, exact),), inexact
 
     def __add__(self, other: Any) -> Any:
+        if isinstance(other, _Relational):
+            return NotImplemented
         o = self._field(other, "a field sum")
         return TracedField(self._trace, self._builder() + o._builder(),
                            _expansion_add(self._expansion, o._expansion),
                            inexact=self._inexact or o._inexact)
 
     def __radd__(self, other: Any) -> Any:
+        if isinstance(other, _Relational):
+            return NotImplemented
         o = self._field(other, "a field sum")
         return TracedField(self._trace, o._builder() + self._builder(),
                            _expansion_add(o._expansion, self._expansion),
                            inexact=self._inexact or o._inexact)
 
     def __sub__(self, other: Any) -> Any:
+        if isinstance(other, _Relational):
+            return NotImplemented
         o = self._field(other, "a field difference")
         return TracedField(self._trace, self._builder() - o._builder(),
                            _expansion_add(self._expansion, _expansion_scale(
@@ -616,6 +672,8 @@ class TracedField(_Traced):
                            inexact=self._inexact or o._inexact)
 
     def __rsub__(self, other: Any) -> Any:
+        if isinstance(other, _Relational):
+            return NotImplemented
         o = self._field(other, "a field difference")
         return o.__sub__(self)
 
@@ -626,12 +684,16 @@ class TracedField(_Traced):
                            inexact=self._inexact)
 
     def __mul__(self, other: Any) -> Any:
+        if isinstance(other, _Relational):
+            return NotImplemented
         factor, poly, inexact = self._scalar(other, "a field product")
         return TracedField(self._trace, self._builder() * factor,
                            _expansion_scale(self._expansion, poly),
                            inexact=self._inexact or inexact)
 
     def __rmul__(self, other: Any) -> Any:
+        if isinstance(other, _Relational):
+            return NotImplemented
         factor, poly, inexact = self._scalar(other, "a field product")
         return TracedField(self._trace, factor * self._builder(),
                            _expansion_scale(self._expansion, poly),
@@ -781,6 +843,8 @@ class _Component:
             raise NotYetElaborated(
                 "%s(..., %s): term selection and field requests (T5, T6) are elaborated by a "
                 "later lot of N8" % (self._name, ", ".join(sorted(options))))
+        if isinstance(state, _Relational):
+            return self._image(state, time)
         if time is None and isinstance(state, TracedField):
             if state._trace is not trace:
                 raise ClosedBodyViolation(
@@ -825,6 +889,37 @@ class _Component:
         trace.evaluations.append((evaluation, self._name, ordinal))
         atom = _Atom("%s#%d" % (self._name, evaluation), evaluation)
         return TracedField(trace, rate, ((atom, _ONE),))
+
+    def _image(self, unknown: Any, time: Any) -> Any:
+        """``flow(U, t)`` at an unknown ``U``: the image of ``U`` by the linear map of the
+        component, pending in the relation that reads it (5.5, ``relations.py``)."""
+        trace = self._trace
+        if not isinstance(time, TracedTime):
+            raise TypeError("%s(U, t) evaluates the unknown U at a time t = B.time + c*p.dt of "
+                            "the attempt (T4)" % self._name)
+        unknown._same_trace_relational(trace, "%s(U, t)" % self._name)
+        if time._trace is not trace:
+            raise ClosedBodyViolation("%s(U, t) reads a time of another method trace (T33)"
+                                      % self._name)
+        if trace.evaluation is not None:
+            raise NotYetElaborated("%s(U, t) inside the component %r: a relation is stated in the "
+                                   "method body" % (self._name, trace.evaluation.component))
+        return unknown._image_by(self, time.c)
+
+    def _linear_claims(self) -> Any:
+        """The claims of the linear map that the evaluation of this component states (IR16)."""
+        claims = _Relational._claims_of(getattr(self._evaluate, "linear_claims", None))
+        if not callable(getattr(self._evaluate, "linear_apply", None)) or claims is None:
+            raise NotYetElaborated(
+                "%s(U, t) at an unknown U: the rate of %r states no linear map (linear_apply and "
+                "linear_claims); a rate that its scheme does not realize as a linear map, solved "
+                "by Newton, comes with a later lot of N8 with N9, and the operator generated from "
+                "a term with G10" % (self._name, self._name))
+        return claims
+
+    def _linear_apply(self, P: Any, value: Any) -> Any:
+        """``L(value)`` on the matrix-free apply ``P``, written by the component's rate."""
+        return self._evaluate.linear_apply(P, value)
 
     def _value_at(self, state: TracedField, point: StagePoint, ordinal: int, c: Any) -> tuple:
         """The builder value that the rate reads at ``point``, materialized there if needed."""
@@ -1000,11 +1095,12 @@ class MethodTrace:
     """
 
     __slots__ = ("name", "components", "stages", "evaluations", "increment", "candidate",
-                 "tolerated", "memory", "requests", "guards")
+                 "tolerated", "memory", "requests", "guards", "solves")
 
     def __init__(self, name: str, components: tuple, stages: tuple, evaluations: tuple,
                  increment: tuple, candidate: Any, tolerated: tuple = (), memory: tuple = (),
-                 requests: tuple = (), guards: tuple = ()) -> None:
+                 requests: tuple = (), guards: tuple = (), solves: tuple = ()) -> None:
+        self.solves = solves        # the SolveSites of the body, in order (5.5)
         self.memory = memory        # ((name, declared type, value), ...) of the Candidate
         self.requests = requests    # the FieldRequests of the attempt, in order (T6)
         self.guards = guards        # the admissibility guards of the body, in order (IR4)
@@ -1045,9 +1141,14 @@ class SpecializedMethod:
     def name(self) -> str:
         return self.method.name
 
-    def trace(self, program: Any, temporal: Any, proposal: Any) -> MethodTrace:
-        """Run the body once against ``program`` and materialize the candidate at the endpoint."""
+    def trace(self, program: Any, temporal: Any, proposal: Any,
+              realization: Any = None) -> MethodTrace:
+        """Run the body once against ``program`` and materialize the candidate at the endpoint.
+
+        ``realization`` maps the path of each solve of the body to its solver (5.5).
+        """
         trace = _Trace(program, temporal, self.name, proposal)
+        trace.realization = dict(realization or {})
         state = TracedField(trace, temporal.n, ((trace.state_atom, _ONE),),
                             value=temporal.n, c=0)
         views = [_Component(trace, name, evaluate)
@@ -1104,6 +1205,12 @@ class SpecializedMethod:
                 "elaborates the guard of B.state and of the candidate; others come with a later "
                 "lot of N8 (choices between computations in a body, IR4)"
                 % (", ".join(unapplied), self.name))
+        unread = [site.path for site in trace.solves if not site.consumed]
+        if unread:
+            raise TypeError(
+                "the solve %s of %r has an outcome that no require_success(s) reads: a solve of "
+                "this lot fails the attempt when it fails (T38); try_solve, whose outcome a method "
+                "reads, comes with a later lot of N8" % (", ".join(unread), self.name))
         dangling = [call.component._name for call in trace.predicates if not call.consumed]
         if dangling:
             raise TypeError(
@@ -1112,7 +1219,8 @@ class SpecializedMethod:
                 % (", ".join(dangling), self.name))
         return MethodTrace(self.name, tuple(self.method.component_names), tuple(trace.stages),
                            tuple(trace.evaluations), increment, value, tuple(trace.tolerated),
-                           memory, tuple(trace.requests.values()), tuple(trace.guards))
+                           memory, tuple(trace.requests.values()), tuple(trace.guards),
+                           tuple(trace.solves))
 
 
 class Method:
