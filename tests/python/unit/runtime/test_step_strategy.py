@@ -234,16 +234,27 @@ def test_adaptive_cfl_retries_once_at_the_step_of_the_recorded_face_frequency():
     assert native.time() == 0.4/4.0
 
 
-@pytest.mark.parametrize("native, attempts", [
-    (_FaceGuardNative(4.0, payload=False), 1),  # a refusal without the frequency of its step
-    (_FaceGuardNative(4.0, payload=None), 1),  # the face schema without payload bytes
-    (_FaceGuardNative(4.0, refusals=2), 2),  # the retry is refused too: one retry only
-    (_FaceGuardNative(1.0, refusals=1), 1),  # the cap would not lower the refused proposal
+@pytest.mark.parametrize("native, attempts, note", [
+    # a refusal without the frequency of its step names why it is not retried (review O3)
+    (_FaceGuardNative(4.0, payload=False), 1,
+     "retry stopped: only a face step refusal is retried, and this refusal carries no "
+     "recorded face frequency (pops.face-step-frequency@1)"),
+    # the face schema without payload bytes
+    (_FaceGuardNative(4.0, payload=None), 1,
+     "retry stopped: only a face step refusal is retried, and this refusal carries no "
+     "recorded face frequency (pops.face-step-frequency@1)"),
+    # the retry is refused too: one retry only
+    (_FaceGuardNative(4.0, refusals=2), 2,
+     "retry stopped: finite retry budget exhausted after 2 attempt(s), budget=1"),
+    # the cap would not lower the refused proposal
+    (_FaceGuardNative(1.0, refusals=1), 1,
+     "retry stopped: the step of the recorded face frequency does not shorten the refused step"),
 ])
-def test_adaptive_cfl_does_not_retry_without_a_lower_face_step(native, attempts):
-    with pytest.raises(StepAttemptRejected):
+def test_adaptive_cfl_does_not_retry_without_a_lower_face_step(native, attempts, note):
+    with pytest.raises(StepAttemptRejected) as refused:
         prepare_program_run(_Engine(AdaptiveCFL(0.4, max_dt=0.2))).run_step(native, t_end=1.0)
     assert len(native.calls) == attempts
+    assert getattr(refused.value, "__notes__", []) == [note]
 
 
 def test_fixed_dt_merges_a_roundoff_equivalent_final_landing():

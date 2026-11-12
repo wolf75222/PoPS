@@ -36,6 +36,8 @@ namespace masked_operator_detail {
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
           class Reconstruction, class NumericalFlux, class ProviderStorage, class TraceTransform>
 struct MaterializeMaskedFaceFlux {
+  static_assert(!metric_has_physical_face_normals<Metric>,
+                "a masked axis face cannot read a metric with physical face normals");
   Model model;
   Metric metric;
   Reconstruction reconstruction;

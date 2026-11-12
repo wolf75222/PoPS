@@ -71,6 +71,7 @@ def compile_native(
     declare_auxiliary_providers: bool = True,
     _toolchain_capture: Any = None,
     native_route: Any = None,
+    native_geometry: Any = None,
 ) -> Any:
     """Backend "production": generate the NATIVE LOADER (emit_cpp_native_loader)
     and compile it into a .so loadable by System.add_native_block
@@ -105,6 +106,7 @@ def compile_native(
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
         native_route=native_route,
+        native_geometry=native_geometry,
     )
     cc, native_compile_flags, native_link_flags = pops_loader_build_flags(cxx)
     native_compile_flags = native_toolchain_flags(toolchain_capture, native_compile_flags)
@@ -212,6 +214,7 @@ def compile_model(
     declare_auxiliary_providers: bool = True,
     model_source_policy: str = "allow_missing",
     _native_route: Any = None,
+    _native_geometry: Any = None,
 ) -> Any:
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
     into a native fixed-ABI package and returns its path.
@@ -226,9 +229,10 @@ def compile_model(
     Returns so_path.
     """
     from pops.codegen.model_compile_evidence import policy, read, paths, guard_recompile
-    from pops.codegen._compile_emit import normalize_native_route
+    from pops.codegen._compile_emit import normalize_native_geometry, normalize_native_route
     policy(model_source_policy)
     native_route = normalize_native_route(_native_route)
+    native_geometry = normalize_native_geometry(_native_geometry)
     m = model
     backend = lower_backend(backend)
     if target not in ("system", "amr_system"):
@@ -280,6 +284,7 @@ def compile_model(
         declare_auxiliary_providers=declare_auxiliary_providers,
         toolchain_capture=toolchain_capture,
         native_route=native_route,
+        native_geometry=native_geometry,
     )
 
     def _compile_and_authenticate(path: Any, destination: Any = None) -> Any:
@@ -299,6 +304,7 @@ def compile_model(
             declare_auxiliary_providers=declare_auxiliary_providers,
             _toolchain_capture=toolchain_capture,
             native_route=native_route,
+            native_geometry=native_geometry,
         )
         read(out_path, require=model_source_policy != "allow_missing")
         verify_native_toolchain(toolchain_capture)

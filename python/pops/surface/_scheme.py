@@ -52,8 +52,13 @@ _ENTITY_OWNER = {
     "incident": "a later lot of N15 with the graph reductions of G08",
     "region": "a later lot of N15 with the regions of level 3 (SU15)",
 }
-_DIFFUSIVE = ("a later lot of N15 with a b6 face route that covers a diffusive flux and reads the "
-              "spacing (C31)")
+# A diffusive face of this lot is realized by b6's StencilFlux (N3 lot 1), which is Cartesian,
+# uniform and periodic: a face of a diffusive flux that is not -k grad(u) of its own quantity
+# belongs to G05. Its walls (G04) are refused with the boundary of its support, and its hierarchies
+# (N4, N12) with pops.AMR (``_elaborate.boundaries``, ``_program.AMR``).
+_DIFFUSIVE_FORMS = "a later lot of N15 with the coupled and drift realizations of G05"
+_SPACING = ("a later lot of N15 with a b6 face route that covers a transport flux and reads the "
+            "spacing (C31)")
 _GEOMETRY = "a later lot of N15 with the geometry reads of §4.3 (D18)"
 _STENCIL = ("a later lot of N15 with the stencil faces of N7a (a face of this lot reads its two "
             "cells; a wider stencil is a Reconstruct)")
@@ -62,20 +67,13 @@ _BUILDERS = "a later lot of N15 with the keys that this builder covers"
 # Refusal tables of the surface (CF2, §21.7): the reads of 2.6.4 that a later lot elaborates and
 # whose names the core does not otherwise spell, keyed by the read, with the sentence of their lot.
 _LATER_FACE = {
-    "gradient": "a later lot of N15 with a b6 face route that covers a diffusive flux and reads "
-                "the spacing (C31)",
-    "normal_gradient": "a later lot of N15 with a b6 face route that covers a diffusive flux and "
-                       "reads the spacing (C31)",
+    "gradient": "a later lot of N15 with the gradient schemes of face.gradient(e, scheme=)",
     "velocity": "a later lot of N15 with the moving configurations of D18 and D21",
 }
 _LATER_CELL = {
-    "gradient": "a later lot of N15 with a b6 face route that covers a diffusive flux and reads "
-                "the spacing (C31)",
+    "gradient": "a later lot of N15 with the gradient schemes of cell.gradient(e, scheme=)",
 }
-_LATER_TERM = {
-    "gradient_variables": "a later lot of N15 with a b6 face route that covers a diffusive flux "
-                          "and reads the spacing (C31)",
-}
+_LATER_TERM: dict = {}
 _LATER_KINDS = {
     "Gradient": "a later lot of N15 with the schemes given to face.gradient(e, scheme=) and "
                 "cell.gradient(e, scheme=)",
@@ -136,6 +134,78 @@ class LawValue(Expr):
 
     def _text(self, precedence: int) -> str:
         return text(self.value, precedence)
+
+
+class DiffusiveLaw(LawValue):
+    """``term.law(states=..., gradients=...)`` of a diffusive key -k grad(w), each ``grad(w)``
+    given as ``g * face.normal``: the flux along the normal, whose ``dot`` with ``face.normal`` is
+    its normal component ``value``, -k g, the normal being a unit vector (lot 1 of N3)."""
+
+
+def _normal_factor(value: Any) -> Any:
+    """The scalar g of ``g * face.normal`` (or ``face.normal * g``), else ``None``."""
+    if isinstance(value, Arith) and value.op == "*":
+        left, right = value.args
+        if isinstance(right, SchemeLeaf) and right.key == ("normal",):
+            return left
+        if isinstance(left, SchemeLeaf) and left.key == ("normal",):
+            return right
+    return None
+
+
+def _replace_gradients(value: Any, table: dict) -> Any:
+    """``value`` with each ``grad(w)`` of ``table`` replaced by its normal component."""
+    if isinstance(value, Call) and value.word == "grad":
+        for variable, replacement in table.items():
+            if value.args[0] is variable:
+                return replacement
+        return value
+    if isinstance(value, Arith):
+        return Arith(value.op, tuple(_replace_gradients(arg, table) for arg in value.args))
+    if isinstance(value, Call):
+        return Call(value.word, tuple(_replace_gradients(arg, table) for arg in value.args))
+    return value
+
+
+def _diffusive_law(key: Any, states: Any, gradients: Any) -> Any:
+    """``term.law(states={q: v}, gradients={w: g * face.normal})`` of a diffusive key."""
+    if gradients is None:
+        raise RealizationMismatch(
+            "the scheme reads term.law without gradients=, the law of a transport flux, and the "
+            "key %s is a diffusive flux, whose law reads the gradients of %s"
+            % (key, ", ".join(map(str, key.variables))),
+            write="a scheme of the kind of the key, or term.law(states=..., gradients={w: ...}) "
+                  "for each w of term.gradient_variables", site=user_site(3))
+    if not isinstance(gradients, dict):
+        raise TypeError("term.law(gradients={w: value}) takes a table keyed by quantities")
+    table = {}
+    for variable, value in gradients.items():
+        if not any(variable is item for item in key.variables):
+            raise TypeError("term.law(gradients={%s: ...}): %s is not a gradient variable of %s, "
+                            "whose law reads the gradients of %s" % (
+                                variable, variable, key, ", ".join(map(str, key.variables))))
+        factor = _normal_factor(value)
+        if factor is None:
+            raise NotYetElaborated(
+                "term.law(gradients={%s: %s}), a gradient that is not a scalar times face.normal"
+                % (variable, text(value) if isinstance(value, Expr) else repr(value)),
+                "a later lot of N15 with the gradient schemes of face.gradient(e, scheme=)")
+        table[variable] = factor
+    missing = [item for item in key.variables if not any(item is v for v in table)]
+    if missing:
+        raise TypeError("term.law(gradients=...) of %s omits %s, whose gradient the law reads"
+                        % (key, ", ".join(map(str, missing))))
+    value = _replace_gradients(key.value, table)
+    if states is not None:
+        if not isinstance(states, dict):
+            raise TypeError("term.law(states={q: value}) takes a table keyed by quantities")
+        for quantity, state in states.items():
+            _own_quantity(key, quantity, "term.law(states=)")
+            if not (is_number(state) or isinstance(state, Expr)):
+                raise TypeError("term.law(states={%s: v}) takes a value, got %r"
+                                % (quantity, state))
+        value = substitute(value, dict(states))
+    return DiffusiveLaw(value, None, ())
 
 
 def substitute(value: Any, table: dict) -> Any:
@@ -370,6 +440,10 @@ def _wave(term: Any, value: Any, normal: Any, word: str) -> Any:
                         % (word, normal))
     slopes = key.slopes()
     if slopes is None:
+        for node in walk(key.value):
+            if isinstance(node, Call) and node.word in ("largest", "smallest"):
+                raise NotYetElaborated("%s in a value of the model, whose derivative %s(term, u, "
+                                       "n) reads" % (text(node), word), _N11, site=user_site(3))
         raise AmbiguousElaboration(
             "%s(term, u, n) under %s = %s, whose wave speed dF/d%s is not derived in this lot, so "
             "the law declares none" % (word, key, text(key.value), key.quantity),
@@ -394,14 +468,47 @@ def spectral_radius(term: Any, value: Any, normal: Any) -> Any:
     return radius
 
 
+def _side_speed(word: str, term: Any, value: Any, normal: Any) -> Any:
+    speed = _wave(term, value, normal, word)
+    if isinstance(value, SchemeLeaf) and value.key[0] == "trace":
+        side = value.key[1]
+        return SchemeLeaf((word, side), None, "%s(term, face.%s(%s), face.normal)"
+                          % (word, side, value.quantity), speed)
+    return speed
+
+
 def slowest_speed(term: Any, value: Any, normal: Any) -> Any:
-    """``slowest_speed(term, u, n)``: the smallest λ of D_u(F(u)·n) at u (R9)."""
-    return _wave(term, value, normal, "slowest_speed")
+    """``slowest_speed(term, u, n)``: the smallest λ of D_u(F(u)·n) at u (R9).
+
+    At a bare trace it is a read of the face, which lowers to its expansion; and ``smallest`` of
+    the slowest speeds at the two traces is the first of the face input ``speeds`` of
+    ``riemann.User``, the slowest wave speed united over the two traces (N3 lot 1)."""
+    return _side_speed("slowest_speed", term, value, normal)
 
 
 def fastest_speed(term: Any, value: Any, normal: Any) -> Any:
-    """``fastest_speed(term, u, n)``: the largest λ of D_u(F(u)·n) at u (R9)."""
-    return _wave(term, value, normal, "fastest_speed")
+    """``fastest_speed(term, u, n)``: the largest λ of D_u(F(u)·n) at u (R9); ``largest`` of the
+    fastest speeds at the two traces is the second of the face input ``speeds``."""
+    return _side_speed("fastest_speed", term, value, normal)
+
+
+def speed_pair_index(value: Any) -> Any:
+    """0 when a value is ``smallest`` of the slowest speeds at the two traces, 1 when it is
+    ``largest`` of the fastest speeds there (the two entries of the face input ``speeds``), else
+    ``None``."""
+    for index, (fold, word) in enumerate((("smallest", "slowest_speed"),
+                                          ("largest", "fastest_speed"))):
+        if (isinstance(value, Call) and value.word == fold and len(value.args) == 2
+                and all(isinstance(arg, SchemeLeaf) for arg in value.args)
+                and {arg.key for arg in value.args} == {(word, "left"), (word, "right")}):
+            return index
+    return None
+
+
+def reads_speed_pair(*values: Any) -> bool:
+    """Whether a value reads the face input ``speeds``."""
+    return any(speed_pair_index(node) is not None
+               for value in values if value is not None for node in walk(value))
 
 
 def is_radius_pair(value: Any) -> bool:
@@ -456,6 +563,8 @@ def dot(a: Any, b: Any) -> Any:
     if _is_normal(a) and not _is_normal(b):
         a, b = b, a
     if _is_normal(b):
+        if isinstance(a, DiffusiveLaw):
+            return a.value
         if isinstance(a, LawValue):
             if a.side is not None:
                 return SchemeLeaf(("flux", a.side), None,
@@ -551,7 +660,7 @@ class FaceEntity(_Unread):
 
     _entity = "face"
     _later_reads = _LATER_FACE
-    _later = {"distance": _DIFFUSIVE, "measure": _GEOMETRY,
+    _later = {"measure": _GEOMETRY,
               "inner": "a later lot of N15 with the ghosts of G04",
               "flux": "a later lot of N15 with the face fluxes read by another scheme (X1)"}
 
@@ -574,6 +683,17 @@ class FaceEntity(_Unread):
 
     def average(self, value: Any) -> Any:
         return (self.left(value) + self.right(value)) / 2
+
+    @property
+    def distance(self) -> Any:
+        """The distance between the centres of the two cells of the face (2.6.4): the spacing of
+        the axis on the uniform tiling of this lot."""
+        return SchemeLeaf(("distance",), None, "face.distance")
+
+    def normal_gradient(self, value: Any) -> Any:
+        """The two-point normal derivative of ``value`` at the face, (right - left) / distance
+        (2.6.4)."""
+        return (self.right(value) - self.left(value)) / self.distance
 
     def __repr__(self) -> str:
         return "face"
@@ -620,9 +740,7 @@ class TermEntity(_Unread):
     """``term`` in a scheme: the key that the scheme is placed under."""
 
     _entity = "term"
-    _later = {"quantities": "a later lot of N15 with the record states of N8",
-              "unknowns": "a later lot of N15 with the constraints of N10",
-              "first_order_inputs": _DIFFUSIVE,
+    _later = {"unknowns": "a later lot of N15 with the constraints of N10",
               "operator": "a later lot of N15 with the constraints of N10",
               "load": "a later lot of N15 with the constraints of N10",
               "data": "a later lot of N15 with the boundary relations of G04",
@@ -642,6 +760,25 @@ class TermEntity(_Unread):
         return self._key.quantity
 
     @property
+    def quantities(self) -> list:
+        """The quantities that the law of the key reads: its own one, in this lot (a record state
+        is a later lot of N15 with the record states of N8)."""
+        return [self._key.quantity]
+
+    @property
+    def gradient_variables(self) -> list:
+        """The variables whose gradient the law of a diffusive key reads (2.6.4); none for a
+        transport flux."""
+        return list(getattr(self._key, "variables", ()))
+
+    @property
+    def first_order_inputs(self) -> list:
+        """The fields whose gradient the law reads as a first-order transport input (2.6.4,
+        SD51): none for the diffusive fluxes -k grad(u) of this lot, the others being refused
+        when the model declares them (G05)."""
+        return []
+
+    @property
     def form(self) -> Any:
         raise AmbiguousElaboration("term.form is the form of a boundary relation, and the key %s "
                                    "is a %s" % (self._key, self._key.kind),
@@ -649,10 +786,13 @@ class TermEntity(_Unread):
 
     def law(self, states: Any = None, gradients: Any = None) -> Any:
         key = self._key
-        if gradients is not None:
-            raise NotYetElaborated("term.law(gradients=...)", _DIFFUSIVE)
         if isinstance(key, DiffusiveFlux):
-            raise NotYetElaborated("term.law of the diffusive flux %s" % key, _DIFFUSIVE)
+            return _diffusive_law(key, states, gradients)
+        if gradients is not None:
+            raise RealizationMismatch(
+                "the scheme reads term.law(gradients=...), the law of a diffusive flux, and the "
+                "key %s is a %s, whose law reads no gradient" % (key, key.kind),
+                write="a scheme of the kind of the key", site=user_site(2))
         components = getattr(key, "components", (key.value,))
         if states is None:
             return LawValue(key.value, None, components)
@@ -672,16 +812,21 @@ class TermEntity(_Unread):
         return LawValue(substitute(key.value, table), side,
                         tuple(substitute(component, table) for component in components))
 
-    def expect(self, form: Any) -> None:
-        """Refuse the scheme unless the key has the form (CC2); return nothing."""
+    def expect(self, form: Any, write: Any = None) -> None:
+        """Refuse the scheme unless the key has the form (CC2); return nothing. ``write`` is the
+        help of the refusal, what to write instead (D9 of N3); without it the help is generic."""
         key = self._key
         _expression(form, "term.expect(form)")
+        if write is not None and not isinstance(write, str):
+            raise TypeError("term.expect(form, write=...) takes the text of the help, got %r"
+                            % (write,))
         if normal_form(key.value) != normal_form(form):
             raise RealizationMismatch(
                 "the scheme expects the key %s to be %s, and it is %s"
                 % (key, text(form), text(key.value)),
-                write="a scheme whose term.expect states the form of %s, or the key that it "
-                      "expects" % key, site=user_site(2))
+                write=write if write is not None else
+                "a scheme whose term.expect states the form of %s, or the key that it expects"
+                % key, site=user_site(2))
 
     def __repr__(self) -> str:
         return "term"
@@ -881,13 +1026,67 @@ def scheme(function: Any = None, **options: Any) -> Any:
 
 
 class Traced:
-    """What a scheme gave under one key: its builder, and the reconstruction that it names."""
+    """What a scheme gave under one key: its builder, the reconstruction that it names, and for a
+    diffusive key the incident frequency of its face that the elaborator derives (D10 of N3)."""
 
-    __slots__ = ("builder", "reconstruction")
+    __slots__ = ("builder", "reconstruction", "frequency")
 
-    def __init__(self, builder: Any, reconstruction: Any) -> None:
+    def __init__(self, builder: Any, reconstruction: Any, frequency: Any = None) -> None:
         self.builder = builder
         self.reconstruction = reconstruction
+        self.frequency = frequency
+
+
+class StencilRealization:
+    """The realization of a diffusive key under a face scheme: the b6 ``StencilFlux`` whose body
+    is the face flux of the scheme, entered in each evaluation of a rate that covers the key as
+    ``stencil_flux_divergence`` (N3 lot 1, D7), not as a row of the plan of b6."""
+
+    __slots__ = ("flux", "description")
+
+    def __init__(self, flux: Any, description: str) -> None:
+        self.flux = flux
+        self.description = description
+
+
+_LEFT = ("leaf", ("trace", "left"))
+
+
+def _mentions_trace(atom: Any) -> bool:
+    return "'trace'" in repr(atom)
+
+
+def diffusive_frequency(scheme_: Any, key: Any, value: Any) -> Any:
+    """The incident frequency of a diffusive face (D10 of N3): the exact derivative of the face
+    value with respect to the trace on its left, divided by ``face.distance``.
+
+    It is derived, never stated (``FaceFlux`` has no frequency, 2.6.4). The derivative is taken
+    on the normal form of the value (CC2), exactly; for the face of -k grad(u), k not reading the
+    state, it is k / face.distance, written ``(k / face.distance) / face.distance``. Summed over
+    the faces of a cell by b6's StencilFlux, that is bitwise the frequency of b6's two-point
+    diffusion, sum_a ((k / h_a) + (k / h_a)) / h_a. A face whose derivative is of another form
+    (a coefficient that reads the state, a face that is not linear in its traces) belongs to the
+    coupled realizations of G05."""
+    distance = SchemeLeaf(("distance",), None, "face.distance")
+    derivative: dict = {}
+    for mono, coef in _polynomial(value).items():
+        powers = dict(mono)
+        exponent = powers.pop(_LEFT, 0)
+        if exponent == 0:
+            continue
+        if exponent != 1 or any(_mentions_trace(atom) for atom in powers):
+            break
+        reduced = tuple(sorted(powers.items()))
+        derivative[reduced] = derivative.get(reduced, 0) + coef
+    else:
+        coefficient = key.coefficient
+        expected = _polynomial(Arith("/", (coefficient, distance)))
+        if {mono: coef for mono, coef in derivative.items() if coef != 0} == expected:
+            return Arith("/", (Arith("/", (coefficient, distance)), distance))
+    raise NotYetElaborated(
+        "the scheme %s under %s, whose face %s is not the two-point flux k (w_R - w_L) / "
+        "face.distance of -k grad(w), so its frequency is not derived in this lot"
+        % (scheme_, key, text(value)), _DIFFUSIVE_FORMS, site=getattr(scheme_, "site", None))
 
 
 class UserScheme(SchemeValue):
@@ -903,6 +1102,12 @@ class UserScheme(SchemeValue):
     def __repr__(self) -> str:
         return "%s(%s)" % (self.scheme.name, ", ".join(
             "%s=%s" % (name, _option_text(self.options[name])) for name in self.stated))
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotAPopsOperation(
+            "%r is a scheme, which pops.Numerics runs; an option that takes a function of face "
+            "takes a plain function, passed uncalled" % self,
+            write="def f(face): ... and pass f", site=user_site(2))
 
     def option_choices(self) -> list:
         """Each option with its value and its origin, stated or default, for ``pops.inspect``."""
@@ -934,9 +1139,6 @@ class UserScheme(SchemeValue):
             raise RealizationMismatch(
                 "%s returns Ghost, a ghost of a boundary relation, which covers no term" % self,
                 write="the policy as pops.Numerics(boundary=%s)" % self, site=self.site)
-        if isinstance(key, DiffusiveFlux):
-            raise NotYetElaborated("the scheme %s under the diffusive flux %s" % (self, key),
-                                   _DIFFUSIVE, site=self.site)
         self.traced(key)
 
     def ghosts(self, relation: BoundaryRelation, depths: tuple) -> list:
@@ -983,6 +1185,14 @@ class UserScheme(SchemeValue):
                 write="%s(value)" % expected.word, site=self.scheme.site)
         return result
 
+    def reads_speeds(self, key: Term) -> bool:
+        """Whether the face of the key reads the face input ``speeds`` (the slowest and the
+        fastest wave speeds of R9), which the model then declares (``Model.wave_speeds``)."""
+        if self.scheme.is_cell or isinstance(key, DiffusiveFlux):
+            return False
+        builder = self.traced(key).builder
+        return reads_speed_pair(builder.value, builder.speed)
+
     def traced(self, key: Term) -> Traced:
         """The builder that the scheme gives under ``key``, run once per key (SU5), and for a face
         scheme once per axis of the support, ``face.axis`` being Python data."""
@@ -1004,6 +1214,8 @@ class UserScheme(SchemeValue):
                         "the axis %s" % (self, axis, axes[0]), _PER_AXIS_RECONSTRUCTION,
                         site=self.site)
             traced = Traced(builder, None)
+        elif isinstance(key, DiffusiveFlux):
+            traced = self._traced_diffusive(key, tuple(axes))
         else:
             builder = None
             for axis in axes:
@@ -1029,32 +1241,119 @@ class UserScheme(SchemeValue):
         self._traced.append((key, traced))
         return traced
 
+    def _traced_diffusive(self, key: DiffusiveFlux, axes: tuple) -> Traced:
+        """The face of a diffusive key, run once per axis: it reads the two traces and
+        ``face.distance``, names no reconstruction and states no speed; its frequency is derived
+        (D10 of N3)."""
+        if any(isinstance(node, Quantity) for node in walk(key.coefficient)):
+            raise NotYetElaborated(
+                "the scheme %s under %s, whose coefficient %s varies with the state"
+                % (self, key, text(key.coefficient)),
+                "a later lot of N15 with the face means of 2.6.4 (G05)", site=self.site)
+        builder = None
+        for axis in axes:
+            ran = self._run({"face": FaceEntity(key, axis), "term": TermEntity(key)}, key)
+            _reads(ran.value, _DIFFUSIVE_READS + ("normal",), self, "face")
+            if ran.reconstruction is not None:
+                raise NotYetElaborated(
+                    "the scheme %s under the diffusive flux %s names a reconstruction"
+                    % (self, key),
+                    _DIFFUSIVE_FORMS, site=self.site)
+            if ran.speed is not None:
+                raise TypeError("the scheme %s states FaceFlux(speed=) under the diffusive flux "
+                                "%s; the frequency of a diffusive face is derived (D10)"
+                                % (self, key))
+            if builder is None:
+                builder = ran
+            elif normal_form(builder.value) != normal_form(ran.value):
+                raise NotYetElaborated(
+                    "the scheme %s, whose face flux on the axis %s differs from the one on the "
+                    "axis %s" % (self, axis, axes[0]), _PER_AXIS, site=self.site)
+        assert builder is not None
+        _reads(builder.value, _DIFFUSIVE_READS, self, "face")
+        return Traced(builder, None, diffusive_frequency(self, key, builder.value))
+
+    def _realize_diffusive(self, view: TermView) -> StencilRealization:
+        from pops.numerics.stencil_flux import StencilFlux
+
+        traced = self.traced(view.term)
+        value, frequency = traced.builder.value, traced.frequency
+        rank = view.term.quantity.support.rank
+        lower = view.lower
+
+        def body(sample: Any, spacing: Any, axis: int) -> tuple:
+            left = tuple(-1 if d == axis else 0 for d in range(rank))
+            inputs = {("trace", "left"): sample(left, 0),
+                      ("trace", "right"): sample((0,) * rank, 0),
+                      ("distance",): spacing[axis]}
+            return (lower(value, inputs),), lower(frequency, inputs)
+
+        flux = StencilFlux(dimension=rank, components=1, radius=1, body=body)
+        return StencilRealization(flux, self.describe())
+
+    def is_two_point(self, key: Term) -> bool:
+        """Whether the face of this scheme under the diffusive ``key`` of -k grad(w) is the
+        two-point flux -k (w_R - w_L) / face.distance of ``two_point()``, by its normal form (CC2).
+        The matrix-free apply of a solve reads it so (N3 lot 1, D7): a copy of the body written in
+        a case is applied as the word, and any other face is not."""
+        if not isinstance(key, DiffusiveFlux) or self.scheme.is_cell or len(key.variables) != 1:
+            return False
+        (w,) = key.variables
+        left = SchemeLeaf(("trace", "left"), w, "face.left(%s)" % w)
+        right = SchemeLeaf(("trace", "right"), w, "face.right(%s)" % w)
+        distance = SchemeLeaf(("distance",), None, "face.distance")
+        form = Arith("*", (Arith("neg", (key.coefficient,)),
+                           Arith("/", (Arith("-", (right, left)), distance))))
+        return normal_form(self.traced(key).builder.value) == normal_form(form)
+
     def realize(self, view: TermView) -> Any:
         from pops.numerics import reconstruction, riemann, variables
         from pops.numerics.spatial import FiniteVolume
 
+        if isinstance(view.term, DiffusiveFlux):
+            return self._realize_diffusive(view)
         traced = self.traced(view.term)
         builder = traced.builder
         lower = view.lower
 
-        def body(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> tuple:
-            return (lower(builder.value, _face_inputs(uL, uR, fL, fR, n, s)),)
+        body: Any
+        stability: Any
+        if reads_speed_pair(builder.value, builder.speed):
+            # The pair (sL, sR) of the slowest and the fastest wave speeds united over the two
+            # traces is the face input speeds of riemann.User (R9), as the b6 HLL reads it.
+            def body_of_pair(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any,
+                             speeds: Any) -> tuple:
+                return (lower(builder.value, _face_inputs(uL, uR, fL, fR, n, s, speeds)),)
+            body = body_of_pair
+        else:
+            def body_of_traces(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> tuple:
+                return (lower(builder.value, _face_inputs(uL, uR, fL, fR, n, s)),)
+            body = body_of_traces
 
         if builder.speed is None:
             # The larger spectral radius of R9 at the two traces: the fallback of cell.speed
             # (2.6.4, SD44), and the bound that b6 requires of every user face (N1).
-            def stability(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> Any:
+            def radius(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> Any:
                 del uL, uR, fL, fR, n
                 return s
+            stability = radius
         else:
             # A speed may be signed (upwind follows the orientation of the face); b6 reads a
             # nonnegative bound, so a speed that is not nonnegative by its form is taken in
             # absolute value.
             signed = not _nonnegative(builder.speed)
 
-            def stability(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> Any:
-                bound = lower(builder.speed, _face_inputs(uL, uR, fL, fR, n, s))
-                return abs(bound) if signed else bound
+            if reads_speed_pair(builder.speed):
+                def bound_of_pair(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any,
+                                  speeds: Any) -> Any:
+                    bound = lower(builder.speed, _face_inputs(uL, uR, fL, fR, n, s, speeds))
+                    return abs(bound) if signed else bound
+                stability = bound_of_pair
+            else:
+                def bound_of_traces(uL: Any, uR: Any, fL: Any, fR: Any, s: Any, *, n: Any) -> Any:
+                    bound = lower(builder.speed, _face_inputs(uL, uR, fL, fR, n, s))
+                    return abs(bound) if signed else bound
+                stability = bound_of_traces
 
         recon = reconstruction.FirstOrder() if traced.reconstruction is None else \
             realize_reconstruction(builder.reconstruction, traced.reconstruction, view)
@@ -1068,6 +1367,10 @@ class UserScheme(SchemeValue):
         if self.scheme.is_cell:
             return "reconstruction.User(the Reconstruct of %s)" % self.scheme.name
         first = self._traced[0][1] if self._traced else None
+        if first is not None and first.frequency is not None:
+            return ("StencilFlux(radius=1, body=the FaceFlux of %s, frequency=%s, derived), "
+                    "entered in each evaluation of a rate as a stencil of the program"
+                    % (self.scheme.name, text(first.frequency)))
         builder = None if first is None else first.builder
         reconstruction = "FirstOrder()"
         if first is not None and first.reconstruction is not None:
@@ -1086,7 +1389,8 @@ class UserScheme(SchemeValue):
                                                              speed))
 
 
-_FACE_READS = ("trace", "normal", "flux", "radius", "cell")
+_FACE_READS = ("trace", "normal", "flux", "radius", "cell", "slowest_speed", "fastest_speed")
+_DIFFUSIVE_READS = ("trace", "distance")
 
 
 def _reads_cells(*values: Any) -> bool:
@@ -1112,12 +1416,15 @@ def _same_face(one: FaceFlux, other: FaceFlux) -> bool:
     return repr(one.reconstruction) == repr(other.reconstruction)
 
 
-def _face_inputs(uL: Any, uR: Any, fL: Any, fR: Any, n: Any, s: Any) -> dict:
+def _face_inputs(uL: Any, uR: Any, fL: Any, fR: Any, n: Any, s: Any,
+                 speeds: Any = None) -> dict:
     # A cell read is lowered to the trace only where the face has no reconstruction (traced).
     inputs = {("trace", "left"): uL[0], ("trace", "right"): uR[0], ("flux", "left"): fL[0],
               ("flux", "right"): fR[0], ("normal",): n[0], ("speed",): s,
               ("cell", "left"): uL[0], ("cell", "right"): uR[0]}
     inputs.update({("normal", index): n[index] for index in range(3)})
+    if speeds is not None:
+        inputs[("speeds", 0)], inputs[("speeds", 1)] = speeds
     return inputs
 
 
@@ -1136,6 +1443,9 @@ def _reads(value: Any, allowed: tuple, scheme_: Any, entity: str, site: Any = No
                 % (scheme_, node.rank),
                 write="dot(e, face.normal) of a vector e, such as dot(term.law(...), "
                       "face.normal)", site=site)
+        if isinstance(node, SchemeLeaf) and node.key == ("distance",) and "distance" not in allowed:
+            raise NotYetElaborated("%s, a transport face that reads face.distance" % scheme_,
+                                   _SPACING, site=site)
         if isinstance(node, SchemeLeaf) and node.key[0] not in allowed:
             raise TypeError("%s reads %s, which a %s scheme does not receive"
                             % (scheme_, node, entity))
@@ -1224,8 +1534,9 @@ def check_plain_function(value: Any, where: str) -> None:
 
 
 __all__ = [
-    "BoundaryFaceEntity", "BoundaryTermEntity", "Builder", "CellEntity", "FaceEntity",
-    "FaceFlux", "Ghost", "Reconstruct", "SchemeLeaf",
+    "BoundaryFaceEntity", "BoundaryTermEntity", "Builder", "CellEntity", "DiffusiveLaw",
+    "FaceEntity", "FaceFlux", "Ghost", "Reconstruct", "SchemeLeaf", "StencilRealization",
+    "diffusive_frequency", "reads_speed_pair", "speed_pair_index",
     "LawValue", "SurfaceScheme", "TermEntity", "UserScheme", "Word", "Words",
     "check_plain_function", "dot", "formal_order", "is_radius_pair", "normal_dot",
     "fastest_speed", "forms", "kinds", "normal_form", "realize_reconstruction", "scheme",

@@ -6,6 +6,11 @@ duration is an increment and a state plus an increment is a state (SU10), so eac
 written as on paper; the increment of the candidate and its exchanges are derived (T34). The
 bodies are those of the gallery (``lib_methods.py`` of the surface drafts), and the trace of N8
 gives each the program that the same method written for N8 gives (SU-T3).
+
+``imex_euler`` solves its implicit rate (§17.1, L1-d): the relation of ``pops.solve`` is the one of
+N8 (§5.5). It replaces b6's ``pops.lib.time.imex.IMEX(state, explicit_operator=,
+implicit_operator=, tableau=IMEX_EULER_TABLEAU)``, the earlier spelling that piece H removes
+(SU3, MG9), as ``ssprk2`` did with ``ssprk.py``.
 """
 from __future__ import annotations
 
@@ -54,4 +59,15 @@ def rk4(step, rate):
     return pops.Candidate(u + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4))
 
 
-__all__ = ["forward_euler", "rk4", "ssprk2", "ssprk3"]
+@pops.method
+def imex_euler(step, explicit, implicit):
+    """IMEX Euler: X = u + h E(u, t) + h I(X, t + h), solved for X (§17.1, L1-d). Its one solve
+    is unnamed and takes the key of the method in ``solvers=`` (2.6.2)."""
+    u = step.state
+    t = step.time
+    h = step.dt
+    X = pops.unknown(step.state.space)
+    return pops.Candidate(pops.solve(X == u + h * explicit(u, t) + h * implicit(X, t + h), X))
+
+
+__all__ = ["forward_euler", "imex_euler", "rk4", "ssprk2", "ssprk3"]

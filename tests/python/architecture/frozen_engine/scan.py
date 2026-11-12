@@ -361,10 +361,27 @@ def _math_definitions(tree: ast.Module, words: frozenset) -> set[int]:
     return admitted
 
 
+def _entity_read_definitions(tree: ast.Module) -> set[int]:
+    """ids of the ``def`` nodes, in a class at the top level of the module of the entities, whose
+    name is a read of an entity of 2.6.4 in SURFACE_ENTITY_READS. Only the name of the definition
+    is admitted: its body, a call of the read and any other spelling are read as elsewhere."""
+    admitted: set[int] = set()
+    for statement in tree.body:
+        if isinstance(statement, ast.ClassDef):
+            for member in statement.body:
+                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and member.name in SURFACE_ENTITY_READS:
+                    admitted.add(id(member))
+    return admitted
+
+
 def math_definitions(rel: str, tree: ast.Module) -> set[int]:
     """ids of the nodes of @p tree that define a word of pops.math, when @p rel is the module
-    pops.math (POPS_MATH_MODULES); empty elsewhere. CF2 and gate 2e of test_lib_boundaries.py (no
-    numerical method has a home in the core) read this one admission."""
+    pops.math (POPS_MATH_MODULES), or a read of an entity of 2.6.4, when @p rel is the module of
+    the entities of the surface (SURFACE_ENTITY_MODULE); empty elsewhere. CF2 and gate 2e of
+    test_lib_boundaries.py (no numerical method has a home in the core) read this one admission."""
+    if rel == SURFACE_ENTITY_MODULE:
+        return _entity_read_definitions(tree)
     return _math_definitions(tree, POPS_MATH_WORDS) if rel in POPS_MATH_MODULES else set()
 
 
@@ -614,6 +631,17 @@ POPS_MATH_WORDS = frozenset(
     "infinity integral inverse jump jvp largest log log1p matrix_trace mean minus_side none_of "
     "norm normal outer outflow pi plus_side reflect restrict sign sin sinh smallest solve_small "
     "sqrt sum sum_over symmetric_eigen tan tanh trace transpose unit vector vjp where".split())
+
+
+# The reads of the entities of 2.6.4 whose names hold a CF2 term (N3 lot 1, ROM-87, 12/11, decided
+# by delegation): face.normal_gradient(w), the two-point normal derivative of w at a face, and
+# term.gradient_variables, the variables whose gradient a diffusive law reads. They are words of the
+# surface, in the "words" list of its lint (scripts/surface_lint_words.json), which the scheme
+# two_point() of pops.lib.numerics reads. In the module of the entities, the name of the method that
+# defines such a read is admitted (_entity_read_definitions); the name stays refused everywhere
+# else, in that module too (a selector, a key, a string, a kernel).
+SURFACE_ENTITY_MODULE = "python/pops/surface/_scheme.py"
+SURFACE_ENTITY_READS = frozenset({"gradient_variables", "normal_gradient"})
 
 
 @dataclasses.dataclass(frozen=True)

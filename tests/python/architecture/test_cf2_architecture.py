@@ -661,6 +661,31 @@ def test_the_words_of_pops_math_that_hold_a_term_are_curl_and_outflow():
         assert set(json.loads(lint.read_text(encoding="utf-8"))["math"]) == scan.POPS_MATH_WORDS
 
 
+def test_the_reads_of_an_entity_that_hold_a_term_are_admitted_only_where_they_are_defined():
+    """N3 lot 1: face.normal_gradient and term.gradient_variables are words of 2.6.4 (the "words"
+    list of the lint of the surface); the module of the entities defines them, and only the name of
+    each definition is admitted."""
+    assert {word for word in scan.SURFACE_ENTITY_READS if scan.terms_in(word, "ident")} == \
+        scan.SURFACE_ENTITY_READS
+    lint = scan.REPO_ROOT / "scripts" / "surface_lint_words.json"
+    if lint.exists():
+        assert scan.SURFACE_ENTITY_READS <= set(json.loads(lint.read_text(encoding="utf-8"))[
+            "words"])
+    defined = ("class FaceEntity:\n    def normal_gradient(self, value):\n        return value\n"
+               "class TermEntity:\n    @property\n    def gradient_variables(self):\n"
+               "        return []\n")
+    assert _terms(defined, "python", path=scan.SURFACE_ENTITY_MODULE) == []
+    assert _terms(defined, "python", path="python/pops/surface/_elaborate.py") == ["gradient"]
+    selected = ('def normal_gradient(value):\n    return value\n'
+                'class FaceEntity:\n    def read(self):\n        return self.normal_gradient\n'
+                'TABLE = {"gradient_variables": 1}\n')
+    assert _terms(selected, "python", path=scan.SURFACE_ENTITY_MODULE) == ["gradient"]
+    for source in ('def normal_gradient(value):\n    return value\n',
+                   'class FaceEntity:\n    def read(self):\n        return self.normal_gradient\n',
+                   'TABLE = {"gradient_variables": 1}\n'):
+        assert _terms(source, "python", path=scan.SURFACE_ENTITY_MODULE) == ["gradient"]
+
+
 @pytest.mark.parametrize("source", [
     '_EARLIER = {\n    "laplacian": SpellingRefusal("div(grad(e))"),\n'
     '    "Q": SpellingRefusal("Fraction(1, 2)"),\n}\n',

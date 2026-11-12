@@ -65,6 +65,7 @@ api pops/mesh/geometry/coordinate_map.hpp
 api pops/mesh/geometry/geometry.hpp
 api pops/mesh/geometry/swept_interval.hpp
 api pops/mesh/geometry/prepared_metric_provider.hpp
+api pops/mesh/geometry/static_geometry.hpp
 test-only pops/mesh/nd_proof/local_neighbors.hpp
 test-only pops/mesh/nd_proof/periodicity.hpp
 test-only pops/mesh/nd_proof/translation_schedule.hpp
@@ -147,6 +148,7 @@ api pops/numerics/elliptic/polar/polar_poisson_solver.hpp
 sdk-support pops/numerics/elliptic/polar/polar_tensor_operator.hpp
 sdk-support pops/numerics/elliptic/polar/prepared_polar_poisson_inverse.hpp
 api pops/numerics/fv/flux_interfaces.hpp
+api pops/numerics/fv/normal_flux.hpp
 api pops/numerics/fv/path_flux.hpp
 api pops/numerics/fv/path_result.hpp
 api pops/numerics/fv/flux_failure.hpp

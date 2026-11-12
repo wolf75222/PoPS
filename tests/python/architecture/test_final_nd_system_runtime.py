@@ -56,7 +56,11 @@ def _driver_body(source: str, signature: str) -> str:
 
 def _assert_ranked_step_drivers(source: str) -> None:
     step = _driver_body(source, "System<Dim>::step(double dt)")
-    cfl = _driver_body(source, "System<Dim>::step_cfl(")
+    # step_cfl executes the step that its selection (select_step_, shared with run_advance's step
+    # rule, N8) chooses: the facade is the two bodies.
+    facade = _driver_body(source, "System<Dim>::step_cfl(")
+    assert "select_step_(" in facade
+    cfl = facade + _driver_body(source, "System<Dim>::select_step_(")
     for body in (step, cfl):
         assert "dispatch_cadence_step(" in body
         assert not re.search(r"\bif\s+constexpr\b", body)

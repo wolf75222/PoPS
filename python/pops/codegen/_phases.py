@@ -464,7 +464,7 @@ def resolve(
                   bootstrap=authority.authorities.bootstrap,
                   execution=authority.authorities.execution).rows),
         ))
-    return ResolvedSimulationPlan(
+    resolved_plan = ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
         native_layouts=native_layouts,
@@ -492,6 +492,9 @@ def resolve(
         initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan,
         amr_execution=amr_execution, amr_providers=amr_providers,
         layout_amr_authorities=layout_amr_authorities)
+    from pops.codegen._static_geometry_consumers import validate_static_geometry_consumers
+    validate_static_geometry_consumers(resolved_plan)
+    return resolved_plan
 
 
 def compile(plan: Any) -> Any:

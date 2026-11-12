@@ -360,6 +360,10 @@ class _ProgramSerialization(_ProgramBase):
                 # Version 32: the memory and the field requests of a traced method (N8 lot 5):
                 # control schema 3 and the trial sites of the request outcomes.
                 _raise_ir_version(result, 32)
+            if advance_control.step_rule is not None:
+                # Version 33: the step rule of an Advance (N8 « Règle de pas compilée »):
+                # control schema 4, whose proposal is the rule.
+                _raise_ir_version(result, 33)
         cadence = self.cadence_contract()
         if not cadence.is_default:
             result["cadence"] = cadence.to_data()

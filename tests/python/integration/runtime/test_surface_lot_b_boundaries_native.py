@@ -25,7 +25,7 @@ from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
 from pops.lib.numerics.boundaries import ghosts
-from pops.lib.numerics.schemes import rusanov
+from pops.lib.numerics import rusanov
 from pops.lib.time.methods import ssprk2
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables

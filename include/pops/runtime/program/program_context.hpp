@@ -1029,6 +1029,14 @@ class ProgramContext {
   void require_cartesian_generated_operator(int program_block, const std::string& operation) const {
     system_->require_cartesian_generated_operator(sys_block(program_block), operation);
   }
+  /// Preflight a generated operator that reads the static geometry arrays (N17, C1).
+  void require_static_geometry_operator(int program_block, const std::string& operation) const {
+    system_->require_static_geometry_operator(sys_block(program_block), operation);
+  }
+  /// The static geometry arrays of the mapped layout, or null on the uniform logical box.
+  std::shared_ptr<const StaticGeometry<Dim>> static_geometry() const {
+    return system_->static_geometry();
+  }
 
   /// Fill the state and shared auxiliary halos through the exact block package before a generated
   /// pointwise stencil reads neighbouring cells.  The Program contributes no topology or boundary

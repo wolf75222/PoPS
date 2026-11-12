@@ -251,14 +251,22 @@ struct DiffusionGeometry {
   double spacing(int axis) const { return axis?hy:.5; }
   const pops::Box<2>& domain() const { return bounds; }
 };
+// A Cartesian producer: the face measures of static geometry arrays (N17) are never read.
+struct NoStaticArrays {
+  Real face_measure_at(int,const pops::Index<2>&) const {
+    throw std::runtime_error("static arrays read");
+  }
+};
 struct Producer {
   static constexpr int Dim=2, Components=2;
+  static constexpr bool StaticArrays=false;
   using Field=pops::MultiFab<2>;
   const Field& variable_;
   const std::vector<Faces>& faces_;
   DiffusionGeometry geometry_;
   std::array<Boundary,4> physical_{};
   const pops::Lane* lane_;
+  NoStaticArrays arrays_{};
   Real explicit_frequency() const { return 0; }
 ''' + producer + r'''
 };

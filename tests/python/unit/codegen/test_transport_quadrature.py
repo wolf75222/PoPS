@@ -87,3 +87,47 @@ def test_branch_results_and_scheduled_consumers_cannot_hide_selected_transport()
     program._commits = {"state": update}
     with pytest.raises(ValueError, match="scoped quadrature carrier"):
         accepted_transport_quadrature(program, {10: rate})
+
+
+def _linear_solve(rhs, guess, *, weights=({0: 1},), block=(), offset=40):
+    """A consumed ``solve_linear`` A X = b of a traced method (lot « solves » of N15): the apply
+    holds ``apply_in`` with each weight of ``weights`` and a laplacian of it, its block reads
+    ``block`` beside them, and the commit is the solution component of its outcome."""
+    applied = SimpleNamespace(id=offset, op="apply_in", inputs=(), attrs={})
+    field = SimpleNamespace(id=offset + 1, op="scalar_field", inputs=(), attrs={})
+    laplacian = SimpleNamespace(id=offset + 2, op="laplacian", inputs=(field, applied), attrs={})
+    terms = tuple((applied, weight) for weight in weights) + ((laplacian, {1: Fraction(-1, 100)}),)
+    operator = SimpleNamespace(
+        id=offset + 3, op="matrix_free_operator", inputs=(),
+        attrs={"apply_in": applied, "apply_result": SimpleNamespace(terms=terms),
+               "apply_block": (applied, field, laplacian) + tuple(block)})
+    solve = SimpleNamespace(id=offset + 4, op="solve_linear", inputs=(operator, rhs, guess),
+                            attrs={})
+    outcome = SimpleNamespace(id=offset + 5, op="solve_outcome", inputs=(solve,), attrs={})
+    return SimpleNamespace(id=offset + 6, op="solve_outcome_component", inputs=(outcome,),
+                           attrs={})
+
+
+def test_a_linear_solve_of_unit_weight_carries_the_transport_of_its_right_hand_side():
+    """X = u + dt E(u) + dt L(X): the captured transport of E is that of the rhs, weight dt."""
+    state = _state(0)
+    rate = _rate(10, "rhs", state)
+    rhs = _combine(20, (state, {0: 1}), (rate, {1: 1}))
+    program = SimpleNamespace(_commits={"state": _linear_solve(rhs, state)})
+    assert accepted_transport_quadrature(program, {10: rate}) == ((10, {1: Fraction(1)}),)
+
+
+@pytest.mark.parametrize("case", ["weight-two", "apply-reads-captured", "unknown-twice"])
+def test_a_linear_solve_outside_the_rule_hides_transport(case):
+    """A weight of the unknown other than one, an apply block that reads a captured rate, or the
+    unknown in two terms of the apply: the attribution to the rhs does not hold, and the commit
+    is refused as hiding transport."""
+    state = _state(0)
+    rate = _rate(10, "rhs", state)
+    rhs = _combine(20, (state, {0: 1}), (rate, {1: 1}))
+    options = {"weight-two": {"weights": ({0: 2},)},
+               "apply-reads-captured": {"block": (rate,)},
+               "unknown-twice": {"weights": ({0: 1}, {1: -1})}}[case]
+    program = SimpleNamespace(_commits={"state": _linear_solve(rhs, state, **options)})
+    with pytest.raises(ValueError, match="hides transport"):
+        accepted_transport_quadrature(program, {10: rate})

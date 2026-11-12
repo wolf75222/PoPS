@@ -424,7 +424,7 @@ void external_install_system(runtime::system::PreparedNativeBlockInstaller<Dim>&
       CompiledSystemBlockPreparation<Dim, Model>{
           name, external_model<Model>(static_cast<Real>(gamma)), std::move(routes),
           installer.geometry(), BoundaryTopology<Dim>::axis_periodic(installer.periodicity()),
-          provider_storage, provider_plan},
+          provider_storage, provider_plan, installer.static_geometry()},
       static_cast<Real>(weno_epsilon));
   prepared.name = name;
   prepared.ncomp = Model::n_vars;

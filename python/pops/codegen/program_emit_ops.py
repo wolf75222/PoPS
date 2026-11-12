@@ -1153,7 +1153,9 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             raise ValueError("stencil flux delegate requires an explicit resolved block owner")
         from .program_emit_stencil_flux import emit_stencil_flux
         from .program_value_authority import delegated_output_boundaries
-        publication = emit_stencil_flux(v, var, lines, block=bidx, target=target)
+        from .program_models import model_for_node
+        publication = emit_stencil_flux(v, var, lines, block=bidx, target=target,
+                                        model=None if model is None else model_for_node(model, v))
         output_setup_end, delegated_before_write = delegated_output_boundaries(
             v, var, lines, _profile_start, bidx, publication)
     elif v.op == "diffusive_rhs":
@@ -1169,9 +1171,11 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                             and any(node is v for node in program._values)))
                        and v.attrs.get("schedule") is None))
         publications = []
+        from pops.codegen.program_emit_diffusion import program_reads_static_geometry
         _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
                             defer_explicit_bound=defer_bound,
-                            output_publication=publications.append)
+                            output_publication=publications.append,
+                            static_geometry=program_reads_static_geometry(model))
         if len(publications) != 1:
             raise ValueError("diffusive delegate lacks one actual output publication boundary")
         from .program_value_authority import delegated_output_boundaries
