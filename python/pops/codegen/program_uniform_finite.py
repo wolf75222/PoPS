@@ -13,6 +13,7 @@ from contextvars import ContextVar
 from functools import wraps
 
 from pops._structural_data import canonical_json
+from pops._ir.data_model import is_field_leaf, is_finite_array, value_kind
 
 
 def _leaf(signature, token, lines):
@@ -24,9 +25,9 @@ def _leaf(signature, token, lines):
         from .program_emit_distributed_arrays import uniform_reference
 
         uniform_reference(signature, token, lines)
-    elif kind == "index_set":
+    elif value_kind(kind) == "index_set":
         _check_domain(signature, token, lines)
-    elif kind in ("state", "rhs", "scalar_field"):
+    elif is_field_leaf(kind):
         # The replicated outer Array does not replicate a MultiFab's local cells.
         pass
     elif kind == "scalar":
@@ -46,7 +47,7 @@ def _leaf(signature, token, lines):
             lines,
             "replicated array element differs across execution ranks",
         )
-    elif kind == "index":
+    elif value_kind(kind) == "index":
         _reject_if(
             "!(%s).domain || !(%s).domain->visible() || (%s).offset < 0 || "
             "(%s).offset >= (%s).domain->size" % ((token,) * 5),
@@ -92,7 +93,7 @@ def _layout(signature):
             ()
             if sig.get("ownership") == "contiguous_distributed" or _device(sig)
             else (sig["element"],)
-            if kind == "array"
+            if is_finite_array(kind)
             else tuple(child for _, child in sig["members"])
             if kind in ("product", "variant")
             else ()
@@ -221,7 +222,7 @@ def _traverse(nodes, token, root, depth, lines):
                     _push_record_child(child, offset, lines)
                     lines += ["break;", "}"]
                 lines += ["default: --top; break;", "}"]
-        elif kind == "array" and not distributed and _fields(sig):
+        elif is_finite_array(kind) and not distributed and _fields(sig):
             _cell(lines)
             lines.append(
                 "const auto* value = std::any_cast<pops_algebra_finite::FieldArray>(cell);"
@@ -231,7 +232,7 @@ def _traverse(nodes, token, root, depth, lines):
             )
             _field_array(sig, "(*value)", lines)
             lines.append("--top;")
-        elif kind == "array" and not distributed and _device(sig):
+        elif is_finite_array(kind) and not distributed and _device(sig):
             _cell(lines)
             lines.append(
                 "const auto* value = std::any_cast<pops_algebra_finite::DeviceArray>(cell);"
@@ -241,7 +242,7 @@ def _traverse(nodes, token, root, depth, lines):
             )
             _device_array(sig, "(*value)", lines)
             lines.append("--top;")
-        elif kind == "array" and not distributed:
+        elif is_finite_array(kind) and not distributed:
             lines += ["if (!frame.entered) {", "if (!frame.array) {"]
             _cell(lines)
             lines.append(
@@ -265,7 +266,7 @@ def _traverse(nodes, token, root, depth, lines):
                 "stack[top++] = UniformFrame{%d, child};" % node["children"][0],
                 "} else { --top; }",
             ]
-        elif kind in ("state", "rhs", "scalar_field"):
+        elif is_field_leaf(kind):
             lines.append("--top;")
         else:
             _cell(lines)
@@ -308,7 +309,7 @@ class _SchemaRegistry:
             data = dict(node["signature"])
             kind = data["vtype"]
             if data.get("ownership") != "contiguous_distributed":
-                if kind == "array" and children:
+                if is_finite_array(kind) and children:
                     data["element"] = children[0]
                 elif kind in ("product", "variant"):
                     data["members"] = tuple(
@@ -469,7 +470,7 @@ def uniform_element(signature, token, lines):
             stack.extend(reversed(children))
         else:
             lines.append("if (%s) {" % active)
-            if kind == "array" and sig.get("ownership") != "contiguous_distributed":
+            if is_finite_array(kind) and sig.get("ownership") != "contiguous_distributed":
                 _array(sig, value, lines)
             else:
                 _leaf(sig, value, lines)

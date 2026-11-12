@@ -19,7 +19,7 @@ from examples.api_v02.models_M01_M14 import (
 )
 from examples.api_v02.models_M15_M18 import build_m16
 from pops import math as pm
-from pops.lib.numerics import hll, rusanov, upwind
+from examples.api_v02.b6_numerics import hll, rusanov, upwind
 from pops.numerics import DiscretizationPlan
 from tests.python.integration.runtime.test_api_v02_python_faces_native import (
     _assert_rounding_level, _bind, _run,

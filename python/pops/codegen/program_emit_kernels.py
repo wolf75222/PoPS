@@ -928,11 +928,13 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <array>                               // exact-ranked axis packs
 #include <chrono>                              // std::chrono::steady_clock (per-node profiling pair, ADC-459)
 #include <cmath>                               // std::sqrt / std::fabs / std::pow in lowered formulas
+#include <cstdio>                              // std::snprintf (face step refusal payload, ROM-108)
 #include <limits>                              // std::numeric_limits (dt_bound +inf sentinel)
 #include <functional>                          // per-level AMR persistent Program closures
 #include <memory>                              // std::make_shared (persistent matrix-free scratch)
 #include <optional>                            // exact ProviderPack contract optional unit/kind
 #include <stdexcept>                           // std::runtime_error (AMR install fail-loud, ADC-508)
+#include <string>                              // std::string (typed refusal payloads)
 #include <utility>                             // std::as_const (read-only field views)
 #include <vector>                              // pointer list for the coupled multi-block field-solve (ADC-457)
 

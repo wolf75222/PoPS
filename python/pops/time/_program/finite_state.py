@@ -1,5 +1,6 @@
 """Validation of a complete finite state on the existing whole-System Program path."""
 from __future__ import annotations
+from pops._ir.data_model import is_field_leaf
 
 
 def require_finite_state_program(program):
@@ -16,7 +17,7 @@ def require_finite_state_program(program):
     if program._block_indices():
         raise ValueError("a finite-state Program cannot reference undeclared native blocks")
     def check(sig):
-        if sig["vtype"] in ("state", "rhs", "scalar_field"):
+        if is_field_leaf(sig):
             raise ValueError("a field-free Continuation cannot hide native fields in its packet")
         for _, child in sig.get("members", ()):
             check(child)

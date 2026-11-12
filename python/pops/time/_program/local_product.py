@@ -5,6 +5,7 @@ from types import MappingProxyType
 from pops.time.expressions import ProgramExpression, component_names, encode_expressions
 from pops.time.values import ProgramValue, _resolve_handle
 from .value_validation import require_top_level
+from pops._ir.data_model import field_role
 
 
 def build_local_product(program, problem, prepared, *, name=None):
@@ -89,7 +90,7 @@ def build_local_product(program, problem, prepared, *, name=None):
             if isinstance(row, _Affine):
                 row = program.value("product_residual_" + key, row, at=seed.point)
             if isinstance(row, ProgramValue):
-                if row.vtype not in ("state", "rhs") or row.block != seed.block:
+                if field_role(row) not in ("state", "rhs") or row.block != seed.block:
                     raise ValueError("LocalResidual product row must retain its exact unknown block")
                 row = tuple(row[c] for c in range(len(component_names(row))))
             if isinstance(row, ProgramExpression):

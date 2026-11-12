@@ -73,6 +73,7 @@ class ScientificType:
 
     def __post_init__(self):
         from pops.model.spaces import Space
+        from pops._ir.data_model import is_finite_array, value_kind
         from pops._ir.quantity import PhysicalDimension
         from pops.time.variant_types import ValueType
         if type(self.finite_type) is not ValueType or not isinstance(self.space, Space):
@@ -104,9 +105,9 @@ class ScientificType:
         if not isinstance(self.measure, Mapping) or not self.measure:
             raise TypeError("scientific measure requires an explicit nonempty definition mapping")
         if self.dofs is not None and (type(self.dofs) is not ValueType
-                                      or self.dofs.signature["vtype"] != "index_set"):
+                                      or value_kind(self.dofs.signature) != "index_set"):
             raise TypeError("dofs requires the exact finite IndexSet ValueType")
-        if self.finite_type.signature["vtype"] == "array":
+        if is_finite_array(self.finite_type.signature):
             if self.dofs is None:
                 raise ValueError("an array representation requires its exact dof family")
             domain = {key: value for key, value in self.finite_type.signature.items()

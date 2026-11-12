@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from typing import Any
+from pops._ir.data_model import field_role, is_field_leaf
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +59,7 @@ class ProgramValueAuthorityPlan:
             prefix, json.dumps(self.program_identity), ", ".join(producers), ", ".join(fields))]
 
 
-_BUFFER_TYPES = frozenset(("state", "rhs", "scalar_field", "vector_field", "mask"))
+_OTHER_BUFFER_TYPES = frozenset(("vector_field", "mask"))
 _RHS_STORAGE = frozenset(("rhs", "diffusive_rhs", "stencil_flux_divergence", "source", "implicit_source", "apply"))
 _STATE_STORAGE = frozenset(("linear_combine", "solve_local_linear", "solve_local_nonlinear",
                             "solve_implicit_source", "where", "pointwise_expression"))
@@ -183,7 +184,7 @@ def prepare_program_value_authority(program: Any, authority: Any,
         # and coefficient captures keep their solver-owned authorities; they are not State SSA.
         readable = tuple(value for value in source.inputs
                          if (value.vtype == "state" if source.op == "condensed_reconstruct" else
-                             value.vtype in _BUFFER_TYPES or value.op == "solve_outcome"))
+                             (is_field_leaf(value) or value.vtype in _OTHER_BUFFER_TYPES) or value.op == "solve_outcome"))
         inputs = tuple(visit(value, owner).ssa for value in readable)
         storage, storage_id, subslot, history, lag = "", source.id, 0, "", 0
         if source.op == "state":
@@ -207,7 +208,7 @@ def prepare_program_value_authority(program: Any, authority: Any,
                 raise NotImplementedError("Field RHS path producer requires its actual delegated storage hook")
             storage = "RhsScratch"
         elif source.op in _STATE_STORAGE:
-            storage = ("ScalarScratch" if source.vtype == "scalar_field" or
+            storage = ("ScalarScratch" if field_role(source) == "field" or
                        source.op == "pointwise_expression" and "field_product_seed" in source.attrs
                        else "StateScratch")
         elif source.op == "cell_compare":

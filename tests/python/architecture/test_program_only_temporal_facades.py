@@ -295,11 +295,17 @@ def test_system_temporal_facades_dispatch_only_through_an_installed_program():
         "void System<Dim>::step(double dt)",
         "void System<Dim>::advance(double dt, int nsteps)",
         "double System<Dim>::step_cfl(",
+        "double System<Dim>::select_step_(",
     ):
         body = _function_body(source, signature)
-        assert "require_step_installed(" in body
+        if signature != "double System<Dim>::step_cfl(":
+            assert "require_step_installed(" in body
         assert "SystemStepper" not in body
         assert "driver_->" not in body
+    # step_cfl requires the installed Program through its selection, which comes first (N8).
+    facade = _function_body(source, "double System<Dim>::step_cfl(")
+    assert facade[facade.index("{") + 1:].lstrip().startswith(
+        "const double selected = select_step_(")
 
     step = _function_body(source, "void System<Dim>::step(double dt)")
     step_cfl = _function_body(source, "double System<Dim>::step_cfl(")

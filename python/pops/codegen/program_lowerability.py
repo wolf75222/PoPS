@@ -5,6 +5,7 @@ from typing import Any
 
 from pops.codegen.program_emit_kernels import ProgramValue
 from pops.time._program.traversal import all_ops, all_ops_with_ancestry
+from pops._ir.data_model import field_role, is_field_leaf
 
 
 _MODEL_OWNER_SENSITIVE_OPS = frozenset(
@@ -149,7 +150,7 @@ def _check_amr_flux_weights(program: Any) -> None:
                     powers.get(source.id, frozenset())
                     for source in stored_histories.get(value.attrs["history"], ())
                 ])
-            elif (value.vtype in {"state", "rhs", "scalar_field"}
+            elif (is_field_leaf(value)
                   and (value.op in {"product_get", "result_success", "result_payload",
                                     "variant_payload", "variant_require_success"}
                        or value.op == "region_argument" and value.id in region_origins)):
@@ -175,7 +176,7 @@ def _check_amr_flux_weights(program: Any) -> None:
                 # the scalar elliptic solution is not a second transport contribution.
                 if (value.vtype != "state" or len(value.inputs) != 2
                         or value.inputs[0].vtype != "state"
-                        or value.inputs[1].vtype != "scalar_field"
+                        or field_role(value.inputs[1]) != "field"
                         or value.block is None or value.block != value.inputs[0].block
                         or value.space != value.inputs[0].space
                         or value.state_ref != value.inputs[0].state_ref):

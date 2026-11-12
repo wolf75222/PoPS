@@ -7,6 +7,7 @@ dependencies. Their signs are unrestricted; stability certificates are separate.
 from __future__ import annotations
 
 from pops.identity.scalar import ScalarLiteral, scalar_literal
+from pops._ir.data_model import field_role
 
 ZERO = ("literal", scalar_literal(0))
 ONE = ("literal", scalar_literal(1))
@@ -56,7 +57,7 @@ def affine_field_terms(value):
     nodes = value.attrs.get("expression_nodes", ())
     if len(outputs) != len(component_names(value)):
         return None
-    fields = {item.id: item for item in value.inputs if item.vtype in ("state", "rhs")}
+    fields = {item.id: item for item in value.inputs if field_role(item) in ("state", "rhs")}
     common = None
     for component, root in enumerate(outputs):
         parsed = []

@@ -13,6 +13,7 @@ from pops.time._program.value_validation import (
 )
 from pops.time.stencil import StencilAccess
 from pops.time.values import ProgramValue, _is_field_value, _resolve_handle
+from pops._ir.data_model import field_role, is_finite_index
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -330,14 +331,14 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             raise ValueError("where: mask and selected values must belong to the same block")
         require_compatible_spaces(a.space, b.space, "where", typed_pair=True)
         scalar_attrs = {}
-        if a.vtype == "scalar_field":
+        if field_role(a) == "field":
             from pops.time.field_sampling import scalar_co_location
             scalar_co_location(a, b, "where")
             if a.attrs.get("scalar_storage") is not None:
                 scalar_co_location(a, mask, "where mask", same_space=False)
                 scalar_attrs = {key: a.attrs[key] for key in
                                 ("scalar_storage", "scalar_owner", "scalar_sampling_contract", "scalar_storage_component")}
-        if mask.vtype in ("state", "rhs"):
+        if field_role(mask) in ("state", "rhs"):
             require_compatible_spaces(a.space, mask.space, "where mask", typed_pair=True)
         na, nb, nm_ = self._ncomp(a), self._ncomp(b), self._ncomp(mask)
         if na is not None and nb is not None and na != nb:
@@ -351,14 +352,14 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             attrs["ncomp"] = ncomp
         return self._new(
             a.vtype, "where", (mask, a, b), attrs, name, a.block, space=a.space,
-            point=a.point, inherit_state_ref=a.vtype != "scalar_field")
+            point=a.point, inherit_state_ref=field_role(a) != "field")
 
     @staticmethod
     def _ncomp(value: Any) -> Any:
         """The statically-known component count of a field value, or None when it is not pinned in the
         IR (a State / RHS ncomp is the model's n_cons, known only at codegen): a scalar_field carries its
         own ``ncomp`` attr. Used by `where` for the static a/b/mask ncomp consistency check."""
-        if value.vtype == "scalar_field":
+        if field_role(value) == "field":
             return int(value.attrs.get("ncomp", 1))
         return None
 
@@ -757,7 +758,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         if condition.clock != true_result.clock:
             raise ValueError("branch: condition and result arms must share one clock")
         structured = ({"signature": true_result.attrs["signature"]}
-                      if true_result.vtype in ("product", "variant", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology") else
+                      if (is_finite_index(true_result) or true_result.vtype in ("product", "variant", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology")) else
                       {"success_signature": true_result.attrs["success_signature"]}
                       if true_result.vtype == "result" else {})
         return self._new(
@@ -773,7 +774,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
     def _require_branch_compatible(left: Any, right: Any) -> None:
         if left.vtype != right.vtype:
             raise ValueError("branch: both arms must return the same value type")
-        if left.vtype in ("product", "variant", "result", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
+        if is_finite_index(left) or left.vtype in ("product", "variant", "result", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
             from .structured_control import value_signature, same_signature
             if not same_signature(value_signature(left), value_signature(right)):
                 raise ValueError("branch: product arms must have identical structural types")

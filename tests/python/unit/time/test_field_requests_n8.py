@@ -592,10 +592,11 @@ def test_requests_with_one_key_share_one_solve(monkeypatch):
     assert len(_ops(elaboration.program, "field_component")) == 1
 
 
-def test_one_state_read_at_two_times_is_solved_at_each_stage(monkeypatch):
+def test_one_state_read_at_two_times_is_solved_once(monkeypatch):
     """b6 ties an observation to the stage value that its solve read: the copy of B.state at
-    the second stage is another stage value, so its request is solved again (deviation from the
-    note's T7 reuse list, which goes with the linear recombination of T7)."""
+    the second stage is another stage value, so the IR keeps one request and one solve outcome
+    per stage. The request is time-independent: the emission solves it once and aliases the
+    second (lot « reuse across stages », ``test_reuse_across_stages_n8``)."""
     parts = _parts(monkeypatch, early.build_m10)
 
     @method
@@ -605,9 +606,17 @@ def test_one_state_read_at_two_times_is_solved_at_each_stage(monkeypatch):
         return Candidate(B.state + .5*p.dt*(k0 + k1), B.time + p.dt)
     elaboration = _elaborate(parts, twice)
     assert len(_ops(elaboration.program, "solve_linear")) == 2
+    assert len(_ops(elaboration.program, "solve_outcome")) == 2
     assert [(request.site, request.fixed) for request in elaboration.trace.requests] == [
         ("twice/flow#0/live_Poisson", True), ("twice/flow#1/live_Poisson", True)]
 
+    def route(case, block, state, flow, dt, *, name, memory, record, b6):
+        return elaborate(Advance(twice(flow=flow)), case=case, state=block[state],
+                         proposal=Proposal(dt), name=name)
+    source = _source(_spec(early, early.build_m10, monkeypatch, route))
+    assert source.count("ctx.solve_prepared_linear(") == 1
+    assert [line.strip() for line in source.splitlines()
+            if "field_counters_0)[1]" in line and "++" in line][-1] == "++(*field_counters_0)[1];"
 
 def test_two_keys_give_two_solves_and_a_body_read_reuses_the_component(monkeypatch):
     spec = _spec(early, early.build_m08, monkeypatch)

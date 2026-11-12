@@ -244,6 +244,16 @@ class AmbiguousElaboration(SurfaceRefusal, ValueError):
     code = "ambiguous_elaboration"
 
 
+class UnknownSolvePath(SurfaceRefusal, ValueError):
+    rules = ("§5.5", "SU8")
+    phase = "resolve"
+
+
+class AmbiguousSolvePath(SurfaceRefusal, ValueError):
+    rules = ("§5.5", "SU8")
+    phase = "resolve"
+
+
 class RealizationMismatch(SurfaceRefusal, ValueError):
     rules = ("D5", "§2.6.4")
     phase = "resolve"

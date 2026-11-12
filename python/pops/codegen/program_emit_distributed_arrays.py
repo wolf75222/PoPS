@@ -20,6 +20,7 @@ from pops.time._program.structured_control import (
     success_signature,
     failure_signature,
 )
+from pops._ir.data_model import is_finite_array, is_finite_index, value_kind
 
 NS = "pops::runtime::program"
 DN = NS + "::distributed"
@@ -31,9 +32,9 @@ LOCAL_FAILURE = DN + "::LocalPayloadFailure<pops::kNativeDimension>"
 
 def _requests_signature(sig):
     return (
-        sig["vtype"] == "array"
+        is_finite_array(sig)
         and sig.get("ownership") == OWNERSHIP
-        and sig["element"]["vtype"] == "index"
+        and value_kind(sig["element"]) == "index"
         and sig["element"].get("ownership") == OWNERSHIP
     )
 
@@ -69,7 +70,7 @@ def uniform_reference(sig, token, lines):
             "const auto& reference_lane=reference_registry.lane();",
         )
     )
-    if kind == "array":
+    if is_finite_array(kind):
         lines.append(DN + "::ArrayRef<pops::kNativeDimension> reference;")
         lines.append(DN + "::phase(reference_lane,[&]{")
         lines.append("reference=" + _array_native(sig, token) + ";")
@@ -96,10 +97,10 @@ def uniform_reference(sig, token, lines):
         lines.append("reference_registry.common(reference->domain);")
         lines.append(DN + "::agree_i64(std::int64_t(reference->version.ordinal),reference_lane);")
     else:
-        if kind == "index":
+        if value_kind(kind) == "index":
             lines.append("const auto& reference=" + token + ";")
             domain = "reference.domain"
-        elif kind == "index_set":
+        elif value_kind(kind) == "index_set":
             lines.append("const auto& reference=" + token + ";")
             domain = "reference"
         else:
@@ -111,7 +112,7 @@ def uniform_reference(sig, token, lines):
             + domain
             + "->capacity()==%d" % sig["capacity"]
         )
-        if kind == "index":
+        if value_kind(kind) == "index":
             check += " && reference.gid>=0 && reference.gid<reference.domain->size()"
         lines.append(
             DN
@@ -123,7 +124,7 @@ def uniform_reference(sig, token, lines):
             + DN
             + "::Code::domain); });"
         )
-        if kind == "index":
+        if value_kind(kind) == "index":
             lines.append(DN + "::agree_i64(reference.gid,reference_lane);")
     lines.append("}")
 
@@ -264,10 +265,10 @@ def unpack(sig, ref, *, capacity):
             stack.extend(
                 (child, children, name, (*path, 0)) for name, child in reversed(node["members"])
             )
-        elif kind in ("index_set", "index", "array") and node.get("ownership") == OWNERSHIP:
-            if kind == "index_set":
+        elif is_finite_index(kind) and node.get("ownership") == OWNERSHIP:
+            if value_kind(kind) == "index_set":
                 expression = "(%s)->distributed_domain_ref()" % projection
-            elif kind == "index":
+            elif value_kind(kind) == "index":
                 expression = (
                     DN
                     + "::Index{(%s)->distributed_domain_ref(),(%s)->distributed_index_offset()}"
@@ -282,7 +283,7 @@ def unpack(sig, ref, *, capacity):
             else:
                 expression = "(%s)->distributed_array_ref()" % projection
             parent[key] = expression
-        elif kind in ("index_set", "index", "array"):
+        elif is_finite_index(kind):
             from .program_emit_versioned import _unpack
 
             parent[key] = _unpack(node, projection, [], "distributed_unpacked", capacity=capacity)
@@ -813,7 +814,7 @@ def _body(v, var, lines, formal_name, *, lane):
         formal = v.attrs.get("body_index", v.attrs.get("body_offset"))
         env[formal.id] = (
             CV + "::distributed_index((%s).domain,(%s).gid)" % (formal_name, formal_name)
-            if formal.vtype == "index"
+            if value_kind(formal) == "index"
             else formal_name
         )
     lifted = frozenset(node.id for node in _local_nodes(block)
@@ -829,7 +830,7 @@ def _has_finite_capture(signature):
         if id(node) in seen:
             continue
         seen.add(id(node))
-        if node["vtype"] in ("index_set", "index", "array"):
+        if is_finite_index(node):
             if node.get("ownership") in ("replicated", OWNERSHIP):
                 return True
         else:
@@ -912,11 +913,11 @@ def emit_distributed_op(program, v, var, model, lines, prelude, block_idx, field
         lines.append("const std::int64_t %s=(%s)->size();" % (token, args[0]))
     elif v.op == "distributed_value_domain":
         source = signature(v.inputs[0])
-        is_requests = source["vtype"] == "array" and (
-            source["element"]["vtype"] == "index"
+        is_requests = is_finite_array(source) and (
+            value_kind(source["element"]) == "index"
             and source["element"].get("ownership") == OWNERSHIP
         )
-        access = "." if source["vtype"] == "index" or is_requests else "->"
+        access = "." if value_kind(source) == "index" or is_requests else "->"
         lines.append("const auto %s=(%s)%sdomain;" % (token, args[0], access))
         lines.append("%s.common(%s);" % (registry, token))
     elif v.op in ("distributed_domain", "distributed_balanced_domain"):
