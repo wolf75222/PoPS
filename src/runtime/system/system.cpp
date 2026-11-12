@@ -18,10 +18,29 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
 namespace pops {
+
+namespace {
+
+/// The fraction that a path rhs reads while the attempts of one step run (step_cfl, or
+/// run_advance with a step rule), set for the scope and restored on every exit.
+class StepFractionScope {
+ public:
+  StepFractionScope(double& slot, double fraction) : slot_(slot), prior_(slot) { slot_ = fraction; }
+  ~StepFractionScope() { slot_ = prior_; }
+  StepFractionScope(const StepFractionScope&) = delete;
+  StepFractionScope& operator=(const StepFractionScope&) = delete;
+
+ private:
+  double& slot_;
+  double prior_;
+};
+
+}  // namespace
 
 POPS_EXPORT std::string abi_key() {
   return detail::abi_key_string();
@@ -202,7 +221,8 @@ void System<Dim>::advance(double dt, int nsteps) {
 template <int Dim>
 runtime::program::AdvanceRunReport System<Dim>::run_advance(
     double until, double proposal, std::int64_t max_steps,
-    const std::vector<runtime::program::AdvanceOutputSchedule>& outputs) {
+    const std::vector<runtime::program::AdvanceOutputSchedule>& outputs,
+    const runtime::program::AdvanceStepRule* rule) {
   using runtime::program::AdvanceRunStop;
   p_->program_.require_step_installed("System::run_advance");
   const auto communicator = prepared_boundary_execution_lane_
@@ -211,9 +231,13 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
   const int max_attempts = p_->program_.advance_max_attempts_;
   auto& segment = p_->program_.advance_segment_;
   ExactContractBuilder arguments;
-  arguments.text("pops.system-run-advance.v1")
+  arguments.text("pops.system-run-advance.v2")
       .scalar(until)
       .scalar(proposal)
+      .presence(rule != nullptr)
+      .scalar(rule ? rule->fraction : 0.0)
+      .scalar(rule ? rule->max_dt : 0.0)
+      .scalar(rule ? rule->speed_floor : 0.0)
       .scalar(max_steps)
       .scalar(max_attempts)
       .scalar(p_->t)
@@ -239,10 +263,25 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     throw std::logic_error("System::run_advance requires a Program elaborated from an Advance");
   if (step_transaction_depth() != 0)
     throw std::logic_error("System::run_advance cannot run inside a step transaction");
-  if (!std::isfinite(until) || !std::isfinite(proposal) || !(proposal > 0.0) || max_steps < 0)
+  // With a step rule the proposal is the rule's selection at each step: the argument is not read.
+  if (!std::isfinite(until) ||
+      (rule == nullptr && (!std::isfinite(proposal) || !(proposal > 0.0))) || max_steps < 0)
     throw std::invalid_argument(
         "System::run_advance requires a finite frontier, a finite positive proposal and a "
         "non-negative step budget");
+  if (rule != nullptr) {
+    if (!std::isfinite(rule->fraction) || !(rule->fraction > 0.0) || std::isnan(rule->max_dt) ||
+        !(rule->max_dt > 0.0) || !std::isfinite(rule->speed_floor) || !(rule->speed_floor > 0.0))
+      throw std::invalid_argument(
+          "System::run_advance step rule requires a finite positive fraction, a positive max_dt "
+          "or +infinity and a finite positive speed floor");
+    // The rule selects once per step, on the accepted state: a bound that reads anything else
+    // could give a retry another value (review P2 of the lot note).
+    if (!p_->coupling_.dt_bounds.empty())
+      throw std::logic_error(
+          "System::run_advance with a step rule refuses the global bounds of add_dt_bound, "
+          "which read outside the accepted state");
+  }
   if (until < p_->t)
     throw std::invalid_argument("System::run_advance frontier precedes the accepted time");
   const auto& output_scalar_counts = p_->program_.advance_output_scalar_counts_;
@@ -255,9 +294,12 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
       (void)p_->find(block);  // an unknown block fails before the first evaluation
   // A run continues the segment that the last compiled run left at this cursor with this
   // proposal; any other run starts one, as master's FixedDt grid does.
-  if (segment.macro_step != static_cast<std::int64_t>(p_->macro_step_) || segment.time != p_->t ||
-      segment.proposal != proposal)
+  // A run with a step rule has no fixed-proposal segment: each step starts its own below.
+  if (rule == nullptr && (segment.macro_step != static_cast<std::int64_t>(p_->macro_step_) ||
+                          segment.time != p_->t || segment.proposal != proposal))
     segment = {proposal, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
+  if (rule != nullptr)
+    segment = {0.0, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
   runtime::program::AdvanceRunReport report;
   const std::int64_t solves = p_->prepared_solves_;
   const auto finish = [&](AdvanceRunStop stop) {
@@ -295,8 +337,22 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     if (report.steps == max_steps)
       return finish(AdvanceRunStop::kStepBudget);
     const double frontier = runtime::program::advance_next_frontier(p_->t, until, outputs, cursors);
-    const auto duration = runtime::program::advance_attempt_duration(p_->t, proposal, frontier,
+    double step_proposal = proposal;
+    if (rule != nullptr) {
+      // b6's selection on the accepted state, taken once for the attempts of the step; the step
+      // starts its own segment, so the landing rules are those of a single proposal.
+      step_proposal = select_step_(rule->fraction, rule->speed_floor, rule->max_dt, 0.0);
+      segment = {step_proposal, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
+    }
+    const auto duration = runtime::program::advance_attempt_duration(p_->t, step_proposal, frontier,
                                                                      segment.origin, segment.steps);
+    if (rule != nullptr && (duration.lands || duration.dt != step_proposal))
+      p_->last_dt_reason_ = "frontier";  // cut or landed by the frontier (review P1)
+    // The attempts of a rule run at its fraction, as step_cfl's execution does: a path rhs checks
+    // its budget against it.
+    std::optional<StepFractionScope> fraction_scope;
+    if (rule != nullptr)
+      fraction_scope.emplace(p_->active_program_step_courant_, rule->fraction);
     // The epoch before the first attempt of this step: a retry keeps the epoch of the step only
     // when an earlier attempt opened it, so an attempt rejected before its begin_step never
     // lends a later one the epoch of the previous accepted step (review of the code, O1).
@@ -339,7 +395,12 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
       }
     }
     ++report.steps;
-    if (duration.continuous) {
+    if (rule != nullptr) {
+      // A rule's step ends its own segment; no fixed-proposal run continues it (proposal 0).
+      segment.proposal = 0.0;
+      segment.origin = p_->t;
+      segment.steps = 0;
+    } else if (duration.continuous) {
       ++segment.steps;
     } else {
       segment.origin = p_->t;
@@ -1031,7 +1092,32 @@ void System<Dim>::rollback_restart_transaction() {
 }
 
 template <int Dim>
-double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, double min_dt) {
+double System<Dim>::step_cfl(double fraction, double speed_floor, double max_dt, double min_dt) {
+  const double selected = select_step_(fraction, speed_floor, max_dt, min_dt);
+  const ExecutionLane& lane = prepared_boundary_execution_lane();
+  {
+    // The step runs at its fraction (a path rhs checks its budget against it), restored after the
+    // step on every exit, before the attempt count moves.
+    const StepFractionScope fraction_scope(p_->active_program_step_courant_, fraction);
+    p_->execute_step_transaction(
+        lane.communicator(),
+        [&] {
+          p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System",
+                                             lane.communicator());
+          if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
+            throw std::logic_error("System Program CFL step left a native solve result unconsumed");
+        },
+        [&] {
+          ++solve_outcome_authority_->attempt;
+          rollback_field_publication_transaction();
+        });
+  }
+  ++solve_outcome_authority_->attempt;
+  return selected;
+}
+
+template <int Dim>
+double System<Dim>::select_step_(double cfl, double speed_floor, double max_dt, double min_dt) {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   runtime::program::require_step_transaction_control(
       lane, 10, static_cast<long>(step_transaction_depth()),
@@ -1310,27 +1396,6 @@ double System<Dim>::step_cfl(double cfl, double speed_floor, double max_dt, doub
     throw std::runtime_error("System::step_cfl selected different bounds across MPI ranks");
 
   p_->last_dt_reason_ = std::move(reason);
-  const double prior_courant = p_->active_program_step_courant_;
-  p_->active_program_step_courant_ = cfl;
-  try {
-    p_->execute_step_transaction(
-        lane.communicator(),
-        [&] {
-          p_->program_.dispatch_cadence_step(p_->t, p_->macro_step_, selected, "System",
-                                             lane.communicator());
-          if (solve_outcome_authority_->pending.load(std::memory_order_acquire) != 0)
-            throw std::logic_error("System Program CFL step left a native solve result unconsumed");
-        },
-        [&] {
-          ++solve_outcome_authority_->attempt;
-          rollback_field_publication_transaction();
-        });
-  } catch (...) {
-    p_->active_program_step_courant_ = prior_courant;
-    throw;
-  }
-  p_->active_program_step_courant_ = prior_courant;
-  ++solve_outcome_authority_->attempt;
   return selected;
 }
 
@@ -1508,7 +1573,8 @@ template void System<kNativeDimension>::count_prepared_solve_(int, double) noexc
 template void System<kNativeDimension>::step(double);
 template void System<kNativeDimension>::advance(double, int);
 template runtime::program::AdvanceRunReport System<kNativeDimension>::run_advance(
-    double, double, std::int64_t, const std::vector<runtime::program::AdvanceOutputSchedule>&);
+    double, double, std::int64_t, const std::vector<runtime::program::AdvanceOutputSchedule>&,
+    const runtime::program::AdvanceStepRule*);
 template int System<kNativeDimension>::advance_max_attempts() const noexcept;
 template std::string System<kNativeDimension>::advance_program_region(double);
 template void System<kNativeDimension>::begin_step_transaction();
@@ -1543,6 +1609,7 @@ template void System<kNativeDimension>::commit_restart_transaction();
 template void System<kNativeDimension>::finalize_restart_transaction() noexcept;
 template void System<kNativeDimension>::rollback_restart_transaction();
 template double System<kNativeDimension>::step_cfl(double, double, double, double);
+template double System<kNativeDimension>::select_step_(double, double, double, double);
 template double System<kNativeDimension>::active_program_step_courant() const;
 template int System<kNativeDimension>::macro_step() const;
 template void System<kNativeDimension>::mark_bound();

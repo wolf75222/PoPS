@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1181,
+    "estimated_count": 1183,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6930,6 +6930,7 @@
       "tests/python/integration/runtime/test_combined_diffusion_exchange_ledger.py",
       "tests/python/integration/runtime/test_combined_transport_derived_auxiliary.py",
       "tests/python/integration/runtime/test_compiled_control_n8_native.py",
+      "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py",
       "tests/python/integration/runtime/test_computed_program_frontier_runtime.py",
       "tests/python/integration/runtime/test_computed_scratch_ssa_native.py",
       "tests/python/integration/runtime/test_conditional_consumers_runtime.py",
@@ -7764,6 +7765,7 @@
       "tests/python/unit/time/test_coarsening_moments_v14.py",
       "tests/python/unit/time/test_compiled_control_n8.py",
       "tests/python/unit/time/test_compiled_program_detach.py",
+      "tests/python/unit/time/test_compiled_step_rule_n8.py",
       "tests/python/unit/time/test_computed_scratch_ssa.py",
       "tests/python/unit/time/test_computed_spatial_ports.py",
       "tests/python/unit/time/test_continuation_forest_v02.py",
@@ -8119,7 +8121,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1246,
+    "total_files": 1248,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8735,6 +8737,33 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_reuse_across_stages_n8_native.py": "104f65179603cd68cdf58588da47aef3f1c386a2b3dee7ce591abc5ad20a4ef7",
         "tests/python/unit/time/test_reuse_across_stages_n8.py": "d74b4aca1e5b751bbb9e7280fd79e70b24a2e1f14249ac1839ef700ccf7ac91c"
+      }
+    },
+    "ci_20261112_n8_compiled_step_rule": {
+      "basis": "Unmeasured CI scheduling estimates for the two N8 \u00ab R\u00e8gle de pas compil\u00e9e \u00bb modules (ROM-89), on the api_v02_20261013 tiers: 15 s for the source-only module (the control record of schema 4 and the elaboration of a StepRule, no C++); 360 s for the Dim2 native module (about 2.8 times its local receipt, the ratio of the reuse lot), which compiles master's tutorial 02 at 64 x 64 cells five times (the slice's rule, a binding max_dt, Retry(2) with and without the one-shot rejection, an Output) and runs each against master's AdaptiveCFL bit for bit. The local receipts come from scripts/ci_pytest_timings.py on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial build of _pops); they are not GitHub CI file wall times. Existing weights, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py": "tests/python/integration/runtime/test_compiled_control_n8_native.py",
+        "tests/python/unit/time/test_compiled_step_rule_n8.py": "tests/python/unit/time/test_compiled_control_n8.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py": 360,
+        "tests/python/unit/time/test_compiled_step_rule_n8.py": 15
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py": {
+          "cases": 5,
+          "phase_seconds": 128.59,
+          "session_seconds": 129.35
+        },
+        "tests/python/unit/time/test_compiled_step_rule_n8.py": {
+          "cases": 25,
+          "phase_seconds": 0.66,
+          "session_seconds": 1.41
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py": "c90bccf9d951bd3372bb7a356347e126c71e39088057a0af62921b13d3f3de91",
+        "tests/python/unit/time/test_compiled_step_rule_n8.py": "6d3116aad76670b6d34ee286ecba07b034eb8e0c89b39ed2cdd4662dc1bae651"
       }
     }
   },
@@ -9983,5 +10012,7 @@
   "tests/python/unit/surface/test_solver_reference_n9.py": 15,
   "tests/python/integration/runtime/test_reference_cg_trace_n9.py": 1200,
   "tests/python/integration/runtime/test_reuse_across_stages_n8_native.py": 900,
-  "tests/python/unit/time/test_reuse_across_stages_n8.py": 60
+  "tests/python/unit/time/test_reuse_across_stages_n8.py": 60,
+  "tests/python/integration/runtime/test_compiled_step_rule_n8_native.py": 600,
+  "tests/python/unit/time/test_compiled_step_rule_n8.py": 15
 }

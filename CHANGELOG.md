@@ -18,6 +18,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
+  from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
+  `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the
+  compiled run takes each step's proposal from b6's `System::step_cfl` selection, now split from
+  its execution as `select_step_`, and lands on its frontiers. Its control is
+  `pops.advance-control@4` (IR version 33); every Program without a rule keeps its record and
+  identity. `pops.run` on the same artifact runs the rule's strategy (master's `AdaptiveCFL` from
+  `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
+  sliver step at a frontier, when a CFL step ends within four ulp short of it or when
+  `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
 - ROM-98 (N15, lot D-E, part E): the projection of an analytic initial value (spec 0.3, 2.6.2,
   CN12, SU9; OD31). `initial={u: pops.project(e, quadrature=Q)}` averages e over each cell by
   the rule Q (one `pops.Quadrature` or one per axis) mapped onto the cell, and
