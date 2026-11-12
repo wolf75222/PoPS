@@ -376,11 +376,20 @@ class _Elaboration:
         if pair is not None:
             return inputs[("speeds", pair)]
         if isinstance(value, Predicate):
-            if value.op not in ("<", "<=", ">", ">="):
+            # N3 lot 2 (P4): equal(a, b) is b6 ==, all_of and any_of the left folds of & and |,
+            # and none_of([p, q, ...]) is ~(p | q | ...), ~p for one predicate.
+            if value.op in ("all_of", "any_of", "none_of"):
+                items = [self.lower(arg, inputs) for arg in value.args]
+                result = items[0]
+                for item in items[1:]:
+                    result = result & item if value.op == "all_of" else result | item
+                return ~result if value.op == "none_of" else result
+            if value.op not in ("<", "<=", ">", ">=", "equal"):
                 raise NotYetElaborated("%s in the body of a scheme" % text(value), _LATER)
             left, right = (self.lower(arg, inputs) for arg in value.args)
             return {"<": lambda: left < right, "<=": lambda: left <= right,
-                    ">": lambda: left > right, ">=": lambda: left >= right}[value.op]()
+                    ">": lambda: left > right, ">=": lambda: left >= right,
+                    "equal": lambda: left == right}[value.op]()
         if isinstance(value, Call) and value.word == "where":
             predicate, then, otherwise = value.args
             then_value, otherwise_value = self.lower(then, inputs), self.lower(otherwise, inputs)
