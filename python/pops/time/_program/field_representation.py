@@ -15,6 +15,7 @@ from pops.time._program.value_validation import require_owned
 from pops.time.value_signatures import same_signature, value_signature
 from pops.time.variant_types import ValueType
 from pops.time.field_topology import field_components, validate_topology_signature
+from pops._ir.data_model import field_role, value_kind
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -77,7 +78,7 @@ def _domains(signature):
     cells = members["instance"]
     patches = dict(members["maps"]["members"])["patch_instance"]
     for domain, ownership in ((cells, "contiguous_distributed"), (patches, "replicated")):
-        if domain.get("vtype") != "index_set" or domain.get("ownership") != ownership:
+        if value_kind(domain) != "index_set" or domain.get("ownership") != ownership:
             raise TypeError("Field Bundle has an incompatible storage-domain ownership")
         _capacity(domain.get("capacity"), "Field Bundle domain")
         if type(domain.get("family")) is not int or domain["family"] < 0:
@@ -89,7 +90,7 @@ def _field_topology(program, field, topology):
     require_owned(program, field, "Field representation")
     require_owned(program, topology, "Field topology", vtype="field_topology")
     signature = validate_topology_signature(value_signature(topology))
-    if field.vtype not in ("state", "scalar_field") or not same_signature(
+    if field_role(field) not in ("state", "field") or not same_signature(
             value_signature(field), signature["field_signature"]):
         raise TypeError("Field representation requires its exact topology field authority")
     return signature
@@ -110,7 +111,7 @@ def validate_field_representation(value):
         raise TypeError("Field representation has an incomplete input contract")
     field, topology = inputs[:2] if exporting else inputs[1:]
     top = validate_topology_signature(value_signature(topology))
-    if field.vtype not in ("state", "scalar_field") or not same_signature(
+    if field_role(field) not in ("state", "field") or not same_signature(
             value_signature(field), top["field_signature"]):
         raise TypeError("Field representation changed its exact field/topology pair")
     bundle = value_signature(value) if exporting else value_signature(inputs[0])
@@ -139,7 +140,7 @@ def validate_field_storage_allocation(value):
     top = validate_topology_signature(value_signature(topology))
     if top["side"] != "target":
         raise TypeError("Field storage allocation requires a target topology")
-    if (prototype.vtype != "scalar_field"
+    if (field_role(prototype) != "field"
             or not same_signature(value_signature(prototype), top["field_signature"])):
         raise TypeError("Field storage allocation requires its exact scalar-field topology authority")
     if initial.vtype != "scalar":
@@ -166,7 +167,7 @@ def allocate_field_storage(program, prototype, topology, initial, *, ncomp=None,
 
     _field_topology(program, prototype, topology)
     require_owned(program, initial, "Field storage Float64 initial", vtype="scalar")
-    if prototype.vtype != "scalar_field":
+    if field_role(prototype) != "field":
         raise TypeError("Field storage allocation requires a typed scalar-field prototype")
     width = field_components(value_signature(prototype))
     if ncomp is not None and (type(ncomp) is not int or ncomp != width):
@@ -315,7 +316,7 @@ class _ProgramFieldRepresentation(_ProgramBase):
             fs = value_signature(family)
             if fs["vtype"] == "product":
                 cell_domain, patch_domain = _domains(fs)
-            elif fs["vtype"] == "index_set" and fs.get("ownership") == "contiguous_distributed":
+            elif value_kind(fs) == "index_set" and fs.get("ownership") == "contiguous_distributed":
                 cell_domain = fs
             else:
                 raise TypeError("family requires an owned Field Bundle or distributed IndexSet")

@@ -1,0 +1,248 @@
+"""N9 lot 4: ``@pops.solver`` and the reference ``pops.lib.solve.cg`` (spec 0.3 SV9, SU15, C46).
+
+The reference lowers onto the Program without a native module: these tests build it, emit its
+C++ and check the surface of a solver, its refusals, the identity of its body (CF4, O1) and the
+collectives of one step (SV20). The native comparison (SV13, the Trace class) is in
+``tests/python/integration/runtime/test_reference_cg_trace_n9.py``.
+"""
+from __future__ import annotations
+
+import inspect
+
+import pytest
+
+import pops
+import pops.surface as surface
+from pops.surface import _solver
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.linalg import LinearOperatorProperties, LinearProblem
+from pops.lib.solve import cg, krylov
+from pops.time.solve_outcome import FailRun, RejectAttempt
+
+
+def _program(solver, *, properties=None, consume=None, read_evidence=False):
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian2D
+
+    frame = CartesianDomain("ref_n9", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
+    model = pops.Model("ref_n9", frame=frame)
+    state = model.state("u", components=("c0",), sampling="cell_average")
+    case = pops.Case("ref_n9")
+    block = case.block("q", model)
+    program = pops.Program("ref_n9")
+    temporal = program.state(block[state])
+    operator = program.matrix_free_operator("A", domain="state", range_="state", ncomp=1)
+
+    def apply(p, out, x):
+        return x - 0.1 * p.laplacian(out, x)
+
+    program.set_apply(operator, apply)
+    problem = LinearProblem(
+        operator, temporal.n, nullspace=None,
+        properties=properties or LinearOperatorProperties.symmetric_positive_definite())
+    outcome = program.solve(problem, solver=solver, name="sol")
+    solution = outcome.consume(action=RejectAttempt() if consume is None else consume)
+    if read_evidence:
+        program.record_scalar("cg_residual", outcome.evidence.residual_norm)
+    program.commit(temporal.next, program.value("accepted", solution, at=temporal.next.point))
+    return program, outcome
+
+
+def _walk(values, seen=None):
+    """Every value of the Program, nested regions included."""
+    from pops.time.values import ProgramValue
+
+    seen = set() if seen is None else seen
+    for value in values:
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        yield value
+        for item in value.attrs.values():
+            if isinstance(item, ProgramValue):
+                yield from _walk((item,), seen)
+            elif isinstance(item, (list, tuple)) and all(isinstance(x, ProgramValue) for x in item):
+                yield from _walk(item, seen)
+
+
+def _reference(**options):
+    return cg(**options).with_request(rtol=1e-10, atol=0.0)
+
+
+def test_the_reference_lowers_onto_one_iterate_and_emits():
+    program, outcome = _program(_reference(max_iterations=50), read_evidence=True)
+    assert program.validate()
+    ops = [value.op for value in _walk(program._values)]
+    assert ops.count("structured_iterate") == 1
+    assert "solve_linear" not in ops  # no native solve: the body is the Program
+    source = emit_cpp_program(program)
+    assert "solve_prepared_linear" not in source
+    assert outcome.evidence.reason == "solved"
+
+
+def test_a_solver_records_its_options_and_runs_nothing():
+    value = cg(max_iterations=7)
+    assert value.options == {"preconditioner": None, "max_iterations": 7}
+    with pytest.raises(TypeError, match="by keyword"):
+        cg(7)
+    with pytest.raises(TypeError, match="no option tolerance"):
+        cg(tolerance=1e-8)
+    with pytest.raises(ValueError, match="no request"):
+        cg().prepare_program_solve()
+    with pytest.raises(ValueError, match="rtol in"):
+        cg().with_request(rtol=1.0, atol=0.0)
+
+
+def test_a_solver_takes_the_two_entities():
+    with pytest.raises(TypeError, match="supplies problem and region"):
+        @surface.solver
+        def no_region(problem, max_iterations=3):  # pragma: no cover - refused at decoration
+            return problem
+
+
+@pytest.mark.parametrize("word, owner", [("choose", "a later lot of N8"), ("fail", "N8 phase 1")])
+def test_the_body_words_refuse_outside_a_solver(word, owner):
+    arguments = {"choose": ((None,), {"then": None, "otherwise": None}),
+                 "fail": ((surface.SolveFailed,), {"payload": "breakdown"})}[word]
+    with pytest.raises(surface.NotYetElaborated, match=owner):
+        getattr(surface, word)(*arguments[0], **arguments[1])
+
+
+def test_record_outside_a_solver_is_the_record_of_the_run():
+    from pops.surface._run import Record as RunRecord
+
+    value = surface.record(a=1.0)
+    assert isinstance(value, RunRecord) and value.a == 1.0
+
+
+def test_the_failure_variants_are_the_run_classes():
+    from pops.surface._run import RunFailed
+
+    assert issubclass(surface.SolveFailed, RunFailed) and issubclass(surface.BudgetExhausted, RunFailed)
+    with pytest.raises(TypeError, match="variant of T39"):
+        with _solver._lowering(_solver._Lowering(None, "t")):
+            surface.fail(RunFailed, payload="breakdown")
+
+
+def test_require_refuses_an_operator_not_derived_spd():
+    general = LinearOperatorProperties()
+    with pytest.raises(surface.PropertyNotDerived, match="symmetric positive definite"):
+        _program(_reference(), properties=general)
+
+
+def test_the_preconditioner_is_refused_with_g10():
+    with pytest.raises(surface.NotYetElaborated, match="G10"):
+        cg(preconditioner="jacobi")
+
+
+@pytest.mark.parametrize("bad", [0, -1, 2.5, True])
+def test_max_iterations_is_a_positive_integer(bad):
+    with pytest.raises(ValueError, match="max_iterations"):
+        _program(_reference(max_iterations=bad))
+
+
+def test_the_evidence_is_read_after_consumption_only():
+    program, outcome = _program(_reference())
+    evidence = outcome.evidence
+    with pytest.raises(surface.NotYetElaborated, match="« Évidence des solves »"):
+        _ = evidence.correction_norm
+    assert evidence.iterations.vtype == "int64"
+    assert evidence.residual_norm.vtype == "scalar"
+
+
+def test_a_reference_outcome_is_not_readable_before_consume():
+    from pops.surface._solver import ReferenceOutcome
+
+    program, _ = _program(_reference())
+    unconsumed = ReferenceOutcome.__new__(ReferenceOutcome)
+    unconsumed._success = None
+    with pytest.raises(TypeError, match="after consume"):
+        _ = unconsumed.evidence
+
+
+def test_failrun_on_a_reference_is_left_to_a_later_lot():
+    with pytest.raises(surface.NotYetElaborated, match="FailRun"):
+        _program(_reference(), consume=FailRun())
+
+
+def test_the_name_of_a_solver_is_not_identity():
+    # CF4 and O1: the case writes the library's body as my_cg; the Program and its C++ are the
+    # same, so the function's name enters no identity (SV9: the hash of the IR).
+    source = inspect.getsource(krylov).replace("def cg(", "def my_cg(")
+    namespace: dict = {"__name__": "case_my_cg"}
+    exec(compile(source, "case_my_cg.py", "exec"), namespace)
+    my_cg = namespace["my_cg"]
+    library, _ = _program(_reference(max_iterations=40))
+    case, _ = _program(my_cg(max_iterations=40).with_request(rtol=1e-10, atol=0.0))
+    assert emit_cpp_program(library) == emit_cpp_program(case)
+
+
+def test_the_failures_are_variants_of_t39_with_their_reason():
+    from pops.surface._solver import FAILURE_CODES
+
+    assert set(FAILURE_CODES) == {
+        ("BudgetExhausted", "iteration limit"), ("SolveFailed", "breakdown"),
+        ("SolveFailed", "invalid evaluation"), ("SolveFailed", "unverified solved value")}
+    program, _ = _program(_reference())
+    codes = {value.inputs[1].attrs["value"] for value in _walk(program._values)
+             if value.op == "result_error" and value.inputs[1].op == "int64_constant"}
+    assert codes == {11, 21, 22, 23}
+
+
+def test_the_solve_reduces_its_pairings_and_norms_in_its_program():
+    # SV20 duty 3. Four norms of the request, each the largest magnitude (norm_inf_all) and one of
+    # two pairings on its branch (sqrt(<v, v>) at ordinary scales, or of v / max|v| outside):
+    # |b|, the first residual, the true residual of a confirmation and of the check at the cap.
+    # Three more pairings in the recurrence: r.r of the first scaled residual, the curvature
+    # (d, Ad) and r.r of the updated residual. Only one arm of each branch runs.
+    program, _ = _program(_reference())
+    reductions = [value.attrs.get("kind") for value in _walk(program._values)
+                  if value.op == "reduce"]
+    assert reductions.count("norm_inf_all") == 4
+    assert reductions.count("dot_all") == 4 * 2 + 3
+    assert len(reductions) == 15
+
+
+def _m08_source_with_evidence(retry_can_change):
+    """The C++ of M08 (N8 lot 6) when the case reads the evidence of its stage-0 (fixed site,
+    kept across attempts) or stage-1 (retryable) solve."""
+    import examples.api_v02.models_M01_M14 as early
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.time.solve_outcome import SolveEvidence
+
+    spec = early.build_m08()
+    program = spec.case._time
+    (outcome,) = [value for value in program._values if value.op == "solve_outcome"
+                  and value.attrs["trial_site"]["retry_can_change"] is retry_can_change]
+    _ = SolveEvidence(program, outcome).iterations
+    resolved = pops.resolve(pops.validate(spec.case), layout=spec.layout)
+    return emit_cpp_program(resolved.time, model_graph=ProgramModelGraph.from_resolved_blocks(
+        resolved.blocks)), outcome.inputs[0].id
+
+
+def test_the_evidence_of_a_solve_kept_across_attempts_is_not_yet_elaborated():
+    from pops.time._program.traced_method import NotYetElaborated
+
+    with pytest.raises(NotYetElaborated, match="« Évidence des solves »") as refusal:
+        _m08_source_with_evidence(False)
+    assert "kept attempt's report" in str(refusal.value)
+    assert "N8 lot 6" in str(refusal.value)
+
+
+def test_the_evidence_of_a_retryable_solve_is_emitted():
+    source, solve = _m08_source_with_evidence(True)
+    assert "const pops::SolveReport kr%d_evidence = kr%d.report();" % (solve, solve) in source
+
+
+def test_the_candidate_names_the_fields_of_its_evidence():
+    # Review O1 of #775: the evidence reads the residual norm from the field that the solver's
+    # candidate names, not from a field of CG's record.
+    @surface.solver
+    def literal_norm(problem, region, max_iterations=3):
+        start = surface.record(x=problem.guess, n=1.0)
+        result = region.iterate(start=start, step=lambda s: s, stop=lambda s: s.n > 0,
+                                max_steps=max_iterations)
+        return problem.candidate(result.x, iterations=result.iterations, residual_norm=1.0)
+
+    with pytest.raises(TypeError, match="residual_norm=...\\) takes a field of the result"):
+        _program(literal_norm().with_request(rtol=1e-8, atol=0.0))

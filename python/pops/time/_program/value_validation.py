@@ -7,6 +7,7 @@ from pops.time.values import ProgramValue, _Affine
 from pops.time.points import point_clock
 from pops.time.value_support import require_owned_value
 from pops.time.value_scope import TOP_LEVEL_REGION, require_top_level
+from pops._ir.data_model import field_role
 
 
 _BLOCK_KEYS = (
@@ -77,7 +78,7 @@ def require_compatible_spaces(left: Any, right: Any, where: str, *, typed_pair: 
 
 def merge_state_spaces(values: Any, where: str) -> Any:
     """Validate State/Rate tags and return the strongest known StateSpace provenance."""
-    state_like = [value for value in values if value.vtype in ("state", "rhs")]
+    state_like = [value for value in values if field_role(value) in ("state", "rhs")]
     if not state_like:
         return None
     if any(value.space is None for value in state_like):

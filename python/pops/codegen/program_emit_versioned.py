@@ -8,6 +8,7 @@ from pops.time._program.structured_control import value_signature
 from pops.time._program.versioned_values import CAPABILITY_TYPES, _digest, _at
 from pops.time._program.versioned_values import VERSIONED_OPS as VERSIONED_OPS
 from pops.bundles import BUNDLE_OPS, validate_bundle_signature
+from pops._ir.data_model import field_role, is_field_leaf, is_finite_array, is_finite_index
 
 _NS = "pops::runtime::program::"
 _DIM = "pops::kNativeDimension"
@@ -34,7 +35,7 @@ def _indices(signature, path):
 def _dependent_indices(signature, path):
     indices = []
     for key in path:
-        if signature["vtype"] == "array" and key == "[]":
+        if is_finite_array(signature) and key == "[]":
             indices.append(_NS + "continuation_each")
             signature = signature["element"]
         else:
@@ -72,7 +73,7 @@ def schema_cpp(signature, block_idx, *, roles=None, path=()):
         node = frame["signature"]
         kind = node["vtype"]
         members: Any = (node["members"] if kind in ("product", "variant") else
-                   (("[]", node["element"]),) if kind == "array" else ())
+                   (("[]", node["element"]),) if is_finite_array(kind) else ())
         if frame["next"] < len(members):
             edge, child = members[frame["next"]]
             frame["next"] += 1
@@ -83,9 +84,9 @@ def schema_cpp(signature, block_idx, *, roles=None, path=()):
                            "children": [], "next": 0})
             continue
         family, capacity, owner, components, contract, provider = -1, 0, -1, 0, "", ""
-        if kind in ("array", "index", "index_set"):
+        if is_finite_index(kind):
             family, capacity = node["family"], node["capacity"]
-        if kind in ("state", "rhs", "scalar_field"):
+        if is_field_leaf(kind):
             authority = node.get("field_authority")
             if authority is None:
                 owner = block_idx[node["block"]]
@@ -93,7 +94,7 @@ def schema_cpp(signature, block_idx, *, roles=None, path=()):
             else:
                 from pops._structural_data import canonical_json
                 from pops.time.canonical_data import _json_ready
-                if (kind != "scalar_field" or node.get("block") is not None
+                if (field_role(kind) != "field" or node.get("block") is not None
                         or authority.get("kind") != "field_problem"
                         or authority.get("version") != 1
                         or type(authority.get("components")) is not int
@@ -110,7 +111,7 @@ def schema_cpp(signature, block_idx, *, roles=None, path=()):
                   "product": "Product", "variant": "Variant", "array": "Array",
                   "index_set": "Domain", "index": "Index", "state": "Field",
                   "rhs": "Field", "scalar_field": "Field"}[kind]
-        if kind in ("array", "index", "index_set") and node.get("ownership") == "contiguous_distributed":
+        if is_finite_index(kind) and node.get("ownership") == "contiguous_distributed":
             native = "Distributed" + native
         dependencies = []
         bundle = node.get("bundle") is not None
@@ -167,7 +168,7 @@ def _local_storage(signature, tokens, body, prefix, capacity):
     from .program_structural_storage import slots
 
     def leaf(sig, token):
-        if sig["vtype"] in ("state", "rhs", "scalar_field"):
+        if is_field_leaf(sig):
             return "std::cref(%s)" % token
         if sig["vtype"] in ("bool", "int64", "scalar"):
             return "%s(%s)" % (finite_cpp_type(sig), token)

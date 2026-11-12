@@ -8,13 +8,14 @@ from __future__ import annotations
 from typing import Any, cast
 
 from pops.model import FieldSpace, Handle
+from pops._ir.data_model import field_role
 
 
 def scalar_storage_contract(template: Any, storage: Any, space: Any, *,
                             source_module: Any = None) -> dict[str, Any]:
     from pops.fields.problem import FieldStorageBinding
 
-    if template.vtype not in ("state", "scalar_field") or template.block is None:
+    if field_role(template) not in ("state", "field") or template.block is None:
         raise TypeError("scalar field template requires exact block-qualified State/field storage")
     if type(storage) is not FieldStorageBinding or type(space) is not FieldSpace:
         raise TypeError("scalar storage requires exact FieldStorageBinding and FieldSpace")
@@ -119,7 +120,7 @@ def scalar_co_location(left: Any, right: Any, where: str, *, same_space: bool = 
     """Physical fields share storage explicitly; shape and display names confer no authority."""
     from pops.fields.problem import FieldStorageBinding
 
-    if left.vtype != "scalar_field" or right.vtype != "scalar_field":
+    if field_role(left) != "field" or field_role(right) != "field":
         raise TypeError(where + ": expected scalar fields")
     first, second = left.attrs.get("scalar_storage"), right.attrs.get("scalar_storage")
     if first is None and second is None:

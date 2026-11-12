@@ -4,6 +4,7 @@ from pops._ir.expr import is_scalar_expression
 from pops.time._authoring import atomic_authoring
 from pops.time.expressions import ProgramExpression, component_names, encode_expressions
 from pops.time._program.value_validation import require_compatible_spaces, require_owned
+from pops._ir.data_model import field_role
 
 
 def is_pointwise_expression(value):
@@ -82,7 +83,7 @@ class _ProgramExpressions(_ProgramBase):
             template = None
         encoded, nodes, inputs = encode_expressions(expressions, self)
         expression_input_count = len(inputs)
-        if not any(value.vtype in ("state", "scalar_field") for value in inputs):
+        if not any(field_role(value) in ("state", "field") for value in inputs):
             if template is None:
                 raise ValueError("a pointwise expression needs a temporal value to define its support")
             # Literal fields still need a layout/space authority. An explicitly

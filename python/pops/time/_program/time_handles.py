@@ -12,6 +12,7 @@ from pops.time._program.value_validation import (
 )
 from pops.time.references import block_name, state_name
 from pops.time.values import ProgramValue, _Affine, _resolve_handle
+from pops._ir.data_model import field_role
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -126,7 +127,7 @@ class _ProgramTimeHandles(_ProgramBase):
                 raise TypeError("T.value stage: an empty affine value is not a State")
             for term, _ in resolved.terms:
                 require_owned(self, term, "T.value stage")
-                if term.vtype not in ("state", "rhs"):
+                if field_role(term) not in ("state", "rhs"):
                     raise TypeError(
                         "T.value stage: every affine term must be a State/Rate value; "
                         "got %s value %r" % (term.vtype, term.name))

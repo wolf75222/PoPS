@@ -9,6 +9,7 @@ from pops.time._program.value_validation import require_top_level
 from pops.time._authoring import authoring_transaction
 from .mapping import ConsumedFieldPort
 from ._program_publication import _target_space, _states, _consumer_states
+from pops._ir.data_model import field_role
 
 
 def publish_mapped(solution, physical_map, bindings, *, states=None):
@@ -107,7 +108,7 @@ def validate_pack(value):
     from ._program_problem import _identity
     from pops.time._program.serialization import _json_ready
     from ._observation_contract import validate_field_observation
-    if value.op != "field_map_pack" or value.vtype != "scalar_field" or len(value.inputs) != 1 or type(value.attrs.get("ncomp")) is not int or value.attrs.get("ncomp") != 1 or value.block is not None or value.state_ref is not None:
+    if value.op != "field_map_pack" or field_role(value) != "field" or len(value.inputs) != 1 or type(value.attrs.get("ncomp")) is not int or value.attrs.get("ncomp") != 1 or value.block is not None or value.state_ref is not None:
         raise ValueError("consumed Field map requires one selected scalar observation")
     source = value.inputs[0]
     width, solve = _source(source)
@@ -149,7 +150,7 @@ def validate_pack(value):
 
 
 def validate_candidate(value):
-    if value.op != "layout_map_import" or value.vtype != "scalar_field" \
+    if value.op != "layout_map_import" or field_role(value) != "field" \
             or value.attrs.get("contract") != "mapped-consumed-output@1" \
             or len(value.inputs) != 1 or value.inputs[0].vtype != "state" \
             or type(value.attrs.get("ncomp")) is not int or value.attrs.get("ncomp") != 1 or value.state_ref is not None:
@@ -185,7 +186,7 @@ def validate_candidate(value):
 
 def validate_mapped_pair(source, target):
     validate_candidate(target)
-    if source.vtype != "scalar_field" or source.state_ref is not None or len(source.inputs) != 1 \
+    if field_role(source) != "field" or source.state_ref is not None or len(source.inputs) != 1 \
             or source.point != target.point or source.point != source.attrs.get("source_point"):
         raise ValueError("mapped Field export changed its stage authority")
     _selected, _factor, solve = validate_pack(source.inputs[0])

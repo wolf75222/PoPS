@@ -35,7 +35,9 @@ from typing import Any
 from ._expr import Arith, Call, Expr, Predicate, Relation, is_number, text, walk
 from ._geometry import Coordinate, MathConstant
 from ._method import ENTITY_PARAMETERS
-from ._model import DiffusiveFlux, Flux, ModelConstant, Parameter, Quantity, Term
+from ._model import (
+    BoundaryRelation, DiffusiveFlux, Flux, ModelConstant, Parameter, Quantity, Term,
+)
 from ._numerics import SchemeValue, TermView
 from ._refusal import (
     AmbiguousElaboration, NotAPopsOperation, NotYetElaborated, RealizationMismatch,
@@ -43,10 +45,9 @@ from ._refusal import (
 )
 
 # The entities that a scheme of this lot receives; the others of SU5 belong to later lots.
-SCHEME_ENTITIES = ("face", "cell", "term", "axis")
+SCHEME_ENTITIES = ("face", "cell", "term", "axis", "depth")
 _ENTITY_OWNER = {
     "edge": "a later lot of N15 with the edge fluxes of G06",
-    "depth": "a later lot of N15 with the ghosts of G04",
     "interval": "a later lot of N15 with the interval fluxes of D11",
     "incident": "a later lot of N15 with the graph reductions of G08",
     "region": "a later lot of N15 with the regions of level 3 (SU15)",
@@ -76,6 +77,18 @@ _LATER_TERM: dict = {}
 _LATER_KINDS = {
     "Gradient": "a later lot of N15 with the schemes given to face.gradient(e, scheme=) and "
                 "cell.gradient(e, scheme=)",
+}
+# The same tables for the entities of a boundary policy (lot B), whose reads G04 elaborates.
+_LATER_BOUNDARY_FACE = {
+    "gradient": "a later lot of N15 with the boundary relations of G04",
+    "normal_gradient": "a later lot of N15 with the boundary relations of G04",
+    "velocity": "a later lot of N15 with the moving configurations of D18 and D21",
+}
+_LATER_INNER = {
+    "gradient": "a later lot of N15 with the boundary relations of G04",
+}
+_LATER_BOUNDARY_TERM = {
+    "gradient_variables": "a later lot of N15 with the boundary relations of G04",
 }
 _N11 = "N11 (expression closure, C1)"
 _PER_AXIS_RECONSTRUCTION = ("a later lot of N15 with a reconstruction lowered per axis "
@@ -388,6 +401,13 @@ class Reconstruct(Builder):
     the negative side mirroring it (2.6.4)."""
 
     word = "Reconstruct"
+
+
+class Ghost(Builder):
+    """``Ghost(value)``: the value of the ghost cell at depth k beyond a face of a piece, which
+    ``face.inner(k)`` mirrors (D9, 2.6.4)."""
+
+    word = "Ghost"
 
 
 def _later_builder(word: str) -> Any:
@@ -812,6 +832,110 @@ class TermEntity(_Unread):
         return "term"
 
 
+# --- the entities of a boundary policy (lot B) ---------------------------------------------------
+
+_G04 = "a later lot of N15 with the boundary relations of G04"
+
+
+class InnerCell(_Unread):
+    """``face.inner(k)``: the k-th cell inward from a boundary face, the mirror of the ghost cell
+    at depth k (D9)."""
+
+    _later = {"shift": _STENCIL, "width": _GEOMETRY, "center": _GEOMETRY, "lower": _GEOMETRY,
+              "upper": _GEOMETRY, "measure": _GEOMETRY, "displacement": _GEOMETRY,
+              "load": _BUILDERS, "speed": _BUILDERS}
+    _later_reads = _LATER_INNER
+
+    def __init__(self, relation: BoundaryRelation, k: int) -> None:
+        object.__setattr__(self, "_relation", relation)
+        object.__setattr__(self, "_k", k)
+        object.__setattr__(self, "_entity", "face.inner(%d)" % k)
+
+    def value(self, quantity: Any) -> Any:
+        relation = self._relation
+        if quantity is not relation.quantity:
+            if isinstance(quantity, Quantity):
+                raise NotYetElaborated("%s.value(%s), a quantity other than the one of the "
+                                       "relation %r" % (self._entity, quantity, relation),
+                                       "a later lot of N15 with the record states of N8")
+            raise TypeError("%s.value(q) takes the quantity of the relation, %s, got %r"
+                            % (self._entity, relation.quantity, quantity))
+        return SchemeLeaf(("inner", self._k), quantity,
+                          "face.inner(%d).value(%s)" % (self._k, quantity))
+
+    def __repr__(self) -> str:
+        return self._entity
+
+
+class BoundaryFaceEntity(_Unread):
+    """``face`` in a boundary policy: a face of a piece of the relation, ``face.normal``
+    pointing out of the support, ``face.inner(k)`` the k-th cell inward."""
+
+    _entity = "face"
+    _later = {"distance": _G04, "measure": _GEOMETRY, "average": _G04,
+              "flux": "a later lot of N15 with the face fluxes read by another scheme (X1)",
+              "left": _G04, "right": _G04, "left_cell": _G04, "right_cell": _G04}
+    _later_reads = _LATER_BOUNDARY_FACE
+
+    def __init__(self, relation: BoundaryRelation, piece: Any) -> None:
+        self._relation = relation
+        self.piece = piece
+        self.axis = getattr(piece.support, piece.axis)
+
+    @property
+    def normal(self) -> Any:
+        return SchemeLeaf(("normal",), None, "face.normal",
+                          rank=self._relation.quantity.support.rank)
+
+    def inner(self, k: Any) -> InnerCell:
+        if type(k) is not int or k < 1:
+            raise TypeError("face.inner(k) takes an integer k >= 1, the depth, got %r" % (k,))
+        return InnerCell(self._relation, k)
+
+    def __repr__(self) -> str:
+        return "face"
+
+
+class BoundaryTermEntity(_Unread):
+    """``term`` in a boundary policy: the relation of ``model.on`` that the policy realizes."""
+
+    _entity = "term"
+    _later = {"quantities": "a later lot of N15 with the record states of N8",
+              "unknowns": "a later lot of N15 with the constraints of N10",
+              "law": _G04, "flux": _G04, "expect": _G04, "operator": _G04, "load": _G04,
+              "first_order_inputs": _G04}
+    _later_reads = _LATER_BOUNDARY_TERM
+
+    def __init__(self, relation: BoundaryRelation) -> None:
+        self._relation = relation
+
+    @property
+    def kind(self) -> Word:
+        return kinds.BoundaryRelation
+
+    @property
+    def form(self) -> Word:
+        return getattr(forms, self._relation.form)
+
+    @property
+    def quantity(self) -> Quantity:
+        return self._relation.quantity
+
+    @property
+    def data(self) -> Any:
+        relation = self._relation
+        if relation.form != "Value":
+            raise AmbiguousElaboration(
+                "term.data of %r, whose form is %s, which carries no data" % (relation,
+                                                                            relation.form),
+                write="term.data under a relation of form Value, Characteristic or NormalFlux; "
+                      "read term.form first", site=user_site(2))
+        return relation.data
+
+    def __repr__(self) -> str:
+        return "term"
+
+
 # --- @pops.scheme ------------------------------------------------------------------------------
 
 class SurfaceScheme:
@@ -849,6 +973,10 @@ class SurfaceScheme:
         if "cell" in entities and "axis" not in entities:
             raise NotYetElaborated("a scheme over cell without axis, which returns CellValue, "
                                    "CellRate or CellResidual", _BUILDERS)
+        if "depth" in entities and "face" not in entities:
+            raise TypeError("@pops.scheme: %s takes depth, the depth of a ghost, with face, for "
+                            "a boundary policy that returns Ghost: def %s(face, term, depth)"
+                            % (name, name))
         if "face" in entities and "axis" in entities:
             raise TypeError("@pops.scheme: a face scheme reads its axis as face.axis; %s takes "
                             "face, not axis" % name)
@@ -862,6 +990,10 @@ class SurfaceScheme:
     @property
     def is_cell(self) -> bool:
         return "cell" in self.entities
+
+    @property
+    def is_boundary(self) -> bool:
+        return "depth" in self.entities
 
     def __call__(self, *args: Any, **options: Any) -> UserScheme:
         if args:
@@ -1003,7 +1135,37 @@ class UserScheme(SchemeValue):
                 "%s returns Reconstruct, the trace of a face, which covers no term" % self,
                 write="the scheme as the reconstruction= of a face scheme, such as "
                       "rusanov(reconstruction=%s)" % self, site=self.site)
+        if self.scheme.is_boundary:
+            raise RealizationMismatch(
+                "%s returns Ghost, a ghost of a boundary relation, which covers no term" % self,
+                write="the policy as pops.Numerics(boundary=%s)" % self, site=self.site)
         self.traced(key)
+
+    def ghosts(self, relation: BoundaryRelation, depths: tuple) -> list:
+        """The ghost that this boundary policy gives under ``relation``, on each of its pieces
+        and at each depth: a list of (piece, depth, value)."""
+        rows = []
+        for piece in relation.pieces:
+            for k in depths:
+                entities = {"face": BoundaryFaceEntity(relation, piece),
+                            "term": BoundaryTermEntity(relation), "depth": k}
+                arguments = {name: entities[name] for name in self.scheme.entities}
+                arguments.update(self.options)
+                result = self.scheme.body(**arguments)
+                if not isinstance(result, Ghost):
+                    raise RealizationMismatch(
+                        "the boundary policy %s returns %r under %r, which Ghost covers"
+                        % (self.scheme.name, result, relation),
+                        write="Ghost(value)", site=self.scheme.site)
+                for node in walk(result.value):
+                    if isinstance(node, SchemeLeaf) and node.key[0] not in ("inner", "normal"):
+                        raise TypeError("%s reads %s, which a boundary policy does not receive"
+                                        % (self, node))
+                    if isinstance(node, (Quantity, Term)):
+                        raise TypeError("%s reads %s itself; a boundary policy reads the inner "
+                                        "cells through face.inner(k).value(q)" % (self, node))
+                rows.append((piece, k, result.value))
+        return rows
 
     def _run(self, entities: dict, key: Term) -> Any:
         arguments = {name: entities[name] for name in self.scheme.entities}
@@ -1349,9 +1511,9 @@ def check_plain_function(value: Any, where: str) -> None:
 
 
 __all__ = [
-    "Builder", "CellEntity", "DiffusiveLaw", "FaceEntity", "FaceFlux", "Reconstruct",
-    "SchemeLeaf", "StencilRealization", "diffusive_frequency", "reads_speed_pair",
-    "speed_pair_index",
+    "BoundaryFaceEntity", "BoundaryTermEntity", "Builder", "CellEntity", "DiffusiveLaw",
+    "FaceEntity", "FaceFlux", "Ghost", "Reconstruct", "SchemeLeaf", "StencilRealization",
+    "diffusive_frequency", "reads_speed_pair", "speed_pair_index",
     "LawValue", "SurfaceScheme", "TermEntity", "UserScheme", "Word", "Words",
     "check_plain_function", "dot", "formal_order", "is_radius_pair", "normal_dot",
     "fastest_speed", "forms", "kinds", "normal_form", "realize_reconstruction", "scheme",

@@ -7,6 +7,11 @@ assessments of the candidate, the rejections, the retries and the landing on ``u
 compiled C++, and no Python runs before that call returns (PF1, CF9). The run lands on ``until``
 as master does (section 14.1): the rules of master's FixedDt, which absorb the rounding of
 repeated additions, with the frontier published exactly (``runtime/program/advance_run.hpp``).
+An Advance elaborated from a ``StepRule`` (N8 « Règle de pas compilée ») takes each step's
+proposal from b6's CFL selection of ``System::step_cfl``, then lands with the same rules; it
+refuses ``proposal=``. On one artifact, ``pops.run`` (master's ``AdaptiveCFL``) caps its last step
+at ``t_end - t`` instead, so the two can differ by one sliver step at a frontier: when a CFL step
+ends within four ulp short of it, or when ``t + (t_end - t)`` is not ``t_end``.
 The run returns a ``RunResult``; a run whose result holds a failure raises its T39 variant, a
 subclass of ``RunFailed`` whose ``result`` is that ``RunResult``, on every rank after the same
 step.
@@ -42,7 +47,7 @@ from types import MappingProxyType
 from typing import Any
 
 from pops.time._program.control import AdvanceControl, memory_rings
-from pops.time._program.elaboration import Proposal
+from pops.time._program.elaboration import Proposal, StepRule
 from pops.time._program.memory import MemoryView
 from pops.time._program.outputs import EveryDt, OutputRegion, Product
 
@@ -135,7 +140,7 @@ class Continuation:
 
     __slots__ = ("time", "macro_step", "proposal", "memory")
 
-    def __init__(self, time: float, macro_step: int, proposal: Proposal,
+    def __init__(self, time: float, macro_step: int, proposal: Proposal | StepRule,
                  memory: MemoryView | None = None) -> None:
         object.__setattr__(self, "time", time)
         object.__setattr__(self, "macro_step", macro_step)
@@ -146,6 +151,9 @@ class Continuation:
         raise AttributeError("Continuation is immutable")
 
     def __repr__(self) -> str:
+        if type(self.proposal) is StepRule:
+            return "Continuation(time=%r, macro_step=%d, proposal=%r)" % (
+                self.time, self.macro_step, self.proposal)
         return "Continuation(time=%r, macro_step=%d, proposal=Proposal(dt=%r))" % (
             self.time, self.macro_step, self.proposal.dt)
 
@@ -285,6 +293,17 @@ def _trial_variant(control: Any, site: str) -> type:
     return _VARIANTS[variants[site]]
 
 
+def _run_data(start: float, until: float, dt: float, rule: Any, max_steps: int) -> dict:
+    data: dict[str, Any] = {"start": start.hex(), "until": until.hex()}
+    if rule is None:
+        data["proposal"] = dt.hex()
+    else:
+        data["rule"] = {"fraction": rule[0].hex(),
+                        "max_dt": None if rule[1] is None else rule[1].hex()}
+    data["max_steps"] = max_steps
+    return data
+
+
 class Simulation:
     """A bound artifact whose Program elaborates an Advance, run by ``System::run_advance``."""
 
@@ -344,7 +363,15 @@ class Simulation:
         """
         runtime = self._runtime
         until = _binary64(until, "Simulation.run(until=...)")
-        if proposal is None:
+        rule = self._control.step_rule
+        if rule is not None:
+            # The step rule chooses every proposal (N8 « Règle de pas compilée »); the native run
+            # does not read the proposal argument.
+            if proposal is not None:
+                raise TypeError("Simulation.run(proposal=...): the step rule of this Advance "
+                                "chooses every proposal")
+            dt = 0.0
+        elif proposal is None:
             dt = (self._control.first_dt if self._continuation is None
                   else float(self._continuation.proposal.dt))
         elif type(proposal) is Proposal:
@@ -369,13 +396,15 @@ class Simulation:
                              _ahead(times, start, until),
                              [item for _, kind, item in region.record if kind == "array"]))
         try:
-            report = self._run_native(until, dt, max_steps, schedule)
+            report = self._run_native(until, dt, max_steps, schedule, None if rule is None else (
+                rule[0], math.inf if rule[1] is None else rule[1]))
         finally:
             # A failure of a trial leaves the accepted state of its step; the next proposal is
             # the one of this run (T28, next=None).
             time, macro_step = runtime.time(), runtime.macro_step()
-            self._continuation = Continuation(time, macro_step, Proposal(dt), MemoryView(
-                runtime, time, macro_step, memory_rings(self._control)))
+            self._continuation = Continuation(
+                time, macro_step, Proposal(dt) if rule is None else StepRule(*rule),
+                MemoryView(runtime, time, macro_step, memory_rings(self._control)))
         time = runtime.time()
         report = dict(report)
         published: dict[Any, list] = {region.output: [] for region in self._outputs}
@@ -419,8 +448,7 @@ class Simulation:
             steps=report["steps"], rejections=report["rejections"],
             diagnostics={
                 "control": self._control.to_data(),
-                "run": {"start": start.hex(), "until": until.hex(), "proposal": dt.hex(),
-                        "max_steps": max_steps},
+                "run": _run_data(start, until, dt, rule, max_steps),
                 "native": report,
                 "outputs": [len(rows) for rows in published.values()],
             },

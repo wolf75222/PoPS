@@ -55,6 +55,7 @@ from pops.codegen.program_emit_solve import (
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
 from pops.codegen.program_emit_field_routes import field_point_cpp, resolved_field_route
 from pops.identity import make_identity
+from pops._ir.data_model import field_role, is_field_leaf
 
 
 def _child_history_store_is_delegated(program: Any, value: Any, *, target: str) -> bool:
@@ -452,7 +453,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         # tower itself, and any other consumer of that tower keeps this guard.
         closed_tower = _closed_interaction_reduction_source(v)
         reads = [item for item in v.inputs
-                 if item.vtype in {"state", "rhs", "scalar_field"}
+                 if is_field_leaf(item)
                  and item.id in var
                  and ("field_observation_snapshot", item.id) not in var
                  and item is not closed_tower]
@@ -1680,6 +1681,10 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                            field_plans, target, emit_residual)
     elif v.op == "solve_linear":
         _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
+    elif v.op == "solve_evidence":
+        # SV5: a read of the evidence of a consumed solve, a copy of its report (program_emit_solve).
+        from .program_emit_solve import solve_evidence_cpp
+        var[v.id] = solve_evidence_cpp(v)
     elif v.op in ("solve_outcome", "solve_outcome_component"):
         # Python graph/authoring requires an explicit consumed outcome before a solve result can feed
         # effects. The solve-producing operation has already constructed and guarded its native
@@ -2001,15 +2006,15 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             # A scalar_field combine (ADC-427: the phi^{n+1} extrapolation) has no block, so it has no
             # base block-state to shape the scratch: inherit the exact first field input, including
             # every component of a coupled field tuple. A State combine uses the block base as before.
-            template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
+            template = var[terms[0][0].id] if field_role(v) == "field" else var[base.id]
             field_ghost_depth = 1
             if "cell_field_projection" in v.attrs:
                 from pops.codegen.program_emit_stencil_inputs import cell_sample_ghost_depth
                 field_ghost_depth = cell_sample_ghost_depth(v)
             lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.%s(%d, 0, %s%s);"
-                         % (var[v.id], "scalar_scratch" if v.vtype == "scalar_field" else "scratch_state",
+                         % (var[v.id], "scalar_scratch" if field_role(v) == "field" else "scratch_state",
                             int(v.id), template, ", (%s).ncomp(), %d" % (template,field_ghost_depth)
-                            if v.vtype == "scalar_field" else ""))
+                            if field_role(v) == "field" else ""))
             output_setup_end = len(lines)
             for inp, coeff in terms:
                 lines.append("ctx.axpy(%s, %s, %s, dt, %s);"

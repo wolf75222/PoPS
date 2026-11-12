@@ -2,6 +2,7 @@
 
 from fractions import Fraction
 from typing import Any
+from pops._ir.data_model import is_field_leaf
 
 
 def _runtime_parameter_binding(declaration, model):
@@ -218,7 +219,7 @@ def stencil_expression_write(value, var, *, has_output_boundary):
     native algebra operation installs their exact affine expression.
     """
     if (not var.get(("stencil_flux_expressions",), False)
-            or value.vtype not in ("state", "rhs", "scalar_field")
+            or not is_field_leaf(value)
             or value.op in ("state", "history")
             or not has_output_boundary and value.op != "project"):
         return [], []
@@ -229,7 +230,7 @@ def stencil_expression_write(value, var, *, has_output_boundary):
           and value.attrs.get("numerical_pointwise_rate") == "pops.pointwise-rate@1")
     inputs = [] if fresh else [
         "&(%s)" % var[source.id] for source in value.inputs
-        if source.vtype in ("state", "rhs", "scalar_field", "vector_field", "mask")
+        if (is_field_leaf(source) or source.vtype in ("vector_field", "mask"))
     ]
     output = var[value.id]
     return (["ctx.prepare_stencil_expression_write(%s, {%s});" % (output, ", ".join(inputs))],

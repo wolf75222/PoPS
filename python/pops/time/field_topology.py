@@ -1,5 +1,6 @@
 """Pure schema validation for ephemeral native topology capabilities."""
 from collections.abc import Mapping
+from pops._ir.data_model import field_role
 
 
 def validate_topology_signature(signature):
@@ -17,11 +18,11 @@ def validate_topology_signature(signature):
 
 def field_components(field):
     """Storage width follows the exact scientific producer, never its State neighbour."""
-    if not isinstance(field, Mapping) or field.get("vtype") not in ("state", "scalar_field"):
+    if not isinstance(field, Mapping) or field_role(field) not in ("state", "field"):
         raise TypeError("FieldTopology requires an authenticated complete Field signature")
     authority = field.get("field_authority")
     if authority is not None:
-        if (field.get("vtype") != "scalar_field" or field.get("block") is not None
+        if (field_role(field) != "field" or field.get("block") is not None
                 or not isinstance(authority, Mapping) or authority.get("kind") != "field_problem"
                 or authority.get("version") != 1 or type(authority.get("components")) is not int
                 or authority["components"] < 1):

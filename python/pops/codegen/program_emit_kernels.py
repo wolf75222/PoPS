@@ -102,6 +102,7 @@ _ALLOWED_OPS = frozenset(
         "solve_linear",
         "solve_outcome",
         "solve_outcome_component",
+        "solve_evidence",
         "apply_in",
         "apply_out",
         "history",

@@ -10,6 +10,12 @@ formula becomes the generated C++ (G2).
 * :mod:`.reconstructions` -- the per-axis ``Reconstruct`` builder, ``muscl`` and ``weno5`` (N3).
 * :mod:`.limiters` -- the slope limiters ``minmod``, ``vanleer``, ``mc`` and ``superbee`` (N3),
   passed uncalled to ``muscl``.
+* :mod:`.boundaries` -- ``ghosts()``, the boundary policy of 2.6.9, written with the surface
+  (N15 lot B): the ghost 2g - u_k of a value and u_1 of no data. It is imported from its module,
+  as the scheme words of :mod:`.schemes` are, so that importing this package does not import the
+  surface; ``from pops.lib.numerics import ghosts`` comes with the switch to one API (N3).
+* :mod:`.ghost_laws` -- the b6 conditions of those two ghost laws, the bridge of the boundary
+  policy until G04 generates the ghost fills.
 * :mod:`.face_flux` -- the ``FaceFlux`` builder of the N7a pilot, realized by the b6
   ``StencilFlux`` native (IR24). It is imported from its module, not from this package: a case
   writes ``FaceFlux`` from ``pops.surface.discrete`` (2.6.4), so the package does not re-export
@@ -23,3 +29,4 @@ __all__ = [
     "hll", "rusanov", "two_point", "upwind",
     "Reconstruct", "muscl", "weno5", "mc", "minmod", "superbee", "vanleer",
 ]
+

@@ -855,10 +855,12 @@ class System {
   /// fixed step does, after at most @p max_steps accepted steps and Retry.max_attempts attempts per
   /// step; the Outputs of the Advance, one schedule each, are evaluated at the start of the run and
   /// after the publications they are due on. Collective; the rules are those of
-  /// runtime/program/advance_run.hpp.
+  /// runtime/program/advance_run.hpp. With a step @p rule, each step's proposal is the selection
+  /// of step_cfl at the rule's fraction, floor and cap, and @p proposal is not read.
   runtime::program::AdvanceRunReport run_advance(
       double until, double proposal, std::int64_t max_steps,
-      const std::vector<runtime::program::AdvanceOutputSchedule>& outputs = {});
+      const std::vector<runtime::program::AdvanceOutputSchedule>& outputs = {},
+      const runtime::program::AdvanceStepRule* rule = nullptr);
   /// Retry.max_attempts of the installed Advance; 0 when the installed Program has none.
   int advance_max_attempts() const noexcept;
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
@@ -1611,6 +1613,11 @@ class System {
   /// Count one prepared linear solve that ran, with the iteration count and the final residual
   /// norm of its report (the solve count and the last solve of AdvanceRunReport).
   POPS_EXPORT void count_prepared_solve_(int iterations, double residual_norm) noexcept;
+  /// The selection of step_cfl without its execution (N8 « Règle de pas compilée »): the request
+  /// contract, the field evaluation, every bound, the rank agreement on the decision and
+  /// last_dt_bound(). step_cfl executes the step it selects; run_advance with a step rule takes
+  /// it as the proposal of a step. Collective. @return the selected dt.
+  double select_step_(double fraction, double speed_floor, double max_dt, double min_dt);
   /// Internal result boundary shared by field, local-source and Program prepared-linear solves.
   [[nodiscard]] POPS_EXPORT SolveOutcome track_solve_outcome(SolveOutcome outcome) const noexcept;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains

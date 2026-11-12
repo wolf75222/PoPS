@@ -375,6 +375,9 @@ def emit_user_face_stability(value, var, lines, *, block_index):
             terms.append("%s * %s" % (scalar_cpp(beta), token))
         frequency = "user_face_update_frequency_%d_%d" % (value.id, index)
         lines.append("const pops::Real %s = %s;" % (frequency, " + ".join(terms)))
+        proposes = user_face_frequency_rule(getattr(value, "prog", None)) != ""
+        if proposes:
+            lines.append("try {")
         lines.append(
             "ctx.consume_pointwise_evaluation_status(%d,%d,"
             "(!std::isfinite(%s) || %s < 0 || !std::isfinite(dt) || dt < 0 || "
@@ -382,6 +385,33 @@ def emit_user_face_stability(value, var, lines, *, block_index):
             "* (1 + 32 * std::numeric_limits<pops::Real>::epsilon())) ? 1 : 0,"
             "\"user_face_numerical_stability\",503);"
             % (block_index, value.id, frequency, frequency, frequency, scalar_cpp(alpha)))
+        if proposes:
+            lines.extend(_face_step_frequency_rejection(frequency, scalar_cpp(alpha)))
+
+
+def _face_step_frequency_rejection(frequency, alpha):
+    """Rethrow the guard's refusal with the frequency of its step, as the retry reads it.
+
+    A strategy that proposes from the face speeds (``largest_axis``) retries a refused attempt
+    once (spec 0.3, 21.6: its guard with Retry(max_attempts=2)). The refusal carries the
+    frequency of the step, the faces' frequency over the stage budget, that the refused attempt
+    recorded at the state the guard checks (ROM-108): the retry's step is the strategy's number
+    over that frequency (2.6.9, s_a from the recorded speeds), and the guard admits it. The
+    payload is the binary64 frequency in C hexadecimal notation.
+    """
+    from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA
+
+    rejected = "pops_face_step_rejected"
+    return [
+        "} catch (const pops::runtime::program::StepAttemptRejected& %s) {" % rejected,
+        "  char pops_face_step_text[64];",
+        "  std::snprintf(pops_face_step_text, sizeof(pops_face_step_text), \"%%a\", "
+        "static_cast<double>(%s / %s));" % (frequency, alpha),
+        "  throw pops::runtime::program::StepAttemptRejected(%s.status(), %s.disposition(), "
+        "%s.reason_code(), %s.phase(), %s.detail(), \"%s\", std::string(pops_face_step_text));"
+        % (rejected, rejected, rejected, rejected, rejected, FACE_STEP_FREQUENCY_SCHEMA),
+        "}",
+    ]
 
 
 def require_deferred_partition_bounds(var, *, inherited=()):
