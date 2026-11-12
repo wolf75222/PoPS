@@ -1,7 +1,7 @@
 """N7a pilot, native: M05 and M10 realized by the FaceFlux builder run bit for bit like b6.
 
 The b6 case builders stay unchanged; only their face is replaced by the
-``StencilFlux`` that ``pops.lib.numerics.realize_face_flux`` derives from the
+``StencilFlux`` that ``pops.lib.numerics.face_flux.realize_face_flux`` derives from the
 face schemes of ``examples/api_v02/faceflux_pilot.py`` (IR24 substitution).
 Both routes must reach one artifact identity; each is bound and run, the
 final states must be equal bitwise, and the case invariants of b6 must pass.
@@ -12,7 +12,7 @@ import pytest
 import pops
 import examples.api_v02.models_M01_M14 as cases
 from examples.api_v02.faceflux_pilot import navier_stokes_scheme, scharfetter_gummel_scheme
-from pops.lib.numerics import realize_face_flux
+from pops.lib.numerics.face_flux import realize_face_flux
 from tests.python.support.api_v02_native import execute_case
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.public_native_profile import native_profile

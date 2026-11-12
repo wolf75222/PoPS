@@ -17,7 +17,7 @@ from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
 from pops import math as pm
-from pops.lib.numerics import rusanov
+from examples.api_v02.b6_numerics import rusanov
 from pops.lib.time import SSPRK2, ForwardEuler
 from pops.math import ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes

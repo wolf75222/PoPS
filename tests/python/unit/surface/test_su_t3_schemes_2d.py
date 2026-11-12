@@ -22,8 +22,8 @@ from pops.frames import Cartesian2D, Cartesian3D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
-from pops.lib.numerics import fluxes
-from pops.lib.numerics.schemes import rusanov, upwind
+from examples.api_v02 import b6_numerics
+from pops.lib.numerics import rusanov, upwind
 from pops.lib.time.methods import ssprk2
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -208,7 +208,7 @@ def _muscl(u):
 
 def test_the_flux_is_lowered_on_the_dictionary_per_axis_with_its_waves():
     _assert_same(_surface_case(lambda a, b: rusanov()),
-                 _hand_case(lambda flux_u, u, a, b: riemann.Rusanov()))
+                 _hand_case(lambda flux_u, u, a, b: b6_numerics.rusanov(flux_u, u)))
 
 
 def test_a_face_scheme_on_a_support_of_rank_two():
@@ -245,7 +245,7 @@ def test_upwind_with_a_stated_velocity_dotted_with_the_normal():
         return upwind(speed=speed)
 
     def hand(flux_u, u, a, b):
-        return fluxes.upwind(flux_u, u, speed=lambda face: a * face.normal[0]
+        return b6_numerics.upwind(flux_u, u, speed=lambda face: a * face.normal[0]
                              + b * face.normal[1])
 
     _assert_same(_surface_case(surface_scheme), _hand_case(hand))
@@ -253,7 +253,7 @@ def test_upwind_with_a_stated_velocity_dotted_with_the_normal():
 
 def test_cf4_a_scheme_in_the_arithmetic_of_the_library_is_the_library_rusanov():
     _assert_same(_surface_case(lambda a, b: rusanov_as_the_library()),
-                 _hand_case(lambda flux_u, u, a, b: fluxes.rusanov(flux_u, u)))
+                 _hand_case(lambda flux_u, u, a, b: b6_numerics.rusanov(flux_u, u)))
 
 
 def test_inspect_reports_the_components_and_the_waves_per_axis():
@@ -342,13 +342,13 @@ def test_the_normal_component_at_a_state_on_a_support_of_rank_three():
 
 
 def test_upwind_with_a_stated_velocity_on_a_support_of_rank_three():
-    """upwind(speed=f), f(face) = dot(vector(a, b, c), face.normal), against fluxes.upwind with
+    """upwind(speed=f), f(face) = dot(vector(a, b, c), face.normal), against b6_numerics.upwind with
     a n0 + b n1 + c n2 written by hand."""
     def speed(face):
         return dot(vector(1.0, 0.5, 0.25), face.normal)
 
     def hand(flux_u, u, a, b, c):
-        return fluxes.upwind(flux_u, u, speed=lambda face: 1.0 * face.normal[0]
+        return b6_numerics.upwind(flux_u, u, speed=lambda face: 1.0 * face.normal[0]
                              + 0.5 * face.normal[1] + 0.25 * face.normal[2])
 
     _assert_same(_surface_case3(upwind(speed=speed)), _hand_case3(hand))

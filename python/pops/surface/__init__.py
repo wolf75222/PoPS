@@ -3,8 +3,8 @@
 This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2, and the solves of
 the lot « solves » (``pops.unknown``, ``pops.solve``, ``pops.Tolerance``, ``solvers=``). Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
 imports it as ``import pops.surface as pops`` and ``from pops.surface.math import *``; the words
-of the library that it elaborates are ``pops.lib.numerics.schemes`` (``upwind``, ``rusanov``,
-``two_point``) and ``pops.lib.time.methods`` (``forward_euler``, ``ssprk2``, ``ssprk3``, ``rk4``).
+of the library that it elaborates are ``pops.lib.numerics`` (``upwind``, ``rusanov``, ``hll``,
+``two_point``, written with ``@pops.scheme``, N3 lot 1) and ``pops.lib.time.methods`` (``forward_euler``, ``ssprk2``, ``ssprk3``, ``rk4``).
 Building ``pops.Case(...)`` traces the case into a b6 case (2.6.6, ``_elaborate``), and
 ``pops.inspect(case)`` validates and resolves it without compiling (SU12).
 
@@ -142,7 +142,7 @@ _EARLIER = {
                                    "of cell, since accept= holds checks only"),
 }
 
-_LIBRARY = "pops.lib.numerics.schemes, pops.lib.time.methods and pops.lib.quadrature"
+_LIBRARY = "pops.lib.numerics, pops.lib.time.methods and pops.lib.quadrature"
 
 
 def _later(name: str, owner: str) -> _Any:

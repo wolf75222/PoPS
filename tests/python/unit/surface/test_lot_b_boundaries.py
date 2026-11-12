@@ -15,6 +15,8 @@ import types
 
 import pytest
 
+from examples.api_v02 import b6_numerics
+
 import pops
 import pops.surface as surface
 from pops import math as pm
@@ -28,11 +30,10 @@ from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
 from pops.lib.numerics.boundaries import ghosts
-from pops.lib.numerics.schemes import rusanov, upwind
+from pops.lib.numerics import rusanov, upwind
 from pops.lib.time.methods import ssprk2
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
-from pops.numerics.spatial import FiniteVolume
+from pops.numerics import DiscretizationPlan
 from pops.params import ConstParam, RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.surface.discrete import Ghost, forms
@@ -101,9 +102,7 @@ def _hand_case(laws, periodic_x=False, inlet=0.05):
     rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u))
     plan = DiscretizationPlan()
     selection = rate.select(flux_u)
-    plan.rates.add(selection, FiniteVolume(flux=flux_u, variables=variables.Conservative(u),
-                                           reconstruction=reconstruction.FirstOrder(),
-                                           riemann=riemann.Rusanov()))
+    plan.rates.add(selection, b6_numerics.rusanov(flux_u, u))
     value = inlet(model) if callable(inlet) else inlet
     case = pops.Case("advection")
     block = case.block("advection", model)

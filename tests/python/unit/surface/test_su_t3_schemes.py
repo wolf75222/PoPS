@@ -4,9 +4,9 @@ A case whose numerics name a scheme written with ``@pops.scheme`` elaborates int
 by hand for b6 with the same ``riemann.User`` body (and the same ``reconstruction.User``): the
 same program IR, the same artifact once the source lines of its provenance are set aside, the same
 semantic identity and the same generated C++. ``upwind(speed=f)``, f a plain function of ``face``,
-gives the ``pops.lib.numerics.fluxes.upwind`` face of the case written by hand.
+gives the b6 ``upwind`` (``examples/api_v02/b6_numerics.py``) face of the case written by hand.
 
-CF4: a scheme of one's own written in the arithmetic of ``pops.lib.numerics.fluxes.rusanov``
+CF4: a scheme of one's own written in the arithmetic of b6 ``rusanov``
 gives that face node for node, its ``largest`` of the two spectral radii being the face input
 ``s`` of ``riemann.User``; the native body-swap parity of N3
 (``test_lib_face_body_swap_native.py``) ties that body to the native Rusanov.
@@ -25,8 +25,8 @@ from pops.frames import Cartesian1D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
-from pops.lib.numerics import fluxes
-from pops.lib.numerics.schemes import rusanov, upwind
+from examples.api_v02 import b6_numerics
+from pops.lib.numerics import rusanov, upwind
 from pops.lib.time.methods import ssprk2
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
@@ -227,7 +227,8 @@ def test_a_cell_scheme_gives_the_reconstruction_user_written_by_hand():
 
 def test_a_library_word_takes_a_cell_scheme_as_its_reconstruction():
     case = _surface_burgers(lambda u: rusanov(reconstruction=muscl(limiter=minmod)))
-    _assert_same(case, _hand_burgers(lambda flux, u: riemann.Rusanov(), recon=_muscl))
+    _assert_same(case, _hand_burgers(lambda flux, u: b6_numerics.rusanov(
+        flux, u, reconstruction=_muscl(u))))
 
 
 def test_upwind_with_a_stated_speed_gives_the_library_upwind_face():
@@ -238,7 +239,7 @@ def test_upwind_with_a_stated_speed_gives_the_library_upwind_face():
         return upwind(speed=speed)
 
     def hand(flux_u, u):
-        return fluxes.upwind(flux_u, u, speed=lambda face: (face.left(u)[0]
+        return b6_numerics.upwind(flux_u, u, speed=lambda face: (face.left(u)[0]
                                                             + face.right(u)[0]) / 2)
 
     _assert_same(_surface_burgers(surface_speed), _hand_burgers(hand))
@@ -248,7 +249,7 @@ def test_upwind_with_a_stated_speed_gives_the_library_upwind_face():
 
 def test_a_scheme_in_the_arithmetic_of_the_library_is_the_library_rusanov_node_for_node():
     _assert_same(_surface_burgers(lambda u: rusanov_as_the_library()),
-                 _hand_burgers(lambda flux_u, u: fluxes.rusanov(flux_u, u)))
+                 _hand_burgers(lambda flux_u, u: b6_numerics.rusanov(flux_u, u)))
 
 
 # --- pops.inspect --------------------------------------------------------------------------------

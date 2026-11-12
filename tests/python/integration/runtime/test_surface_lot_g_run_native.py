@@ -12,8 +12,8 @@ that file is refused before it runs (2.6.9).
 
 The parity check of A2 (review of the N15 lot « solves », P2): on one random periodic field of
 16 x 8 cells, one forward Euler step of the generated two_point diffusion of ``-kappa grad(u)``
-(``_TwoPoint``, b6's ``Diffusion``) and one step of ``u + dt kappa P.laplacian(u)``, b6's shared
-Laplacian in a Program written by hand, agree to round-off, and both are kappa (u_{i+1} - 2 u_i +
+(the StencilFlux of the body of ``two_point()``, N3 lot 1) and one step of ``u + dt kappa
+P.laplacian(u)``, b6's shared Laplacian in a Program written by hand, agree to round-off, and both are kappa (u_{i+1} - 2 u_i +
 u_{i-1}) / h^2 on each axis: the spacing and the sign of b6's convention, with unequal spacings.
 """
 from pathlib import Path
@@ -29,7 +29,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
-from pops.lib.numerics.schemes import rusanov, two_point
+from pops.lib.numerics import rusanov, two_point
 from pops.lib.output import OutputExists, npz
 from pops.lib.time.methods import forward_euler, ssprk2
 from pops.mesh import CartesianGrid, PeriodicAxes
