@@ -697,12 +697,13 @@ class _Elaboration:
                             states: dict, relations: list, data: dict) -> None:
         """Run the boundary policy under each relation, check that the ghost it gives is a
         ghost law of b6, and add the transport boundaries of the block to the plan (T5): the
-        ghost 2 g - u_k of a value is ``Inflow`` (``FixedState``), the ghost u_1 of no data is
-        ``Outflow`` (``Extrapolate``), b6's two laws of master (2.6.5)."""
+        ghost 2 g - u_k of a value and the ghost u_1 of no data, b6's two laws of master
+        (2.6.5), whose b6 conditions ``pops.lib.numerics.ghost_laws`` names (the bridge of the
+        boundary policy, until G04 generates the ghost fills)."""
         if not relations:
             return
         from pops.boundary import TransportBoundarySet
-        from pops.boundary.transport import Inflow, Outflow
+        from pops.lib.numerics.ghost_laws import realize
 
         from ._scheme import SchemeLeaf, normal_form
 
@@ -722,14 +723,9 @@ class _Elaboration:
                         "law of b6 (2 g - u_k for a value, u_1 for no data)"
                         % (text(value), policy, relation, k), _GENERATED_GHOSTS,
                         site=relation.site)
-            if relation.form == "Value":
-                law, spelling, ghost = Inflow(state=state, value=data[relation]), \
-                    "Inflow(state=block[%s], value=%s)" % (quantity.name,
-                                                           self.code(relation.data)), \
-                    "2 g - u_k (FixedState)"
-            else:
-                law, spelling, ghost = Outflow(state=state), \
-                    "Outflow(state=block[%s])" % quantity.name, "u_1 (Extrapolate)"
+            law, spelling, ghost = realize(
+                relation.form, state, data.get(relation), "block[%s]" % quantity.name,
+                self.code(relation.data) if relation.form == "Value" else "")
             for piece in relation.pieces:
                 laws[getattr(frame.boundaries, piece.name)] = law
             self.rows.append(Row(

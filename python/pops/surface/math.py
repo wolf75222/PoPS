@@ -226,9 +226,9 @@ curl = _later("curl", _N11)
 def outflow(q: _Any) -> _Any:
     """``outflow(q)``: the empty relation on the trace of q, which states that a piece of
     ``model.on`` carries no data (R20, SD43); its form is ``NoData`` (lot B of N15)."""
-    from ._model import Outflow
+    from ._model import NoDataRelation
 
-    return Outflow(q)
+    return NoDataRelation(q, "outflow")
 
 __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
     "Fraction", "pi", "infinity", "ddt", "grad", "div", "curl", *_ELEMENTARY, "where", "equal",

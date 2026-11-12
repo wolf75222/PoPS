@@ -80,6 +80,18 @@ _LATER_KINDS = {
     "Gradient": "a later lot of N15 with the schemes given to face.gradient(e, scheme=) and "
                 "cell.gradient(e, scheme=)",
 }
+# The same tables for the entities of a boundary policy (lot B), whose reads G04 elaborates.
+_LATER_BOUNDARY_FACE = {
+    "gradient": "a later lot of N15 with the boundary relations of G04",
+    "normal_gradient": "a later lot of N15 with the boundary relations of G04",
+    "velocity": "a later lot of N15 with the moving configurations of D18 and D21",
+}
+_LATER_INNER = {
+    "gradient": "a later lot of N15 with the boundary relations of G04",
+}
+_LATER_BOUNDARY_TERM = {
+    "gradient_variables": "a later lot of N15 with the boundary relations of G04",
+}
 _N11 = "N11 (expression closure, C1)"
 _PER_AXIS_RECONSTRUCTION = ("a later lot of N15 with a reconstruction lowered per axis "
                             "(reconstruction.User has one body for the axes)")
@@ -686,7 +698,8 @@ class InnerCell(_Unread):
 
     _later = {"shift": _STENCIL, "width": _GEOMETRY, "center": _GEOMETRY, "lower": _GEOMETRY,
               "upper": _GEOMETRY, "measure": _GEOMETRY, "displacement": _GEOMETRY,
-              "load": _BUILDERS, "speed": _BUILDERS, "gradient": _G04}
+              "load": _BUILDERS, "speed": _BUILDERS}
+    _later_reads = _LATER_INNER
 
     def __init__(self, relation: BoundaryRelation, k: int) -> None:
         object.__setattr__(self, "_relation", relation)
@@ -714,10 +727,10 @@ class BoundaryFaceEntity(_Unread):
     pointing out of the support, ``face.inner(k)`` the k-th cell inward."""
 
     _entity = "face"
-    _later = {"distance": _G04, "measure": _GEOMETRY, "gradient": _G04,
-              "normal_gradient": _G04, "average": _G04, "velocity": _LATER_FACE["velocity"],
+    _later = {"distance": _G04, "measure": _GEOMETRY, "average": _G04,
               "flux": "a later lot of N15 with the face fluxes read by another scheme (X1)",
               "left": _G04, "right": _G04, "left_cell": _G04, "right_cell": _G04}
+    _later_reads = _LATER_BOUNDARY_FACE
 
     def __init__(self, relation: BoundaryRelation, piece: Any) -> None:
         self._relation = relation
@@ -745,7 +758,8 @@ class BoundaryTermEntity(_Unread):
     _later = {"quantities": "a later lot of N15 with the record states of N8",
               "unknowns": "a later lot of N15 with the constraints of N10",
               "law": _G04, "flux": _G04, "expect": _G04, "operator": _G04, "load": _G04,
-              "gradient_variables": _G04, "first_order_inputs": _G04}
+              "first_order_inputs": _G04}
+    _later_reads = _LATER_BOUNDARY_TERM
 
     def __init__(self, relation: BoundaryRelation) -> None:
         self._relation = relation

@@ -337,24 +337,25 @@ def _level_check(value: Any, where: str) -> None:
 _BOUNDARY = "a later lot of N15 with the boundary relations of G04"
 
 
-class Outflow:
-    """``outflow(u)``: the empty relation on the trace of ``u``, whose piece carries no data
-    (R20, SD43); its form is ``NoData``."""
+class NoDataRelation:
+    """The relation of ``model.on`` whose piece carries no data, the empty relation on the trace
+    of an evolved quantity (R20, SD43); its form is ``NoData``. ``word`` is the word of
+    ``pops.math`` that wrote it, for its spelling."""
 
-    __slots__ = ("quantity",)
+    __slots__ = ("quantity", "word")
 
-    def __init__(self, quantity: Any) -> None:
+    def __init__(self, quantity: Any, word: str) -> None:
         if not isinstance(quantity, Quantity):
-            raise TypeError("outflow(u) takes an evolved quantity of the model, got %r"
-                            % (quantity,))
+            raise TypeError("%s(u) takes an evolved quantity of the model, got %r"
+                            % (word, quantity))
         self.quantity = quantity
+        self.word = word
 
     def __repr__(self) -> str:
-        return "outflow(%s)" % self.quantity
+        return "%s(%s)" % (self.word, self.quantity)
 
     def __bool__(self) -> bool:
-        raise TypeError("outflow(%s) is a relation, which has no truth value (SU4)"
-                        % self.quantity)
+        raise TypeError("%r is a relation, which has no truth value (SU4)" % self)
 
 
 class BoundaryRelation:
@@ -380,7 +381,7 @@ class BoundaryRelation:
         self.site = site
 
     def relation_text(self) -> str:
-        return repr(self.relation) if isinstance(self.relation, Outflow) else text(self.relation)
+        return repr(self.relation) if isinstance(self.relation, NoDataRelation) else text(self.relation)
 
     def __repr__(self) -> str:
         pieces = self.pieces[0].name if len(self.pieces) == 1 else \
@@ -669,7 +670,7 @@ class Model:
         names = [piece.name for piece in listed]
         if len(set(names)) != len(names):
             raise ValueError("model.on(%s, ...) names a piece twice" % ", ".join(names))
-        if isinstance(relation, Outflow):
+        if isinstance(relation, NoDataRelation):
             quantity, form, data = relation.quantity, "NoData", None
         elif isinstance(relation, Relation):
             quantity, data = self._value_relation(relation, site)
