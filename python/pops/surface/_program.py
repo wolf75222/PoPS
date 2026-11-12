@@ -132,7 +132,9 @@ class Advance:
         from ._step import StepRuleValue
 
         if callable(dt) and not is_number(dt) and not isinstance(dt, StepRuleValue):
-            raise NotYetElaborated("pops.Advance(dt=<a function of cell>), a step rule", _N8_STEP)
+            raise NotYetElaborated(
+                "pops.Advance(dt=<a function of cell>), a step rule, has no elaborated form yet; "
+                "%s elaborates it%s" % (_N8_STEP, StepRuleValue.meanwhile()), None)
         if not isinstance(dt, StepRuleValue) and not _positive_number(dt):
             raise TypeError("pops.Advance(dt=...) takes a positive number, a function of cell or "
                             "a controller, got %r" % (dt,))

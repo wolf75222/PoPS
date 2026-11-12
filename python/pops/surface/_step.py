@@ -25,6 +25,9 @@ class StepRuleValue:
     N8 that the compiled run executes. A library subclasses it and names it with ``word``."""
 
     word = "step rule"
+    # the spelling of a library's rule, which a refusal of dt= as a function of cell names as what
+    # to write until N8 elaborates it (MG9: the bridge that the refusal carries)
+    spelling: str | None = None
     __slots__ = ("fluxes", "options", "site")
 
     def __init__(self, fluxes: Any, options: tuple, *, site: Any = None) -> None:
@@ -43,6 +46,21 @@ class StepRuleValue:
         self.fluxes = listed
         self.options = tuple(options)
         self.site = user_site(3) if site is None else site
+
+    @classmethod
+    def meanwhile(cls) -> str:
+        """What to write until N8 elaborates dt= as a function of cell: the step rules that the
+        libraries loaded so far give, by their spelling (the core names none, CF2)."""
+        spellings: list = []
+        pending = list(cls.__subclasses__())
+        while pending:
+            rule = pending.pop(0)
+            pending.extend(rule.__subclasses__())
+            if rule.spelling is not None and rule.spelling not in spellings:
+                spellings.append(rule.spelling)
+        if not spellings:
+            return "; until then, write dt= with a number or a step rule of pops.lib.time"
+        return "; until then, write dt=%s" % " or dt=".join(sorted(spellings))
 
     def realize(self) -> Any:
         """The step rule of N8 that the compiled run executes (``pops.time``); a library

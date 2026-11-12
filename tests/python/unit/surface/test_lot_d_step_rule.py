@@ -272,6 +272,11 @@ def test_a_rule_in_a_model_with_diffusion_names_its_lot():
 
 
 def test_a_function_of_cell_is_still_a_later_step_rule():
+    """The refusal that the cfl_limit bridge carries (MG9): it names the lot of N8 and the
+    bridge to write until then."""
     parts = _parts()
-    with pytest.raises(surface.NotYetElaborated, match="a function of cell"):
+    with pytest.raises(surface.NotYetElaborated, match="a function of cell") as caught:
         surface.Advance(ssprk2(rate=parts.model), dt=lambda cell: 1e-3)
+    message = str(caught.value)
+    assert "a later lot of N8 (the step rules of 5.11, PF8)" in message
+    assert "until then, write dt=pops.lib.time.cfl_limit(flux, cfl=..., max_dt=...)" in message

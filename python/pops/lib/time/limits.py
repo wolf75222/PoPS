@@ -10,8 +10,10 @@ selection gives when the list names every flux of the model.
 
 It is a bridge of MG9 (``tests/gates/mg9_bridges.toml``), as ``cg()`` of ``pops.lib.solve``: it
 subclasses the surface's ``StepRuleValue`` and names b6's ``AdaptiveCFL``, until N8 elaborates
-``dt=`` as a function of ``cell`` and the step rules of 5.11 are written with the surface. The value is a ``pops.StepRuleValue``; ``realize`` builds the
-step rule of N8, ``StepRule(cfl, max_dt, strategy=AdaptiveCFL(cfl, max_dt))``: the compiled run of
+``dt=`` as a function of ``cell`` and the step rules of 5.11 are written with the surface; the
+refusal of ``dt=`` as a function of ``cell`` names it as what to write until then (``spelling``).
+The value is a ``pops.StepRuleValue``; ``realize`` builds the step rule of N8,
+``StepRule(cfl, max_dt, strategy=AdaptiveCFL(cfl, max_dt))``: the compiled run of
 ``System::run_advance`` executes the rule, and ``pops.run`` on the same artifact runs master's
 ``AdaptiveCFL``. The pairing is this word's; the core never reads its options (CF2).
 """
@@ -38,6 +40,7 @@ class _CflLimit(StepRuleValue):
     """The value of ``cfl_limit(flux, cfl=, max_dt=None)``."""
 
     word = "cfl_limit"
+    spelling = "pops.lib.time.cfl_limit(flux, cfl=..., max_dt=...)"
     __slots__ = ("cfl", "max_dt")
 
     def __init__(self, fluxes: Any, cfl: float, max_dt: float | None) -> None:
