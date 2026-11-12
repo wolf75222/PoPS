@@ -328,3 +328,11 @@ def test_erf_is_a_word_of_the_initial_values_only():
     parts = types.SimpleNamespace(domain=domain, model=model, u=u, advection=advection)
     with pytest.raises(surface.NotYetElaborated, match=r"erf\(a\) in a value of the model.*N11"):
         _case(parts, 0.5)
+
+
+def test_a_word_that_the_analytic_route_lacks_names_g07():
+    from pops.surface.math import expm1
+
+    parts = _parts()
+    with pytest.raises(surface.NotYetElaborated, match=r"expm1\(.*pops.analytic.*G07"):
+        _case(parts, surface.project(expm1(parts.x), quadrature=GaussLegendre(1)))

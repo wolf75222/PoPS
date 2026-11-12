@@ -62,6 +62,12 @@ BRIDGE_WORDS = {("Diffusion", "pops.numerics"), ("riemann", "pops.numerics"),
 # solves de relation » runs the reference cg under the relation solves of traced methods.
 SOLVE_BRIDGE = "python/pops/lib/solve/__init__.py"
 SOLVE_BRIDGE_WORDS = {("CG", "pops.solvers"), ("NotYetElaborated", "pops.surface")}
+# The cfl_limit bridge of N15 lot D-E (python/pops/lib/time/limits.py): it subclasses the
+# surface's StepRuleValue and pairs N8's compiled step rule with b6's AdaptiveCFL, which
+# pops.run takes on the same artifact; both findings leave with the bridge, when N8 writes the
+# step rules of 5.11 with the surface (dt= a function of cell, PF8).
+STEP_BRIDGE = "python/pops/lib/time/limits.py"
+STEP_BRIDGE_WORDS = {("StepRuleValue", "pops.surface"), ("AdaptiveCFL", "pops.time")}
 
 
 @pytest.fixture(scope="module")
@@ -96,7 +102,7 @@ def _surface_modules():
 def test_the_library_written_with_the_surface_passes_the_lint(words):
     modules = [path.relative_to(ROOT).as_posix() for path in _surface_modules()]
     assert {"python/pops/lib/time/methods.py", BRIDGE} <= set(modules)
-    bridges = {BRIDGE: set(), SOLVE_BRIDGE: set()}
+    bridges = {BRIDGE: set(), SOLVE_BRIDGE: set(), STEP_BRIDGE: set()}
     for name in modules:
         for finding in lint.lint_file(ROOT / name, words, name=name):
             if name in bridges and finding.rule == "word" and finding.kind == "F":
@@ -105,7 +111,8 @@ def test_the_library_written_with_the_surface_passes_the_lint(words):
                 bridges[name].add((word, module))
                 continue
             raise AssertionError(str(finding))
-    assert bridges == {BRIDGE: BRIDGE_WORDS, SOLVE_BRIDGE: SOLVE_BRIDGE_WORDS}
+    assert bridges == {BRIDGE: BRIDGE_WORDS, SOLVE_BRIDGE: SOLVE_BRIDGE_WORDS,
+                       STEP_BRIDGE: STEP_BRIDGE_WORDS}
 
 
 @pytest.mark.parametrize("source, expected", [

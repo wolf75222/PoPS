@@ -28,6 +28,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
   sliver step at a frontier, when a CFL step ends within four ulp short of it or when
   `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-98 (N15, lot D-E, part D): `dt=cfl_limit(flux, cfl=, max_dt=None)` (spec 0.3, 2.6.2,
+  2.6.9, SD44, SD70; OD31). `from pops.lib.time import cfl_limit`;
+  `pops.Advance(method, dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2))` elaborates onto N8's
+  compiled step rule, `StepRule(cfl, max_dt, strategy=AdaptiveCFL(cfl, max_dt))`: each step is
+  b6's CFL selection on the wave speeds of the model, capped by `max_dt`, and the run lands on
+  its frontiers; `pops.run` on the artifact takes master's `AdaptiveCFL`. The core knows a
+  library step rule as `pops.StepRuleValue` (its fluxes and its realization), not by its name
+  (CF2). A rule that leaves out a transport flux of the model, a model with a diffusive flux and
+  a flux without derived waves refuse with their lot. A 64 x 64 advection with inflow and
+  outflow runs bit for bit as the same case written by hand, and as master's `AdaptiveCFL`.
+  A compiled run with the rule refuses every global step bound (`add_dt_bound`), even one added
+  before `bind`, which the `step_cfl` route admits: a case with such a bound cannot yet take
+  `cfl_limit` in a compiled run (review R2 of #782).
 - ROM-98 (N15, lot « solves »): `pops.unknown`, `pops.solve`, `pops.Tolerance`,
   `Advance(tolerance=)` and `Program(solvers=)` of spec 0.3, 2.6.7, `cg()` in `pops.lib.solve`
   (a bridge of MG9 on b6's native conjugate gradients) and `imex_euler` in

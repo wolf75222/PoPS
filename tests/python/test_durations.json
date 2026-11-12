@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1186,
+    "estimated_count": 1188,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7075,6 +7075,7 @@
       "tests/python/integration/runtime/test_spec3_runtime_end_to_end.py",
       "tests/python/integration/runtime/test_stencil_flux_v02_native.py",
       "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py",
+      "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py",
       "tests/python/integration/runtime/test_surface_lot_e_project_native.py",
       "tests/python/integration/runtime/test_surface_lot_g_run_native.py",
       "tests/python/integration/runtime/test_symbolic_path_adversarial_runtime.py",
@@ -7738,6 +7739,7 @@
       "tests/python/unit/solvers/test_cartesian_cg_descriptor.py",
       "tests/python/unit/solvers/test_poisson_screened.py",
       "tests/python/unit/surface/test_lot_b_boundaries.py",
+      "tests/python/unit/surface/test_lot_d_step_rule.py",
       "tests/python/unit/surface/test_lot_e_project.py",
       "tests/python/unit/surface/test_lot_g_run.py",
       "tests/python/unit/surface/test_quadrature.py",
@@ -8124,7 +8126,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1251,
+    "total_files": 1253,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8679,13 +8681,13 @@
           "session_seconds": 106.46
         },
         "tests/python/unit/surface/test_lot_e_project.py": {
-          "cases": 13,
-          "session_seconds": 15.95
+          "cases": 14,
+          "session_seconds": 18.95
         }
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_surface_lot_e_project_native.py": "c076f330ce651c72a9cfa7ccfa4aa0e62bc107b8d76e4035ee6afdb697b28627",
-        "tests/python/unit/surface/test_lot_e_project.py": "d016d0bb3ca2ba541a6ede6b5746ac70a8e3a6f4fe236b98e475c038c26b388d"
+        "tests/python/unit/surface/test_lot_e_project.py": "ad249095ee760348999b81d9ca31c9801d101e8a742fe922809f0b9fab4efd73"
       }
     },
     "ci_20261111_n9_lot4_reference_cg": {
@@ -8802,6 +8804,31 @@
         "tests/python/unit/surface/test_su_t3_solves.py": "5fe4c64ca0bb34fa873d9ea1ad181f1645d6d7eee34067e0ae0e9d1f1580ccf3",
         "tests/python/unit/time/test_relations_n8.py": "bd757b5304182cbdc206f4052a94e333d421443188c58014cdaa318192209765",
         "tests/python/unit/surface/test_su_t2_solve_refusals.py": "5d3fb0638aeae68c1eecea4cdbd3e5be06a471ad3ad1f0b29f4f19ad29c0ac97"
+      }
+    },
+    "ci_20261112_n15_surface_lot_d": {
+      "basis": "Unmeasured CI scheduling estimates for the two modules of N15 lot D-E, part D (ROM-98, OD31: dt=cfl_limit(flux, cfl=, max_dt=), the step rule of the surface elaborated onto N8's compiled step rule), on the api_v02_20261013 tiers: 60 s for the source-only module, which resolves eight level-1 cases and emits the C++ of three of them and of their hand-written b6 forms, as the analogue test_su_t3_schemes_2d.py (60 s); 600 s for the Dim2 native module, which compiles two artifacts once per module (the surface advection with inflow, outflow and cfl_limit, and its hand-written b6 form) and runs five compiled runs of 29 steps at most on 64 x 64 cells, as the analogue test_surface_lot_b_boundaries_native.py (two artifacts, 600 s). The local receipts come from pytest on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py": "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py",
+        "tests/python/unit/surface/test_lot_d_step_rule.py": "tests/python/unit/surface/test_su_t3_schemes_2d.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py": 600,
+        "tests/python/unit/surface/test_lot_d_step_rule.py": 60
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py": {
+          "cases": 2,
+          "session_seconds": 86.6
+        },
+        "tests/python/unit/surface/test_lot_d_step_rule.py": {
+          "cases": 9,
+          "session_seconds": 12.68
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py": "ce9830ec717a12e136908d8525561da6f1af02e2b3fcd2e30e27eb723162d6d7",
+        "tests/python/unit/surface/test_lot_d_step_rule.py": "d3cbd4aa87be5c0ff60129c916bc86295f481158031eca68d21cac1d3a684170"
       }
     }
   },
@@ -10055,5 +10082,7 @@
   "tests/python/unit/time/test_compiled_step_rule_n8.py": 15,
   "tests/python/unit/surface/test_su_t3_solves.py": 60,
   "tests/python/unit/time/test_relations_n8.py": 15,
-  "tests/python/unit/surface/test_su_t2_solve_refusals.py": 15
+  "tests/python/unit/surface/test_su_t2_solve_refusals.py": 15,
+  "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py": 600,
+  "tests/python/unit/surface/test_lot_d_step_rule.py": 60
 }
