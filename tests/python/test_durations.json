@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1193,
+    "estimated_count": 1194,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7075,6 +7075,7 @@
       "tests/python/integration/runtime/test_scoped_flux_wave_runtime.py",
       "tests/python/integration/runtime/test_shared_interface_runtime.py",
       "tests/python/integration/runtime/test_spec3_runtime_end_to_end.py",
+      "tests/python/integration/runtime/test_state_operand_n9_native.py",
       "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py",
       "tests/python/integration/runtime/test_stencil_flux_v02_native.py",
       "tests/python/integration/runtime/test_stencil_runtime_parameter_native.py",
@@ -8131,7 +8132,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1258,
+    "total_files": 1259,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8890,6 +8891,25 @@
       "source_sha256": {
         "tests/python/unit/surface/test_n3_lot1_library_words.py": "95d37145f60c7464755a4947ad719748ba1052f135edf47cb456a774b74c97a6",
         "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": "d98b823128733a7a9bb70fb75c4f2ff47c08ff5301fcdec63064bc38297236c4"
+      }
+    },
+    "n9_20261112_state_operand": {
+      "basis": "Unmeasured CI scheduling estimate for the native module of N9 « La référence sous les solves de relation », commit 4 (ROM-90, the State operand of a matrix_free_operator and its core ledger entry): 600 s, the 600 s native tier of api_v02_20261013, above the 300 s of its analogue test_stencil_runtime_parameter_native.py because the local receipt alone is 280 s. The module compiles six Dim2 artifacts (build_m05's and build_m23's frozen-coefficient linearizations inside a reference region, and the full and stiff-free corpus faces of each) on 8x8 grids and runs one step of each. The local receipt comes from scripts/ci_pytest_timings.py on a 4-core container with a Kokkos 4.4.01 Serial build of _pops and a cold cache; it is not a GitHub CI file wall time. Existing weights, the Python shard total, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_state_operand_n9_native.py": "tests/python/integration/runtime/test_stencil_runtime_parameter_native.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_state_operand_n9_native.py": 600
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_state_operand_n9_native.py": {
+          "cases": 2,
+          "phase_seconds": 279.4,
+          "session_seconds": 280.8
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_state_operand_n9_native.py": "7965169d7565e8680b8cda750aafa018e8f06e4127f318ab2b9701b7fead3ebc"
       }
     }
   },
@@ -10150,5 +10170,6 @@
   "tests/python/unit/numerics/test_stencil_runtime_parameter.py": 15,
   "tests/python/integration/runtime/test_stencil_runtime_parameter_native.py": 300,
   "tests/python/unit/surface/test_n3_lot1_library_words.py": 60,
-  "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": 600
+  "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": 600,
+  "tests/python/integration/runtime/test_state_operand_n9_native.py": 600
 }

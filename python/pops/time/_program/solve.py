@@ -124,6 +124,10 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
           - @p max_iter: iteration budget (REQUIRED, > 0: a dynamic solver loop with no budget is a
             configuration error refused before the prepared native route is entered)."""
         operator = self._canonical_value(operator)
+        if operator.attrs.get("apply_operand") == "state":
+            from pops.time.solve_outcome import state_operand_native_refusal
+
+            raise NotImplementedError(state_operand_native_refusal(operator))
         from pops.solvers.scopes import solve_scope_id
 
         solve_scope = (

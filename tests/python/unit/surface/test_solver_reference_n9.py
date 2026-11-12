@@ -17,7 +17,7 @@ from pops.surface import _solver
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.lib.solve import cg, krylov
-from pops.time.solve_outcome import FailRun, RejectAttempt
+from pops.time.solve_outcome import FailRun, RejectAttempt, solve_realization_kind
 
 
 def _program(solver, *, properties=None, consume=None, read_evidence=False, unconsumed=False):
@@ -485,3 +485,152 @@ def test_a_fixed_site_whose_solve_reaches_its_iteration_limit_names_its_budget()
     broken = _trial_failure(_sites_control(), dict(report, rejection_status="breakdown"),
                             time=0.5, attempts=1)
     assert broken.variant is SolveFailed and "budget" not in broken.payload
+
+
+# --- The State operand of a matrix_free_operator (IR26; N9 « La référence sous les solves de
+# relation » §3.4, commit 4). The measurement on build_m05 and build_m23 is native:
+# tests/python/integration/runtime/test_state_operand_n9_native.py.
+
+def _diffusion_face(kappa=1.0):
+    from pops.numerics.stencil_flux import StencilFlux
+
+    def body(sample, h, axis):
+        left = tuple(-int(d == axis) for d in range(2))
+        return (-kappa * (sample((0, 0), 0) - sample(left, 0)) / h[axis],), 2 * kappa / h[axis] ** 2
+    return StencilFlux(dimension=2, components=1, radius=1, body=body)
+
+
+def _state_operand_program(via, *, solver=None, apply=None, properties=None):
+    """u + 0.1 div F(u) on a State operand: through a ``StateOperator`` or through
+    ``set_apply(operand=)`` by hand."""
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian2D
+    from pops.numerics import DiscretizationPlan, StateStorage
+    from pops.surface._solver import StateOperator
+
+    frame = CartesianDomain("so_n9", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
+    model = pops.Model("so_n9", frame=frame)
+    state = model.state("u", components=("c0",), sampling="cell_average")
+    case = pops.Case("so_n9")
+    block = case.block("q", model)
+    plan = DiscretizationPlan()
+    plan.states.add(state, StateStorage(ghost_depth=1))
+    case.numerics(plan, block=block)
+    program = pops.Program("so_n9")
+    temporal = program.state(block[state])
+    flux = _diffusion_face()
+    if apply is None:
+        def apply(p, v):
+            return v + 0.1 * p.stencil_flux_divergence("diffusion", v, flux=flux)
+    if via == "state_operator":
+        operator = StateOperator("A", apply)
+    else:
+        operator = program.matrix_free_operator("A", domain="state", range_="state", ncomp=1)
+        operator = program.set_apply(operator, lambda p, _out, v: apply(p, v), operand=temporal.n)
+    problem = LinearProblem(
+        operator, temporal.n, nullspace=None,
+        properties=properties or LinearOperatorProperties.symmetric_positive_definite())
+    outcome = program.solve(problem, name="sol",
+                            solver=solver or cg().with_request(rtol=1e-10, atol=0.0))
+    solution = outcome.consume(action=FailRun())
+    program.commit(temporal.next, program.value("accepted", solution, at=temporal.next.point))
+    case.program(program)
+    return case, program, model, temporal
+
+
+def _emit(program, model):
+    from pops.codegen.module_lowering import lower_and_validate
+
+    lowered, _ = lower_and_validate(model, facade=model)
+    return emit_cpp_program(program, model=lowered)
+
+
+@pytest.mark.parametrize("via", ["state_operator", "set_apply"])
+def test_a_state_operand_operator_is_a_declaration_on_states_of_the_block(via):
+    import json
+
+    case, program, model, temporal = _state_operand_program(via)
+    (operator,) = [v for v in program._values if v.op == "matrix_free_operator"]
+    attrs = operator.attrs
+    assert (attrs["domain"], attrs["range"], attrs["apply_operand"]) == ("state", "state", "state")
+    for role in ("apply_in", "apply_out"):
+        placeholder = attrs[role]
+        assert placeholder.vtype == "state" and placeholder.attrs["apply_operand"] == "state"
+        assert (placeholder.block, placeholder.state_ref) == (temporal.n.block,
+                                                              temporal.n.state_ref)
+    assert [node.op for node in attrs["apply_block"]] == [
+        "apply_out", "apply_in", "stencil_flux_divergence", "linear_combine"]
+    assert attrs["apply_result"].state_ref == temporal.n.state_ref
+    # The reference realizes the solve; its region applies the same body on its own States.
+    assert solve_realization_kind(_solve(program)) == "reference"
+    region = [v.op for v in _walk(program._values)]
+    assert region.count("stencil_flux_divergence") >= 2
+    ir = case._time._serialize(include_provenance=False)
+    assert '"apply_operand": "state"' in json.dumps(ir, default=str)
+    pops.validate(case)
+    # No C++ lambda is emitted from the declaration (§3.4): only the region applies it.
+    source = _emit(program, model)
+    assert "apply_A%d" % operator.id not in source
+    assert "the apply of a State-operand operator is a declaration (IR26)" in source
+
+
+def test_a_native_solve_of_a_state_operand_operator_names_the_operator_generated_by_g10():
+    # The pilot's condition on Q4: the refusal names G10's generated operator.
+    from pops.solvers import CG
+
+    with pytest.raises(NotImplementedError) as refused:
+        _state_operand_program("set_apply", solver=CG(max_iter=20))
+    assert str(refused.value) == ("the native realization of the State-operand operator A is the "
+                                  "operator generated by G10")
+
+
+def test_native_realization_refuses_a_native_node_of_a_state_operand_operator():
+    from types import SimpleNamespace
+
+    from pops.time.solve_outcome import native_realization
+
+    operator = SimpleNamespace(name="A", attrs={"apply_operand": "state"})
+    node = SimpleNamespace(name="sol", attrs={}, inputs=(operator,))
+    with pytest.raises(NotImplementedError, match="operator A is the operator generated by G10"):
+        native_realization(node)
+    field = SimpleNamespace(name="sol", attrs={"provider": "cg"},
+                            inputs=(SimpleNamespace(name="B", attrs={}),))
+    assert native_realization(field) is field.attrs
+
+
+def test_a_rate_that_is_not_region_safe_in_a_state_operand_apply_is_refused_by_its_name():
+    case, program, model, _ = _state_operand_program(
+        "state_operator", apply=lambda p, v: p.fill_boundary(v))
+    pops.validate(case)
+    with pytest.raises(NotImplementedError,
+                       match="structured region operation 'fill_boundary' has no checked "
+                             "lane-uniform failure contract"):
+        _emit(program, model)
+
+
+def test_set_apply_refuses_an_operand_that_is_not_a_state_of_the_operator():
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian2D
+
+    frame = CartesianDomain("so_bad_n9", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
+    model = pops.Model("so_bad_n9", frame=frame)
+    state = model.state("u", components=("c0", "c1"), sampling="cell_average")
+    block = pops.Case("so_bad_n9").block("q", model)
+    program = pops.Program("so_bad_n9")
+    temporal = program.state(block[state])
+
+    def body(p, _out, v):
+        return v
+
+    vector = program.matrix_free_operator("V", domain="vector", range_="vector", ncomp=2)
+    with pytest.raises(ValueError, match="of domain 'state', not 'vector'"):
+        program.set_apply(vector, body, operand=temporal.n)
+    narrow = program.matrix_free_operator("N", domain="state", range_="state", ncomp=1)
+    with pytest.raises(ValueError, match="the operator has 1 components, its State operand 2"):
+        program.set_apply(narrow, body, operand=temporal.n)
+    operator = program.matrix_free_operator("A", domain="state", range_="state", ncomp=2)
+    with pytest.raises(TypeError, match="the operand is a qualified State"):
+        program.set_apply(operator, body, operand=program.scalar_field("s", ncomp=2))
+    operator = program.set_apply(operator, body, operand=temporal.n)
+    with pytest.raises(ValueError, match="already has an apply"):
+        program.set_apply(operator, body, operand=temporal.n)
