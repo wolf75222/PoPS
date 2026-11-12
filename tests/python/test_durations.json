@@ -8376,8 +8376,8 @@
       "files": {
         "tests/python/integration/runtime/test_lib_face_body_swap_native.py": {
           "analogue": "tests/python/integration/runtime/test_api_v02_python_face_inputs_native.py",
-          "estimated_seconds": 600,
-          "source_sha256": "a8fb75c71b7b1a2384ec3fedfb402320a64f3791c60070440caaebd2c5857227"
+          "estimated_seconds": 780,
+          "source_sha256": "7b4f0e2a9ac463829bbbf8b4e71f57e7f8ce9e727f9bc5f7344432f4bff37f07"
         }
       }
     },
@@ -10060,7 +10060,7 @@
   "tests/python/unit/codegen/test_program_code_volume_f7.py": 15,
   "tests/python/integration/runtime/test_advance_outputs_n8_native.py": 600,
   "tests/python/unit/time/test_advance_outputs_n8.py": 30,
-  "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 600,
+  "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 780,
   "tests/python/unit/amr/test_regrid_decision.py": 60,
   "tests/python/integration/amr/test_regrid_decision_native.py": 900,
   "tests/python/unit/surface/test_su_t2_refusals.py": 15,
