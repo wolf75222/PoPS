@@ -35,6 +35,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   policy gives a ghost law of b6 before it adds `Inflow` (2 g - u_k) and `Outflow` (u_1) to the
   plan. The other forms, data read from a datum and `closes=` refuse with their lot. A 2D case
   with inflow and outflow runs bit for bit as the same case written by hand for b6.
+- ROM-90 (N9, lot 4): the reference conjugate gradient `pops.lib.solve.cg(preconditioner=None,
+  max_iterations=2000)`, written with `@pops.solver` over the entities `problem` and `region`
+  (SV9, SU15) and lowered onto one Program `iterate` in one captured region. It mirrors the native
+  `solve_cg` branch by branch (cycle scale, subnormal restart, no confirmation at the cap, final
+  true-residual check), and its failures are variants of T39 with their reason. The native CG
+  is a substitution of its Trace class (SV13): the same iteration counts on the Trace problems at
+  one and two ranks. `outcome.evidence` (iterations, residual norm, reason; SV5) is readable after
+  consumption on both routes and emitted only when read; `correction_norm`, and the evidence of a
+  solve kept across attempts (N8 lot 6), are refused with `NotYetElaborated` naming the N9 lot
+  « Évidence des solves ». `pops.fail` takes the run's `pops.SolveFailed` and
+  `pops.BudgetExhausted` (N15 lot G), and `pops.record` is a solver's record inside a solver and
+  the run's record elsewhere.
 - ROM-98 (N15, lot G): a case of the surface compiles, binds and runs (spec 0.3, 2.6.2, 2.6.6,
   §5.2, CC14; OD31). `pops.compile(case, target=pops.OpenMP())`, `pops.bind(artifact,
   params={b: v}, data={u0: array}, resources=pops.Resources(threads=n), directory=d)` and

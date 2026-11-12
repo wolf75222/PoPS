@@ -104,7 +104,11 @@ def div(e: _Any) -> _Expr:
 
 def _elementary(word: str) -> _Any:
     @_surface_entry
-    def function(e: _Any) -> _Expr:
+    def function(e: _Any) -> _Any:
+        hook = getattr(type(e), "__pops_elementary__", None)
+        if hook is not None:
+            # a scalar of a solver computes its own elementary function (N9 lot 4)
+            return hook(e, word)
         return _Call(word, (_value(e, word),))
 
     function.__name__ = function.__qualname__ = word
