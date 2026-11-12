@@ -186,6 +186,8 @@ case "$(uname)" in
 import pathlib
 import runpy
 import sys
+# The env is fresh here: pops is not installed yet, so import it from this checkout.
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "python"))
 capture = runpy.run_path(str(pathlib.Path(sys.argv[1]) / "python/pops/codegen/_native_toolchain.py"))[
     "capture_native_toolchain"
 ]()
@@ -194,7 +196,8 @@ if capture is None:
 print(capture.sysroot)
 PY
     )"; then
-      echo "ERROR: the declared macOS SDKROOT or its exact metadata is invalid." >&2
+      echo "ERROR: the macOS native SDK capture failed (Python error above): the declared" >&2
+      echo "       SDKROOT or its exact metadata is invalid, or the checkout's pops sources cannot load." >&2
       exit 1
     fi
     if [[ -z "$canonical_sdk_root" || "$canonical_sdk_root" != /* \
