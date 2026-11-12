@@ -68,6 +68,16 @@ struct AdvanceSegment {
   std::int64_t macro_step = -1;  ///< -1 before the first compiled run
 };
 
+/// The step rule of an elaborated Advance (N8 lot « Règle de pas compilée »): the proposal of each
+/// step is b6's CFL selection (System::step_cfl without its execution: the wave speeds of the
+/// accepted state, the coupled frequencies and the Program dt bound, at Courant number @p cfl and
+/// capped at @p max_dt), taken once per step before its attempts and then cut at the frontier by
+/// advance_attempt_duration. A rule has no fixed-proposal segment: each step starts its own.
+struct AdvanceStepRule {
+  double cfl = 0.0;
+  double max_dt = std::numeric_limits<double>::infinity();  ///< +infinity when the rule has none
+};
+
 /// One Output of the elaborated Advance as a compiled run schedules it (CC14).
 struct AdvanceOutputSchedule {
   /// when=every(k): due after each publication whose macro step is a multiple of k; 0 for none.

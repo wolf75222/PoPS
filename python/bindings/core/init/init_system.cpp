@@ -1224,12 +1224,18 @@ void bind_system_stepping(py::class_<System>& cls) {
           "_run_advance",
           [](System& system, double until, double proposal, std::int64_t max_steps,
              const std::vector<std::tuple<std::int64_t, std::vector<double>,
-                                          std::vector<std::string>>>& outputs) {
+                                          std::vector<std::string>>>& outputs,
+             const std::optional<std::pair<double, double>>& rule) {
             std::vector<pops::runtime::program::AdvanceOutputSchedule> schedule;
             schedule.reserve(outputs.size());
             for (const auto& [every_steps, at, arrays] : outputs)
               schedule.push_back({every_steps, at, arrays});
-            const auto report = system.run_advance(until, proposal, max_steps, schedule);
+            // rule = (cfl, max_dt): the step rule of the Advance, max_dt +inf when it has none.
+            std::optional<pops::runtime::program::AdvanceStepRule> step_rule;
+            if (rule)
+              step_rule = pops::runtime::program::AdvanceStepRule{rule->first, rule->second};
+            const auto report = system.run_advance(until, proposal, max_steps, schedule,
+                                                   step_rule ? &*step_rule : nullptr);
             py::list samples;
             for (const auto& sample : report.outputs) {
               py::dict row;
@@ -1263,7 +1269,8 @@ void bind_system_stepping(py::class_<System>& cls) {
           },
           py::arg("until"), py::arg("proposal"), py::arg("max_steps"),
           py::arg("outputs") = std::vector<
-              std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>{})
+              std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>{},
+          py::arg("rule") = std::optional<std::pair<double, double>>{})
       .def("_advance_max_attempts", &System::advance_max_attempts)
       .def_static(
           "_advance_attempt_duration",

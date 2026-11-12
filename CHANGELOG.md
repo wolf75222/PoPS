@@ -18,6 +18,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
+  from `StepRule(cfl, max_dt=None)` (internal; the slice's `cfl_limit` elaborates onto it), the
+  compiled run takes each step's proposal from b6's `System::step_cfl` selection, now split from
+  its execution, and lands on its frontiers. Its control is `pops.advance-control@4` (IR version
+  33); every Program without a rule keeps its record and identity. `pops.run` on the same artifact
+  runs master's `AdaptiveCFL`, which caps its last step at `t_end - t`: the two can differ by one
+  sliver step at a frontier, when a CFL step ends within four ulp short of it or when
+  `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
 - ROM-98 (N15, lot G): a case of the surface compiles, binds and runs (spec 0.3, 2.6.2, 2.6.6,
   §5.2, CC14; OD31). `pops.compile(case, target=pops.OpenMP())`, `pops.bind(artifact,
   params={b: v}, data={u0: array}, resources=pops.Resources(threads=n), directory=d)` and

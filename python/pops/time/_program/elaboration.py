@@ -33,7 +33,7 @@ from pops.time._program.outputs import trace_output
 from pops.time._program.traced_method import (
     MethodTrace, NotYetElaborated, SpecializedMethod, _fraction,
 )
-from pops.time._step.strategy import FixedDt
+from pops.time._step.strategy import AdaptiveCFL, FixedDt
 
 
 class Proposal:
@@ -61,6 +61,32 @@ class Proposal:
         self.dt: Any = dt
         self.request = request
         self.choices = dict(choices)
+
+
+class StepRule:
+    """``StepRule(cfl, max_dt=None)``: a step rule in place of the first ``Proposal`` (N8 lot
+    « Règle de pas compilée »). The compiled run takes each step's proposal from b6's CFL
+    selection of ``System::step_cfl`` (the wave speeds of the accepted state, the coupled
+    frequencies and the Program dt bound, at Courant number ``cfl``), capped at ``max_dt``, then
+    lands on its frontiers. The builder runs as master's ``AdaptiveCFL(cfl, max_dt)`` under
+    ``pops.run``. The slice's ``cfl_limit`` elaborates onto it; it is not a user spelling.
+    """
+
+    __slots__ = ("cfl", "max_dt")
+    request = None  # the trace reads ``p.request`` (5.5): a rule carries no solve request
+
+    def __init__(self, cfl: Any, max_dt: Any = None) -> None:
+        self.cfl = _rule_value(cfl, "cfl")
+        self.max_dt = None if max_dt is None else _rule_value(max_dt, "max_dt")
+
+
+def _rule_value(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, Fraction, Decimal)):
+        raise TypeError("StepRule(%s): a positive finite number, got %r" % (name, value))
+    value = float(value)
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError("StepRule(%s): a positive finite number, got %r" % (name, value))
+    return value
 
 
 class Retry:
@@ -182,7 +208,7 @@ def _trial_failures(program: Any, trace: MethodTrace) -> tuple:
     return tuple(rows)
 
 
-def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
+def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal | StepRule,
               name: str | None = None, outputs: Any = ()) -> Elaboration:
     """Elaborate ``advance`` for the block-qualified ``state`` of ``case``, from ``proposal``.
 
@@ -194,9 +220,9 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
     """
     if not isinstance(advance, Advance):
         raise TypeError("elaborate(advance): an Advance, got %r" % (advance,))
-    if not isinstance(proposal, Proposal):
-        raise TypeError("elaborate(proposal=...): the first Proposal of the run, got %r"
-                        % (proposal,))
+    if not isinstance(proposal, (Proposal, StepRule)):
+        raise TypeError("elaborate(proposal=...): the first Proposal of the run or a StepRule, "
+                        "got %r" % (proposal,))
     program = _Builder(advance.method.name if name is None else name)
     temporal = program.state(state)
     trace = advance.method.trace(program, temporal, proposal)
@@ -212,12 +238,19 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal,
     if regions:
         program._set_advance_outputs(regions)
     memory = _lower_memory(program, advance.method, trace)
-    dt = proposal.dt
-    strategy = FixedDt(float(dt) if isinstance(dt, (Fraction, Decimal)) else dt)
-    program.step_strategy(strategy)
+    if isinstance(proposal, StepRule):
+        # pops.run on the artifact takes master's AdaptiveCFL route; Simulation.run the rule.
+        program.step_strategy(AdaptiveCFL(proposal.cfl, proposal.max_dt))
+        first_dt, step_rule = None, (proposal.cfl, proposal.max_dt)
+    else:
+        dt = proposal.dt
+        strategy = FixedDt(float(dt) if isinstance(dt, (Fraction, Decimal)) else dt)
+        program.step_strategy(strategy)
+        first_dt, step_rule = strategy.dt, None
     control = AdvanceControl(assessments=(("finite", "default"),),
                              max_attempts=advance.retry.max_attempts,
-                             max_transforms=advance.retry.max_transforms, first_dt=strategy.dt,
+                             max_transforms=advance.retry.max_transforms, first_dt=first_dt,
+                             step_rule=step_rule,
                              outputs=tuple(region.schedule_data() for region in regions),
                              memory=memory, trial_failures=_trial_failures(program, trace))
     program._set_advance_control(control)
