@@ -297,6 +297,29 @@ def test_every_other_operation_is_a_barrier(op):
     assert not reuse._crosses(_node(op))
 
 
+def test_a_reference_solve_is_a_barrier_of_both_caches():
+    """``_SAFE`` lists ``solve_linear``, a native solve. A reference solve (N9 « La référence sous
+    les solves de relation », SV12) is the region of its node: the StencilFlux of the relation's
+    rate, evaluated at its iterates, writes their ghost cells and its rate scratch, and the
+    solution is the region's own buffer. That write set is not proved disjoint from the valid
+    cells of a state and the solved buffers that a time-independent entry reads, so the traced
+    walk stops at it and the b6 cache is emptied there (§5 of the lot note); a native solve still
+    crosses."""
+    from tests.python.unit.surface.test_su_t3_solves import _surface_l1d
+
+    program = _surface_l1d().elaborated.case._time
+    (solve,) = [value for value in program._values if value.op == "solve_linear"]
+    assert solve.attrs["realization"]["kind"] == "reference" and solve.region == 0
+    assert not reuse._crosses(solve)
+    var = {("field_reuse_cache",): {"entry": "kept"}}
+    reuse.observe_operation(solve, var)
+    assert var[("field_reuse_cache",)] == {}
+    native = _node("solve_linear")
+    assert reuse._crosses(native)
+    reuse.observe_operation(native, var := {("field_reuse_cache",): {"entry": "kept"}})
+    assert var[("field_reuse_cache",)] == {"entry": "kept"}
+
+
 def test_a_path_conservative_rate_is_a_barrier():
     assert not reuse._crosses(_node("rhs", attrs={"path_conservative": True}))
     assert reuse._crosses(_node("rhs", attrs={"path_conservative": False}))

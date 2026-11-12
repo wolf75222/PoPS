@@ -198,3 +198,22 @@ def test_a_right_hand_side_that_is_not_finite_fails_the_run(
     assert reference["error"].startswith("RuntimeError: "), reference
     assert "invalid_evaluation action=fail_run" in reference["error"], reference
     assert "origin=2; code=3" in reference["error"], reference
+
+
+@pytest.mark.parametrize("maxit", [60, 200])
+def test_a_request_that_no_recurrence_meets_ends_at_the_iteration_limit_on_both_routes(
+        maxit, isolated_native_cache, native_cxx, kokkos_root):
+    """O3' of the review of #775 (§5 of the N9 lot « La référence sous les solves de relation »):
+    rtol 1e-200 is below the rounding of any recurrence, which may reach the subnormal trigger of
+    the cycle scale and restart. Both routes end at the iteration limit, the reference with the
+    status iteration_limit through the table of §3.2, where it said invalid_evaluation (code=11)
+    before the lot. That proves the same variant, not that the trigger fired: counting the
+    restarts needs the evidence of a failed solve, which lands with the N9 lot « Évidence des
+    solves »."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    b = np.random.default_rng(2026).standard_normal((1, 16, 16))
+    controls = dict(c=0.1, rtol=1e-200, maxit=maxit)
+    native, reference = _run("native", b, **controls), _run("reference", b, **controls)
+    assert "iteration_limit" in native["error"], native
+    assert "StepAttemptRejected" in reference["error"], reference
+    assert "status=iteration_limit" in reference["error"], reference
