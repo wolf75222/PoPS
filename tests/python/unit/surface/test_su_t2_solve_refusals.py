@@ -138,7 +138,7 @@ def test_a_layout_that_is_not_uniform_and_periodic_is_refused():
             _TwoPoint("two_point").linear_operator(view, weight=1, layout=layout)
     linear = _TwoPoint("two_point").linear_operator(
         view, weight=1, layout={"uniform": True, "cartesian": True, "periodic": True})
-    assert linear.kappa == 1e-2 and linear.claims()["negative_semidefinite"]
+    assert linear.kappa == 1e-2 and linear.claims().negative_semidefinite
 
 
 def test_an_anti_diffusive_relation_is_not_proved_spd_for_cg():

@@ -455,6 +455,19 @@ class _Relational(_Traced):
     def _as_affine(self) -> Any:  # pragma: no cover - every subclass defines it
         raise NotImplementedError
 
+    def _image_by(self, component: Any, c: Any) -> Any:
+        """The image of this value by the linear map of ``component`` at the stage ``c``: an
+        unknown has one (``relations.py``); a combination of an unknown has none in this lot."""
+        raise NotYetElaborated(
+            "%s(...) at a combination of an unknown: this lot elaborates a rate at the unknown "
+            "itself, %s(U, t); others come with a later lot of N8"
+            % (component._name, component._name))
+
+    @staticmethod
+    def _claims_of(value: Any) -> Any:  # pragma: no cover - installed by relations.py
+        """The ``LinearClaims`` of ``value``, or ``None`` (installed by ``relations.py``)."""
+        raise NotImplementedError
+
     def _same_trace_relational(self, trace: Any, where: str) -> None:
         self._trace.require_active("a relation")
         if self._trace is not trace:
@@ -880,8 +893,6 @@ class _Component:
     def _image(self, unknown: Any, time: Any) -> Any:
         """``flow(U, t)`` at an unknown ``U``: the image of ``U`` by the linear map of the
         component, pending in the relation that reads it (5.5, ``relations.py``)."""
-        from pops.time._program.relations import TracedAffine, TracedUnknown
-
         trace = self._trace
         if not isinstance(time, TracedTime):
             raise TypeError("%s(U, t) evaluates the unknown U at a time t = B.time + c*p.dt of "
@@ -890,22 +901,14 @@ class _Component:
         if time._trace is not trace:
             raise ClosedBodyViolation("%s(U, t) reads a time of another method trace (T33)"
                                       % self._name)
-        if not isinstance(unknown, TracedUnknown):
-            raise NotYetElaborated(
-                "%s(...) at a combination of an unknown: this lot elaborates a rate at the unknown "
-                "itself, %s(U, t); others come with a later lot of N8" % (self._name, self._name))
         if trace.evaluation is not None:
             raise NotYetElaborated("%s(U, t) inside the component %r: a relation is stated in the "
                                    "method body" % (self._name, trace.evaluation.component))
-        self._linear_claims()
-        return TracedAffine(trace, unknown, (_Coeff({}), ()),
-                            ((self, time.c, (_Coeff({0: 1}), _ONE)),), None, False)
+        return unknown._image_by(self, time.c)
 
     def _linear_claims(self) -> Any:
         """The claims of the linear map that the evaluation of this component states (IR16)."""
-        from pops.time._program.relations import LinearClaims
-
-        claims = LinearClaims.of(getattr(self._evaluate, "linear_claims", None))
+        claims = _Relational._claims_of(getattr(self._evaluate, "linear_claims", None))
         if not callable(getattr(self._evaluate, "linear_apply", None)) or claims is None:
             raise NotYetElaborated(
                 "%s(U, t) at an unknown U: the rate of %r states no linear map (linear_apply and "

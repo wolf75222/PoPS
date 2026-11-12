@@ -187,17 +187,29 @@ class _TwoPointLinear:
         """``kappa * P.laplacian(v)`` on the apply ``P`` of a matrix-free operator."""
         return self.kappa * P.laplacian(P.scalar_field("laplacian"), value)
 
-    def claims(self) -> dict:
+    def claims(self) -> _TwoPointClaims:
         """The claims of the map (IR16), with their proof, as the solves of a method read them."""
-        positive = self.kappa >= 0
-        return {
-            "symmetric": True, "negative_semidefinite": positive,
-            "description": "the two_point() rate of %s, kappa*Laplacian with kappa = %r"
-                           % (self.term, self.kappa),
-            "proof": ("kappa = %s = %r >= 0 and the shared Laplacian of a uniform periodic grid "
-                      "is symmetric negative semidefinite" if positive else
-                      "kappa = %s = %r is negative, so the map is not negative semidefinite")
-                     % (self.spelled, self.kappa)}
+        positive = bool(self.kappa >= 0)
+        proof = ("kappa = %s = %r >= 0 and the shared Laplacian of a uniform periodic grid is "
+                 "symmetric negative semidefinite" if positive else
+                 "kappa = %s = %r is negative, so the map is not negative semidefinite") \
+            % (self.spelled, self.kappa)
+        return _TwoPointClaims(
+            positive, proof, "the two_point() rate of %s, kappa*Laplacian with kappa = %r"
+            % (self.term, self.kappa))
+
+
+class _TwoPointClaims:
+    """The claims of a two-point linear map (IR16): symmetric, negative semidefinite when
+    kappa >= 0, with the proof and the description that ``pops.inspect`` reports."""
+
+    __slots__ = ("symmetric", "negative_semidefinite", "proof", "description")
+
+    def __init__(self, negative_semidefinite: bool, proof: str, description: str) -> None:
+        self.symmetric = True
+        self.negative_semidefinite = negative_semidefinite
+        self.proof = proof
+        self.description = description
 
 
 def _checked_reconstruction(word: str, reconstruction: Any) -> Any:

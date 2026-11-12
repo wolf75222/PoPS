@@ -101,13 +101,16 @@ class LinearClaims:
 
     @classmethod
     def of(cls, value: Any) -> LinearClaims | None:
-        """``value`` as claims: claims, or a mapping of the four keys; ``None`` otherwise."""
+        """``value`` as claims: claims, or a value of the library that states the four of them as
+        attributes, so that ``pops.lib`` imports no private module (CF0b); ``None`` otherwise."""
         if isinstance(value, cls):
             return value
-        keys = {"symmetric", "negative_semidefinite", "proof", "description"}
-        if isinstance(value, dict) and set(value) == keys:
-            return cls(**value)
-        return None
+        if value is None or not all(hasattr(value, name) for name in cls.__slots__):
+            return None
+        if not all(isinstance(getattr(value, name), bool)
+                   for name in ("symmetric", "negative_semidefinite")):
+            return None
+        return cls(**{name: getattr(value, name) for name in cls.__slots__})
 
     __slots__ = ("symmetric", "negative_semidefinite", "proof", "description")
 
@@ -137,6 +140,13 @@ class TracedUnknown(_Relational):
     def _as_affine(self) -> TracedAffine:
         self._trace.require_active("the unknown %s" % self.name)
         return TracedAffine(self._trace, self, (_Coeff({0: 1}), _ONE_POLY), (), None, False)
+
+    def _image_by(self, component: Any, c: Any) -> TracedAffine:
+        """``component(U, t)``: the image of ``U`` by the linear map that the component states,
+        pending in the relation that reads it (IR16)."""
+        component._linear_claims()
+        return TracedAffine(self._trace, self, (_Coeff({}), ()),
+                            ((component, c, (_Coeff({0: 1}), _ONE_POLY)),), None, False)
 
     def __repr__(self) -> str:
         return "TracedUnknown(%s)" % self.name
@@ -289,6 +299,7 @@ def _eq(self: Any, other: Any) -> Relation:
 
 _Relational.__neg__ = _neg  # type: ignore[method-assign]
 _Relational.__eq__ = _eq  # type: ignore[method-assign,assignment]
+_Relational._claims_of = staticmethod(LinearClaims.of)  # type: ignore[method-assign]
 
 
 class Relation:
