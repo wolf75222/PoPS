@@ -184,3 +184,18 @@ def test_a_parameter_that_no_kernel_reads_is_refused_with_its_lot():
                                                "reads") as caught:
         _emit(_parameter_case(read_by_kernel=False))
     assert "a later lot of N8 « dt= as a function of cell »" in str(caught.value)
+
+
+def test_the_runtime_knows_the_zero_elliptic_brick_by_its_codegen_identity():
+    """The plan guard of a cells rule takes a generated block whose elliptic brick is the zero
+    right-hand side for one without a Poisson source: the identity it compares is the one that
+    codegen gives that brick (``module_codegen._emit_bricks``, ``_exact_brick_contract``)."""
+    from pathlib import Path
+
+    import pops.codegen.module_codegen as module_codegen
+
+    root = Path(__file__).resolve().parents[4]
+    header = (root / "include/pops/runtime/builders/compiled/generated_system_block.hpp").read_text()
+    source = Path(module_codegen.__file__).read_text()
+    assert '"zero-elliptic-rhs",' in source
+    assert '"pops.codegen.zero-elliptic-rhs-brick"' in header

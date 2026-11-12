@@ -38,6 +38,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -1204,13 +1205,16 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
     add_poisson_rhs<Dim>(model, state, rhs);
   };
-  // The closure adds nothing for a model without elliptic_rhs, or whose elliptic brick is
-  // NoElliptic (a composite without Poisson coupling): a cells rule reads that (N8).
+  // The closure adds nothing for a model without elliptic_rhs, or whose elliptic brick is the
+  // zero right-hand side (NoElliptic, or the brick codegen emits for a model without
+  // set_elliptic_rhs): a cells rule reads that (N8).
   result.poisson_source_empty = [] {
-    if constexpr (requires(const Model& provider) { provider.ell; })
-      return std::is_same_v<std::remove_cvref_t<decltype(std::declval<const Model&>().ell)>,
-                            NoElliptic>;
-    else
+    if constexpr (requires(const Model& provider) { provider.ell.provider_identity(); }) {
+      using Elliptic = std::remove_cvref_t<decltype(std::declval<const Model&>().ell)>;
+      const std::string_view name = Elliptic::provider_identity().name;
+      return name == NoElliptic::provider_identity().name ||
+             name == std::string_view("pops.codegen.zero-elliptic-rhs-brick");
+    } else
       return !requires(const Model& provider, const typename Model::State& value) {
         provider.elliptic_rhs(value);
       };

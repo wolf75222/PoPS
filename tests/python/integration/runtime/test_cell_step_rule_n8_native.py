@@ -254,12 +254,12 @@ def burgers(tmp_path_factory, native_cxx, kokkos_root):
         yield {max_dt: _burgers(max_dt) for max_dt in (None, MAX_DT)}
 
 
-@pytest.mark.parametrize("max_dt", [None, MAX_DT])
 def _step_profile():
     x = (np.arange(REST_CELLS[0]) + 0.5) / REST_CELLS[0]
     return np.repeat(np.where(x < 0.5, 0.0, 1.0)[:, None], REST_CELLS[1], axis=1)
 
 
+@pytest.mark.parametrize("max_dt", [None, MAX_DT])
 def test_a_cell_at_rest_bounds_nothing(burgers, tmp_path, max_dt):
     artifact, u0 = burgers[max_dt]
     moving = surface.bind(artifact, data={u0: _step_profile()},
