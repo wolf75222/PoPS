@@ -9,24 +9,28 @@ its exact reason; the clock-reading maps keep the refusals of the moving route
 import functools
 import math
 
+import numpy as np
 import pops
 import pytest
+from pops import math as pm
 from pops.analytic import constant, coordinates, cos, sin
 from pops.boundary.transport import Inflow, NoFlux, SlipWall
 from pops.codegen._native_spatial_layout import NativeSpatialLayoutError, native_spatial_layouts
-from pops.codegen._static_geometry_consumers import StaticGeometryConsumerError
+from pops.codegen._static_geometry_consumers import (
+    StaticGeometryConsumerError, static_geometry_layouts)
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian2D, Cartesian3D
 from pops.layouts import Uniform
 from pops.lib.quadrature import GaussLegendre
-from pops.mesh import CartesianGrid, GeometryEvolution, MovingControlVolumes, normalize_layout_plan
+from pops.mesh import (
+    CartesianGrid, GeometryEvolution, MovingControlVolumes, PeriodicAxes, normalize_layout_plan)
 from pops.mesh._static_geometry import is_static_coordinate_map
-from pops.numerics import reconstruction, riemann
+from pops.numerics import Diffusion, DiscretizationPlan, TensorDiffusion, reconstruction, riemann
 from pops.physics.diffusion import DiffusiveBoundary
 from pops.time import AdaptiveCFL
 
 from examples.api_v02.models_static_geometry import (
-    build_annulus_free_stream, build_graded_diffusion)
+    _initial, _ssprk2, annulus_map, build_annulus_free_stream, build_graded_diffusion)
 
 
 def _refusal(layout, owner="pops-static-geometry"):
@@ -65,12 +69,34 @@ def test_a_component_that_reads_no_coordinate_is_refused():
     assert _refusal(layout) == "static_geometry_degenerate_map"
 
 
-def test_rank_three_waits_for_the_graded_box():
+def test_a_graded_box_of_rank_three_is_read_as_node_positions():
+    """N17 L1b: node positions are served at every rank to three (a graded box, which
+    pops.Graded elaborates to); the base refused rank three."""
     frame = CartesianDomain("static-rank-three", (0.0,)*3, (1.0,)*3).frame(Cartesian3D())
     x, y, z = coordinates(frame)
     layout = MovingControlVolumes(Uniform(CartesianGrid(frame=frame, cells=(2, 2, 2))),
-                                  evolution=GeometryEvolution((x*x + x, y, z)))
-    assert _refusal(layout) == "static_geometry_rank_unavailable"
+                                  evolution=GeometryEvolution((x*x/2 + x/2, y, z*z*z)))
+    owner = pops.Case("static-rank-three").owner_path.canonical()
+    plan = normalize_layout_plan(layout, owner=owner)
+    assert native_spatial_layouts(plan)
+    (reading,) = static_geometry_layouts(plan).values()
+    assert (reading.kind, reading.rank) == ("nodes", 3)
+
+
+def test_a_chart_of_rank_three_is_planned_not_covered():
+    """A chart has rank two (design note N17, 3.10); one of rank three is refused at resolution,
+    with its stated rule, before any C++."""
+    frame = CartesianDomain("static-chart-three", (0.0,)*3, (1.0,)*3).frame(Cartesian3D())
+    x, y, z = coordinates(frame)
+    layout = MovingControlVolumes(Uniform(CartesianGrid(frame=frame, cells=(2, 2, 2))),
+                                  evolution=GeometryEvolution((x + y/4, y, z)),
+                                  geometry=GaussLegendre(2))
+    owner = pops.Case("static-chart-three").owner_path.canonical()
+    plan = normalize_layout_plan(layout, owner=owner)
+    with pytest.raises(NativeSpatialLayoutError) as caught:
+        native_spatial_layouts(plan)
+    assert caught.value.code == "static_geometry_rank_unavailable"
+    assert "a chart of rank 3 is planned, not covered" in str(caught.value)
 
 
 def test_the_polar_chart_of_graph_one_reads_both_axes_in_each_component():
@@ -116,6 +142,83 @@ def test_source_authored_traces_are_refused_at_resolution():
         pops.resolve(pops.validate(case), layout=layout)
     assert caught.value.code == "static_geometry_source_numerics_unavailable"
     assert caught.value.evidence == {"part": "reconstruction"}
+
+
+def _chart_diffusion():
+    """The scalar diffusion of the annulus of graph (1), conormal walls, theta periodic."""
+    frame = CartesianDomain("n17_chart_diffusion", (1.0, 0.0), (2.0, 2*math.pi)).frame(Cartesian2D())
+    model = pops.Model("N17_chart_diffusion", frame=frame)
+    U = model.state("heat", components=("u",))
+    walls = (DiffusiveBoundary(0, "lower", "conormal", 0.0),
+             DiffusiveBoundary(0, "upper", "conormal", 0.0),
+             DiffusiveBoundary(1, "lower", "periodic"), DiffusiveBoundary(1, "upper", "periodic"))
+    flux = model.diffusive_flux("conduction", state=U,
+                                value=pm.CoeffGradient(U[0], ((0.01, 0.0), (0.0, 0.01))),
+                                boundaries=walls)
+    rate = model.rate("heat_balance", equation=pm.ddt(U) == pm.div(flux))
+    case = pops.Case("N17_chart_diffusion")
+    block = case.block("ring", model)
+    plan = DiscretizationPlan()
+    plan.rates.add(rate, Diffusion(flux=flux))
+    case.numerics(plan, block=block)
+    _ssprk2(case, block, U, rate, 1e-4, "N17_chart_diffusion_SSPRK2")
+    periodic = PeriodicAxes((frame.axes[1],))
+    layout = MovingControlVolumes(Uniform(CartesianGrid(frame=frame, cells=(4, 8),
+                                                        periodic=periodic)),
+                                  evolution=annulus_map(frame), geometry=GaussLegendre(2))
+    _initial(case, block[U], np.ones((1, 8, 4)))
+    return case, layout
+
+
+def test_the_diffusion_of_a_chart_is_refused_at_resolution():
+    """The two-point flux reads the distance of the centroids along the face normal, which holds
+    on node positions, whose faces are orthogonal to the line of the centroids, and not on a chart
+    (its faces are chords); a chart is refused at every rank."""
+    case, layout = _chart_diffusion()
+    with pytest.raises(StaticGeometryConsumerError) as caught:
+        pops.resolve(pops.validate(case), layout=layout)
+    assert caught.value.code == "static_geometry_diffusion_unavailable"
+    assert "diffuses on a chart of rank 2" in str(caught.value)
+
+
+def _plane_diffusion(method):
+    """The scalar diffusion of a graded plane (node positions of rank two), both axes periodic."""
+    frame = CartesianDomain("n17_plane_diffusion", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
+    model = pops.Model("N17_plane_diffusion", frame=frame)
+    U = model.state("U", components=("u",))
+    flux = model.diffusive_flux("conduction", state=U,
+                                value=pm.CoeffGradient(U[0], ((0.01, 0.0), (0.0, 0.01))),
+                                boundaries=tuple(DiffusiveBoundary(axis, side, "periodic")
+                                                 for axis in (0, 1) for side in ("lower", "upper")))
+    rate = model.rate("heat_balance", equation=pm.ddt(U) == pm.div(flux))
+    case = pops.Case("N17_plane_diffusion")
+    block = case.block("plane", model)
+    plan = DiscretizationPlan()
+    plan.rates.add(rate, method(flux=flux))
+    case.numerics(plan, block=block)
+    _ssprk2(case, block, U, rate, 1e-4, "N17_plane_diffusion_SSPRK2")
+    x, y = coordinates(frame)
+    periodic = PeriodicAxes(tuple(frame.axes))
+    layout = MovingControlVolumes(Uniform(CartesianGrid(frame=frame, cells=(4, 4),
+                                                        periodic=periodic)),
+                                  evolution=GeometryEvolution((x*x/2 + x/2, y)))
+    _initial(case, block[U], np.ones((1, 4, 4)))
+    return case, layout
+
+
+def test_the_two_point_diffusion_of_a_graded_plane_resolves_and_a_wider_face_is_refused():
+    """The static arrays serve a diffusion by capabilities (CF2): a face that reads its two cells
+    alone (ghost depth one), one component and a diagonal tensor. The tensor realization of the
+    same diagonal law reads a centred cell gradient through a face two cells wide, so it is refused
+    before any C++, on node positions of rank two as on any other."""
+    case, layout = _plane_diffusion(Diffusion)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    assert resolved is not None
+    case, layout = _plane_diffusion(TensorDiffusion)
+    with pytest.raises(StaticGeometryConsumerError) as caught:
+        pops.resolve(pops.validate(case), layout=layout)
+    assert caught.value.code == "static_geometry_diffusion_unavailable"
+    assert "through a wider face" in str(caught.value)
 
 
 def test_diffusive_boundary_data_that_reads_a_coordinate_is_refused():
