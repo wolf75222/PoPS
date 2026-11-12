@@ -3,7 +3,8 @@
 The gallery of the surface (``examples/surface/gallery``, the cases and library drafts of
 ``/mnt/project-files/dsl/cases/after/`` as R12c left them, with the quadrature rules imported from
 ``pops.lib.quadrature`` since the review of 11/11 (P3, D0), and with the four scheme words of
-``pops.lib.numerics`` since N3 lot 1 and ``muscl`` since lot 2 (D8); pinned here by hash) and every
+``pops.lib.numerics`` since N3 lot 1, ``muscl`` since lot 2 (D8), and the gallery ``mc`` and
+``superbee`` of the amended spec since lot 3; pinned here by hash) and every
 module of ``pops.lib`` that is written with the surface pass the lint of
 ``scripts/surface_lint.py``. A module of the surface that the MG9 registry lists as a bridge
 (``tests/gates/mg9_bridges.toml``, ``[[bridge]]``) is excepted for the words of b6 that it imports
@@ -41,7 +42,7 @@ GALLERY_SHA256 = {
     "l4_two_fluid_drag.py": "8b1a4dd29f75ba8632df993fcfbe2e43fa86c470b6833d9c573d02a008bf173b",
     "lib_methods.py": "a3f35db05eca230fef657f5e11b57d29c0d5b47aa65e39271d2dfb1c3b9fd8ae",
     "lib_models.py": "bfe1d3b06ba66b93d1850d32994b9d1357624adf0c3ead13d9ff9ece3a8be774",
-    "lib_schemes.py": "5de80a28c51be09dbc001f704b47dee3cb19e7111c9e5e5f6054260f8cefb1b2",
+    "lib_schemes.py": "c33ab783718254ff07da022d1b76a618f1331aa0aa04b520ceae4e72f4b13648",
     "m10_drift_diffusion.py": "e90c3636f7ac4c65721937fa0b1520b797024dd3b3d886f306da2e796e9f1cec",
     "m19_vlasov_bgk.py": "5aa4f38164b3fc1df744ad578d90e479ff688abe7cde4ad13ad2ad4578ba961a",
     "m26_aggregation_diffusion.py":

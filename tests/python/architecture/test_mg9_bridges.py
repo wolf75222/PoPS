@@ -99,8 +99,9 @@ def test_no_word_of_n3_is_a_bridge_after_lot_1():
     earlier = {module: entry["owner"] for entry in registry["earlier"]
                for module in entry["modules"]}
     assert earlier["pops.lib.numerics.face_flux"].startswith("N7")
-    assert earlier["pops.lib.numerics.reconstructions"].startswith("N3 (ROM-87), lot 3")
+    assert "pops.lib.numerics.reconstructions" not in earlier
     assert kinds["pops.lib.numerics.limiters"] == "surface"
+    assert kinds["pops.lib.numerics.reconstructions"] == "surface"
 
 
 def test_the_modules_of_the_surface_pass_the_lint():

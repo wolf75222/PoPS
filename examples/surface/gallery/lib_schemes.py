@@ -113,7 +113,9 @@ def hll(face, term, reconstruction=None):
 def muscl(cell, term, axis, limiter):
     """u_(c+1/2) = u_c + limiter(u_c - u_(c-1), u_(c+1) - u_c) / 2, the trace on the face on the positive side of
     `axis`; the trace on the negative side mirrors it (2.6.4). A record state is limited field by field, since
-    record arithmetic acts field by field (SD71). As master's MUSCL face value."""
+    record arithmetic acts field by field (SD71). As master's MUSCL face value, with the two deviations that the
+    module docstring states (the sign of a zero trace on the negative face, and vanleer's product beyond the largest
+    double)."""
     q = term.quantity
     centre = cell.value(q)
     backward = centre - cell.shift(axis, -1).value(q)
@@ -129,6 +131,19 @@ def minmod(a, b):
 def vanleer(a, b):
     """vanleer(a, b) = 0 where a b <= 0; elsewhere 2 a b / (a + b) (master's VanLeer)."""
     return where(a * b > 0, 2 * a * b / (a + b), 0)
+
+
+def mc(a, b):
+    """mc(a, b) = 0 where a b <= 0; elsewhere min((|a| + |b|) / 2, 2 |a|, 2 |b|) with the common sign (master's MC,
+    monotonized central). The row's formula; the library keeps master's guards (P2)."""
+    return where(a * b > 0, where(a > 0, 1, -1) * smallest([(abs(a) + abs(b)) / 2, 2 * abs(a), 2 * abs(b)]), 0)
+
+
+def superbee(a, b):
+    """superbee(a, b) = 0 where a b <= 0; elsewhere max(min(2 |a|, |b|), min(|a|, 2 |b|)) with the common sign
+    (master's Superbee). The row's formula; the library keeps master's guards (P2)."""
+    return where(a * b > 0, where(a > 0, 1, -1) * largest([smallest([2 * abs(a), abs(b)]),
+                                                            smallest([abs(a), 2 * abs(b)])]), 0)
 
 
 # Diffusive fluxes, sources, definitions and constraints
