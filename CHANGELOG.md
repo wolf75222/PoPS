@@ -709,6 +709,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-17 (B02): `scripts/setup_env.sh` works again on a fresh macOS env. Its Darwin SDK capture loads
+  `_native_toolchain.py` with `PYTHONPATH` unset, and that module imports `pops` since 6603aec4, so a
+  first setup stopped on `ModuleNotFoundError` reported as an invalid SDKROOT. The capture now puts the
+  checkout's `python/` alone on `sys.path`, and the error names the Python failure.
 - ROM-93 (N11 lot 1 follow-up): the empty sum `ddt(U) == RateExpr(())` is again the zero rate of b6 and
   reaches the prepared IR as the zero identity; lot 1 had refused it. Spec 0.3 R7 refuses no empty
   balance. The bare literal `ddt(U) == 0` stays refused, as in b6.
