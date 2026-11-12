@@ -7,9 +7,9 @@ The gallery of the surface (``examples/surface/gallery``, the cases and library 
 of ``pops.lib`` that is written with the surface pass the lint of ``scripts/surface_lint.py``. A
 module of the surface that the MG9 registry lists as a bridge (``tests/gates/mg9_bridges.toml``,
 ``[[bridge]]``) is excepted for the words of b6 that it imports to return a native route: since
-N3 lot 1 (ROM-87), ``pops.lib.numerics.schemes`` being gone, that is ``pops.lib.solve`` and its
-``cg()`` (#776), until the N9 lot « La référence sous les solves de relation ». The test fails on a new finding and on an
-exception that no longer holds.
+N3 lot 1 (ROM-87), ``pops.lib.numerics.schemes`` being gone, and since the N9 lot « La référence
+sous les solves de relation », which runs the reference ``cg()`` under relation solves, no module of
+the surface is. The test fails on a new finding and on an exception that no longer holds.
 
 Each rule fails or warns on a statement written for it, so that a lint that sees nothing fails
 here. The words of the lint come from the spec (``--words``), whose hash the word file records.
@@ -137,9 +137,10 @@ def test_the_library_written_with_the_surface_passes_the_lint(words):
                 excepted.add(name)
                 continue
             raise AssertionError(str(finding))
-    # a bridge module that is not written with the surface (the ghost laws of lot B) is MG9's
-    assert excepted == bridges & set(modules)
-    assert "python/pops/lib/solve/__init__.py" in excepted
+    # a bridge module that is not written with the surface (the ghost laws of lot B) is MG9's;
+    # pops.lib.solve was the last bridge written with the surface, until the N9 lot « La
+    # référence sous les solves de relation » ran the relation solves on the reference
+    assert excepted == bridges & set(modules) == set()
 
 
 @pytest.mark.parametrize("source, expected", [

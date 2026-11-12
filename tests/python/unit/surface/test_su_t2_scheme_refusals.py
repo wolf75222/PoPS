@@ -343,9 +343,10 @@ def test_pops_discrete_exports_no_entity():
 
 def test_no_method_of_this_lot_derives_a_face():
     """A face that reads largest or smallest lowers them to b6 maximum and minimum (SU-T3), and no
-    method of level 1 in this lot derives a face. The solves of the lot « solves » read the linear
-    map that a scheme states (two_point() of a constant coefficient), never a derivative: a face
-    flux read at the unknown of a solve is refused with its lot. When a later lot derives one, such
+    method of level 1 in this lot derives a face. A relation solve reads the claims that a scheme
+    states of its rate (two_point() of a coefficient that reads no state, the N9 lot « La
+    référence sous les solves de relation »), never a derivative: a face flux read at the unknown
+    of a solve is refused with its lot. When a later lot derives one, such
     a face keeps b6's behaviour or names the lot 2 of N11."""
     from pops.lib.solve import cg
     from pops.lib.time.methods import imex_euler
@@ -358,7 +359,7 @@ def test_no_method_of_this_lot_derives_a_face():
         initial={u: u0}, solvers={imex: cg()})
     numerics = surface.Numerics(represent={u: surface.CellAverage()},
                                 schemes={flux: rusanov(), diffusion: two_point()})
-    with pytest.raises(surface.NotYetElaborated, match="states no linear map.*G10"):
+    with pytest.raises(surface.NotYetElaborated, match="is not stated linear and homogeneous in the state.*G10"):
         surface.Case(model=model, numerics=numerics, program=program,
                      layout={domain: surface.Uniform(cells=16)})
 

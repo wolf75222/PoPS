@@ -324,8 +324,10 @@ def test_the_literal_scalars_of_a_solver_are_at_the_point_of_its_problem():
 
 def test_the_name_of_a_solver_is_not_identity():
     # CF4 and O1: the case writes the library's body as my_cg; the Program and its C++ are the
-    # same, so the function's name enters no identity (SV9: the hash of the IR).
-    source = inspect.getsource(krylov).replace("def cg(", "def my_cg(")
+    # same, so the function's name enters no identity (SV9: the hash of the IR). The copy declares
+    # what a relation solve reads of it, as the library declares it of cg().
+    source = inspect.getsource(krylov).replace("def cg(", "def my_cg(").replace(
+        "\ncg.declare_relation(", "\nmy_cg.declare_relation(")
     namespace: dict = {"__name__": "case_my_cg"}
     exec(compile(source, "case_my_cg.py", "exec"), namespace)
     my_cg = namespace["my_cg"]

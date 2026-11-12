@@ -81,14 +81,14 @@ def test_the_registry_holds_every_module_and_every_bridge_of_pops_lib():
 
 def test_no_word_of_n3_is_a_bridge_after_lot_1():
     registry = mg9.read(ROOT)
-    # the entries are cg() of the N15 lot « solves » (#776), arrived, and the ghost laws of the
-    # boundary policy of lot B (#774); no word of pops.lib.numerics.fluxes
+    # the entry is the ghost laws of the boundary policy of lot B (#774); no word of
+    # pops.lib.numerics.fluxes, and no longer cg() of the N15 lot « solves » (#776), which the N9
+    # lot « La référence sous les solves de relation » runs as the reference
     assert [(entry["word"], entry["module"], "arrives" in entry) for entry in registry["bridge"]] \
-        == [("cg", "pops.lib.solve", False), ("realize", "pops.lib.numerics.ghost_laws", False)]
-    assert registry["bridge"][0]["owner"].startswith(
-        "N9, the lot « La référence sous les solves de relation »")
+        == [("realize", "pops.lib.numerics.ghost_laws", False)]
+    assert registry["bridge"][0]["owner"].startswith("G04")
     assert {(word, route) for word, module, route in mg9.found_bridges(ROOT)
-            if module == "pops.lib.solve"} == {("cg", "pops.solvers.CG")}
+            if module == "pops.lib.solve"} == set()
     assert {word for word, module, _ in mg9.found_bridges(ROOT)
             if module.startswith("pops.lib.numerics")} == {"realize"}
     kinds = mg9.classify(ROOT, registry)
@@ -313,8 +313,9 @@ def test_a_base_without_the_registry_records_nothing(tmp_path):
 
 
 def test_a_builder_handed_to_a_word_at_import_is_that_word_s_bridge():
-    """N9 lot 4 binds the native CG to the @pops.solver cg at import:
-    ``cg.bind_relation_native(_native_cg, ...)`` makes cg the word of the bridge."""
+    """N9 lot 4 bound the native CG to the @pops.solver cg at import, until the N9 lot « La
+    référence sous les solves de relation »: ``cg.bind_relation_native(_native_cg, ...)`` made cg
+    the word of the bridge, and the gate still reads such a binding."""
     source = textwrap.dedent("""\
         from .krylov import cg
 

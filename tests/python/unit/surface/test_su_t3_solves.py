@@ -2,17 +2,17 @@
 
 The L1-d case of §17.1: ``imex_euler(explicit=advection, implicit=diffusion)`` with
 ``solvers={imex: cg()}`` and ``tolerance=pops.Tolerance(rtol=1e-10, atol=1e-12)``. Its ν is a
-``model.constant`` in this lot: the matrix-free apply of the ``cg()`` bridge has no coefficient
-bound at bind, so a ``model.parameter`` ν is refused until the bridge leaves (SU-T2, MG9). The
-case written by hand is the b6 model of ``test_su_t3_parity.py`` (the face of the b6 ``rusanov``
-of ``examples/api_v02/b6_numerics.py`` and the two-point ``StencilFlux`` of N3 lot 1, D7) and the
-method written for N8 in
-the shape of §5.5 (``unknowns``, ``Problem``, ``solve(request=p.request)``, ``require_success``),
-whose implicit component states the linear map κ·Laplacian of its two-point rate and the
-realization ``{"imex_euler/*": cg()}``. Both forms give the same program IR, the same artifact
-without the source lines of its provenance, the same semantic identity and the same generated C++.
-The solve starts from the state at the start of the attempt (SV3) and its path is the key of the
-method, ``imex_euler`` (5.5, line 707).
+``model.constant`` here; a ``model.parameter`` ν is the exit test of the N9 lot « La référence
+sous les solves de relation ». The case written by hand is the b6 model of
+``test_su_t3_parity.py`` (the face of the b6 ``rusanov`` of ``examples/api_v02/b6_numerics.py``
+and the two-point ``StencilFlux`` of N3 lot 1, D7) and the method written for N8 in the shape of
+§5.5 (``unknowns``, ``Problem``, ``solve(request=p.request)``, ``require_success``), whose
+implicit component states the claims of its two-point rate (symmetric, negative semidefinite,
+linear and homogeneous in the state) and the realization ``{"imex_euler/*": cg()}``. The operator
+of the solve is that rate at the State, solved by the reference ``cg()`` (N9). Both forms give
+the same program IR, the same artifact without the source lines of its provenance, the same
+semantic identity and the same generated C++. The solve starts from the state at the start of the
+attempt (SV3) and its path is the key of the method, ``imex_euler`` (5.5, line 707).
 """
 import json
 
@@ -81,9 +81,11 @@ _n8_imex_euler.name = "imex_euler"
 
 
 class _TwoPointRate:
-    """The two-point rate written by hand, with the linear map of its matrix-free apply."""
+    """The two-point rate written by hand, with the claims of its rate read at the unknown (the
+    operator of the solve evaluates the rate itself at its operand, N9 « La référence sous les
+    solves de relation » §3.4)."""
 
-    linear_claims = LinearClaims(symmetric=True, negative_semidefinite=True,
+    linear_claims = LinearClaims(symmetric=True, negative_semidefinite=True, homogeneous=True,
                                  proof="kappa = 0.01 > 0", description="kappa*Laplacian")
 
     def __init__(self, flux, name):
@@ -91,16 +93,14 @@ class _TwoPointRate:
         self.name = name
 
     def __call__(self, state):
-        # -div_h of the face flux, named <name>_<k> in the k-th evaluation (N3 lot 1, D7)
+        # -div_h of the face flux, named <name>_<k> in the k-th evaluation of the Program, top
+        # level or inside a solve (N3 lot 1, D7)
         program = state.prog
-        evaluation = sum(1 for value in program._values
-                         if value.op == "stencil_flux_divergence"
-                         and value.name.startswith(self.name + "_"))
+        counts = program.__dict__.setdefault("_stencil_term_evaluations", {})
+        evaluation = counts.get(self.name, 0)
+        counts[self.name] = evaluation + 1
         return program.stencil_flux_divergence("%s_%d" % (self.name, evaluation), state,
                                                flux=self.flux)
-
-    def linear_apply(self, P, value):
-        return NU * P.laplacian(P.scalar_field("laplacian"), value)
 
 
 def _two_point_body(nu):
@@ -108,7 +108,8 @@ def _two_point_body(nu):
     (D10), written by hand as the body of a ``StencilFlux``."""
     def body(sample, spacing, axis):
         h = spacing[axis]
-        return ((-nu) * ((sample((0,), 0) - sample((-1,), 0)) / h),), (nu / h) / h
+        left, right = sample((-1,), 0), sample((0,), 0)  # sampled in the order of the scheme
+        return ((-nu) * ((right - left) / h),), (nu / h) / h
 
     return body
 
@@ -188,9 +189,17 @@ def test_l1d_gives_the_artifact_and_semantic_identity_of_the_hand_written_case(l
 def test_l1d_gives_the_cpp_of_the_hand_written_case(l1d):
     cpp = _cpp(l1d["resolved"])
     assert cpp == _cpp(l1d["hand_resolved"])
-    # b6's native CG on the matrix-free Helmholtz apply, with the request and a rejected attempt.
-    assert "pops::cg_krylov_method" in cpp and "ctx.laplacian(" in cpp
-    assert "static_cast<pops::Real>(1e-10), static_cast<pops::Real>(1e-12), 2000" in cpp
+    # The reference CG of pops.lib.solve as the region of the solve (N9 « La référence sous les
+    # solves de relation »): its operator is the two-point StencilFlux of the rate at the State,
+    # not b6's Laplacian, no native Krylov route is emitted, and a failure rejects the attempt.
+    (solve,) = [value for value in l1d["elaborated"].case._time._values
+                if value.op == "solve_linear"]
+    assert solve.attrs["realization"]["kind"] == "reference"
+    assert (float.fromhex(solve.attrs["realization"]["rtol"]),
+            float.fromhex(solve.attrs["realization"]["atol"])) == (1e-10, 1e-12)
+    assert "pops::SolveOutcome kr%d = pops::SolveOutcome::collective_lane(" % solve.id in cpp
+    assert "pops::cg_krylov_method" not in cpp and "solve_prepared_linear" not in cpp
+    assert "ctx.laplacian(" not in cpp
     assert "pops::SolveAction::kRejectAttempt" in cpp
 
 
@@ -227,7 +236,8 @@ def test_inspect_reports_the_solve_and_its_certificate(l1d):
     assert "path = imex_euler (derived)" in report
     assert "guess = the state at the start of the attempt (SV3) (derived)" in report
     assert "solver = cg(max_iterations=2000, preconditioner=None) (stated)" in report
-    assert "SPD certificate = derived (IR16) from the substituted operator" in report
+    assert "SPD certificate = derived (IR16) from the claims of the rates of the components, " \
+        "which the operator evaluates at the State" in report
     assert "kappa = nu = 0.01 >= 0" in report
     assert "tolerance = pops.Tolerance(rtol=1e-10, atol=1e-12) (stated)" in report
 
@@ -253,7 +263,12 @@ def test_a_relation_solve_enters_no_field_cache_and_is_never_kept_across_attempt
     assert field_reuse._key(solve, {}, target="system") is None
     assert not field_reuse._time_independent_request(solve, target="system")
     assert not field_reuse.reuse_field_solve(solve, {}, [], target="system")
-    # The emission reaches the attempt reuse with a prepared Krylov solve, which declines it.
+    # Under the reference realization (N9 « La référence sous les solves de relation ») the
+    # relation solve is the region of its node, with no prepared Krylov solve: the emission never
+    # reaches the attempt reuse, and a fixed relation site under a reference is refused at
+    # elaboration (§3.7, test_relations_n8.py::
+    # test_a_fixed_site_under_a_reference_realization_is_refused_by_name).
+    assert solve.attrs["realization"]["kind"] == "reference"
     seen = []
     attempt_reuse = emit_solve._attempt_reuse
 
@@ -263,7 +278,7 @@ def test_a_relation_solve_enters_no_field_cache_and_is_never_kept_across_attempt
 
     monkeypatch.setattr(emit_solve, "_attempt_reuse", spy)
     source = _cpp(resolved)
-    assert seen == [(True, None)]
+    assert seen == []
     assert "attempt_slot" not in source and "field.reuses/" not in source
     # A fixed relation site (none exists under cg(), see test_relations_n8.py) is not kept either.
     monkeypatch.setattr(emit_solve, "_trial_site",

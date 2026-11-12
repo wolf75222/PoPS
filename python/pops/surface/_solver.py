@@ -733,19 +733,16 @@ class SolverDefinition:
         self.function = function
         self.options = {name: parameter.default for name, parameter in parameters.items()
                         if name not in _ENTITIES}
-        self.relation_native: Any = None
         self.requires: tuple = ()
         self.relation_description: str | None = None
 
-    def bind_relation_native(self, native: Any, *, requires: tuple, description: str) -> Any:
-        """The bound native that a relation solve of a traced method runs under this solver
-        (N15 lot « solves », §5.5): ``native(options, request)`` gives its b6 descriptor and
-        ``requires`` the properties of the operator that it needs (IR16, K4). A bridge of MG9
-        until the N9 lot « La référence sous les solves de relation » runs the reference there.
-        """
-        if not callable(native):
-            raise TypeError("bind_relation_native(native, ...) takes native(options, request)")
-        self.relation_native = native
+    def declare_relation(self, *, requires: tuple, description: str) -> Any:
+        """What a relation solve of a traced method reads of this solver (N15 lot « solves »,
+        §5.5): ``requires``, the properties of the operator that it needs (IR16, K4), which the
+        relation checks against the claims of its components before it lowers the solve, and
+        ``description``, what ``describe()`` reports. The solve runs the reference itself, the
+        solver's body as the region of its ``solve_linear`` node (§3.8 of the N9 lot « La
+        référence sous les solves de relation »)."""
         self.requires = tuple(requires)
         self.relation_description = description
         return self
@@ -804,7 +801,7 @@ class SolverValue:
         return lower_solver(self, program, problem, name)
 
     # The protocol of a relation solve of a traced method (N15 lot « solves », §5.5): the
-    # properties of the operator that the solver needs, and the bound native that it runs.
+    # properties of the operator that the solver needs, and the realization that the solve runs.
 
     @property
     def requires(self) -> tuple:
@@ -812,20 +809,17 @@ class SolverValue:
         refuses an operator that its claims do not derive with ``PropertyNotDerived`` (K4)."""
         return self.definition.requires
 
-    def linear_solver(self, *, request: Any) -> Any:
-        """The b6 descriptor that a relation solve runs under this solver, with its request."""
-        native = self.definition.relation_native
-        if native is None:
-            raise NotYetElaborated(
-                "%r under a relation solve of a traced method, whose operator only the bound "
-                "native of cg() solves in this lot" % (self,),
-                "the N9 lot « La référence sous les solves de relation »")
-        return native(self.options, request)
+    def linear_solver(self, *, request: Any) -> SolverValue:
+        """The realization that a relation solve runs under this solver: the reference itself,
+        with the request of the solve (SV3; §3.8 of the N9 lot « La référence sous les solves de
+        relation »). An unstated tolerance of the request is 0."""
+        return self.with_request(rtol=0.0 if request.rtol is None else request.rtol,
+                                 atol=0.0 if request.atol is None else request.atol)
 
     def describe(self) -> str:
         description = self.definition.relation_description
-        return "%r, the reference of @pops.solver%s" % (
-            self, "" if description is None else "; a relation solve runs %s" % description)
+        return "%r, %s" % (self, "the reference of @pops.solver (SV9)" if description is None
+                           else description)
 
     def __repr__(self) -> str:
         return "%s(%s)" % (self.definition.function.__name__,
@@ -977,8 +971,14 @@ def _gate_measurement(context: _Lowering, problem: Problem, solution: Any) -> An
     measured = program.capture(measure)
 
     def ok(_program: Any, payload: Any) -> Any:
+        from pops.time._program.structured_control import new_typed, scalar_signature
+
+        # The code 0 at the point of the problem, as the failure's code: a solve at a stage
+        # point (a relation solve) matches the two arms at one exact point.
+        zero_code = new_typed(program, scalar_signature("int64"), "int64_constant", (),
+                              {"value": 0}, point=context.point)
         with _lowering(context):
-            return Record({"code": Scalar(program.int64(0)),
+            return Record({"code": Scalar(zero_code),
                            "norm": Scalar(program._product_get(payload, "norm")),
                            "scale": Scalar(program._product_get(payload, "scale"))}).program_value()
 

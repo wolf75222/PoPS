@@ -193,17 +193,20 @@ def _number(value: Any) -> Any:
 class _RateSum:
     """A rate option of a method: the sum of the selections of its terms, in balance order.
 
-    At an unknown of a solve, the rate is read as the linear map that the schemes of its terms
-    state (``linear_apply`` and ``linear_claims``, the lot « solves »): each term asks its scheme
-    for the map when a relation reads it, never before, so that an explicit method never needs one.
+    At an unknown of a solve, the rate is read as is, at the solve's operand (§3.4 of the N9 lot
+    « La référence sous les solves de relation »), and its claims are those that the schemes of
+    its terms state (``linear_claims``, IR16): each term asks its scheme for them when a relation
+    reads it, never before, so that an explicit method never needs them. Every term of the rate
+    states them: a term that is not linear and homogeneous in the state (a source, a forcing) is
+    refused by name, since it would make the operator affine.
     """
 
-    __slots__ = ("views", "linear", "_providers")
+    __slots__ = ("views", "linear", "_claims")
 
     def __init__(self, views: Sequence[Any], linear: Sequence[Any] = ()) -> None:
         self.views = tuple(views)
         self.linear = tuple(linear)
-        self._providers: tuple | None = None
+        self._claims: tuple | None = None
 
     def __call__(self, state: Any) -> Any:
         result = self.views[0](state)
@@ -211,36 +214,30 @@ class _RateSum:
             result = result + view(state)
         return result
 
-    def providers(self) -> tuple:
-        if self._providers is None:
-            self._providers = tuple(linear() for linear in self.linear)
-        return self._providers
+    def claims(self) -> tuple:
+        if self._claims is None:
+            self._claims = tuple(linear() for linear in self.linear)
+        return self._claims
 
     @property
     def linear_claims(self) -> Any:
         from pops.time._program.relations import LinearClaims
 
         claims = []
-        for provider in self.providers():
-            claim = LinearClaims.of(provider.claims())
+        for stated in self.claims():
+            claim = LinearClaims.of(stated)
             if claim is None:
                 raise NotYetElaborated(
-                    "the linear map %r of a rate read at the unknown of a solve states no claims "
-                    "(symmetric, negative_semidefinite, proof, description; IR16)" % (provider,),
+                    "the rate %r read at the unknown of a solve states no claims (symmetric, "
+                    "negative_semidefinite, homogeneous, proof, description; IR16)" % (stated,),
                     "G10, the operator generated from the term, with the Newton solves of N9")
             claims.append(claim)
         return LinearClaims(
             symmetric=all(claim.symmetric for claim in claims),
             negative_semidefinite=all(claim.negative_semidefinite for claim in claims),
+            homogeneous=all(claim.homogeneous for claim in claims),
             proof="; ".join(claim.proof for claim in claims),
             description=" + ".join(claim.description for claim in claims))
-
-    def linear_apply(self, P: Any, value: Any) -> Any:
-        providers = self.providers()
-        result = providers[0].apply(P, value)
-        for provider in providers[1:]:
-            result = result + provider.apply(P, value)
-        return result
 
 
 class _StencilTerm:
@@ -248,7 +245,10 @@ class _StencilTerm:
     that covers it, ``-div_h`` of its face flux, the evaluation k named ``<name>_<k>``.
 
     ``stencil_flux_divergence`` gives -div_h(F) of the physical flux F, which is the contribution
-    of ``-div(F)`` to the balance; a term written ``+div(F)`` is its opposite."""
+    of ``-div(F)`` to the balance; a term written ``+div(F)`` is its opposite. The evaluations are
+    counted by name in the Program, wherever they are recorded: a solve's operator evaluates the
+    rate inside its declaration and its region, whose values are not among the Program's top-level
+    values (§3.4 of the N9 lot « La référence sous les solves de relation »)."""
 
     __slots__ = ("flux", "name", "weight")
 
@@ -261,10 +261,11 @@ class _StencilTerm:
         from pops.time._program.stencil_flux import OPERATION
 
         program = state.prog
-        evaluation = sum(1 for value in program._values
-                         if value.op == OPERATION and value.name.startswith(self.name + "_"))
+        counts = program.__dict__.setdefault("_stencil_term_evaluations", {})
+        evaluation = counts.get(self.name, 0)
         rate = getattr(program, OPERATION)("%s_%d" % (self.name, evaluation), state,
                                            flux=self.flux)
+        counts[self.name] = evaluation + 1
         return rate if self.weight == -1 else -rate
 
 
@@ -626,21 +627,19 @@ class _Elaboration:
         return plan, selections
 
     def _linear(self, scheme: Any, view: TermView, balance: Balance) -> Any:
-        """The linear map of the rate of a term, asked when a solve reads it, never before, of the
-        solver that ``solvers=`` states (N3 lot 1, D7): the matrix-free apply is the solver's,
-        beside ``cg()`` in ``pops.lib.solve``, and it recognizes the scheme by the normal form of
-        its face, so that a copy of ``two_point()`` written in a case is applied as the word."""
+        """The claims of the rate of a term read at the unknown of a solve, asked when a solve
+        reads it, never before (IR16): the scheme states them, by the normal form of its face, so
+        that a copy of ``two_point()`` written in a case is claimed as the word (N3 lot 1, D7). No
+        solver states them: the operator of a relation solve is its components' rates at the
+        State, and each solve runs the solver that ``solvers=`` keys by its own site (O1 of the
+        delta review of #778, the N9 lot « La référence sous les solves de relation »)."""
+        from pops.lib.solve import linear_claims
+
         weight = next(-coefficient if isinstance(term, DiffusiveFlux) else coefficient
                       for term, coefficient in balance.occurrences if term is view.term)
 
         def linear() -> Any:
-            operator = next((solver.linear_operator for _, solver in self.program.solvers
-                             if hasattr(solver, "linear_operator")), None)
-            if operator is None:
-                # no solver states one: the apply of the library, whose solve N8 then refuses
-                # without a solver (auto() of SV11)
-                from pops.lib.solve import linear_operator as operator
-            return operator(view, scheme=scheme, weight=weight, layout=self.layout_facts)
+            return linear_claims(view, scheme=scheme, weight=weight, layout=self.layout_facts)
         return linear
 
     # The program.
@@ -761,8 +760,9 @@ class _Elaboration:
              Choice("guess", "the state at the start of the attempt (SV3)", "derived"),
              Choice("solver", site.solver, "stated"),
              Choice("implicit operator", claims, "derived"),
-             Choice("SPD certificate", "derived (IR16) from the substituted operator, until "
-                    "IR16 derives it from the face blocks (§17.1): %s" % proofs if site.spd
+             Choice("SPD certificate", "derived (IR16) from the claims of the rates of the "
+                    "components, which the operator evaluates at the State, until IR16 derives "
+                    "it from the face blocks (§17.1): %s" % proofs if site.spd
                     else "not derived", "derived"),
              Choice("failure", "SolveFailed fails the attempt (T38)", "derived")])
 
