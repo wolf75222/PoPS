@@ -3,7 +3,8 @@
 This lot elaborates the field algebra (``+ - * / **``, unary minus, ``abs``, ``pi`` and Python's
 ``Fraction``, which this module re-exports so that a case that star-imports it keeps its numbers
 exact), the elementary functions that the expressions of b6 lower (``exp``, ``expm1``, ``log``,
-``sqrt``, ``sin``, ``cos``), the differential words of a balance (``ddt``, ``grad``, ``div``) and
+``sqrt``, ``sin``, ``cos``; ``erf`` and ``erfc`` in the initial values of ``pops.project``
+only, lot D-E), the differential words of a balance (``ddt``, ``grad``, ``div``) and
 the predicate words, whose refusals SU4 and SU11 state (``where``, ``equal``, ``all_of``,
 ``any_of``, ``none_of``), in the body of a scheme (lot 2), ``largest``, ``smallest`` and
 ``dot(term.law(...), face.normal)``, and ``outflow(q)``, the relation of ``model.on`` whose piece
@@ -30,13 +31,14 @@ from ._refusal import SymbolNotInSurface as _SymbolNotInSurface
 from ._refusal import surface_entry as _surface_entry
 
 _ELEMENTARY = ("exp", "expm1", "log", "sqrt", "sin", "cos")
+_INITIAL_ONLY = ("erf", "erfc")
 
 _N11 = "N11 (expression closure, C1)"
 _NONLOCAL = "a later lot of N15 with the nonlocal terms of G05"
 _TRACES = "a later lot of N15 with the boundary relations of G04"
 _LATER = {
     "log1p": _N11, "cbrt": _N11, "sign": _N11, "clamp": _N11, "tan": _N11, "atan": _N11,
-    "atan2": _N11, "sinh": _N11, "cosh": _N11, "tanh": _N11, "erf": _N11, "erfc": _N11,
+    "atan2": _N11, "sinh": _N11, "cosh": _N11, "tanh": _N11,
     "component": _N11, "unit": _N11,
     "identity": _N11, "outer": _N11, "contract": _N11, "transpose": _N11,
     "matrix_trace": _N11, "determinant": _N11, "inverse": _N11, "solve_small": _N11,
@@ -111,6 +113,9 @@ def _elementary(word: str) -> _Any:
 
 
 exp, expm1, log, sqrt, sin, cos = (_elementary(word) for word in _ELEMENTARY)
+# erf and erfc build their call; the analytic initial values of pops.project lower them (lot D-E,
+# the exact cell integral of a Gaussian, CN12), and every other value refuses them with N11.
+erf, erfc = (_elementary(word) for word in _INITIAL_ONLY)
 
 
 def _predicate(value: _Any, word: str) -> _Predicate:
@@ -230,8 +235,10 @@ def outflow(q: _Any) -> _Any:
 
     return NoDataRelation(q, "outflow")
 
+
 __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
-    "Fraction", "pi", "infinity", "ddt", "grad", "div", "curl", *_ELEMENTARY, "where", "equal",
+    "Fraction", "pi", "infinity", "ddt", "grad", "div", "curl", *_ELEMENTARY, *_INITIAL_ONLY,
+    "where", "equal",
     "all_of", "any_of", "none_of", "largest", "smallest", "vector", "dot", "outflow", *_LATER]
 
 

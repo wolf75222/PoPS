@@ -24,6 +24,7 @@ from ._scheme import check_plain_function, scheme
 from ._program import (
     AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Uniform, bind, claim, compile, inspect,
 )
+from ._project import project
 from ._quadrature import Quadrature
 from ._run import BudgetExhausted, Output, RunFailed, every, record
 from ._refusal import (
@@ -58,7 +59,7 @@ _LATER = {
     "Scientific": _RUN, "Bitwise": _RUN, "Reproducible": _RUN, "Cache": _RUN,
     "Regrid": _HIERARCHY, "Level": _HIERARCHY, "invalidate": _HIERARCHY, "remap": _HIERARCHY,
     "restrict_onto": _HIERARCHY, "replace_contribution": _HIERARCHY,
-    "project": _REPRESENT, "CellTotal": _REPRESENT,
+    "CellTotal": _REPRESENT,
     "PointValue": _REPRESENT, "FaceNormalIntegral": _REPRESENT, "EdgeCirculation": _REPRESENT,
     "DualLoad": _REPRESENT, "Covector": _REPRESENT, "reconstruct": _REPRESENT,
     "Weak": _REPRESENT, "Pointwise": _REPRESENT, "Approximate": _REPRESENT,
@@ -168,7 +169,7 @@ __all__ = [
     "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
     "Model", "Numerics", "OpenMP", "Output", "Periodic", "Positive", "Program", "Quadrature",
     "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "every", "inspect",
-    "record", "discrete", "math", "method", "scheme",
+    "project", "record", "discrete", "math", "method", "scheme",
     # the refusals of §14.1 that this lot raises, and the values that the library reads
     "AmbiguousElaboration", "AntiDiffusive", "ClosedBodyViolation", "ContradictsDerivation",
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",

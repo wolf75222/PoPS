@@ -18,6 +18,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-98 (N15, lot D-E, part E): the projection of an analytic initial value (spec 0.3, 2.6.2,
+  CN12, SU9; OD31). `initial={u: pops.project(e, quadrature=Q)}` averages e over each cell by
+  the rule Q (one `pops.Quadrature` or one per axis) mapped onto the cell, and
+  `pops.project(e, integral=I)` divides the exact integral I(cell), written with
+  `cell.lower(axis)`, `cell.upper(axis)` and `cell.measure`, by the measure of the cell; a value
+  that reads no coordinate is exact and written alone. The elaborator lowers both on the analytic
+  route of b6 (`Analytic(frame, components=(e,), cell_integrals=(I,))` under
+  `ConservativeCellAverage`). `erf` and `erfc` are words of the initial values only. An
+  expression of the coordinates without `pops.project` is `AmbiguousElaboration`. The bump of
+  the tutorial 02 with `GaussLegendre(1)` runs bit for bit as the same case written by hand.
 - ROM-98 (N15, lot B): boundary relations of the surface (spec 0.3, 2.6.2, 2.6.9, D9, R20; OD31).
   `model.on(pieces, u == g)` (form `Value`, g a number, a constant or a runtime parameter) and
   `model.on(pieces, outflow(u))` (form `NoData`) close the pieces of a box that are not
