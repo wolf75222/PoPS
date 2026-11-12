@@ -950,7 +950,7 @@ def _public_amr_hierarchy_case(
         ),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(marker_instance) > case.value(threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(marker_instance)) > case.value(threshold)),
                 Buffer(cells=1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

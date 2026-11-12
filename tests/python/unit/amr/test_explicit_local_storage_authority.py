@@ -44,7 +44,7 @@ def _case(*, name="explicit_local", levels=1, depth=1):
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(8, 8),
                                     periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,) * (levels - 1)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["u"] > case.value(threshold)),
+        tagging=AMRTagging(rules=(Tag(lambda cell: cell.value(ValueExpr(block[state])["u"]) > case.value(threshold)),
                                  Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS),
