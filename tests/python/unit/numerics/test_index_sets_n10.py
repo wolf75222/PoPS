@@ -512,6 +512,39 @@ def test_a_field_leaf_in_a_general_access_is_a_typed_dm5_refusal():
     assert len(program._values) == before
 
 
+def test_every_other_general_access_refuses_a_field_leaf():
+    """O1 of the 3a review: the two scatters and the CSR import.
+
+    The distributed local access refuses through the same ``strict_access``; it is reached only
+    inside the local region of a distributed instance.
+    """
+    from pops._ir.refusals import GeneralAccessOnPatches
+    from pops.time._program.distributed_arrays import Distributed
+    from tests.python.unit.time.test_geometry_ssa import authoring
+
+    _, program, state, _, _ = authoring()
+    domain = program.range_set(3, capacity=3, ownership="replicated")
+    indices = program.map(domain, lambda b, i: i)
+    initial = program.float64(0)
+    algebra = Distributed(program)
+    accesses = {
+        "scatter_reduce": lambda: program.scatter_reduce(
+            state.n, indices, domain, initial, lambda b, total, value: total+value,
+            order="source"),
+        "distributed scatter": lambda: algebra.scatter_reduce(
+            state.n, indices, domain, initial, lambda b, total, value: total+value,
+            order="global_gid_ascending", byte_capacity=8),
+        "CSR import": lambda: algebra.import_csr(state.n, indices, byte_capacity=8),
+    }
+    before = len(program._values)
+    for op, access in accesses.items():
+        with pytest.raises(GeneralAccessOnPatches, match="field leaf") as refused:
+            access()
+        assert refused.value.op == op and refused.value.rule == "DM5"
+        assert isinstance(refused.value, TypeError)
+    assert len(program._values) == before
+
+
 def test_state_geometry_is_left_to_g03():
     from pops._ir.data_model import _symbolic_placements, ir_type, value_kind
     from tests.python.unit.time.test_geometry_ssa import authoring

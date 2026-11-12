@@ -8436,12 +8436,12 @@
       "local_receipts": {
         "tests/python/unit/numerics/test_index_sets_n10.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_index_sets_n10.py",
-          "passed": 31,
-          "seconds": 92.5
+          "passed": 32,
+          "seconds": 92.0
         }
       },
       "source_sha256": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": "4f73198f44f8db7c8c5d939c778d102635553ee70f5afedeb2a355396e4f2d7c"
+        "tests/python/unit/numerics/test_index_sets_n10.py": "ffcd3a826daf486e6ae40765168b673707e5494be62179e720ae85554dfceaa2"
       }
     },
     "n11_20261108_expression_closure": {

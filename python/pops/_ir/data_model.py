@@ -366,6 +366,8 @@ _GENERAL_ACCESSES = {
 }
 _ARGUMENTS = frozenset(("finite_index_argument", "distributed_index_argument"))
 _ARRAY_READS = frozenset(_GENERAL_ACCESSES)
+# Op prefixes whose value depends on the run's state: a continuation, a solve or an attempt.
+_COMPUTED_PREFIXES = ("continuation_", "solve", "attempt_")
 
 
 def _provenance(carrier: Any, nodes: tuple[Any, ...]) -> str:
@@ -378,7 +380,7 @@ def _provenance(carrier: Any, nodes: tuple[Any, ...]) -> str:
     from pops.time._graph.value_traversal import reachable_values
 
     reached = reachable_values(carrier, nodes)
-    if any(is_field_leaf(value) or str(value.op).startswith(("continuation_", "solve", "attempt_"))
+    if any(is_field_leaf(value) or str(value.op).startswith(_COMPUTED_PREFIXES)
            for value in reached):
         return "computed"
     if any(value.op in _ARRAY_READS for value in reached):
