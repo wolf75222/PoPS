@@ -28,6 +28,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
   sliver step at a frontier, when a CFL step ends within four ulp short of it or when
   `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-98 (N15, lot D-E, part E): the projection of an analytic initial value (spec 0.3, 2.6.2,
+  CN12, SU9; OD31). `initial={u: pops.project(e, quadrature=Q)}` averages e over each cell by
+  the rule Q (one `pops.Quadrature` or one per axis) mapped onto the cell, and
+  `pops.project(e, integral=I)` divides the exact integral I(cell), written with
+  `cell.lower(axis)`, `cell.upper(axis)` and `cell.measure`, by the measure of the cell; a value
+  that reads no coordinate is exact and written alone. The elaborator lowers both on the analytic
+  route of b6 (`Analytic(frame, components=(e,), cell_integrals=(I,))` under
+  `ConservativeCellAverage`). `erf` and `erfc` are words of the initial values only. An
+  expression of the coordinates without `pops.project` is `AmbiguousElaboration`. The bump of
+  the tutorial 02 with `GaussLegendre(1)` runs bit for bit as the same case written by hand.
+- ROM-98 (N15, lot B): boundary relations of the surface (spec 0.3, 2.6.2, 2.6.9, D9, R20; OD31).
+  `model.on(pieces, u == g)` (form `Value`, g a number, a constant or a runtime parameter) and
+  `model.on(pieces, outflow(u))` (form `NoData`) close the pieces of a box that are not
+  periodic; `pops.Numerics(boundary=ghosts())` realizes them, and the elaborator checks that the
+  policy gives a ghost law of b6 before it adds `Inflow` (2 g - u_k) and `Outflow` (u_1) to the
+  plan. The other forms, data read from a datum and `closes=` refuse with their lot. A 2D case
+  with inflow and outflow runs bit for bit as the same case written by hand for b6.
+- ROM-90 (N9, lot 4): the reference conjugate gradient `pops.lib.solve.cg(preconditioner=None,
+  max_iterations=2000)`, written with `@pops.solver` over the entities `problem` and `region`
+  (SV9, SU15) and lowered onto one Program `iterate` in one captured region. It mirrors the native
+  `solve_cg` branch by branch (cycle scale, subnormal restart, no confirmation at the cap, final
+  true-residual check), and its failures are variants of T39 with their reason. The native CG
+  is a substitution of its Trace class (SV13): the same iteration counts on the Trace problems at
+  one and two ranks. `outcome.evidence` (iterations, residual norm, reason; SV5) is readable after
+  consumption on both routes and emitted only when read; `correction_norm`, and the evidence of a
+  solve kept across attempts (N8 lot 6), are refused with `NotYetElaborated` naming the N9 lot
+  « Évidence des solves ». `pops.fail` takes the run's `pops.SolveFailed` and
+  `pops.BudgetExhausted` (N15 lot G), and `pops.record` is a solver's record inside a solver and
+  the run's record elsewhere.
 - ROM-98 (N15, lot G): a case of the surface compiles, binds and runs (spec 0.3, 2.6.2, 2.6.6,
   §5.2, CC14; OD31). `pops.compile(case, target=pops.OpenMP())`, `pops.bind(artifact,
   params={b: v}, data={u0: array}, resources=pops.Resources(threads=n), directory=d)` and
@@ -648,6 +677,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   drops the Kokkos root overrides from its own environment, as it fixes the other toolchain facts
   that need `_pops`; the emitted units are unchanged. Its test runs under a Kokkos root everywhere
   and prints the profile's error and trace when it fails.
+- ROM-18 (#767 follow-up): the masked (embedded-boundary) face path of a single-route package called
+  `PreparedEmbeddedBoundaryMetric::cell_measure` out of line on every face, which the catalogue
+  package of b6 did not. The wrapper's accessors (`reference_cell`, `face_aperture`,
+  `oriented_face_area_vector`, `cell_measure`) are now `POPS_HD_FORCEINLINE` like the base metric's,
+  so the masked face functor has the same shape as at b6. Results do not change.
 - ROM-18 (#699 follow-up, found by DM-T2 of ROM-85): a generated package compiled for its one
   resolved route lost up to 19 % per step on M01 against b6 (face kernel x1.65), with bit-identical
   states. GCC sizes its inlining budget on the whole translation unit (`inline-unit-growth`), and
@@ -671,6 +705,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   observation computes it from the same recorded speeds (`nd::FaceFrequencyRule`), and FixedDt
   and the combined transport-diffusion certificate keep the incident sum. Tutorial 02 as written
   takes the native face's steps with `upwind(speed=)` (core ledger entry).
+- ROM-108: under `AdaptiveCFL`, a `riemann.User` face whose recorded speed exceeds the spectral
+  radius of every cell no longer stops the run at its first step. `System::step_cfl` proposes
+  from the radius, while spec 0.3 (2.6.9, `cfl_limit`) takes s_a from the speeds that the faces
+  record, so the face's guard refused the proposal (reason 503). The guard's refusal now carries
+  the frequency that the refused attempt's faces recorded (typed payload
+  `pops.face-step-frequency@1`), and `AdaptiveCFL` retries once with its step capped at cfl over
+  that frequency (spec 21.6, `Retry(max_attempts=2)`). A face that records the radius is never
+  refused, so its steps are unchanged.
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
   and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step
