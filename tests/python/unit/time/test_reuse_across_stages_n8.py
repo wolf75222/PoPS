@@ -157,7 +157,17 @@ def test_a_b6_program_never_reaches_the_traced_cache(monkeypatch):
 
 def test_only_a_field_request_attaches_a_trial_site_to_a_solve_outcome():
     """Section 2.3: the inventory of the writers of ``trial_site``. A solve outcome receives one
-    from ``field_requests.at`` only; ``authoring`` attaches one to guard nodes."""
+    from ``field_requests.at`` and from ``relations.require_success``; ``authoring`` attaches one
+    to guard nodes.
+
+    The relation solve of a traced method (N15 lot « solves », 5.5) is outside this lot's reuse:
+    its right-hand side is the ``linear_combine`` of its known part, never a
+    ``field_problem_load``, so ``_key`` and ``_time_independent_request`` return before they read
+    its site and it never enters either cache; ``_attempt_reuse`` asks for a
+    ``field_problem_load`` too, and under ``cg()`` the site is never fixed anyway, since IR16
+    puts ``p.dt`` in every ``b_k``. ``test_su_t3_solves.py::
+    test_a_relation_solve_enters_no_field_cache_and_is_never_kept_across_attempts`` and
+    ``test_relations_n8.py::test_a_relation_solve_under_cg_is_never_a_fixed_site`` prove it."""
     writers = {}
     for path in sorted((ROOT / "python" / "pops").rglob("*.py")):
         text = path.read_text()
@@ -167,7 +177,13 @@ def test_only_a_field_request_attaches_a_trial_site_to_a_solve_outcome():
     assert writers == {
         "python/pops/time/_program/field_requests.py": [r'\{"trial_site":'],
         "python/pops/time/_program/authoring.py": [r'attrs\["trial_site"\]\s*='],
+        # The relation solve (see above): consumed by require_success alone, once.
+        "python/pops/time/_program/relations.py": [r'\{"trial_site":'],
     }
+    relations = (ROOT / "python/pops/time/_program/relations.py").read_text()
+    assert relations.count('{"trial_site":') == 1
+    assert relations.split('{"trial_site":')[0].rsplit("\ndef ", 1)[1].startswith(
+        "require_success(")
     authoring = (ROOT / "python/pops/time/_program/authoring.py").read_text()
     assert authoring.count('attrs["trial_site"] = trial_site') == 1
     # The attach sits in the acceptance-guard builder: it writes an acceptance_guard node.

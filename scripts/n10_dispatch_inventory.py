@@ -28,6 +28,14 @@ and the tuples written over several lines (review of #777, B1). Lot 1b moved eve
 from the head of the IR type. Only that module still compares those spellings, and the architecture
 test of N10 holds it. Writing a signature (``vtype="array"``) is its encoding, not a comparison,
 and is not a row. ``--write`` regenerates the CSV, ``--check`` reports whether it is current.
+
+Limits (review of #777, R2). The syntax tree is read one module at a time, without data flow, so
+these forms are not seen: a parameter that receives a spelling (``def f(kind): kind == "array"``),
+a loop target, an unpacking, an attribute (``self.kind``), a class constant or an imported
+constant, ``match``/``case``, an indexing table (``{...}[kind]``, an encoding of the spelling into
+a native name, out of scope when the kind is decided first) and ``startswith``. None of them
+compares a field or finite spelling in ``python/pops`` at lot 3a (the reviewer's sweeps,
+``review/n10_lot1b_777``); a new one is caught by review, not by this script.
 """
 from __future__ import annotations
 

@@ -285,3 +285,30 @@ def test_a_request_states_a_positive_tolerance():
         Request(rtol=1e-6, observe=object())
     with pytest.raises(TypeError, match="takes a Request"):
         Proposal(1e-3, request=1e-6)
+
+
+def test_a_relation_solve_under_cg_is_never_a_fixed_site():
+    """``cg()``, the one solver of this lot with a native, needs an SPD operator (IR16): every
+    ``b_k`` is a nonpositive multiple of ``p.dt``, so every image of the unknown depends on the
+    proposal and the site is retryable (T38). A relation whose image has no ``p.dt`` is refused,
+    and so is a relation without image. So ``require_success`` never writes a fixed trial site,
+    which ``_attempt_reuse`` would otherwise reach (``test_reuse_across_stages_n8.py``)."""
+    (site,) = _elaborate(imex).trace.solves
+    assert not site.fixed
+
+    def without_dt(B, p, explicit, implicit):
+        with unknowns(U=B.state.space) as z:
+            s = solve(Problem(unknowns=z, equations=(
+                z.U == B.state - 0.5 * implicit(z.U, B.time),)), request=p.request)
+        return Candidate(require_success(s).values.U, B.time + p.dt)
+
+    def without_image(B, p, explicit, implicit):
+        with unknowns(U=B.state.space) as z:
+            s = solve(Problem(unknowns=z, equations=(z.U == B.state,)), request=p.request)
+        return Candidate(require_success(s).values.U, B.time + p.dt)
+
+    with pytest.raises(PropertyNotDerived, match="nonpositive multiple of p.dt"):
+        _elaborate(without_dt)
+    with pytest.raises(NotYetElaborated, match="reads no rate at its unknown"):
+        _elaborate(without_image)
+    assert cg().requires == ("symmetric_positive_definite",)

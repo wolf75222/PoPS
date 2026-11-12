@@ -69,6 +69,24 @@ class DeliveryNotStructural(RegionRefusal):
         super().__init__(message, region=region, blocking=construct)
 
 
+class GeneralAccessOnPatches(RegionRefusal, TypeError):
+    """DM5 (strict mode): a table or CSR gather reaches a field leaf, an array on ``Patches``.
+
+    On ``Patches`` no table or CSR gather reaches an array unless the case requests it, and phase 1
+    has no request form (N10 lot 3, addendum §3). The general accesses are ``at`` with an index
+    that is not the argument of its map, the distributed local access, the imports by requests
+    or by CSR, and the distributed scatter. A field leaf was already refused there with a
+    ``TypeError``; the refusal is also a ``TypeError``, so callers that catch it keep catching it.
+    """
+
+    rule = "DM5"
+    phase = "tracing"
+
+    def __init__(self, message, *, region, op):
+        self.op = op
+        super().__init__(message, region=region, blocking=op)
+
+
 class CoverageNotExact(ValueError):
     """A term is covered twice or not at all on a success path (D5)."""
 
@@ -156,5 +174,5 @@ class TermNotAdditive(ValueError):
 
 
 __all__ = ["ClassNotReached", "ConservationNotStructural", "CoverageNotExact",
-           "DeliveryNotStructural", "PropertyNotDerived", "RegionRefusal", "ScheduleIllegal",
-           "TermNotAdditive"]
+           "DeliveryNotStructural", "GeneralAccessOnPatches", "PropertyNotDerived",
+           "RegionRefusal", "ScheduleIllegal", "TermNotAdditive"]

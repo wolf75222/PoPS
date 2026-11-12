@@ -631,8 +631,13 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            "The identity of the installed generated regrid decision, empty when the cadence "
            "decides.")
       .def("_last_regrid_decision", &AmrSystem::last_regrid_decision,
-           "The accepted step count, 1 or 0 for the decision, then the reduced value of each "
-           "indicator, of the last generated regrid decision; empty before the first one.")
+           "The accepted step count of the run, 1 or 0 for the decision, then the reduced value "
+           "of each indicator, of the last generated regrid decision; empty before the first one.")
+      .def("_mark_run_start", &AmrSystem::mark_run_start,
+           "Start a run at the current macro step: a generated Regrid decision counts the "
+           "accepted steps of the run from it.")
+      .def("_run_start_step", &AmrSystem::run_start_step,
+           "The macro step at which the current run started.")
       .def(
           "_tagging_requests",
           [](AmrSystem& system, int parent_level) {
