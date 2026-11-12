@@ -30,12 +30,12 @@ std::shared_ptr<field_type> regrid_read(const field_type& source, std::int64_t s
               "regrid_read reads a source level finer than its target: restriction is left to G11");
         const bool provider = !qualification->provider.empty();
         const auto source_view =
-            provider ? continuation_source_topology(qualification->provider, source_level, source)
-                     : continuation_source_topology(qualification->block, source_level, source);
+            provider ? regrid_source_view_(qualification->provider, source_level, source)
+                     : regrid_source_view_(qualification->block, source_level, source);
         require_regrid_field_topology(source, source_view);
-        const auto target =
-            provider ? continuation_target_topology(qualification->provider, target_level, source)
-                     : continuation_target_topology(qualification->block, target_level, source);
+        const auto target = provider
+                                ? regrid_target_view_(qualification->provider, target_level, source)
+                                : regrid_target_view_(qualification->block, target_level, source);
         if (source.distribution().rank_space() != target.distribution().rank_space())
           throw std::invalid_argument("regrid_read source and target have different rank spaces");
         const auto& source_domain = source_view.geometry().domain();
@@ -59,9 +59,9 @@ std::shared_ptr<field_type> regrid_read(const field_type& source, std::int64_t s
               boundary.is_periodic(Face<Dim>{axis, BoundarySide::lower}) &&
               boundary.is_periodic(Face<Dim>{axis, BoundarySide::upper});
 
-        auto field = std::make_shared<field_type>(target.layout(), target.distribution(),
-                                                  target.local_rank(), target.components(),
-                                                  target.ghosts());
+        auto field =
+            std::make_shared<field_type>(target.layout(), target.distribution(),
+                                         target.local_rank(), target.components(), target.ghosts());
         field->set_val(Real{0});
         target.require_field(*field);
         // Retained until the frame is revoked, so the registered pointer is never recycled.
@@ -87,9 +87,9 @@ std::shared_ptr<field_type> regrid_read(const field_type& source, std::int64_t s
                 ? field_type::distribution_type::replicated(scratch_layout, space)
                 : field_type::distribution_type::partitioned(scratch_layout, space,
                                                              distribution.owners());
-        result.scratch = std::make_shared<field_type>(scratch_layout, scratch_distribution,
-                                                      target.local_rank(), source.ncomp(),
-                                                      Extent<Dim>{});
+        result.scratch =
+            std::make_shared<field_type>(scratch_layout, scratch_distribution, target.local_rank(),
+                                         source.ncomp(), Extent<Dim>{});
         result.scratch->set_val(Real{0});
 
         // Images of a source box that meet a box, under the periodic identification.
@@ -106,8 +106,10 @@ std::shared_ptr<field_type> regrid_read(const field_type& source, std::int64_t s
               return n / d - ((n % d != 0) && ((n < 0) != (d < 0)) ? 1 : 0);
             };
             // Shifts k with box + k L meeting region: k in [ceil((lo_r - hi_b)/L), floor((hi_r - lo_b)/L)].
-            low[a] = -floor_div(static_cast<std::int64_t>(box.hi[axis]) - region.lo[axis], length[a]);
-            high[a] = floor_div(static_cast<std::int64_t>(region.hi[axis]) - box.lo[axis], length[a]);
+            low[a] =
+                -floor_div(static_cast<std::int64_t>(box.hi[axis]) - region.lo[axis], length[a]);
+            high[a] =
+                floor_div(static_cast<std::int64_t>(region.hi[axis]) - box.lo[axis], length[a]);
           }
           std::array<std::int64_t, Dim> k = low;
           while (true) {
@@ -140,9 +142,15 @@ std::shared_ptr<field_type> regrid_read(const field_type& source, std::int64_t s
           for (std::size_t box = 0; box < source_layout.size(); ++box)
             images(parents, source_layout[box],
                    [&](const Box<Dim>& meet, const Index<Dim>&) { covered += meet.numPts(); });
-          if (covered != parents.numPts())
+          if (covered != parents.numPts()) {
+            std::string box;
+            for (int axis = 0; axis < Dim; ++axis)
+              box += (axis ? ", " : "") + std::to_string(layout[patch].lo[axis]) + ".." +
+                     std::to_string(layout[patch].hi[axis]);
             throw std::invalid_argument(
-                "regrid_read: a valid target cell has no valid source parent");
+                "regrid_read: a valid cell of target patch " + std::to_string(patch) + " [" + box +
+                "] has no valid parent on source level " + std::to_string(source_level));
+          }
         }
 
         // Jobs: scratch patch ∩ periodic image of a source patch, in global order.
@@ -168,8 +176,8 @@ std::shared_ptr<field_type> regrid_read(const field_type& source, std::int64_t s
                      else
                        add(distribution.owner(patch));
                    });
-          result.bytes += static_cast<std::uint64_t>(scratch_layout[patch].numPts()) * ncomp *
-                          sizeof(Real);
+          result.bytes +=
+              static_cast<std::uint64_t>(scratch_layout[patch].numPts()) * ncomp * sizeof(Real);
         }
         return result;
       },
@@ -180,7 +188,9 @@ std::shared_ptr<field_type> regrid_read(const field_type& source, std::int64_t s
   const auto& space = prepared.scratch->distribution().rank_space();
   ::pops::mesh::parallel::RegionTransport<Dim> transport(
       ::pops::mesh::parallel::RegionTransferPlan<Dim>{
-          space, prepared.scratch->local_rank(), prepared.scratch->ncomp(),
+          space,
+          prepared.scratch->local_rank(),
+          prepared.scratch->ncomp(),
           std::move(prepared.jobs),
           {jobs, space.size(), prepared.elements, prepared.elements, prepared.elements}});
   transport.prepare_collectively(lane);
@@ -194,11 +204,10 @@ std::shared_ptr<field_type> regrid_read(const field_type& source, std::int64_t s
         const auto& scratch = std::as_const(*prepared.scratch);
         for (std::size_t local = 0; local < field.local_size(); ++local) {
           const auto global = field.global_index(local);
-          pops::for_each_cell(
-              field.fab(local).grown_box(),
-              detail::RegridParentKernel<Dim>{field.fab(local).view(),
-                                              scratch.fab_global(global).view(), prepared.ratio,
-                                              field.ncomp()});
+          pops::for_each_cell(field.fab(local).grown_box(),
+                              detail::RegridParentKernel<Dim>{field.fab(local).view(),
+                                                              scratch.fab_global(global).view(),
+                                                              prepared.ratio, field.ncomp()});
         }
         relayout_bytes().fetch_add(prepared.bytes, std::memory_order_relaxed);
       },
@@ -218,11 +227,11 @@ Real regrid_integral(const field_type& field, int component) const {
       throw std::invalid_argument("regrid_integral requires a Field read onto the target level");
     if (component < 0 || component >= field.ncomp())
       throw std::invalid_argument("regrid_integral component is outside its Field");
-    const auto view = qualification->provider.empty()
-                          ? continuation_target_topology(qualification->block, qualification->level)
-                          : continuation_provider_topology_(qualification->provider,
-                                                            qualification->level,
-                                                            FieldTopology::Side::Target);
+    const auto view =
+        qualification->provider.empty()
+            ? regrid_target_view_(qualification->block, qualification->level)
+            : continuation_provider_topology_(qualification->provider, qualification->level,
+                                              FieldTopology::Side::Target);
     if (field.layout() != view.layout() || field.distribution() != view.distribution() ||
         field.local_rank() != view.local_rank())
       throw std::invalid_argument("regrid_integral Field differs from its target level layout");
@@ -245,8 +254,8 @@ Real regrid_integral(const field_type& field, int component) const {
               detail::RegridComponentIntegrand<Dim>{field.fab(local).view(), component},
               active ? active->fab(local).view() : FieldView<const Real, Dim>{},
               coverage.fab(local).view(),
-              fraction ? fraction->fab(local).view() : FieldView<const Real, Dim>{},
-              Real(volume), active != nullptr, fraction != nullptr});
+              fraction ? fraction->fab(local).view() : FieldView<const Real, Dim>{}, Real(volume),
+              active != nullptr, fraction != nullptr});
       if (!sum.finite())
         throw std::overflow_error("regrid_integral has nonfinite active values");
       if (!field.distribution().replicated() || lane.rank() == 0) {

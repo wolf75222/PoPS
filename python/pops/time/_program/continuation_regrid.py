@@ -1,14 +1,22 @@
 """Closed authoring operations for an explicitly assessed AMR topology change.
 
-The runtime supplies immutable source images and target storage representations.
-Which source supplies a target, and every numerical transfer, remain Python DAGs.
+The runtime supplies immutable source images. A target Field is read from a source Field
+along the map the regrid issues (``regrid_read``); which source supplies a target remains a
+Python DAG, and the runtime only copies.
 """
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from .structured_control import new_typed, value_signature
 from .value_validation import require_owned
 from .versioned_values import _cap
 from pops._ir.data_model import field_role
+
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
 
 
 REGRID_OPS = frozenset((
@@ -16,7 +24,6 @@ REGRID_OPS = frozenset((
     "continuation_regrid_source", "continuation_regrid_base",
     "continuation_regrid_templates", "continuation_regrid_child_publish",
     "continuation_regrid_parent_open", "continuation_regrid_parent_publish",
-    "continuation_source_topology", "continuation_target_topology",
     "continuation_regrid_read", "continuation_regrid_integral",
 ))
 
@@ -31,30 +38,6 @@ def _context(program):
 def _level(program, value):
     require_owned(program, value, "regrid source or target level", vtype="int64")
     return value
-
-
-def topology(program, field, *, level, side, dimension):
-    """Borrow one exact old/new layout; no geometry or interpolation is inferred."""
-    from pops.time.field_topology import validate_topology_signature
-
-    context = _context(program)
-    require_owned(program, field, "regrid topology Field")
-    signature = value_signature(field)
-    if field_role(signature) not in ("state", "field"):
-        raise TypeError("regrid topology requires an immutable native Field template")
-    if signature.get("field_authority") is None and signature.get("block") not in context["blocks"]:
-        raise ValueError("regrid Field has no declared scientific storage owner")
-    if side not in ("source", "target"):
-        raise ValueError("regrid topology side must be source or target")
-    if type(dimension) is not int or not 1 <= dimension <= 3:
-        raise ValueError("regrid topology dimension must match a native dimension in 1..3")
-    if dimension != context["dimension"]:
-        raise ValueError("regrid topology differs from the declared native dimension")
-    result = {"vtype": "field_topology", "field_signature": signature,
-              "side": side, "dimension": dimension}
-    validate_topology_signature(result)
-    return new_typed(program, result, "continuation_%s_topology" % side,
-                     (field, _level(program, level)), {"dimension": dimension, "side": side})
 
 
 def source(program, level):
@@ -296,3 +279,23 @@ def author_phase(program, metadata, child_author, parent_author, observe, dimens
         return p.boolean(True)
 
     return program.branch(selected, child, parent)
+
+
+class _ProgramRegrid(_ProgramBase):
+    """The builder operations of a regrid region (N10 lot 3: they replace the bridge)."""
+
+    def regrid_source(self, level):
+        """Read one immutable source image inside the explicit regrid transaction."""
+        return source(self, level)
+
+    def regrid_read(self, field):
+        """Read a source Field at the child's target cells along the map the regrid issues."""
+        return read(self, field)
+
+    def regrid_integral(self, field):
+        """The child's level share of the composite integral of one Field component."""
+        return integral(self, field)
+
+    def regrid_base(self, source_level):
+        """Choose explicitly the source whose assessed descendant this target becomes."""
+        return base(self, source_level)

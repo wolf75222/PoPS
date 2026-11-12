@@ -13,7 +13,6 @@ from pops import math as pm
 from pops.amr import (AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging,
                       AMRTransfer, Buffer, ConflictPolicy, EqualityPolicy,
                       Hysteresis, Tag)
-from pops.bundles import BundleSchema
 from pops.continuations import Assess, Candidate, ContinuationSchema, accept, assess
 from pops.graph_functions import graph
 from pops.layouts import AMR
@@ -21,8 +20,7 @@ from pops.lib.amr import StateTransfer
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.params import RuntimeParam
 from pops.time import FixedDt, every
-from pops.time._program.distributed_arrays import Distributed
-from pops.time.variant_types import Bool, Float64, Int64, Product, Result, type_of
+from pops.time.variant_types import Bool, Int64, Product, type_of
 
 from .common import CaseSpec, non_owner_metrics
 from .methods_T01_T12 import _storage
@@ -67,55 +65,6 @@ def _approve(p, base, proposal, after, report, *, advancing, mass=False, reject=
                          checks=q.product(stage=q.int64(71 if reject else 0)))
 
     return p.require_success(accept(p, candidate, assess(p, candidate, Assess(assessment))))
-
-
-def _with_values(p, target, values):
-    raw = p.product(instance=target["instance"], fields=p.product(values=values),
-                    geometry=target["geometry"], maps=target["maps"], histories=target["histories"])
-    bindings = {("fields", "values"): "cells", ("maps", "patches"): "patches"}
-    for name in ("coordinates", "indices", "is_active", "is_covered", "is_valid",
-                 "measure", "volume_fraction"):
-        bindings[("geometry", name)] = "cells"
-    return BundleSchema(raw, domains={"cells": ("instance",),
-        "patches": ("maps", "patch_instance")}, bindings=bindings).bind(p, raw)
-
-
-def _injection(p, algebra, source, target, *, target_level, cells):
-    """Global target-to-source index map, written entirely in finite Python algebra."""
-    scale = p.branch(target_level == p.int64(0), lambda q: q.int64(1), lambda q: q.int64(2))
-
-    def source_index(q, index):
-        position = algebra.at_local(target["geometry"]["indices"], index)
-        x = (position["i0"]//scale) % q.int64(cells[0])
-        y = (position["i1"]//scale) % q.int64(cells[1])
-
-        def locate(b, found, patch):
-            inside = (_indicator(b, x >= patch["lo0"])*_indicator(b, x <= patch["hi0"])
-                      *_indicator(b, y >= patch["lo1"])*_indicator(b, y <= patch["hi1"])
-                      *b.branch(patch["is_replica"], lambda z: z.int64(0), lambda z: z.int64(1)))
-            width = patch["hi0"]-patch["lo0"]+1+2*patch["ghost0"]
-            offset = ((y-patch["lo1"]+patch["ghost1"])*width
-                      +x-patch["lo0"]+patch["ghost0"])
-            return b.branch(inside == b.int64(1), lambda z: patch["global_offset"]+offset,
-                            lambda z: found)
-
-        gid = q.reduce(source["maps"]["patches"], q.int64(-1), locate, order="ascending")
-        return algebra.index(source["instance"], gid)
-
-    requests = algebra.requests(target["instance"], source["instance"], source_index)
-    values = algebra.import_values(source["fields"]["values"], requests, byte_capacity=8*1024*1024)
-    return _with_values(p, target, values)
-
-
-def _bundle_mass(p, algebra, bundle):
-    def weighted(q, i):
-        value = algebra.at_local(bundle["fields"]["values"], i)["c0"]
-        measure = algebra.at_local(bundle["geometry"]["measure"], i)
-        return q.variant(Result(Float64, Int64), "ok", value*measure)
-    values = p.require_success(algebra.local_map(bundle["instance"], weighted,
-                                                byte_capacity=8*1024*1024))
-    return algebra.reduce(values, p.float64(0), lambda q, total, value: total+value,
-                          order="global_gid_ascending", byte_capacity=8*1024*1024)
 
 
 def build_continuation_regrid_amr(*, cells=(16, 8), dt=.1, steps=3, reject_regrid_parent=False,

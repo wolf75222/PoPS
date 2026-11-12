@@ -10,7 +10,6 @@
 #include <pops/runtime/program/composite_integral_kernel.hpp>
 #include <pops/runtime/program/regrid_read_support.hpp>
 #include <pops/runtime/program/field_topology_view.hpp>
-#include <pops/runtime/program/field_bundle_port.hpp>
 #include <pops/runtime/program/amr_finite_value_lifetime.hpp>
 
 #include <pops/runtime/program/step_transaction.hpp>
@@ -561,8 +560,6 @@ class AmrProgramContext {
 #include <pops/runtime/program/amr_program_context_continuation_regrid.inc>
 #include <pops/runtime/program/amr_program_context_continuation_regrid_child.inc>
 #include <pops/runtime/program/amr_program_context_regrid_read.inc>
-#include <pops/runtime/program/amr_program_context_field_bundle.inc>
-#include <pops/runtime/program/amr_program_context_field_allocation.inc>
 #include <pops/runtime/program/amr_program_context_continuation_field_storage.inc>
 #include <pops/runtime/program/amr_program_context_field_representation_obligation.inc>
 #include <pops/runtime/program/amr_program_context_continuation_checkpoint.inc>

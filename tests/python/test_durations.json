@@ -4785,18 +4785,6 @@
           "estimated_seconds": 15,
           "kind": "source_contract"
         },
-        "tests/python/unit/time/test_field_representation_v02.py": {
-          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt.",
-          "estimated_seconds": 30,
-          "kind": "source_contract",
-          "registration": "completion_20261015"
-        },
-        "tests/python/unit/time/test_field_storage_topology_v02.py": {
-          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt.",
-          "estimated_seconds": 30,
-          "kind": "source_contract",
-          "registration": "completion_20261015"
-        },
         "tests/python/unit/time/test_finite_amr_regions.py": {
           "basis": "Unmeasured source-only scheduling weight, not a native execution receipt.",
           "estimated_seconds": 30,
@@ -7790,11 +7778,9 @@
       "tests/python/unit/time/test_expression_derivatives_v02.py",
       "tests/python/unit/time/test_extension_closure_v14.py",
       "tests/python/unit/time/test_fibre_representation.py",
-      "tests/python/unit/time/test_field_representation_v02.py",
       "tests/python/unit/time/test_field_requests_n8.py",
       "tests/python/unit/time/test_field_sampling.py",
       "tests/python/unit/time/test_field_solve_outcome.py",
-      "tests/python/unit/time/test_field_storage_topology_v02.py",
       "tests/python/unit/time/test_finite_amr_regions.py",
       "tests/python/unit/time/test_finite_arrays_v02.py",
       "tests/python/unit/time/test_finite_contributions_v14.py",
@@ -8436,12 +8422,12 @@
       "local_receipts": {
         "tests/python/unit/numerics/test_index_sets_n10.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_index_sets_n10.py",
-          "passed": 32,
-          "seconds": 92.0
+          "passed": 34,
+          "seconds": 102.9
         }
       },
       "source_sha256": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": "ffcd3a826daf486e6ae40765168b673707e5494be62179e720ae85554dfceaa2"
+        "tests/python/unit/numerics/test_index_sets_n10.py": "871a656e2bdfe5c5c3296a53a3f7e66f381ad8095c9d63e892dbe097e6c8d9cf"
       }
     },
     "n11_20261108_expression_closure": {
@@ -9753,10 +9739,8 @@
   "tests/python/unit/time/test_extension_closure_v14.py": 60,
   "tests/python/unit/time/test_fibre_representation.py": 15,
   "tests/python/unit/time/test_field_context.py": 0.5,
-  "tests/python/unit/time/test_field_representation_v02.py": 30,
   "tests/python/unit/time/test_field_sampling.py": 5,
   "tests/python/unit/time/test_field_solve_outcome.py": 1.0,
-  "tests/python/unit/time/test_field_storage_topology_v02.py": 30,
   "tests/python/unit/time/test_finite_amr_regions.py": 30,
   "tests/python/unit/time/test_finite_arrays_v02.py": 15,
   "tests/python/unit/time/test_finite_contributions_v14.py": 60,

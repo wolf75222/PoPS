@@ -41,7 +41,6 @@ _FIELD_ROLES = {"state": "state", "rhs": "rhs", "scalar_field": "field", "vector
 _LATER = {
     "vector_field": ("no builder spells a value so: Local.vector_field returns a scalar_field of d "
                      "components, typed as a field leaf"),
-    "field_topology": "lot 3 of phase 1 types the hierarchy value of a topology (DM13)",
     "state_geometry": ("G03 types it: the swept geometry of a moving state, held by the runtime "
                        "and checked against its coordinate law (ALE: R26, D18, D21, probe M28)"),
     "csr": "lot 4 of phase 1 types it as a product of range-set arrays (DM4)",
@@ -51,7 +50,6 @@ _CONTINUATION = frozenset((
     "continuation_base", "continuation_candidate", "continuation_assessment",
     "continuation_accepted",
 ))
-_ON_TOPOLOGY = "pops.field-storage-topology@1"
 _NOT_DATA = frozenset((
     "operator", "matrix_free_op", "effect", "condensed_coeffs", "solve_outcome", "unit",
 ))
@@ -243,9 +241,6 @@ def ir_type(value: Any, placements: Placements, *, program: str = "program") -> 
     shape = value.logical_shape or {}
     count = shape.get("n_comp") if hasattr(shape, "get") else None
     attrs = getattr(value, "attrs", None) or {}
-    if hasattr(attrs, "get") and attrs.get("storage_allocation") == _ON_TOPOLOGY:
-        return A.Untyped("a field allocated on a topology lives on the levels of the hierarchy "
-                         "that the topology names (DM13, lot 3 of phase 1)")
     if count is None and hasattr(attrs, "get"):
         # A ``scalar_field()`` without a block carries its component count here (review T3).
         count = attrs.get("ncomp")

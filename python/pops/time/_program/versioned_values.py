@@ -27,7 +27,7 @@ from pops.time.variant_types import ValueType
 from pops.bundles import BUNDLE_OPS, validate_bundle_signature
 
 
-CAPABILITY_TYPES = frozenset(("field_topology", "continuation_base", "continuation_candidate",
+CAPABILITY_TYPES = frozenset(("continuation_base", "continuation_candidate",
                              "continuation_assessment", "continuation_accepted"))
 VERSIONED_OPS = frozenset(("continuation_open", "continuation_read", "continuation_freeze",
                           "continuation_candidate_value", "continuation_proposal",
@@ -45,7 +45,6 @@ VERSIONED_OPS = frozenset(("continuation_open", "continuation_read", "continuati
                           "continuation_regrid_source", "continuation_regrid_base",
                           "continuation_regrid_templates", "continuation_regrid_child_publish",
                           "continuation_regrid_parent_open", "continuation_regrid_parent_publish",
-                          "continuation_source_topology", "continuation_target_topology",
                           "continuation_regrid_read", "continuation_regrid_integral")) | BUNDLE_OPS
 
 
@@ -265,8 +264,6 @@ def _same(expected, actual, where):
 
 def validate_continuations(program, *, target=None):
     """Check the closed executable profile and unique root publication after deserialization too."""
-    from pops.time._program.field_representation import validate_field_representation_program
-    validate_field_representation_program(program)
     def walk(values):
         pending = list(reversed(values))
         keys = ("body_block", "cond_block", "true_block", "false_block", "apply_block", "residual_block")

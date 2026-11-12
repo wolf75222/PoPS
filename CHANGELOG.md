@@ -172,6 +172,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-85 (N10, phase 1, lot 3b): the regrid port (spec 0.3 DM2, DM6, addendum of lot 3). A
+  regrid reads the field of the previous hierarchy at the parent of each target cell with
+  `p.regrid_read(field, source_level)` and measures it with `p.regrid_integral(field[c])`; the
+  halo reads the periodic parent, a finer source level or a valid cell without parent is refused.
+  The relayout is one region transport per read, listed in the layout record (schema 5,
+  `relayouts`) and counted by `pops_relayout_byte_count` in the generated program. A value that
+  mixes the two hierarchies of a regrid raises `HierarchyInstancesMixed` (rule DM2); the record
+  has an `instance` column. The bridge is deleted: `field_bundle`, `bundle_field`,
+  `regrid_topology`, `scalar_field(topology=, initial=)`, the `field_topology` value type and the
+  native bundle and allocation fragments. The three regrid cases ran bit for bit equal to the
+  bridge on every cell, halo included, before the deletion.
 - ROM-85 (N10, phase 1, lot 3a): strict mode on `Patches` (spec 0.3 DM5). The layout record
   (`data_layout_and_distribution`, schema 4) lists every general access of the plan
   (`general_accesses`: node, op, array, layout and IR8 provenance of the index) for `at` and the
