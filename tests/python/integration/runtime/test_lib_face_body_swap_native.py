@@ -246,7 +246,7 @@ def _tutorial_02_library(flux, state, velocity):
                   reconstruction=reconstruction.MUSCL(reconstruction.limiters.VanLeer()))
 
 
-def _tutorial_02(method, *, fixed_step=False):
+def _tutorial_02(method, *, fixed_step=False, step=TUTORIAL_STEP):
     from fractions import Fraction
 
     from pops.boundary import TransportBoundarySet
@@ -297,7 +297,7 @@ def _tutorial_02(method, *, fixed_step=False):
     half = Fraction(1, 2)
     program.commit(q.next, program.value(
         "ssprk2_step", q.n + program.dt*half*k0 + program.dt*half*k1, at=q.next.point))
-    program.step_strategy(FixedDt(TUTORIAL_STEP) if fixed_step
+    program.step_strategy(FixedDt(step) if fixed_step
                           else AdaptiveCFL(cfl=TUTORIAL_CFL, max_dt=1.0e-2))
     case.program(program)
     x = (np.arange(nx, dtype=np.float64) + 0.5)/nx
@@ -312,14 +312,14 @@ def _tutorial_02(method, *, fixed_step=False):
                     "SSPRK2 under AdaptiveCFL")
 
 
-def _run_tutorial_02(world, label, method, *, fixed_step):
-    spec = collective_call(world, lambda: _tutorial_02(method, fixed_step=fixed_step))
+def _run_tutorial_02(world, label, method, *, fixed_step, step=TUTORIAL_STEP):
+    spec = collective_call(world, lambda: _tutorial_02(method, fixed_step=fixed_step, step=step))
     runtime = _bind(world, spec, "N3 tutorial 02 " + label)
     report = collective_call(world, lambda: pops.run(runtime, t_end=spec.t_end, max_steps=10_000,
                                                      console=False))
     clock = collective_call(world, lambda: float(runtime.time()))
     state = collective_call(world, lambda: runtime.state_global("tracer"))
-    return report.accepted_steps, clock, state
+    return report.accepted_steps, clock, state, report.rejected_steps
 
 
 @pytest.mark.compiler
@@ -369,6 +369,56 @@ def test_upwind_matches_master_scalar_upwind_on_tutorial_02_as_written(isolated_
     with collective_check(world):
         assert native[0] > 10, native[:2]
         assert library[:2] == native[:2], (library[:2], native[:2])
+        # ROM-108: a face that records the radius is never refused, so no attempt is lost.
+        record_property("tutorial 02 as written rejected attempts (native, upwind)",
+                        (native[3], library[3]))
+        assert native[3] == 0 and library[3] == 0, (native[3], library[3])
         if native[2] is not None:
             _assert_rounding_level(native[0], native[2], library[2], record_property,
                                    "tutorial 02 as written, upwind vs ScalarUpwind ")
+
+
+# ROM-108: a face whose recorded speed exceeds every cell's spectral radius. upwind(speed=) states
+# s = 2 a.n, twice the radius |a.n| that System::step_cfl reads from the waves of F. Spec 2.6.9
+# (cfl_limit) takes s_a from the speeds that the faces record, so the step is cfl h / 2 = 0.45/128.
+# The native proposal reads the radius, cfl h / 1, and the face's guard refuses it (reason 503);
+# the refusal now carries the frequency that the faces recorded at the beginning state, and
+# AdaptiveCFL retries once at cfl over it (spec 21.6). Before, the run stopped at its first step.
+FAST_FACTOR = 2.0
+
+
+def _tutorial_02_fast(flux, state, velocity):
+    del velocity
+    return upwind(flux, state, speed=lambda face: FAST_FACTOR*(
+        TUTORIAL_VELOCITY[0]*face.normal[0] + TUTORIAL_VELOCITY[1]*face.normal[1]),
+                  reconstruction=reconstruction.MUSCL(reconstruction.limiters.VanLeer()))
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_a_face_faster_than_the_cell_radius_takes_the_step_of_its_recorded_speed(
+        isolated_native_cache, native_cxx, kokkos_root, record_property):
+    """ROM-108: under AdaptiveCFL the step is cfl h / s with s the recorded face speed.
+
+    The same face runs as written and at FixedDt(cfl h / s): the same steps to the same clock, and
+    the same final state bit for bit, each step accepted at its second attempt.
+    """
+    del isolated_native_cache, native_cxx, kokkos_root
+    _native, world = native_profile(dimension=2, scope="N3 tutorial 02 faster face")
+    fast_step = TUTORIAL_CFL/(FAST_FACTOR*TUTORIAL_CELLS[0])
+    adaptive = _run_tutorial_02(world, "upwind(speed=2a.n) AdaptiveCFL", _tutorial_02_fast,
+                                fixed_step=False)
+    fixed = _run_tutorial_02(world, "upwind(speed=2a.n) FixedDt", _tutorial_02_fast,
+                             fixed_step=True, step=fast_step)
+    with collective_check(world):
+        assert fixed[1] == pytest.approx(0.20) and fixed[0] > 50, fixed[:2]
+        assert adaptive[:2] == fixed[:2], (adaptive[:2], fixed[:2])
+        # Each step whose radius proposal exceeds cfl h / s loses one attempt, and only one.
+        record_property("tutorial 02 faster face rejected attempts", adaptive[3])
+        assert fixed[3] == 0 and 0 < adaptive[3] <= adaptive[0], (adaptive[3], adaptive[0])
+        if fixed[2] is not None:
+            record_property("tutorial 02 faster face AdaptiveCFL vs FixedDt bitwise_equal",
+                            bool(np.array_equal(adaptive[2], fixed[2])))
+            assert np.array_equal(adaptive[2], fixed[2]), (
+                float(np.max(np.abs(np.asarray(adaptive[2]) - np.asarray(fixed[2])))))

@@ -33,6 +33,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `static_geometry_*` code. A box layout is unchanged. The two graphs of C1 are
   `examples/api_v02/models_static_geometry.py`; core ledger entry
   `static-geometry-arrays-of-a-structured-configuration`.
+- ROM-98 (N15, lot D-E, part E): the projection of an analytic initial value (spec 0.3, 2.6.2,
+  CN12, SU9; OD31). `initial={u: pops.project(e, quadrature=Q)}` averages e over each cell by
+  the rule Q (one `pops.Quadrature` or one per axis) mapped onto the cell, and
+  `pops.project(e, integral=I)` divides the exact integral I(cell), written with
+  `cell.lower(axis)`, `cell.upper(axis)` and `cell.measure`, by the measure of the cell; a value
+  that reads no coordinate is exact and written alone. The elaborator lowers both on the analytic
+  route of b6 (`Analytic(frame, components=(e,), cell_integrals=(I,))` under
+  `ConservativeCellAverage`). `erf` and `erfc` are words of the initial values only. An
+  expression of the coordinates without `pops.project` is `AmbiguousElaboration`. The bump of
+  the tutorial 02 with `GaussLegendre(1)` runs bit for bit as the same case written by hand.
+- ROM-98 (N15, lot B): boundary relations of the surface (spec 0.3, 2.6.2, 2.6.9, D9, R20; OD31).
+  `model.on(pieces, u == g)` (form `Value`, g a number, a constant or a runtime parameter) and
+  `model.on(pieces, outflow(u))` (form `NoData`) close the pieces of a box that are not
+  periodic; `pops.Numerics(boundary=ghosts())` realizes them, and the elaborator checks that the
+  policy gives a ghost law of b6 before it adds `Inflow` (2 g - u_k) and `Outflow` (u_1) to the
+  plan. The other forms, data read from a datum and `closes=` refuse with their lot. A 2D case
+  with inflow and outflow runs bit for bit as the same case written by hand for b6.
+- ROM-90 (N9, lot 4): the reference conjugate gradient `pops.lib.solve.cg(preconditioner=None,
+  max_iterations=2000)`, written with `@pops.solver` over the entities `problem` and `region`
+  (SV9, SU15) and lowered onto one Program `iterate` in one captured region. It mirrors the native
+  `solve_cg` branch by branch (cycle scale, subnormal restart, no confirmation at the cap, final
+  true-residual check), and its failures are variants of T39 with their reason. The native CG
+  is a substitution of its Trace class (SV13): the same iteration counts on the Trace problems at
+  one and two ranks. `outcome.evidence` (iterations, residual norm, reason; SV5) is readable after
+  consumption on both routes and emitted only when read; `correction_norm`, and the evidence of a
+  solve kept across attempts (N8 lot 6), are refused with `NotYetElaborated` naming the N9 lot
+  « Évidence des solves ». `pops.fail` takes the run's `pops.SolveFailed` and
+  `pops.BudgetExhausted` (N15 lot G), and `pops.record` is a solver's record inside a solver and
+  the run's record elsewhere.
+- ROM-98 (N15, lot G): a case of the surface compiles, binds and runs (spec 0.3, 2.6.2, 2.6.6,
+  §5.2, CC14; OD31). `pops.compile(case, target=pops.OpenMP())`, `pops.bind(artifact,
+  params={b: v}, data={u0: array}, resources=pops.Resources(threads=n), directory=d)` and
+  `simulation.run(until=t, max_steps=n)` run the b6 compile and the compiled run of N8; arrays
+  are in the order of the support's axes. `pops.Output(pops.record(u=u), when=[t1, t2] |
+  pops.every(time=h) | pops.every(steps=k), write=npz(path, metadata=pops.record(...)))` lowers
+  to the Outputs of N8, and `pops.lib.output.npz` writes the series of an Output after each run.
+  `pops.RunFailed` and `pops.BudgetExhausted` carry the surface `RunResult`. A 2D periodic case
+  runs bit for bit as the same case written by hand for b6.
 - ROM-98 (N15, lot 2b): schemes of one's own on a support of rank two and three. A flux is
   written by its axis components, `model.flux(of=u, value=vector(a, b) * u)`, and lowered on the
   b6 dictionary per axis with the waves dF_a/du of each component; in a scheme,
@@ -149,6 +187,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-93 with ROM-25 (N11 lot 2a, G07): source spans leave every artifact identity (spec 0.3 CC2,
+  gap C48). The same case loaded from two checkout paths, or with comment lines inserted, now has
+  one `snapshot.artifact_hash`, one `plan_identity` and one compiled `artifact_identity`: the time
+  program of the compile context is projected without provenance, and `ModuleManifest.artifact_data()`
+  drops each operator's source span from the snapshot projection and the binary evidence. The full
+  snapshot (`snapshot.hash`) and the manifest keep file and line as provenance. A docstring no
+  longer changes the identity of a Python operator body, as a comment or a line shift already did.
+  `ARTIFACT_SCHEMA_VERSION` is 7, so every artifact hash changes once; semantic identities do not.
 - A `format-bench` job of `ci.yml`, aggregated by `gate`, replays
   `scripts/test_check_clang_format.sh`, the bench of `scripts/check_clang_format.sh`, on every full
   plan and when the plan sees the script, the bench or a style file (`.clang-format`,
@@ -157,6 +203,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3b): a criterion written as regions of `cell` now compiles on a plan with
+  several layouts. `pops.compile` generates each adaptive layout's criterion into that layout's
+  Program slice, and the layout's AmrSystem installs the entry of its own slice; no native code
+  changes. `Regrid(criterion, when)` on a plan with several layouts stays refused (write
+  `tagging=` and `regrid=` on each adaptive layout). The multi-layout AMR cases of the test suite
+  (physical maps, interstage maps, m19, sol61) write regions; on three adaptive layouts, graph and
+  region routes give bitwise identical hierarchies.
 - ROM-95 (N12, lot 3a, part 2): the 19 `examples/api_v02` AMR cases and the condensed_fac/01,
   diocotron/01, 02 and 04, hyqmom (`_amr_hybrid`) and initial_field_ghost/01 tutorials write their
   tagging as regions of `cell`; the three reviewed api_v02 modules that changed carry new source
@@ -619,12 +672,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-93 (N11 lot 1 follow-up): the empty sum `ddt(U) == RateExpr(())` is again the zero rate of b6 and
+  reaches the prepared IR as the zero identity; lot 1 had refused it. Spec 0.3 R7 refuses no empty
+  balance. The bare literal `ddt(U) == 0` stays refused, as in b6.
+
 - ROM-85 (#749 follow-up): `scripts/dmt1.py emit` failed on M15 in the gate-python shards, which
   export a Kokkos root for their native tests: the real `compile_native` that it runs
   authenticates that root against the Kokkos contract of `_pops`, which it never loads. `emit` now
   drops the Kokkos root overrides from its own environment, as it fixes the other toolchain facts
   that need `_pops`; the emitted units are unchanged. Its test runs under a Kokkos root everywhere
   and prints the profile's error and trace when it fails.
+- ROM-18 (#767 follow-up): the masked (embedded-boundary) face path of a single-route package called
+  `PreparedEmbeddedBoundaryMetric::cell_measure` out of line on every face, which the catalogue
+  package of b6 did not. The wrapper's accessors (`reference_cell`, `face_aperture`,
+  `oriented_face_area_vector`, `cell_measure`) are now `POPS_HD_FORCEINLINE` like the base metric's,
+  so the masked face functor has the same shape as at b6. Results do not change.
 - ROM-18 (#699 follow-up, found by DM-T2 of ROM-85): a generated package compiled for its one
   resolved route lost up to 19 % per step on M01 against b6 (face kernel x1.65), with bit-identical
   states. GCC sizes its inlining budget on the whole translation unit (`inline-unit-growth`), and
@@ -648,6 +710,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   observation computes it from the same recorded speeds (`nd::FaceFrequencyRule`), and FixedDt
   and the combined transport-diffusion certificate keep the incident sum. Tutorial 02 as written
   takes the native face's steps with `upwind(speed=)` (core ledger entry).
+- ROM-108: under `AdaptiveCFL`, a `riemann.User` face whose recorded speed exceeds the spectral
+  radius of every cell no longer stops the run at its first step. `System::step_cfl` proposes
+  from the radius, while spec 0.3 (2.6.9, `cfl_limit`) takes s_a from the speeds that the faces
+  record, so the face's guard refused the proposal (reason 503). The guard's refusal now carries
+  the frequency that the refused attempt's faces recorded (typed payload
+  `pops.face-step-frequency@1`), and `AdaptiveCFL` retries once with its step capped at cfl over
+  that frequency (spec 21.6, `Retry(max_attempts=2)`). A face that records the radius is never
+  refused, so its steps are unchanged.
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
   and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step

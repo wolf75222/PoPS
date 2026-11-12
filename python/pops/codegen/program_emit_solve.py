@@ -106,6 +106,63 @@ def _trial_site(program: Any, solve: Any) -> Any:
     return None
 
 
+def _solve_evidence_requested(program: Any, solve: Any) -> bool:
+    """Whether a ``solve_evidence`` read (SV5) consumes the outcome of ``solve``. The evidence is
+    emitted only when the case reads it, so a case that does not read it keeps its C++."""
+    for node in _program_nodes(program):
+        if (node.op == "solve_evidence" and len(node.inputs) == 1
+                and node.inputs[0].op == "solve_outcome" and node.inputs[0].inputs
+                and node.inputs[0].inputs[0] is solve):
+            return True
+    return False
+
+
+def solve_evidence_cpp(value: Any) -> str:
+    """The C++ expression of one ``solve_evidence`` read: a field of the report that the solve
+    copied before its consumption guard (``kr<id>_evidence``)."""
+    outcome = value.inputs[0]
+    solve = outcome.inputs[0]
+    report = "kr%d_evidence" % solve.id
+    field = value.attrs.get("field")
+    if field == "iterations":
+        return "static_cast<std::int64_t>(%s.iters)" % report
+    if field == "residual_norm":
+        return "static_cast<pops::Real>(%s.residual_norm)" % report
+    raise ValueError("solve_evidence field %r is not elaborated" % (field,))
+
+
+def _attempt_reuse(program: Any, solve: Any, prelude: list[str], lines: list[str], solution: str,
+                   *, target: str, prepared: bool) -> str | None:
+    """The flag of a solve that a retry of its step keeps, or None (T7 across attempts, N8 lot 6).
+
+    Only the prepared Krylov solve of a uniform Program at a fixed trial site of a traced method
+    (T38: its dependency set excludes the proposal) is kept. Its solution buffer is persistent, and
+    the request owns it: no other node writes it. The slot records the epoch and duration of the
+    attempt that completed the solve, after its guard accepted it; System::run_advance keeps the
+    epoch across the retries of one accepted step, and any other step starts a new one.
+    """
+    site = _trial_site(program, solve)
+    if site is None or site["retry_can_change"] or target != "system" or not prepared:
+        return None
+    writers = [node.name for node in _program_nodes(program)
+               if node is not solve and any(item is solve for item in node.inputs)
+               and node.op not in _SOLVE_READERS]
+    if writers:
+        raise ValueError("the solution of a reused attempt solve is read by %s"
+                         % ", ".join(writers))
+    slot = "attempt_slot%d" % solve.id
+    prelude.append("auto %s = std::make_shared<std::remove_cvref_t<decltype(ctx)>::"
+                   "AttemptReuseSlot>();" % slot)
+    flag = "attempt_reused%d" % solve.id
+    lines.append("const bool %s = ctx.attempt_slot_reused(*%s);" % (flag, slot))
+    return flag
+
+
+# The consumers of a request's solve: its outcome and the observations of the solution, which read
+# the buffer and never write it.
+_SOLVE_READERS = frozenset(("solve_outcome",))
+
+
 def _append_solve_report_guard(
         program: Any, solve: Any, outcome: str, lines: list[str], *, label: str,
         phase: str | None = None) -> None:
@@ -1457,13 +1514,19 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                      (v.id, fallback_owner, op_ncomp, input_ghosts)
                      if fallback_owner is not None
                      else "(*%s)" % sol_sp)
+    # T7 across the attempts of one step (N8 lot 6): a field request whose dependency set
+    # excludes the proposal (a fixed trial site, T38) computes the same solution at every attempt
+    # of the step, so a retry keeps the solution of the attempt that completed it.
+    reused = _attempt_reuse(program, v, prelude, lines, sol_sp, target=target,
+                            prepared=uses_prepared_krylov and hierarchy_provider is None)
+    keep = "if (!%s) " % reused if reused else ""
     # Initial guess: zero (default) or a copy of the guess field.
     if uses_prepared_krylov:
         if guess_in is None:
-            lines.append("pops::PureFieldAlgebra::zero_valid(*%s);" % sol_sp)
+            lines.append("%spops::PureFieldAlgebra::zero_valid(*%s);" % (keep, sol_sp))
         else:
-            lines.append("pops::PureFieldAlgebra::copy(*%s, %s);"
-                         % (sol_sp, var[guess_in.id]))
+            lines.append("%spops::PureFieldAlgebra::copy(*%s, %s);"
+                         % (keep, sol_sp, var[guess_in.id]))
     tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["tol"])
     max_iter = int(v.attrs["max_iter"])
     rhs_tok = var[rhs_in.id]
@@ -1511,6 +1574,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                 lines.extend(hierarchy_emission.solve)
         else:
             lines.extend(hierarchy_emission.solve)
+        if _solve_evidence_requested(program, v):
+            raise ValueError("solve evidence (SV5) of a direct hierarchy solve is not elaborated; "
+                             "the prepared Krylov route has it")
         _append_solve_report_guard(
             program, v, kr, lines, label="solve_linear", phase="solve")
         return
@@ -1693,6 +1759,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         )
     for capture in dt_captures:
         lines.append("*%s = static_cast<pops::Real>(dt);" % capture)
+    solve_start = len(lines)
     lines.append(
         "*%s = ctx.operator_evaluation_snapshot("
         "{%s}, *%s, {%s});"
@@ -1706,8 +1773,26 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     _append_original_residual_gate(
         program, v, kr, problem_name, workspace_name, controls_name, rhs_tok, op_ncomp,
         input_ghosts, tol, abs_tol, prelude, lines)
+    if _solve_evidence_requested(program, v):
+        if reused:
+            from pops.time._program.traced_method import NotYetElaborated
+
+            raise NotYetElaborated(
+                "outcome.evidence (SV5) of %s, a solve that a retry keeps across the attempts of "
+                "its step (N8 lot 6), has no elaborated form yet; the later N9 lot "
+                "« Évidence des solves » elaborates it, with correction_norm, by storing the kept "
+                "attempt's report in its slot" % v.name)
+        # SV5: the evidence is the report the gates left, copied before its consumption; a report
+        # that is not solved fails at the guard below, so a read after it is a solved one.
+        lines.append("const pops::SolveReport %s_evidence = %s.report();" % (kr, kr))
     _append_solve_report_guard(
         program, v, kr, lines, label="solve_linear", phase="solve")
+    if reused:
+        if fallback_owner is not None:
+            raise ValueError("a reused attempt solve has no owner-issued delivery")
+        lines[solve_start:] = (["if (!%s) {" % reused]
+                               + ["  " + line for line in lines[solve_start:]]
+                               + ["  ctx.complete_attempt_slot(*attempt_slot%d);" % v.id, "}"])
     if fallback_owner is not None:
         # A successful Krylov solve owns a private allocation. Deliver its complete
         # value to storage issued from the declared block before downstream History
@@ -1719,7 +1804,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         lines.append("  pops::PureFieldAlgebra::copy_allocated(delivered, *%s);" % sol_sp)
         lines.append("  Kokkos::fence();")
         lines.append("}); // exact owner-issued Krylov solution delivery")
-    publish_field_solve(v, var, lines, target=target)
+    publish_field_solve(v, var, lines, target=target, reused=reused)
     if v.vtype == "state" and v.attrs.get("scope") != "hierarchy":
         # Krylov coordinates carry the operator's exact stencil halo, which may be
         # zero for a pointwise operator. A physical State keeps its own storage

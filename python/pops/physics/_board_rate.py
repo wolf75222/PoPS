@@ -40,6 +40,13 @@ def _fold_coefficient(coefficient: Any, values: Any) -> tuple[Any, ...]:
     return tuple(folded)
 
 
+def _is_written_zero_rate(rhs: Any) -> bool:
+    """Whether a right-hand side is the empty sum of rate terms, the zero rate of b6."""
+    from pops._ir.expr import RateExpr
+
+    return isinstance(rhs, RateExpr) and not rhs.terms
+
+
 class _RateAuthoringMixin(_BoardModel):
     """Retain physical equations and derive checked finite-volume adapters."""
 
@@ -85,9 +92,11 @@ class _RateAuthoringMixin(_BoardModel):
         from pops.provenance import source_span
         site = source_span()
         terms = self._destructure_rate(equation.rhs, target=state)
-        if not terms:
-            raise ValueError("balance %r holds no term; a balance holds at least one term, and "
-                             "ddt(U) == 0 declares nothing to integrate" % (name,))
+        if not terms and not _is_written_zero_rate(equation.rhs):
+            # R7 refuses no empty balance: the empty sum RateExpr(()) is the zero rate of b6 and
+            # reaches the prepared IR as the zero identity. A bare literal stays refused, as in b6.
+            raise ValueError("balance %r holds no term: ddt(U) == 0 declares nothing to integrate; "
+                             "the zero rate is the empty sum RateExpr(())" % (name,))
         if not any(kind == "inline" for kind, _, _ in terms):
             return self._register_rate(reg, state, terms, (site,) * len(terms), None,
                                        equation.lhs.accumulation)

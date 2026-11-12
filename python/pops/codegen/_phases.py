@@ -508,7 +508,7 @@ def compile(plan: Any) -> Any:
 
     models = compile_install_models(plan, plan.compile_options)
     from pops.codegen._compile_drivers import (
-        _compile_resolved_problem, _program_compile_options, compile_problem)
+        _compile_layout_slice, _compile_resolved_problem, _program_compile_options)
     from pops.codegen._compiled_artifact import CompiledLayoutProgram
 
     program = None
@@ -524,12 +524,19 @@ def compile(plan: Any) -> Any:
         from pops.codegen.program_slicing import slice_program
         from pops.mesh._amr import ResolvedRefinementCriterion
 
-        if any(type(row.authorities.bootstrap.tagging) is ResolvedRefinementCriterion
-               for row in plan.layout_amr_authorities.values()):
-            raise NotImplementedError(
-                "a criterion written as functions of cell is generated into the Program of one "
-                "adaptive layout; a plan with several layouts compiles one Program slice per "
-                "layout, which does not carry it yet")
+        # A criterion written as functions of cell is generated into the Program slice of the
+        # adaptive layout that owns it; each layout's AmrSystem installs the entry of its slice.
+        layout_criteria = {}
+        for layout_id, row in plan.layout_amr_authorities.items():
+            criterion = row.authorities.bootstrap.tagging
+            if type(criterion) is not ResolvedRefinementCriterion:
+                continue
+            if criterion.decision is not None:
+                raise NotImplementedError(
+                    "Regrid(criterion, when) is generated into the Program of one adaptive "
+                    "layout; a plan with several layouts writes tagging= and regrid= on each "
+                    "adaptive layout")
+            layout_criteria[layout_id] = criterion
         from pops.codegen.program_models import ProgramModelGraph
         from pops.codegen.program_balance_due import validate_balance_due_contract
         from pops._balance_due_contract import BalanceDueContract
@@ -556,7 +563,7 @@ def compile(plan: Any) -> Any:
                 slice_options["so_path"] = str(
                     path.with_name("%s.%s%s" % (
                         path.stem, row.handle.local_id, path.suffix or ".so")))
-            compiled_program = compile_problem(
+            compiled_program = _compile_layout_slice(
                 time=sliced,
                 model_graph=ProgramModelGraph.from_resolved_blocks(selected),
                 backend=plan.backend,
@@ -565,6 +572,7 @@ def compile(plan: Any) -> Any:
                 field_plans={},
                 balance_due_contract=balance_due_contract,
                 native_dimension=plan.resolved_dimension,
+                refinement_criterion=layout_criteria.get(layout_id),
                 **slice_options,
             )
             compiled_program._discard_authoring()

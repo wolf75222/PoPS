@@ -420,6 +420,28 @@ def compile_problem(
     )
 
 
+def _compile_layout_slice(
+    *,
+    native_dimension: Any,
+    refinement_criterion: Any = None,
+    **kwargs: Any,
+) -> Any:
+    """Compile the Program slice of one layout of a resolved multi-layout plan.
+
+    ``refinement_criterion`` is the criterion of that layout when it is written as regions of
+    ``cell``; it is generated into the slice, whose AmrSystem installs its entry.
+    """
+    from pops._native_selector import select_native_dimension
+
+    select_native_dimension(native_dimension)
+    return _compile_problem_impl(
+        native_dimension=native_dimension,
+        shared_interface_codegen_evidence=None,
+        refinement_criterion=refinement_criterion,
+        **kwargs,
+    )
+
+
 def _program_compile_options(plan: Any) -> dict[str, Any]:
     """Project authenticated options to the Program compiler's authority.
 

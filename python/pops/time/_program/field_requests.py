@@ -18,7 +18,8 @@ value of it have identical dependency sets: the second returns the first request
 (T7, exact reuse). The stage value enters the key because b6 ties an observation to the stage
 value that its solve read (the field context of a publication, the stage of a stencil field): the
 same state read at another time of the attempt is a copy at another stage, and a request there is
-solved again. Its reuse goes with the linear recombination of T7, in the candidate-guard lot.
+solved again. Its reuse goes with the linear recombination of T7, in the lot « N8 reuse across
+stages ». Across the attempts of one step, the solve of a fixed site is kept (N8 lot 6, T38 below).
 
 The reads of a request are b6's: ``request[unknown]`` and ``request.publish``, and every other
 observation of b6's ``FieldSolution`` (a derivative of an unknown, for instance), which the request

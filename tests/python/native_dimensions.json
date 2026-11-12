@@ -87,6 +87,7 @@
     "tests/python/integration/runtime/test_array_derivatives_v14_native.py": 2,
     "tests/python/integration/runtime/test_bundle_remap_v14_native.py": 2,
     "tests/python/integration/runtime/test_bundle_repartition_v14_native.py": 2,
+    "tests/python/integration/runtime/test_candidate_guards_n8_dim1_native.py": 1,
     "tests/python/integration/runtime/test_coarsening_moments_v14_native.py": 2,
     "tests/python/integration/runtime/test_collective_control_preparation_v10.py": 2,
     "tests/python/integration/runtime/test_computed_scratch_ssa_native.py": 2,

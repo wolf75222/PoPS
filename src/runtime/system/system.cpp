@@ -93,6 +93,27 @@ void System<Dim>::require_solve_outcome_creation_(long solve_kind) const {
 }
 
 template <int Dim>
+std::uint64_t System<Dim>::begin_attempt_epoch_() {
+  // One invocation of the Program per attempt is what lets a retry find the slot of its first
+  // attempt. A cadence with sub-steps or a stride invokes the Program several times in one
+  // step(), so the first invocation of a retry would read the slot of the last sub-step of the
+  // rejected attempt, a solution of another state (review A1): every invocation then opens its
+  // own epoch and no solve is reused.
+  const bool single_invocation = p_->program_.substeps_ == 1 && p_->program_.stride_ == 1;
+  if (!p_->attempt_retry_mark_ || !single_invocation)
+    ++p_->attempt_epoch_;
+  p_->attempt_retry_mark_ = false;
+  return p_->attempt_epoch_;
+}
+
+template <int Dim>
+void System<Dim>::count_prepared_solve_(int iterations, double residual_norm) noexcept {
+  ++p_->prepared_solves_;
+  p_->last_prepared_solve_iterations_ = iterations;
+  p_->last_prepared_solve_residual_ = residual_norm;
+}
+
+template <int Dim>
 void System<Dim>::step(double dt) {
   p_->program_.require_step_installed("System::step");
   const auto communicator = prepared_boundary_execution_lane_
@@ -238,9 +259,15 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
       segment.proposal != proposal)
     segment = {proposal, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
   runtime::program::AdvanceRunReport report;
+  const std::int64_t solves = p_->prepared_solves_;
   const auto finish = [&](AdvanceRunStop stop) {
     report.stop = stop;
     report.segment = segment;
+    report.prepared_solves = p_->prepared_solves_ - solves;
+    if (report.prepared_solves > 0) {
+      report.last_prepared_solve_iterations = p_->last_prepared_solve_iterations_;
+      report.last_prepared_solve_residual = p_->last_prepared_solve_residual_;
+    }
     return report;
   };
   // An Output is evaluated after publication, outside every step (CC14, PF1): its scalars by the
@@ -270,7 +297,19 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     const double frontier = runtime::program::advance_next_frontier(p_->t, until, outputs, cursors);
     const auto duration = runtime::program::advance_attempt_duration(p_->t, proposal, frontier,
                                                                      segment.origin, segment.steps);
+    // The epoch before the first attempt of this step: a retry keeps the epoch of the step only
+    // when an earlier attempt opened it, so an attempt rejected before its begin_step never
+    // lends a later one the epoch of the previous accepted step (review of the code, O1).
+    const std::uint64_t epoch_before_step = p_->attempt_epoch_;
     for (std::int64_t attempt = 1;; ++attempt) {
+      // A retry computes the same accepted step: its solves whose dependency set excludes the
+      // proposal keep their solution (T7 across attempts). The mark is taken by the first
+      // begin_step of the attempt and cleared whatever step() does.
+      struct RetryMark {
+        bool& mark;
+        ~RetryMark() { mark = false; }
+      } retry{p_->attempt_retry_mark_};
+      retry.mark = attempt > 1 && p_->attempt_epoch_ != epoch_before_step;
       try {
         step(duration.dt);
         break;
@@ -1464,6 +1503,8 @@ template System<kNativeDimension>::System(System&&) noexcept;
 template System<kNativeDimension>& System<kNativeDimension>::operator=(System&&) noexcept;
 template SolveOutcome System<kNativeDimension>::track_solve_outcome(SolveOutcome) const noexcept;
 template void System<kNativeDimension>::require_solve_outcome_creation_(long) const;
+template std::uint64_t System<kNativeDimension>::begin_attempt_epoch_();
+template void System<kNativeDimension>::count_prepared_solve_(int, double) noexcept;
 template void System<kNativeDimension>::step(double);
 template void System<kNativeDimension>::advance(double, int);
 template runtime::program::AdvanceRunReport System<kNativeDimension>::run_advance(

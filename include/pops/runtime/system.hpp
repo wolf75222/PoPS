@@ -1622,6 +1622,14 @@ class System {
   friend class runtime::program::ProgramContext<Dim>;
   friend class PreparedSystemLayoutTransfer<Dim>;
   POPS_EXPORT void require_solve_outcome_creation_(long solve_kind) const;
+  /// The epoch of the accepted step that the attempt now starting computes (spec 0.3 T7 across
+  /// attempts, N8 lot 6): the epoch of the previous attempt when run_advance retries the same
+  /// step, a new one otherwise. A generated solve whose dependency set excludes the proposal
+  /// keeps its solution for the later attempts of its epoch.
+  POPS_EXPORT std::uint64_t begin_attempt_epoch_();
+  /// Count one prepared linear solve that ran, with the iteration count and the final residual
+  /// norm of its report (the solve count and the last solve of AdvanceRunReport).
+  POPS_EXPORT void count_prepared_solve_(int iterations, double residual_norm) noexcept;
   /// Internal result boundary shared by field, local-source and Program prepared-linear solves.
   [[nodiscard]] POPS_EXPORT SolveOutcome track_solve_outcome(SolveOutcome outcome) const noexcept;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains

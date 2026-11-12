@@ -1680,6 +1680,10 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                            field_plans, target, emit_residual)
     elif v.op == "solve_linear":
         _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
+    elif v.op == "solve_evidence":
+        # SV5: a read of the evidence of a consumed solve, a copy of its report (program_emit_solve).
+        from .program_emit_solve import solve_evidence_cpp
+        var[v.id] = solve_evidence_cpp(v)
     elif v.op in ("solve_outcome", "solve_outcome_component"):
         # Python graph/authoring requires an explicit consumed outcome before a solve result can feed
         # effects. The solve-producing operation has already constructed and guarded its native
@@ -1853,6 +1857,15 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 raise ValueError("Advance assessment lost its rejection contract")
             phase = "assessment"
             message = "Advance assessment %r rejected the candidate" % v.attrs["guard"]
+        if "trial_site" in v.attrs:
+            # An admissibility predicate of a traced method (IR4, T38): a retryable site rejects
+            # the attempt ("trial"), a fixed site fails the step ("trial_failure"); the message
+            # starts with the stable site name of its AdvanceControl row.
+            site = v.attrs["trial_site"]
+            if "assessment" in v.attrs or type(action) is not RejectAttempt:
+                raise ValueError("a trial guard of a traced method rejects the attempt")
+            phase = "trial" if site["retry_can_change"] else "trial_failure"
+            message = "%s failed: %s" % (site["site"], site["variant"])
         from pops.codegen.program_emit_structured_control import _uniform_int
         _uniform_int(var[condition.id], lines, "acceptance guard differs across execution lane")
         lines.append("if (!(%s)) {" % var[condition.id])

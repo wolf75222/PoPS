@@ -126,7 +126,7 @@ class Elaboration:
 
 
 # The lot that classifies the field_evaluation guards of a request (T39 PartialOperation, IR4).
-_GUARD_LOT = "N8 candidate guards (M15 to M21)"
+_GUARD_LOT = "N8 field_evaluation guards"
 
 
 def _type_identity(program: Any, kind: Any, node: Any) -> dict:
@@ -160,8 +160,9 @@ def _lower_memory(program: Any, method: Any, trace: MethodTrace) -> tuple:
 
 
 def _trial_failures(program: Any, trace: MethodTrace) -> tuple:
-    """The failure sites of the field requests of the trace (T38): the solve, classified, and the
-    field_evaluation guards of its load, coefficients and reads, listed unclassified."""
+    """The failure sites of the trace (T38): for each field request its solve, classified, and the
+    field_evaluation guards of its load, coefficients and reads, listed unclassified; then each
+    admissibility guard of the body (IR4), classified."""
     rows = []
     for request in trace.requests:
         retry = not request.fixed
@@ -175,6 +176,9 @@ def _trial_failures(program: Any, trace: MethodTrace) -> tuple:
             rows.append({"site": "%s/read:%s" % (request.site, unknown.name),
                          "guard": "field_evaluation", "variant": None, "retry_can_change": retry,
                          "classified": False, "lot": _GUARD_LOT})
+    for guard in trace.guards:
+        rows.append({"site": guard.site, "guard": "admissibility", "variant": "NotAdmissible",
+                     "retry_can_change": not guard.fixed, "classified": True, "lot": None})
     return tuple(rows)
 
 

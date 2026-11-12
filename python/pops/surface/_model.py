@@ -17,6 +17,7 @@ F^d of the canonical form of R7 (2.6.6).
 """
 from __future__ import annotations
 
+import math as _math
 from fractions import Fraction
 from typing import Any
 
@@ -334,6 +335,66 @@ def _level_check(value: Any, where: str) -> None:
                                   "or pops.Program")
 
 
+_BOUNDARY = "a later lot of N15 with the boundary relations of G04"
+
+
+class NoDataRelation:
+    """The relation of ``model.on`` whose piece carries no data, the empty relation on the trace
+    of an evolved quantity (R20, SD43); its form is ``NoData``. ``word`` is the word of
+    ``pops.math`` that wrote it, for its spelling."""
+
+    __slots__ = ("quantity", "word")
+
+    def __init__(self, quantity: Any, word: str) -> None:
+        if not isinstance(quantity, Quantity):
+            raise TypeError("%s(u) takes an evolved quantity of the model, got %r"
+                            % (word, quantity))
+        self.quantity = quantity
+        self.word = word
+
+    def __repr__(self) -> str:
+        return "%s(%s)" % (self.word, self.quantity)
+
+    def __bool__(self) -> bool:
+        raise TypeError("%r is a relation, which has no truth value (SU4)" % self)
+
+
+class BoundaryRelation:
+    """The handle that ``model.on(pieces, relation)`` returns (2.6.2, R10, R18, R20).
+
+    ``form`` is the word of ``pops.discrete.forms`` that the relation has, derived by the first
+    rule of 2.6.2 that holds: ``Value`` for ``q == g`` with g free of the unknowns of the block,
+    ``NoData`` for ``outflow(q)``; ``data`` is g for a value."""
+
+    kind = "BoundaryRelation"
+
+    __slots__ = ("model", "pieces", "quantity", "relation", "form", "data", "name", "site")
+
+    def __init__(self, model: Model, pieces: tuple, quantity: Quantity, relation: Any,
+                 form: str, data: Any, name: str | None, site: Site | None) -> None:
+        self.model = model
+        self.pieces = pieces
+        self.quantity = quantity
+        self.relation = relation
+        self.form = form
+        self.data = data
+        self.name = name
+        self.site = site
+
+    def relation_text(self) -> str:
+        return repr(self.relation) if isinstance(self.relation, NoDataRelation) else text(self.relation)
+
+    def __repr__(self) -> str:
+        pieces = self.pieces[0].name if len(self.pieces) == 1 else \
+            "[%s]" % ", ".join(piece.name for piece in self.pieces)
+        return "model.on(%s, %s)" % (pieces, self.relation_text())
+
+    def __bool__(self) -> bool:
+        return True
+
+    __hash__ = object.__hash__
+
+
 class Model:
     """``pops.Model("name")``: a model, its frame that of the supports of its quantities."""
 
@@ -352,6 +413,7 @@ class Model:
         self.data_fields: list = []
         self.terms: list = []
         self.balances: list = []
+        self.boundary_relations: list = []
         self._declared: dict = {}
 
     def __repr__(self) -> str:
@@ -587,9 +649,86 @@ class Model:
     def relation(self) -> Any:
         return self._later("model.relation, an implicit relation (R16)")
 
-    @property
-    def on(self) -> Any:
-        return self._later("model.on, a boundary relation (R10, R18, R20)")
+    def on(self, pieces: Any = None, relation: Any = None, *, closes: Any = None,
+           name: Any = None) -> BoundaryRelation:
+        """``model.on(pieces, relation)``: a boundary relation on one piece or a list of pieces
+        of the support of its quantity (2.6.2, SU14). This lot elaborates ``q == g`` with g free
+        of the quantities (form ``Value``) and ``outflow(q)`` (form ``NoData``)."""
+        from ._geometry import Piece
+
+        site = user_site(2)
+        if closes is not None:
+            raise NotYetElaborated("model.on(..., closes=B), a relation that reads two blocks",
+                                   "a later lot of N15 with the record states of N8")
+        if isinstance(pieces, tuple):
+            raise TypeError("model.on(pieces, relation) takes one piece or a list of pieces, "
+                            "model.on([sides.x_min, sides.y_min], u == g); a tuple is a point, a "
+                            "size or an interval (SU14)")
+        listed = pieces if isinstance(pieces, list) else [pieces]
+        if not listed or not all(isinstance(piece, Piece) for piece in listed):
+            raise TypeError("model.on(pieces, relation) takes a boundary piece Ω.boundary.x_min, "
+                            "or a list of them, got %r" % (pieces,))
+        names = [piece.name for piece in listed]
+        if len(set(names)) != len(names):
+            raise ValueError("model.on(%s, ...) names a piece twice" % ", ".join(names))
+        if isinstance(relation, NoDataRelation):
+            quantity, form, data = relation.quantity, "NoData", None
+        elif isinstance(relation, Relation):
+            quantity, data = self._value_relation(relation, site)
+            form = "Value"
+        else:
+            raise TypeError("model.on(pieces, relation) takes a relation, u == g or outflow(u), "
+                            "got %r" % (relation,))
+        if quantity.model is not self:
+            raise ValueError("model.on(..., %r): the quantity belongs to another model"
+                             % (relation,))
+        for piece in listed:
+            if piece.support is not quantity.support:
+                raise ValueError("model.on(%s, ...): the piece is not a piece of the support of %s"
+                                 % (piece.name, quantity))
+            for other in self.boundary_relations:
+                if other.quantity is quantity and any(known.name == piece.name
+                                                      for known in other.pieces):
+                    raise AmbiguousElaboration(
+                        "the piece %s already has the relation %r for %s; a second relation of "
+                        "the same field on a piece overdetermines it (D9)"
+                        % (piece.name, other, quantity),
+                        write="one relation per field and piece", site=site)
+        handle = BoundaryRelation(self, tuple(listed), quantity, relation, form, data,
+                                  None if name is None else self._declare(name, "model.on"),
+                                  site)
+        self.boundary_relations.append(handle)
+        return handle
+
+    def _value_relation(self, relation: Relation, site: Any) -> tuple:
+        """``q == g``: the quantity and its data, refusing the other forms of 2.6.2."""
+        sides = relation.sides()
+        bare = [side for side in sides if isinstance(side, Quantity)]
+        if len(bare) == 1:
+            quantity = bare[0]
+            data = sides[1] if sides[0] is quantity else sides[0]
+            readers = [node for node in walk(data) if isinstance(node, (Quantity, Term))]
+            if not readers:
+                for node in walk(data):
+                    if isinstance(node, Datum):
+                        raise NotYetElaborated(
+                            "model.on(..., %s == %s), boundary data read from the datum %s"
+                            % (quantity, text(data), node), _BOUNDARY)
+                    if not isinstance(node, (Arith, ModelConstant, Parameter, MathConstant)) \
+                            and not is_number(node):
+                        raise NotYetElaborated(
+                            "model.on(..., %s == %s), boundary data that read %s"
+                            % (quantity, text(data), text(node)), _BOUNDARY)
+                    number = node.value if isinstance(node, (ModelConstant, MathConstant)) \
+                        else node if is_number(node) else None
+                    if number is not None and not _math.isfinite(float(number)):
+                        raise ValueError("model.on(..., %s == %s): the boundary data reads %s, "
+                                         "which is not finite" % (quantity, text(data),
+                                                                  text(node)))
+                return quantity, data
+        raise NotYetElaborated(
+            "model.on(..., %s), a relation of form NormalFlux, Characteristic, NormalComponent "
+            "or General (2.6.2)" % text(relation), _BOUNDARY)
 
     @property
     def wave_speeds(self) -> Any:

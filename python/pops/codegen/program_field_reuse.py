@@ -1,7 +1,11 @@
 """Exact same-invocation reuse for pure physical field tuple solves.
 
 The cache is an emission-local alias proof. Runtime solved buffers never survive as
-reuse inputs across a new step, rejected attempt, restart, or layout generation.
+reuse inputs across a new step, restart, or layout generation. One exception crosses a
+rejected attempt (spec 0.3 T7, N8 lot 6): the solve of a fixed trial site of a traced
+method, whose dependency set excludes the proposal, keeps its solution for the later
+attempts of the same accepted step (``program_emit_solve._attempt_reuse``); such an
+attempt counts a reuse, not a solve.
 """
 from __future__ import annotations
 
@@ -129,11 +133,17 @@ def reuse_field_solve(value: Any, var: Any, lines: Any, *, target: str) -> bool:
     return True
 
 
-def publish_field_solve(value: Any, var: Any, lines: Any, *, target: str) -> None:
+def publish_field_solve(value: Any, var: Any, lines: Any, *, target: str,
+                        reused: str | None = None) -> None:
+    """Count the solve of ``value`` and publish its alias. ``reused`` is the flag of a solve that
+    a retry of its step keeps (T7 across attempts): that attempt counts a reuse."""
     key = _key(value, var, target=target)
     if key is None:
         return
     field, solves, reuses = _counters(value, var, lines)
-    lines.append("++%s;" % solves)
+    if reused:
+        lines.append("if (%s) ++%s; else ++%s;" % (reused, reuses, solves))
+    else:
+        lines.append("++%s;" % solves)
     _record(field, solves, reuses, lines)
     var.setdefault(("field_reuse_cache",), {})[key] = var[value.id]

@@ -40,6 +40,13 @@ WEIGHTS = (
 NAMES = ("reservoir_z", "zeta_laminated_material", "reservoir_a")
 
 
+
+def _component_above(subject, component, threshold):
+    """The refine region of one adaptive layout, written as a function of cell (DM13b)."""
+    from pops.math import ValueExpr
+
+    return lambda cell: cell.value(ValueExpr(subject)[component]) > threshold
+
 def build(directory, *, reverse=False, provider_factory=None):
     if provider_factory is None:
         provider_factory = fault_provider
@@ -216,7 +223,6 @@ def build(directory, *, reverse=False, provider_factory=None):
     from pops.time import every
     from pops.layouts import AMR
     from pops.lib.amr import StateTransfer, ConservativeInjection, CoarseFineInjection
-    from pops.math import ValueExpr
 
     adapted = []
     for index, grid in enumerate(grids):
@@ -229,11 +235,11 @@ def build(directory, *, reverse=False, provider_factory=None):
                     prolongation=ConservativeInjection(), coarse_fine=CoarseFineInjection()
                 ),
             )
-        condition = (
-            ValueExpr(source_state)["heat_load"] > validated.value(threshold)
-            if index == 0
-            else ValueExpr(destinations[0][1])["marker"] > validated.value(threshold)
-        )
+        # Each adaptive layout's refine region is a function of cell (DM13b), generated into
+        # that layout's Program slice.
+        subject, component = (
+            (source_state, "heat_load") if index == 0 else (destinations[0][1], "marker"))
+        condition = _component_above(subject, component, validated.value(threshold))
         adapted.append(
             AMR(
                 grid=grid.mesh,

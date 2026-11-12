@@ -257,6 +257,9 @@ class _Trace:
         self.request_ids: set = set()  # every node that a field request of the trace emitted
         self.request_reads: dict = {}  # node id -> (FieldRequest, unknown) of each read
         self.body_requests = 0
+        self.guards: list = []        # the admissibility guards of the body (guards.py, IR4)
+        self.body_guards = 0
+        self.predicates: list = []    # the predicate reads domain(U) of the body, consumed by cond
 
     def require_active(self, what: str) -> None:
         if not self.active:
@@ -540,21 +543,37 @@ class TracedField(_Traced):
     ``_value`` and ``_c`` are the stage value that materializes the field and the time of its
     stage, set by the first rate evaluation that reads the field; ``B.state`` is born
     materialized at ``B.time``. ``_inexact`` records that a binary64 literal entered the weights.
+    ``_guards`` are the admissibility guards (``guards.py``) that wait for the field to be
+    materialized: each gates the materialized value, in order.
     """
 
-    __slots__ = ("_expr", "_expansion", "_value", "_c", "_inexact")
+    __slots__ = ("_expr", "_expansion", "_value", "_c", "_inexact", "_guards")
 
     def __init__(self, trace: _Trace, expr: Any, expansion: tuple,
-                 value: Any = None, c: Any = None, inexact: bool = False) -> None:
+                 value: Any = None, c: Any = None, inexact: bool = False,
+                 guards: tuple = ()) -> None:
         self._trace = trace
         self._expr = expr
         self._expansion = expansion
         self._value = value
         self._c = c
         self._inexact = inexact
+        self._guards = guards
 
     def _builder(self) -> Any:
+        if self._guards and self._value is None:
+            raise NotYetElaborated(
+                "a combination of a guarded field that is not materialized: this lot elaborates "
+                "a guarded combination that is guarded again or returned as the candidate; "
+                "reading it otherwise comes with a later lot of N8 (choices between computations "
+                "in a body, IR4)")
         return self._expr if self._value is None else self._value
+
+    def _materialize(self, value: Any) -> Any:
+        """The value of this field at its stage, ``value``, gated by its waiting guards."""
+        for guard in self._guards:
+            value = guard.apply(value)
+        return value
 
     def _field(self, other: Any, where: str) -> TracedField:
         self._same_trace(other, where)
@@ -727,8 +746,26 @@ class _ProposalView:
                                "lot of N8")
 
 
+class _PredicateCall:
+    """``domain(U)``: a component read as an admissibility predicate of the traced field ``U``,
+    which ``cond`` (``guards.py``) evaluates where ``U`` is materialized (IR4)."""
+
+    __slots__ = ("component", "state", "consumed")
+
+    def __init__(self, component: Any, state: TracedField) -> None:
+        self.component = component
+        self.state = state
+        self.consumed = False
+        state._trace.predicates.append(self)
+
+    def __bool__(self) -> bool:
+        raise TypeError("a predicate of a method body has no truth value while it is traced; "
+                        "cond(domain(U), then=..., otherwise=...) chooses between its arms (IR4)")
+
+
 class _Component:
-    """A component inside a method body: ``flow(U, t)`` evaluates its rate at a new stage (T4)."""
+    """A component inside a method body: ``flow(U, t)`` evaluates its rate at a new stage (T4);
+    ``domain(U)``, without a time, reads it as the predicate of a guard (IR4, ``guards.py``)."""
 
     __slots__ = ("_trace", "_name", "_evaluate")
 
@@ -737,13 +774,23 @@ class _Component:
         self._name = name
         self._evaluate = evaluate
 
-    def __call__(self, state: Any = None, time: Any = None, **options: Any) -> TracedField:
+    def __call__(self, state: Any = None, time: Any = None, **options: Any) -> "TracedField | _PredicateCall":
         trace = self._trace
         trace.require_active("the component %r" % self._name)
         if options:
             raise NotYetElaborated(
                 "%s(..., %s): term selection and field requests (T5, T6) are elaborated by a "
                 "later lot of N8" % (self._name, ", ".join(sorted(options))))
+        if time is None and isinstance(state, TracedField):
+            if state._trace is not trace:
+                raise ClosedBodyViolation(
+                    "%s(U) reads a value of another method trace (T33)" % self._name)
+            if trace.evaluation is not None:
+                raise NotYetElaborated(
+                    "%s(U) inside the component %r: a guard is written in the method body; "
+                    "guards inside a component come with the Assess bodies of a later lot of N8"
+                    % (self._name, trace.evaluation.component))
+            return _PredicateCall(self, state)
         if not isinstance(state, TracedField) or not isinstance(time, TracedTime):
             _refuse_foreign(state, "%s(U, t)" % self._name)
             _refuse_foreign(time, "%s(U, t)" % self._name)
@@ -784,6 +831,12 @@ class _Component:
         program = self._trace.program
         name = "%s_state%d" % (self._trace.name, ordinal)
         if state._value is None:
+            if state._guards:
+                raise NotYetElaborated(
+                    "%s(U, t) reads a guarded combination: this lot materializes a guarded "
+                    "combination only as the candidate, at B.time + p.dt; a guard read by a rate "
+                    "at a stage comes with a later lot of N8 (choices between computations in a "
+                    "body, IR4)" % self._name)
             value = program.value(name, state._expr, at=point)
             _require_state(value, "%s(U, t) reads a state" % self._name)
             state._value, state._c = value, c
@@ -947,13 +1000,14 @@ class MethodTrace:
     """
 
     __slots__ = ("name", "components", "stages", "evaluations", "increment", "candidate",
-                 "tolerated", "memory", "requests")
+                 "tolerated", "memory", "requests", "guards")
 
     def __init__(self, name: str, components: tuple, stages: tuple, evaluations: tuple,
                  increment: tuple, candidate: Any, tolerated: tuple = (), memory: tuple = (),
-                 requests: tuple = ()) -> None:
+                 requests: tuple = (), guards: tuple = ()) -> None:
         self.memory = memory        # ((name, declared type, value), ...) of the Candidate
         self.requests = requests    # the FieldRequests of the attempt, in order (T6)
+        self.guards = guards        # the admissibility guards of the body, in order (IR4)
         self.name = name
         self.components = components
         self.stages = stages
@@ -1000,6 +1054,7 @@ class SpecializedMethod:
                  for name, evaluate in zip(self.method.component_names, self.components,
                                            strict=True)]
         before = _guarded_tables(program)
+        guards = program._acceptance_guards
         _TRACES.append(trace)
         try:
             candidate = self.method.body(_Continuation(trace, state), _ProposalView(trace), *views)
@@ -1008,6 +1063,14 @@ class SpecializedMethod:
         finally:
             trace.active = False
             _TRACES.remove(trace)
+        # The guards of the body (IR4) are the only acceptance guards that it may add.
+        added = program._acceptance_guards[len(guards):]
+        if program._acceptance_guards[:len(guards)] == guards and [
+                guard.name for guard in added] == [
+                guard.site for guard in trace.guards if guard.applied]:
+            before = tuple((name, _snapshot(program._acceptance_guards))
+                           if name == "_acceptance_guards" else (name, table)
+                           for name, table in before)
         changed = _changed_tables(before, _guarded_tables(program))
         if changed:
             raise ClosedBodyViolation(
@@ -1025,12 +1088,31 @@ class SpecializedMethod:
                 % (self.name, Fraction(_fraction(candidate.time.c))))
         increment = _state_weights(trace, candidate.state, "the candidate of %r" % self.name,
                                    candidate=True)
-        value = program.value("%s_candidate" % self.name, candidate.state._builder(),
+        final = candidate.state
+        pending = final._guards and final._value is None
+        value = program.value("%s_candidate" % self.name,
+                              final._expr if pending else final._builder(),
                               at=temporal.next.point)
         _require_state(value, "Candidate(state=...) is a state")
+        if pending:
+            # A guarded candidate (IR4): its guards gate the candidate before the assessments.
+            value = final._materialize(value)
+        unapplied = [guard.site for guard in trace.guards if not guard.applied]
+        if unapplied:
+            raise NotYetElaborated(
+                "the guard %s of %r gates a combination that is not the candidate: this lot "
+                "elaborates the guard of B.state and of the candidate; others come with a later "
+                "lot of N8 (choices between computations in a body, IR4)"
+                % (", ".join(unapplied), self.name))
+        dangling = [call.component._name for call in trace.predicates if not call.consumed]
+        if dangling:
+            raise TypeError(
+                "%s(U) in %r is a predicate that no cond(...) consumes: a predicate guards "
+                "nothing outside cond(p, then=..., otherwise=fail(NotAdmissible)) (IR4)"
+                % (", ".join(dangling), self.name))
         return MethodTrace(self.name, tuple(self.method.component_names), tuple(trace.stages),
                            tuple(trace.evaluations), increment, value, tuple(trace.tolerated),
-                           memory, tuple(trace.requests.values()))
+                           memory, tuple(trace.requests.values()), tuple(trace.guards))
 
 
 class Method:

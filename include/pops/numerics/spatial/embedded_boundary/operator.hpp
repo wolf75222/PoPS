@@ -121,7 +121,7 @@ class PreparedEmbeddedBoundaryMetric {
   static constexpr PreparedMetricCapabilities capabilities() { return BaseMetric::capabilities(); }
 
   POPS_HD Identity identity() const { return base_.identity(); }
-  POPS_HD ReferenceCell<Dim> reference_cell(const Index<Dim>& index) const {
+  POPS_HD_FORCEINLINE ReferenceCell<Dim> reference_cell(const Index<Dim>& index) const {
     return base_.reference_cell(index);
   }
   POPS_HD PhysicalPoint cell_center(const Index<Dim>& index) const {
@@ -135,7 +135,7 @@ class PreparedEmbeddedBoundaryMetric {
     return base_.jacobian(index);
   }
   template <int Axis, MetricFaceSide Side>
-  POPS_HD Real face_aperture(const Index<Dim>& index) const {
+  POPS_HD_FORCEINLINE Real face_aperture(const Index<Dim>& index) const {
     const FieldView<const Real, Dim>& field =
         Side == MetricFaceSide::Lower ? face_aperture_lower_ : face_aperture_upper_;
     if (field.data == nullptr)
@@ -143,7 +143,7 @@ class PreparedEmbeddedBoundaryMetric {
     return field(index, Axis);
   }
   template <int Axis, MetricFaceSide Side>
-  POPS_HD PhysicalPoint oriented_face_area_vector(const Index<Dim>& index) const {
+  POPS_HD_FORCEINLINE PhysicalPoint oriented_face_area_vector(const Index<Dim>& index) const {
     auto area = base_.template oriented_face_area_vector<Axis, Side>(index);
     const Real aperture = face_aperture<Axis, Side>(index);
     for (int physical = 0; physical < embedding_dimension; ++physical)
@@ -154,7 +154,9 @@ class PreparedEmbeddedBoundaryMetric {
     return base_.inverse_map(physical);
   }
 
-  POPS_HD Real cell_measure(const Index<Dim>& index) const {
+  /// Force-inlined like the base metric's accessors (ROM-18, #767): out of line, a single-route
+  /// package calls it on every face of the masked path.
+  POPS_HD_FORCEINLINE Real cell_measure(const Index<Dim>& index) const {
     const Real inverse = inverse_volume_fraction_(index);
     if (!(inverse > Real(0)) || !Kokkos::isfinite(inverse))
       return std::numeric_limits<Real>::quiet_NaN();
