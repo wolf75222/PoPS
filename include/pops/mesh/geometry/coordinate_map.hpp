@@ -246,7 +246,8 @@ class CartesianCoordinateMap {
     return result;
   }
 
-  POPS_HD Real cell_measure(const RealVector<Dim>& lower, const RealVector<Dim>& upper) const {
+  POPS_HD_FORCEINLINE Real cell_measure(const RealVector<Dim>& lower,
+                                        const RealVector<Dim>& upper) const {
     Real measure = Real(1);
     for (int axis = 0; axis < Dim; ++axis)
       measure *= lengths_[axis] * coordinate_map_detail::abs(upper[axis] - lower[axis]);
@@ -254,8 +255,8 @@ class CartesianCoordinateMap {
   }
 
   template <int Axis, MetricFaceSide Side>
-  POPS_HD RealVector<EmbedDim> oriented_face_area_vector(const RealVector<Dim>& lower,
-                                                         const RealVector<Dim>& upper) const {
+  POPS_HD_FORCEINLINE RealVector<EmbedDim> oriented_face_area_vector(
+      const RealVector<Dim>& lower, const RealVector<Dim>& upper) const {
     static_assert(Axis >= 0 && Axis < Dim, "Cartesian metric face axis is outside the map rank");
     Real magnitude = Real(1);
     for (int axis = 0; axis < Dim; ++axis)

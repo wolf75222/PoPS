@@ -1855,6 +1855,15 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 raise ValueError("Advance assessment lost its rejection contract")
             phase = "assessment"
             message = "Advance assessment %r rejected the candidate" % v.attrs["guard"]
+        if "trial_site" in v.attrs:
+            # An admissibility predicate of a traced method (IR4, T38): a retryable site rejects
+            # the attempt ("trial"), a fixed site fails the step ("trial_failure"); the message
+            # starts with the stable site name of its AdvanceControl row.
+            site = v.attrs["trial_site"]
+            if "assessment" in v.attrs or type(action) is not RejectAttempt:
+                raise ValueError("a trial guard of a traced method rejects the attempt")
+            phase = "trial" if site["retry_can_change"] else "trial_failure"
+            message = "%s failed: %s" % (site["site"], site["variant"])
         from pops.codegen.program_emit_structured_control import _uniform_int
         _uniform_int(var[condition.id], lines, "acceptance guard differs across execution lane")
         lines.append("if (!(%s)) {" % var[condition.id])

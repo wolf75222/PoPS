@@ -67,7 +67,8 @@ def test_both_orders_and_regimes_resolve_dim1_and_wrong_spatial_state_fails(orde
     plan=pops.resolve(pops.validate(spec.case),layout=spec.layout)
     assert plan.resolved_dimension==1
     cpp=emit_cpp_program(plan.time,model_graph=ProgramModelGraph.from_resolved_blocks(plan.blocks))
-    assert "strict_candidate_domain" in cpp
+    # N8 lot 6: the traced route names the guard of the candidate by its site (T4).
+    assert "admissible_euler/body#1/domain failed: NotAdmissible" in cpp
     initial=next(iter(spec.initial_values.values()))
     expected=initial.copy()
     for _ in range(4):expected+=spec.dt*reference_rhs(expected)

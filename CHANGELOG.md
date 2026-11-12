@@ -150,6 +150,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3b): a criterion written as regions of `cell` now compiles on a plan with
+  several layouts. `pops.compile` generates each adaptive layout's criterion into that layout's
+  Program slice, and the layout's AmrSystem installs the entry of its own slice; no native code
+  changes. `Regrid(criterion, when)` on a plan with several layouts stays refused (write
+  `tagging=` and `regrid=` on each adaptive layout). The multi-layout AMR cases of the test suite
+  (physical maps, interstage maps, m19, sol61) write regions; on three adaptive layouts, graph and
+  region routes give bitwise identical hierarchies.
 - ROM-95 (N12, lot 3a, part 2): the 19 `examples/api_v02` AMR cases and the condensed_fac/01,
   diocotron/01, 02 and 04, hyqmom (`_amr_hybrid`) and initial_field_ghost/01 tutorials write their
   tagging as regions of `cell`; the three reviewed api_v02 modules that changed carry new source
@@ -612,12 +619,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-93 (N11 lot 1 follow-up): the empty sum `ddt(U) == RateExpr(())` is again the zero rate of b6 and
+  reaches the prepared IR as the zero identity; lot 1 had refused it. Spec 0.3 R7 refuses no empty
+  balance. The bare literal `ddt(U) == 0` stays refused, as in b6.
+
 - ROM-85 (#749 follow-up): `scripts/dmt1.py emit` failed on M15 in the gate-python shards, which
   export a Kokkos root for their native tests: the real `compile_native` that it runs
   authenticates that root against the Kokkos contract of `_pops`, which it never loads. `emit` now
   drops the Kokkos root overrides from its own environment, as it fixes the other toolchain facts
   that need `_pops`; the emitted units are unchanged. Its test runs under a Kokkos root everywhere
   and prints the profile's error and trace when it fails.
+- ROM-18 (#699 follow-up, found by DM-T2 of ROM-85): a generated package compiled for its one
+  resolved route lost up to 19 % per step on M01 against b6 (face kernel x1.65), with bit-identical
+  states. GCC sizes its inlining budget on the whole translation unit (`inline-unit-growth`), and
+  the single-route package is a small unit: the budget ran out before the metric accessors, so
+  every face called `cell_measure`, `reference_cell` and `face_measure` through the PLT. Those
+  accessors are now `POPS_HD_FORCEINLINE`, and the prescribed boundary trace of a face, taken on two
+  faces of a row, is out of line (`POPS_HD_OUTLINE`). The face body no longer depends on how many
+  routes the package instantiates; results stay bit for bit, no threshold changes.
 - ROM-17: build PoPS against conda-forge's Kokkos 5.2.2. Its HWLOC TPL names the prefix's
   `include/` with a trailing separator next to Kokkos' own `include`, so the include contract kept
   both spellings and counted four defining headers instead of two, and configuration stopped.

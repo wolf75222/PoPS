@@ -14,6 +14,51 @@ from __future__ import annotations
 from itertools import permutations
 
 from examples.api_v02.common import CaseSpec, state_array, non_owner_metrics
+from pops.runtime._simulation import NotAdmissible
+from pops.time._program.elaboration import Advance, Proposal, elaborate
+from pops.time._program.guards import cond, fail
+from pops.time._program.traced_method import Candidate, method
+
+
+@method
+def admissible_euler(B, p, flow, domain):
+    """Forward Euler between two admissibility guards (spec 0.3 IR4, T38; N8 lot 6).
+
+    The rate reads the accepted state gated by ``domain`` and the candidate is gated again: the
+    step of M15 at b6, ``p.guard(..., action=FailRun())`` on each. A failure of the first guard,
+    on B.state alone, ends the step; a failure of the second rejects the attempt.
+
+    MG10: this method and ``twice_admissible_euler`` move to the method library
+    (``pops/lib/time/methods.py``) when the surface writes ``cond`` and ``fail`` (D3, N15); until
+    then they live here, as ``shu_osher_ssprk2`` does in ``models_M01_M14.py``.
+    """
+    U = cond(domain(B.state), lambda: B.state, lambda: fail(NotAdmissible))
+    C = U + p.dt*flow(U, B.time)
+    return Candidate(cond(domain(C), lambda: C, lambda: fail(NotAdmissible)), B.time + p.dt)
+
+
+@method
+def twice_admissible_euler(B, p, flow, positive, domain):
+    """``admissible_euler`` whose guard is two predicates in turn, ``positive`` then ``domain``,
+    the second reading the value the first gated: the step of M17 at b6."""
+    U0 = cond(positive(B.state), lambda: B.state, lambda: fail(NotAdmissible))
+    U = cond(domain(U0), lambda: U0, lambda: fail(NotAdmissible))
+    C0 = U + p.dt*flow(U, B.time)
+    C1 = cond(positive(C0), lambda: C0, lambda: fail(NotAdmissible))
+    return Candidate(cond(domain(C1), lambda: C1, lambda: fail(NotAdmissible)), B.time + p.dt)
+
+
+def traced_admissible_euler(case, block, state, dt, *, name, b6, **components):
+    """The traced route of M15 and M17: ``admissible_euler`` with the components
+    ``flow`` and ``domain``, or ``twice_admissible_euler`` with ``positive`` too.
+
+    ``b6`` builds the b6 Program of the profile, kept verbatim: the parity tests select it by
+    patching this function (MG1). The Program keeps the b6 name of the profile.
+    """
+    del b6
+    body = twice_admissible_euler if "positive" in components else admissible_euler
+    return elaborate(Advance(body(**components)), case=case, state=block[state],
+                     proposal=Proposal(dt), name=name)
 
 
 def hyqmom_recurrence(raw):
@@ -222,21 +267,31 @@ def build_m15_orders(*,order=4,regime="smooth",cells=16,steps=4,dt=1e-4):
     plan.rates.add(rate,FiniteVolume(flux=flux,
         variables=variables.Conservative(u),reconstruction=reconstruction.FirstOrder(),riemann=riemann.HLL()))
     case.numerics(plan,block=block)
-    p=pops.Program("M15_S04_Euler")
-    state=p.state(subject)
-    def guard(value,name):
+    def b6():
+        p=pops.Program("M15_S04_Euler")
+        state=p.state(subject)
+        def guard(value,name):
+            margins=hankel_margins(tuple(value[k] for k in range(order+1)))
+            margin=margins[0]
+            for next_margin in margins[1:]:
+                margin=pm.minimum(margin,next_margin)
+            field=p.value(name+"_hankel_margin",(margin,)*(order+1))
+            return p.guard(name,value,p.min(field)>0.,action=FailRun())
+        current=guard(state.n,"strict_current_domain")
+        rate_value=rate(current)
+        candidate=p.value("candidate",tuple(current[k]+p.dt*rate_value[k] for k in range(order+1)),at=state.next.point)
+        p.commit(state.next,guard(candidate,"strict_candidate_domain"))
+        p.step_strategy(FixedDt(dt))
+        case.program(p)
+    def strict_hankel(value):
+        # The strict Hankel predicate of b6's guard, as a component of the traced method.
         margins=hankel_margins(tuple(value[k] for k in range(order+1)))
         margin=margins[0]
         for next_margin in margins[1:]:
             margin=pm.minimum(margin,next_margin)
-        field=p.value(name+"_hankel_margin",(margin,)*(order+1))
-        return p.guard(name,value,p.min(field)>0.,action=FailRun())
-    current=guard(state.n,"strict_current_domain")
-    rate_value=rate(current)
-    candidate=p.value("candidate",tuple(current[k]+p.dt*rate_value[k] for k in range(order+1)),at=state.next.point)
-    p.commit(state.next,guard(candidate,"strict_candidate_domain"))
-    p.step_strategy(FixedDt(dt))
-    case.program(p)
+        field=value.prog.value(value.name+"_hankel_margin",(margin,)*(order+1))
+        return value.prog.min(field)>0.
+    traced_admissible_euler(case,block,u,dt,name="M15_S04_Euler",b6=b6,flow=rate,domain=strict_hankel)
     layout=Uniform(CartesianGrid(frame=frame,cells=(cells,),periodic=PeriodicAxes(frame.axes)))
     initial=initial_moments(order,cells,regime)
     expected=initial.copy()

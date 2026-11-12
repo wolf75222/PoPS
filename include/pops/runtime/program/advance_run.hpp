@@ -92,11 +92,15 @@ struct AdvanceRunReport {
   std::int64_t steps = 0;       ///< accepted steps of the run
   std::int64_t rejections = 0;  ///< rejected attempts of the run
   AdvanceRunStop stop = AdvanceRunStop::kReached;
-  std::int64_t attempts = 0;     ///< attempts of the step that spent its budget or failed
-  std::string rejection;         ///< diagnostic of the last rejected attempt, empty when none
-  std::string rejection_phase;   ///< phase of that rejection: assessment, trial, trial_failure
-  std::string rejection_detail;  ///< its detail; a trial site starts with the site name
-  AdvanceSegment segment;        ///< the segment that the next run continues
+  std::int64_t attempts = 0;         ///< attempts of the step that spent its budget or failed
+  std::string rejection;             ///< diagnostic of the last rejected attempt, empty when none
+  std::string rejection_phase;       ///< phase of that rejection: assessment, trial, trial_failure
+  std::string rejection_detail;      ///< its detail; a trial site starts with the site name
+  std::int64_t prepared_solves = 0;  ///< prepared linear solves that ran, every attempt included
+  /// The iteration count and final residual norm of the last of them; -1 and NaN without one.
+  std::int64_t last_prepared_solve_iterations = -1;
+  double last_prepared_solve_residual = std::numeric_limits<double>::quiet_NaN();
+  AdvanceSegment segment;                    ///< the segment that the next run continues
   std::vector<AdvanceOutputSample> outputs;  ///< the evaluations of the Outputs, in run order
 };
 
