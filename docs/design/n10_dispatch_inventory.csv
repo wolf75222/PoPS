@@ -1,8 +1,8 @@
 file,line,kind,text
-python/pops/_ir/data_model.py,166,field,"if kind in (""state"", ""rhs"", ""scalar_field""):"
-python/pops/_ir/data_model.py,192,finite,"if kind == ""index_set"":"
-python/pops/_ir/data_model.py,195,finite,"if kind == ""index"":"
-python/pops/_ir/data_model.py,198,finite,"if kind == ""array"":"
+python/pops/_ir/data_model.py,167,field,"if kind in (""state"", ""rhs"", ""scalar_field""):"
+python/pops/_ir/data_model.py,193,finite,"if kind == ""index_set"":"
+python/pops/_ir/data_model.py,196,finite,"if kind == ""index"":"
+python/pops/_ir/data_model.py,199,finite,"if kind == ""array"":"
 python/pops/codegen/program_emit_affine_expressions.py,55,role,"""true"" if node.vtype == ""rhs"" else ""false"")"
 python/pops/codegen/program_emit_affine_expressions.py,69,role,"states = {node.id: token for node, token in terms if node.vtype == ""state""}"
 python/pops/codegen/program_emit_affine_expressions.py,71,role,"invalid.extend(""%s < 0"" % token for node, token in terms if node.vtype == ""state"")"

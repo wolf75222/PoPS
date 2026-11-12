@@ -19,14 +19,12 @@ of N8 (``pops.runtime._simulation``), these constructs of the surface:
 * ``pops.Output(pops.record(u=u), when=schedule, write=writer)`` and ``pops.every(time=h)`` or
   ``pops.every(steps=k)``: an Output of N8 whose body reads the accepted state. A time or a list
   of times gives ``at=`` and the run publishes at those times only; ``every(time=h)`` publishes at
-  the start t0 of the run and at t0 + k h, ``every(steps=k)`` at the start and after every k-th
-  accepted step. N8 lowers both on a lattice fixed when the case is compiled, k h and the k-th
-  macro step from the start of the simulation, which is the lattice of the spec only when the
-  run starts on it: a later run whose start is off the lattice is refused before it runs
-  (``NotYetElaborated``, naming the N8 lot 'run-anchored schedules', ROM-89, which owes the
-  anchoring t0 + k h before the exit of phase 1), and a later run that starts on it publishes
-  its times and steps after its start, the start being the end of the run before it, which that
-  run published (review of lot G, F1). ``write=None`` keeps the publications in
+  the start t0 of each run and at t0 + k h, ``every(steps=k)`` at the start and after every k-th
+  accepted step of the run, as N8 lowers both, anchored at the start of each run (N8 lot
+  « Ancrage des calendriers au départ du run », ROM-89). A later run keeps its start publication
+  unless the series already ends with a publication at the same time and macro step: on the
+  grid, the start of a later run is the end of the run before it, which that run published.
+  ``write=None`` keeps the publications in
   ``result.outputs`` (2.6.9); a writer of ``pops.lib.output`` writes the whole series of the
   simulation after each run, outside every step (CF9), relative to ``directory=``.
 
@@ -37,12 +35,15 @@ from __future__ import annotations
 
 import math as _math
 import os
+import weakref as _weakref
 from typing import Any
 
 import numpy as _np
 
 from ._model import Datum, Model, Parameter, Quantity
-from ._refusal import AmbiguousElaboration, NotYetElaborated, surface_entry, user_site
+from ._refusal import (
+    AmbiguousElaboration, NotYetElaborated, SupportMismatch, surface_entry, user_site,
+)
 
 _GPU = "a later lot of N15 with the device storage of G13 and the GPU run of Q03a"
 _MPI = "a later lot of N15 with the distributed runs of N10"
@@ -50,9 +51,6 @@ _RESTART = "a later lot of N15 with the continuation and restart of G07 (CN11)"
 _DEFINITIONS = "a later lot of N15 with the definitions of R16 and the reductions of N8"
 _PREDICATE = "a later lot of N8 with the predicates of the when bodies (CC14)"
 _DEFAULT_MAX_STEPS = 1_000_000
-_LATTICE = ("the N8 lot 'run-anchored schedules' (ROM-89), owed before the exit of phase 1: N8 "
-            "fixes the grid of every(time=h) and every(steps=k) at compile time, from the start "
-            "of the simulation, not of the run (spec 2.6.2)")
 
 
 # --- records and schedules ----------------------------------------------------------------------
@@ -219,16 +217,28 @@ class Output:
             return _n8.Output(value, at=_n8.every_dt(self.every_time))
         return _n8.Output(value, at=self.times)
 
-    def keeps(self, time: float, first_run: bool, publication_index: int) -> bool:
-        """Whether a publication of N8 at ``time`` is one of this Output's. N8 publishes once at
-        the start of each run: the start of the first run of a simulation is its start, which
-        a schedule ``every`` keeps and a list of times keeps when it holds that time; the start of
-        a later run is the end of the run before it, published already or off the schedule."""
-        if publication_index == 0 and not first_run:
-            return False
+    def keeps(self, time: float, macro_step: int, publication_index: int, start: float,
+              until: float, last: tuple | None) -> bool:
+        """Whether a publication of N8 at (``time``, ``macro_step``), of index
+        ``publication_index`` in a run from ``start`` to ``until``, is one of this Output's;
+        ``last`` is the (time, macro step) of this Output's series so far, or ``None``.
+
+        N8 publishes once at the start of each run (index 0). The run keeps it when the schedule
+        holds t0 (``every`` always, a list when it holds that time) and the series does not
+        already end at the same (time, macro step): on the grid, the start of a later run is the
+        end of the run before it, which that run published (design note of N8 « Ancrage des
+        calendriers au départ du run », D2). After the start, ``every`` keeps each publication,
+        and a list each publication at one of its times as the run lands on them (``_ahead``): a
+        listed time within four ulp below ``until`` is published at ``until`` (O1)."""
+        if publication_index == 0:
+            if self.times is not None and time not in self.times:
+                return False
+            return last != (time, macro_step)
         if self.times is None:
             return True
-        return time in self.times
+        from pops.runtime._simulation import _ahead
+
+        return time in _ahead(self.times, start, until, anchored=False)
 
     def __repr__(self) -> str:
         return "pops.Output(%r, when=%r%s)" % (self.record, self.when, "" if self.write is None
@@ -365,6 +375,55 @@ def from_layout(array: Any, cells: tuple) -> Any:
     return _np.ascontiguousarray(_np.transpose(value[0]))
 
 
+# --- published arrays (G03 lot E, K4) -------------------------------------------------------------
+# An array that a run publishes, in ``result.state[u]`` or in a publication of an Output, keeps the
+# elaborated identity of u's representation (``surface/_elaborate.py``, ``elaborated_representation``)
+# for as long as the array lives. ``bind(data=...)`` reads it back: an array published on one
+# support, or under one representation, is refused as the datum of a quantity on another, even when
+# the shapes agree. An array the user writes, or copies, carries no identity: giving it is an
+# authoring assertion, as declaring a ScientificValue on a bare array is.
+
+_PUBLISHED: dict = {}
+
+
+def publish(array: Any, representation: Any) -> Any:
+    """``array`` with the elaborated identity it is published under."""
+    key = id(array)
+
+    def forget(_reference: Any, key: int = key) -> None:
+        _PUBLISHED.pop(key, None)
+
+    _PUBLISHED[key] = (_weakref.ref(array, forget), representation)
+    return array
+
+
+def published_representation(array: Any) -> Any:
+    """The elaborated identity under which a run published ``array``, or None."""
+    entry = _PUBLISHED.get(id(array))
+    if entry is None or entry[0]() is not array:
+        return None
+    return entry[1]
+
+
+def require_published_under(array: Any, expected: Any, where: str) -> None:
+    """K4: a published array is read only under the elaborated identity it was published under."""
+    written = published_representation(array)
+    if written is None or written == expected:
+        return
+    if written.space.support != expected.space.support:
+        raise SupportMismatch(
+            "%s gives an array that a run published on the support %s, as the datum of a "
+            "quantity on the support %s; equal shapes do not make supports interchangeable"
+            % (where, _support_text(written), _support_text(expected)),
+            write="the array on the support of the datum, or a pops.Map between the supports")
+    expected.require_same(written, where=where)
+
+
+def _support_text(representation: Any) -> str:
+    return " x ".join("%s in %s" % (name, domain)
+                      for name, domain in representation.space.support.coordinates)
+
+
 @surface_entry
 def bind(artifact: Any = None, *, params: Any = None, data: Any = None, resources: Any = None,
          directory: Any = None, restart: Any = None, migrate: Any = None) -> Simulation:
@@ -415,6 +474,9 @@ def bind(artifact: Any = None, *, params: Any = None, data: Any = None, resource
         if not quantities:
             raise NotYetElaborated("pops.bind(data={%s: ...}) for a datum that no initial value "
                                    "reads" % key, "a later lot of N15 with the data fields of Q3")
+        for quantity in quantities:
+            require_published_under(value, elaborated.representations[quantity],
+                                    "pops.bind(data={%s: array})" % key)
         initial[key] = to_layout(value, cells, "pops.bind(data={%s: array})" % key)
     supplied: dict = {}
     bindings = tuple(artifact.compiled.plan.initial_condition_plan.bindings)
@@ -523,7 +585,7 @@ class Simulation:
     """What ``pops.bind`` returns; ``simulation.run(until=t, max_steps=n)`` runs it (§5.2)."""
 
     __slots__ = ("artifact", "_simulation", "directory", "_threads", "_cells", "_series",
-                 "_written", "_runs")
+                 "_written")
 
     def __init__(self, artifact: Artifact, simulation: Any, directory: str, threads: dict,
                  cells: tuple) -> None:
@@ -535,7 +597,6 @@ class Simulation:
         outputs = artifact.case.outputs
         self._series: dict = {output: [] for output in outputs}
         self._written: set = set()
-        self._runs = 0
 
     @surface_entry
     def run(self, *, until: Any = None, max_steps: Any = None, **earlier: Any) -> RunResult:
@@ -557,62 +618,43 @@ class Simulation:
         for output in self._series:
             if output.write is not None and output not in self._written:
                 output.write.check(self.directory)
-        self._check_lattices()
-        first_run = self._runs == 0
-        self._runs += 1
+        start = float(self._simulation._runtime.time())
         failure_error = None
         try:
             result = self._simulation.run(until, max_steps=steps)
         except _n8.RunFailed as error:
             failure_error = error
             result = error.result
-        surface = self._result(result, first_run)
+        surface = self._result(result, start, until)
         self._write()
         if failure_error is not None:
             variant = _VARIANTS.get(type(failure_error).__name__, RunFailed)
             raise variant(surface, str(failure_error)).with_traceback(None) from failure_error
         return surface
 
-    def _check_lattices(self) -> None:
-        """Refuse a run whose start is off the lattice of an ``every`` schedule (F1): N8's
-        lattice, k h and every k-th macro step, is fixed at compile time, and it is t0 + k h only
-        when the run starts on it."""
-        runtime = self._simulation._runtime
-        start, step = float(runtime.time()), int(runtime.macro_step())
-        for output in self._series:
-            if output.every_time is not None:
-                from pops.time._program.outputs import EveryDt
-
-                lattice = EveryDt(output.every_time)
-                index = round(start / output.every_time)
-                near = lattice.time(index)
-                if abs(near - start) > 4.0 * max(_math.ulp(start), _math.ulp(near)):
-                    raise NotYetElaborated(
-                        "a run of %r that starts at t0 = %r, off the lattice k h of "
-                        "pops.every(time=%r), where the run would publish t0 + k h"
-                        % (output, start, output.every_time), _LATTICE)
-            if output.every_steps is not None and step % output.every_steps:
-                raise NotYetElaborated(
-                    "a run of %r that starts after %d accepted steps, which is not a multiple of "
-                    "pops.every(steps=%d)" % (output, step, output.every_steps), _LATTICE)
-
-    def _result(self, result: Any, first_run: bool) -> RunResult:
+    def _result(self, result: Any, start: float, until: float) -> RunResult:
         case = self.artifact.case
         elaborated = case.elaborated
         cells = self._cells
         states = []
+        representations = elaborated.representations
         for quantity in elaborated.states:
             block = case.model.name             # the block of the elaborated case (SU8)
-            states.append((quantity, from_layout(result.state[block], cells)))
+            states.append((quantity, publish(from_layout(result.state[block], cells),
+                                             representations[quantity])))
         outputs = {}
         regions = self.artifact.case.outputs
         for output, lowered in zip(regions, elaborated.outputs, strict=True):
             rows = []
+            series = self._series[output]
+            last = (series[-1].time, series[-1].step) if series else None
             for index, publication in enumerate(result.outputs.get(lowered, ())):
-                if not output.keeps(publication.time, first_run, index):
+                if not output.keeps(publication.time, publication.macro_step, index, start, until,
+                                    last):
                     continue
-                values = {name: from_layout(publication.values[name], cells)
-                          for name, _ in output.record.items()}
+                values = {name: publish(from_layout(publication.values[name], cells),
+                                        representations[quantity])
+                          for name, quantity in output.record.items()}
                 rows.append(Publication(publication.time, publication.macro_step, values))
             self._series[output].extend(rows)
             outputs[output] = tuple(rows)

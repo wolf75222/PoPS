@@ -10,6 +10,7 @@ from .dirk import (BACKWARD_EULER_TABLEAU, DIRK, DiagonallyImplicitRungeKuttaTab
                    IMPLICIT_MIDPOINT_TABLEAU)
 from .euler import FORWARD_EULER_TABLEAU, ForwardEuler
 from .imex import IMEX, IMEX_ARS222_TABLEAU, IMEX_EULER_TABLEAU
+from .limits import cfl_limit
 from .multistep import AdamsBashforth, BDF
 from .predictor_corrector import PredictorCorrector
 from .rk import (
@@ -30,6 +31,7 @@ from .strang import Lie, Strang
 # ``import pops.lib.time.rk`` remains normal Python module access.
 globals().pop("rk", None)
 globals().pop("strang", None)
+globals().pop("limits", None)
 
 __all__ = [
     "AdamsBashforth",
@@ -55,5 +57,6 @@ __all__ = [
     "SSPRK3",
     "SSPRK3_TABLEAU",
     "Strang",
+    "cfl_limit",
     "every",
 ]
