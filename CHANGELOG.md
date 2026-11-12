@@ -18,6 +18,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-98 (N15, lot B): boundary relations of the surface (spec 0.3, 2.6.2, 2.6.9, D9, R20; OD31).
+  `model.on(pieces, u == g)` (form `Value`, g a number, a constant or a runtime parameter) and
+  `model.on(pieces, outflow(u))` (form `NoData`) close the pieces of a box that are not
+  periodic; `pops.Numerics(boundary=ghosts())` realizes them, and the elaborator checks that the
+  policy gives a ghost law of b6 before it adds `Inflow` (2 g - u_k) and `Outflow` (u_1) to the
+  plan. The other forms, data read from a datum and `closes=` refuse with their lot. A 2D case
+  with inflow and outflow runs bit for bit as the same case written by hand for b6.
 - ROM-98 (N15, lot G): a case of the surface compiles, binds and runs (spec 0.3, 2.6.2, 2.6.6,
   §5.2, CC14; OD31). `pops.compile(case, target=pops.OpenMP())`, `pops.bind(artifact,
   params={b: v}, data={u0: array}, resources=pops.Resources(threads=n), directory=d)` and
