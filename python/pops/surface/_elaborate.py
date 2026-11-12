@@ -55,6 +55,8 @@ from ._refusal import (
 )
 
 _LATER = "a later lot of N15"
+# The words of pops.math that b6's analytic expressions have (pops.analytic), for initial values.
+_ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs", "atan2")
 _FRAMES = {1: Cartesian1D, 2: Cartesian2D, 3: Cartesian3D}
 
 
@@ -162,6 +164,21 @@ def _per_axis(values: tuple | None) -> Any:
 def _per_axis_text(values: tuple, spell: Any) -> str:
     return spell(values[0]) if len(values) == 1 else \
         "vector(%s)" % ", ".join(spell(value) for value in values)
+
+
+_G04 = "a later lot of N15 with the boundary relations of G04"
+_GENERATED_GHOSTS = "a later lot of N15 with the generated ghost fills of G04"
+# The depths at which a boundary policy is checked: those that b6 derives at most (WENO5 reads
+# three cells), so that a body that departs from a law of b6 at a depth is refused.
+_GHOST_DEPTHS = (1, 2, 3)
+
+
+def _tensor(mapped: list) -> list:
+    """The tensor nodes of one list of (point, weight) per axis, the first axis slowest."""
+    rows: list = [()]
+    for nodes in mapped:
+        rows = [row + (node,) for row in rows for node in nodes]
+    return rows
 
 
 def _number(value: Any) -> Any:
@@ -595,32 +612,164 @@ class _Elaboration:
         self.lowered_outputs = tuple(lowered)
         return self.lowered_outputs
 
-    def initial(self, case6: Any, block: Any, states: dict) -> None:
+    def initial(self, case6: Any, block: Any, states: dict, frame: Any) -> None:
+        """The initial value of each evolved quantity (CN12, Q3): a datum, supplied at bind; a
+        value that reads no coordinate, whose cell average is exact; ``pops.project(e, ...)``,
+        lowered on the analytic route of b6 (``Analytic`` under ``ConservativeCellAverage``)
+        with the exact cell integral that its rule or its integral gives (lot D-E)."""
         from pops.lib.initial import BindArray   # the datum supplied at bind (Q3), a b6 value
 
+        from ._project import Projection
+
         program = self.program
-        for key, datum in program.initial:
+        for key, value in program.initial:
             if not any(key is quantity for quantity in states):
                 raise ValueError("pops.Program(initial={%s: ...}): %s is not a quantity that the "
                                  "model evolves" % (key, key))
-            if datum.model is not self.model:
+            if isinstance(value, Datum) and value.model is not self.model:
                 raise ValueError("pops.Program(initial={%s: %s}): the datum belongs to another "
-                                 "model" % (key, datum))
+                                 "model" % (key, value))
         for quantity, state in states.items():
-            datum = program.initial_of(quantity)
-            if datum is None:
+            value = program.initial_of(quantity)
+            if value is None:
                 raise AmbiguousElaboration(
                     "the evolved quantity %s has no initial value" % quantity,
                     write='pops.Program(initial={%s: d}), d = model.data("d", %r)'
                           % (quantity, quantity.space), site=program.site)
-            case6.initials.add(InitialCondition(state=block[state], value=BindArray(),
+            if isinstance(value, Datum):
+                provider, spelling = BindArray(), "BindArray()"
+                choices = [Choice("value", "the datum %s, supplied at bind" % value, "stated")]
+                stated = str(value)
+            elif isinstance(value, Projection):
+                provider, spelling, choices = self.projection(value, quantity, frame)
+                stated = repr(value)
+            else:
+                provider, spelling, choices = self.exact_value(value, frame)
+                stated = text(value)
+            case6.initials.add(InitialCondition(state=block[state], value=provider,
                                                 projection=ConservativeCellAverage()))
             self.rows.append(Row(
-                "initial={%s: %s}" % (quantity, datum), "program",
-                "case.initials.add(InitialCondition(state=block[%s], value=BindArray(), "
-                "projection=ConservativeCellAverage()))" % quantity.name,
-                [Choice("value", "the datum %s, supplied at bind" % datum, "stated"),
-                 Choice("projection", "ConservativeCellAverage()", "derived")]))
+                "initial={%s: %s}" % (quantity, stated), "program",
+                "case.initials.add(InitialCondition(state=block[%s], value=%s, "
+                "projection=ConservativeCellAverage()))" % (quantity.name, spelling),
+                choices + [Choice("projection", "ConservativeCellAverage()", "derived")]))
+
+    def exact_value(self, value: Any, frame: Any) -> tuple:
+        """A value that reads no coordinate: its cell average is the value itself, which b6's
+        analytic route gives exactly (one literal, or equal samples)."""
+        from pops.lib.initial import Analytic
+
+        lowered = self.analytic(value, frame, ())
+        return (Analytic(frame=frame, components=(lowered,)),
+                "Analytic(frame=frame, components=(%s,))" % text(value),
+                [Choice("value", text(value), "stated"),
+                 Choice("cell average", "exact, the value reads no coordinate", "derived")])
+
+    def projection(self, value: Any, quantity: Any, frame: Any) -> tuple:
+        """``pops.project(e, quadrature=Q)``: the cell integral measure x the sum over the tensor
+        nodes of the weights (each divided by the length of its interval) times e at the nodes
+        mapped onto the cell; ``integral=I``: I run on the bounds of the cell (CN12)."""
+        from pops.analytic import CellBounds, coordinate
+        from pops.lib.initial import Analytic
+
+        from ._project import ProjectionCell, reads_coordinate
+
+        support = quantity.space.support
+        bounds = CellBounds(frame)
+        axes = frame.axes
+        point = tuple(coordinate(frame, axis) for axis in axes)
+        component = self.analytic(value.expression, frame, point)
+        if value.integral is not None:
+            from ._expr import Expr
+
+            result = value.integral(ProjectionCell(support))
+            if not (is_number(result) or isinstance(result, Expr)):
+                raise TypeError("pops.project(e, integral=I): I(cell) returns the integral of e "
+                                "over the cell, an expression, got %r" % (result,))
+            if reads_coordinate(result):
+                raise TypeError("pops.project(e, integral=I): I(cell) reads the bounds of the "
+                                "cell, cell.lower(axis) and cell.upper(axis), not a coordinate")
+            integral = self.analytic(result, frame, (), bounds)
+            spelling, rule = text(result), Choice("integral", text(result), "stated")
+        else:
+            rules = value.rules(len(axes))
+            mapped = []
+            for axis, rule in zip(axes, rules, strict=True):
+                low, high = (float(end) for end in rule.interval)
+                lower, upper = bounds.lower(axis), bounds.upper(axis)
+                width = upper - lower
+                nodes = []
+                for node, weight in zip(rule.nodes, rule.weights, strict=True):
+                    fraction = (node - low) / (high - low)
+                    where = lower if fraction == 0.0 else upper if fraction == 1.0 \
+                        else lower + width * fraction
+                    nodes.append((where, weight / (high - low)))
+                mapped.append(nodes)
+            terms = []
+            for choice in _tensor(mapped):
+                weight = 1.0
+                for _, factor in choice:
+                    weight *= factor
+                sample = self.analytic(value.expression, frame,
+                                       tuple(where for where, _ in choice))
+                terms.append(sample if weight == 1.0 else weight * sample)
+            average = terms[0]
+            for term in terms[1:]:
+                average = average + term
+            integral = bounds.measure * average
+            spelling = "the cell measure x the rule of %r" % (value.quadrature,)
+            rule = Choice("quadrature", value.quadrature, "stated")
+        provider = Analytic(frame=frame, components=(component,), cell_integrals=(integral,))
+        return (provider,
+                "Analytic(frame=frame, components=(%s,), cell_integrals=(%s,))"
+                % (text(value.expression), spelling),
+                [Choice("value", text(value.expression), "stated"), rule,
+                 Choice("cell average", "the cell integral divided by the cell measure, "
+                                        "native", "derived")])
+
+    def analytic(self, value: Any, frame: Any, point: tuple, bounds: Any = None) -> Any:
+        """The analytic expression of b6 (``pops.analytic``) of a value of an initial value: the
+        coordinates read ``point``, the bounds of the cell ``bounds``; a constant of the model is
+        its number and a parameter its handle, bound at bind."""
+        from pops import analytic as an
+
+        from ._project import CellBound
+
+        if is_number(value):
+            return an.constant(float(_number(value)))
+        if isinstance(value, MathConstant):
+            if not _math.isfinite(value.value):
+                raise NotYetElaborated("%s in an initial value" % value.name, _LATER)
+            return an.constant(value.value)
+        if isinstance(value, ModelConstant):
+            return an.constant(float(value.value))
+        if isinstance(value, Parameter):
+            return an.param(self.params[value])
+        if isinstance(value, Coordinate):
+            return point[value.index]
+        if isinstance(value, CellBound):
+            axes = frame.axes
+            if value.index is None:
+                return bounds.measure
+            return getattr(bounds, value.side)(axes[value.index])
+        if isinstance(value, Arith):
+            args = [self.analytic(arg, frame, point, bounds) for arg in value.args]
+            if value.op == "neg":
+                return -args[0]
+            left, right = args
+            if value.op == "**":
+                exponent = value.args[1]
+                if not is_number(exponent):
+                    raise NotYetElaborated("%s, a power whose exponent is not a number, in an "
+                                           "initial value" % text(value), _LATER)
+                return left ** float(_number(exponent))
+            return {"+": lambda: left + right, "-": lambda: left - right,
+                    "*": lambda: left * right, "/": lambda: left / right}[value.op]()
+        if isinstance(value, Call) and value.word in _ANALYTIC_WORDS:
+            args = [self.analytic(arg, frame, point, bounds) for arg in value.args]
+            return getattr(an, value.word)(*args)
+        raise NotYetElaborated("%s in an initial value" % text(value),
+                               "N11 (expression closure, C1)")
 
     def layout(self, support: Box, frame: Any) -> Any:
         case = self.case
@@ -635,24 +784,101 @@ class _Elaboration:
         periodic = tuple(axis for axis, (_, _, flag)
                          in zip(frame.axes, support.bounds(), strict=True) if flag)
         layout = _Uniform(CartesianGrid(frame=frame, cells=uniform.cells,
-                                        periodic=PeriodicAxes(periodic)))
+                                        periodic=PeriodicAxes(periodic) if periodic else None))
         self.rows.append(Row(
             "layout={%r: %r}" % (support, uniform), "case",
-            "Uniform(CartesianGrid(frame=frame, cells=%r, periodic=PeriodicAxes(%s)))"
-            % (uniform.cells, "(%s)" % "".join("%s," % axis for axis in support._names
-                                              if support.periodic(axis))),
+            "Uniform(CartesianGrid(frame=frame, cells=%r, periodic=%s))"
+            % (uniform.cells, "PeriodicAxes((%s))" % "".join(
+                "%s," % axis for axis in support._names if support.periodic(axis))
+               if periodic else None),
             [Choice("cells", uniform.cells, "stated")]))
         return layout
 
-    def boundaries(self, support: Box) -> None:
+    def boundaries(self, support: Box) -> list:
+        """The relations of ``model.on`` that close each boundary piece of the support (2.6.2,
+        D9): each piece that a flux crosses takes one relation of the quantity, and the relations
+        take the boundary policy of the numerics (``MissingBoundaryRealization`` otherwise)."""
         pieces = support.piece_names()
-        if pieces and self.model.terms:
+        relations = list(self.model.boundary_relations)
+        if not pieces:
+            return relations
+        if not self.model.terms:
+            if relations:
+                raise NotYetElaborated("a boundary relation of a balance with no flux",
+                                       _G04, site=relations[0].site)
+            return relations
+        (balance,) = self.model.balances
+        quantity = balance.quantity
+        missing = [name for name in pieces
+                   if not any(relation.quantity is quantity
+                              and any(piece.name == name for piece in relation.pieces)
+                              for relation in relations)]
+        if missing:
             raise MissingBoundaryRealization(
                 "the fluxes of %s cross the boundary pieces %s of %r, which no boundary relation "
-                "closes" % (self.model.terms[0].quantity, ", ".join(pieces), support),
-                write="pops.Periodic(lower, upper) for an axis whose ends are identified; the "
-                      "boundary relations model.on(...) and the boundary policy are elaborated "
-                      "by a later lot of N15 with G04", site=support.site)
+                "closes" % (quantity, ", ".join(missing), support),
+                write="pops.Periodic(lower, upper) for an axis whose ends are identified, or a "
+                      "relation of each piece, model.on(Ω.boundary.%s, %s == g) or "
+                      "model.on(..., outflow(%s))" % (missing[0], quantity, quantity),
+                site=support.site)
+        if self.numerics.boundary is None:
+            raise MissingBoundaryRealization(
+                "the relation %r has no realization: the numerics state no boundary policy"
+                % relations[0], write="pops.Numerics(..., boundary=ghosts())",
+                site=self.numerics.site)
+        return relations
+
+    def boundary_data(self, relations: list) -> dict:
+        """The data g of each value relation, lowered on the model of b6 before its block is
+        made, which registers the parameters that g reads."""
+        return {relation: _number(relation.data) if is_number(relation.data)
+                else self.lower(relation.data)
+                for relation in relations if relation.form == "Value"}
+
+    def boundary_conditions(self, support: Box, frame: Any, block: Any, plan: Any,
+                            states: dict, relations: list, data: dict) -> None:
+        """Run the boundary policy under each relation, check that the ghost it gives is a
+        ghost law of b6, and add the transport boundaries of the block to the plan (T5): the
+        ghost 2 g - u_k of a value and the ghost u_1 of no data, b6's two laws of master
+        (2.6.5), whose b6 conditions ``pops.lib.numerics.ghost_laws`` names (the bridge of the
+        boundary policy, until G04 generates the ghost fills)."""
+        if not relations:
+            return
+        from pops.boundary import TransportBoundarySet
+        from pops.lib.numerics.ghost_laws import realize
+
+        from ._scheme import SchemeLeaf, normal_form
+
+        policy = self.numerics.boundary
+        laws: dict = {}
+        for relation in relations:
+            quantity = relation.quantity
+            state = block[states[quantity]]
+            for _piece, k, value in policy.ghosts(relation, _GHOST_DEPTHS):
+                if relation.form == "Value":
+                    expected = 2 * relation.data - SchemeLeaf(("inner", k), quantity, "u_%d" % k)
+                else:
+                    expected = SchemeLeaf(("inner", 1), quantity, "u_1")
+                if normal_form(value) != normal_form(expected):
+                    raise NotYetElaborated(
+                        "the ghost %s that %r gives under %r at depth %d, which is not a ghost "
+                        "law of b6 (2 g - u_k for a value, u_1 for no data)"
+                        % (text(value), policy, relation, k), _GENERATED_GHOSTS,
+                        site=relation.site)
+            law, spelling, ghost = realize(
+                relation.form, state, data.get(relation), "block[%s]" % quantity.name,
+                self.code(relation.data) if relation.form == "Value" else "")
+            for piece in relation.pieces:
+                laws[getattr(frame.boundaries, piece.name)] = law
+            self.rows.append(Row(
+                repr(relation), "numerics",
+                "%s on %s" % (spelling, ", ".join(piece.name for piece in relation.pieces)),
+                [Choice("form", relation.form, "derived"),
+                 Choice("ghost", "%s, by %r" % (ghost, policy), "derived")]))
+        periodic = tuple(axis for axis, (_, _, flag)
+                         in zip(frame.axes, support.bounds(), strict=True) if flag)
+        plan.boundaries.add(TransportBoundarySet(
+            laws, periodic=PeriodicAxes(periodic) if periodic else None))
 
     def run(self) -> Elaborated:
         model = self.model
@@ -665,7 +891,7 @@ class _Elaboration:
                 "a model of several evolved quantities, whose state is a record (SD42)",
                 "a later lot of N15 with the record states of N8", site=model.balances[1].site)
         support = self.support()
-        self.boundaries(support)
+        relations = self.boundaries(support)
         frame = self.frame(support)
         b6 = _Model(model.name, frame=frame)
         self.rows.insert(0, Row("pops.Model(%r)" % model.name, "model",
@@ -674,10 +900,12 @@ class _Elaboration:
         terms = self.terms(b6, frame, states)
         rates = {balance: self.rate(b6, balance, terms, states) for balance in model.balances}
         plan, selections = self.plan(rates, terms, states)
+        data = self.boundary_data(relations)
         case6 = _Case(model.name)
         block = case6.block(model.name, b6)
+        self.boundary_conditions(support, frame, block, plan, states, relations, data)
         case6.numerics(plan, block=block)
-        self.initial(case6, block, states)
+        self.initial(case6, block, states, frame)
         advance = self.advance(case6, block, states, selections)
         layout = self.layout(support, frame)
         return Elaborated(case=case6, layout=layout, block=block, model=b6, plan=plan,

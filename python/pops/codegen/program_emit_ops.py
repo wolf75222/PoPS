@@ -1679,6 +1679,10 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                            field_plans, target, emit_residual)
     elif v.op == "solve_linear":
         _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
+    elif v.op == "solve_evidence":
+        # SV5: a read of the evidence of a consumed solve, a copy of its report (program_emit_solve).
+        from .program_emit_solve import solve_evidence_cpp
+        var[v.id] = solve_evidence_cpp(v)
     elif v.op in ("solve_outcome", "solve_outcome_component"):
         # Python graph/authoring requires an explicit consumed outcome before a solve result can feed
         # effects. The solve-producing operation has already constructed and guarded its native

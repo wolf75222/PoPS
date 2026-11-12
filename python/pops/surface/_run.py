@@ -421,6 +421,8 @@ def bind(artifact: Any = None, *, params: Any = None, data: Any = None, resource
     (quantity,) = tuple(elaborated.states)          # one evolved quantity at this level
     for binding in bindings:
         datum = case.program.initial_of(quantity)
+        if not isinstance(datum, Datum):
+            continue                # an analytic value, projected by the compiled code (lot E)
         if datum not in initial:
             raise AmbiguousElaboration(
                 "the datum %s, the initial value of %s, is not supplied" % (datum, quantity),

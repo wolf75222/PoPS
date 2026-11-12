@@ -158,3 +158,37 @@ def test_adaptive_step_guards_the_user_face_with_the_frequency_of_its_own_bound(
         assert all(line.rstrip().endswith(
             "&user_face_frequency_%s,pops::nd::FaceFrequencyRule::largest_axis);"
             % line.split("&user_face_frequency_")[1].split(",")[0]) for line in calls), calls
+
+
+def test_adaptive_guard_refusal_carries_the_frequency_of_its_step():
+    """ROM-108: under AdaptiveCFL each user-face guard rethrows its refusal with the frequency of
+    the refused step (the faces' frequency over the stage budget) as a typed payload, which the
+    controller's single retry reads; FixedDt keeps the plain refusal."""
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA
+
+    case, layout, _, _, _, _ = _case(face=True, width=1, strategy=AdaptiveCFL(cfl=.45))
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    for target in ("system", "amr_system"):
+        lines = [line.strip() for line in
+                 emit_cpp_program(resolved.time, model=graph, target=target).splitlines()]
+        guards = [index for index, line in enumerate(lines)
+                  if '"user_face_numerical_stability",503);' in line]
+        assert len(guards) == 2
+        for index in guards:
+            frequency = lines[index - 2].split()[2]
+            assert lines[index - 2].startswith("const pops::Real user_face_update_frequency_")
+            assert lines[index - 1] == "try {"
+            assert lines[index + 1].startswith(
+                "} catch (const pops::runtime::program::StepAttemptRejected& ")
+            assert "static_cast<double>(%s / " % frequency in lines[index + 3]
+            assert lines[index + 4].endswith(
+                '"%s", std::string(pops_face_step_text));' % FACE_STEP_FREQUENCY_SCHEMA)
+
+    fixed, layout, _, _, _, _ = _case(face=True, width=1)
+    resolved = pops.resolve(pops.validate(fixed), layout=layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    source = emit_cpp_program(resolved.time, model=graph, target="system")
+    assert source.count("user_face_numerical_stability") == 2
+    assert FACE_STEP_FREQUENCY_SCHEMA not in source and "pops_face_step_rejected" not in source

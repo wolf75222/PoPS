@@ -2,7 +2,8 @@
 flux and the words of the kinds and the forms, which a case that writes a scheme imports (SU13).
 
 Lot 2 of N15 elaborates ``FaceFlux`` (without ``left=`` and ``right=``) under a ``Flux`` key and
-``Reconstruct`` as the ``reconstruction=`` of a face scheme, ``spectral_radius``,
+``Reconstruct`` as the ``reconstruction=`` of a face scheme, lot B ``Ghost`` under a boundary
+policy (``boundary=``), ``spectral_radius``,
 ``slowest_speed`` and ``fastest_speed`` of a flux at a trace, and ``kinds`` and ``forms``. Every
 other builder and reduction of 2.6.4 is importable and refuses its use with ``NotYetElaborated``,
 which names the lot that elaborates it. The module exports no entity: ``face``, ``cell``, ``term``
@@ -14,11 +15,11 @@ from typing import Any as _Any
 from ._refusal import NotYetElaborated as _NotYetElaborated
 from ._refusal import SymbolNotInSurface as _SymbolNotInSurface
 from ._scheme import (
-    FaceFlux, Reconstruct, fastest_speed, forms, kinds, slowest_speed, spectral_radius,
+    FaceFlux, Ghost, Reconstruct, fastest_speed, forms, kinds, slowest_speed, spectral_radius,
 )
 from ._scheme import _later_builder
 
-_BUILDERS = ("FaceValue", "CellRate", "CellValue", "CellResidual", "Ghost", "BoundaryFlux",
+_BUILDERS = ("FaceValue", "CellRate", "CellValue", "CellResidual", "BoundaryFlux",
              "EdgeFlux", "IntervalFaceFlux", "Transfer")
 _REDUCTIONS = ("sum_faces", "sum_children", "sum_fibre", "sum_edges", "sum_cells",
                "largest_cells", "smallest_cells")
@@ -42,8 +43,8 @@ for _word in _REDUCTIONS:
     globals()[_word] = _reduction(_word)
 
 __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
-    "FaceFlux", "Reconstruct", *_BUILDERS, *_REDUCTIONS, "spectral_radius", "slowest_speed",
-    "fastest_speed", "kinds", "forms"]
+    "FaceFlux", "Reconstruct", "Ghost", *_BUILDERS, *_REDUCTIONS, "spectral_radius",
+    "slowest_speed", "fastest_speed", "kinds", "forms"]
 
 
 def __getattr__(name: str) -> _Any:

@@ -643,6 +643,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         validate_input_regions(self, (operator,), self._current_region(), "set_apply")
         if operator.attrs["apply_block"] is not None:
             raise ValueError("set_apply: operator '%s' already has an apply" % operator.name)
+        # The authoring body itself, kept outside the IR: a reference solver of pops.lib.solve
+        # (SV9) applies the operator inside its own region by calling it again (N9 lot 4).
+        bodies = self.__dict__.setdefault("_operator_apply_bodies", {})
+        bodies[operator.id] = body_fn
         # The apply ops (the in/out placeholders + the body) live in the operator's OWN sub-block, NOT
         # the flat SSA list: they are re-emitted as the C++ apply lambda, never walked at the top level.
         sub = []
