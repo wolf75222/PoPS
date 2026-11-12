@@ -127,7 +127,7 @@ class MovingControlVolumes(MeshDescriptor):
             raise ValueError("geometry evolution must match the exact layout frame and rank")
         self.layout = layout
         self.evolution = evolution
-        self.geometry = geometry
+        # The rule is kept as its data only: a descriptor crosses the compiled boundary.
         self._rule = None if geometry is None else geometry_rule_data(geometry)
 
     def _rule_data(self) -> dict[str, Any]:
@@ -159,9 +159,10 @@ class MovingControlVolumes(MeshDescriptor):
         return self.layout.native_spatial_data()
 
     def resolve_for_case(self, resolver: Any) -> MovingControlVolumes:
-        return type(self)(self.layout.resolve_for_case(resolver),
-                          evolution=self.evolution.resolve_references(resolver),
-                          geometry=self.geometry)
+        result = type(self)(self.layout.resolve_for_case(resolver),
+                            evolution=self.evolution.resolve_references(resolver))
+        result._rule = self._rule
+        return result
 
     def validate(self, context: Any = None) -> bool:
         self.layout.validate(context)

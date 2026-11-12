@@ -19,6 +19,15 @@ def validate_moving_layout_program(program,layout_plan):
         if evolution is None and selected:
             raise ValueError("coupled geometry_state requires its explicit MovingControlVolumes layout")
         if evolution is None: continue
+        from pops._frozen_data import thaw_data
+        from pops.mesh._static_geometry import is_static_coordinate_map
+        if is_static_coordinate_map(thaw_data(evolution)):
+            # A map without a clock is served by the static arrays (N17, C1): one route per map.
+            if selected:
+                raise ValueError("a coordinate map that reads no clock is served by static "
+                                 "geometry arrays; a coupled geometry_state belongs to a map "
+                                 "that reads the clock")
+            continue
         if len(selected)!=1:
             raise ValueError("moving layout requires exactly one coupled physical geometry_state authority")
         if _thaw_json(selected[0].attrs["evolution"])!=_thaw_json(evolution):

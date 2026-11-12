@@ -44,6 +44,36 @@ def _supported_dimensions(value: Any) -> tuple[int, ...]:
     return value
 
 
+def _static_geometry_layout(normalized: Any) -> bool:
+    """Whether a layout is served by static geometry arrays (N17, C1), refusing what they do not
+    serve. A coordinate map that reads neither the clock nor a discrete input is static: the
+    reference box is logical and the physical domain is its image, fixed in time."""
+    from pops._frozen_data import thaw_data
+    from pops.mesh._static_geometry import (StaticGeometryRefusal, is_static_coordinate_map,
+                                            layout_static_geometry)
+
+    if not is_static_coordinate_map(thaw_data(normalized.requirements["geometry_evolution"])):
+        return False
+    layout_id = normalized.handle.qualified_id
+    if normalized.adaptive:
+        raise NativeSpatialLayoutError(
+            "native_static_geometry_adaptive_unavailable",
+            "static geometry arrays on an adaptive layout need the renormalization of child "
+            "measures at regrid, which is not yet provided", layout_id=layout_id)
+    if normalized.options.get("embedded_boundary") is not None:
+        raise NativeSpatialLayoutError(
+            "native_static_geometry_embedded_boundary_unavailable",
+            "static geometry arrays and an embedded boundary are not composed", layout_id=layout_id)
+    try:
+        reading = layout_static_geometry(normalized)
+    except StaticGeometryRefusal as refusal:
+        raise NativeSpatialLayoutError(refusal.code, str(refusal), layout_id=layout_id,
+                                       evidence={"static_geometry": refusal.code}) from None
+    if reading is None:
+        raise RuntimeError("a clock-free coordinate map lost its static reading")
+    return True
+
+
 def native_spatial_layouts(
     layout_plan: Any,
     *,
@@ -64,6 +94,8 @@ def native_spatial_layouts(
     selected_dimensions: set[int] = set()
     for normalized in layout_plan.layouts:
         evolution = normalized.requirements.get("geometry_evolution")
+        if evolution is not None and _static_geometry_layout(normalized):
+            evolution = None
         if evolution is not None and (normalized.adaptive or
                 normalized.native_spatial_layout is None or
                 normalized.native_spatial_layout.dimension != 1 or
