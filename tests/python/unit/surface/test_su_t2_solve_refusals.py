@@ -155,6 +155,22 @@ def test_an_anti_diffusive_relation_is_not_proved_spd_for_cg():
     assert caught.value.phase == "resolve" and caught.value.rule == "IR13"
 
 
+def test_a_relation_of_another_weight_is_refused_by_name():
+    """A1 of the review of #776: 2 X == 2 u + 2 h E(u) + 2 h I(X) on L1-d is refused when the
+    method is traced, naming the weight, not by the codegen of the accepted transport."""
+    @surface.method
+    def doubled(step, explicit, implicit):
+        u, t, h = step.state, step.time, step.dt
+        X = surface.unknown(step.state.space)
+        return surface.Candidate(surface.solve(  # <- doubled
+            2 * X == 2 * u + 2 * h * explicit(u, t) + 2 * h * implicit(X, t + h), X))
+
+    with pytest.raises(surface.NotYetElaborated) as caught:
+        _case(method=doubled)
+    assert "weighs its unknown by 2: this lot elaborates the weight 1" in str(caught.value)
+    assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("doubled"))
+
+
 def test_two_unnamed_solves_of_a_method_are_ambiguous():
     @surface.method
     def twice(step, explicit, implicit):

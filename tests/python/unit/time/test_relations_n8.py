@@ -247,6 +247,21 @@ def test_relations_outside_this_lot_name_their_lot():
             _elaborate(body)
 
 
+def test_a_relation_weighs_its_unknown_by_one():
+    """A1 of the review of #776: the accepted commit attributes the transport of the solution to
+    the right-hand side only at the weight 1, so another weight is refused by name in solve()."""
+    def doubled(B, p, explicit, implicit):
+        with unknowns(U=B.state.space) as z:
+            s = solve(Problem(unknowns=z, equations=(
+                2 * z.U == 2 * B.state + 2 * p.dt * implicit(z.U, B.time + p.dt),)),
+                request=p.request)
+        return Candidate(require_success(s).values.U, B.time + p.dt)
+
+    with pytest.raises(NotYetElaborated, match="weighs its unknown by 2: this lot elaborates "
+                                               "the weight 1"):
+        _elaborate(doubled)
+
+
 def test_a_relation_is_affine_in_its_unknown():
     def body(B, p, explicit, implicit):
         with unknowns(U=B.state.space) as z:

@@ -554,6 +554,15 @@ def solve(problem: Any, *, request: Any = None, name: str | None = None) -> Trac
             "the relation of %s weighs its unknown by %s: this lot elaborates a weight that is a "
             "nonzero number, so that the increment of the solution derives (T34); others come "
             "with %s" % (path, _poly_text(a_poly) if a_poly else "0", _LATER))
+    if dict(a_poly)[0] != 1:
+        # The accepted commit attributes the transport of the solution to the right-hand side
+        # only when the unknown has the weight 1 in the operator (codegen, the rule linear_solve
+        # of the affine quadrature); the division of the relation by its weight is a later lot.
+        raise NotYetElaborated(
+            "the relation of %s weighs its unknown by %s: this lot elaborates the weight 1, "
+            "U == known + sum_k b_k L_k(U); write the relation divided by %s. A relation "
+            "divided by its weight comes with %s" % (path, _poly_text(a_poly), _poly_text(a_poly),
+                                                     _LATER))
     site = SolveSite(path, name, path + "/solve")
     trace.solves.append(site)
     site.request = request
@@ -571,17 +580,16 @@ def solve(problem: Any, *, request: Any = None, name: str | None = None) -> Trac
     point = program.stage("%s_solve%d" % (trace.name, ordinal), c=c)
     trace.stages.append((ordinal, c, "%s_solution%d" % (trace.name, ordinal)))
     site.stage = ordinal
-    sign = 1 if dict(a_poly)[0] > 0 else -1
     if known is None:
         raise NotYetElaborated("the relation of %s is homogeneous: its solution is zero, which "
                                "this lot does not elaborate" % path)
     rhs = program.value("%s_rhs%d" % (trace.name, ordinal),
-                        (known * (-sign))._builder(), at=point)
+                        (known * (-1))._builder(), at=point)
     operator = program.matrix_free_operator(
         "%s_operator%d" % (trace.name, ordinal), domain="state", range_="state",
         ncomp=len(getattr(trace.temporal.n.space, "components", ())) or 1)
-    identity = a_coeff * sign
-    terms = tuple((component, coeff * sign) for component, _, (coeff, _) in residual._images)
+    identity = a_coeff
+    terms = tuple((component, coeff) for component, _, (coeff, _) in residual._images)
 
     def apply(P: Any, _out: Any, value: Any) -> Any:
         result = identity * value

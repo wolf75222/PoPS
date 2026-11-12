@@ -8647,20 +8647,20 @@
           "session_seconds": 7.5
         },
         "tests/python/unit/time/test_relations_n8.py": {
-          "cases": 17,
+          "cases": 18,
           "phase_seconds": 4.6,
           "session_seconds": 4.9
         },
         "tests/python/unit/surface/test_su_t2_solve_refusals.py": {
-          "cases": 16,
+          "cases": 17,
           "phase_seconds": 3.1,
           "session_seconds": 3.4
         }
       },
       "source_sha256": {
         "tests/python/unit/surface/test_su_t3_solves.py": "26efcda730662df56ef1703d1c2e2560c4209b452a3d10bea1ce9cfcc2071e52",
-        "tests/python/unit/time/test_relations_n8.py": "2adb81b1a8eb99d5b06cb3f404b0f155a67ce9501bc5345968b4a21cfbbca6f8",
-        "tests/python/unit/surface/test_su_t2_solve_refusals.py": "324bfd2ede063e238dda7012463e33f1b2381fd937474f51861cff08c68bff71"
+        "tests/python/unit/time/test_relations_n8.py": "bd757b5304182cbdc206f4052a94e333d421443188c58014cdaa318192209765",
+        "tests/python/unit/surface/test_su_t2_solve_refusals.py": "7703f703b84fb282c07036db03c61c30ec123e15fb08ba1cf75624b73c7a9f4f"
       }
     }
   },

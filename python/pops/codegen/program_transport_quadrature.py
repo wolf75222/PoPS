@@ -88,9 +88,14 @@ def accepted_transport_regions(program, captured):
         return node if node.op == "solve_spatial_nonlinear" else None
 
     def linear_solve(value):
-        # A consumed linear solve A X = b whose apply is the identity, with weight exactly one,
-        # plus maps that read no transport: X = b + (I - A) X, so the transport of X is that of
-        # b, with weight one (the IMEX relation of a traced method, lot « solves » of N15).
+        # A consumed linear solve A X = b whose apply holds X once, with weight exactly one, and
+        # whose apply block reads no captured rate (the IMEX relation of a traced method, lot
+        # « solves » of N15). Then X = b + (X - AX) + (AX - b): the other terms of the apply,
+        # X - AX, are images of other occurrences or cell-local terms, read no captured rate, and
+        # carry no captured transport, as diffusive_rhs and source below; the residual AX - b of
+        # the solver is cell-local and has no faces. So the face amounts of a captured occurrence
+        # in X are those of b, with weight one, which is the increment that N8 derives (T34,
+        # U = -(known + sum_k b_k L_k(U)) / a with a = 1). The guess (inputs[2]) carries none.
         node = value
         while node.op in {"solve_outcome", "solve_outcome_component"} and len(node.inputs) == 1:
             node = node.inputs[0]
