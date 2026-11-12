@@ -58,7 +58,8 @@ BRIDGE_WORDS = {("Diffusion", "pops.numerics"), ("riemann", "pops.numerics"),
                 ("fluxes", "pops.lib.numerics"), ("check_plain_function", "pops.surface")}
 # The cg() bridge of MG9 (lot « solves », python/pops/lib/solve/__init__.py): it returns b6's
 # native CG descriptor and refuses the words of 2.6.9 that N9 elaborates with the NotYetElaborated
-# of the surface; both findings leave with the bridge, when N9 writes the reference CG (SV9).
+# of the surface; both findings leave with the bridge, when the N9 lot « La référence sous les
+# solves de relation » runs the reference cg under the relation solves of traced methods.
 SOLVE_BRIDGE = "python/pops/lib/solve/__init__.py"
 SOLVE_BRIDGE_WORDS = {("CG", "pops.solvers"), ("NotYetElaborated", "pops.surface")}
 

@@ -8735,7 +8735,7 @@
           "session_seconds": 4.9
         },
         "tests/python/unit/surface/test_su_t2_solve_refusals.py": {
-          "cases": 18,
+          "cases": 20,
           "phase_seconds": 3.1,
           "session_seconds": 3.4
         }
@@ -8743,7 +8743,7 @@
       "source_sha256": {
         "tests/python/unit/surface/test_su_t3_solves.py": "5fe4c64ca0bb34fa873d9ea1ad181f1645d6d7eee34067e0ae0e9d1f1580ccf3",
         "tests/python/unit/time/test_relations_n8.py": "bd757b5304182cbdc206f4052a94e333d421443188c58014cdaa318192209765",
-        "tests/python/unit/surface/test_su_t2_solve_refusals.py": "7c686e7d4c1444f81fb731ab87ba6c632b1313b6820b142be04bda26d53e2e2b"
+        "tests/python/unit/surface/test_su_t2_solve_refusals.py": "5d3fb0638aeae68c1eecea4cdbd3e5be06a471ad3ad1f0b29f4f19ad29c0ac97"
       }
     }
   },

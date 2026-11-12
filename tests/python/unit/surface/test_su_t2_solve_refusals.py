@@ -172,6 +172,49 @@ def test_a_relation_of_another_weight_is_refused_by_name():
     assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("doubled"))
 
 
+def _case_solvers():
+    """A @pops.solver written in a case, and a copy of the library's cg written in a case: the
+    copy is not the library's word, so it has no bound native (the one CF4 asymmetry that the
+    bridge cg() leaves while it is listed, MG9)."""
+    import inspect
+
+    import pops.lib.solve.krylov as krylov
+
+    @surface.solver
+    def mine(problem, region, max_iterations=10):
+        return problem.candidate(problem.guess, iterations=0, residual_norm=0.0)
+
+    namespace = {"__name__": "a_case"}
+    exec(compile(inspect.getsource(krylov), "a_case.py", "exec"), namespace)  # noqa: S102
+    copy = namespace["cg"]
+    assert copy is not krylov.cg
+    return {"mine": (mine(), "mine(max_iterations=10)"),
+            "copy-of-cg": (copy(), "cg(max_iterations=2000, preconditioner=None)")}
+
+
+@pytest.mark.parametrize("which", ["mine", "copy-of-cg"])
+def test_a_solver_of_a_case_without_a_bound_native_names_the_lot_of_the_reference(which):
+    """T1 of the review of #776 at aff27d9f: a @pops.solver written in a case runs as a reference
+    for problem/region callers; under a relation solve of a traced method only the bound native
+    of the library's cg() runs in this lot (MG9), so the solve is refused naming the N9 lot that
+    runs the reference there, at the line of the solve."""
+    solver, spelled = _case_solvers()[which]
+
+    @surface.method
+    def imex(step, explicit, implicit):
+        u, t, h = step.state, step.time, step.dt
+        X = surface.unknown(step.state.space)
+        return surface.Candidate(surface.solve(  # <- user-solver
+            X == u + h * explicit(u, t) + h * implicit(X, t + h), X))
+
+    with pytest.raises(surface.NotYetElaborated) as caught:
+        _case(method=imex, solvers=lambda m: {m: solver})
+    message = str(caught.value)
+    assert "%s under a relation solve of a traced method" % spelled in message
+    assert "the N9 lot « La référence sous les solves de relation »" in message
+    assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("user-solver"))
+
+
 def test_two_unnamed_solves_of_a_method_are_ambiguous():
     @surface.method
     def twice(step, explicit, implicit):
