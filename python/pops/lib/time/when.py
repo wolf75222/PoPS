@@ -10,7 +10,9 @@ from typing import Any, Callable
 
 
 def every(k: int) -> Callable[[Any], Any]:
-    """The ``when`` body true after every k-th accepted step: ``lambda B: B.steps % k == 0``."""
+    """The ``when`` body true after every k-th accepted step of the run: ``lambda B: B.steps % k
+    == 0``, ``B.steps`` the accepted steps counted from the start of the run (spec 5.2): a run
+    starts at ``pops.run`` or a restored clock, and ``pops.step`` continues it."""
     if isinstance(k, bool) or not isinstance(k, int) or k < 1:
         raise ValueError("every(k) needs an integer k >= 1")
 
