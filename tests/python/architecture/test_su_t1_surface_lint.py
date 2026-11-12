@@ -132,7 +132,7 @@ def test_the_library_written_with_the_surface_passes_the_lint(words):
 
      @pops.method
      def euler(step, rate):
-         request = step.request
+         estimate = step.estimate
          return pops.Candidate(step.state + step.dt * rate(step.state, step.time))
      """, [(5, "F", "word")]),
     # F word: a name of the star import that pops.math does not list

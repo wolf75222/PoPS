@@ -75,7 +75,7 @@ class Tolerance:
 def _solvers(solvers: Any, advance: Any) -> tuple:
     """``solvers={key: solver}``: each key a method value or a solve path ``method.name`` of the
     advance, each solver a value of ``pops.lib.solve`` (2.6.2, SU8)."""
-    from pops.lib.solve import SolverValue
+    from ._solver import SolverValue
 
     from ._method import SolvePath
 
@@ -95,8 +95,8 @@ def _solvers(solvers: Any, advance: Any) -> tuple:
                                    "a later lot of N15 with the field, relation and term solves "
                                    "of N9")
         if not isinstance(solver, SolverValue):
-            raise TypeError("pops.Program(solvers={%r: ...}) takes a solver of pops.lib.solve, "
-                            "such as cg(), got %r" % (key, solver))
+            raise TypeError("pops.Program(solvers={%r: ...}) takes a solver of pops.lib.solve "
+                            "or of @pops.solver, such as cg(), got %r" % (key, solver))
         rows.append((key, solver))
     return tuple(rows)
 
@@ -160,6 +160,49 @@ class Advance:
         return text + ")"
 
 
+def _initial_value(quantity: Quantity, value: Any, site: Any) -> Any:
+    """The initial value of ``quantity`` (CN12, Q3, lot D-E): a datum, ``pops.project(e, ...)``,
+    or a value that reads no coordinate, whose cell average is exact."""
+    from ._expr import Arith, Call, Expr, is_number, text, walk
+    from ._geometry import Coordinate, MathConstant
+    from ._model import ModelConstant, Parameter
+    from ._project import Projection
+    from ._refusal import AmbiguousElaboration, SupportMismatch
+
+    if isinstance(value, Datum):
+        if value.space.support is not quantity.space.support:
+            raise SupportMismatch("the datum %s lives on another support than %s"
+                                  % (value, quantity), write="a datum of the support of %s"
+                                                             % quantity)
+        return value
+    expression = value.expression if isinstance(value, Projection) else value
+    if not (is_number(expression) or isinstance(expression, Expr)):
+        raise TypeError("pops.Program(initial={%s: ...}) takes a datum, pops.project(e, ...) or "
+                        "a value, got %r" % (quantity, value))
+    for node in walk(expression):
+        if isinstance(node, Coordinate):
+            if node.support is not quantity.space.support:
+                raise SupportMismatch(
+                    "the initial value of %s reads the coordinate %s of another support"
+                    % (quantity, node.name), write="the coordinates of the support of %s"
+                                                   % quantity)
+            if not isinstance(value, Projection):
+                raise AmbiguousElaboration(
+                    "the initial value %s of %s reads a coordinate, and its cell average is a "
+                    "choice: the rule or the exact integral of the projection" % (text(value),
+                                                                                  quantity),
+                    write="initial={%s: pops.project(e, quadrature=GaussLegendre(n))}, or "
+                          "integral=I" % quantity, site=site)
+        elif isinstance(node, Datum):
+            raise NotYetElaborated("an initial value that reads the datum %s" % node,
+                                   "a later lot of N15 with the data fields of Q3")
+        elif isinstance(node, Expr) and not isinstance(
+                node, (ModelConstant, Parameter, MathConstant, Arith, Call)):
+            raise NotYetElaborated("an initial value that reads %s" % text(node),
+                                   "a later lot of N15 with the definitions of N10")
+    return value
+
+
 class Program:
     """``pops.Program(advance=A, initial={u: u0})`` (5.2, CN12, Q3)."""
 
@@ -191,16 +234,7 @@ class Program:
             if not isinstance(quantity, Quantity):
                 raise TypeError("pops.Program(initial=...) is keyed by quantities, got %r"
                                 % (quantity,))
-            if not isinstance(value, Datum):
-                raise NotYetElaborated("an initial value other than a datum, %r" % (value,),
-                                       "a later lot of N15 with the projections of CN12 (G07)")
-            if value.space.support is not quantity.space.support:
-                from ._refusal import SupportMismatch
-
-                raise SupportMismatch("the datum %s lives on another support than %s"
-                                      % (value, quantity), write="a datum of the support of %s"
-                                                                 % quantity)
-            rows.append((quantity, value))
+            rows.append((quantity, _initial_value(quantity, value, self.site)))
         self.advance = advance
         self.initial = tuple(rows)
 

@@ -1,17 +1,21 @@
-"""The solvers of the surface (spec 0.3, 2.6.9 ``pops.lib.solve``; SV4, SV9, SV11; MG9).
+"""The solve algorithms of the library, written with ``@pops.solver`` (spec 0.3 2.6.9, SV9).
 
-``cg(preconditioner=None, max_iterations=2000)`` is the one solver of this lot. It is a bridge of
-MG9: it realizes the solve on b6's native conjugate gradients (``pops.solvers.CG``), until N9
-writes the reference CG of SV9 in this module, Python over the IR, with the native CG behind it as
-a substitution qualified by Trace (§17.1 « Runs », SV13, CF4). The bridge leaves within Phase 1,
-whose exit requires the list of bridges of MG9 empty (spec line 3632).
+``cg(preconditioner=None, max_iterations=2000)`` is the reference conjugate gradient of the row
+``cg`` of 2.6.9. A case passes the called word as the value of ``solvers={key: cg()}`` (SV4), and
+the solve gives it its request (SV3). The native ``solve_cg`` is a bound substitution of this
+reference (SV12, SV13) that runs only under ``pops.auto()`` until SV-T2 qualifies it at 64 ranks
+(N9 lot 4, Q2).
 
-A solver of this module is a reference that the realization of a solve path names
-(``solvers={method: cg()}``). Its protocol with the traced methods of N8 is ``requires``, the
-properties of the operator that it needs, and ``linear_solver(request=)``, the b6 descriptor of a
-linear solve whose operator the relation composed: conjugate gradients require a symmetric
-positive definite operator, and N8 refuses a solve whose properties do not derive it with
-``PropertyNotDerived`` (K4, IR16).
+**The relation solves of a traced method (N15 lot « solves », §5.5) run the bound native.** A
+``pops.solve`` of a relation in a method body composes its operator with ``matrix_free_operator``
+and solves it with b6's conjugate gradients, ``pops.solvers.CG``, under the request of the solve:
+the passes that read an accepted step (the affine decomposition of the accepted transport, the
+trial rows and the attempt reuse of N8, the partition and exchange passes) know that node and not
+yet the outcome of the reference. ``cg`` therefore stays on the MG9 list of bridges, with this
+narrower reason, until the N9 lot « La référence sous les solves de relation » runs the reference
+there (N9 lot 4, step 2, ruling of 12/11 00:52). Conjugate gradients need a symmetric positive
+definite operator: the relation solve derives it from the claims of its components (IR16) and
+refuses it otherwise with ``PropertyNotDerived`` (K4).
 
 Every other word of 2.6.9 is importable and refuses its use with the lot that elaborates it.
 """
@@ -19,59 +23,31 @@ from __future__ import annotations
 
 from typing import Any
 
+from .krylov import cg
+
 _LATER = "N9 (the references of SV9 and the selection of SV11)"
 
 
-class SolverValue:
-    """A solver of ``pops.lib.solve``, the value of an entry of ``solvers=``."""
+def _native_cg(options: dict, request: Any) -> Any:
+    """The b6 descriptor of conjugate gradients that a relation solve runs under ``cg(...)``, with
+    the request of the solve (SV3, SV4): the bridge of MG9 named above."""
+    from pops.solvers import CG
 
-    __slots__ = ("word",)
-
-    def __init__(self, word: str) -> None:
-        self.word = word
-
-
-class _CG(SolverValue):
-    __slots__ = ("preconditioner", "max_iterations")
-
-    def __init__(self, preconditioner: Any, max_iterations: Any) -> None:
-        super().__init__("cg")
-        if preconditioner is not None:
-            from pops.surface import NotYetElaborated
-
-            raise NotYetElaborated("cg(preconditioner=...), the preconditioners of SV11", _LATER)
-        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) \
-                or max_iterations < 1:
-            raise ValueError("cg(max_iterations=n) needs an integer n >= 1, got %r"
-                             % (max_iterations,))
-        self.preconditioner = preconditioner
-        self.max_iterations = max_iterations
-
-    # Conjugate gradients need a symmetric positive definite operator (IR16): the solve of a
-    # relation that does not derive it is refused with PropertyNotDerived (K4).
-    requires = ("symmetric_positive_definite",)
-
-    def linear_solver(self, *, request: Any) -> Any:
-        """The b6 descriptor of conjugate gradients for a solve of ``request`` (SV3, SV4)."""
-        from pops.solvers import CG
-
-        rtol = 0.0 if request.rtol is None else float(request.rtol)
-        atol = None if request.atol is None else float(request.atol)
-        return CG(max_iter=self.max_iterations, rel_tol=rtol, abs_tol=atol)
-
-    def describe(self) -> str:
-        return ("the native conjugate gradients of b6, pops.solvers.CG(max_iter=%d), a bridge of "
-                "MG9 until the reference CG of N9" % self.max_iterations)
-
-    def __repr__(self) -> str:
-        return "cg()" if self.max_iterations == 2000 else "cg(max_iterations=%d)" \
-            % self.max_iterations
+    max_iterations = options["max_iterations"]
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) \
+            or max_iterations < 1:
+        raise ValueError("cg(max_iterations=n) takes an integer n >= 1, got %r"
+                         % (max_iterations,))
+    rtol = 0.0 if request.rtol is None else float(request.rtol)
+    atol = None if request.atol is None else float(request.atol)
+    return CG(max_iter=max_iterations, rel_tol=rtol, abs_tol=atol)
 
 
-def cg(*, preconditioner: Any = None, max_iterations: int = 2000) -> SolverValue:
-    """``cg(preconditioner=None, max_iterations=2000)``: conjugate gradients, for a symmetric
-    positive definite operator (IR16); exhausting the iterations fails the solve (SV10)."""
-    return _CG(preconditioner, max_iterations)
+cg.bind_relation_native(
+    _native_cg, requires=("symmetric_positive_definite",),
+    description="the native conjugate gradients of b6, pops.solvers.CG, which a relation solve of "
+                "a traced method runs (a bridge of MG9 until the N9 lot « La référence sous les "
+                "solves de relation » runs the reference there)")
 
 
 def _later(word: str) -> Any:
@@ -92,5 +68,5 @@ jacobi = _later("jacobi")
 newton = _later("newton")
 dense_lu = _later("dense_lu")
 
-__all__ = ["CGS2", "SolverValue", "auto", "bicgstab", "cg", "dense_lu", "gmres", "jacobi",
-           "newton", "richardson"]
+__all__ = ["CGS2", "auto", "bicgstab", "cg", "dense_lu", "gmres", "jacobi", "newton",
+           "richardson"]

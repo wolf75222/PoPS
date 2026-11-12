@@ -251,6 +251,11 @@ class ComputedDt(StepStrategy):
                    clip_to_frontier=clipped)
 
 
+# The typed refusal of a riemann.User guard under a strategy that proposes from the face speeds:
+# its payload is the frequency of the refused step, in C hexadecimal notation (ROM-108).
+FACE_STEP_FREQUENCY_SCHEMA = "pops.face-step-frequency@1"
+
+
 @register_step_strategy_type
 @dataclass(frozen=True, slots=True)
 class AdaptiveCFL(StepStrategy):

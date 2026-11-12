@@ -208,7 +208,7 @@ def test_inspect_reports_the_solve_and_its_certificate(l1d):
     assert "[program] pops.solve(...) in imex_euler" in report
     assert "path = imex_euler (derived)" in report
     assert "guess = the state at the start of the attempt (SV3) (derived)" in report
-    assert "solver = cg() (stated)" in report
+    assert "solver = cg(max_iterations=2000, preconditioner=None) (stated)" in report
     assert "SPD certificate = derived (IR16) from the substituted operator" in report
     assert "kappa = nu = 0.01 >= 0" in report
     assert "tolerance = pops.Tolerance(rtol=1e-10, atol=1e-12) (stated)" in report

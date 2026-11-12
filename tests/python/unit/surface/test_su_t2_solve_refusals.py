@@ -151,7 +151,8 @@ def test_an_anti_diffusive_relation_is_not_proved_spd_for_cg():
 
     with pytest.raises(PropertyNotDerived) as caught:
         _case(method=backward)
-    assert "cg() needs a symmetric positive definite operator" in str(caught.value)
+    assert "cg(max_iterations=2000, preconditioner=None) needs a symmetric positive definite " \
+        "operator" in str(caught.value)
     assert caught.value.phase == "resolve" and caught.value.rule == "IR13"
 
 
@@ -201,7 +202,7 @@ def test_named_solves_take_their_keys():
     case = _case(method=twice, solvers=lambda m: {m.first: cg(), m.second: cg(max_iterations=50)})
     first, second = case.elaborated.advance.trace.solves
     assert (first.path, second.path) == ("twice/first", "twice/second")
-    assert second.request.atol == 1e-6 and second.solver.max_iterations == 50
+    assert second.request.atol == 1e-6 and second.solver.options["max_iterations"] == 50
 
 
 def test_the_options_of_pops_solve_outside_this_lot_name_their_lot():
@@ -245,10 +246,12 @@ def test_a_tolerance_states_a_positive_rtol_or_atol():
 def test_cg_options_outside_this_lot_name_their_lot():
     from pops.lib import solve
 
-    with pytest.raises(surface.NotYetElaborated, match="preconditioners of SV11"):
+    with pytest.raises(surface.NotYetElaborated, match="a preconditioned solver.*G10"):
         cg(preconditioner=object())
+    # The reference checks its budget when its body runs; the bound native that a relation solve
+    # runs checks it when the solve is traced.
     with pytest.raises(ValueError, match="max_iterations=n"):
-        cg(max_iterations=0)
+        _case(solvers=lambda imex: {imex: cg(max_iterations=0)})
     for word in ("auto", "gmres", "bicgstab", "newton", "jacobi", "richardson", "dense_lu"):
         with pytest.raises(surface.NotYetElaborated, match="N9"):
             getattr(solve, word)()
