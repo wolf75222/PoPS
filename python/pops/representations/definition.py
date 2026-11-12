@@ -842,7 +842,7 @@ def cells_not_affine(layout: Any) -> str | None:
 
 
 def inventory_weights(quantity: Any, representation: Any, *,
-                      layout: Any = None) -> tuple[Polynomial, ...]:
+                      layout: Any) -> tuple[Polynomial, ...]:
     """The rate weights an inventory of ``quantity`` reads, or a named refusal.
 
     An inventory is sum_K m_K^T c_K, never sum_K c_K. ``MeasureMissing`` (D4, validate) has the two
@@ -853,10 +853,12 @@ def inventory_weights(quantity: Any, representation: Any, *,
     conservation claim, which reads w_K, is then refused with ``ConservationNotStructural``
     (N16 5.2), not here.
 
-    ``layout`` is the normalized layout row of the quantity's configuration. The weights of a
-    decode that reads the point are moments of the reference box, exact only on affine cells
-    (``rate_weights``): on a chart or a moving map they are refused by name. One constant mode,
-    m_K = c mu(K), holds on every configuration."""
+    ``layout`` is the normalized layout row of the quantity's configuration, a required keyword
+    (review of #789, A1): a caller with no configuration writes ``layout=None`` and so states that
+    the reference-box moments are its weights. The weights of a decode that reads the point are
+    moments of the reference box, exact only on affine cells (``rate_weights``): on a chart or a
+    moving map they are refused by name. One constant mode, m_K = c mu(K), holds on every
+    configuration."""
     from pops.time._program.traced_method import NotYetElaborated
     definition = representation.definition if isinstance(
         representation, ElaboratedRepresentation) else representation
