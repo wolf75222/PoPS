@@ -228,6 +228,27 @@ def test_a_second_run_continues_and_rewrites_its_series(compiled, tmp_path):
 
 
 
+def test_published_arrays_keep_the_identity_of_their_representation(compiled, tmp_path):
+    """G03 lot E (K4): the run publishes result.state[u] and the rows of its Outputs under the
+    elaborated identity of u's representation, and a published array binds again as the datum of
+    a quantity on the same support; on another support it is refused before the native bind
+    (tests/python/unit/surface/test_published_representation.py)."""
+    from pops.surface._run import published_representation
+    u, by_steps = compiled["u"], compiled["by_steps"]
+    expected = compiled["case"].elaborated.representations[u]
+    simulation = surface.bind(compiled["artifact"], params={compiled["b"]: B},
+                              data={compiled["u0"]: _initial()}, directory=tmp_path / "first")
+    result = simulation.run(until=0.02)
+    final = result.state[u]
+    assert published_representation(final) == expected
+    assert all(published_representation(row["u"]) == expected
+               for rows in result.outputs.values() for row in rows)
+    again = surface.bind(compiled["artifact"], params={compiled["b"]: B},
+                         data={compiled["u0"]: final}, directory=tmp_path / "again")
+    restarted = again.run(until=0.01)
+    _bitwise(restarted.outputs[by_steps][0]["u"], final)
+
+
 def test_a_later_run_that_starts_off_the_lattice_of_every_is_refused(compiled, tmp_path):
     """F1 of the review of lot G: the run would publish N8's k H, where the spec gives t0 + k H;
     it is refused before it runs, and the simulation is left as it was."""

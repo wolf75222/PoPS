@@ -37,12 +37,15 @@ from __future__ import annotations
 
 import math as _math
 import os
+import weakref as _weakref
 from typing import Any
 
 import numpy as _np
 
 from ._model import Datum, Model, Parameter, Quantity
-from ._refusal import AmbiguousElaboration, NotYetElaborated, surface_entry, user_site
+from ._refusal import (
+    AmbiguousElaboration, NotYetElaborated, SupportMismatch, surface_entry, user_site,
+)
 
 _GPU = "a later lot of N15 with the device storage of G13 and the GPU run of Q03a"
 _MPI = "a later lot of N15 with the distributed runs of N10"
@@ -365,6 +368,55 @@ def from_layout(array: Any, cells: tuple) -> Any:
     return _np.ascontiguousarray(_np.transpose(value[0]))
 
 
+# --- published arrays (G03 lot E, K4) -------------------------------------------------------------
+# An array that a run publishes, in ``result.state[u]`` or in a publication of an Output, keeps the
+# elaborated identity of u's representation (``surface/_elaborate.py``, ``elaborated_representation``)
+# for as long as the array lives. ``bind(data=...)`` reads it back: an array published on one
+# support, or under one representation, is refused as the datum of a quantity on another, even when
+# the shapes agree. An array the user writes, or copies, carries no identity: giving it is an
+# authoring assertion, as declaring a ScientificValue on a bare array is.
+
+_PUBLISHED: dict = {}
+
+
+def publish(array: Any, representation: Any) -> Any:
+    """``array`` with the elaborated identity it is published under."""
+    key = id(array)
+
+    def forget(_reference: Any, key: int = key) -> None:
+        _PUBLISHED.pop(key, None)
+
+    _PUBLISHED[key] = (_weakref.ref(array, forget), representation)
+    return array
+
+
+def published_representation(array: Any) -> Any:
+    """The elaborated identity under which a run published ``array``, or None."""
+    entry = _PUBLISHED.get(id(array))
+    if entry is None or entry[0]() is not array:
+        return None
+    return entry[1]
+
+
+def require_published_under(array: Any, expected: Any, where: str) -> None:
+    """K4: a published array is read only under the elaborated identity it was published under."""
+    written = published_representation(array)
+    if written is None or written == expected:
+        return
+    if written.space.support != expected.space.support:
+        raise SupportMismatch(
+            "%s gives an array that a run published on the support %s, as the datum of a "
+            "quantity on the support %s; equal shapes do not make supports interchangeable"
+            % (where, _support_text(written), _support_text(expected)),
+            write="the array on the support of the datum, or a pops.Map between the supports")
+    expected.require_same(written, where=where)
+
+
+def _support_text(representation: Any) -> str:
+    return " x ".join("%s in %s" % (name, domain)
+                      for name, domain in representation.space.support.coordinates)
+
+
 @surface_entry
 def bind(artifact: Any = None, *, params: Any = None, data: Any = None, resources: Any = None,
          directory: Any = None, restart: Any = None, migrate: Any = None) -> Simulation:
@@ -415,6 +467,9 @@ def bind(artifact: Any = None, *, params: Any = None, data: Any = None, resource
         if not quantities:
             raise NotYetElaborated("pops.bind(data={%s: ...}) for a datum that no initial value "
                                    "reads" % key, "a later lot of N15 with the data fields of Q3")
+        for quantity in quantities:
+            require_published_under(value, elaborated.representations[quantity],
+                                    "pops.bind(data={%s: array})" % key)
         initial[key] = to_layout(value, cells, "pops.bind(data={%s: array})" % key)
     supplied: dict = {}
     bindings = tuple(artifact.compiled.plan.initial_condition_plan.bindings)
@@ -601,9 +656,11 @@ class Simulation:
         elaborated = case.elaborated
         cells = self._cells
         states = []
+        representations = elaborated.representations
         for quantity in elaborated.states:
             block = case.model.name             # the block of the elaborated case (SU8)
-            states.append((quantity, from_layout(result.state[block], cells)))
+            states.append((quantity, publish(from_layout(result.state[block], cells),
+                                             representations[quantity])))
         outputs = {}
         regions = self.artifact.case.outputs
         for output, lowered in zip(regions, elaborated.outputs, strict=True):
@@ -611,8 +668,9 @@ class Simulation:
             for index, publication in enumerate(result.outputs.get(lowered, ())):
                 if not output.keeps(publication.time, first_run, index):
                     continue
-                values = {name: from_layout(publication.values[name], cells)
-                          for name, _ in output.record.items()}
+                values = {name: publish(from_layout(publication.values[name], cells),
+                                        representations[quantity])
+                          for name, quantity in output.record.items()}
                 rows.append(Publication(publication.time, publication.macro_step, values))
             self._series[output].extend(rows)
             outputs[output] = tuple(rows)
