@@ -142,7 +142,7 @@ class SolveOutcome:
         return result
 
     @property
-    def evidence(self) -> "SolveEvidence":
+    def evidence(self) -> SolveEvidence:
         """The evidence of a consumed solve (spec 0.3 SV5): its iterations and the norm of its last
         physical residual, in the request's norm. It reports what the realization did and never
         decides success: the gates of SV8 decide, and a failed solve does not continue past its
@@ -192,14 +192,12 @@ class SolveEvidence:
 
     def _value(self, field: str) -> Any:
         if field not in self._values:
-            from pops.time._program.structured_control import new_typed, scalar_signature
-
             kind = "int64" if field == "iterations" else "scalar"
             with authoring_transaction(self._program):
-                self._values[field] = new_typed(
-                    self._program, scalar_signature(kind), "solve_evidence", (self._outcome,),
-                    {"field": field}, point=self._outcome.point,
-                    name="%s_%s" % (self._outcome.name, field))
+                self._values[field] = self._program._new(
+                    kind, "solve_evidence", (self._outcome,), {"field": field},
+                    "%s_%s" % (self._outcome.name, field), None, space=None, field_context=None,
+                    state_ref=None, point=self._outcome.point, inherit_state_ref=False)
         return self._values[field]
 
     @property

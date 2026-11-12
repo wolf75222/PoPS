@@ -133,7 +133,7 @@ class Scalar:
     def _context(self) -> _Lowering:
         return _active("a scalar of a solver")
 
-    def _materialize(self, expression: Any, what: str) -> "Scalar":
+    def _materialize(self, expression: Any, what: str) -> Scalar:
         context = self._context()
         return Scalar(context.program.scalar_expression(context.fresh(what), expression))
 
@@ -157,7 +157,7 @@ class Scalar:
     def __rtruediv__(self, other): return self._binary(other, lambda a, b: a / b, True)
     def __neg__(self): return self._binary(-1.0, lambda a, b: a * b)
 
-    def _compare(self, other: Any, cmp: str) -> "Scalar":
+    def _compare(self, other: Any, cmp: str) -> Scalar:
         program = self._context().program
         rhs = _scalar_input(other, "a comparison")
         if isinstance(rhs, float) and _pymath.isinf(rhs) and rhs > 0:
@@ -180,11 +180,11 @@ class Scalar:
     def __ror__(self, other): return Scalar(_bool(other) | self.value)
     def __invert__(self): return Scalar(~self.value)
 
-    def __abs__(self) -> "Scalar":
+    def __abs__(self) -> Scalar:
         from pops._ir.ops import abs_
         return self._materialize(abs_(self.value), "abs")
 
-    def __pops_elementary__(self, word: str) -> "Scalar":
+    def __pops_elementary__(self, word: str) -> Scalar:
         if word != "sqrt":
             raise NotYetElaborated("%s of a scalar of a solver" % word, _N9_LATER)
         return self._materialize(self.value ** 0.5, "sqrt")
@@ -223,7 +223,7 @@ class Field:
         return context.program.value(context.fresh(what), self.expression,
                                      at=self.template.point)
 
-    def _combine(self, other: Any, sign: float) -> "Field":
+    def _combine(self, other: Any, sign: float) -> Field:
         if not isinstance(other, Field):
             raise TypeError("a field of a solver adds only another field, got %r" % (other,))
         if sign > 0:
@@ -233,7 +233,7 @@ class Field:
     def __add__(self, other): return self._combine(other, 1.0)
     def __sub__(self, other): return self._combine(other, -1.0)
 
-    def _scaled_by(self, factor: Scalar, fn: Any, swap: bool) -> "Field":
+    def _scaled_by(self, factor: Scalar, fn: Any, swap: bool) -> Field:
         if fn(2.0, 3.0) != 6.0:
             raise TypeError("a field of a solver is scaled by a scalar only")
         return Field(factor.value * self.expression, self.template)
@@ -285,7 +285,7 @@ class Record:
         return context.program.product(**members)
 
     @staticmethod
-    def from_program(product: Any, template: "Record") -> "Record":
+    def from_program(product: Any, template: Record) -> Record:
         context = _active("pops.record")
         items = {}
         for name, item in template._items.items():
@@ -381,7 +381,7 @@ class Request:
 
     rtol: float
     atol: float
-    problem: "Problem"
+    problem: Problem
 
     def norm(self, value: Any) -> Scalar:
         """The norm of the request: sqrt of the pairing of a field with itself."""
@@ -464,7 +464,7 @@ class Problem:
                 % (" ".join(missing), " ".join(missing)),
                 write="a realization whose preconditions the problem meets, such as gmres()")
 
-    def candidate(self, solution: Any, *, iterations: Any) -> "_Candidate":
+    def candidate(self, solution: Any, *, iterations: Any) -> _Candidate:
         return _Candidate(solution, iterations)
 
     def __getattr__(self, name: str) -> Any:
@@ -474,7 +474,7 @@ class Problem:
 class _Deferred:
     """A field of the result of ``region.iterate``, read after the solve is consumed."""
 
-    def __init__(self, iteration: "_Iteration", name: str) -> None:
+    def __init__(self, iteration: _Iteration, name: str) -> None:
         self.iteration = iteration
         self.name = name
 
@@ -632,7 +632,7 @@ class SolverDefinition:
                         if name not in _ENTITIES}
 
     @surface_entry
-    def __call__(self, *args: Any, **options: Any) -> "SolverValue":
+    def __call__(self, *args: Any, **options: Any) -> SolverValue:
         if args:
             raise TypeError("a solver takes its options by keyword (SU8): %s(%s)"
                             % (self.function.__name__,
@@ -667,7 +667,7 @@ class SolverValue:
         self.options = dict(options)
         self.request = request
 
-    def with_request(self, *, rtol: float, atol: float) -> "SolverValue":
+    def with_request(self, *, rtol: float, atol: float) -> SolverValue:
         """The same solver with the request of the solve that runs it (SV3, SU9)."""
         rtol, atol = float(rtol), float(atol)
         if not (0.0 <= rtol < 1.0) or not atol >= 0.0 or not (_pymath.isfinite(atol)):
@@ -676,7 +676,7 @@ class SolverValue:
             raise ValueError("a request needs rtol > 0 or atol > 0")
         return SolverValue(self.definition, self.options, (rtol, atol))
 
-    def prepare_program_solve(self) -> "SolverValue":
+    def prepare_program_solve(self) -> SolverValue:
         if self.request is None:
             raise ValueError("%r has no request; the solve gives it one (tolerance=, SV3)" % self)
         return self
@@ -771,7 +771,7 @@ class ReferenceOutcome:
             return program.value("%s_solution" % self._name, 1.0 * solution, at=at)
 
     @property
-    def evidence(self) -> "ReferenceEvidence":
+    def evidence(self) -> ReferenceEvidence:
         if self._success is None:
             raise TypeError("the evidence of a solve is readable only after consume (SV5)")
         if self._evidence is None:

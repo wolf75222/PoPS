@@ -19,7 +19,7 @@ from pops.lib.solve import cg, krylov
 from pops.time.solve_outcome import FailRun, RejectAttempt
 
 
-def _program(solver, *, properties=None, consume=RejectAttempt(), read_evidence=False):
+def _program(solver, *, properties=None, consume=None, read_evidence=False):
     from pops.domain import CartesianDomain
     from pops.frames import Cartesian2D
 
@@ -40,7 +40,7 @@ def _program(solver, *, properties=None, consume=RejectAttempt(), read_evidence=
         operator, temporal.n, nullspace=None,
         properties=properties or LinearOperatorProperties.symmetric_positive_definite())
     outcome = program.solve(problem, solver=solver, name="sol")
-    solution = outcome.consume(action=consume)
+    solution = outcome.consume(action=RejectAttempt() if consume is None else consume)
     if read_evidence:
         program.record_scalar("cg_residual", outcome.evidence.residual_norm)
     program.commit(temporal.next, program.value("accepted", solution, at=temporal.next.point))
@@ -130,7 +130,7 @@ def test_the_evidence_is_read_after_consumption_only():
     program, outcome = _program(_reference())
     evidence = outcome.evidence
     with pytest.raises(NotImplementedError, match="correction_norm"):
-        evidence.correction_norm
+        _ = evidence.correction_norm
     assert evidence.iterations.vtype == "int64"
     assert evidence.residual_norm.vtype == "scalar"
 
@@ -142,7 +142,7 @@ def test_a_reference_outcome_is_not_readable_before_consume():
     unconsumed = ReferenceOutcome.__new__(ReferenceOutcome)
     unconsumed._success = None
     with pytest.raises(TypeError, match="after consume"):
-        unconsumed.evidence
+        _ = unconsumed.evidence
 
 
 def test_failrun_on_a_reference_is_left_to_a_later_lot():

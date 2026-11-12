@@ -18,6 +18,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-90 (N9, lot 4): the reference conjugate gradient `pops.lib.solve.cg(preconditioner=None,
+  max_iterations=2000)`, written with `@pops.solver` over the entities `problem` and `region`
+  (SV9, SU15) and lowered onto one Program `iterate` in one captured region. It mirrors the native
+  `solve_cg` branch by branch (cycle scale, subnormal restart, no confirmation at the cap, final
+  true-residual check), and its failures are variants of T39 with their reason. The native CG
+  is a substitution of its Trace class (SV13): the same iteration counts on the Trace problems at
+  one and two ranks. `outcome.evidence` (iterations, residual norm, reason; SV5) is readable after
+  consumption on both routes and emitted only when read; `correction_norm` is refused.
 - ROM-98 (N15, lot 2b): schemes of one's own on a support of rank two and three. A flux is
   written by its axis components, `model.flux(of=u, value=vector(a, b) * u)`, and lowered on the
   b6 dictionary per axis with the waves dF_a/du of each component; in a scheme,
