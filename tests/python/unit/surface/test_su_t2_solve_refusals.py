@@ -111,17 +111,82 @@ def test_solvers_are_keyed_by_handles_and_take_solvers_of_the_library():
         _case(solvers=lambda imex: {imex: "cg"})
 
 
-def test_a_coefficient_that_is_a_parameter_names_the_exit_test_that_claims_it():
-    """§17.1 writes nu = model.parameter("nu", default=1e-2, admissible=pops.Positive()). The
-    reference cg() reads it where the StencilFlux reads it; the claim of the rate from the
-    admissibility of nu is the exit test of the N9 lot (§3.5), which refuses it until then."""
-    with pytest.raises(surface.NotYetElaborated) as caught:
-        _case(nu=lambda model: model.parameter("nu", default=1e-2,
-                                               admissible=surface.Positive()))
+def _nu(admissible=surface.Positive()):
+    return lambda model: model.parameter("nu", default=1e-2, admissible=admissible)
+
+
+def test_a_coefficient_that_is_a_parameter_is_claimed_from_its_admissible_set():
+    """§17.1 writes nu = model.parameter("nu", default=1e-2, admissible=pops.Positive()) (§3.5 of
+    the N9 lot « La référence sous les solves de relation »): the reference cg() reads nu where the
+    StencilFlux of two_point() reads it, inside the region of the solve, and the claim of the rate
+    holds for every value that the bind accepts, which pops.inspect reports. The native run of the
+    exit test is tests/python/integration/runtime/test_relation_solve_parameter_n9_native.py."""
+    case = _case(nu=_nu())
+    (solve,) = [value for value in case.elaborated.case._time._values
+                if value.op == "solve_linear"]
+    assert solve.attrs["realization"]["kind"] == "reference"
+    report = str(surface.inspect(case))
+    assert "implicit operator = implicit: the two_point() rate of -nu * grad(u), kappa = nu " \
+        "(derived)" in report
+    assert "kappa = nu >= 0 for every value of nu admissible in pops.Positive(), which the bind " \
+        "checks, and the two-point flux of a uniform periodic grid is symmetric negative " \
+        "semidefinite" in report
+
+
+def test_a_parameter_with_no_admissible_set_gives_no_claim_and_cg_refuses_it():
+    """§3.5: a nu with no admissible set gives the rate no sign, so cg() refuses the relation
+    with PropertyNotDerived, naming the parameter and how to give it its sign."""
+    with pytest.raises(PropertyNotDerived) as caught:
+        _case(nu=_nu(admissible=None))
     message = str(caught.value)
-    assert "reads the parameter nu" in message
-    assert "write model.constant('nu', value=...)" in message
-    assert "the exit test of the N9 lot « La référence sous les solves de relation »" in message
+    assert "cg(max_iterations=2000, preconditioner=None) needs a symmetric positive definite " \
+        "operator" in message
+    assert "the sign of kappa = nu is not derived from the admissible sets of nu " \
+        "(model.parameter('nu', ..., admissible=pops.Positive()) gives a parameter its sign)" \
+        in message
+
+
+@pytest.mark.parametrize("coefficient, kappa, negative_semidefinite", [
+    (lambda nu, u: nu, "nu", True),
+    (lambda nu, u: 2 * nu, "2 * nu", True),
+    (lambda nu, u: nu * nu, "nu * nu", True),
+    (lambda nu, u: nu + 1, "nu + 1", False),
+])
+def test_the_claim_of_a_parameter_is_the_sign_that_its_admissible_set_derives(
+        coefficient, kappa, negative_semidefinite):
+    """A product of numbers and parameters admissible in pops.Positive() has their sign; a sum
+    has none that this lot derives (R2, K7)."""
+    domain, model, u, u0, advection, diffusion, numerics = _model(nu=_nu(), coefficient=coefficient)
+    view = surface.TermView(diffusion, None, None)
+    claims = linear_claims(view, scheme=numerics.scheme_of(diffusion), weight=1, layout={
+        "uniform": True, "cartesian": True, "periodic": True})
+    assert claims.symmetric and claims.homogeneous
+    assert claims.negative_semidefinite is negative_semidefinite
+    assert claims.description.endswith("kappa = %s" % kappa)
+    assert ("for every value of nu admissible in pops.Positive()" in claims.proof) \
+        is negative_semidefinite
+
+
+def test_nu_has_its_slot_in_the_runtime_table_of_its_block():
+    """§3.5: the StencilFlux of two_point() reads nu inside the region of the solve from its
+    block's RuntimeParams table (ctx.program_params, N3 lot 1), where a formula of the model gives
+    nu its slot: the surface declares b6's diffusive flux of the term. A later lot that stops
+    declaring it fails here, before a native compile refuses the read."""
+    import re
+
+    import pops
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_emit_params import program_param_entries
+    from pops.codegen.program_models import ProgramModelGraph
+
+    elaborated = _case(nu=_nu()).elaborated
+    resolved = pops.resolve(pops.validate(elaborated.case), layout=elaborated.layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    assert program_param_entries(resolved.time, graph) == [(0, "nu", 0, 1e-2)]
+    cpp = emit_cpp_program(resolved.time, model_graph=graph)
+    reads = re.findall(r"const pops::RuntimeParams (stencil_params_\d+) = ctx\.program_params\(0\);",
+                       cpp)
+    assert reads and set(re.findall(r"params\.get\((\d+)\)", cpp)) == {"0"}
 
 
 def test_a_coefficient_that_varies_with_the_state_is_refused():

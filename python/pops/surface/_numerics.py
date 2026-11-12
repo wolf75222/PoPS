@@ -85,6 +85,15 @@ class TermView:
 
         return [node.name for node in walk(value) if isinstance(node, Parameter)]
 
+    def sign(self, value: Any) -> int | None:
+        """1, -1, 0 or None: the sign that the declarations of the model derive for a value,
+        whatever the bind gives its parameters (R2, K7): a parameter has the sign of its admissible
+        set, ``pops.Positive()`` the only one elaborated, and a parameter with none has no sign
+        (§3.5 of the N9 lot « La référence sous les solves de relation »)."""
+        from ._model import _sign
+
+        return _sign(value)
+
     def number(self, value: Any) -> Any:
         """The number of a value written with numbers, mathematical constants and model
         constants (folded at compile time, Q4), or ``None`` when it reads anything else."""
