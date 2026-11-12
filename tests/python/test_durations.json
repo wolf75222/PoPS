@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1189,
+    "estimated_count": 1190,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7538,6 +7538,7 @@
       "tests/python/unit/numerics/test_principal_grouping_contract.py",
       "tests/python/unit/numerics/test_principal_storage_route.py",
       "tests/python/unit/numerics/test_region_facts_n7.py",
+      "tests/python/unit/numerics/test_representation_definition_v2.py",
       "tests/python/unit/numerics/test_retained_stencil_v02.py",
       "tests/python/unit/numerics/test_scoped_stencil_v02.py",
       "tests/python/unit/numerics/test_state_storage.py",
@@ -8127,7 +8128,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1254,
+    "total_files": 1255,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8840,6 +8841,24 @@
         "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": "98a5f3ba7db3991fa0191e517f7dda765fd9971476c15b8cb81dca89ca2f8398",
         "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": "8cfb8bc6c41d219698508fc85d841a44d8960dc331340d3ec29f9790f0890c69",
         "tests/python/unit/mesh/test_static_geometry_reading.py": "93ea92eb6e0fcf208232f2b30fb14984841ed3711874d2b3a78e06cc9920c7e9"
+      }
+    },
+    "g03_20261112_representation_definition": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only module of G03 lot R-a (ROM-21, contract pops.executable-representation-definition@2): exact normal forms, rate and load weights by exact rational moments, identities and refusals, no native module and no compile. 5 s, the lower source-only tier of api_v02_20261013 (5/15/60 s), above its source-only analogue (2 s). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/numerics/test_representation_definition_v2.py": "tests/python/unit/codegen/test_representation_arity.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/numerics/test_representation_definition_v2.py": 5
+      },
+      "local_receipts": {
+        "tests/python/unit/numerics/test_representation_definition_v2.py": {
+          "pytest_seconds": 0.57,
+          "tests": 23
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/numerics/test_representation_definition_v2.py": "cce8e0777f641fb4035f6285e99c7d5fdfe2674fe1ad1c9caa5a2af74b08fc41"
       }
     }
   },
@@ -10096,5 +10115,6 @@
   "tests/python/unit/surface/test_su_t2_solve_refusals.py": 15,
   "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": 300,
   "tests/python/unit/mesh/test_static_geometry_reading.py": 60,
-  "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": 300
+  "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": 300,
+  "tests/python/unit/numerics/test_representation_definition_v2.py": 5
 }
