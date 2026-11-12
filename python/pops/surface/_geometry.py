@@ -4,7 +4,8 @@
 order; a bound is a number or an expression of numbers and ``pi``. ``Ω.x`` is the coordinate x,
 which also names the axis x where an axis is expected; ``Ω.axes`` lists the axes and
 ``Ω.boundary.x_min`` names a boundary piece. An axis may not take the name of a reading of a
-support (SU8, ``ReservedName``).
+support (SU8, ``ReservedName``). The node function of ``pops.Graded`` is called with the logical
+coordinate s in [0, 1] of its axis (``LogicalCoordinate``), not with the coordinate.
 
 The elaborated form is a b6 ``CartesianDomain`` named ``box`` with the frame of its axes; the
 identification of a periodic axis is carried by the layout of b6 (``PeriodicAxes``). The frames of
@@ -98,6 +99,19 @@ class Coordinate(Expr):
 
     def _text(self, precedence: int) -> str:
         return self.name
+
+
+class LogicalCoordinate(Expr):
+    """The logical coordinate s in [0, 1] of an axis, with which PoPS calls the node function of
+    ``pops.Graded`` once (D0b; SU5 as section 13 of the design note N17 states it)."""
+
+    __slots__ = ("axis",)
+
+    def __init__(self, axis: Coordinate) -> None:
+        self.axis = axis
+
+    def _text(self, precedence: int) -> str:
+        return "s"
 
 
 class Piece:
