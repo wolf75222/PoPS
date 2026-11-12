@@ -1682,7 +1682,16 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         emit_spatial_solve(program, v, base, var, model, lines, prelude, block_idx,
                            field_plans, target, emit_residual)
     elif v.op == "solve_linear":
-        _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
+        from pops.time.solve_outcome import solve_realization_kind
+
+        if solve_realization_kind(v) == "reference":
+            # SV12: the same solve, realized by its region (N9 lot « La référence sous les
+            # solves de relation », §3.2).
+            from .program_emit_solve import emit_reference_solve
+            emit_reference_solve(program, v, var, model, lines, prelude, block_idx, field_plans,
+                                 target)
+        else:
+            _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
     elif v.op == "solve_evidence":
         # SV5: a read of the evidence of a consumed solve, a copy of its report (program_emit_solve).
         from .program_emit_solve import solve_evidence_cpp

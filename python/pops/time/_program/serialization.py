@@ -228,6 +228,10 @@ class _ProgramSerialization(_ProgramBase):
             project_block("cond_block")
             project_block("body_block")
             attrs["cond"], attrs["body"] = attrs["cond"].id, attrs["body"].id
+        elif value.op == "solve_linear" and "body_block" in attrs:
+            # The region of a reference realization (SV12): the IR hash and the artifact hold it.
+            project_block("body_block")
+            attrs["body"] = attrs["body"].id
         elif value.op in ("range", "subcycle", "post_synchronization", "structured_fold", "capture_result", "finite_map", "finite_scan", "distributed_map", "distributed_requests", "distributed_csr", "distributed_reduce", "distributed_scatter_reduce", "distributed_scan"):
             project_block("body_block")
             if value.op != "post_synchronization":
@@ -494,6 +498,10 @@ class _ProgramSerialization(_ProgramBase):
                 _raise_ir_version(result, 30)
             if node.op == "acceptance_guard" and "assessment" in node.attrs:
                 _raise_ir_version(result, 30)
+            if node.op == "solve_linear" and "body_block" in node.attrs:
+                # Version 34: a solve whose realization is a reference holds its region (SV12,
+                # N9 lot « La référence sous les solves de relation », §3.1).
+                _raise_ir_version(result, 34)
             for key in ("cond_block", "body_block", "true_block", "false_block",
                         "apply_block", "residual_block"):
                 block = node.attrs.get(key)

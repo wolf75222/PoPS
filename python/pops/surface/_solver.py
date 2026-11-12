@@ -74,8 +74,10 @@ class _Lowering:
         self.name = name
         self.count = 0
         self.templates: list = []
-        # The block of the problem's fields, which owns the scalars that its pairings reduce.
+        # The block of the problem's fields, which owns the scalars that its pairings reduce, and
+        # the point of the problem, at which the solver's literal scalars are made.
         self.block: Any = None
+        self.point: Any = None
 
     def fresh(self, what: str) -> str:
         self.count += 1
@@ -308,9 +310,11 @@ def _owned_scalar(context: _Lowering, value: Any) -> Any:
     """A literal Scalar of the solver in the block of the problem's fields, as its reduced
     scalars are, so that a record or a choice mixes them with one structural type."""
     if value.block is None and context.block is not None:
+        # At the point of the problem: a solve at a stage point (an IMEX relation) mixes these
+        # literals with its reduced scalars in a choice, which needs one exact point (lot 4 fix).
         return context.program._new("scalar", "scalar_expression", value.inputs,
                                     dict(value.attrs), context.fresh("owned"), context.block,
-                                    inherit_state_ref=False)
+                                    point=context.point, inherit_state_ref=False)
     return value
 
 
@@ -811,8 +815,28 @@ def solver(function: Any) -> SolverDefinition:
     return SolverDefinition(function)
 
 
+# The status of each failure of a solver's region, by the reason of its variant (§3.2 of the lot
+# « La référence sous les solves de relation »): the table of solve failures gives each one its
+# action and its variant, as on the native route. A failure that the region rejects at runtime
+# (origin 2, such as a value that is not finite) is an invalid evaluation, with its code.
+_FAILURE_STATUSES = {
+    "iteration limit": "iteration_limit",
+    "breakdown": "breakdown",
+    "invalid evaluation": "invalid_evaluation",
+    "unverified solved value": "invalid_evaluation",
+}
+
+
+def _failure_rows() -> list:
+    """``[code, status, reason]`` of each user failure (origin 1) of a solver's region."""
+    return [[code, _FAILURE_STATUSES[reason], reason]
+            for code, (_variant, reason) in sorted(FAILURES_BY_CODE.items())]
+
+
 def lower_solver(value: SolverValue, program: Any, linear: Any, name: Any = None) -> Any:
-    """Run the body of ``value`` once over ``program`` for the linear problem ``linear``."""
+    """Lower ``value`` for the linear problem ``linear``: one ``solve_linear`` node (SV12) whose
+    realization is the reference, with the solver's body as its region (lot « La référence sous
+    les solves de relation », §3.1), and its outcome, b6's ``SolveOutcome``."""
     from pops.linalg import LinearProblem
 
     if not isinstance(linear, LinearProblem):
@@ -822,20 +846,25 @@ def lower_solver(value: SolverValue, program: Any, linear: Any, name: Any = None
     from pops.time.values import _resolve_handle
 
     if isinstance(linear.operator, StateOperator):
-        apply: Any = _StateApply(linear.operator.apply)
-    else:
-        operator = program._canonical_value(_resolve_handle(linear.operator))
-        bodies = program.__dict__.get("_operator_apply_bodies", {})
-        if operator.id not in bodies:
-            raise TypeError("the operator of the problem has no apply; call P.set_apply first, "
-                            "or give a StateOperator")
-        apply = _FieldApply(bodies[operator.id])
+        raise NotYetElaborated(
+            "a reference solve of a StateOperator, before the State operand of a "
+            "matrix_free_operator", "the N9 lot « La référence sous les solves de relation »")
+    operator = program._canonical_value(_resolve_handle(linear.operator))
+    bodies = program.__dict__.get("_operator_apply_bodies", {})
+    if operator.id not in bodies:
+        raise TypeError("the operator of the problem has no apply; call P.set_apply first")
+    apply = _FieldApply(bodies[operator.id])
+    rhs = program._canonical_value(_resolve_handle(linear.rhs))
+    guess = None if linear.initial_guess is None else \
+        program._canonical_value(_resolve_handle(linear.initial_guess))
+    at = rhs.point if linear.at is None else linear.at
     label = name or "reference_solve"
     context = _Lowering(program, label)
     returned: dict = {}
 
     def body(_program: Any) -> Any:
         with _lowering(context):
+            context.point = at
             problem = Problem(context, linear, apply, value.request)
             context.block = problem.rhs.expression.block
             result = value.definition.function(problem=problem, region=Region(context),
@@ -844,92 +873,105 @@ def lower_solver(value: SolverValue, program: Any, linear: Any, name: Any = None
             raise TypeError("a solver returns problem.candidate(x, iterations=k), x read from "
                             "the result of region.iterate")
         returned["candidate"] = result
-        return result.solution.iteration.result
+        # The candidate, read inside the region: a failed iterate fails the region with its
+        # code, and the solve's report reads the success's fields (the solver's names, SV5).
+        success = program.require_success(result.solution.iteration.result)
+        state = program._product_get(success, "state")
+        return program.product(
+            solution=program._product_get(state, result.solution.name),
+            iterations=program._product_get(success, "iterations"),
+            residual_norm=program._product_get(state, result.residual_norm.name))
 
     # The whole solve is one closed region: a value that is not finite, in a pairing or in a
-    # scalar, is then a failure of the solve (code 3 of iterate, a rejected native evaluation),
-    # before the loop as inside it, never a failure of the run (SV5, T39).
-    captured = program.capture(body)
-    return ReferenceOutcome(program, context, linear, returned["candidate"], captured, label)
+    # scalar, is then a failure of the solve (code 3, a rejected evaluation), before the loop as
+    # inside it (SV5, T39). The region is the node's sub-block, as set_apply records apply_block.
+    block: list = []
+    region = program._region_for_block(block)
+    for parent in program._recording:
+        program._allow_region_capture(program._region_for_block(parent), region)
+    program._recording.append(block)
+    try:
+        captured = program.capture(body)
+    finally:
+        program._recording.pop()
+    _require_closed_region(program, block, operator, rhs, guess)
+    if value.request is None:
+        raise ValueError("%r has no request; the solve gives it one (tolerance=, SV3)" % value)
+    rtol, atol = value.request
+    ncomp = int(operator.attrs["ncomp"])
+    attrs = {
+        "realization": {"kind": "reference", "rtol": float(rtol).hex(),
+                        "atol": float(atol).hex(), "failures": _failure_rows()},
+        "body_block": block, "body_region": region, "body": captured,
+        "has_guess": guess is not None, "ncomp": ncomp,
+        "operator_properties": linear.properties.canonical_data(),
+        "problem_kind": "matrix_free_linear",
+    }
+    result_type = ("state" if operator.attrs["domain"] == "state" and rhs.vtype == "state"
+                   else "scalar_field")
+    inputs = (operator, rhs) if guess is None else (operator, rhs, guess)
+    token = program._new(result_type, "solve_linear", inputs, attrs, label, rhs.block,
+                         space=rhs.space, point=at)
+    from pops.time.solve_outcome import SolveOutcome
+
+    def project(outcome: Any) -> Any:
+        return program._new(result_type, "solve_outcome_component", (outcome,),
+                            {"index": 0, "ncomp": ncomp}, label, rhs.block, space=rhs.space,
+                            point=token.point)
+
+    return SolveOutcome(program, token, project, label)
 
 
-class ReferenceOutcome:
-    """The outcome of a solve realized by a reference (SV5): unreadable until it is consumed."""
-
-    def __init__(self, program: Any, context: _Lowering, linear: Any, candidate: _Candidate,
-                 result: Any, name: str) -> None:
-        self._program = program
-        self._context = context
-        self._linear = linear
-        self._candidate = candidate
-        self._result = result
-        self._name = name
-        self._success = None
-        self._evidence = None
-
-    def consume(self, *, action: Any = None) -> Any:
-        from pops.time.solve_outcome import FailRun, RejectAttempt
-
-        if self._success is not None:
-            raise RuntimeError("the outcome has already been consumed")
-        if isinstance(action, FailRun):
-            raise NotYetElaborated("FailRun on the outcome of a reference solver",
-                                   "%s; a failed reference solve rejects its attempt" % _N9_LATER)
-        if not isinstance(action, RejectAttempt):
-            raise TypeError("consume requires action=RejectAttempt(...)")
-        program = self._program
-        with _lowering(self._context):
-            success = program.require_success(self._result)
-            self._success = success
-            state = program._product_get(success, "state")
-            solution = program._product_get(state, self._candidate.solution.name)
-            at = self._linear.at if self._linear.at is not None else self._linear.rhs.point
-            return program.value("%s_solution" % self._name, 1.0 * solution, at=at)
-
-    @property
-    def evidence(self) -> ReferenceEvidence:
-        if self._success is None:
-            raise TypeError("the evidence of a solve is readable only after consume (SV5)")
-        if self._evidence is None:
-            self._evidence = ReferenceEvidence(self._program, self._success,
-                                               self._candidate.residual_norm.name)
-        return self._evidence
-
-    def __repr__(self) -> str:
-        return "<ReferenceOutcome %s: %s>" % (
-            self._name, "consumed" if self._success is not None else "unconsumed")
+# What a solver's region may read from outside it (§3.1): the node's inputs and what the apply of
+# its operator reads from outside the apply (such as p.dt in b_k), and runtime parameters and
+# constants. Any other value of the Program read inside the region is refused by name: the rule
+# linear_solve of the accepted decomposition reads the operator and the right-hand side, never
+# the solver, so a solver must not read another rate.
+_CONSTANT_OPS = frozenset(("scalar_constant", "int64_constant", "bool_constant", "runtime_param",
+                           "parameter"))
 
 
-class ReferenceEvidence:
-    """The evidence of a consumed reference solve (SV5), the fields of the native's."""
+def _region_reads(block: Any) -> list:
+    """The values that ``block`` and its nested sub-blocks read from outside them."""
+    from pops.time._program.traversal import _STRUCTURED_BLOCK_KEYS
 
-    def __init__(self, program: Any, success: Any, residual_norm: str) -> None:
-        self._program = program
-        self._success = success
-        self._residual_norm = residual_norm
+    inside: set = set()
+    pending = [block]
+    blocks = []
+    while pending:
+        current = pending.pop()
+        blocks.append(current)
+        for node in current:
+            inside.add(node.id)
+            for key in _STRUCTURED_BLOCK_KEYS:
+                nested = node.attrs.get(key)
+                if nested:
+                    pending.append(nested)
+    reads: dict = {}
+    for current in blocks:
+        for node in current:
+            for item in node.inputs:
+                if item.id not in inside:
+                    reads.setdefault(item.id, item)
+    return list(reads.values())
 
-    @property
-    def iterations(self) -> Any:
-        return self._program._product_get(self._success, "iterations")
 
-    @property
-    def residual_norm(self) -> Any:
-        state = self._program._product_get(self._success, "state")
-        return self._program._product_get(state, self._residual_norm)
-
-    @property
-    def reason(self) -> str:
-        return "solved"
-
-    @property
-    def correction_norm(self) -> Any:
-        raise NotYetElaborated("evidence correction_norm (SV5) of the reference CG",
-                               _N9_EVIDENCE)
+def _require_closed_region(program: Any, block: Any, operator: Any, rhs: Any, guess: Any) -> None:
+    allowed = {item.id for item in (operator, rhs, guess) if item is not None}
+    apply_block = operator.attrs.get("apply_block") or ()
+    allowed.update(item.id for item in _region_reads(apply_block))
+    refused = [item for item in _region_reads(block)
+               if item.id not in allowed and item.op not in _CONSTANT_OPS]
+    if refused:
+        raise TypeError(
+            "a solver's region reads, from outside it, only the problem (its operator, right-hand "
+            "side and guess, and what the operator's apply reads); it reads %s"
+            % ", ".join(sorted("%s (%s)" % (item.name, item.op) for item in refused)))
 
 
 __all__ = [
     "BudgetExhausted", "FAILURE_CODES", "FAILURES_BY_CODE", "OUTSIDE_OWNERS", "PropertyNotDerived",
-    "ReferenceOutcome", "SolveFailed", "StateOperator", "SolverDefinition", "SolverValue",
+    "SolveFailed", "StateOperator", "SolverDefinition", "SolverValue",
     "choose", "fail",
     "lower_solver", "record", "solver",
 ]

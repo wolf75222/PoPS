@@ -40,7 +40,7 @@ def _declared_clocks(nodes: Any, primary: Any) -> tuple[Any, ...]:
             for arm in (node.when_true, node.when_false):
                 candidates.extend(arm.clocks)
                 pending.extend(getattr(arm, "nodes", ()))
-        elif node.kind in ("loop", "capture"):
+        elif node.kind in ("loop", "capture") or node.kind == "solve" and node.body is not None:
             regions = ((node.condition,) if node.kind == "loop" and node.condition is not None
                        else ()) + (node.body,)
             for region in regions:
@@ -341,6 +341,16 @@ def program_to_graph(program: Any) -> Any:
                 next_id += 1
             if len(inputs) == 3 and not explicit_request:
                 prefix = ()
+            body = None
+            if "body_block" in value.attrs:
+                # A reference realization (SV12): its region converts as a capture's does, so
+                # that the graph, and every artifact made from it, holds it (A1).
+                body = convert_region(value.attrs["body_block"], value.attrs["body"],
+                                      "%s/body" % _name(value),
+                                      signature=result_signature(value.attrs["body"]))
+                attrs = dict(attrs)
+                attrs["attrs"] = {key: item for key, item in attrs["attrs"].items()
+                                  if key not in ("body_block", "body", "body_region")}
             node = Solve(
                 value.id,
                 unknown,
@@ -351,6 +361,7 @@ def program_to_graph(program: Any) -> Any:
                 name=_name(value),
                 attrs=attrs,
                 initial=inputs[2] if explicit_request and len(inputs) == 3 else None,
+                body=body,
             )
         else:
             node = GraphValue(

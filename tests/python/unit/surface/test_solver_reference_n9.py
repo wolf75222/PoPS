@@ -20,7 +20,7 @@ from pops.lib.solve import cg, krylov
 from pops.time.solve_outcome import FailRun, RejectAttempt
 
 
-def _program(solver, *, properties=None, consume=None, read_evidence=False):
+def _program(solver, *, properties=None, consume=None, read_evidence=False, unconsumed=False):
     from pops.domain import CartesianDomain
     from pops.frames import Cartesian2D
 
@@ -41,6 +41,8 @@ def _program(solver, *, properties=None, consume=None, read_evidence=False):
         operator, temporal.n, nullspace=None,
         properties=properties or LinearOperatorProperties.symmetric_positive_definite())
     outcome = program.solve(problem, solver=solver, name="sol")
+    if unconsumed:
+        return program, outcome
     solution = outcome.consume(action=RejectAttempt() if consume is None else consume)
     if read_evidence:
         program.record_scalar("cg_residual", outcome.evidence.residual_norm)
@@ -69,14 +71,25 @@ def _reference(**options):
     return cg(**options).with_request(rtol=1e-10, atol=0.0)
 
 
+def _solve(program):
+    (solve,) = [value for value in program._values if value.op == "solve_linear"]
+    return solve
+
+
 def test_the_reference_lowers_onto_one_iterate_and_emits():
+    # SV12: one solve_linear node, realized by its region (N9 lot « La référence sous les solves
+    # de relation », §3.1); no native solve: the body is the Program.
     program, outcome = _program(_reference(max_iterations=50), read_evidence=True)
     assert program.validate()
     ops = [value.op for value in _walk(program._values)]
     assert ops.count("structured_iterate") == 1
-    assert "solve_linear" not in ops  # no native solve: the body is the Program
+    assert ops.count("solve_linear") == 1
+    solve = _solve(program)
+    assert solve.attrs["realization"]["kind"] == "reference"
+    assert [value.op for value in solve.attrs["body_block"]] == ["capture_result"]
     source = emit_cpp_program(program)
     assert "solve_prepared_linear" not in source
+    assert "pops::SolveOutcome kr%d = pops::SolveOutcome::collective_lane(" % solve.id in source
     assert outcome.evidence.reason == "solved"
 
 
@@ -144,25 +157,143 @@ def test_max_iterations_is_a_positive_integer(bad):
 def test_the_evidence_is_read_after_consumption_only():
     program, outcome = _program(_reference())
     evidence = outcome.evidence
-    with pytest.raises(surface.NotYetElaborated, match="« Évidence des solves »"):
+    with pytest.raises(NotImplementedError, match="« Évidence des solves »"):
         _ = evidence.correction_norm
     assert evidence.iterations.vtype == "int64"
     assert evidence.residual_norm.vtype == "scalar"
 
 
-def test_a_reference_outcome_is_not_readable_before_consume():
-    from pops.surface._solver import ReferenceOutcome
+def test_a_reference_outcome_is_b6s_and_not_readable_before_consume():
+    from pops.time.solve_outcome import SolveOutcome
+
+    _, outcome = _program(_reference(), unconsumed=True)
+    assert type(outcome) is SolveOutcome
+    with pytest.raises(TypeError, match="only after outcome.consume"):
+        _ = outcome.evidence
+    with pytest.raises(TypeError, match="not readable"):
+        _ = outcome.token
+
+
+def test_failrun_on_a_reference_fails_the_run_at_every_failure():
+    # b6's outcome, one code on both realizations: FailRun gives every failure of the region the
+    # action kFailRun, as the native's filter does under FailRun.
+    program, _ = _program(_reference(), consume=FailRun())
+    source = emit_cpp_program(program)
+    report = "kr%d_region_report" % _solve(program).id
+    failures = [line for line in source.splitlines() if "%s.mark_failed(" % report in line]
+    assert len(failures) == 7
+    assert all("pops::SolveAction::kFailRun" in line for line in failures)
+
+
+def test_the_region_failures_follow_the_table_of_solve_failures():
+    # §3.2 (F2): under RejectAttempt, the iteration limit and a breakdown reject the attempt, and
+    # an invalid evaluation, whatever its code, fails the run, as on the native route.
+    program, _ = _program(_reference())
+    source = emit_cpp_program(program)
+    report = "kr%d_region_report" % _solve(program).id
+    rows = {}
+    for line in source.splitlines():
+        if "%s.mark_failed(" % report in line:
+            arguments = line.split("mark_failed(", 1)[1]
+            rows.setdefault(arguments.split(",")[0], set()).add(arguments.split(",")[1].strip())
+    assert rows == {
+        "pops::SolveStatus::kIterationLimit": {"pops::SolveAction::kRejectAttempt"},
+        "pops::SolveStatus::kBreakdown": {"pops::SolveAction::kRejectAttempt"},
+        "pops::SolveStatus::kInvalidEvaluation": {"pops::SolveAction::kFailRun"},
+    }
+
+
+def test_the_table_of_solve_failures():
+    from pops.time.solve_outcome import solve_failure_disposition
+
+    every = ("singular", "breakdown", "iteration_limit", "invalid_evaluation", "safeguard_failure")
+    table = {
+        ("body", "iteration_limit"): ("reject_attempt", "BudgetExhausted"),
+        ("body", "breakdown"): ("reject_attempt", "SolveFailed"),
+        ("body", "singular"): ("reject_attempt", "SolveFailed"),
+        ("body", "invalid_evaluation"): ("fail_run", None),
+        ("gate", "safeguard_failure"): ("reject_attempt", "SolveFailed"),
+        ("gate", "invalid_evaluation"): ("reject_attempt", "SolveFailed"),
+    }
+    for (source, status), (action, variant) in table.items():
+        row = solve_failure_disposition(source, status)
+        assert (row.resolve("reject_attempt", every), row.variant) == (action, variant)
+        assert row.resolve("fail_run", every) == "fail_run"
+    # A gate refusal follows the consumer's choice for safeguard_failure, not the measured status.
+    gate = solve_failure_disposition("gate", "invalid_evaluation")
+    assert gate.resolve("reject_attempt", ("invalid_evaluation",)) == "fail_run"
+    with pytest.raises(ValueError, match="no solve failure"):
+        solve_failure_disposition("body", "safeguard_failure")
+
+
+def test_a_reference_solve_survives_the_ir_the_graph_and_the_rebuild():
+    # A1: the six places that branch on the op name hold the region (§3.1).
+    from pops.time._program.graph_conversion import program_to_graph
+
+    program, _ = _program(_reference(max_iterations=30))
+    solve = _solve(program)
+    data = program._serialize()
+    (row,) = [node for node in data["nodes"] if node["op"] == "solve_linear"]
+    assert row["attrs"]["realization"]["kind"] == "reference"
+    assert [child["op"] for child in row["attrs"]["body_block"]] == ["capture_result"]
+    assert data["version"] == 34
+    graph = program_to_graph(program)
+    (node,) = [item for item in graph.nodes if item.kind == "solve"]
+    assert node.body is not None and len(node.body.nodes) == 1
+    assert "body_block" not in node.attrs.to_data()["attrs"]
+    clone = program._rebuild(lambda value: True)
+    assert clone._ir_hash() == program._ir_hash()
+    assert clone.validate()
+    assert emit_cpp_program(clone) == emit_cpp_program(program)
+    assert solve.attrs["body"].op == "capture_result"
+
+
+def test_a_native_pass_refuses_a_reference_node_by_name():
+    from pops.time.solve_outcome import native_realization
 
     program, _ = _program(_reference())
-    unconsumed = ReferenceOutcome.__new__(ReferenceOutcome)
-    unconsumed._success = None
-    with pytest.raises(TypeError, match="after consume"):
-        _ = unconsumed.evidence
+    with pytest.raises(ValueError, match="realized by a reference solver"):
+        native_realization(_solve(program))
 
 
-def test_failrun_on_a_reference_is_left_to_a_later_lot():
-    with pytest.raises(surface.NotYetElaborated, match="FailRun"):
-        _program(_reference(), consume=FailRun())
+def test_the_region_reads_only_the_problem_from_outside():
+    # §3.1: a solver that reads another value of the Program is refused by name.
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian2D
+
+    frame = CartesianDomain("ref_capture", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
+    model = pops.Model("ref_capture", frame=frame)
+    state = model.state("u", components=("c0",), sampling="cell_average")
+    case = pops.Case("ref_capture")
+    block = case.block("q", model)
+    program = pops.Program("ref_capture")
+    temporal = program.state(block[state])
+    foreign = program.value("foreign", 2.0 * temporal.n, at=temporal.n.point)
+    operator = program.matrix_free_operator("A", domain="state", range_="state", ncomp=1)
+    program.set_apply(operator, lambda p, out, x: x - 0.1 * p.laplacian(out, x))
+
+    @surface.solver
+    def reads_foreign(problem, region, max_iterations=3):
+        start = surface.record(x=problem.guess + _solver.Field(foreign, foreign), n=1.0)
+        result = region.iterate(start=start, step=lambda s: s, stop=lambda s: s.n > 0,
+                                max_steps=max_iterations)
+        return problem.candidate(result.x, iterations=result.iterations, residual_norm=result.n)
+
+    problem = LinearProblem(operator, temporal.n, nullspace=None,
+                            properties=LinearOperatorProperties.symmetric_positive_definite())
+    with pytest.raises(TypeError, match="reads foreign"):
+        program.solve(problem, solver=reads_foreign().with_request(rtol=1e-8, atol=0.0),
+                      name="sol")
+
+
+def test_the_literal_scalars_of_a_solver_are_at_the_point_of_its_problem():
+    # A bug of lot 4 (probe P1): the literal arms of the reference had no point, so a solve at a
+    # stage point could not choose between them and its reduced scalars.
+    program, _ = _program(_reference())
+    solve = _solve(program)
+    owned = [value for value in _walk(solve.attrs["body_block"])
+             if value.op == "scalar_expression" and "_owned" in value.name]
+    assert owned and all(value.point == solve.point for value in owned)
 
 
 def test_the_name_of_a_solver_is_not_identity():

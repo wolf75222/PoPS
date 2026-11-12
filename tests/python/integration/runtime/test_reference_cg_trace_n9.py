@@ -139,11 +139,13 @@ def test_the_variants_of_the_native_branches(isolated_native_cache, native_cxx, 
     controls = dict(c=0.1, rtol=1e-10)
     count = _run("native", b, maxit=500, **controls)["iterations"]
 
-    # The iteration limit: BudgetExhausted on both routes (code 11, « iteration limit »).
+    # The iteration limit: the status iteration_limit on both routes; the reference's region
+    # reports it typed through the table of solve failures (N9 relation solves §3.2).
     native, reference = _run("native", b, maxit=10, **controls), _run("reference", b, maxit=10,
                                                                      **controls)
     assert "iteration_limit" in native["error"]
-    assert "StepAttemptRejected" in reference["error"] and "code=11" in reference["error"]
+    assert "StepAttemptRejected" in reference["error"], reference
+    assert "status=iteration_limit" in reference["error"], reference
 
     # The estimate reached exactly at the cap: no confirmation in the recurrence, one check of
     # the candidate, and the same count (solve_cg l. 938-945, wrapper l. 2118).
@@ -157,11 +159,12 @@ def test_the_variants_of_the_native_branches(isolated_native_cache, native_cxx, 
     assert _run("native", zero, maxit=500, **controls)["iterations"] == 0
     assert _run("reference", zero, maxit=500, **controls)["iterations"] == 0
 
-    # Loss of definiteness: SolveFailed « breakdown » on both routes (code 21, D3).
+    # Loss of definiteness: the status breakdown on both routes (D3).
     native = _run("native", b, c=-1.0, rtol=1e-10, maxit=200)
     reference = _run("reference", b, c=-1.0, rtol=1e-10, maxit=200)
     assert "breakdown" in native["error"]
-    assert "StepAttemptRejected" in reference["error"] and "code=21" in reference["error"]
+    assert "StepAttemptRejected" in reference["error"], reference
+    assert "status=breakdown" in reference["error"], reference
 
 
 @pytest.mark.parametrize("scale", [1e160, 1e-160])
@@ -180,15 +183,18 @@ def test_the_recurrence_is_scaled_as_the_native(
                                atol=64 * np.finfo(float).eps * np.abs(native["x"]).max())
 
 
-def test_a_right_hand_side_that_is_not_finite_fails_the_solve(
+def test_a_right_hand_side_that_is_not_finite_fails_the_run(
         isolated_native_cache, native_cxx, kokkos_root):
-    """A NaN in b: an invalid evaluation of the solve at 0 iterations on both routes, never a
-    failure of the run (the scale-safe norm never pairs a field that is not finite)."""
+    """A NaN in b: an invalid evaluation of the solve at 0 iterations (the scale-safe norm never
+    pairs a field that is not finite). It fails the run on both routes, whatever the consumer's
+    filter, as the untyped error of today (N9 relation solves, review F2): the reference here is
+    consumed with RejectAttempt and still fails the run."""
     del isolated_native_cache, native_cxx, kokkos_root
     b = np.random.default_rng(2026).standard_normal((1, 16, 16))
     b[0, 3, 5] = np.nan
     controls = dict(c=0.1, rtol=1e-10, maxit=500)
     native, reference = _run("native", b, **controls), _run("reference", b, **controls)
     assert "invalid_evaluation" in native["error"], native
-    assert "StepAttemptRejected" in reference["error"], reference
-    assert "code=3" in reference["error"] or "code=22" in reference["error"], reference
+    assert reference["error"].startswith("RuntimeError: "), reference
+    assert "invalid_evaluation action=fail_run" in reference["error"], reference
+    assert "origin=2; code=3" in reference["error"], reference
