@@ -58,7 +58,7 @@ from ._scheme import StencilRealization
 
 _LATER = "a later lot of N15"
 # The words of pops.math that b6's analytic expressions have (pops.analytic), for initial values.
-_ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs", "atan2")
+_ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs")
 _FRAMES = {1: Cartesian1D, 2: Cartesian2D, 3: Cartesian3D}
 
 
@@ -175,6 +175,12 @@ _GENERATED_GHOSTS = "a later lot of N15 with the generated ghost fills of G04"
 _GHOST_DEPTHS = (1, 2, 3)
 
 
+_ANALYTIC_LOT = "a later lot of N15 with the generated initial values of G07"
+_STEP_REQUEST = "a later lot of N8 (the solve requests of a step rule, 5.5)"
+_STEP_PARTS = "a later lot of N8 with the step rules of 5.11 per flux (PF8)"
+_FACE_SPEEDS = "a later lot of N8 (the recorded face speeds of ROM-108 in the compiled step rule)"
+
+
 def _tensor(mapped: list) -> list:
     """The tensor nodes of one list of (point, weight) per axis, the first axis slowest."""
     rows: list = [()]
@@ -281,6 +287,7 @@ class _Elaboration:
         self.layout_facts: dict = {}
         self.params: dict = {}
         self.lowered_outputs: tuple = ()
+        self.rule: Any = None
 
     # The support and its frame.
 
@@ -694,10 +701,16 @@ class _Elaboration:
         request = None if advance.tolerance is None else advance.tolerance.request()
         realization = self.realization(value)
         outputs = self.outputs(block)
+        rule = self.rule
+        if rule is not None and request is not None:
+            raise NotYetElaborated("%r with tolerance=, the request of the solves of a step that "
+                                   "a step rule chooses" % (rule,), _STEP_REQUEST,
+                                   site=advance.site)
+        proposal = _n8.Proposal(float(advance.dt), request=request) if rule is None \
+            else rule.realize()
         try:
             elaboration = _n8.elaborate(_n8.Advance(specialized, retry=retry), case=case6,
-                                        state=block[states[quantity]],
-                                        proposal=_n8.Proposal(float(advance.dt), request=request),
+                                        state=block[states[quantity]], proposal=proposal,
                                         realization=realization, outputs=outputs)
         except Exception as error:
             translated = translate(error, trace)
@@ -711,14 +724,20 @@ class _Elaboration:
         self.rows.append(Row(
             repr(advance), "program",
             "elaborate(Advance(%s(%s), retry=Retry(max_attempts=%d)), case=case, state=block[%s], "
-            "proposal=Proposal(%r%s)%s), the traced method of N8"
+            "proposal=%s%s), the traced method of N8"
             % (value.name, ", ".join(components), retry.max_attempts, quantity.name,
-               float(advance.dt), "" if request is None else ", request=%r" % (request,),
+               "Proposal(%r%s)" % (float(advance.dt), "" if request is None
+                                   else ", request=%r" % (request,)) if rule is None
+               else repr(proposal),
                "" if not realization else ", realization={%s}" % ", ".join(
                    "%r: %r" % item for item in realization.items())),
             [Choice("method", "%s, %d evaluations of its rates"
                     % (value.name, len(elaboration.trace.evaluations)), "stated"),
              Choice("dt", advance.dt, "stated"),
+             *([] if rule is None else [Choice(
+                 "speeds", "the wave speeds dF/du of %s, recorded by b6 on each cell (R9, SD44); "
+                           "each step lands on the frontiers of the run" % ", ".join(
+                               text(flux) for flux in rule.fluxes), "derived")]),
              Choice("attempts", retry.max_attempts,
                     "default" if advance.attempts is None else "stated"),
              Choice("accept", "finite()", "default")]
@@ -765,6 +784,43 @@ class _Elaboration:
                     "IR16 derives it from the face blocks (§17.1): %s" % proofs if site.spd
                     else "not derived", "derived"),
              Choice("failure", "SolveFailed fails the attempt (T38)", "derived")])
+
+    def step_rule(self, dt: Any) -> Any:
+        """The step rule of a library given as ``dt=`` (lot D-E), checked against what b6's
+        selection reads: the speeds of every transport flux of the model, derived (R9), and no
+        diffusive limit; ``None`` for a number."""
+        from ._step import StepRuleValue
+
+        if not isinstance(dt, StepRuleValue):
+            return None
+        model = self.model
+        for flux in dt.fluxes:
+            if flux.model is not model:
+                raise ValueError("%r reads %s, a flux of another model" % (dt, text(flux)))
+        named = {id(flux) for flux in dt.fluxes}
+        # a term in no balance is left to the coverage of the terms, which refuses it (T5)
+        integrated = {id(term) for balance in model.balances for term in balance.terms}
+        transports = [term for term in model.terms if isinstance(term, Flux)
+                      and not isinstance(term, DiffusiveFlux) and id(term) in integrated]
+        missing = [term for term in transports if id(term) not in named]
+        if missing:
+            raise NotYetElaborated(
+                "%r, a step rule that leaves out the flux %s of the model, whose speeds b6's "
+                "selection reads with the others" % (dt, text(missing[0])), _STEP_PARTS,
+                site=dt.site)
+        diffusive = [term for term in model.terms if isinstance(term, DiffusiveFlux)
+                     and id(term) in integrated]
+        if diffusive:
+            raise NotYetElaborated(
+                "%r in a model with the diffusive flux %s, whose limit b6's selection adds to "
+                "the step" % (dt, text(diffusive[0])), _STEP_PARTS, site=dt.site)
+        for flux in dt.fluxes:
+            if flux.slopes() is None:
+                raise NotYetElaborated(
+                    "%r reads the speeds of %s, whose waves dF/%s are not derived (R9); the speed "
+                    "that the face fluxes record (SD44)" % (dt, text(flux), flux.quantity),
+                    _FACE_SPEEDS, site=dt.site)
+        return dt
 
     def outputs(self, block: Any) -> tuple:
         """The Outputs of N8 of the case's outputs, in their order (CC14; lot G)."""
@@ -948,6 +1004,10 @@ class _Elaboration:
         if isinstance(value, Call) and value.word in _ANALYTIC_WORDS:
             args = [self.analytic(arg, frame, point, bounds) for arg in value.args]
             return getattr(an, value.word)(*args)
+        if isinstance(value, Call):
+            raise NotYetElaborated("%s in an initial value, a word that b6's analytic "
+                                   "expressions (pops.analytic) do not have" % text(value),
+                                   _ANALYTIC_LOT)
         raise NotYetElaborated("%s in an initial value" % text(value),
                                "N11 (expression closure, C1)")
 
@@ -1081,6 +1141,7 @@ class _Elaboration:
                 "a later lot of N15 with the record states of N8", site=model.balances[1].site)
         support = self.support()
         relations = self.boundaries(support)
+        self.rule = self.step_rule(self.program.advance.dt)
         frame = self.frame(support)
         self.layout_facts = {"uniform": True, "cartesian": True,
                              "periodic": all(support.periodic(axis) for axis in support._names)}
