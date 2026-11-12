@@ -203,6 +203,32 @@ def test_the_region_failures_follow_the_table_of_solve_failures():
     }
 
 
+def test_the_gate_of_a_reference_solve_is_measured_in_its_region_and_decided_by_the_native():
+    # SV8 (§3.3, F1): ||R(u)|| and ||R(0)|| are measured in IR, in their own captured region,
+    # after the solver's candidate; the decision is the native's apply_measured_original_residual_
+    # gate with the request's tolerances, and a refusal takes the consumer's action.
+    program, _ = _program(_reference(max_iterations=40))
+    solve = _solve(program)
+    (body,) = solve.attrs["body_block"]
+    captures = [value for value in _walk(body.attrs["body_block"]) if value.op == "capture_result"]
+    assert len(captures) == 1  # the gate's measurement, inside the solve's region
+    measured = list(_walk(captures[0].attrs["body_block"]))
+    # A(u) and A(0), each the operator's apply (one Laplacian): R(0) is computed, not taken as b.
+    assert [value.op for value in measured].count("laplacian") == 2
+    assert [value.attrs.get("kind") for value in measured if value.op == "reduce"].count(
+        "norm_inf_all") == 2
+    source = emit_cpp_program(program)
+    gate = source[source.index("apply_measured_original_residual_gate(kr%d" % solve.id):]
+    lines = gate.split("\n")[:4]
+    assert "OriginalResidualGate{" in lines[2]
+    assert "static_cast<pops::Real>(0.0), static_cast<pops::Real>(1e-10)" in lines[2]
+    assert lines[3].strip() == "}, pops::SolveAction::kRejectAttempt, \"solve_linear\");"
+    failrun, _ = _program(_reference(max_iterations=40), consume=FailRun())
+    source = emit_cpp_program(failrun)
+    gate = source[source.index("apply_measured_original_residual_gate(kr"):]
+    assert "}, pops::SolveAction::kFailRun, \"solve_linear\");" in gate
+
+
 def test_the_table_of_solve_failures():
     from pops.time.solve_outcome import solve_failure_disposition
 
@@ -326,12 +352,15 @@ def test_the_solve_reduces_its_pairings_and_norms_in_its_program():
     # |b|, the first residual, the true residual of a confirmation and of the check at the cap.
     # Three more pairings in the recurrence: r.r of the first scaled residual, the curvature
     # (d, Ad) and r.r of the updated residual. Only one arm of each branch runs.
+    # The SV8 gate of the solve (§3.3 of the lot « La référence sous les solves de relation »)
+    # adds two norms of the request, ||R(u)|| and ||R(0)||, each one norm_inf_all and a pairing
+    # on each of its two branches.
     program, _ = _program(_reference())
     reductions = [value.attrs.get("kind") for value in _walk(program._values)
                   if value.op == "reduce"]
-    assert reductions.count("norm_inf_all") == 4
-    assert reductions.count("dot_all") == 4 * 2 + 3
-    assert len(reductions) == 15
+    assert reductions.count("norm_inf_all") == 4 + 2
+    assert reductions.count("dot_all") == (4 + 2) * 2 + 3
+    assert len(reductions) == 21
 
 
 def _m08_source_with_evidence(retry_can_change):

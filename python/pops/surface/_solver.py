@@ -866,6 +866,7 @@ def lower_solver(value: SolverValue, program: Any, linear: Any, name: Any = None
         with _lowering(context):
             context.point = at
             problem = Problem(context, linear, apply, value.request)
+            returned["problem"] = problem
             context.block = problem.rhs.expression.block
             result = value.definition.function(problem=problem, region=Region(context),
                                                **value.options)
@@ -877,10 +878,15 @@ def lower_solver(value: SolverValue, program: Any, linear: Any, name: Any = None
         # code, and the solve's report reads the success's fields (the solver's names, SV5).
         success = program.require_success(result.solution.iteration.result)
         state = program._product_get(success, "state")
+        solution = program._product_get(state, result.solution.name)
+        gate = _gate_measurement(context, problem, solution)
         return program.product(
-            solution=program._product_get(state, result.solution.name),
+            solution=solution,
             iterations=program._product_get(success, "iterations"),
-            residual_norm=program._product_get(state, result.residual_norm.name))
+            residual_norm=program._product_get(state, result.residual_norm.name),
+            gate_code=program._product_get(gate, "code"),
+            gate_norm=program._product_get(gate, "norm"),
+            gate_scale=program._product_get(gate, "scale"))
 
     # The whole solve is one closed region: a value that is not finite, in a pairing or in a
     # scalar, is then a failure of the solve (code 3, a rejected evaluation), before the loop as
@@ -920,6 +926,42 @@ def lower_solver(value: SolverValue, program: Any, linear: Any, name: Any = None
                             point=token.point)
 
     return SolveOutcome(program, token, project, label)
+
+
+def _gate_measurement(context: _Lowering, problem: Problem, solution: Any) -> Any:
+    """The measurement of the SV8 gate of a solved candidate u (§3.3 of the lot « La référence
+    sous les solves de relation »): ||R(u)|| and the scale ||R(0)||, R(v) = b - A(v), in the
+    request's norm, through the same apply as the body. The gate is the solve's, not the
+    solver's: it runs after the solver's body returned its candidate, as its own captured region,
+    so that a value it rejects is a failure of the measurement (code > 0), never of the body.
+    The decision is the native's own C++ (``apply_measured_original_residual_gate``)."""
+    program = context.program
+    rhs = problem.rhs.expression
+
+    def measure(_program: Any) -> Any:
+        with _lowering(context):
+            candidate = Field(solution, rhs)
+            zero = Field(program.value(context.fresh("gate_zero"), 0.0 * rhs, at=rhs.point), rhs)
+            norm = problem.request.norm(problem.rhs - problem.apply(candidate))
+            # R(0) is computed with one apply, as the native does, not taken as b: the gate then
+            # holds without the claim « linear and homogeneous ».
+            scale = problem.request.norm(problem.rhs - problem.apply(zero))
+            return Record({"norm": norm, "scale": scale}).program_value()
+
+    measured = program.capture(measure)
+
+    def ok(_program: Any, payload: Any) -> Any:
+        with _lowering(context):
+            return Record({"code": Scalar(program.int64(0)),
+                           "norm": Scalar(program._product_get(payload, "norm")),
+                           "scale": Scalar(program._product_get(payload, "scale"))}).program_value()
+
+    def err(_program: Any, payload: Any) -> Any:
+        with _lowering(context):
+            return Record({"code": Scalar(program._product_get(payload, "code")),
+                           "norm": 0.0, "scale": 0.0}).program_value()
+
+    return program.match(measured, ok=ok, err=err)
 
 
 # What a solver's region may read from outside it (§3.1): the node's inputs and what the apply of

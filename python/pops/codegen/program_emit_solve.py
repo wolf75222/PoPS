@@ -1526,6 +1526,22 @@ def emit_reference_solve(program: Any, v: Any, var: Any, model: Any, lines: list
         "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane(std::move(%s), "
         "ctx.prepared_execution_lane());" % (outcome, report))
     var[v.id] = "(*%s)" % solution
+    # SV8 (§3.3): the region measured ||R(u)|| and ||R(0)|| of a solved candidate in the request's
+    # norm; the decision is the native's own, and a measurement that failed refuses the candidate
+    # as an invalid evaluation with the refusal action, as on the native route.
+    realization = v.attrs["realization"]
+    lines.append(
+        "(void)pops::runtime::program::apply_measured_original_residual_gate(%s, [&]() {"
+        % outcome)
+    lines.append(
+        "  if (%s != 0) throw std::runtime_error(std::string(\"its region rejected a value; "
+        "code=\") + std::to_string(%s));" % (output["gate_code"], output["gate_code"]))
+    lines.append(
+        "  return pops::runtime::program::OriginalResidualGate{static_cast<pops::Real>(%s), "
+        "static_cast<pops::Real>(%r), static_cast<pops::Real>(%r), static_cast<pops::Real>(%s)};"
+        % (output["gate_norm"], float.fromhex(realization["atol"]),
+           float.fromhex(realization["rtol"]), output["gate_scale"]))
+    lines.append("}, %s, \"solve_linear\");" % gate_refusal_action_cpp(program, v))
     if _solve_evidence_requested(program, v):
         # SV5: the evidence is the report, copied before its consumption, as on the native.
         lines.append("const pops::SolveReport %s_evidence = %s.report();" % (outcome, outcome))
