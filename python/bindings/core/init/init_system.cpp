@@ -1146,6 +1146,71 @@ void bind_system_physics(py::class_<System>& cls) {
       .def("_set_analytic_level_set", &System::set_analytic_level_set, py::arg("opcodes"),
            py::arg("literals"), py::arg("mode") = "none", py::arg("kappa_min") = 0.0,
            py::arg("face_open_eps") = 0.0, py::arg("cut_theta_min") = 0.0)
+      // Runtime-private seam of the static geometry arrays of a mapped layout (N17, C1). Python
+      // passes the lowered analytic programs of the coordinate map and the stated rule of a chart;
+      // the native System generates, certifies and owns the arrays before any block.
+      .def("_install_static_geometry", &System::install_static_geometry, py::arg("identity"),
+           py::arg("kind"), py::arg("opcodes"), py::arg("literals"), py::arg("rule_nodes"),
+           py::arg("rule_weights"))
+      // A host snapshot of the installed arrays for evidence and tests: cell arrays in the NumPy
+      // order of the state, face arrays per axis with the axis extent grown by one; None on the
+      // uniform logical box.
+      .def("_static_geometry_snapshot",
+           [](const System& s) -> py::object {
+             constexpr int Dim = pops::kNativeDimension;
+             const auto geometry = s.static_geometry();
+             if (!geometry)
+               return py::none();
+             pops::device_fence();
+             const auto view = geometry->view();
+             const auto shape = s.spatial_shape();
+             const auto cells = static_cast<std::size_t>(view.domain.numPts());
+             const auto cell_array = [&](const pops::Real* data) {
+               return to_ranked_field<Dim>(std::vector<double>(data, data + cells), shape);
+             };
+             const auto face_array = [&](int axis, const pops::Real* data) {
+               auto extent = shape;
+               ++extent[axis];
+               std::size_t count = 1;
+               for (int other = 0; other < Dim; ++other)
+                 count *= static_cast<std::size_t>(extent[other]);
+               return to_ranked_field<Dim>(std::vector<double>(data, data + count), extent);
+             };
+             py::dict result;
+             result["identity"] = geometry->identity();
+             result["kind"] =
+                 geometry->kind() == pops::StaticGeometryKind::chart ? "chart" : "nodes";
+             result["closure_ratio"] = static_cast<double>(geometry->closure_ratio());
+             result["cell_measure"] = cell_array(view.cell_measure);
+             py::tuple centroid(Dim), width(Dim), face_measure(Dim), face_distance(Dim),
+                 face_normal(Dim), nodes(Dim);
+             for (int axis = 0; axis < Dim; ++axis) {
+               centroid[static_cast<std::size_t>(axis)] = cell_array(view.centroid[axis]);
+               width[static_cast<std::size_t>(axis)] = cell_array(view.width[axis]);
+               face_measure[static_cast<std::size_t>(axis)] =
+                   face_array(axis, view.face_measure[axis]);
+               face_distance[static_cast<std::size_t>(axis)] =
+                   face_array(axis, view.face_distance[axis]);
+               py::tuple normal(Dim);
+               for (int component = 0; component < Dim; ++component)
+                 normal[static_cast<std::size_t>(component)] =
+                     face_array(axis, view.face_normal[axis][component]);
+               face_normal[static_cast<std::size_t>(axis)] = normal;
+               const auto& positions = geometry->nodes()[static_cast<std::size_t>(axis)];
+               auto node_extent = shape;
+               for (int other = 0; other < Dim; ++other)
+                 ++node_extent[other];
+               nodes[static_cast<std::size_t>(axis)] = to_ranked_field<Dim>(
+                   std::vector<double>(positions.begin(), positions.end()), node_extent);
+             }
+             result["centroid"] = centroid;
+             result["width"] = width;
+             result["face_measure"] = face_measure;
+             result["face_distance"] = face_distance;
+             result["face_normal"] = face_normal;
+             result["nodes"] = nodes;
+             return result;
+           })
       // Toggles only the installed level-set transport mode without redefining its expression.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
       .def("embedded_boundary_mask",
@@ -1210,6 +1275,8 @@ void bind_system_physics(py::class_<System>& cls) {
 
 // Stepping + profiling + custom-integrator primitives (field solve, step/advance/CFL, eval_rhs/state).
 void bind_system_stepping(py::class_<System>& cls) {
+  // The floor of step_cfl's default and of a step rule's selection: one value for both routes.
+  const double speed_floor = static_cast<double>(kCflSpeedFloor);
   cls.def("solve_fields",
           [](System& system) { return consume_solve_outcome(system.solve_fields()); })
       .def(
@@ -1222,14 +1289,23 @@ void bind_system_stepping(py::class_<System>& cls) {
       // One compiled run of the installed Advance; the interpreter only receives its counters.
       .def(
           "_run_advance",
-          [](System& system, double until, double proposal, std::int64_t max_steps,
-             const std::vector<std::tuple<std::int64_t, std::vector<double>,
-                                          std::vector<std::string>>>& outputs) {
+          [speed_floor](
+              System& system, double until, double proposal, std::int64_t max_steps,
+              const std::vector<
+                  std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>& outputs,
+              const std::optional<std::pair<double, double>>& rule) {
             std::vector<pops::runtime::program::AdvanceOutputSchedule> schedule;
             schedule.reserve(outputs.size());
             for (const auto& [every_steps, at, arrays] : outputs)
               schedule.push_back({every_steps, at, arrays});
-            const auto report = system.run_advance(until, proposal, max_steps, schedule);
+            // rule = (fraction, max_dt): the step rule of the Advance, max_dt +inf when it has
+            // none; its floor is step_cfl's default.
+            std::optional<pops::runtime::program::AdvanceStepRule> step_rule;
+            if (rule)
+              step_rule =
+                  pops::runtime::program::AdvanceStepRule{rule->first, rule->second, speed_floor};
+            const auto report = system.run_advance(until, proposal, max_steps, schedule,
+                                                   step_rule ? &*step_rule : nullptr);
             py::list samples;
             for (const auto& sample : report.outputs) {
               py::dict row;
@@ -1263,7 +1339,8 @@ void bind_system_stepping(py::class_<System>& cls) {
           },
           py::arg("until"), py::arg("proposal"), py::arg("max_steps"),
           py::arg("outputs") = std::vector<
-              std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>{})
+              std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>{},
+          py::arg("rule") = std::optional<std::pair<double, double>>{})
       .def("_advance_max_attempts", &System::advance_max_attempts)
       .def_static(
           "_advance_attempt_duration",
@@ -1419,7 +1496,7 @@ void bind_system_stepping(py::class_<System>& cls) {
            "the dt used. speed_floor (ADC-645): the floor applied to the reduced max wave speed "
            "(w = max(w, speed_floor), so a quiescent system cannot divide by zero); defaults to "
            "the historical kCflSpeedFloor (1e-30), bit-identical.",
-           py::arg("cfl"), py::arg("speed_floor") = static_cast<double>(kCflSpeedFloor),
+           py::arg("cfl"), py::arg("speed_floor") = speed_floor,
            py::arg("max_dt") = std::numeric_limits<double>::infinity(), py::arg("min_dt") = 0.0)
       .def("enable_profiling", &System::enable_profiling,
            "Spec 3 profiling (ADC-459): start timing the step phases (step, field_solve). Disabled "

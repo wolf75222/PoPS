@@ -43,6 +43,9 @@ void System<Dim>::set_analytic_level_set(const std::vector<std::string>& opcodes
                                          const std::string& mode, double kappa_min,
                                          double face_open_eps, double cut_theta_min) {
   require_assembling(p_->lifecycle_, "set_analytic_level_set");
+  if (p_->static_geometry_)
+    throw std::invalid_argument(
+        "System embedded boundary and static geometry arrays (N17) are not composed");
   const auto prepared_mode = runtime::system::parse_prepared_embedded_boundary_mode(mode);
   const EbThresholds thresholds = resolved_eb_thresholds(kappa_min, face_open_eps, cut_theta_min);
   const std::uint64_t generation =

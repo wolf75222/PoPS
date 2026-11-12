@@ -13,6 +13,7 @@ import json
 
 from pops.identity.scalar import scalar_cpp
 from pops.time._program.structured_control import value_signature
+from pops._ir.data_model import is_finite_array, value_kind
 
 _NS = "pops::runtime::program::finite_kokkos::"
 _TYPES = {"scalar": "pops::Real", "int64": "std::int64_t", "bool": "bool"}
@@ -73,7 +74,7 @@ def _flat(signature):
 def device_array(signature):
     """A replicated Array of scalar/Product elements is stored as device columns."""
     return (
-        signature["vtype"] == "array"
+        is_finite_array(signature)
         and signature.get("ownership") != "contiguous_distributed"
         and _flat(signature["element"])
     )
@@ -110,7 +111,7 @@ def _capture_type(signature):
     if _flat(signature):
         return True
     return signature.get("ownership") == "replicated" and (
-        kind in ("index_set", "index") or (kind == "array" and _flat(signature["element"]))
+        value_kind(kind) in ("index_set", "index") or (is_finite_array(kind) and _flat(signature["element"]))
     )
 
 
@@ -396,9 +397,9 @@ def _stage(prefix, captures, var, block, lines, serial):
                 return name_leaf
 
             env[capture.id] = _tree(sig, leaf)
-        elif sig["vtype"] == "index_set":
+        elif value_kind(sig) == "index_set":
             env[capture.id] = descriptor(token, sig)
-        elif sig["vtype"] == "index":
+        elif value_kind(sig) == "index":
             _uniform_element(sig, token, lines)
             env[capture.id] = {
                 "domain": descriptor("(%s).domain" % token, sig),
@@ -577,10 +578,10 @@ _ORDERED_OPS = _OPS | {"region_argument", "region_index"}
 
 def reads_arrays(value):
     """Whether a fold carries or reads an Array, so its placement is worth a row."""
-    if any(sig["vtype"] == "array" for sig, _ in _leaves(value_signature(value.inputs[0]), None)):
+    if any(is_finite_array(sig) for sig, _ in _leaves(value_signature(value.inputs[0]), None)):
         return True
     return any(
-        item.vtype == "array" for node in _walk(value.attrs["body_block"]) for item in node.inputs
+        is_finite_array(item) for node in _walk(value.attrs["body_block"]) for item in node.inputs
     )
 
 
@@ -589,7 +590,7 @@ def ordered_admission(value):
     scan = value.op == "finite_scan"
     state = value_signature(value.inputs[0])
     if not _flat(state):
-        if any(sig["vtype"] == "array" for sig, _ in _leaves(state, None)):
+        if any(is_finite_array(sig) for sig, _ in _leaves(state, None)):
             # The carry is a handle: each iteration's array operations keep their own placement.
             return "ordered carry holds an Array: the host sequences the iterations", ()
         return "ordered carry requires structural storage", ()

@@ -87,6 +87,33 @@ def accepted_transport_regions(program, captured):
                 break
         return node if node.op == "solve_spatial_nonlinear" else None
 
+    def linear_solve(value):
+        # A consumed linear solve A X = b whose apply holds X once, with weight exactly one, and
+        # whose apply block reads no captured rate (the IMEX relation of a traced method, lot
+        # « solves » of N15). Then X = b + (X - AX) + (AX - b): the other terms of the apply,
+        # X - AX, are images of other occurrences or cell-local terms, read no captured rate, and
+        # carry no captured transport, as diffusive_rhs and source below; the residual AX - b of
+        # the solver is cell-local and has no faces. So the face amounts of a captured occurrence
+        # in X are those of b, with weight one, which is the increment that N8 derives (T34,
+        # U = -(known + sum_k b_k L_k(U)) / a with a = 1). The guess (inputs[2]) carries none.
+        node = value
+        while node.op in {"solve_outcome", "solve_outcome_component"} and len(node.inputs) == 1:
+            node = node.inputs[0]
+        if node.op != "solve_linear" or len(node.inputs) < 2:
+            return None
+        operator = node.inputs[0]
+        result, applied = operator.attrs.get("apply_result"), operator.attrs.get("apply_in")
+        if result is None or applied is None:
+            return None
+        terms = getattr(result, "terms", None) or ((result, {0: 1}),)
+        weights = [getattr(weight, "powers", weight) for term, weight in terms if term is applied]
+        if len(weights) != 1 or {power: Fraction(coefficient) for power, coefficient
+                                 in dict(weights[0]).items()} != {0: Fraction(1)}:
+            return None
+        if any(hides(item) for item in operator.attrs.get("apply_block") or ()):
+            return None
+        return node
+
     def multiply(left, right):
         result = {}
         for a, x in left.items():
@@ -140,6 +167,9 @@ def accepted_transport_regions(program, captured):
             from pops.time._program.spatial_solve import validate_spatial_commit
             validate_spatial_commit(program, solve)
             return decompose(solve.inputs[0], owner, boundary)
+        linear = linear_solve(value)
+        if linear is not None:
+            return decompose(linear.inputs[1], owner, boundary)
         if value.op == "acceptance_guard":
             return decompose(value.inputs[0], owner, boundary)
         if value.op == "synchronize" and value.attrs.get("relation") == relation_data(SampleAndHold()):

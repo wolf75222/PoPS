@@ -68,9 +68,22 @@ struct AdvanceSegment {
   std::int64_t macro_step = -1;  ///< -1 before the first compiled run
 };
 
+/// The step rule of an elaborated Advance (N8 lot « Règle de pas compilée »): the proposal of each
+/// step is b6's selection of System::step_cfl without its execution (the wave speeds of the
+/// accepted state, floored at @p speed_floor, the coupled frequencies and the Program dt bound),
+/// at @p fraction and capped at @p max_dt, taken once per step before its attempts and then cut at
+/// the frontier by advance_attempt_duration. A rule has no fixed-proposal segment: each step starts
+/// its own. The library word that elaborates onto it names the rule; the core does not.
+struct AdvanceStepRule {
+  double fraction = 0.0;
+  double max_dt = std::numeric_limits<double>::infinity();  ///< +infinity when the rule has none
+  double speed_floor = 0.0;  ///< the floor of step_cfl's default, set by the binding
+};
+
 /// One Output of the elaborated Advance as a compiled run schedules it (CC14).
 struct AdvanceOutputSchedule {
-  /// when=every(k): due after each publication whose macro step is a multiple of k; 0 for none.
+  /// when=every(k): due after the k-th, 2k-th, ... accepted step of the run, counted from its
+  /// start (spec 5.2); 0 for none.
   std::int64_t every_steps = 0;
   /// The times of at= that lie ahead of the run, strictly increasing; each one is a frontier.
   std::vector<double> at;
@@ -154,14 +167,15 @@ inline double advance_next_frontier(double time, double until,
   return frontier;
 }
 
-/// Whether Output @p output is due after the publication at (@p time, @p macro_step), and moves
-/// its cursor past every time of it that the publication reached or passed: an Output whose
+/// Whether Output @p output is due after the publication at @p time, the @p run_steps-th
+/// accepted step of the run (counted from its start, not the global macro step: spec 5.2), and
+/// moves its cursor past every time of it that the publication reached or passed: an Output whose
 /// times a publication passes is evaluated once for that publication (CC14).
-inline bool advance_output_due(std::size_t output, double time, std::int64_t macro_step,
+inline bool advance_output_due(std::size_t output, double time, std::int64_t run_steps,
                                const std::vector<AdvanceOutputSchedule>& schedule,
                                std::vector<std::size_t>& cursors) {
   const auto& entry = schedule[output];
-  bool due = entry.every_steps > 0 && macro_step % entry.every_steps == 0;
+  bool due = entry.every_steps > 0 && run_steps % entry.every_steps == 0;
   while (cursors[output] < entry.at.size() && time >= entry.at[cursors[output]]) {
     ++cursors[output];
     due = true;

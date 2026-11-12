@@ -31,11 +31,12 @@ from pops.frames import Cartesian1D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
-from pops.lib.numerics.schemes import hll, rusanov, two_point, upwind
+from pops.lib.numerics import hll, rusanov, two_point, upwind
 from pops.lib.time.methods import forward_euler, rk4, ssprk2, ssprk3
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.numerics import Diffusion, DiscretizationPlan, reconstruction, riemann, variables
-from pops.numerics.spatial import FiniteVolume
+from examples.api_v02 import b6_numerics
+from pops.numerics import DiscretizationPlan
+from pops.numerics.stencil_flux import StencilFlux
 from pops.params import ConstParam, Positive, RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.surface._derive import derivative
@@ -108,14 +109,43 @@ def _surface_l1(word, component="rate", balance=_l1_balance):
     return case, transport, advection
 
 
-def _hand_l1_equation(u, flux_u, diffusive_flux_u):
-    return pm.ddt(u) == -pm.div(flux_u) + pm.div(diffusive_flux_u)
+def _hand_l1_equation(u, flux_u):
+    return pm.ddt(u) == -pm.div(flux_u)
+
+
+def _two_point_body(nu):
+    """b6's two-point diffusion of -nu grad(u) written by hand as the body of a ``StencilFlux``
+    (N3 lot 1, D7): the face flux -nu (u_R - u_L) / h, in the arithmetic of the face of
+    ``two_point()``, and its incident frequency (nu / h) / h (D10)."""
+    def body(sample, spacing, axis):
+        h = spacing[axis]
+        u_left = sample(tuple(-1 if d == axis else 0 for d in range(1)), 0)
+        u_right = sample((0,), 0)
+        return ((-nu) * ((u_right - u_left) / h),), (nu / h) / h
+
+    return body
+
+
+def _hand_stencil(flux, name, sign):
+    """``sign`` times -div_h of the face flux of ``flux``, named ``<name>_<k>`` in the k-th
+    evaluation of the rate, as the surface enters a diffusive term (D7)."""
+    def term(state):
+        program = state.prog
+        evaluation = sum(1 for value in program._values
+                         if value.op == "stencil_flux_divergence"
+                         and value.name.startswith(name + "_"))
+        rate = program.stencil_flux_divergence("%s_%d" % (name, evaluation), state, flux=flux)
+        return rate if sign == 1 else -rate
+
+    return term
 
 
 def _hand_l1(n8_method, component="rate", equation=_hand_l1_equation, diffusion_first=False):
-    """The same case written for b6 and N8; ``component`` names the component of the method,
-    ``equation`` gives the balance of b6 and ``diffusion_first`` the order of its terms in the
-    rate."""
+    """The same case written for b6 and N8 with the oracles of N3 lot 1: the face of the b6
+    ``rusanov`` of ``examples/api_v02/b6_numerics.py`` (D1, D5) and a ``StencilFlux`` written by
+    hand that reads the runtime parameter nu (D7). ``component`` names the component of the
+    method, ``equation`` gives the balance of b6 and ``diffusion_first`` the order of the terms in
+    the rate."""
     frame = CartesianDomain("box", lower=(0.0,), upper=(1.0,)).frame(Cartesian1D())
     (x,) = frame.axes
     model = pops.Model("advection_diffusion", frame=frame)
@@ -124,16 +154,15 @@ def _hand_l1(n8_method, component="rate", equation=_hand_l1_equation, diffusion_
     u = model.state("u", components=("u",))
     flux_u = model.flux("flux_u", state=u, frame=frame, components={x: (a * u[0],)},
                         waves={x: (a,)})
-    diffusive_flux_u = model.diffusive_flux("diffusive_flux_u", state=u,
-                                            value=nu * pm.grad(u[0]))
-    rate = model.rate("u", equation=equation(u, flux_u, diffusive_flux_u))
+    # The model declares F^d (R7) so that nu, read by a formula of the model, has a slot in the
+    # block's RuntimeParams table, which the StencilFlux reads (CF15).
+    model.diffusive_flux("diffusive_flux_u", state=u, value=nu * pm.grad(u[0]))
+    rate = model.rate("u", equation=equation(u, flux_u))
     plan = DiscretizationPlan()
     advection = rate.select(flux_u)
-    plan.rates.add(advection, FiniteVolume(
-        flux=flux_u, variables=variables.Conservative(u),
-        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
-    diffusion = rate.select(diffusive_flux_u)
-    plan.rates.add(diffusion, Diffusion(flux=diffusive_flux_u))
+    plan.rates.add(advection, b6_numerics.rusanov(flux_u, u))
+    diffusion = _hand_stencil(StencilFlux(dimension=1, components=1, radius=1,
+                                          body=_two_point_body(nu)), "diffusive_flux_u", 1)
     case = pops.Case("advection_diffusion")
     block = case.block("advection_diffusion", model)
     case.numerics(plan, block=block)
@@ -268,9 +297,8 @@ def test_a_later_term_of_weight_minus_one_is_subtracted():
     balance of b6 as ``- div(F)``."""
     case, _, _ = _surface_l1(ssprk2, balance=lambda advection, diffusion:
                              -div(diffusion + advection))
-    hand_case, hand_layout = _hand_l1(N8["ssprk2"], equation=lambda u, flux, diffusive:
-                                      pm.ddt(u) == pm.div(diffusive) - pm.div(flux),
-                                      diffusion_first=True)
+    hand_case, hand_layout = _hand_l1(N8["ssprk2"], equation=lambda u, flux:
+                                      pm.ddt(u) == -pm.div(flux), diffusion_first=True)
     elaborated = case.elaborated
     resolved = _resolved(elaborated.case, elaborated.layout)
     hand = _resolved(hand_case, hand_layout)
@@ -294,19 +322,19 @@ def _surface_burgers(word):
                         layout={domain: surface.Uniform(cells=64)})
 
 
-def _hand_burgers(face):
+def _hand_burgers(word):
     frame = CartesianDomain("box", lower=(0.0,), upper=(1.0,)).frame(Cartesian1D())
     (x,) = frame.axes
     model = pops.Model("burgers", frame=frame)
     u = model.state("u", components=("u",))
     flux_u = model.flux("flux_u", state=u, frame=frame, components={x: (u[0] ** 2 / 2,)},
                         waves={x: (u[0],)})
+    if word is b6_numerics.hll:
+        model.wave_speeds(flux_u, frame=frame, values={x: (u[0], u[0])})
     rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u))
     plan = DiscretizationPlan()
     selection = rate.select(flux_u)
-    plan.rates.add(selection, FiniteVolume(
-        flux=flux_u, variables=variables.Conservative(u),
-        reconstruction=reconstruction.FirstOrder(), riemann=face))
+    plan.rates.add(selection, word(flux_u, u))
     case = pops.Case("burgers")
     block = case.block("burgers", model)
     case.numerics(plan, block=block)
@@ -321,13 +349,16 @@ def _hand_burgers(face):
     return case, Uniform(CartesianGrid(frame=frame, cells=(64,), periodic=PeriodicAxes((x,))))
 
 
-@pytest.mark.parametrize("word, face", [(rusanov, riemann.Rusanov), (hll, riemann.HLL)],
+@pytest.mark.parametrize("word, oracle", [(rusanov, b6_numerics.rusanov), (hll, b6_numerics.hll)],
                          ids=["rusanov", "hll"])
-def test_a_non_linear_flux_takes_the_waves_that_r9_derives(word, face):
+def test_a_non_linear_flux_takes_the_waves_that_r9_derives(word, oracle):
+    """N3 lot 1: rusanov() and hll() are bodies of @pops.scheme; each gives the face of its b6
+    oracle (examples/api_v02/b6_numerics.py, D5), with the waves that R9 derives, and hll() the
+    signed pair (dF/du, dF/du) that its face input speeds reads."""
     case = _surface_burgers(word)
     elaborated = case.elaborated
     resolved = _resolved(elaborated.case, elaborated.layout)
-    hand = _resolved(*_hand_burgers(face()))
+    hand = _resolved(*_hand_burgers(oracle))
     assert _without_provenance(_artifact(resolved)) == _without_provenance(_artifact(hand))
     assert resolved.snapshot.semantic_identity == hand.snapshot.semantic_identity
     report = surface.inspect(case)
@@ -419,8 +450,10 @@ def test_inspect_reports_each_choice_and_its_origin(l1):
                      ("accept", "finite()", "default"), ("cells", (256,), "stated")]:
         assert expected in choices
     assert "FiniteVolume(variables=Conservative(u), reconstruction=FirstOrder(), " \
-           "riemann=Rusanov())" in text
-    assert "Diffusion(flux=F^d)" in text
+           "riemann=riemann.User(body=the FaceFlux of upwind" in text
+    assert "StencilFlux(radius=1, body=the FaceFlux of two_point, frequency=nu / face.distance " \
+           "/ face.distance, derived)" in text
+    assert "and in the program the StencilFlux of diffusive_flux_u" in text
 
 
 def test_inspect_of_a_term_shows_its_kind_and_its_model(l1):

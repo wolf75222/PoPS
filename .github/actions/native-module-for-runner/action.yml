@@ -1,0 +1,121 @@
+name: 'Native Python module for this runner'
+description: >
+  Verifie, avant tout test, que le contrat d'en-tetes du module natif telecharge (compilateur et
+  arbres d'include implicites, pops.native-compiler-includes) tient sur CE runner. Pendant un
+  deploiement d'image GitHub, le job de build et le job consommateur peuvent tourner sur deux
+  images differentes : le contrat refuse alors toute compilation native, comme il le doit. Au lieu
+  de cent tests rouges, cette action nomme les deux images et les paquets Debian en cause, puis
+  reconstruit le module de cette dimension sur ce runner (meme preset, ccache du build) et prouve
+  que le contrat du module reconstruit tient ici. Le contrat lui-meme n'est jamais relache.
+  Prerequis : setup-kokkos (recu d'identite des en-tetes) et setup-python ont deja tourne.
+
+inputs:
+  dimension:
+    description: 'Dimension native du module telecharge (1, 2 ou 3)'
+    required: true
+  package-dir:
+    description: 'Repertoire de l artefact telecharge (une roue pops-*.whl et native-build-runner.json)'
+    required: true
+  rebuild-minutes:
+    description: >
+      Garde-fou du build de reconstruction. Avec le ccache du build il suffit de quelques minutes ;
+      un depassement echoue avec une erreur nommee au lieu d'entamer le budget des tests.
+    default: '12'
+
+outputs:
+  rebuilt:
+    description: "'true' si le module a ete reconstruit sur ce runner"
+    value: ${{ steps.check.outputs.rebuild }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check Dim${{ inputs.dimension }} module include contract on this runner
+      id: check
+      shell: bash
+      run: >-
+        python3 scripts/ci_native_build_runner.py check
+        --dimension "${{ inputs.dimension }}"
+        --package-dir "${{ inputs.package-dir }}"
+        --identity "$RUNNER_TEMP/pops-ci-compiler-include-identity.json"
+        --github-output "$GITHUB_OUTPUT"
+        --summary "$GITHUB_STEP_SUMMARY"
+        --receipt "$RUNNER_TEMP/pops-ci-native-runner-check-dim${{ inputs.dimension }}.json"
+
+    # Cle de sauvegarde du job gate-python-build (CCACHE_CACHE_KEY) : meme run d'abord, puis la
+    # branche, puis master. Un ccache ne sert qu'a accelerer : chaque hit est adresse par le contenu
+    # exact des en-tetes lus, donc un en-tete systeme change donne un miss, jamais un objet perime.
+    - name: Restore Dim${{ inputs.dimension }} module build ccache
+      if: steps.check.outputs.rebuild == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ github.workspace }}/.ccache-module-dim${{ inputs.dimension }}
+        key: ccache-${{ runner.os }}-python-build-dim${{ inputs.dimension }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ccache-${{ runner.os }}-python-build-dim${{ inputs.dimension }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-
+          ccache-${{ runner.os }}-python-build-dim${{ inputs.dimension }}-${{ github.ref }}-
+          ccache-${{ runner.os }}-python-build-dim${{ inputs.dimension }}-refs/heads/master-
+
+    - name: Rebuild Dim${{ inputs.dimension }} module on this runner
+      if: steps.check.outputs.rebuild == 'true'
+      shell: bash
+      env:
+        CCACHE_DIR: ${{ github.workspace }}/.ccache-module-dim${{ inputs.dimension }}
+        CCACHE_MAXSIZE: 2G
+        CCACHE_BASEDIR: ${{ github.workspace }}
+        CCACHE_NOHASHDIR: "true"
+        CCACHE_SLOPPINESS: locale
+        POPS_NATIVE_DIM: ${{ inputs.dimension }}
+      run: |
+        set -euo pipefail
+        dim="${{ inputs.dimension }}"
+        package_dir="${{ inputs.package-dir }}"
+        pip install --upgrade pip numpy pytest
+        # Same configure line as gate-python-build: preset, linker, Dim, TU pool and path map.
+        rm -rf build-kokkos-py
+        export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+        ccache --zero-stats
+        cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
+          -DPOPS_NATIVE_DIM="$dim" \
+          -DPOPS_HEAVY_MODULE_TU_POOL=4 \
+          -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+        set +e
+        timeout --signal=TERM --kill-after=30s "${{ inputs.rebuild-minutes }}m" \
+          cmake --build --preset ci-kokkos-python
+        build_status=$?
+        set -e
+        ccache -s | grep -iE 'hits|misses' || true
+        if [[ $build_status -ne 0 ]]; then
+          if [[ $build_status -eq 124 ]]; then
+            echo "::error title=Native module rebuild for this runner image::Dim${dim} rebuild exceeded ${{ inputs.rebuild-minutes }} minutes; the module artifact was built on another runner image. Re-run the whole workflow once the image rollout is complete."
+          else
+            echo "::error title=Native module rebuild for this runner image::Dim${dim} rebuild failed (status ${build_status}); the module artifact was built on another runner image."
+          fi
+          exit "$build_status"
+        fi
+        PYTHONPATH="$PWD/build-kokkos-py/python" PYTHONNOUSERSITE=1 \
+          python3 scripts/verify_installed_native.py --expect-dim "$dim" --expect-serial
+        rebuilt="$RUNNER_TEMP/pops-ci-rebuilt-dim${dim}"
+        rm -rf "$rebuilt"
+        python3 scripts/ci_assemble_installed_wheel.py \
+          --package build-kokkos-py/python --dimension "$dim" --output-dir "$rebuilt"
+        PYTHONPATH="$PWD/build-kokkos-py/python" PYTHONNOUSERSITE=1 \
+          python3 scripts/ci_native_build_runner.py record \
+          --dimension "$dim" --wheel-dir "$rebuilt" --output "$rebuilt/native-build-runner.json"
+        # Keep the downloaded artifact beside, outside the checkout; tests install only the new wheel.
+        replaced="$RUNNER_TEMP/pops-ci-replaced-dim${dim}"
+        rm -rf "$replaced"
+        mv "$package_dir" "$replaced"
+        mkdir -p "$(dirname "$package_dir")"
+        cp -a "$rebuilt" "$package_dir"
+        # No build tree stays in the checkout: shards test installed wheels only.
+        rm -rf build-kokkos-py
+
+    - name: Prove the rebuilt Dim${{ inputs.dimension }} module contract holds here
+      if: steps.check.outputs.rebuild == 'true'
+      shell: bash
+      run: >-
+        python3 scripts/ci_native_build_runner.py check --require-match
+        --dimension "${{ inputs.dimension }}"
+        --package-dir "${{ inputs.package-dir }}"
+        --identity "$RUNNER_TEMP/pops-ci-compiler-include-identity.json"

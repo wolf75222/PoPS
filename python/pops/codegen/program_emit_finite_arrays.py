@@ -5,6 +5,7 @@ import json
 import re
 
 from pops.time._program.structured_control import value_signature
+from pops._ir.data_model import is_field_leaf, is_finite_array, value_kind
 
 
 FINITE_OPS = frozenset(("finite_real", "finite_range_set", "finite_size", "finite_domain", "finite_same_domain",
@@ -94,9 +95,9 @@ def finite_cpp_type(signature):
     kind = signature["vtype"]
     if signature.get("ownership") == "contiguous_distributed":
         ns = "pops::runtime::program::distributed::"
-        if kind == "array":
+        if is_finite_array(kind):
             element = signature["element"]
-            requests = (element["vtype"] == "index" and
+            requests = (value_kind(element) == "index" and
                         element.get("ownership") == "contiguous_distributed")
             return ns + ("Requests" if requests else "ArrayRef<pops::kNativeDimension>")
         return ns + {"index_set":"DomainRef", "index":"Index"}[kind]
@@ -107,31 +108,28 @@ def finite_cpp_type(signature):
         return capability_cpp_type(signature)
     if kind in ("product", "variant"):
         return "pops_algebra_finite::Record"
-    if kind == "array":
+    if is_finite_array(kind):
         from .program_emit_finite_kokkos import device_array
         if field_array(signature):
             return "pops_algebra_finite::FieldArray"
         return "pops_algebra_finite::" + ("DeviceArray" if device_array(signature) else "Array")
-    if kind in ("state", "rhs", "scalar_field"):
+    if is_field_leaf(kind):
         return "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>"
     return {"scalar":"pops::Real", "int64":"std::int64_t", "bool":"bool",
             "index_set":"pops_algebra_finite::DomainRef", "index":"pops_algebra_finite::Index"}[kind]
 
 
-_FIELD_LEAVES = ("state", "rhs", "scalar_field")
-
-
 def field_array(signature):
     """A replicated Array whose element is a Field keeps one device column per box (DM7)."""
-    return (signature["vtype"] == "array" and signature.get("ownership") != "contiguous_distributed"
-            and signature["element"]["vtype"] in _FIELD_LEAVES)
+    return (is_finite_array(signature) and signature.get("ownership") != "contiguous_distributed"
+            and is_field_leaf(signature["element"]))
 
 
 def _packed(signature, token, lines, prefix):
     if signature["vtype"] in ("product", "variant"):
         from .program_structural_storage import pack_record
         return pack_record(signature, token, lines, prefix)
-    if signature["vtype"] in ("state", "rhs", "scalar_field"):
+    if is_field_leaf(signature):
         output = prefix + "_snapshot"
         lines.append("%s %s;" % (finite_cpp_type(signature), output))
         _allocate("ctx.own_structural_field(%s)" % token, output, lines)
@@ -143,7 +141,7 @@ def _unpacked(signature, token):
     if signature["vtype"] in ("product", "variant"):
         from .program_structural_storage import unpack_record
         return unpack_record(signature, token)
-    if signature["vtype"] in ("state", "rhs", "scalar_field"):
+    if is_field_leaf(signature):
         return "(*(%s))" % token
     return token
 
@@ -398,7 +396,7 @@ def emit_finite_op(program,value,var,model,lines,prelude,block_idx,field_plans,t
         signature = value_signature(value)
         unpacked = _unpacked_cell(signature,token)
         def has_field(item):
-            if item["vtype"] in ("state", "rhs", "scalar_field"):
+            if is_field_leaf(item):
                 return True
             return item["vtype"] in ("product", "variant") and any(has_field(child) for _, child in item["members"])
         if has_field(signature):

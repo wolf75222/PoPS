@@ -176,6 +176,8 @@ template <int Axis, int Dim, class Model>
 POPS_HD void accumulate_cfl(const Model& model, const typename Model::State& state,
                             const auto& metric, const Index<Dim>& cell, Real inverse_volume,
                             Real& inverse_dt, FiniteVolumeStatus& status) {
+  static_assert(!metric_has_physical_face_normals<std::remove_cvref_t<decltype(metric)>>,
+                "an axis wave-speed bound cannot read a metric with physical face normals");
   if (status != FiniteVolumeStatus::Success)
     return;
   const Real lower_area = face_measure<Axis>(metric, cell, MetricFaceSide::Lower);
@@ -208,6 +210,8 @@ template <int Axis, int Dim, class Model>
 POPS_HD void accumulate_parabolic_cfl(const Model& model, const auto& metric,
                                       const Index<Dim>& cell, Real inverse_volume, Real& inverse_dt,
                                       FiniteVolumeStatus& status) {
+  static_assert(!metric_has_physical_face_normals<std::remove_cvref_t<decltype(metric)>>,
+                "an axis spacing bound cannot read a metric with physical face normals");
   if (status != FiniteVolumeStatus::Success)
     return;
   const Real lower_area = face_measure<Axis>(metric, cell, MetricFaceSide::Lower);
@@ -304,9 +308,22 @@ template <int Axis, MetricFaceSide Side, int Dim, class Metric>
   requires PreparedMetricProvider<Dim, Metric>
 POPS_HD FaceContext metric_face_context(const Metric& metric, const Index<Dim>& cell) {
   static_assert(Axis >= 0 && Axis < Dim, "ND metric face axis is outside the dimension");
-  return FaceContext::axis_aligned(Axis,
-                                   finite_volume_detail::face_measure<Axis>(metric, cell, Side),
-                                   FaceOrientation::kPositive, metric.cell_measure(cell));
+  if constexpr (metric_has_physical_face_normals<Metric>) {
+    // A mapped configuration (N17): the face keeps its logical axis and canonical orientation,
+    // and carries the physical unit normal of its area vector instead of that axis.
+    FaceContext context = FaceContext::axis_aligned(
+        Axis, finite_volume_detail::face_measure<Axis>(metric, cell, Side),
+        FaceOrientation::kPositive, metric.cell_measure(cell));
+    Index<Dim> face = cell;
+    if constexpr (Side == MetricFaceSide::Upper)
+      ++face[Axis];
+    metric.template face_unit_normal<Axis>(face, context.normal);
+    return context;
+  } else {
+    return FaceContext::axis_aligned(Axis,
+                                     finite_volume_detail::face_measure<Axis>(metric, cell, Side),
+                                     FaceOrientation::kPositive, metric.cell_measure(cell));
+  }
 }
 
 /// Evaluate one face with a compile-time normal axis.  The model is checked for admissibility
@@ -355,6 +372,8 @@ template <int Axis, MetricFaceSide Side, class Numerical, int Dim, class Model, 
 POPS_HD FluxEvaluation<typename Model::State> evaluate_metric_face_flux(
     const Numerical& numerical, const Model& model, const typename Model::State& left,
     const typename Model::State& right, const Metric& metric, const Index<Dim>& cell) {
+  static_assert(!metric_has_physical_face_normals<Metric>,
+                "an axis face evaluation cannot read a metric with physical face normals");
   if (!metric.identity().domain.contains(cell))
     return finite_volume_detail::reject_face_evaluation<Numerical, typename Model::State>(
         FiniteVolumeStatus::InvalidMetric);

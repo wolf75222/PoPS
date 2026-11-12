@@ -14,6 +14,7 @@ from .program_emit_kernels import _model_impl
 from .program_emit_model_kernels import _emit_local_transform_kernel, _provider_binding
 from .program_emit_versioned import schema_cpp
 from .program_transform_read_plan import transform_read_plan
+from pops._ir.data_model import is_field_leaf
 
 
 def emit_pending_presence(source: str, stem: str) -> tuple[list[str], str]:
@@ -38,7 +39,7 @@ def emit_physical_input_guards(value: Any, variables: Any) -> list[str]:
     the original metadata. The named transform has its executed discharge path.
     Identity affine copies are handled separately after their normal equation.
     """
-    if value.vtype not in {"state", "rhs", "scalar_field"} and value.op != "project":
+    if not is_field_leaf(value) and value.op != "project":
         return []
     if value.op in {"local_transform", "synchronize", "solve_outcome_component", "store_history"}:
         return []
@@ -46,7 +47,7 @@ def emit_physical_input_guards(value: Any, variables: Any) -> list[str]:
             and dict(value.attrs["coeffs"][0]) == {0: 1}):
         return []
     inputs = [item for item in value.inputs
-              if item.vtype in {"state", "rhs", "scalar_field"} and item.id in variables]
+              if is_field_leaf(item) and item.id in variables]
     if not inputs:
         return []
     lines = ["pops::runtime::program::field_read_detail::phase(ctx.prepared_execution_lane(), [&] {"]
@@ -85,7 +86,7 @@ def emit_closed_transform(
     ns = "pops::runtime::program::"
     schema = cpp_string_expression(plan.descriptor)
     native_schema = schema_cpp(signature, block_indices)
-    if signature.get("vtype") not in {"state", "rhs", "scalar_field"}:
+    if not is_field_leaf(signature):
         raise ValueError("closed transformation requires one typed Field")
     lines = [
         "std::shared_ptr<%s> %s;" % (fields, owner_var),

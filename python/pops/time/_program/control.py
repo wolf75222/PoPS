@@ -19,7 +19,11 @@ ADVANCE_CONTROL_SCHEMA = "pops.advance-control@1"
 
 ADVANCE_CONTROL_OUTPUTS_SCHEMA = "pops.advance-control@2"
 """Schema of ``AdvanceControl.to_data`` for an Advance with Outputs (CC14): schema 1 and the
-schedule and record shape of each Output."""
+schedule and record shape of each Output. The schedule rows ``{"every": k}`` and
+``{"every_dt": h}`` count from the start of each run, in schemas 2 to 4: the k-th, 2k-th, ...
+accepted step of the run, and the times t0 + k h of the run, t0 its start (N8 « Ancrage des
+calendriers au départ du run »). The rows and the Program identity are those written before that
+lot; only the run reads them anchored."""
 
 ADVANCE_CONTROL_MEMORY_SCHEMA = "pops.advance-control@3"
 """Schema of ``AdvanceControl.to_data`` for an Advance whose method has memory or field requests
@@ -29,6 +33,12 @@ readers and ring; ``trial_failures`` lists each failure site of a field request 
 retry can change it (T38), the sites that no lot classifies yet with the lot that will, and each
 admissibility guard of the method body (IR4, N8 lot 6), whose variant is ``NotAdmissible``."""
 
+ADVANCE_CONTROL_STEP_RULE_SCHEMA = "pops.advance-control@4"
+"""Schema of ``AdvanceControl.to_data`` for an Advance whose proposals a step rule chooses (N8 lot
+« Règle de pas compilée »): schema 3, whose ``proposal`` is ``{"rule": "stability", "fraction": ...}`` with
+``max_dt`` when the rule has one, instead of ``{"dt": ...}``. Only a Program with a rule records
+it, so the record and the identity of every Program without one are unchanged."""
+
 ADVANCE_ASSESSMENT_CONTRACT = "pops.advance-assessment@1"
 """Attribute of an acceptance guard that is an assessment of an Advance: its rejection is raised
 in the phase that the compiled run repeats (T28), every other rejection is a trial failure."""
@@ -37,14 +47,16 @@ _MAX_ATTEMPTS = 2**31 - 1
 
 
 class AdvanceControl:
-    """The assessments, the retry budget and the first proposal of one elaborated Advance."""
+    """The assessments, the retry budget and the first proposal of one elaborated Advance, or its
+    step rule: ``step_rule`` is ``None`` or ``(fraction, max_dt)``, ``max_dt`` ``None`` when the rule
+    has no cap, and ``first_dt`` is ``None`` exactly when there is a rule."""
 
     __slots__ = ("assessments", "max_attempts", "max_transforms", "first_dt", "outputs",
-                 "memory", "trial_failures")
+                 "memory", "trial_failures", "step_rule")
 
     def __init__(self, *, assessments: tuple, max_attempts: int, max_transforms: int,
-                 first_dt: float, outputs: tuple = (), memory: tuple = (),
-                 trial_failures: tuple = ()) -> None:
+                 first_dt: float | None, outputs: tuple = (), memory: tuple = (),
+                 trial_failures: tuple = (), step_rule: tuple | None = None) -> None:
         if type(assessments) is not tuple or not assessments or any(
                 type(row) is not tuple or len(row) != 2
                 or any(type(item) is not str or not item for item in row)
@@ -55,7 +67,20 @@ class AdvanceControl:
             raise ValueError("AdvanceControl.max_attempts is an integer in [1, 2**31 - 1]")
         if type(max_transforms) is not int or max_transforms != 0:
             raise ValueError("AdvanceControl.max_transforms is 0 until transforms are lowered")
-        if type(first_dt) is not float or not math.isfinite(first_dt) or first_dt <= 0.0:
+        if step_rule is not None:
+            if type(step_rule) is not tuple or len(step_rule) != 2:
+                raise TypeError("AdvanceControl.step_rule is (fraction, max_dt) or None")
+            fraction, max_dt = step_rule
+            if type(fraction) is not float or not math.isfinite(fraction) or fraction <= 0.0:
+                raise ValueError("AdvanceControl.step_rule fraction is a finite positive binary64")
+            if max_dt is not None and (type(max_dt) is not float or not math.isfinite(max_dt)
+                                       or max_dt <= 0.0):
+                raise ValueError("AdvanceControl.step_rule max_dt is None or a finite positive "
+                                 "binary64 duration")
+            if first_dt is not None:
+                raise ValueError("AdvanceControl with a step rule has no first_dt: the rule "
+                                 "chooses every proposal")
+        elif type(first_dt) is not float or not math.isfinite(first_dt) or first_dt <= 0.0:
             raise ValueError("AdvanceControl.first_dt is a finite positive binary64 duration")
         object.__setattr__(self, "assessments", assessments)
         object.__setattr__(self, "max_attempts", max_attempts)
@@ -65,6 +90,7 @@ class AdvanceControl:
         object.__setattr__(self, "memory", _rows(memory, _MEMORY_KEYS, "memory"))
         object.__setattr__(self, "trial_failures",
                            _rows(trial_failures, _TRIAL_KEYS, "trial failure"))
+        object.__setattr__(self, "step_rule", step_rule)
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("AdvanceControl is immutable")
@@ -74,13 +100,16 @@ class AdvanceControl:
 
     def __hash__(self) -> int:
         return hash((self.assessments, self.max_attempts, self.max_transforms, self.first_dt,
-                     len(self.outputs), len(self.memory), len(self.trial_failures)))
+                     len(self.outputs), len(self.memory), len(self.trial_failures),
+                     self.step_rule))
 
     def __repr__(self) -> str:
         return "AdvanceControl(%r)" % (self.to_data(),)
 
     @property
     def schema(self) -> str:
+        if self.step_rule is not None:
+            return ADVANCE_CONTROL_STEP_RULE_SCHEMA
         if self.memory or self.trial_failures:
             return ADVANCE_CONTROL_MEMORY_SCHEMA
         return ADVANCE_CONTROL_OUTPUTS_SCHEMA if self.outputs else ADVANCE_CONTROL_SCHEMA
@@ -91,14 +120,26 @@ class AdvanceControl:
             "schema": schema,
             "accept": [{"assess": name, "origin": origin} for name, origin in self.assessments],
             "retry": {"max_attempts": self.max_attempts, "max_transforms": self.max_transforms},
-            "proposal": {"dt": self.first_dt.hex()},
+            "proposal": self._proposal_data(),
         }
-        if self.outputs or schema == ADVANCE_CONTROL_MEMORY_SCHEMA:
+        full = schema in (ADVANCE_CONTROL_MEMORY_SCHEMA, ADVANCE_CONTROL_STEP_RULE_SCHEMA)
+        if self.outputs or full:
             data["outputs"] = _thaw(self.outputs)
-        if schema == ADVANCE_CONTROL_MEMORY_SCHEMA:
+        if full:
             data["memory"] = _thaw(self.memory)
             data["trial_failures"] = _thaw(self.trial_failures)
         return data
+
+    def _proposal_data(self) -> dict[str, Any]:
+        if self.step_rule is None:
+            if self.first_dt is None:
+                raise RuntimeError("AdvanceControl without a step rule lost its first_dt")
+            return {"dt": self.first_dt.hex()}
+        fraction, max_dt = self.step_rule
+        proposal = {"rule": "stability", "fraction": fraction.hex()}
+        if max_dt is not None:
+            proposal["max_dt"] = max_dt.hex()
+        return proposal
 
     @classmethod
     def from_data(cls, data: Any) -> AdvanceControl:
@@ -107,7 +148,8 @@ class AdvanceControl:
                 data.get("schema") == ADVANCE_CONTROL_SCHEMA and set(data) == keys
                 or data.get("schema") == ADVANCE_CONTROL_OUTPUTS_SCHEMA
                 and set(data) == keys | {"outputs"}
-                or data.get("schema") == ADVANCE_CONTROL_MEMORY_SCHEMA
+                or data.get("schema") in (ADVANCE_CONTROL_MEMORY_SCHEMA,
+                                          ADVANCE_CONTROL_STEP_RULE_SCHEMA)
                 and set(data) == keys | {"outputs", "memory", "trial_failures"}):
             raise ValueError("Advance control record has another schema")
         accept, retry, proposal = data["accept"], data["retry"], data["proposal"]
@@ -116,12 +158,20 @@ class AdvanceControl:
             raise ValueError("Advance control record has malformed assessments")
         if not isinstance(retry, dict) or set(retry) != {"max_attempts", "max_transforms"}:
             raise ValueError("Advance control record has a malformed retry budget")
-        if not isinstance(proposal, dict) or set(proposal) != {"dt"} \
-                or type(proposal["dt"]) is not str:
+        ruled = data["schema"] == ADVANCE_CONTROL_STEP_RULE_SCHEMA
+        if not isinstance(proposal, dict) or any(type(value) is not str
+                                                 for value in proposal.values()):
             raise ValueError("Advance control record has a malformed proposal")
+        if ruled and (set(proposal) not in ({"rule", "fraction"}, {"rule", "fraction", "max_dt"})
+                      or proposal["rule"] != "stability") or not ruled and set(proposal) != {"dt"}:
+            raise ValueError("Advance control record has a malformed proposal")
+        step_rule = None if not ruled else (
+            float.fromhex(proposal["fraction"]),
+            float.fromhex(proposal["max_dt"]) if "max_dt" in proposal else None)
         control = cls(assessments=tuple((row["assess"], row["origin"]) for row in accept),
                       max_attempts=retry["max_attempts"], max_transforms=retry["max_transforms"],
-                      first_dt=float.fromhex(proposal["dt"]),
+                      first_dt=None if ruled else float.fromhex(proposal["dt"]),
+                      step_rule=step_rule,
                       outputs=tuple(data.get("outputs", ())),
                       memory=tuple(data.get("memory", ())),
                       trial_failures=tuple(data.get("trial_failures", ())))
@@ -208,4 +258,5 @@ def _outputs(outputs: Any) -> tuple:
 
 __all__ = ["ADVANCE_ASSESSMENT_CONTRACT", "ADVANCE_CONTROL_MEMORY_SCHEMA",
            "ADVANCE_CONTROL_OUTPUTS_SCHEMA",
-           "ADVANCE_CONTROL_SCHEMA", "AdvanceControl", "memory_rings"]
+           "ADVANCE_CONTROL_SCHEMA", "ADVANCE_CONTROL_STEP_RULE_SCHEMA", "AdvanceControl",
+           "memory_rings"]

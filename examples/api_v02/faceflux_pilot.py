@@ -5,13 +5,13 @@ Same physics and the same arithmetic as ``navier_stokes_face`` and
 The difference is how the reads are written: a scheme reads cells reached
 from the face (``face.left_cell``, ``face.right_cell``, ``cell.shift``) and
 components by name. It writes no dimension, no radius and no halo depth;
-``pops.lib.numerics.realize_face_flux`` derives them (IR14, IR17).
+``pops.lib.numerics.face_flux.realize_face_flux`` derives them (IR14, IR17).
 """
 from __future__ import annotations
 
 import numpy as np
 from pops import math as pm
-from pops.lib.numerics import FaceFlux
+from pops.lib.numerics.face_flux import FaceFlux
 
 
 def navier_stokes_scheme(U, *, gamma=1.4, viscosity=.01, prandtl=.72):

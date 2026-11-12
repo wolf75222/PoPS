@@ -79,6 +79,39 @@ class TermView:
 
         return face_function(function, self, where, reconstructed)
 
+    def parameters(self, value: Any) -> list:
+        """The names of the parameters that a value reads, bound at bind (Q4)."""
+        from ._model import Parameter
+
+        return [node.name for node in walk(value) if isinstance(node, Parameter)]
+
+    def number(self, value: Any) -> Any:
+        """The number of a value written with numbers, mathematical constants and model
+        constants (folded at compile time, Q4), or ``None`` when it reads anything else."""
+        from fractions import Fraction
+
+        from ._expr import Arith
+        from ._geometry import MathConstant
+        from ._model import ModelConstant
+
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float, Fraction)):
+            return value
+        if isinstance(value, (MathConstant, ModelConstant)):
+            return value.value
+        if isinstance(value, Arith):
+            args = [self.number(arg) for arg in value.args]
+            if any(arg is None for arg in args):
+                return None
+            if value.op == "neg":
+                return -args[0]
+            left, right = args
+            return {"+": lambda: left + right, "-": lambda: left - right,
+                    "*": lambda: left * right, "/": lambda: left / right,
+                    "**": lambda: left ** right}[value.op]()
+        return None
+
     def reads_derivative(self, value: Any) -> bool:
         """Whether a value reads the derivative of a field, ``grad(...)``."""
         return any(isinstance(node, Call) and node.word == "grad" for node in walk(value))

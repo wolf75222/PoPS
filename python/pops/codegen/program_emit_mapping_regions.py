@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import re
+from pops._ir.data_model import is_field_leaf
 
 
 def emit_map_port(value, var, lines, block_indices):
@@ -21,7 +22,7 @@ def continuation_capture(values, var):
     # Numerical buffers are owned by ctx_owner, not by a stack frame. C++ reference captures bind
     # those objects directly; scalar temporaries and provider handles are preserved by value.
     references = sorted({var.get(("continuation_reference", node.id), var[node.id]) for node in values
-                         if node.id in var and node.vtype in ("state", "rhs", "scalar_field")
+                         if node.id in var and is_field_leaf(node)
                          and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*",
                                           var.get(("continuation_reference", node.id), var[node.id]))})
     return "=, " + ", ".join("&" + name for name in references) if references else "="

@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Any
 
 from pops.time._program.structured_control import value_signature
+from pops._ir.data_model import is_field_leaf
 
 
 def has_suspension(value: Any) -> bool:
@@ -55,7 +56,7 @@ def _heap_slots(signature, node_id, prefix, lines, *, carry=False, slot_offset=0
             output = {"code": token+"_code", "origin": token+"_origin"}
             parent[key] = output
             stack.append((sig["success"], output, "value"))
-        elif kind in ("state", "rhs", "scalar_field"):
+        elif is_field_leaf(kind):
             declarations.append(
                 "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s_owner;" % member)
             parent[key] = _OwnedFieldSlot(token + "_owner")

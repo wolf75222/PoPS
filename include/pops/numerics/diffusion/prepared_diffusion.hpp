@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/static_geometry.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/diffusion/bernoulli.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
@@ -345,17 +346,124 @@ struct Divergence {
   }
 };
 
+/// The two-point flux of a scalar diagonal law on the static geometry arrays of node positions
+/// (N17, C1). It is the Cartesian kernel with the logical spacing h replaced by the distance that
+/// the arrays state across the face: between the centroids of its cells, and at a physical end the
+/// mirrored distance 2 |m_f - c_K|, so that the centroid lies half of it from the face. The end
+/// coefficient is the linear extrapolation in that distance (1.5 a_K - 0.5 a_in on a uniform box).
+template <int Dim>
+struct StaticFaceFlux {
+  FieldView<const Real, Dim> q, w, a;
+  FieldView<Real, Dim> face_values;
+  Geometry<Dim> geometry;
+  StaticGeometryView<Dim> arrays;
+  std::array<DiffusiveBoundary<Dim>, 2 * Dim> physical;
+  int axis;
+  POPS_HD void operator()(const Index<Dim>& face) const {
+    Index<Dim> left = face, right = face;
+    --left[axis];
+    const bool lower = face[axis] == geometry.domain().lo[axis];
+    const bool upper = face[axis] == geometry.domain().hi[axis] + 1;
+    const auto boundary = physical[2 * axis + (upper ? 1 : 0)];
+    const Real distance = arrays.distance_at(axis, face);
+    Real flux = Real(0), conductance = Real(0);
+    if ((lower || upper) && boundary.kind != DiffusiveBoundaryKind::periodic) {
+      const Index<Dim> center = lower ? right : left;
+      const Real orientation = lower ? Real(-1) : Real(1);
+      Index<Dim> inside = center;
+      inside[axis] += lower ? 1 : -1;
+      const Real inner = arrays.distance_at(axis, lower ? inside : center);
+      const Real coefficient =
+          a(center, axis) + (a(center, axis) - a(inside, axis)) * (Real(0.5) * distance) / inner;
+      if (boundary.kind == DiffusiveBoundaryKind::conormal) {
+        const Real trace = boundary.trace(geometry, face, axis);
+        flux = orientation * trace;
+        if (!Kokkos::isfinite(coefficient) || coefficient < 0 || (coefficient == 0 && trace != 0))
+          flux = std::numeric_limits<Real>::quiet_NaN();
+      } else if (coefficient == 0) {
+        flux = conductance = Real(0);
+      } else if (!(coefficient > 0)) {
+        flux = std::numeric_limits<Real>::quiet_NaN();
+      } else {
+        flux = orientation * coefficient * Real(2) *
+               (boundary.trace(geometry, face, axis) - w(center, 0)) / distance;
+        conductance = Real(2) * coefficient * w(center, 1) / distance;
+      }
+    } else {
+      const Real coefficient = Real(0.5) * (a(left, axis) + a(right, axis));
+      if (coefficient == 0) {
+        flux = conductance = Real(0);
+      } else {
+        flux = coefficient * (w(right, 0) - w(left, 0)) / distance;
+        const Real difference = q(right, 0) - q(left, 0);
+        const Real secant = difference != 0 ? (w(right, 0) - w(left, 0)) / difference
+                                            : Real(0.5) * (w(right, 1) + w(left, 1));
+        conductance = coefficient * secant / distance;
+      }
+    }
+    face_values(face, 0) = flux;
+    face_values(face, 1) = conductance;
+    face_values(face, 2) = conductance;
+  }
+};
+
+/// The divergence of the static face fluxes: sum_f F_f |S_f| / |K| with the measures of the
+/// arrays, and the explicit frequency sum_f g_f |S_f| / |K| of the face conductances g_f.
+template <int Dim>
+struct StaticCellBalance {
+  nd::FaceFieldView<Real, Dim> faces;
+  FieldView<Real, Dim> result, status;
+  StaticGeometryView<Dim> arrays;
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    Real net_flux = 0, frequency = 0;
+    bool valid = true;
+    const Real measure = arrays.measure(cell);
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> upper = cell;
+      ++upper[axis];
+      for (int side = 0; side < 2; ++side) {
+        const auto face = side == 0 ? cell : upper;
+        valid = valid && Kokkos::isfinite(faces.axes[axis](face, 0)) &&
+                Kokkos::isfinite(faces.axes[axis](face, 1)) && faces.axes[axis](face, 1) >= 0 &&
+                Kokkos::isfinite(faces.axes[axis](face, 2)) && faces.axes[axis](face, 2) >= 0;
+      }
+      const Real lower_area = arrays.face_measure_at(axis, cell);
+      const Real upper_area = arrays.face_measure_at(axis, upper);
+      net_flux +=
+          (faces.axes[axis](upper, 0) * upper_area - faces.axes[axis](cell, 0) * lower_area) /
+          measure;
+      frequency +=
+          (faces.axes[axis](upper, 1) * upper_area + faces.axes[axis](cell, 2) * lower_area) /
+          measure;
+    }
+    result(cell, 0) = net_flux;
+    status(cell, 0) =
+        valid && Kokkos::isfinite(net_flux) && Kokkos::isfinite(frequency) && frequency >= 0
+            ? frequency
+            : std::numeric_limits<Real>::infinity();
+  }
+};
+
 }  // namespace prepared_diffusion_detail
 
 /// One preparation per Program evaluation/implicit operator, reused for every
 /// trial. The law factory supplies W(U), nonnegative diagonal A(U,fields), and
 /// dW/dU at each cell. Neighbor differences are taken AFTER evaluating W: no
 /// discrete chain rule is substituted.
-template <int Dim, int Components = 1, bool Tensor = false, bool Coupled = false>
+///
+/// With @p StaticArrays the faces read the static geometry arrays of a mapped layout (N17, C1)
+/// instead of the uniform spacings of the logical box: distances, face measures and cell measures.
+/// The arrays serve the scalar diagonal law of node positions of rank one, whose faces are
+/// orthogonal to the line of the centroids, so the two-point flux stays consistent.
+template <int Dim, int Components = 1, bool Tensor = false, bool Coupled = false,
+          bool StaticArrays = false>
 class PreparedDiffusion {
   static_assert(Dim >= 1 && Dim <= 3, "Cartesian diffusion requires native dimensions 1 through 3");
   static_assert(Components > 0, "diffusion requires at least one accumulated component");
   static_assert(!Coupled || Tensor, "coupled gradients require the full component Jacobian");
+  static_assert(!StaticArrays || (Dim == 1 && Components == 1 && !Tensor && !Coupled),
+                "static geometry arrays serve the scalar diagonal diffusion of node positions of "
+                "rank one");
   using Field = MultiFab<Dim>;
   using Boundary = PreparedScalarBoundarySession<Dim>;
   Geometry<Dim> geometry_;
@@ -369,6 +477,9 @@ class PreparedDiffusion {
   bool prepared_amr_ghosts_ = false;
   Real frequency_ = Real(0);
   bool evaluated_ = false;
+  // The static geometry arrays that the faces read, with their owner (StaticArrays only).
+  std::shared_ptr<const pops::StaticGeometry<Dim>> static_geometry_;
+  StaticGeometryView<Dim> arrays_{};
   bool matches_storage_(const Field& field) const {
     return field.layout() == variable_.layout() &&
            field.distribution() == variable_.distribution() &&
@@ -440,6 +551,20 @@ class PreparedDiffusion {
       coefficient_boundary_ = ctx.prepare_mesh_boundary_session(coefficients_, *lane_);
       if constexpr (Tensor)
         tensor_flux_boundary_ = ctx.prepare_mesh_boundary_session(tensor_flux_, *lane_);
+      if constexpr (StaticArrays) {
+        static_geometry_ = ctx.static_geometry();
+        if (!static_geometry_ || static_geometry_->kind() != StaticGeometryKind::nodes ||
+            static_geometry_->domain() != geometry_.domain())
+          throw std::invalid_argument(
+              "diffusion on static geometry arrays requires the node positions of its layout");
+        arrays_ = static_geometry_->view();
+        for (const auto& boundary : physical_)
+          for (const Real slope : boundary.slope)
+            if (slope != Real(0))
+              throw std::invalid_argument(
+                  "diffusive boundary data that reads a coordinate would read a logical "
+                  "position on static geometry arrays");
+      }
       for (int axis = 0; axis < Dim; ++axis) {
         if (geometry_.domain().length(axis) < 2 || prototype.ghosts()[axis] < 1)
           throw std::invalid_argument(
@@ -489,6 +614,7 @@ class PreparedDiffusion {
                     std::array<DiffusiveBoundary<Dim>, 2 * Dim> potential_boundaries) {
     static_assert(Components == 1 && !Tensor,
                   "fitted drift diffusion requires a scalar diagonal density law");
+    static_assert(!StaticArrays, "fitted drift diffusion reads the uniform logical spacing");
     if (!std::isfinite(mobility_over_diffusion) || mobility_over_diffusion < 0)
       throw DiffusiveEvaluationError("fitted drift ratio must be finite and nonnegative");
     for (int face = 0; face < 2 * Dim; ++face) {
@@ -668,17 +794,27 @@ class PreparedDiffusion {
           else
             return std::as_const(variable_).fab(local).view();
         }();
-        for (int axis = 0; axis < Dim; ++axis) {
-          const auto face_values = faces.axes[axis];
-          for_each_cell(nd::face_box(input.box(local), axis),
-                        prepared_diffusion_detail::FaceFlux<Dim, Components, Tensor, Fitted>{
-                            q, w, a, tensor_flux, face_values, geometry, physical,
-                            potential_boundaries, drift_ratio, axis});
-        }
         const auto result = output.fab(local).view();
         const auto status = status_.fab(local).view();
-        for_each_cell(output.box(local), prepared_diffusion_detail::Divergence<Dim, Components>{
-                                             faces, result, status, geometry});
+        if constexpr (StaticArrays) {
+          const auto arrays = arrays_;
+          for (int axis = 0; axis < Dim; ++axis)
+            for_each_cell(nd::face_box(input.box(local), axis),
+                          prepared_diffusion_detail::StaticFaceFlux<Dim>{
+                              q, w, a, faces.axes[axis], geometry, arrays, physical, axis});
+          for_each_cell(output.box(local), prepared_diffusion_detail::StaticCellBalance<Dim>{
+                                               faces, result, status, arrays});
+        } else {
+          for (int axis = 0; axis < Dim; ++axis) {
+            const auto face_values = faces.axes[axis];
+            for_each_cell(nd::face_box(input.box(local), axis),
+                          prepared_diffusion_detail::FaceFlux<Dim, Components, Tensor, Fitted>{
+                              q, w, a, tensor_flux, face_values, geometry, physical,
+                              potential_boundaries, drift_ratio, axis});
+          }
+          for_each_cell(output.box(local), prepared_diffusion_detail::Divergence<Dim, Components>{
+                                               faces, result, status, geometry});
+        }
       }
       device_fence();
     } catch (...) {
@@ -864,6 +1000,8 @@ class PreparedDiffusion {
             for (int side = 0; side < 2; ++side) {
               Index<Dim> face = cell;
               face[axis] += side;
+              if constexpr (StaticArrays)
+                measure = arrays_.face_measure_at(axis, face);
               if (physical_boundary_only) {
                 const bool domain_boundary = side == 0
                                                  ? face[axis] == geometry_.domain().lo[axis]

@@ -240,6 +240,7 @@ class _CodegenMixin(_HyperbolicModel):
         consumer_owner_qid: Any = None,
         declare_auxiliary_providers: bool = True,
         _native_route: Any = None,
+        _native_geometry: Any = None,
     ) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.compile_model."""
         return _cg_compile().compile_model(
@@ -258,6 +259,7 @@ class _CodegenMixin(_HyperbolicModel):
             consumer_owner_qid=consumer_owner_qid,
             declare_auxiliary_providers=declare_auxiliary_providers,
             _native_route=_native_route,
+            _native_geometry=_native_geometry,
         )
 
     def emit_cpp_elliptic(

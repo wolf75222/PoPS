@@ -17,6 +17,7 @@ from .program_emit_finite_kokkos import (
     _emit_block,
     _captures,
 )
+from pops._ir.data_model import is_finite_array, is_finite_index, value_kind
 
 _DN = "pops::runtime::program::distributed::"
 _CV = "pops::runtime::program::ContinuationValue<pops::kNativeDimension>"
@@ -178,13 +179,9 @@ def admission(value):
         kind = sig["vtype"]
         if _flat(sig):
             continue
-        if sig.get("ownership") != "contiguous_distributed" or kind not in (
-            "array",
-            "index_set",
-            "index",
-        ):
+        if sig.get("ownership") != "contiguous_distributed" or not is_finite_index(kind):
             return "capture requires unsupported structural/replicated storage", None
-        if kind == "array" and not _flat(sig["element"]):
+        if is_finite_array(kind) and not _flat(sig["element"]):
             return "captured distributed Array requires non-flat elements", None
     return None, (result, raw, block, formal, tuple(captures[key] for key in sorted(captures)))
 
@@ -282,9 +279,9 @@ def emit(value, var, lines, *, token, registry, session, lane):
                 return local
 
             env[item.id] = _tree(sig, leaf)
-        elif kind == "index_set":
+        elif value_kind(kind) == "index_set":
             env[item.id] = descriptor(source)
-        elif kind == "index":
+        elif value_kind(kind) == "index":
             env[item.id] = {"domain": descriptor("(%s).domain" % source), "offset": name + "_gid"}
             body.append("const std::int64_t %s_gid = (%s).gid;" % (name, source))
         else:

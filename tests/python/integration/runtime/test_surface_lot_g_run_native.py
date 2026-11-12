@@ -12,8 +12,8 @@ that file is refused before it runs (2.6.9).
 
 The parity check of A2 (review of the N15 lot « solves », P2): on one random periodic field of
 16 x 8 cells, one forward Euler step of the generated two_point diffusion of ``-kappa grad(u)``
-(``_TwoPoint``, b6's ``Diffusion``) and one step of ``u + dt kappa P.laplacian(u)``, b6's shared
-Laplacian in a Program written by hand, agree to round-off, and both are kappa (u_{i+1} - 2 u_i +
+(the StencilFlux of the body of ``two_point()``, N3 lot 1) and one step of ``u + dt kappa
+P.laplacian(u)``, b6's shared Laplacian in a Program written by hand, agree to round-off, and both are kappa (u_{i+1} - 2 u_i +
 u_{i-1}) / h^2 on each axis: the spacing and the sign of b6's convention, with unequal spacings.
 """
 from pathlib import Path
@@ -29,7 +29,7 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
-from pops.lib.numerics.schemes import rusanov, two_point
+from pops.lib.numerics import rusanov, two_point
 from pops.lib.output import OutputExists, npz
 from pops.lib.time.methods import forward_euler, ssprk2
 from pops.mesh import CartesianGrid, PeriodicAxes
@@ -228,19 +228,134 @@ def test_a_second_run_continues_and_rewrites_its_series(compiled, tmp_path):
 
 
 
-def test_a_later_run_that_starts_off_the_lattice_of_every_is_refused(compiled, tmp_path):
-    """F1 of the review of lot G: the run would publish N8's k H, where the spec gives t0 + k H;
-    it is refused before it runs, and the simulation is left as it was."""
+def test_published_arrays_keep_the_identity_of_their_representation(compiled, tmp_path):
+    """G03 lot E (K4): the run publishes result.state[u] and the rows of its Outputs under the
+    elaborated identity of u's representation, and a published array binds again as the datum of
+    a quantity on the same support; on another support it is refused before the native bind
+    (tests/python/unit/surface/test_published_representation.py)."""
+    from pops.surface._run import published_representation
+    u, by_steps = compiled["u"], compiled["by_steps"]
+    expected = compiled["case"].elaborated.representations[u]
+    simulation = surface.bind(compiled["artifact"], params={compiled["b"]: B},
+                              data={compiled["u0"]: _initial()}, directory=tmp_path / "first")
+    result = simulation.run(until=0.02)
+    final = result.state[u]
+    assert published_representation(final) == expected
+    assert all(published_representation(row["u"]) == expected
+               for rows in result.outputs.values() for row in rows)
+    again = surface.bind(compiled["artifact"], params={compiled["b"]: B},
+                         data={compiled["u0"]: final}, directory=tmp_path / "again")
+    restarted = again.run(until=0.01)
+    _bitwise(restarted.outputs[by_steps][0]["u"], final)
+
+
+def _hand_run(compiled, frontiers):
+    """The hand-written case driven to each frontier in turn: state and macro step by frontier."""
+    hand = compiled["hand"]
+    (binding,) = tuple(hand.plan.initial_condition_plan.bindings)
+    initial = np.ascontiguousarray(np.transpose(_initial())[np.newaxis, ...])
+    runtime = pops.bind(hand, initial_values={binding.subject: initial},
+                        params={compiled["b_handle"]: B})
+    simulation = Simulation(runtime)
+    states = {}
+    for frontier in frontiers:
+        result = simulation.run(frontier)
+        assert result.failure is None and result.time == frontier
+        states[frontier] = (np.asarray(result.state["advection"]).copy(), runtime.macro_step())
+    return states
+
+
+def test_a_later_run_off_the_grid_publishes_from_its_own_start(compiled, tmp_path):
+    """Lot G refused this run (its F1); N8 « Ancrage des calendriers au départ du run » lowers
+    the spec's schedules: run 2 starts at t0 = 0.007 after 7 steps and publishes t0 and t0 + k H
+    for every(time=H), and its start and its 10th step for every(steps=10) (global step 17)."""
+    by_time, by_steps, at_times = compiled["by_time"], compiled["by_steps"], compiled["at_times"]
     simulation = surface.bind(compiled["artifact"], params={compiled["b"]: B},
                               data={compiled["u0"]: _initial()}, directory=tmp_path)
-    first = simulation.run(until=0.01)          # 10 steps, on the lattice of every(steps=10)
-    with pytest.raises(surface.NotYetElaborated,
-                       match="starts at t0 = 0.01, off the lattice k h of "
-                             "pops.every\\(time=0.004\\)"
-                             ".*the N8 lot 'run-anchored schedules' \\(ROM-89\\)"):
-        simulation.run(until=0.015)
-    assert first.time == 0.01 and first.steps == 10
-    assert simulation._simulation._runtime.time() == 0.01
+    first = simulation.run(until=0.007)
+    second = simulation.run(until=0.025)
+    assert (first.steps, second.steps) == (7, 18)
+    assert [row.time for row in first.outputs[by_time]] == [0.0, 0.004]
+    assert [row.step for row in first.outputs[by_steps]] == [0]
+    assert [row.time for row in second.outputs[by_time]] == [0.007, 0.011, 0.015, 0.019, 0.023]
+    assert [row.step for row in second.outputs[by_steps]] == [7, 17]
+    assert [row.time for row in second.outputs[at_times]] == [0.02]
+    reference = _hand_run(compiled, [0.004, 0.007, 0.011, 0.015, 0.019, 0.02, 0.023, 0.025])
+    for row in second.outputs[by_time] + second.outputs[at_times]:
+        state, macro_step = reference[row.time]
+        assert row.step == macro_step
+        _bitwise(row["u"], np.transpose(state[0]))
+    _bitwise(second.outputs[by_steps][0]["u"], first.state[compiled["u"]])
+    _bitwise(second.state[compiled["u"]], np.transpose(reference[0.025][0][0]))
+    # the series: no time twice, and the start of run 2 is kept once
+    series = [(row.time, row.step) for row in simulation._series[by_time]]
+    assert series == [(0.0, 0), (0.004, 4), (0.007, 7), (0.011, 11), (0.015, 15), (0.019, 19),
+                      (0.023, 23)]
+
+
+# --- S3 at the surface (run-anchored note, O1 and D5) --------------------------------------------
+
+S3_H = 0.1
+S3_LIST = [0.3, 0.45]
+
+
+def _s3_case():
+    """The review's case (review/n8_run_anchored/d2_native.py): periodic advection on 16 x 8
+    cells, SSPRK2, dt = 0.01, every(time=0.1) with npz, every(steps=10) and the list [0.3, 0.45]."""
+    domain = surface.Box(x=surface.Periodic(0, 1), y=surface.Periodic(0, 1))
+    model = surface.Model("advection")
+    u = model.quantity("u", surface.Scalar(domain))
+    a = model.constant("a", value=1.0)
+    b = model.constant("b", value=0.25)
+    u0 = model.data("u0", surface.Scalar(domain))
+    advection = model.flux(of=u, value=vector(a, b) * u)
+    model.balance(ddt(u) == -div(advection))
+    numerics = surface.Numerics(represent={u: surface.CellAverage()},
+                                schemes={advection: rusanov()})
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=0.01),
+                              initial={u: u0})
+    by_time = surface.Output(surface.record(u=u), when=surface.every(time=S3_H),
+                             write=npz("series/by_time.npz"))
+    by_steps = surface.Output(surface.record(u=u), when=surface.every(steps=10))
+    at_list = surface.Output(surface.record(u=u), when=S3_LIST)
+    case = surface.Case(model=model, numerics=numerics, program=program,
+                        layout={domain: surface.Uniform(cells=CELLS)},
+                        outputs=[by_time, by_steps, at_list])
+    return case, u0, by_time, by_steps, at_list
+
+
+def test_s3_at_the_surface_has_no_duplicate_and_lands_on_until(tmp_path_factory, native_cxx,
+                                                               kokkos_root, tmp_path):
+    """Runs to 0.1 + 0.2, 0.6 and 0.8. The every(time=0.1) series is 0, 0.1, 0.2,
+    0.30000000000000004, 0.4, ..., 0.8 with no duplicate: run 2 lands its third anchored time,
+    one ulp above 0.6, on 0.6 (D5), and run 3 drops its start as the same (time, step) (D2). The
+    list holds 0.30000000000000004, where run 1 lands the listed 0.3 one ulp below its until
+    (O1), and 0.45. The npz file holds the series with strictly increasing times."""
+    del native_cxx, kokkos_root
+    cache = tmp_path_factory.mktemp("pops-native-cache-s3")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("POPS_CACHE_DIR", str(cache))
+        patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
+        patch.chdir(REPO_ROOT)
+        case, u0, by_time, by_steps, at_list = _s3_case()
+        artifact = surface.compile(case, target=surface.OpenMP())
+    x = (np.arange(CELLS[0]) + 0.5) / CELLS[0]
+    y = (np.arange(CELLS[1]) + 0.5) / CELLS[1]
+    initial = np.sin(2 * np.pi * x)[:, None] + 0.5 * np.cos(4 * np.pi * y)[None, :]
+    simulation = surface.bind(artifact, data={u0: initial}, directory=tmp_path)
+    start = 0.1 + 0.2
+    runs = [simulation.run(until=until) for until in (start, 0.6, 0.8)]
+    assert [run.steps for run in runs] == [30, 30, 20]
+    grid = [(0.0, 0), (0.1, 10), (0.2, 20), (start, 30), (0.4, 40), (0.5, 50), (0.6, 60),
+            (0.7, 70), (0.8, 80)]
+    assert [(row.time, row.step) for row in simulation._series[by_time]] == grid
+    assert [(row.time, row.step) for row in simulation._series[by_steps]] == grid
+    assert [(row.time, row.step) for row in simulation._series[at_list]] == [(start, 30),
+                                                                             (0.45, 45)]
+    assert [(row.time, row.step) for row in runs[1].outputs[by_time]] == grid[4:7]
+    with np.load(tmp_path / "series" / "by_time.npz") as archive:
+        assert archive["time"].tolist() == [time for time, _ in grid]
+        assert archive["step"].tolist() == [step for _, step in grid]
 
 
 # --- A2: the two_point diffusion is kappa P.laplacian ---------------------------------------------

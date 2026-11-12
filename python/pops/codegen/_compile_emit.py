@@ -515,15 +515,35 @@ def selects_catalogue_routes(model: Any) -> bool:
                 or getattr(impl, "_user_face", None) is not None)
 
 
-def _native_route_cpp(route: Any) -> str:
+def normalize_native_geometry(geometry: Any) -> str | None:
+    """Return the geometry contract a package reads beside its route, or ``None`` for the box.
+
+    The one contract is the static geometry arrays of a mapped layout (N17, C1); ``None`` is the
+    uniform logical box, whose package identity is unchanged.
+    """
+    if geometry is None:
+        return None
+    from pops.mesh._static_geometry import STATIC_GEOMETRY_CONTRACT
+
+    if geometry != STATIC_GEOMETRY_CONTRACT:
+        raise ValueError("native geometry %r is not %r" % (geometry, STATIC_GEOMETRY_CONTRACT))
+    return geometry
+
+
+def _native_route_cpp(route: Any, geometry: Any = None) -> str:
     """C++ route set of one package: every catalogue route, or the single resolved one.
 
     The resolved route is named by the native types that the route catalogue records for its
     limiter and Riemann tokens, and by the reconstructed-variable set of its variables token; the
-    engine instantiates the route that the package names and holds no table of routes.
+    engine instantiates the route that the package names and holds no table of routes. On static
+    geometry arrays the same single route reads the physical normals and measures of the arrays.
     """
     route = normalize_native_route(route)
+    geometry = normalize_native_geometry(geometry)
     if route is None:
+        if geometry is not None:
+            raise ValueError("static geometry arrays are read by one resolved native route; "
+                             "this package keeps every catalogue route")
         return ""
     from pops.runtime.routes import RECON_CONSERVATIVE, RECON_PRIMITIVE, resolve
 
@@ -531,7 +551,8 @@ def _native_route_cpp(route: Any) -> str:
     reconstructed = {RECON_CONSERVATIVE: "Conservative", RECON_PRIMITIVE: "Primitive"}
     if variables not in reconstructed:
         raise ValueError("native route %r has no reconstructed-variable set" % variables)
-    return "pops::GeneratedResolvedRoute<pops::nd::ReconstructionVariables::%s, %s, %s>" % (
+    return "pops::%s<pops::nd::ReconstructionVariables::%s, %s, %s>" % (
+        "GeneratedResolvedRoute" if geometry is None else "GeneratedStaticGeometryRoute",
         reconstructed[variables],
         resolve("limiter", limiter).native_entry,
         resolve("riemann", riemann).native_entry,
@@ -972,6 +993,7 @@ def emit_cpp_native_loader(
     consumer_owner_qid: Any = None,
     declare_auxiliary_providers: bool = True,
     native_route: Any = None,
+    native_geometry: Any = None,
 ) -> str:
     """Source of the sole production package.
 
@@ -984,6 +1006,8 @@ def emit_cpp_native_loader(
     @p native_route: ``None`` instantiates every catalogue route; one exact
     ``(variables, limiter, Riemann)`` triple instantiates only that route, and the
     package refuses any other while preparing its block.
+    @p native_geometry: ``None`` reads the uniform logical box; the static geometry contract makes
+    that one route read the static geometry arrays of a mapped layout (N17, C1).
     """
     from pops.codegen.cpp_writer import _cpp_identifier
     from pops.codegen.module_codegen import (
@@ -1034,7 +1058,8 @@ def emit_cpp_native_loader(
         getattr(getattr(m, "_m", m), "_user_face", None))
     user_face_captures = bool(user_face_descriptor is not None and
                               user_face_descriptor.options["runtime_captures"])
-    route_cpp = _native_route_cpp(native_route)
+    route_cpp = _native_route_cpp(
+        native_route, None if storage_only else native_geometry)
     if route_cpp and not selects_catalogue_routes(m):
         raise ValueError(
             "emit_cpp_native_loader: a catalogue native route cannot specialize a state-storage "

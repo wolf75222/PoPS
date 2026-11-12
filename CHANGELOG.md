@@ -18,6 +18,70 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
+  from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
+  `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the
+  compiled run takes each step's proposal from b6's `System::step_cfl` selection, now split from
+  its execution as `select_step_`, and lands on its frontiers. Its control is
+  `pops.advance-control@4` (IR version 33); every Program without a rule keeps its record and
+  identity. `pops.run` on the same artifact runs the rule's strategy (master's `AdaptiveCFL` from
+  `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
+  sliver step at a frontier, when a CFL step ends within four ulp short of it or when
+  `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-89 (N8, « Ancrage des calendriers au départ du run », spec §5.2): a schedule counts from
+  the start of each run. `every(time=h)` publishes at `t0 + k h`, computed exactly from the run's
+  start `t0` and rounded once, and `every(steps=k)` counts the accepted steps of the run, for an
+  Output as for `Regrid(criterion, every(k))` (the AMR hierarchy keeps the step its run started
+  at; `pops.run` starts a run, `pops.step` continues the current one). A lattice time within four
+  ulp of `until`, below or above, is published at `until`; this also applies to a first run,
+  where a lattice time a few ulp above `until` used to be dropped (lists keep the one-sided rule,
+  four ulp below). A later run
+  of the surface off the lattice of the first one is no longer refused, and no publication is
+  repeated at the time and step where the previous run ended. Rows and identities are unchanged.
+- ROM-98 (N15, lot D-E, part D): `dt=cfl_limit(flux, cfl=, max_dt=None)` (spec 0.3, 2.6.2,
+  2.6.9, SD44, SD70; OD31). `from pops.lib.time import cfl_limit`;
+  `pops.Advance(method, dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2))` elaborates onto N8's
+  compiled step rule, `StepRule(cfl, max_dt, strategy=AdaptiveCFL(cfl, max_dt))`: each step is
+  b6's CFL selection on the wave speeds of the model, capped by `max_dt`, and the run lands on
+  its frontiers; `pops.run` on the artifact takes master's `AdaptiveCFL`. The core knows a
+  library step rule as `pops.StepRuleValue` (its fluxes and its realization), not by its name
+  (CF2). A rule that leaves out a transport flux of the model, a model with a diffusive flux and
+  a flux without derived waves refuse with their lot. A 64 x 64 advection with inflow and
+  outflow runs bit for bit as the same case written by hand, and as master's `AdaptiveCFL`.
+  A compiled run with the rule refuses every global step bound (`add_dt_bound`), even one added
+  before `bind`, which the `step_cfl` route admits: a case with such a bound cannot yet take
+  `cfl_limit` in a compiled run (review R2 of #782). `cfl_limit` is a bridge of MG9
+  (`tests/gates/mg9_bridges.toml`, owner N8): `scripts/mg9_bridges.py` finds a subclass of
+  `StepRuleValue` as it finds a `SchemeValue`, and the entry leaves before the exit of phase 1,
+  when N8 elaborates `dt=` as a function of `cell`.
+- ROM-98 (N15, lot « solves »): `pops.unknown`, `pops.solve`, `pops.Tolerance`,
+  `Advance(tolerance=)` and `Program(solvers=)` of spec 0.3, 2.6.7, `cg()` in `pops.lib.solve`
+  (a bridge of MG9 on b6's native conjugate gradients) and `imex_euler` in
+  `pops.lib.time.methods`. A traced method of N8 writes the shape of section 5.5
+  (`unknowns`, `Problem`, `solve(request=p.request)`, `require_success`); the relation is affine
+  in its one unknown, the solve path is the name of the method unless `name=` states one, the
+  request comes from the proposal (SV3), the guess is the state at the start of the attempt and a
+  failed solve fails the attempt (T38). The operator's symmetry and sign derive from the claims of
+  its components (IR16), and `cg()` refuses an operator they do not prove SPD with
+  `PropertyNotDerived` (K4). `two_point()` states its linear map, kappa times b6's Laplacian, on a
+  uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
+  until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
+  case written by hand for b6 and N8 (program IR, artifact, identity, C++).
+- ROM-110 (N17, L1a): static geometry arrays of a structured configuration (C1). A layout whose
+  coordinate map reads neither the clock nor a discrete input (`MovingControlVolumes` over a
+  logical `Uniform` grid with a clock-free `GeometryEvolution`) is read at resolution as static
+  geometry arrays instead of being refused with `native_geometry_evolution_unavailable`: a map of
+  rank one as node positions with exact node differences, a chart of rank two with the rule that
+  its layout states (D0b). The System generates them once at bind, the same on every rank (cell
+  measures and centroids; face area vectors, measures, unit normals and centroids; distances and
+  widths), and refuses them collectively unless their certificates hold (positive measures,
+  det DX > 0, closed cells, identified seams). The generated faces of a block then read the
+  physical normal (F.n, bounded by sum_k |n_k| rho(A_k)) and the measures of the arrays, and the
+  prepared diffusion of a Program reads their distances and measures. The consumers it serves are
+  stated as capability rules at resolution; the others are refused there with a
+  `static_geometry_*` code. A box layout is unchanged. The two graphs of C1 are
+  `examples/api_v02/models_static_geometry.py`; core ledger entry
+  `static-geometry-arrays-of-a-structured-configuration`.
 - ROM-98 (N15, lot D-E, part E): the projection of an analytic initial value (spec 0.3, 2.6.2,
   CN12, SU9; OD31). `initial={u: pops.project(e, quadrature=Q)}` averages e over each cell by
   the rule Q (one `pops.Quadrature` or one per axis) mapped onto the cell, and
@@ -185,6 +249,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   it supplies, not by its source digest. A checkpoint of the same program under other owner names
   is refused by name until N11 lot 2b-ii. `ARTIFACT_SCHEMA_VERSION` is 8; semantic identities of
   every case change once.
+- ROM-85 (N10, phase 1, lot 3a): strict mode on `Patches` (spec 0.3 DM5). The layout record
+  (`data_layout_and_distribution`, schema 4) lists every general access of the plan
+  (`general_accesses`: node, op, array, layout and IR8 provenance of the index) for `at` and the
+  local access with an index that is not the map's argument, the imports by requests or CSR and
+  the scatters; none reaches `Patches` or `LevelPatches`. A field leaf given to one of them
+  (or to `gather`, `scatter_reduce`) raises `GeneralAccessOnPatches` (rule DM5), which is a
+  `TypeError` as before and a `ValueError` like the other typed refusals. `state_geometry` is
+  left to G03 (ALE) instead of lot 3. The native type name of a field in the versioned lowering
+  is decided by `is_field_leaf` (review of #777, R1), and the inventory script names the forms it
+  does not see (R2). The generated C++ is unchanged.
+- ROM-85 (N10, phase 1, lot 1b): one function tells a field leaf from a finite array. Every line of
+  `python/pops` that compared a `vtype` spelling to ask « field » or « finite array » now asks
+  `pops._ir.data_model` (`value_kind`, `is_field_leaf`, `is_finite_array`, `is_finite_index`,
+  `field_role`), which reads the kind from the head of the IR type of the spelling; role tests
+  (`state`, `rhs`) stay. This covers every form of the comparison, including a name bound to the
+  spelling, a module constant and a tuple over several lines, and modules outside the builder and
+  the lowering (`bundles.py`, `scientific_graph.py`, `graph_derivatives.py`,
+  `_finite_differential.py`, `finite_contributions.py`). `scripts/n10_dispatch_inventory.py` reads
+  the syntax tree, and the architecture test fails on each of those forms. Outside
+  `pops._ir.data_model`, the inventory now lists role rows only. The generated C++ of the 40
+  API profiles is unchanged (DM-T1). The layout records (`data_layout_and_distribution`, schema 3)
+  name their node, type an `iterate` result as `Iteration(S)`, a field publication as the product of
+  its bound components and a product without members as `Product()`, read G13's field-element rule
+  before its flat rule for the residency, and give each row still untyped the lot that types it.
 - ROM-93 with ROM-25 (N11 lot 2a, G07): source spans leave every artifact identity (spec 0.3 CC2,
   gap C48). The same case loaded from two checkout paths, or with comment lines inserted, now has
   one `snapshot.artifact_hash`, one `plan_identity` and one compiled `artifact_identity`: the time
@@ -670,6 +758,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-17 (B02): `scripts/setup_env.sh` works again on a fresh macOS env. Its Darwin SDK capture loads
+  `_native_toolchain.py` with `PYTHONPATH` unset, and that module imports `pops` since 6603aec4, so a
+  first setup stopped on `ModuleNotFoundError` reported as an invalid SDKROOT. The capture now puts the
+  checkout's `python/` alone on `sys.path`, and the error names the Python failure.
 - ROM-93 (N11 lot 1 follow-up): the empty sum `ddt(U) == RateExpr(())` is again the zero rate of b6 and
   reaches the prepared IR as the zero identity; lot 1 had refused it. Spec 0.3 R7 refuses no empty
   balance. The bare literal `ddt(U) == 0` stays refused, as in b6.
@@ -715,7 +807,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the frequency that the refused attempt's faces recorded (typed payload
   `pops.face-step-frequency@1`), and `AdaptiveCFL` retries once with its step capped at cfl over
   that frequency (spec 21.6, `Retry(max_attempts=2)`). A face that records the radius is never
-  refused, so its steps are unchanged.
+  refused, so its steps are unchanged. A nonlinear face records its speeds at the retry's own
+  stage states; when they are faster, the retry is refused too and that second refusal stops the
+  run. A refusal that `AdaptiveCFL` does not retry says why in its `retry stopped` note. AMR
+  runs take the same retry, once per macro step (native test on tutorial 06).
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
   and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step

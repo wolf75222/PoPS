@@ -14,6 +14,8 @@ import types
 
 import pytest
 
+from examples.api_v02 import b6_numerics
+
 import pops
 import pops.analytic as an
 import pops.surface as surface
@@ -25,12 +27,11 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import Analytic
-from pops.lib.numerics.schemes import rusanov
+from pops.lib.numerics import rusanov
 from pops.lib.quadrature import GaussHermite, GaussLegendre
 from pops.lib.time.methods import ssprk2
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
-from pops.numerics.spatial import FiniteVolume
+from pops.numerics import DiscretizationPlan
 from pops.params import ConstParam, RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.surface.math import ddt, div, erf, exp, sqrt, vector
@@ -92,9 +93,7 @@ def _hand_case(value):
     rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u))
     plan = DiscretizationPlan()
     selection = rate.select(flux_u)
-    plan.rates.add(selection, FiniteVolume(flux=flux_u, variables=variables.Conservative(u),
-                                           reconstruction=reconstruction.FirstOrder(),
-                                           riemann=riemann.Rusanov()))
+    plan.rates.add(selection, b6_numerics.rusanov(flux_u, u))
     case = pops.Case("advection")
     block = case.block("advection", model)
     case.numerics(plan, block=block)
@@ -328,3 +327,11 @@ def test_erf_is_a_word_of_the_initial_values_only():
     parts = types.SimpleNamespace(domain=domain, model=model, u=u, advection=advection)
     with pytest.raises(surface.NotYetElaborated, match=r"erf\(a\) in a value of the model.*N11"):
         _case(parts, 0.5)
+
+
+def test_a_word_that_the_analytic_route_lacks_names_g07():
+    from pops.surface.math import expm1
+
+    parts = _parts()
+    with pytest.raises(surface.NotYetElaborated, match=r"expm1\(.*pops.analytic.*G07"):
+        _case(parts, surface.project(expm1(parts.x), quadrature=GaussLegendre(1)))

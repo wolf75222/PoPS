@@ -7,16 +7,24 @@ assessments of the candidate, the rejections, the retries and the landing on ``u
 compiled C++, and no Python runs before that call returns (PF1, CF9). The run lands on ``until``
 as master does (section 14.1): the rules of master's FixedDt, which absorb the rounding of
 repeated additions, with the frontier published exactly (``runtime/program/advance_run.hpp``).
+An Advance elaborated from a ``StepRule`` (N8 « Règle de pas compilée ») takes each step's
+proposal from b6's CFL selection of ``System::step_cfl``, then lands with the same rules; it
+refuses ``proposal=``. On one artifact, ``pops.run`` (master's ``AdaptiveCFL``) caps its last step
+at ``t_end - t`` instead, so the two can differ by one sliver step at a frontier: when a CFL step
+ends within four ulp short of it, or when ``t + (t_end - t)`` is not ``t_end``.
 The run returns a ``RunResult``; a run whose result holds a failure raises its T39 variant, a
 subclass of ``RunFailed`` whose ``result`` is that ``RunResult``, on every rank after the same
 step.
 
 The Outputs of the Advance (``pops.time._program.outputs``, CC14) are evaluated by the same native
 call: once at the start of the run, on the state from which it starts, then after each publication
-they are due on, with its achieved time. Each time of their ``at`` that lies ahead of the run, up
-to ``until``, is a frontier that the run lands on; a time within four units in the last place below
-``until`` is ``until``, as master merges a consumer deadline into the end of its run. Their values
-come back in ``RunResult.outputs``, one ``Publication`` per evaluation.
+they are due on, with its achieved time. Both schedules are anchored at the start of each run
+(spec 5.2): ``every(k)`` is due after the k-th, 2k-th, ... accepted step of the run, and
+``every_dt(h)`` gives the times t0 + k h of the run, t0 its start. Each time of their ``at`` that
+lies ahead of the run, up to ``until``, is a frontier that the run lands on; a time within four
+units in the last place below ``until`` is ``until``, as master merges a consumer deadline into the
+end of its run, and so is a time of ``every_dt`` within four units above it (``_ahead``). Their
+values come back in ``RunResult.outputs``, one ``Publication`` per evaluation.
 
 The failure sites of the field requests of a method (T38, N8 lot 5) are classified: a retryable
 site (phase ``trial``) rejects the attempt, as an assessment does, and the next attempt repeats the
@@ -42,9 +50,9 @@ from types import MappingProxyType
 from typing import Any
 
 from pops.time._program.control import AdvanceControl, memory_rings
-from pops.time._program.elaboration import Proposal
+from pops.time._program.elaboration import Proposal, StepRule
 from pops.time._program.memory import MemoryView
-from pops.time._program.outputs import EveryDt, OutputRegion, Product
+from pops.time._program.outputs import EveryDt, OutputRegion, Product, landing
 
 DEFAULT_MAX_STEPS = 1_000_000
 """``max_steps`` when a run leaves it out: master's (``_runtime_instance.py:1598@bb9``), CC14."""
@@ -135,7 +143,7 @@ class Continuation:
 
     __slots__ = ("time", "macro_step", "proposal", "memory")
 
-    def __init__(self, time: float, macro_step: int, proposal: Proposal,
+    def __init__(self, time: float, macro_step: int, proposal: Proposal | StepRule,
                  memory: MemoryView | None = None) -> None:
         object.__setattr__(self, "time", time)
         object.__setattr__(self, "macro_step", macro_step)
@@ -146,6 +154,9 @@ class Continuation:
         raise AttributeError("Continuation is immutable")
 
     def __repr__(self) -> str:
+        if type(self.proposal) is StepRule:
+            return "Continuation(time=%r, macro_step=%d, proposal=%r)" % (
+                self.time, self.macro_step, self.proposal)
         return "Continuation(time=%r, macro_step=%d, proposal=Proposal(dt=%r))" % (
             self.time, self.macro_step, self.proposal.dt)
 
@@ -172,25 +183,30 @@ class Publication:
             self.time, self.macro_step, ", ".join(self.values))
 
 
-def _ahead(times: tuple, start: float, until: float) -> list:
+def _ahead(times: tuple, start: float, until: float, *, anchored: bool) -> list:
     """The output times that are frontiers of a run from ``start`` to ``until``.
 
-    A time within four units in the last place below ``until`` is ``until`` itself, as master
-    merges a consumer deadline into the end of its run. The merge is one-sided on purpose, as in
-    master, whose run loop takes a deadline only when it is at most ``t_end``, then lands on
-    ``t_end`` when ``_same_physical_time`` holds (``_runtime_instance.py:1782-1787``, « a threshold
-    one ULP above t_end is a future occurrence, not an end-of-run sample »): a tolerance never
-    extends the requested run, so a time after ``until``, however close, stays ahead for a later
-    run, which lands on it.
+    ``outputs.landing`` places each time (design note of N8 « Ancrage des calendriers au départ du
+    run », D5). A time within four units in the last place below ``until`` is ``until`` itself, as
+    master merges a consumer deadline into the end of its run. For a list of times
+    (``anchored=False``) the merge is one-sided on purpose, as in master, whose run loop takes a
+    deadline only when it is at most ``t_end``, then lands on ``t_end`` when
+    ``_same_physical_time`` holds (``_runtime_instance.py:1782-1787``, « a threshold one ULP above
+    t_end is a future occurrence, not an end-of-run sample »): a listed time is absolute, so a time
+    after ``until``, however close, stays ahead for a later run, which lands on it. The times of
+    ``every_dt`` (``anchored=True``) are the run's own t0 + k h, which no later run inherits: one
+    within four units above ``until`` lands on it too. A landed time that is not after ``start``
+    is dropped, so a run of zero length publishes only its start.
     """
-    frontiers = []
+    frontiers: list = []
     for time in times:
-        if not time > start or time > until:
+        if not time > start:
             continue
-        if until - time <= 4.0 * max(math.ulp(time), math.ulp(until)):
-            time = until
-        if not frontiers or time > frontiers[-1]:
-            frontiers.append(time)
+        landed = landing(time, until, anchored=anchored)
+        if landed is None or not landed > start:
+            continue
+        if not frontiers or landed > frontiers[-1]:
+            frontiers.append(landed)
     return frontiers
 
 
@@ -285,6 +301,17 @@ def _trial_variant(control: Any, site: str) -> type:
     return _VARIANTS[variants[site]]
 
 
+def _run_data(start: float, until: float, dt: float, rule: Any, max_steps: int) -> dict:
+    data: dict[str, Any] = {"start": start.hex(), "until": until.hex()}
+    if rule is None:
+        data["proposal"] = dt.hex()
+    else:
+        data["rule"] = {"fraction": rule[0].hex(),
+                        "max_dt": None if rule[1] is None else rule[1].hex()}
+    data["max_steps"] = max_steps
+    return data
+
+
 class Simulation:
     """A bound artifact whose Program elaborates an Advance, run by ``System::run_advance``."""
 
@@ -344,7 +371,15 @@ class Simulation:
         """
         runtime = self._runtime
         until = _binary64(until, "Simulation.run(until=...)")
-        if proposal is None:
+        rule = self._control.step_rule
+        if rule is not None:
+            # The step rule chooses every proposal (N8 « Règle de pas compilée »); the native run
+            # does not read the proposal argument.
+            if proposal is not None:
+                raise TypeError("Simulation.run(proposal=...): the step rule of this Advance "
+                                "chooses every proposal")
+            dt = 0.0
+        elif proposal is None:
             dt = (self._control.first_dt if self._continuation is None
                   else float(self._continuation.proposal.dt))
         elif type(proposal) is Proposal:
@@ -364,18 +399,21 @@ class Simulation:
         for region in self._outputs:
             output = region.output
             at = output.at
-            times = () if at is None else at.times(start, until) if type(at) is EveryDt else at
+            anchored = type(at) is EveryDt
+            times = () if at is None else at.times(start, until) if anchored else at
             schedule.append((0 if output.when is None else output.when.steps,
-                             _ahead(times, start, until),
+                             _ahead(times, start, until, anchored=anchored),
                              [item for _, kind, item in region.record if kind == "array"]))
         try:
-            report = self._run_native(until, dt, max_steps, schedule)
+            report = self._run_native(until, dt, max_steps, schedule, None if rule is None else (
+                rule[0], math.inf if rule[1] is None else rule[1]))
         finally:
             # A failure of a trial leaves the accepted state of its step; the next proposal is
             # the one of this run (T28, next=None).
             time, macro_step = runtime.time(), runtime.macro_step()
-            self._continuation = Continuation(time, macro_step, Proposal(dt), MemoryView(
-                runtime, time, macro_step, memory_rings(self._control)))
+            self._continuation = Continuation(
+                time, macro_step, Proposal(dt) if rule is None else StepRule(*rule),
+                MemoryView(runtime, time, macro_step, memory_rings(self._control)))
         time = runtime.time()
         report = dict(report)
         published: dict[Any, list] = {region.output: [] for region in self._outputs}
@@ -419,8 +457,7 @@ class Simulation:
             steps=report["steps"], rejections=report["rejections"],
             diagnostics={
                 "control": self._control.to_data(),
-                "run": {"start": start.hex(), "until": until.hex(), "proposal": dt.hex(),
-                        "max_steps": max_steps},
+                "run": _run_data(start, until, dt, rule, max_steps),
                 "native": report,
                 "outputs": [len(rows) for rows in published.values()],
             },

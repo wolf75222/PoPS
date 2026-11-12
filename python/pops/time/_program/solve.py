@@ -23,6 +23,7 @@ from pops.time._program.value_validation import (
 )
 from pops.time.solve_outcome import SolveOutcome
 from pops.time.values import ProgramValue, _Affine, _is_field_value, _resolve_handle
+from pops._ir.data_model import field_role
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -177,12 +178,12 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 scalar_co_location(rhs, initial_guess, "typed scalar initial guess")
         if initial_guess is not None:
             unqualified_initial = (
-                initial_guess.vtype == "scalar_field"
+                field_role(initial_guess) == "field"
                 and initial_guess.block is None
                 and initial_guess.space is None
             )
             unqualified_rhs = (
-                rhs.vtype == "scalar_field" and rhs.block is None and rhs.space is None
+                field_role(rhs) == "field" and rhs.block is None and rhs.space is None
             )
             # A fresh scalar scratch has no independent owner/layout identity: the qualified
             # operand supplies it.  This is the generic condensed-solve case (an owner-qualified
@@ -212,7 +213,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                         "ncomp=%d" % (label, fld_ncomp, op_ncomp)
                     )
                 continue
-            if fld.vtype != "scalar_field":
+            if field_role(fld) != "field":
                 continue
             fld_ncomp = int(fld.attrs.get("ncomp", 1))
             if fld_ncomp != op_ncomp:
@@ -432,7 +433,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         ):
             raise TypeError("_commit_state: target must be a block-qualified state Handle")
         block = state_ref.block_ref
-        if not (isinstance(state, ProgramValue) and state.vtype in ("state", "scalar_field", "state_geometry")):
+        if not (isinstance(state, ProgramValue) and (field_role(state) in ("state", "field") or state.vtype == "state_geometry")):
             raise TypeError("_commit_state: a State (or scalar_field) ProgramValue is required")
         geometry = self._geometry_states.get(state_ref)
         if geometry is not None and (state.vtype != "state_geometry" or state.op != "reynolds_update"

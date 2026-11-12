@@ -14,7 +14,7 @@ import numpy
 import pytest
 
 import pops.surface as surface
-from pops.lib.numerics.schemes import two_point, upwind
+from pops.lib.numerics import two_point, upwind
 from pops.lib.output import Npz, OutputExists, hdf5, npz
 from pops.lib.time.methods import ssprk2
 from pops.surface import _run
@@ -108,12 +108,30 @@ def test_an_output_is_lowered_to_the_output_of_n8(parts):
     lowered = case.elaborated.outputs
     assert len(lowered) == 3 and all(type(item) is n8_outputs.Output for item in lowered)
     assert case.outputs == (at_times, by_steps, by_time)
-    # the start of the first run: a list of times keeps it when it lists that time
-    assert not at_times.keeps(0.0, True, 0) and at_times.keeps(0.25, True, 1)
-    assert by_steps.keeps(0.0, True, 0) and by_time.keeps(0.0, True, 0)
-    # the start of a later run is the end of the run before it
-    assert not at_times.keeps(0.25, False, 0) and not by_steps.keeps(0.25, False, 0)
-    assert at_times.keeps(0.5, False, 1) and by_steps.keeps(0.5, False, 1)
+    # keeps(time, macro step, index, start, until, last): the start of the first run (no last
+    # record) is kept by an every schedule, and by a list of times when it lists that time
+    assert not at_times.keeps(0.0, 0, 0, 0.0, 0.5, None) and at_times.keeps(0.25, 2, 1, 0.0, 0.5,
+                                                                             None)
+    assert by_steps.keeps(0.0, 0, 0, 0.0, 0.5, None) and by_time.keeps(0.0, 0, 0, 0.0, 0.5, None)
+    # the start of a later run on the grid is the end of the run before it: dropped as the same
+    # (time, macro step); off the grid it is the run's own t0, which every schedule publishes
+    # (N8 « Ancrage des calendriers au départ du run », D2)
+    assert not by_steps.keeps(0.25, 2, 0, 0.25, 0.5, (0.25, 2))
+    assert not by_time.keeps(0.25, 2, 0, 0.25, 0.5, (0.25, 2))
+    assert by_time.keeps(0.3, 3, 0, 0.3, 0.5, (0.25, 2))
+    assert by_steps.keeps(0.3, 3, 0, 0.3, 0.5, (0.25, 2))
+    assert not at_times.keeps(0.3, 3, 0, 0.3, 0.5, (0.25, 2))
+    assert at_times.keeps(0.25, 2, 0, 0.25, 0.5, (0.0, 0)) and not at_times.keeps(
+        0.25, 2, 0, 0.25, 0.5, (0.25, 2))
+    assert at_times.keeps(0.5, 4, 1, 0.25, 0.5, (0.25, 2)) and by_steps.keeps(0.5, 4, 1, 0.25,
+                                                                               0.5, (0.25, 2))
+    # a listed time within four ulp below until is published at until (review O1 of the lot)
+    assert at_times.keeps(0.5, 4, 1, 0.25, 0.5, None) and not at_times.keeps(0.4, 3, 1, 0.25,
+                                                                              0.5, None)
+    below = surface.Output(surface.record(u=parts.u), when=[0.30000000000000004])
+    assert below.keeps(0.30000000000000004, 3, 1, 0.0, 0.30000000000000004, None)
+    listed = surface.Output(surface.record(u=parts.u), when=[0.3])
+    assert listed.keeps(0.30000000000000004, 3, 1, 0.0, 0.30000000000000004, None)
 
 
 def test_a_case_takes_a_list_of_distinct_outputs(parts):
