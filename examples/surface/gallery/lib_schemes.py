@@ -308,7 +308,7 @@ def _ghost_value(face, term, depth):
     if form is forms.Characteristic:
         inner = _inner(face, term, depth)
         return inner + 2 * _incoming(face, term.data - inner, inner)
-    if form is forms.NormalVelocity:
+    if form is forms.NormalComponent:
         return _reflected(face, term, depth)
     return _solved_ghost(face, term, depth)
 
@@ -336,7 +336,7 @@ def _boundary_state(face, term):
         return inner
     if form is forms.Characteristic:
         return inner + _incoming(face, term.data - inner, inner)
-    if form is forms.NormalVelocity:
+    if form is forms.NormalComponent:
         return (inner + _reflected(face, term, 1)) / 2
     boundary = pops.unknown(q.space)
     gradient = (boundary - inner) / (face.distance / 2) * face.normal

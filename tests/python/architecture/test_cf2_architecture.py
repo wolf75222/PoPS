@@ -666,6 +666,9 @@ def test_the_words_of_pops_math_that_hold_a_term_are_curl_and_outflow():
     '    "Q": SpellingRefusal("Fraction(1, 2)"),\n}\n',
     '_EARLIER = {"cfl_guard": "pops.lib.time.cfl_limit(...)", "Rectangle": "pops.Box(x=...)"}\n',
     '_EARLIER_METHODS: dict = {"cfl_guard": SpellingRefusal("a guard of the method")}\n',
+    # a table of the reads of 2.6.4 that a later lot elaborates, valued by the sentence of its lot
+    '_LATER_FACE = {"gradient": "a later lot of N15 with the spacing (C31)",\n'
+    '               "velocity": "a later lot of N15 with the moving configurations"}\n',
 ])
 def test_a_refusal_table_of_the_surface_is_error_text(source):
     assert _terms(source, "python", path="python/pops/surface/__init__.py") == []
@@ -686,6 +689,14 @@ def test_a_refusal_table_of_the_surface_is_error_text(source):
     ('_EARLIER = {"rusanov": "hll"}\n', "python/pops/surface/__init__.py", ["hll", "rusanov"]),
     ('_EARLIER_ROUTES = {"laplacian": "pops.lib.laplacian"}\n', "python/pops/surface/math.py",
      ["laplacian"]),
+    # a table of later reads whose value is a name or a reference, not a sentence, is a route
+    ('_LATER_FACE = {"gradient": "gradient_kernel"}\n', "python/pops/surface/_scheme.py",
+     ["gradient"]),
+    ('_LATER_FACE = {"gradient": _OWNER}\n', "python/pops/surface/_scheme.py", ["gradient"]),
+    # _LATER alone, the table of pops.surface whose values are references, is not a refusal table
+    ('_LATER = {"gradient": "a later lot"}\n', "python/pops/surface/_scheme.py", ["gradient"]),
+    # outside the surface, a table of later reads is code
+    ('_LATER_FACE = {"gradient": "a later lot"}\n', "python/pops/codegen/x.py", ["gradient"]),
 ])
 def test_only_a_refusal_table_of_the_surface_is_error_text(source, path, expected):
     assert _terms(source, "python", path=path) == expected

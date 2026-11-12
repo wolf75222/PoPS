@@ -24,7 +24,9 @@ proposal; when every attempt is spent the run raises ``BudgetExhausted`` tagged 
 payload holds the ``SolveFailed`` of the last attempt as its ``cause``. A fixed site (phase
 ``trial_failure``), whose dependency set excludes the proposal, ends the step after its first
 attempt, which is not counted as a rejection: the run raises ``SolveFailed`` tagged ``trial``. Both
-leave the accepted state of the step. The Auxiliary memory of the method (T27) is read after a run
+leave the accepted state of the step. The admissibility guards of a method body (IR4, N8 lot 6)
+follow the same rule with the variant ``NotAdmissible``, which the site's row of the compiled
+control names. The Auxiliary memory of the method (T27) is read after a run
 as ``continuation.memory``, slot one of the History ring of each member (``MemoryView``).
 
 This lot runs a Uniform artifact of one layout to the frontier ``until``. Writers and callbacks of
@@ -71,6 +73,11 @@ class SolveFailed(RunFailed):
     (T38, T39): the step ends after its first attempt."""
 
 
+class NotAdmissible(RunFailed):
+    """An admissibility guard of the trial failed (S5, IR4, T39): at a fixed failure site, which
+    a retry cannot change, the step ends after its first attempt (T38)."""
+
+
 class Failure:
     """The failure that ended a run: its T39 variant, its origin tag and its payload.
 
@@ -102,7 +109,7 @@ class Failure:
             return ("%s: max_steps=%d accepted steps ended the run at t=%r before until=%r"
                     % (self.variant.__name__, payload["max_steps"], payload["time"],
                        payload["until"]))
-        if self.variant is SolveFailed:
+        if self.variant in (SolveFailed, NotAdmissible):
             if "attempts" not in payload:
                 return "%s at the trial site %s: %s" % (
                     self.variant.__name__, payload["site"], payload["reason"])
@@ -257,12 +264,25 @@ def _binary64(value: Any, where: str) -> float:
 
 def _trial_site(report: Mapping[str, Any]) -> dict:
     """The site and the reason of the trial rejection of ``report``: its detail is the message of
-    the generated solve guard, ``<site> failed: <reason>`` (codegen/program_emit_solve.py)."""
+    the generated guard, ``<site> failed: <reason>`` (codegen/program_emit_solve.py for a solve,
+    program_emit_ops.py for an admissibility guard)."""
     site, separator, reason = report["rejection_detail"].partition(" failed: ")
     if report["rejection_phase"] not in _TRIAL_PHASES or not separator:
         raise RuntimeError("a trial rejection names its failure site: %r"
                            % report["rejection_detail"])
     return {"site": site, "reason": reason}
+
+
+_VARIANTS = {"SolveFailed": SolveFailed, "NotAdmissible": NotAdmissible}
+
+
+def _trial_variant(control: Any, site: str) -> type:
+    """The T39 variant of the failure site ``site``, from its row of the compiled control."""
+    variants = {row["site"]: row["variant"] for row in control.to_data().get("trial_failures", ())}
+    if variants.get(site) not in _VARIANTS:
+        raise RuntimeError("the failure site %r has no classified row in the compiled control"
+                           % site)
+    return _VARIANTS[variants[site]]
 
 
 class Simulation:
@@ -378,7 +398,9 @@ class Simulation:
                        "attempts": report["attempts"], "time": time,
                        "rejection": report["rejection"]}
             if phase == "trial":
-                payload["cause"] = Failure(SolveFailed, "trial", _trial_site(report))
+                site = _trial_site(report)
+                payload["cause"] = Failure(_trial_variant(self._control, site["site"]), "trial",
+                                           site)
             elif phase != "assessment":
                 raise RuntimeError("System::run_advance spent an attempt budget on a rejection "
                                    "of phase %r" % phase)
@@ -387,8 +409,9 @@ class Simulation:
             if report["rejection_phase"] != "trial_failure":
                 raise RuntimeError("System::run_advance ended a step at a fixed failure site "
                                    "without its phase")
-            failure = Failure(SolveFailed, "trial", dict(
-                _trial_site(report), time=time, attempts=report["attempts"]))
+            site = _trial_site(report)
+            failure = Failure(_trial_variant(self._control, site["site"]), "trial", dict(
+                site, time=time, attempts=report["attempts"]))
         elif stop != _REACHED or time != until:
             raise RuntimeError("System::run_advance returned without reaching its frontier")
         result = RunResult(
@@ -409,4 +432,4 @@ class Simulation:
 
 
 __all__ = ["BudgetExhausted", "Continuation", "DEFAULT_MAX_STEPS", "Failure", "Publication",
-           "RunFailed", "RunResult", "RunState", "Simulation", "SolveFailed"]
+           "NotAdmissible", "RunFailed", "RunResult", "RunState", "Simulation", "SolveFailed"]

@@ -1050,22 +1050,22 @@
         {
           "component": "moments",
           "source_symbol": "examples.api_v02.models_M15_orders:build_m15_orders",
-          "source_sha256": "aa12b6f241652b80ef7df2879752cd2ccc09b5b40a2c311d10d5bb95764d693f"
+          "source_sha256": "33d3bbd5e406e265fbc8d0518a90cb0b9f132c0b8fb0285b5f12dff2957ee53a"
         },
         {
           "component": "closure",
           "source_symbol": "examples.api_v02.models_M15_orders:build_m15_orders",
-          "source_sha256": "aa12b6f241652b80ef7df2879752cd2ccc09b5b40a2c311d10d5bb95764d693f"
+          "source_sha256": "33d3bbd5e406e265fbc8d0518a90cb0b9f132c0b8fb0285b5f12dff2957ee53a"
         },
         {
           "component": "admissibility",
           "source_symbol": "examples.api_v02.models_M15_orders:build_m15_orders",
-          "source_sha256": "aa12b6f241652b80ef7df2879752cd2ccc09b5b40a2c311d10d5bb95764d693f"
+          "source_sha256": "33d3bbd5e406e265fbc8d0518a90cb0b9f132c0b8fb0285b5f12dff2957ee53a"
         },
         {
           "component": "transport",
           "source_symbol": "examples.api_v02.models_M15_orders:build_m15_orders",
-          "source_sha256": "aa12b6f241652b80ef7df2879752cd2ccc09b5b40a2c311d10d5bb95764d693f"
+          "source_sha256": "33d3bbd5e406e265fbc8d0518a90cb0b9f132c0b8fb0285b5f12dff2957ee53a"
         }
       ],
       "dependencies": [
@@ -1085,28 +1085,32 @@
         {
           "component": "moments",
           "source_symbol": "examples.api_v02.models_M15_M18:build_m16",
-          "source_sha256": "b6c61f4efb29e00f9822939f5db947f34ef5fd048a79036ec754a1dba4339b70"
+          "source_sha256": "589da5a39bb915f7343a73c87114dfe6f772791e2946dcbfd61815bb95a2cc41"
         },
         {
           "component": "magnetic",
           "source_symbol": "examples.api_v02.models_M15_M18:build_m16",
-          "source_sha256": "b6c61f4efb29e00f9822939f5db947f34ef5fd048a79036ec754a1dba4339b70"
+          "source_sha256": "589da5a39bb915f7343a73c87114dfe6f772791e2946dcbfd61815bb95a2cc41"
         },
         {
           "component": "transport",
           "source_symbol": "examples.api_v02.models_M15_M18:build_m16",
-          "source_sha256": "b6c61f4efb29e00f9822939f5db947f34ef5fd048a79036ec754a1dba4339b70"
+          "source_sha256": "589da5a39bb915f7343a73c87114dfe6f772791e2946dcbfd61815bb95a2cc41"
         },
         {
           "component": "admissibility",
           "source_symbol": "examples.api_v02.models_M15_M18:build_m16",
-          "source_sha256": "b6c61f4efb29e00f9822939f5db947f34ef5fd048a79036ec754a1dba4339b70"
+          "source_sha256": "589da5a39bb915f7343a73c87114dfe6f772791e2946dcbfd61815bb95a2cc41"
         }
       ],
       "dependencies": [
         [
           "examples.api_v02.common",
           "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.models_M15_orders",
+          "33d3bbd5e406e265fbc8d0518a90cb0b9f132c0b8fb0285b5f12dff2957ee53a"
         ],
         [
           "examples.api_v02.profile_contracts",
@@ -1120,28 +1124,32 @@
         {
           "component": "moments",
           "source_symbol": "examples.api_v02.models_M15_M18:build_m17",
-          "source_sha256": "b6c61f4efb29e00f9822939f5db947f34ef5fd048a79036ec754a1dba4339b70"
+          "source_sha256": "589da5a39bb915f7343a73c87114dfe6f772791e2946dcbfd61815bb95a2cc41"
         },
         {
           "component": "nonconservative",
           "source_symbol": "examples.api_v02.models_M15_M18:build_m17",
-          "source_sha256": "b6c61f4efb29e00f9822939f5db947f34ef5fd048a79036ec754a1dba4339b70"
+          "source_sha256": "589da5a39bb915f7343a73c87114dfe6f772791e2946dcbfd61815bb95a2cc41"
         },
         {
           "component": "path-quadrature",
           "source_symbol": "examples.api_v02.models_M15_M18:build_m17",
-          "source_sha256": "b6c61f4efb29e00f9822939f5db947f34ef5fd048a79036ec754a1dba4339b70"
+          "source_sha256": "589da5a39bb915f7343a73c87114dfe6f772791e2946dcbfd61815bb95a2cc41"
         },
         {
           "component": "domain",
           "source_symbol": "examples.api_v02.models_M15_M18:build_m17",
-          "source_sha256": "b6c61f4efb29e00f9822939f5db947f34ef5fd048a79036ec754a1dba4339b70"
+          "source_sha256": "589da5a39bb915f7343a73c87114dfe6f772791e2946dcbfd61815bb95a2cc41"
         }
       ],
       "dependencies": [
         [
           "examples.api_v02.common",
           "706edc93c8e22dc0599bb235cd8215a3773a38cd917ee28ed05cac93a32e2d3c"
+        ],
+        [
+          "examples.api_v02.models_M15_orders",
+          "33d3bbd5e406e265fbc8d0518a90cb0b9f132c0b8fb0285b5f12dff2957ee53a"
         ],
         [
           "examples.api_v02.profile_contracts",
@@ -2027,22 +2035,22 @@
         {
           "component": "tableau",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t01",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "constraints",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t01",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "stage-state",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t01",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "original-residual",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t01",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         }
       ],
       "dependencies": [
@@ -2389,22 +2397,22 @@
         {
           "component": "closure",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t05",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "outer",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t05",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "tangent",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t05",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "termination",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t05",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         }
       ],
       "dependencies": [
@@ -2571,27 +2579,27 @@
         {
           "component": "startup",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "coefficients",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "history",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "intervals",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "defect",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t07",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         }
       ],
       "dependencies": [
@@ -2675,27 +2683,27 @@
         {
           "component": "recursion",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "subcycling",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "face-history",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "synchronization",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         },
         {
           "component": "rollback",
           "source_symbol": "examples.api_v02.methods_T01_T12:build_t08",
-          "source_sha256": "081a2e3bfced2f89e4e42a508c4b9ba58e4652247eccda72f011ca394452afe2"
+          "source_sha256": "568ecf1dd07943b9a8e8600188bdbba8c85bd19a7832c1d52e268bce7da93759"
         }
       ],
       "dependencies": [
@@ -2863,32 +2871,32 @@
         {
           "component": "macro-entry",
           "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
-          "source_sha256": "be946b567ae44ffbb19fb5dad08044633517f3e7d827f225717f7f06f4e7ac00"
+          "source_sha256": "4f8881d181c77b0e8e199eba842842664a8b4f81f5fec51b9e009befc4bbccd3"
         },
         {
           "component": "observable",
           "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
-          "source_sha256": "be946b567ae44ffbb19fb5dad08044633517f3e7d827f225717f7f06f4e7ac00"
+          "source_sha256": "4f8881d181c77b0e8e199eba842842664a8b4f81f5fec51b9e009befc4bbccd3"
         },
         {
           "component": "factor",
           "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
-          "source_sha256": "be946b567ae44ffbb19fb5dad08044633517f3e7d827f225717f7f06f4e7ac00"
+          "source_sha256": "4f8881d181c77b0e8e199eba842842664a8b4f81f5fec51b9e009befc4bbccd3"
         },
         {
           "component": "state-time",
           "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
-          "source_sha256": "be946b567ae44ffbb19fb5dad08044633517f3e7d827f225717f7f06f4e7ac00"
+          "source_sha256": "4f8881d181c77b0e8e199eba842842664a8b4f81f5fec51b9e009befc4bbccd3"
         },
         {
           "component": "exchange-ledger",
           "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
-          "source_sha256": "be946b567ae44ffbb19fb5dad08044633517f3e7d827f225717f7f06f4e7ac00"
+          "source_sha256": "4f8881d181c77b0e8e199eba842842664a8b4f81f5fec51b9e009befc4bbccd3"
         },
         {
           "component": "rollback",
           "source_symbol": "examples.api_v02.method_relaxed_composite:build_t10_composite",
-          "source_sha256": "be946b567ae44ffbb19fb5dad08044633517f3e7d827f225717f7f06f4e7ac00"
+          "source_sha256": "4f8881d181c77b0e8e199eba842842664a8b4f81f5fec51b9e009befc4bbccd3"
         }
       ],
       "dependencies": [
@@ -3044,27 +3052,27 @@
         {
           "component": "candidate",
           "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
-          "source_sha256": "ddece2accf3ca478e043cf9b9c70cab6b0d72412d56141105a015ab44e47797e"
+          "source_sha256": "454fac58355f0480986e0231f8b7e0f1b9a878f5ed3819f49118eb2999db1b02"
         },
         {
           "component": "selection",
           "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
-          "source_sha256": "ddece2accf3ca478e043cf9b9c70cab6b0d72412d56141105a015ab44e47797e"
+          "source_sha256": "454fac58355f0480986e0231f8b7e0f1b9a878f5ed3819f49118eb2999db1b02"
         },
         {
           "component": "replacement",
           "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
-          "source_sha256": "ddece2accf3ca478e043cf9b9c70cab6b0d72412d56141105a015ab44e47797e"
+          "source_sha256": "454fac58355f0480986e0231f8b7e0f1b9a878f5ed3819f49118eb2999db1b02"
         },
         {
           "component": "incidence",
           "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
-          "source_sha256": "ddece2accf3ca478e043cf9b9c70cab6b0d72412d56141105a015ab44e47797e"
+          "source_sha256": "454fac58355f0480986e0231f8b7e0f1b9a878f5ed3819f49118eb2999db1b02"
         },
         {
           "component": "amr-ledger",
           "source_symbol": "examples.api_v02.method_flux_correction_amr:build_t12_amr",
-          "source_sha256": "ddece2accf3ca478e043cf9b9c70cab6b0d72412d56141105a015ab44e47797e"
+          "source_sha256": "454fac58355f0480986e0231f8b7e0f1b9a878f5ed3819f49118eb2999db1b02"
         }
       ],
       "dependencies": [

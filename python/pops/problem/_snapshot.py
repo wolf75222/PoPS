@@ -30,7 +30,7 @@ SNAPSHOT_SCHEMA_VERSION = 11
 
 #: Independent namespace for the compile-identity projection. Changing which declaration facts
 #: affect generated artifacts bumps this version without rewriting the full snapshot schema.
-ARTIFACT_SCHEMA_VERSION = 6
+ARTIFACT_SCHEMA_VERSION = 7
 
 
 class AuthoringSnapshot:
@@ -365,7 +365,9 @@ def build_authoring_snapshot(
         "libraries": tuple(libraries or ()),
     }
     full["compile_context"] = context
-    artifact["compile_context"] = context
+    # CC2: source spans (file, line, provenance ids) are provenance, never artifact identity.
+    artifact["compile_context"] = {
+        **context, "time": _compile_time_snapshot_value(time, include_provenance=False)}
     def resolve_compile_handle(value: Any) -> Any:
         from pops.mesh import LayoutHandle, LayoutPlan
 
@@ -385,15 +387,15 @@ def build_authoring_snapshot(
     )
 
 
-def _compile_time_snapshot_value(program: Any) -> Any:
-    """Return the lossless structural Program view used by the complete snapshot."""
+def _compile_time_snapshot_value(program: Any, *, include_provenance: bool = True) -> Any:
+    """Return the structural Program view: lossless for the full snapshot, span-free for identity."""
     if program is None:
         return None
     serialize = getattr(program, "_serialize", None)
     if callable(serialize):
         return {
             "type": "%s.%s" % (type(program).__module__, type(program).__qualname__),
-            "ir": serialize(),
+            "ir": serialize() if include_provenance else serialize(include_provenance=False),
             "hash": program._ir_hash() if callable(getattr(program, "_ir_hash", None)) else None,
         }
     return program

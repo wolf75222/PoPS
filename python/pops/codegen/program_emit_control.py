@@ -471,14 +471,15 @@ def _brace_depths(entries):
 def _ends_statement(entries, end):
     """Whether the last code line before ``entries[end]`` ends with ``;`` or ``}``.
 
-    Blank, comment and preprocessor lines are passed over. A line that ends with a comment does
-    not qualify, which only moves a split to a later boundary.
+    Blank and comment lines are passed over. A preprocessor line does not qualify, since the
+    statement of an ``if`` before it may sit in one of its branches, and neither does a line that
+    ends with a comment; both only move a split to a later boundary.
     """
     for index in range(end - 1, -1, -1):
         for physical in reversed(entries[index].split("\n")):
             stripped = physical.strip()
-            if stripped and not stripped.startswith(("//", "#")):
-                return stripped.endswith((";", "}"))
+            if stripped and not stripped.startswith("//"):
+                return not stripped.startswith("#") and stripped.endswith((";", "}"))
     return False
 
 
@@ -490,10 +491,11 @@ def _chunk_step_body(lines, boundaries):
     statements run in the same order, locals are destroyed in the same reverse order, exceptions
     propagate unchanged and a return still ends the step, because every install entry places the
     step body at the end of its native function. Only boundaries outside every brace and after a
-    line that ends a statement qualify, so no split can leave a statement open (an ``if`` without
-    its body would otherwise govern the rest of the step); a body that cannot be scanned stays one
-    function. The labels of a typed capture stay inside its operation, so no split separates a
-    ``goto`` from its label.
+    line that ends a statement qualify, so no split can follow a statement header (an ``if``
+    without its body would otherwise govern the rest of the step); a split before an ``else``,
+    the ``while`` of a ``do`` or a ``catch`` would not compile. A body that cannot be scanned
+    stays one function. The labels of a typed capture stay inside its operation, so no split
+    separates a ``goto`` from its label.
     """
     depths = _brace_depths(lines)
     if depths is None or depths[-1] != 0:

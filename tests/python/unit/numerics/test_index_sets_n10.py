@@ -245,18 +245,25 @@ def test_the_compiled_plan_record_reports_the_layouts_outside_its_identity():
 
 def test_dmt1_emit_runs_the_real_compile_path_on_a_short_profile(tmp_path):
     # Review of #749, T1: the identity scope that ``pops.compile`` opens changed under the harness
-    # (#732); only an emission sees it, ``compare`` alone does not.
+    # (#732); only an emission sees it, ``compare`` alone does not. The gate-python shards export
+    # a Kokkos root for their native tests (batch run 43093243275, shard 85): the emission runs
+    # under one here too, wherever the test runs.
     import json
+    import os
     import subprocess
     import sys
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[4]
     out = tmp_path / "m15.jsonl"
+    kokkos = str(tmp_path / "kokkos")
+    environment = dict(os.environ, Kokkos_ROOT=kokkos, POPS_KOKKOS_ROOT=kokkos)
     done = subprocess.run([sys.executable, str(root / "scripts" / "dmt1.py"), "emit", str(out),
-                           "M15"], cwd=root, capture_output=True, text=True, timeout=600)
-    assert done.returncode == 0, done.stdout + done.stderr
-    row = json.loads(out.read_text(encoding="utf-8"))
+                           "M15"], cwd=root, env=environment, capture_output=True, text=True,
+                          timeout=600)
+    rows = out.read_text(encoding="utf-8") if out.exists() else ""
+    assert done.returncode == 0, "\n".join((done.stdout, done.stderr, rows))
+    row = json.loads(rows)
     assert "failed" not in row and row["program"]["bytes"] > 0
     assert row["models"] and all(value is not None for value in row["models"].values())
 

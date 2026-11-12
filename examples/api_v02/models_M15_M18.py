@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from math import pi
 from examples.api_v02.common import CaseSpec, state_array, non_owner_metrics
+from examples.api_v02 import models_M15_orders as _orders
 
 
 def _periodic_case(name, model, state, flux, *, cells, initial, rhs, domain, steps, dt,
@@ -169,20 +170,34 @@ def build_m17(*,cells=16,steps=4,dt=1e-4):
     case=pops.Case("M17_full_FanLi15");block=case.block("moments",model);subject=block[U]
     case.numerics(plan,block=block)
     case.initials.add(InitialCondition(state=subject,value=BindArray(),projection=ConservativeCellAverage()))
-    p=pops.Program("FanLi_raw_path_Euler");u=p.state(subject)
-    def guard(value,label):
-        rho_field=p.value(label+"_density",(value[0],)*15)
-        value=p.guard(label+"_density_positive",value,p.min(rho_field)>0.,action=FailRun())
+    def b6():
+        p=pops.Program("FanLi_raw_path_Euler");u=p.state(subject)
+        def guard(value,label):
+            rho_field=p.value(label+"_density",(value[0],)*15)
+            value=p.guard(label+"_density_positive",value,p.min(rho_field)>0.,action=FailRun())
+            rho=value[0]; ux=value[slot[1,0]]/rho;uy=value[slot[0,1]]/rho
+            a=value[slot[2,0]]/rho-ux*ux;b=value[slot[1,1]]/rho-ux*uy;c=value[slot[0,2]]/rho-uy*uy
+            margin=math.minimum(rho,math.minimum(a,a*c-b*b))
+            margin_field=p.value(label+"_margin",(margin,)*15)
+            return p.guard(label,value,p.min(margin_field)>0.,action=FailRun())
+        current=guard(u.n,"positive_SPD_current")
+        k=rate(current)
+        candidate=p.value("next_moments",current+p.dt*k,at=u.next.point)
+        p.commit(u.next,guard(candidate,"positive_SPD_candidate"))
+        p.step_strategy(FixedDt(dt));case.program(p)
+    # The two predicates of b6's guard, as components of the traced method (N8 lot 6): the
+    # density, then the SPD temperature margin of the density-gated value.
+    def positive(value):
+        rho_field=value.prog.value(value.name+"_density",(value[0],)*15)
+        return value.prog.min(rho_field)>0.
+    def spd(value):
         rho=value[0]; ux=value[slot[1,0]]/rho;uy=value[slot[0,1]]/rho
         a=value[slot[2,0]]/rho-ux*ux;b=value[slot[1,1]]/rho-ux*uy;c=value[slot[0,2]]/rho-uy*uy
         margin=math.minimum(rho,math.minimum(a,a*c-b*b))
-        margin_field=p.value(label+"_margin",(margin,)*15)
-        return p.guard(label,value,p.min(margin_field)>0.,action=FailRun())
-    current=guard(u.n,"positive_SPD_current")
-    k=rate(current)
-    candidate=p.value("next_moments",current+p.dt*k,at=u.next.point)
-    p.commit(u.next,guard(candidate,"positive_SPD_candidate"))
-    p.step_strategy(FixedDt(dt));case.program(p)
+        margin_field=value.prog.value(value.name+"_margin",(margin,)*15)
+        return value.prog.min(margin_field)>0.
+    _orders.traced_admissible_euler(case,block,U,dt,name="FanLi_raw_path_Euler",b6=b6,flow=rate,
+                                    positive=positive,domain=spd)
     x=(np.arange(cells)+.5)/cells
     initial=np.stack([gaussian_mixture(((.55+.02*np.cos(2*pi*xj),(-.2,.1),(.7,.05,.6)),
                                       (.45-.015*np.sin(2*pi*xj),(.3,-.15),(.5,-.04,.8)))) for xj in x],axis=1)

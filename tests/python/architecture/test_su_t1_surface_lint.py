@@ -38,7 +38,7 @@ GALLERY_SHA256 = {
     "l4_two_fluid_drag.py": "8b1a4dd29f75ba8632df993fcfbe2e43fa86c470b6833d9c573d02a008bf173b",
     "lib_methods.py": "a3f35db05eca230fef657f5e11b57d29c0d5b47aa65e39271d2dfb1c3b9fd8ae",
     "lib_models.py": "bfe1d3b06ba66b93d1850d32994b9d1357624adf0c3ead13d9ff9ece3a8be774",
-    "lib_schemes.py": "9d249becb65e83a4655e28fd6dca110e1b238805fcc035755468c4d8696f46a9",
+    "lib_schemes.py": "7bc16f74237133755f7847966178d46a3cc90f035b831868083bdca500282e13",
     "m10_drift_diffusion.py": "e90c3636f7ac4c65721937fa0b1520b797024dd3b3d886f306da2e796e9f1cec",
     "m19_vlasov_bgk.py": "5aa4f38164b3fc1df744ad578d90e479ff688abe7cde4ad13ad2ad4578ba961a",
     "m26_aggregation_diffusion.py":
@@ -52,7 +52,10 @@ LIBRARY = ROOT / "python" / "pops" / "lib"
 BRIDGE = "python/pops/lib/numerics/schemes.py"
 BRIDGE_WORDS = {("Diffusion", "pops.numerics"), ("riemann", "pops.numerics"),
                 ("FiniteVolume", "pops.numerics.spatial"), ("NotYetElaborated", "pops.surface"),
-                ("SchemeValue", "pops.surface"), ("TermView", "pops.surface")}
+                ("SchemeValue", "pops.surface"), ("TermView", "pops.surface"),
+                # lot 2: upwind(speed=f) is realized by fluxes.upwind, and f is checked to be a
+                # plain function of face (SU5)
+                ("fluxes", "pops.lib.numerics"), ("check_plain_function", "pops.surface")}
 
 
 @pytest.fixture(scope="module")

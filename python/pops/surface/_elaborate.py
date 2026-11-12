@@ -40,8 +40,7 @@ from pops.problem import Case as _Case
 from pops.projection import ConservativeCellAverage
 from pops.time._program import elaboration as _n8
 
-from ._derive import derivative, unit_flux
-from ._expr import Arith, Call, is_number, text
+from ._expr import Arith, Call, Predicate, is_number, text
 from ._geometry import FRAME_AXES, Box, Coordinate, MathConstant
 from ._method import MethodValue, _Trace, specialize, translate
 from ._model import (
@@ -122,7 +121,8 @@ class Report:
 class Elaborated:
     """What a case elaborates into: the b6 case, its layout and block, the rows of its report."""
 
-    __slots__ = ("case", "layout", "block", "model", "plan", "states", "names", "advance", "rows")
+    __slots__ = ("case", "layout", "block", "model", "plan", "states", "names", "advance", "rows",
+                 "params", "outputs")
 
     def __init__(self, **fields: Any) -> None:
         for name in self.__slots__:
@@ -149,6 +149,19 @@ def _dissipation(coefficient: Any) -> str:
     if _derived_sign(coefficient) == 1:
         return "established: %s > 0" % text(coefficient)
     return "not established: the sign of %s is not derived" % text(coefficient)
+
+
+def _per_axis(values: tuple | None) -> Any:
+    """A value per axis as the surface writes it: the scalar on a support of rank one, else
+    ``vector(...)`` of the components (lot 2b)."""
+    if values is None:
+        return None
+    return values[0] if len(values) == 1 else Call("vector", tuple(values))
+
+
+def _per_axis_text(values: tuple, spell: Any) -> str:
+    return spell(values[0]) if len(values) == 1 else \
+        "vector(%s)" % ", ".join(spell(value) for value in values)
 
 
 def _number(value: Any) -> Any:
@@ -182,6 +195,8 @@ class _Elaboration:
         self.rows: list = []
         self.values: dict = {}
         self.names: dict = {}
+        self.params: dict = {}
+        self.lowered_outputs: tuple = ()
 
     # The support and its frame.
 
@@ -221,8 +236,13 @@ class _Elaboration:
 
     # The model.
 
-    def lower(self, value: Any) -> Any:
-        """The b6 expression of a value of the model."""
+    def lower(self, value: Any, inputs: dict | None = None) -> Any:
+        """The b6 expression of a value of the model; ``inputs`` gives the b6 expressions of the
+        reads of the entities of a scheme, inside the body of a scheme (lot 2)."""
+        if inputs is not None:
+            scheme = self._scheme_value(value, inputs)
+            if scheme is not None:
+                return scheme
         if is_number(value):
             return _number(value)
         if isinstance(value, MathConstant):
@@ -239,7 +259,7 @@ class _Elaboration:
             raise NotYetElaborated("the coordinate %s read in a value of the model" % value,
                                    "a later lot of N15 with the coordinate fields of G03")
         if isinstance(value, Arith):
-            args = [self.lower(arg) for arg in value.args]
+            args = [self.lower(arg, inputs) for arg in value.args]
             if value.op == "neg":
                 return -args[0]
             left, right = args
@@ -247,14 +267,46 @@ class _Elaboration:
                     "*": lambda: left * right, "/": lambda: left / right,
                     "**": lambda: left ** right}[value.op]()
         if isinstance(value, Call) and value.word == "abs":
-            return abs(self.lower(value.args[0]))
+            return abs(self.lower(value.args[0], inputs))
         if isinstance(value, Call) and value.word in ("exp", "expm1", "log", "sqrt", "sin", "cos"):
-            return getattr(_pm, value.word)(self.lower(value.args[0]))
+            return getattr(_pm, value.word)(self.lower(value.args[0], inputs))
         if isinstance(value, Term):
             raise NotYetElaborated("the term %s read in the value of another" % value, _LATER,
                                    site=value.site)
         raise NotYetElaborated("%s in a value of the model" % text(value),
                                "N11 (expression closure, C1)")
+
+    def _scheme_value(self, value: Any, inputs: dict) -> Any:
+        """The words that only the body of a scheme lowers in this lot: the reads of its entities,
+        ``where`` and its comparisons, ``largest`` and ``smallest`` (b6 ``where``, ``maximum`` and
+        ``minimum``, whose derivative stays the one of b6). ``None`` for every other value."""
+        from ._scheme import SchemeLeaf, is_radius_pair
+
+        if isinstance(value, SchemeLeaf):
+            if value.key in inputs:
+                return inputs[value.key]
+            return self.lower(value.expansion, inputs)
+        if ("speed",) in inputs and is_radius_pair(value):
+            return inputs[("speed",)]
+        if isinstance(value, Predicate):
+            if value.op not in ("<", "<=", ">", ">="):
+                raise NotYetElaborated("%s in the body of a scheme" % text(value), _LATER)
+            left, right = (self.lower(arg, inputs) for arg in value.args)
+            return {"<": lambda: left < right, "<=": lambda: left <= right,
+                    ">": lambda: left > right, ">=": lambda: left >= right}[value.op]()
+        if isinstance(value, Call) and value.word == "where":
+            predicate, then, otherwise = value.args
+            then_value, otherwise_value = self.lower(then, inputs), self.lower(otherwise, inputs)
+            return _pm.where(self.lower(predicate, inputs), lambda: then_value,
+                             lambda: otherwise_value)
+        if isinstance(value, Call) and value.word in ("largest", "smallest"):
+            fold = _pm.maximum if value.word == "largest" else _pm.minimum
+            items = [self.lower(arg, inputs) for arg in value.args]
+            result = items[0]
+            for item in items[1:]:
+                result = fold(result, item)
+            return result
+        return None
 
     def code(self, value: Any) -> str:
         """The b6 spelling of a value, for the report."""
@@ -287,7 +339,9 @@ class _Elaboration:
             if isinstance(parameter.admissible, Positive):
                 options["domain"] = _Positive()
             param = RuntimeParam(parameter.name, **options)
-            self.values[parameter] = b6.value(b6.param(param))
+            handle = b6.param(param)
+            self.params[parameter] = handle
+            self.values[parameter] = b6.value(handle)
             choices = [Choice("default", parameter.default, "stated")]
             if parameter.admissible is not None:
                 choices.append(Choice("admissible", parameter.admissible, "stated"))
@@ -338,20 +392,27 @@ class _Elaboration:
         return elaborated
 
     def flux(self, b6: Any, frame: Any, term: Flux, name: str, origin: str, state: Any) -> Any:
-        (axis,) = frame.axes
-        slope = derivative(term.value, term.quantity)
-        waves = None if slope is None else {axis: (self.lower(slope),)}
+        axes = frame.axes
+        slopes = term.slopes()
+        waves = None if slopes is None else {
+            axis: (self.lower(slope),) for axis, slope in zip(axes, slopes, strict=True)}
         handle = b6.flux(name, state=state, frame=frame,
-                         components={axis: (self.lower(term.value),)}, waves=waves)
+                         components={axis: (self.lower(component),) for axis, component
+                                     in zip(axes, term.components, strict=True)}, waves=waves)
         choices = [Choice("name", name, origin)]
         choices.append(Choice("waves", "none: dF/%s is not derived in this lot" % term.quantity
-                              if slope is None else "dF/d%s = %s" % (term.quantity, text(slope)),
-                              "derived"))
+                              if slopes is None else "dF/d%s = %s"
+                              % (term.quantity, _per_axis_text(slopes, text)), "derived"))
+        names = FRAME_AXES[:len(axes)]
         self.rows.append(Row(
             "model.flux(of=%s, value=%s)" % (term.quantity, text(term.value)), "model",
-            "%s = model.flux(%r, state=%s, frame=frame, components={x: (%s,)}, waves=%s)"
-            % (name, name, term.quantity.name, self.code(term.value),
-               "None" if slope is None else "{x: (%s,)}" % self.code(slope)), choices))
+            "%s = model.flux(%r, state=%s, frame=frame, components={%s}, waves=%s)"
+            % (name, name, term.quantity.name,
+               ", ".join("%s: (%s,)" % (axis, self.code(component))
+                         for axis, component in zip(names, term.components, strict=True)),
+               "None" if slopes is None else "{%s}" % ", ".join(
+                   "%s: (%s,)" % (axis, self.code(slope))
+                   for axis, slope in zip(names, slopes, strict=True))), choices))
         return handle
 
     def diffusive(self, b6: Any, term: DiffusiveFlux, name: str, origin: str, state: Any) -> Any:
@@ -411,12 +472,16 @@ class _Elaboration:
                 view = rates[balance].select(terms[term])
                 selections[term] = view
                 scheme = self.numerics.scheme_of(term)
-                slope = derivative(term.value, term.quantity) if isinstance(term, Flux) else None
-                speed = unit_flux(term.value, term.quantity) if isinstance(term, Flux) else None
+                slope = _per_axis(term.slopes()) if isinstance(term, Flux) else None
+                speed = _per_axis(term.unit_fluxes()) if isinstance(term, Flux) else None
                 realization = scheme.realize(TermView(term, terms[term], states[term.quantity],
-                                                      slope=slope, unit_flux=speed))
+                                                      slope=slope, unit_flux=speed,
+                                                      lower=self.lower))
                 plan.rates.add(view, realization)
                 choices = [Choice("scheme", scheme, "stated")]
+                choices.extend(Choice("option %s" % name, value, origin)
+                               for name, value, origin in getattr(scheme, "option_choices",
+                                                                  list)())
                 if speed is not None:
                     choices.append(Choice("speed", "s = F(1)·n = %s" % text(speed), "derived"))
                 self.rows.append(Row(
@@ -479,10 +544,12 @@ class _Elaboration:
         retry = _n8.Retry() if advance.attempts is None else _n8.Retry(
             max_attempts=advance.attempts)
         (quantity,) = states
+        outputs = self.outputs(block)
         try:
             elaboration = _n8.elaborate(_n8.Advance(specialized, retry=retry), case=case6,
                                         state=block[states[quantity]],
-                                        proposal=_n8.Proposal(float(advance.dt)))
+                                        proposal=_n8.Proposal(float(advance.dt)),
+                                        outputs=outputs)
         except Exception as error:
             translated = translate(error, trace)
             if translated is error:
@@ -501,6 +568,32 @@ class _Elaboration:
                     "default" if advance.attempts is None else "stated"),
              Choice("accept", "finite()", "default")]))
         return elaboration
+
+    def outputs(self, block: Any) -> tuple:
+        """The Outputs of N8 of the case's outputs, in their order (CC14; lot G)."""
+        lowered = []
+        for output in self.case.outputs:
+            for quantity in output.quantities():
+                if quantity.model is not self.model:
+                    raise ValueError("pops.Output(%r) publishes %s, a quantity of another model"
+                                     % (output.record, quantity))
+            value = output.lowered(block)
+            lowered.append(value)
+            schedule = ("every(%d)" % output.every_steps if output.every_steps is not None
+                        else "at=every_dt(%r)" % output.every_time if output.every_time is not None
+                        else "at=%r" % (output.times,))
+            if output.every_steps is not None or output.every_time is not None:
+                schedule += (", the lattice from the start of the simulation; a later run that "
+                             "starts off it is refused (N8)")
+            self.rows.append(Row(
+                repr(output), "program",
+                "Output(lambda B, interval: Product(%s), %s), evaluated by the compiled run (CC14)"
+                % (", ".join("%s=B.state" % name for name, _ in output.record.items()), schedule),
+                [Choice("when", output.when, "stated"),
+                 Choice("write", "result.outputs" if output.write is None else output.write,
+                        "default" if output.write is None else "stated")]))
+        self.lowered_outputs = tuple(lowered)
+        return self.lowered_outputs
 
     def initial(self, case6: Any, block: Any, states: dict) -> None:
         from pops.lib.initial import BindArray   # the datum supplied at bind (Q3), a b6 value
@@ -589,7 +682,8 @@ class _Elaboration:
         layout = self.layout(support, frame)
         return Elaborated(case=case6, layout=layout, block=block, model=b6, plan=plan,
                           states=states, names=self.names, advance=advance,
-                          rows=tuple(self.rows))
+                          rows=tuple(self.rows), params=dict(self.params),
+                          outputs=self.lowered_outputs)
 
 
 def inspect_case(case: Any) -> Report:

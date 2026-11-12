@@ -18,6 +18,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-98 (N15, lot G): a case of the surface compiles, binds and runs (spec 0.3, 2.6.2, 2.6.6,
+  §5.2, CC14; OD31). `pops.compile(case, target=pops.OpenMP())`, `pops.bind(artifact,
+  params={b: v}, data={u0: array}, resources=pops.Resources(threads=n), directory=d)` and
+  `simulation.run(until=t, max_steps=n)` run the b6 compile and the compiled run of N8; arrays
+  are in the order of the support's axes. `pops.Output(pops.record(u=u), when=[t1, t2] |
+  pops.every(time=h) | pops.every(steps=k), write=npz(path, metadata=pops.record(...)))` lowers
+  to the Outputs of N8, and `pops.lib.output.npz` writes the series of an Output after each run.
+  `pops.RunFailed` and `pops.BudgetExhausted` carry the surface `RunResult`. A 2D periodic case
+  runs bit for bit as the same case written by hand for b6.
+- ROM-98 (N15, lot 2b): schemes of one's own on a support of rank two and three. A flux is
+  written by its axis components, `model.flux(of=u, value=vector(a, b) * u)`, and lowered on the
+  b6 dictionary per axis with the waves dF_a/du of each component; in a scheme,
+  `dot(term.law(...), face.normal)` and the wave speeds are their dot with the canonical normal,
+  one face body for every axis. SU-T3 compares 2D cases with the case written by hand for b6.
+- ROM-98 (N15, lot 2): `@pops.scheme` with the entities `face`, `cell`, `term` and `axis` of
+  spec 0.3, 2.6.4 (rows 377 and 702 of 2.6). A scheme records its options at its call and runs
+  when `pops.Numerics` receives it, once per key and once per axis, so a refusal names the line of
+  its body and of `Numerics` (SU5). A `FaceFlux` under a flux lowers to the b6 `riemann.User` face
+  (`face.left(u)`, `face.right(u)`, `face.normal`, `dot(term.law(...), face.normal)` as `fL`/`fR`,
+  `largest` of the two spectral radii as `s`; stability `abs(speed)`, or `s` without `speed=`); a
+  `Reconstruct` lowers to `reconstruction.User` with `formal_order` the number of cells read, a
+  bound of its stencil that `pops.inspect` reports as not claimed. `pops.surface.discrete` holds
+  `FaceFlux`, `Reconstruct`, `spectral_radius`, `slowest_speed`, `fastest_speed`, `kinds` and
+  `forms` (`NormalComponent`, renamed from `NormalVelocity` with the spec of 11/11), the other
+  builders and reductions refused with their lot. `pops.math` elaborates `largest`, `smallest` and
+  `dot(term.law(...), face.normal)` in a scheme; `term.expect` compares exact normal forms (CC2).
+  The library words take `reconstruction=` a cell scheme, and `upwind(speed=f)`, f a function of
+  `face`, is `fluxes.upwind`. SU-T3 compares each with the case written by hand for b6, and CF4 a
+  scheme in the arithmetic of `fluxes.rusanov` with that face node for node.
 - ROM-93 (N11 lot 1): the right-hand side of a balance is a free algebra (spec 0.3 R7, gap C1).
   `ddt(U) == -div(F) + k*u*(1 - u)` declares each term-free operand as the anonymous source
   `<rate>_inline_<k>` of the balance, with its exact coefficient folded in, so it lowers on the
@@ -124,6 +153,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   name their node, type an `iterate` result as `Iteration(S)`, a field publication as the product of
   its bound components and a product without members as `Product()`, read G13's field-element rule
   before its flat rule for the residency, and give each row still untyped the lot that types it.
+- ROM-93 with ROM-25 (N11 lot 2a, G07): source spans leave every artifact identity (spec 0.3 CC2,
+  gap C48). The same case loaded from two checkout paths, or with comment lines inserted, now has
+  one `snapshot.artifact_hash`, one `plan_identity` and one compiled `artifact_identity`: the time
+  program of the compile context is projected without provenance, and `ModuleManifest.artifact_data()`
+  drops each operator's source span from the snapshot projection and the binary evidence. The full
+  snapshot (`snapshot.hash`) and the manifest keep file and line as provenance. A docstring no
+  longer changes the identity of a Python operator body, as a comment or a line shift already did.
+  `ARTIFACT_SCHEMA_VERSION` is 7, so every artifact hash changes once; semantic identities do not.
 - A `format-bench` job of `ci.yml`, aggregated by `gate`, replays
   `scripts/test_check_clang_format.sh`, the bench of `scripts/check_clang_format.sh`, on every full
   plan and when the plan sees the script, the bench or a style file (`.clang-format`,
@@ -132,6 +169,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3b): a criterion written as regions of `cell` now compiles on a plan with
+  several layouts. `pops.compile` generates each adaptive layout's criterion into that layout's
+  Program slice, and the layout's AmrSystem installs the entry of its own slice; no native code
+  changes. `Regrid(criterion, when)` on a plan with several layouts stays refused (write
+  `tagging=` and `regrid=` on each adaptive layout). The multi-layout AMR cases of the test suite
+  (physical maps, interstage maps, m19, sol61) write regions; on three adaptive layouts, graph and
+  region routes give bitwise identical hierarchies.
+- ROM-95 (N12, lot 3a, part 2): the 19 `examples/api_v02` AMR cases and the condensed_fac/01,
+  diocotron/01, 02 and 04, hyqmom (`_amr_hybrid`) and initial_field_ghost/01 tutorials write their
+  tagging as regions of `cell`; the three reviewed api_v02 modules that changed carry new source
+  digests in `profile_implementations.json`. Graph and region runs of condensed_fac/01, hyqmom/02
+  and diocotron/01 are bitwise identical. Only the scalar advection final example still writes the
+  graph; it moves with the VM removal (lot 3c).
 - ROM-95 (N12, lot 3a, part 1): the scalar advection AMR tutorials 05-14, the IMEX AMR final
   example, the field diffusion example and the scalar AMR migration workflow write their tagging
   as regions of `cell` (`Tag(lambda cell: cell.value(q) > c)`, `gradient_norm` for 09) instead of
@@ -588,6 +638,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-93 (N11 lot 1 follow-up): the empty sum `ddt(U) == RateExpr(())` is again the zero rate of b6 and
+  reaches the prepared IR as the zero identity; lot 1 had refused it. Spec 0.3 R7 refuses no empty
+  balance. The bare literal `ddt(U) == 0` stays refused, as in b6.
+
+- ROM-85 (#749 follow-up): `scripts/dmt1.py emit` failed on M15 in the gate-python shards, which
+  export a Kokkos root for their native tests: the real `compile_native` that it runs
+  authenticates that root against the Kokkos contract of `_pops`, which it never loads. `emit` now
+  drops the Kokkos root overrides from its own environment, as it fixes the other toolchain facts
+  that need `_pops`; the emitted units are unchanged. Its test runs under a Kokkos root everywhere
+  and prints the profile's error and trace when it fails.
+- ROM-18 (#699 follow-up, found by DM-T2 of ROM-85): a generated package compiled for its one
+  resolved route lost up to 19 % per step on M01 against b6 (face kernel x1.65), with bit-identical
+  states. GCC sizes its inlining budget on the whole translation unit (`inline-unit-growth`), and
+  the single-route package is a small unit: the budget ran out before the metric accessors, so
+  every face called `cell_measure`, `reference_cell` and `face_measure` through the PLT. Those
+  accessors are now `POPS_HD_FORCEINLINE`, and the prescribed boundary trace of a face, taken on two
+  faces of a row, is out of line (`POPS_HD_OUTLINE`). The face body no longer depends on how many
+  routes the package instantiates; results stay bit for bit, no threshold changes.
 - ROM-17: build PoPS against conda-forge's Kokkos 5.2.2. Its HWLOC TPL names the prefix's
   `include/` with a trailing separator next to Kokkos' own `include`, so the include contract kept
   both spellings and counted four defining headers instead of two, and configuration stopped.
@@ -671,11 +739,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   goes from 30.0 to 17.7 MB and compiles in 357 s within 4.8 GiB, where it did not fit in 12 GiB
   before.
 - The step body of a generated Program continues in a nested function only after a line that ends
-  a statement, and the brace scan that places these splits skips raw string literals, so a split
-  can no longer leave a statement open. The Hall Program and the eleven other Programs of the F7
-  review keep byte-identical sources. In CI the Hall test now passes in 465 s, and its two-rank
-  twin in 457 s per rank, so its weight in `tests/python/test_durations.json` goes from the 900 s
-  estimate to 520 s.
+  with `;` or `}`, never after a preprocessor line, and the brace scan that places these splits
+  skips raw string literals, so a split can no longer follow a statement header such as a bare
+  `if (a)`. The Hall Program and the eleven other Programs of the F7 review keep byte-identical
+  sources. In CI the Hall test now passes in 465 s, and its two-rank twin in 457 s per rank, so
+  its weight in `tests/python/test_durations.json` goes from the 900 s estimate to 520 s.
 
 ## [1.0.0] - 2026-07-16
 

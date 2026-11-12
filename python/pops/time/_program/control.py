@@ -26,7 +26,8 @@ ADVANCE_CONTROL_MEMORY_SCHEMA = "pops.advance-control@3"
 (N8 lot 5): a superset of schema 2, whose keys ``outputs``, ``memory`` and ``trial_failures`` are
 always present. ``memory`` lists each member (T27, CN1): its path, role, type identity, writer,
 readers and ring; ``trial_failures`` lists each failure site of a field request and whether a
-retry can change it (T38), the sites that no lot classifies yet with the lot that will."""
+retry can change it (T38), the sites that no lot classifies yet with the lot that will, and each
+admissibility guard of the method body (IR4, N8 lot 6), whose variant is ``NotAdmissible``."""
 
 ADVANCE_ASSESSMENT_CONTRACT = "pops.advance-assessment@1"
 """Attribute of an acceptance guard that is an assessment of an Advance: its rejection is raised
