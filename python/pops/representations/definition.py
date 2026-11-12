@@ -61,9 +61,11 @@ CARRIERS = ("cell", "node", "face", "edge")
 KINDS = ("coefficient", "average", "total", "sample", "face integral", "edge circulation", "load")
 MEASURES = ("support", "none")
 
-# Atom tags. Geometry atoms are positive on every cell (certified by the plan), so a monomial of
-# them divides exactly.
+# Atom tags. Geometry atoms are nonzero on every cell: measures and widths are positive (certified
+# by the plan) and reference node coordinates are +-1, so a monomial of them divides exactly. The
+# closed list of N16 3.2 also names cell.axes and cell.nodes, which this lot does not build yet.
 _GEOMETRY = ("cell.measure", "cell.width", "node.reference")
+_LEAVES = frozenset(("coefficients", "field") + _GEOMETRY + ("point.reference", "point.position"))
 _POINT = ("point.reference", "point.position")
 
 
@@ -75,6 +77,8 @@ def _exact(value: Any) -> Fraction:
     if isinstance(value, (int, Fraction)):
         return Fraction(value)
     if isinstance(value, float):
+        # The exact binary fraction of the float: 0.1 is the binary64 0.1, not 1/10, so 0.1 and
+        # Fraction(1, 10) give two identities, as two rules one ulp apart do.
         if value != value or value in (float("inf"), float("-inf")):
             raise ValueError("a representation body takes finite numbers")
         return Fraction(value)
@@ -220,15 +224,33 @@ def _to_data(value: Body) -> Any:
     raise TypeError("not a representation body: %r" % (value,))
 
 
+_OPS = {"neg": 1, "+": 2, "-": 2, "*": 2, "/": 2, "**": 2}
+
+
 def body_from_data(data: Any) -> Body:
+    """The body that ``_to_data`` wrote; a leaf, an operation or a word outside the closed lists
+    of this module is refused, so data cannot reach a body that the leaves cannot build."""
+    if not isinstance(data, dict):
+        raise ValueError("not representation body data: %r" % (data,))
     if "const" in data:
         numerator, denominator = data["const"]
+        if type(numerator) is not int or type(denominator) is not int or denominator <= 0:
+            raise ValueError("a constant of a body is an exact fraction, got %r" % (data,))
         return Const(Fraction(numerator, denominator))
     if "leaf" in data:
-        return Leaf(data["leaf"], tuple(data["indices"]))
+        indices = tuple(data["indices"])
+        if data["leaf"] not in _LEAVES or any(type(i) is not int or i < 0 for i in indices):
+            raise ValueError("%r is no leaf of a representation body (the closed list is %s)"
+                             % (data["leaf"], ", ".join(sorted(_LEAVES))))
+        return Leaf(data["leaf"], indices)
     if "op" in data:
-        return Op(data["op"], tuple(body_from_data(arg) for arg in data["args"]))
+        args = tuple(body_from_data(arg) for arg in data["args"])
+        if _OPS.get(data["op"]) != len(args):
+            raise ValueError("%r is no operation of a representation body" % (data["op"],))
+        return Op(data["op"], args)
     if "call" in data:
+        if not isinstance(data["call"], str) or not data["call"]:
+            raise ValueError("a call of a body names its word, got %r" % (data["call"],))
         return Call(data["call"], tuple(body_from_data(arg) for arg in data["args"]))
     raise ValueError("not representation body data: %r" % (data,))
 
@@ -333,21 +355,22 @@ def _atoms(poly: Polynomial):
 
 
 def _reads(atom: Any, tags: tuple) -> bool:
+    """Whether an atom reads a leaf of ``tags``, looking inside the normal forms that an opaque atom
+    holds: ``("call", word, (form, ...))``, ``("quotient", form)``, ``("power", form, form)``."""
     if atom[0] in tags:
         return True
-    if atom[0] in ("call", "quotient", "power"):
-        return any(_form_reads(form, tags) for form in atom[1:]
-                   if isinstance(form, tuple))
+    if atom[0] == "call":
+        return any(_form_reads(form, tags) for form in atom[2])
+    if atom[0] == "quotient":
+        return _form_reads(atom[1], tags)
+    if atom[0] == "power":
+        return _form_reads(atom[1], tags) or _form_reads(atom[2], tags)
     return False
 
 
-def _form_reads(form: Any, tags: tuple) -> bool:
-    if not isinstance(form, tuple):
-        return False
-    if form and isinstance(form[0], tuple) and len(form[0]) == 2 and isinstance(form[0][0], tuple):
-        # a normal form: ((monomial, coef), ...)
-        return any(_reads(atom, tags) for mono, _ in form for atom, _ in mono)
-    return any(_form_reads(item, tags) for item in form)
+def _form_reads(form: tuple, tags: tuple) -> bool:
+    """Whether one normal form, ``((monomial, coefficient), ...)``, reads a leaf of ``tags``."""
+    return any(_reads(atom, tags) for mono, _ in form for atom, _ in mono)
 
 
 def _opaque(atom: Any) -> bool:
@@ -356,14 +379,29 @@ def _opaque(atom: Any) -> bool:
 
 # --- derived values -------------------------------------------------------------------------------
 
+_N16_LOT_2 = "N16 lot 2 (the Gram path, which integrates phi_s under the stated rule)"
+_CHART_LOT = ("N16 lot 2 (the Gram path, which integrates phi_s det DX under the rule of the "
+              "layout, D0b)")
+_MOVING_LOT = "G03 lots M1 and M2 (the moving configuration, whose state holds totals)"
+
+#: The families of an Unknown rate weight (spec delta 5, review of #789 F2): the two triggers of
+#: MeasureMissing, and a weight that a later lot gives.
+NO_MEASURE = "no measure"
+NO_EXACT_FORM = "no exact form and no rule"
+LATER_LOT = "a later lot"
+
+
 @dataclass(frozen=True, slots=True)
 class Unknown:
-    """A derived value that elaboration cannot give exactly, with the reason (IR13)."""
+    """A derived value that elaboration cannot give exactly, with the reason (IR13), its family
+    and, for a later lot, the lot that gives it."""
 
     reason: str
+    family: str = NO_EXACT_FORM
+    lot: str | None = None
 
     def to_data(self) -> dict[str, Any]:
-        return {"unknown": self.reason}
+        return {"unknown": self.reason, "family": self.family, "lot": self.lot}
 
 
 def _poly_data(poly: Polynomial) -> Any:
@@ -590,18 +628,27 @@ class RepresentationDefinition:
         return c
 
     def rate_weights(self) -> tuple[Polynomial, ...] | Unknown:
-        """m_K[s] = integral of phi_s over K, the load of the constant 1 (N16 5.2)."""
+        """m_K[s] = integral of phi_s over K, the load of the constant 1 (N16 5.2).
+
+        For one constant mode, m_K = c mu(K) on any cell, since mu(K) is the configuration's cell
+        measure. For a decode that reads the point, m_K is mu(K) times the mean of phi_s over the
+        reference box [-1, 1]^r: that is the integral over K only when K is an affine image of the
+        box (a Cartesian or graded box, node positions). On a chart (N17) or a moving map, det DX
+        varies over the cell; ``inventory_weights(..., layout=)`` refuses it there by name."""
         if self.measure == "none":
-            return Unknown("the configuration states no measure")
+            return Unknown("the configuration states no measure", NO_MEASURE)
         if self.carrier != "cell" or self.dual_of is not None:
-            return Unknown("rate weights of a %s carrier are G08's" % self.carrier)
+            return Unknown("rate weights of a %s carrier are G08's" % self.carrier, LATER_LOT,
+                           "G08 (face and edge carriers)")
         c = self.constant_mode
         if not isinstance(c, Unknown):
             return (_times(c, _MEASURE),)
         basis = _basis(_polynomial(self.decode), self.size)
         if isinstance(basis, Unknown):
-            return basis if self.pairing is None else Unknown(
-                basis.reason + "; the stated rule takes it in N16 lot 2")
+            if self.pairing is None:
+                return Unknown(basis.reason + ", and the representation states no rule")
+            return Unknown(basis.reason + "; the stated rule takes it in N16 lot 2", LATER_LOT,
+                           _N16_LOT_2)
         weights = []
         for phi in basis:
             total: Polynomial = {}
@@ -610,11 +657,11 @@ class RepresentationDefinition:
                 rest = []
                 for atom, e in mono:
                     if _opaque(atom) or atom[0] == "point.position":
-                        reason = ("decode is not normalizable in the reference point" if
-                                  self.pairing is None else
-                                  "decode is not normalizable; the stated rule takes it in "
-                                  "N16 lot 2")
-                        return Unknown(reason)
+                        if self.pairing is None:
+                            return Unknown("decode is not normalizable in the reference point, "
+                                           "and the representation states no rule")
+                        return Unknown("decode is not normalizable; the stated rule takes it "
+                                       "in N16 lot 2", LATER_LOT, _N16_LOT_2)
                     if atom[0] == "point.reference":
                         exponents[atom[1][0]] = exponents.get(atom[1][0], 0) + e
                     else:
@@ -775,21 +822,60 @@ class MeasureMissing(ValueError):
         super().__init__("MeasureMissing (D4, validate): %s" % message)
 
 
-def inventory_weights(quantity: Any, representation: Any) -> tuple[Polynomial, ...]:
-    """The rate weights an inventory of ``quantity`` reads, or ``MeasureMissing`` (D4).
+def cells_not_affine(layout: Any) -> str | None:
+    """Why the cells of a normalized layout row are not affine images of the reference box, or
+    None when they are: a box, a graded box and node positions (N17 ``nodes``) have axis-aligned
+    cells; a chart (N17 ``chart``) and a moving map do not."""
+    if layout is None:
+        return None
+    from pops.mesh._static_geometry import is_static_coordinate_map, layout_static_geometry
+    from pops._frozen_data import thaw_data
+    evolution = layout.requirements.get("geometry_evolution")
+    if evolution is None:
+        return None
+    if not is_static_coordinate_map(thaw_data(evolution)):
+        return "the cells move with the map, " + _MOVING_LOT
+    reading = layout_static_geometry(layout)
+    if reading is not None and reading.kind == "chart":
+        return "the cells are images of the reference box under a chart, " + _CHART_LOT
+    return None
 
-    An inventory is sum_K m_K^T c_K, never sum_K c_K. When 1 is not in the span of decode m_K still
-    exists; it is a conservation claim, which reads w_K, that is then refused with
-    ``ConservationNotStructural`` (N16 5.2)."""
+
+def inventory_weights(quantity: Any, representation: Any, *,
+                      layout: Any = None) -> tuple[Polynomial, ...]:
+    """The rate weights an inventory of ``quantity`` reads, or a named refusal.
+
+    An inventory is sum_K m_K^T c_K, never sum_K c_K. ``MeasureMissing`` (D4, validate) has the two
+    triggers of spec delta 5: the representation states no measure, or its decode has no exact
+    form (not normalizable, or not linear in the coefficients, so that it has no basis) and it
+    states no rule. A weight that a later lot gives (a stated rule, a face carrier) is
+    ``NotYetElaborated`` naming that lot. When 1 is not in the span of decode, m_K still exists; a
+    conservation claim, which reads w_K, is then refused with ``ConservationNotStructural``
+    (N16 5.2), not here.
+
+    ``layout`` is the normalized layout row of the quantity's configuration. The weights of a
+    decode that reads the point are moments of the reference box, exact only on affine cells
+    (``rate_weights``): on a chart or a moving map they are refused by name. One constant mode,
+    m_K = c mu(K), holds on every configuration."""
+    from pops.time._program.traced_method import NotYetElaborated
     definition = representation.definition if isinstance(
         representation, ElaboratedRepresentation) else representation
     if not isinstance(definition, RepresentationDefinition):
         raise TypeError("an inventory reads a representation of contract @2")
     weights = definition.rate_weights()
     if isinstance(weights, Unknown):
-        raise MeasureMissing("the inventory of %s cannot be formed: %s"
-                             % (quantity, weights.reason), quantity=quantity,
-                             representation=definition.identity)
+        if weights.family in (NO_MEASURE, NO_EXACT_FORM):
+            raise MeasureMissing("the inventory of %s cannot be formed: %s"
+                                 % (quantity, weights.reason), quantity=quantity,
+                                 representation=definition.identity)
+        raise NotYetElaborated("the inventory of %s: %s; %s gives it"
+                               % (quantity, weights.reason, weights.lot))
+    if isinstance(definition.constant_mode, Unknown):
+        reason = cells_not_affine(layout)
+        if reason is not None:
+            raise NotYetElaborated(
+                "the inventory of %s reads the moments of its decode over the reference box, "
+                "which are its rate weights on affine cells only; %s gives it" % (quantity, reason))
     return weights
 
 

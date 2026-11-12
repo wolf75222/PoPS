@@ -2,11 +2,14 @@
 
 The gallery of the surface (``examples/surface/gallery``, the cases and library drafts of
 ``/mnt/project-files/dsl/cases/after/`` as R12c left them, with the quadrature rules imported from
-``pops.lib.quadrature`` since the review of 11/11 (P3, D0); pinned here by hash) and every module
-of ``pops.lib`` that is written with the surface pass the lint of ``scripts/surface_lint.py``. One
-module is excepted where it reaches b6: ``pops.lib.numerics.schemes`` returns the b6 realization
-of each scheme word until the words are written with ``@pops.scheme`` (A4, the bridge of N15
-lot 1). The test fails on a new finding and on an exception that no longer holds.
+``pops.lib.quadrature`` since the review of 11/11 (P3, D0), and with the four scheme words of
+``pops.lib.numerics`` since N3 lot 1 (D8); pinned here by hash) and every module
+of ``pops.lib`` that is written with the surface pass the lint of ``scripts/surface_lint.py``. A
+module of the surface that the MG9 registry lists as a bridge (``tests/gates/mg9_bridges.toml``,
+``[[bridge]]``) is excepted for the words of b6 that it imports to return a native route: since
+N3 lot 1 (ROM-87), ``pops.lib.numerics.schemes`` being gone, that is ``pops.lib.solve`` and its
+``cg()`` (#776), until the N9 lot « La référence sous les solves de relation ». The test fails on a new finding and on an
+exception that no longer holds.
 
 Each rule fails or warns on a statement written for it, so that a lint that sees nothing fails
 here. The words of the lint come from the spec (``--words``), whose hash the word file records.
@@ -38,7 +41,7 @@ GALLERY_SHA256 = {
     "l4_two_fluid_drag.py": "8b1a4dd29f75ba8632df993fcfbe2e43fa86c470b6833d9c573d02a008bf173b",
     "lib_methods.py": "a3f35db05eca230fef657f5e11b57d29c0d5b47aa65e39271d2dfb1c3b9fd8ae",
     "lib_models.py": "bfe1d3b06ba66b93d1850d32994b9d1357624adf0c3ead13d9ff9ece3a8be774",
-    "lib_schemes.py": "7bc16f74237133755f7847966178d46a3cc90f035b831868083bdca500282e13",
+    "lib_schemes.py": "5663cb9ba00f679d2c3b7307181562501e028c84001f1126fab7753473f7ea04",
     "m10_drift_diffusion.py": "e90c3636f7ac4c65721937fa0b1520b797024dd3b3d886f306da2e796e9f1cec",
     "m19_vlasov_bgk.py": "5aa4f38164b3fc1df744ad578d90e479ff688abe7cde4ad13ad2ad4578ba961a",
     "m26_aggregation_diffusion.py":
@@ -47,21 +50,18 @@ GALLERY_SHA256 = {
     "t05_moment_closure.py": "5a1d193a9db9392ef41807d8e8f0282ba3d6fd98e41c7910304dbd38dcd4c615",
 }
 LIBRARY = ROOT / "python" / "pops" / "lib"
-# The bridge of N15 lot 1 (python/pops/surface/_numerics.py): the words that it imports to
-# return a b6 realization, each a finding of the rule "word" (2.6.9, A4).
-BRIDGE = "python/pops/lib/numerics/schemes.py"
-BRIDGE_WORDS = {("Diffusion", "pops.numerics"), ("riemann", "pops.numerics"),
-                ("FiniteVolume", "pops.numerics.spatial"), ("NotYetElaborated", "pops.surface"),
-                ("SchemeValue", "pops.surface"), ("TermView", "pops.surface"),
-                # lot 2: upwind(speed=f) is realized by fluxes.upwind, and f is checked to be a
-                # plain function of face (SU5)
-                ("fluxes", "pops.lib.numerics"), ("check_plain_function", "pops.surface")}
-# The cg() bridge of MG9 (lot « solves », python/pops/lib/solve/__init__.py): it returns b6's
-# native CG descriptor and refuses the words of 2.6.9 that N9 elaborates with the NotYetElaborated
-# of the surface; both findings leave with the bridge, when the N9 lot « La référence sous les
-# solves de relation » runs the reference cg under the relation solves of traced methods.
-SOLVE_BRIDGE = "python/pops/lib/solve/__init__.py"
-SOLVE_BRIDGE_WORDS = {("CG", "pops.solvers"), ("NotYetElaborated", "pops.surface")}
+MG9_SPEC = importlib.util.spec_from_file_location("mg9_bridges",
+                                                  ROOT / "scripts" / "mg9_bridges.py")
+assert MG9_SPEC is not None and MG9_SPEC.loader is not None
+mg9 = importlib.util.module_from_spec(MG9_SPEC)
+MG9_SPEC.loader.exec_module(mg9)
+
+
+def _bridges():
+    """The modules of the bridges of the MG9 registry, as paths under the root (MG9, MG6)."""
+    modules = mg9.library_modules(ROOT)
+    return {modules[entry["module"]].relative_to(ROOT).as_posix()
+            for entry in mg9.read(ROOT)["bridge"] if entry["module"] in modules}
 
 
 @pytest.fixture(scope="module")
@@ -81,6 +81,38 @@ def test_the_gallery_is_the_gallery_of_r12c():
         assert hashlib.sha256((GALLERY / name).read_bytes()).hexdigest() == digest, name
 
 
+# D8 of N3 lot 1 (ROM-87): the gallery writes the four scheme words of pops.lib.numerics as the
+# library does, so that a case that copies a body of the gallery gets the library's word (CF4).
+LIBRARY_WORDS = ("rusanov", "upwind", "hll", "two_point", "_differentiated")
+
+
+def _functions(path):
+    import ast
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    functions = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in LIBRARY_WORDS:
+            body = node.body
+            doc = ast.get_docstring(node)
+            if doc is not None:
+                body = body[1:]
+            functions[node.name] = (" ".join(doc.split()) if doc else None,
+                                    ast.dump(ast.Module(body=body, type_ignores=[])),
+                                    ast.dump(node.args),
+                                    [ast.dump(decorator) for decorator in node.decorator_list])
+    return functions
+
+
+def test_the_gallery_writes_the_scheme_words_of_the_library():
+    """The bodies, the signatures, the decorators and the docstrings (up to their line breaks) of
+    upwind, rusanov, hll and two_point are those of python/pops/lib/numerics/fluxes.py."""
+    gallery = _functions(GALLERY / "lib_schemes.py")
+    library = _functions(LIBRARY / "numerics" / "fluxes.py")
+    assert sorted(library) == sorted(LIBRARY_WORDS)
+    assert gallery == library
+
+
 def test_the_gallery_passes_the_lint(words):
     findings = [str(finding) for path in sorted(GALLERY.glob("*.py"))
                 for finding in lint.lint_file(path, words, name=path.name)]
@@ -95,17 +127,19 @@ def _surface_modules():
 
 def test_the_library_written_with_the_surface_passes_the_lint(words):
     modules = [path.relative_to(ROOT).as_posix() for path in _surface_modules()]
-    assert {"python/pops/lib/time/methods.py", BRIDGE} <= set(modules)
-    bridges = {BRIDGE: set(), SOLVE_BRIDGE: set()}
+    assert {"python/pops/lib/time/methods.py", "python/pops/lib/numerics/fluxes.py"} <= \
+        set(modules)
+    bridges = _bridges()
+    excepted = set()
     for name in modules:
         for finding in lint.lint_file(ROOT / name, words, name=name):
             if name in bridges and finding.rule == "word" and finding.kind == "F":
-                word, module = finding.text.split(" of ", 1)[0][len("the word "):], \
-                    finding.text.split(" of ", 1)[1].split(",", 1)[0]
-                bridges[name].add((word, module))
+                excepted.add(name)
                 continue
             raise AssertionError(str(finding))
-    assert bridges == {BRIDGE: BRIDGE_WORDS, SOLVE_BRIDGE: SOLVE_BRIDGE_WORDS}
+    # a bridge module that is not written with the surface (the ghost laws of lot B) is MG9's
+    assert excepted == bridges & set(modules)
+    assert "python/pops/lib/solve/__init__.py" in excepted
 
 
 @pytest.mark.parametrize("source, expected", [

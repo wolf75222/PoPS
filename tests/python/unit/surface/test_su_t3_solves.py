@@ -4,7 +4,9 @@ The L1-d case of §17.1: ``imex_euler(explicit=advection, implicit=diffusion)`` 
 ``solvers={imex: cg()}`` and ``tolerance=pops.Tolerance(rtol=1e-10, atol=1e-12)``. Its ν is a
 ``model.constant`` in this lot: the matrix-free apply of the ``cg()`` bridge has no coefficient
 bound at bind, so a ``model.parameter`` ν is refused until the bridge leaves (SU-T2, MG9). The
-case written by hand is the b6 model of ``test_su_t3_parity.py`` and the method written for N8 in
+case written by hand is the b6 model of ``test_su_t3_parity.py`` (the face of the b6 ``rusanov``
+of ``examples/api_v02/b6_numerics.py`` and the two-point ``StencilFlux`` of N3 lot 1, D7) and the
+method written for N8 in
 the shape of §5.5 (``unknowns``, ``Problem``, ``solve(request=p.request)``, ``require_success``),
 whose implicit component states the linear map κ·Laplacian of its two-point rate and the
 realization ``{"imex_euler/*": cg()}``. Both forms give the same program IR, the same artifact
@@ -26,12 +28,13 @@ from pops.frames import Cartesian1D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
-from pops.lib.numerics.schemes import two_point, upwind
+from examples.api_v02 import b6_numerics
+from pops.lib.numerics import two_point, upwind
 from pops.lib.solve import cg
 from pops.lib.time.methods import imex_euler
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.numerics import Diffusion, DiscretizationPlan, reconstruction, riemann, variables
-from pops.numerics.spatial import FiniteVolume
+from pops.numerics import DiscretizationPlan
+from pops.numerics.stencil_flux import StencilFlux
 from pops.params import ConstParam
 from pops.projection import ConservativeCellAverage
 from pops.surface.math import ddt, div, grad
@@ -83,14 +86,31 @@ class _TwoPointRate:
     linear_claims = LinearClaims(symmetric=True, negative_semidefinite=True,
                                  proof="kappa = 0.01 > 0", description="kappa*Laplacian")
 
-    def __init__(self, selection):
-        self.selection = selection
+    def __init__(self, flux, name):
+        self.flux = flux
+        self.name = name
 
     def __call__(self, state):
-        return self.selection(state)
+        # -div_h of the face flux, named <name>_<k> in the k-th evaluation (N3 lot 1, D7)
+        program = state.prog
+        evaluation = sum(1 for value in program._values
+                         if value.op == "stencil_flux_divergence"
+                         and value.name.startswith(self.name + "_"))
+        return program.stencil_flux_divergence("%s_%d" % (self.name, evaluation), state,
+                                               flux=self.flux)
 
     def linear_apply(self, P, value):
         return NU * P.laplacian(P.scalar_field("laplacian"), value)
+
+
+def _two_point_body(nu):
+    """The two-point face -nu (u_R - u_L) / h of ``two_point()`` and its frequency (nu / h) / h
+    (D10), written by hand as the body of a ``StencilFlux``."""
+    def body(sample, spacing, axis):
+        h = spacing[axis]
+        return ((-nu) * ((sample((0,), 0) - sample((-1,), 0)) / h),), (nu / h) / h
+
+    return body
 
 
 def _hand_l1d():
@@ -102,23 +122,20 @@ def _hand_l1d():
     u = model.state("u", components=("u",))
     flux_u = model.flux("flux_u", state=u, frame=frame, components={x: (a * u[0],)},
                         waves={x: (a,)})
-    diffusive_flux_u = model.diffusive_flux("diffusive_flux_u", state=u,
-                                            value=nu * pm.grad(u[0]))
-    rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u) + pm.div(diffusive_flux_u))
+    model.diffusive_flux("diffusive_flux_u", state=u, value=nu * pm.grad(u[0]))
+    rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u))
     plan = DiscretizationPlan()
     advection = rate.select(flux_u)
-    plan.rates.add(advection, FiniteVolume(
-        flux=flux_u, variables=variables.Conservative(u),
-        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
-    diffusion = rate.select(diffusive_flux_u)
-    plan.rates.add(diffusion, Diffusion(flux=diffusive_flux_u))
+    plan.rates.add(advection, b6_numerics.rusanov(flux_u, u))
+    diffusion = StencilFlux(dimension=1, components=1, radius=1, body=_two_point_body(nu))
     case = pops.Case("advection_diffusion")
     block = case.block("advection_diffusion", model)
     case.numerics(plan, block=block)
     case.initials.add(InitialCondition(state=block[u], value=BindArray(),
                                        projection=ConservativeCellAverage()))
     elaboration = elaborate(
-        Advance(_n8_imex_euler(explicit=advection, implicit=_TwoPointRate(diffusion)),
+        Advance(_n8_imex_euler(explicit=advection,
+                               implicit=_TwoPointRate(diffusion, "diffusive_flux_u")),
                 retry=Retry(max_attempts=2)),
         case=case, state=block[u],
         proposal=Proposal(0.001, request=Request(rtol=1e-10, atol=1e-12)),

@@ -12,8 +12,7 @@ import os
 import pytest
 
 import pops.surface as surface
-from pops.lib.numerics.schemes import rusanov, two_point, upwind
-from pops.lib.time.methods import ssprk2
+from pops.lib.numerics import rusanov, two_point, upwind
 from pops.surface.discrete import (
     CellValue, FaceFlux, FaceValue, Reconstruct, spectral_radius, sum_faces,
 )
@@ -204,14 +203,9 @@ def test_largest_takes_a_list():
 
 
 def test_largest_in_a_value_of_the_model_belongs_to_n11():
-    domain, model, u, flux, _ = _model(lambda u: largest([u, 0 * u]))
-    numerics = _numerics(u, flux, rusanov())
-    u0 = model.data("u0", surface.Scalar(domain))
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
-                              initial={u: u0})
+    _, _, u, flux, _ = _model(lambda u: largest([u, 0 * u]))
     with pytest.raises(surface.NotYetElaborated, match="N11"):
-        surface.Case(model=model, numerics=numerics, program=program,
-                     layout={domain: surface.Uniform(cells=8)})
+        _numerics(u, flux, rusanov())
 
 
 def test_a_speed_that_is_not_derived_is_ambiguous():
@@ -239,17 +233,17 @@ def _face_reading(read):
 
 
 @pytest.mark.parametrize("read, owner", [
-    (lambda face, term: face.distance, r"spacing \(C31\)"),
+    (lambda face, term: face.distance, r"transport flux and reads the spacing \(C31\)"),
     (lambda face, term: face.measure, "geometry reads"),
-    (lambda face, term: face.normal_gradient(term.quantity), r"spacing \(C31\)"),
+    (lambda face, term: face.normal_gradient(term.quantity),
+     r"transport flux and reads the spacing \(C31\)"),
     (lambda face, term: face.left_cell.shift(1), "stencil faces of N7a"),
     (lambda face, term: face.left_cell.width, "geometry reads"),
-    (lambda face, term: term.law(gradients={}), r"spacing \(C31\)"),
     (lambda face, term: FaceValue(0), "keys that this builder covers"),
     (lambda face, term: CellValue(0), "keys that this builder covers"),
     (lambda face, term: sum_faces(face, abs), "reductions"),
 ], ids=["distance", "measure", "normal_gradient", "left_cell.shift", "left_cell.width",
-        "law-gradients", "FaceValue", "CellValue", "sum_faces"])
+        "FaceValue", "CellValue", "sum_faces"])
 def test_a_construct_of_a_later_lot_names_its_owner(read, owner):
     _, _, u, flux, _ = _model()
     with pytest.raises(surface.NotYetElaborated, match=owner):
@@ -261,11 +255,32 @@ def test_per_side_contributions_name_their_lot():
         FaceFlux(0, left=1)
 
 
-def test_a_face_scheme_under_a_diffusive_flux_names_its_lot():
+def test_a_transport_face_under_a_diffusive_flux_is_of_another_kind():
+    """N3 lot 1: a diffusive key is realized (two_point() and a scheme of one's own that reads
+    term.law(gradients=...)); a face that reads the law of a transport flux under it is refused as
+    a scheme of another kind, at the line of its body."""
     _, _, u, flux, diffusion = _model(diffusive=True)
-    with pytest.raises(surface.NotYetElaborated, match="spacing"):
+    with pytest.raises(surface.RealizationMismatch) as caught:
         surface.Numerics(represent={u: surface.CellAverage()},
                          schemes={flux: rusanov(), diffusion: central()})
+    assert "the law of a transport flux" in str(caught.value)
+    assert "Write a scheme of the kind of the key" in str(caught.value)
+
+
+def test_a_diffusive_face_under_a_transport_flux_is_of_another_kind():
+    @surface.scheme
+    def gradient_law(face, term):
+        q = term.quantity
+        law = term.law(gradients={q: face.normal_gradient(q) * face.normal})  # <- law-gradients
+        return FaceFlux(dot(law, face.normal))
+
+    _, _, u, flux, _ = _model()
+    with pytest.raises(surface.RealizationMismatch) as caught:
+        _numerics(u, flux, gradient_law())
+    assert _at(caught.value, "law-gradients")
+    assert "the law of a diffusive flux" in str(caught.value)
+    with pytest.raises(surface.RealizationMismatch, match="the law of a diffusive flux"):
+        _numerics(u, flux, two_point())
 
 
 def test_a_cell_read_of_geometry_names_its_lot():
@@ -283,21 +298,29 @@ def test_a_cell_read_of_geometry_names_its_lot():
         _numerics(u, flux, face_with(reconstruction=wide()))
 
 
-def test_a_speed_per_factor_names_the_product_supports():
-    with pytest.raises(surface.NotYetElaborated, match="product supports of G09"):
-        upwind(speed={})
+def test_a_speed_table_is_keyed_by_factors():
+    """upwind(speed={factor: f}) (SD73): a key that is not a factor of a product support is a
+    Python error when pops.Numerics runs the scheme (SU5); an empty table states no speed."""
+    _, _, u, flux, _ = _model(lambda u: 2 * u)
+    with pytest.raises(TypeError, match="keys its table by the factors of a product support"):
+        _numerics(u, flux, upwind(speed={u: lambda face: 1.0}))
+    _numerics(u, flux, upwind(speed={}))
 
 
 def test_a_stated_speed_is_a_plain_function_of_face():
-    with pytest.raises(surface.NotAPopsOperation, match="plain function of face"):
-        upwind(speed=central())
+    """The options of a word of the library are checked when pops.Numerics runs its body (SU5),
+    as the options of a scheme of one's own."""
+    _, _, u, flux, _ = _model()
+    with pytest.raises(surface.NotAPopsOperation, match="plain function, passed uncalled"):
+        _numerics(u, flux, upwind(speed=central()))
     with pytest.raises(TypeError, match="takes a function of face"):
-        upwind(speed=1.0)
+        _numerics(u, flux, upwind(speed=1.0))
 
 
 def test_a_library_reconstruction_is_a_cell_scheme():
+    _, _, u, flux, _ = _model()
     with pytest.raises(TypeError, match="takes a scheme that returns Reconstruct"):
-        rusanov(reconstruction=two_point())
+        _numerics(u, flux, rusanov(reconstruction=two_point()))
 
 
 # --- SU7, SU13: the entities exist only as parameters --------------------------------------------
@@ -373,15 +396,10 @@ def test_a_stated_speed_that_reads_a_cell_under_a_reconstruction_names_its_lot()
     def centre(cell, term, axis):
         return Reconstruct(cell.value(term.quantity))
 
-    domain, model, u, flux, _ = _model()
-    u0 = model.data("u0", surface.Scalar(domain))
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
-                              initial={u: u0})
+    _, _, u, flux, _ = _model()
 
     def speed(face):
         return face.left_cell.value(u)
 
-    numerics = _numerics(u, flux, upwind(speed=speed, reconstruction=centre()))
     with pytest.raises(surface.NotYetElaborated, match="stencil faces of N7a"):
-        surface.Case(model=model, numerics=numerics, program=program,
-                     layout={domain: surface.Uniform(cells=8)})
+        _numerics(u, flux, upwind(speed=speed, reconstruction=centre()))

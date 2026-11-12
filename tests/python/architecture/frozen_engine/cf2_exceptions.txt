@@ -10265,9 +10265,8 @@ python/pops/time/_program/spatial_solve.py:185 newton N9 | spatial_newton_option
 python/pops/time/_program/spatial_solve.py:186 newton N9 | "prepared-spatial-newton"
 python/pops/time/_program/spatial_solve.py:256 newton N9 | PreparedSpatialNewton
 python/pops/time/_program/spatial_solve.py:317 newton N9 | "newton_controls"
-python/pops/time/_program/stencil_flux.py:14 divergence G10 | stencil_flux_divergence
-python/pops/time/_program/stencil_flux.py:41 divergence G10 | "stencil_flux_divergence"
-python/pops/time/_program/stencil_flux.py:49 divergence G10 | "stencil_flux_divergence"
+python/pops/time/_program/stencil_flux.py:13 divergence G10 | "stencil_flux_divergence"
+python/pops/time/_program/stencil_flux.py:18 divergence G10 | stencil_flux_divergence
 python/pops/time/_program/temporal_manifest.py:176 dense-output G12 | "dense_output"
 python/pops/time/_step/strategy.py:261 cfl N8 | AdaptiveCFL
 python/pops/time/_step/strategy.py:264 cfl N8 | cfl

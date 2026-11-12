@@ -32,7 +32,7 @@ from pops.frames import Cartesian1D, Cartesian2D, Cartesian3D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform as _Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.numerics import DiscretizationPlan
+from pops.numerics import DiscretizationPlan, StateStorage
 from pops.params import ConstParam, RuntimeParam
 from pops.params import Positive as _Positive
 from pops.physics import Model as _Model
@@ -54,6 +54,7 @@ from ._refusal import (
     AmbiguousElaboration, CoverageNotExact, MissingBoundaryRealization, NotYetElaborated,
     SurfaceRefusal, UnknownSolvePath,
 )
+from ._scheme import StencilRealization
 
 _LATER = "a later lot of N15"
 # The words of pops.math that b6's analytic expressions have (pops.analytic), for initial values.
@@ -263,6 +264,31 @@ class _RateSum:
         return result
 
 
+class _StencilTerm:
+    """A diffusive term realized by a ``StencilFlux`` (N3 lot 1, D7): in each evaluation of a rate
+    that covers it, ``-div_h`` of its face flux, the evaluation k named ``<name>_<k>``.
+
+    ``stencil_flux_divergence`` gives -div_h(F) of the physical flux F, which is the contribution
+    of ``-div(F)`` to the balance; a term written ``+div(F)`` is its opposite."""
+
+    __slots__ = ("flux", "name", "weight")
+
+    def __init__(self, flux: Any, name: str, weight: int) -> None:
+        self.flux = flux
+        self.name = name
+        self.weight = weight
+
+    def __call__(self, state: Any) -> Any:
+        from pops.time._program.stencil_flux import OPERATION
+
+        program = state.prog
+        evaluation = sum(1 for value in program._values
+                         if value.op == OPERATION and value.name.startswith(self.name + "_"))
+        rate = getattr(program, OPERATION)("%s_%d" % (self.name, evaluation), state,
+                                           flux=self.flux)
+        return rate if self.weight == -1 else -rate
+
+
 class _Elaboration:
     def __init__(self, case: Any) -> None:
         self.case = case
@@ -359,7 +385,7 @@ class _Elaboration:
         """The words that only the body of a scheme lowers in this lot: the reads of its entities,
         ``where`` and its comparisons, ``largest`` and ``smallest`` (b6 ``where``, ``maximum`` and
         ``minimum``, whose derivative stays the one of b6). ``None`` for every other value."""
-        from ._scheme import SchemeLeaf, is_radius_pair
+        from ._scheme import SchemeLeaf, is_radius_pair, speed_pair_index
 
         if isinstance(value, SchemeLeaf):
             if value.key in inputs:
@@ -367,6 +393,9 @@ class _Elaboration:
             return self.lower(value.expansion, inputs)
         if ("speed",) in inputs and is_radius_pair(value):
             return inputs[("speed",)]
+        pair = speed_pair_index(value) if ("speeds", 0) in inputs else None
+        if pair is not None:
+            return inputs[("speeds", pair)]
         if isinstance(value, Predicate):
             if value.op not in ("<", "<=", ">", ">="):
                 raise NotYetElaborated("%s in the body of a scheme" % text(value), _LATER)
@@ -482,6 +511,18 @@ class _Elaboration:
         choices.append(Choice("waves", "none: dF/%s is not derived in this lot" % term.quantity
                               if slopes is None else "dF/d%s = %s"
                               % (term.quantity, _per_axis_text(slopes, text)), "derived"))
+        signed = ""
+        scheme = self.numerics.scheme_of(term)
+        if slopes is not None and getattr(scheme, "reads_speeds", lambda key: False)(term):
+            # R9: the slowest and the fastest speeds of a scalar flux are both dF/du, the pair
+            # that the face input speeds of riemann.User reads (N3 lot 1, hll()).
+            b6.wave_speeds(handle, frame=frame, values={
+                axis: (self.lower(slope), self.lower(slope))
+                for axis, slope in zip(axes, slopes, strict=True)})
+            signed = ", and model.wave_speeds(%s, frame=frame, values=the pair (dF/du, dF/du))" \
+                % name
+            choices.append(Choice("signed waves", "(dF/d%s, dF/d%s), read by %r"
+                                  % (term.quantity, term.quantity, scheme), "derived"))
         names = FRAME_AXES[:len(axes)]
         self.rows.append(Row(
             "model.flux(of=%s, value=%s)" % (term.quantity, text(term.value)), "model",
@@ -491,7 +532,7 @@ class _Elaboration:
                          for axis, component in zip(names, term.components, strict=True)),
                "None" if slopes is None else "{%s}" % ", ".join(
                    "%s: (%s,)" % (axis, self.code(slope))
-                   for axis, slope in zip(names, slopes, strict=True))), choices))
+                   for axis, slope in zip(names, slopes, strict=True))) + signed, choices))
         return handle
 
     def diffusive(self, b6: Any, term: DiffusiveFlux, name: str, origin: str, state: Any) -> Any:
@@ -511,6 +552,8 @@ class _Elaboration:
         return handle
 
     def rate(self, b6: Any, balance: Balance, terms: dict, states: dict) -> Any:
+        """The b6 rate of the transport terms of a balance; a diffusive term is a stencil of the
+        program (``_StencilTerm``), so it is not a term of the b6 rate (N3 lot 1)."""
         rhs = None
         parts = []
         for term, coefficient in balance.occurrences:
@@ -518,27 +561,36 @@ class _Elaboration:
                 raise NotYetElaborated(
                     "the weight %s of div(%s) in the balance of %s, a weight other than 1 or -1"
                     % (coefficient, term, balance.quantity), _WEIGHTED, site=balance.site)
+        stencils = []
         for term, coefficient in balance.occurrences:
-            # c div(F) of the physical flux F, c = 1 or -1; F^d = -F for a diffusive flux (R7)
-            weight = -coefficient if isinstance(term, DiffusiveFlux) else coefficient
+            if isinstance(term, DiffusiveFlux):
+                stencils.append("%sthe StencilFlux of %s"
+                                % ("" if coefficient == -1 else "-", self.names[term]))
+                continue
             piece = _pm.div(terms[term])
             spelled = "div(%s)" % self.names[term]
             if rhs is None:
-                rhs = piece if weight == 1 else -piece
-                parts.append(spelled if weight == 1 else "-" + spelled)
-            elif weight == 1:
+                rhs = piece if coefficient == 1 else -piece
+                parts.append(spelled if coefficient == 1 else "-" + spelled)
+            elif coefficient == 1:
                 rhs = rhs + piece
                 parts.append("+ " + spelled)
             else:
                 rhs = rhs - piece
                 parts.append("- " + spelled)
         name = balance.name if balance.name is not None else balance.quantity.name
+        program = (", and in the program %s" % " + ".join(stencils)) if stencils else ""
+        origin = Choice("name", name, "stated" if balance.name is not None else "derived")
+        if rhs is None:
+            self.rows.append(Row("model.balance(%s)" % balance, "model",
+                                 "no rate of b6: in the program %s" % " + ".join(stencils),
+                                 [origin]))
+            return None
         handle = b6.rate(name, equation=_pm.ddt(states[balance.quantity]) == rhs)
         self.rows.append(Row(
             "model.balance(%s)" % balance, "model",
-            "model.rate(%r, equation=pm.ddt(%s) == %s)"
-            % (name, balance.quantity.name, " ".join(parts)),
-            [Choice("name", name, "stated" if balance.name is not None else "derived")]))
+            "model.rate(%r, equation=pm.ddt(%s) == %s)%s"
+            % (name, balance.quantity.name, " ".join(parts), program), [origin]))
         return handle
 
     # The numerics.
@@ -547,16 +599,29 @@ class _Elaboration:
         plan = DiscretizationPlan()
         selections: dict = {}
         for balance in self.model.balances:
+            weights = {id(term): coefficient for term, coefficient in balance.occurrences}
+            if rates[balance] is None:
+                # Only stencils: the state has no rate of b6 to carry its storage, so it is stated,
+                # with the one ghost layer of the two-point StencilFlux (D7).
+                plan.states.add(states[balance.quantity], StateStorage(ghost_depth=1))
             for term in balance.terms:
-                view = rates[balance].select(terms[term])
-                selections[term] = view
                 scheme = self.numerics.scheme_of(term)
                 slope = _per_axis(term.slopes()) if isinstance(term, Flux) else None
                 speed = _per_axis(term.unit_fluxes()) if isinstance(term, Flux) else None
                 realization = scheme.realize(TermView(term, terms[term], states[term.quantity],
                                                       slope=slope, unit_flux=speed,
                                                       lower=self.lower))
-                plan.rates.add(view, realization)
+                if isinstance(term, DiffusiveFlux):
+                    if not isinstance(realization, StencilRealization):
+                        raise TypeError("the scheme %r of the diffusive flux %s gives %r; a "
+                                        "diffusive key is realized by a face scheme"
+                                        % (scheme, term, realization))
+                    selections[term] = _StencilTerm(realization.flux, self.names[term],
+                                                    weights[id(term)])
+                else:
+                    view = rates[balance].select(terms[term])
+                    selections[term] = view
+                    plan.rates.add(view, realization)
                 self.linear[term] = self._linear(scheme, TermView(
                     term, terms[term], states[term.quantity], slope=slope, unit_flux=speed,
                     lower=self.lower), balance)
@@ -568,6 +633,8 @@ class _Elaboration:
                     choices.append(Choice("speed", "s = F(1)·n = %s" % text(speed), "derived"))
                 self.rows.append(Row(
                     "schemes={%s: %r}" % (term, scheme), "numerics",
+                    ("%s, %s" % (self.names[term], scheme.describe()))
+                    if isinstance(term, DiffusiveFlux) else
                     "plan.rates.add(%s.select(%s), %s)"
                     % (balance.name or balance.quantity.name, self.names[term],
                        scheme.describe()), choices))
@@ -580,20 +647,21 @@ class _Elaboration:
         return plan, selections
 
     def _linear(self, scheme: Any, view: TermView, balance: Balance) -> Any:
-        """The linear map of the rate of a term, asked of its scheme when a solve reads it."""
+        """The linear map of the rate of a term, asked when a solve reads it, never before, of the
+        solver that ``solvers=`` states (N3 lot 1, D7): the matrix-free apply is the solver's,
+        beside ``cg()`` in ``pops.lib.solve``, and it recognizes the scheme by the normal form of
+        its face, so that a copy of ``two_point()`` written in a case is applied as the word."""
         weight = next(-coefficient if isinstance(term, DiffusiveFlux) else coefficient
                       for term, coefficient in balance.occurrences if term is view.term)
 
         def linear() -> Any:
-            operator = getattr(scheme, "linear_operator", None)
+            operator = next((solver.linear_operator for _, solver in self.program.solvers
+                             if hasattr(solver, "linear_operator")), None)
             if operator is None:
-                raise NotYetElaborated(
-                    "the term %s under %r read at the unknown of a solve: its scheme states no "
-                    "linear map; this lot solves a two_point() diffusion of a constant "
-                    "coefficient" % (view.term, scheme),
-                    "G10, the operator generated from the term, with the Newton solves of N9",
-                    site=view.site)
-            return operator(view, weight=weight, layout=self.layout_facts)
+                # no solver states one: the apply of the library, whose solve N8 then refuses
+                # without a solver (auto() of SV11)
+                from pops.lib.solve import linear_operator as operator
+            return operator(view, scheme=scheme, weight=weight, layout=self.layout_facts)
         return linear
 
     # The program.
@@ -932,6 +1000,15 @@ class _Elaboration:
         D9): each piece that a flux crosses takes one relation of the quantity, and the relations
         take the boundary policy of the numerics (``MissingBoundaryRealization`` otherwise)."""
         pieces = support.piece_names()
+        diffusive = [term for term in self.model.terms if isinstance(term, DiffusiveFlux)]
+        if pieces and diffusive:
+            raise MissingBoundaryRealization(
+                "the diffusive flux %s crosses the boundary pieces %s of %r, which no boundary "
+                "relation closes; its face is realized by b6's StencilFlux, which is periodic"
+                % (diffusive[0], ", ".join(pieces), support),
+                write="pops.Periodic(lower, upper) for an axis whose ends are identified; the "
+                      "boundary policies of a diffusive face are elaborated by G04",
+                site=support.site)
         relations = list(self.model.boundary_relations)
         if not pieces:
             return relations
