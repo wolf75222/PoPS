@@ -15,7 +15,7 @@ import pytest
 
 import pops.surface as surface
 from pops.lib import quadrature
-from pops.lib.numerics.schemes import two_point, upwind
+from pops.lib.numerics import two_point, upwind
 from pops.lib.quadrature import GaussHermite, GaussLegendre
 from pops.lib.time.methods import ssprk2
 from pops.surface.math import ddt, div, grad, infinity, pi

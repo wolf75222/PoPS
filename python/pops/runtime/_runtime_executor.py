@@ -320,6 +320,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
         _require_native_geometry(plan)
         from pops.runtime._runtime_mesh_lowering import (
             install_embedded_boundary,
+            install_static_geometry,
             system_config_from_layout,
         )
         from pops.runtime._system import System
@@ -337,6 +338,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
         )
         cast(Any, engine)._execution_context = plan.execution_context
         install_embedded_boundary(engine, normalized_layout)
+        install_static_geometry(engine, normalized_layout)
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
         install_runtime_authorities(engine, plan)

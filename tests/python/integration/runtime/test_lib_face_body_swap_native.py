@@ -2,11 +2,11 @@
 
 Spec 0.3 CF4: a face loop passes its parity test with two generated bodies from scientifically
 distinct cases, the L1 upwind flux and the L5 Scharfetter-Gummel flux, and a native that embeds a
-formula fails the second body. The loop under test is the one every ``pops.lib.numerics`` flux
+formula fails the second body. The loop under test is the one every b6 flux of ``examples/api_v02/b6_numerics.py``
 compiles to: the generated ``riemann.User`` face policy (``pops.generated.riemann.face/v2``) inside
 the native finite-volume transport. Its two bodies:
 
-* L1: ``upwind(F, U, speed=f)`` of ``pops.lib.numerics``, f the velocity dotted with the face
+* L1: ``upwind(F, U, speed=f)`` of the b6 oracles, f the velocity dotted with the face
   normal; the velocity is positive along x and negative along y, so each face takes both
   branches of the row of 2.6.9 (s uL where s > 0, else s uR).
 * L5: the Scharfetter-Gummel face of L5 (section 5.10, D8), written in the case as a
@@ -23,6 +23,8 @@ the second body, far above rounding, so the loop ran each body and not one fixed
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pops
 import pytest
@@ -30,7 +32,7 @@ import pytest
 from examples.api_v02.common import CaseSpec
 from examples.api_v02.models_M01_M14 import _domain, _initial, _periodic_metrics, _ssprk2
 from pops import math as pm
-from pops.lib.numerics import upwind
+from examples.api_v02.b6_numerics import upwind
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.riemann.user import authenticated_user_face
 from pops.numerics.spatial import FiniteVolume
@@ -422,3 +424,131 @@ def test_a_face_faster_than_the_cell_radius_takes_the_step_of_its_recorded_speed
                             bool(np.array_equal(adaptive[2], fixed[2])))
             assert np.array_equal(adaptive[2], fixed[2]), (
                 float(np.max(np.abs(np.asarray(adaptive[2]) - np.asarray(fixed[2])))))
+
+
+# ROM-108 under AMR (review O1): tutorial 06, two levels subcycled 1:2, regrid every 2 steps,
+# AdaptiveCFL(0.45, max_dt=0.01), with the same upwind(speed=k a.n) face. The AMR target emits the
+# same rethrow as the uniform one; its retry runs per macro step.
+AMR_T_END = 0.03
+
+
+def _tutorial_06(factor):
+    from fractions import Fraction
+
+    from pops.amr import (
+        AMRClockRelation, AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer, Buffer,
+        Coarsen, ConflictPolicy, EqualityPolicy, Hysteresis, Tag,
+    )
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Inflow, Outflow
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.initial import InitialCondition
+    from pops.layouts import AMR
+    from pops.lib.amr import StateTransfer
+    from pops.lib.initial import Gaussian
+    from pops.mesh import CartesianGrid
+    from pops.params import RuntimeParam
+    from pops.projection import ConservativeCellAverage
+    from pops.representations import Conservative
+    from pops.spaces import CellState
+    from pops.time import AdaptiveCFL, every
+
+    ax, ay = TUTORIAL_VELOCITY
+    far_field = 0.05
+    frame = Rectangle("unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).tag("fluid").frame(
+        Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = pops.Model("scalar_advection_amr", frame=frame)
+    U = model.state("U", components=("u",), representation=Conservative(),
+                    space=CellState(frame=frame))
+    (u,) = U
+    flux = model.flux("advection_flux", frame=frame, state=U,
+                      components={x_axis: (ax*u,), y_axis: (ay*u,)},
+                      waves={x_axis: (ax,), y_axis: (ay,)})
+    rate = model.rate("advection_rate", equation=pm.ddt(U) == -pm.div(flux))
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, upwind(
+        flux, U, speed=lambda face: factor*(ax*face.normal[0] + ay*face.normal[1]),
+        reconstruction=reconstruction.MUSCL(reconstruction.limiters.VanLeer())))
+    case = pops.Case("tutorial_scalar_advection_amr")
+    tracer = case.block("tracer", model=model)
+    tracer_U = tracer[U]
+    boundaries = frame.boundaries
+    numerics.boundaries.add(TransportBoundarySet({
+        boundaries.x_min: Inflow(state=tracer_U, value=far_field),
+        boundaries.x_max: Outflow(state=tracer_U),
+        boundaries.y_min: Inflow(state=tracer_U, value=far_field),
+        boundaries.y_max: Outflow(state=tracer_U),
+    }))
+    case.numerics(numerics, block=tracer)
+    program = pops.Program("SSPRK2")
+    q = program.state(tracer_U)
+    stage_0 = program.stage("ssprk2_stage_0", c=0)
+    k0 = program.value("ssprk2_k_0", rate(q.n), at=stage_0)
+    stage_1 = program.stage("ssprk2_stage_1", c=1)
+    q_stage = program.value("ssprk2_U1", q.n + program.dt*k0, at=stage_1)
+    k1 = program.value("ssprk2_k_1", rate(q_stage), at=stage_1)
+    half = Fraction(1, 2)
+    program.commit(q.next, program.value(
+        "ssprk2_step", q.n + program.dt*half*k0 + program.dt*half*k1, at=q.next.point))
+    program.step_strategy(AdaptiveCFL(cfl=TUTORIAL_CFL, max_dt=1.0e-2))
+    case.program(program)
+    case.initials.add(InitialCondition(
+        state=tracer_U,
+        value=Gaussian(frame=frame, center={x_axis: 0.30, y_axis: 0.35}, background=far_field,
+                       amplitude=0.95, inverse_width=120.0),
+        projection=ConservativeCellAverage()))
+    refine = case.param(RuntimeParam("refine_u", default=0.30))
+    coarsen = case.param(RuntimeParam("coarsen_u", default=0.20))
+    transfer = AMRTransfer()
+    transfer.state(tracer_U, StateTransfer())
+    layout = AMR(
+        grid=CartesianGrid(frame=frame, cells=(32, 32)),
+        hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+        tagging=AMRTagging(
+            rules=(Tag(lambda cell: cell.value(tracer_U) > case.value(refine)),
+                   Coarsen(lambda cell: cell.value(tracer_U) < case.value(coarsen)),
+                   Buffer(cells=2)),
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+            conflict_policy=ConflictPolicy.REFINE_WINS),
+        regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
+        transfer=transfer,
+        execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
+    )
+    # The initial condition is the case's own (projected on each level), so nothing is bound.
+    return SimpleNamespace(case=case, layout=layout, initial_values={}, t_end=AMR_T_END)
+
+
+def _run_tutorial_06(world, factor):
+    spec = collective_call(world, lambda: _tutorial_06(factor))
+    runtime = _bind(world, spec, "N3 tutorial 06 upwind(speed=%ga.n)" % factor)
+    report = collective_call(world, lambda: pops.run(runtime, t_end=spec.t_end, max_steps=10_000,
+                                                     console=False))
+    clock = collective_call(world, lambda: float(runtime.time()))
+    return report.accepted_steps, clock, report.rejected_steps
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_an_amr_face_faster_than_the_cell_radius_is_retried_once_per_macro_step(
+        isolated_native_cache, native_cxx, kokkos_root, record_property):
+    """ROM-108 under AMR: a face at the radius loses no attempt; a face three times faster reaches
+    the end of the run, each macro step but the landing one accepted at its second attempt.
+
+    Before ROM-108 the faster face was refused at its first step (reason 503) and the run stopped.
+    """
+    del isolated_native_cache, native_cxx, kokkos_root
+    _native, world = native_profile(dimension=2, scope="N3 tutorial 06 faces")
+    radius = _run_tutorial_06(world, 1.0)
+    faster = _run_tutorial_06(world, 3.0)
+    with collective_check(world):
+        record_property("tutorial 06 (accepted, clock, rejected) at k=1", radius)
+        record_property("tutorial 06 (accepted, clock, rejected) at k=3", faster)
+        assert radius[1] == pytest.approx(AMR_T_END) and radius[2] == 0, radius
+        assert faster[1] == pytest.approx(AMR_T_END), faster
+        # The faster face takes shorter macro steps; each one whose radius proposal is too long
+        # loses one attempt, and only one. The landing step is clipped by the end of the run.
+        assert faster[0] > radius[0], (faster, radius)
+        assert faster[2] == faster[0] - 1, faster

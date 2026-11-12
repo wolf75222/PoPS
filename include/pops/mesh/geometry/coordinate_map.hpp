@@ -20,6 +20,8 @@ namespace pops {
 enum class CoordinateMapKind : std::uint8_t {
   Cartesian = 0,
   PlanarPolar = 1,
+  /// Arrays generated once from a clock-free coordinate map (N17, C1): no analytic map type.
+  GeneratedArrays = 2,
 };
 
 enum class MetricFaceSide : std::int8_t {

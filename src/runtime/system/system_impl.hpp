@@ -172,6 +172,9 @@ struct System<Dim>::Impl {
   std::vector<double> embedded_boundary_literals_;
   EbThresholds embedded_boundary_thresholds_{};
   std::uint64_t embedded_boundary_generation_ = 0;
+  // The static geometry arrays of a mapped layout (N17, C1): installed once, before any block,
+  // immutable afterwards, and captured by every block and Program operator that reads them.
+  std::shared_ptr<const StaticGeometry<Dim>> static_geometry_;
 
   double t = 0.0;
   int macro_step_ = 0;

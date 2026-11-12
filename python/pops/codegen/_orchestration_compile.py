@@ -75,6 +75,8 @@ def _resolved_native_amr_field_roles(plan: Any) -> dict[str, tuple[dict[str, Any
 
 def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
     from pops.codegen._resolved_operation_ownership import require_block_plan_owner
+    from pops.codegen._static_geometry_consumers import static_geometry_layouts
+    from pops.mesh._static_geometry import STATIC_GEOMETRY_CONTRACT
     from pops.runtime._bricks_scheme import native_catalogue_route
 
     # Authenticate every Case block before the first native compilation can run.
@@ -86,6 +88,9 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
         key: value for key, value in options.items() if key in ("include", "cxx", "std", "model_source_policy")
     }
     roles = _resolved_native_amr_field_roles(plan)
+    # A mapped layout served by static geometry arrays (N17, C1) is the one layout of its plan.
+    native_geometry = (STATIC_GEOMETRY_CONTRACT if static_geometry_layouts(plan.layout_plan)
+                       else None)
     compiled: dict[str, Any] = {}
     for block in plan.blocks:
         if not block.instance_owner_qid:
@@ -108,6 +113,7 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
             # InstallPlan installs exactly this resolved spatial descriptor, so the block's
             # package needs no other catalogue route.
             native_route=native_catalogue_route(block.spatial),
+            native_geometry=native_geometry,
         )
     return compiled
 
@@ -144,12 +150,14 @@ def compile_install_model(
     resolved_operations: Any = None,
     numerics: Any = None,
     native_route: Any = None,
+    native_geometry: Any = None,
 ) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
     from pops.codegen._compiled_model_identity import authenticate_compiled_model
     from pops.codegen._resolved_operation_ownership import require_block_plan_owner
-    from pops.codegen._compile_emit import normalize_native_route, selects_catalogue_routes
+    from pops.codegen._compile_emit import (normalize_native_geometry, normalize_native_route,
+                                            selects_catalogue_routes)
 
     require_block_plan_owner(
         resolved_operations, consumer_owner_qid, where="compiled block %r" % name)
@@ -163,6 +171,7 @@ def compile_install_model(
     expected_roles = _normalize_native_amr_field_roles(native_field_roles)
     has_field_role_contract = native_field_roles is not None
     native_route = normalize_native_route(native_route)
+    native_geometry = normalize_native_geometry(native_geometry)
     state_spaces = tuple(state_spaces)
     if len(state_spaces) != 1 or not isinstance(state_spaces[0], str) or not state_spaces[0]:
         raise TypeError("compiled block %r requires exactly one named state space" % name)
@@ -185,6 +194,10 @@ def compile_install_model(
         if compiled_route is not None and tuple(compiled_route) != native_route:
             raise ValueError(
                 "precompiled native block was compiled for another numerical route; recompile"
+            )
+        if getattr(model, "_native_geometry", None) != native_geometry:
+            raise ValueError(
+                "precompiled native block was compiled for another geometry; recompile"
             )
         from pops.codegen._plans import attest_precompiled_consumer_owner
 
@@ -215,6 +228,10 @@ def compile_install_model(
     if native_route is not None and not selects_catalogue_routes(model):
         # A Program state-storage or source-authored package has no catalogue route to specialize.
         native_route = None
+    if native_geometry is not None and native_route is None \
+            and not getattr(getattr(model, "_m", model), "_program_only_storage_axes", ()):
+        # Resolution refuses source-authored numerics on a mapped layout; this is its fence.
+        raise ValueError("block %r on static geometry arrays has no resolved native route" % name)
     compile_model = getattr(model, "compile", None)
     if not callable(compile_model):
         raise TypeError("resolved block %r has no total compile lowering" % name)
@@ -225,12 +242,15 @@ def compile_install_model(
         consumer_owner_qid=consumer_owner_qid,
         declare_auxiliary_providers=declare_auxiliary_providers,
         **({"_native_route": native_route} if native_route is not None else {}),
+        **({"_native_geometry": native_geometry} if native_geometry is not None else {}),
         **compile_options,
     )
     if type(compiled) is not CompiledModel:
         raise TypeError("resolved block compiler must return exact CompiledModel")
     if tuple(getattr(compiled, "_native_route", None) or ()) != (native_route or ()):
         raise ValueError("compiled native block did not attest its resolved numerical route")
+    if getattr(compiled, "_native_geometry", None) != native_geometry:
+        raise ValueError("compiled native block did not attest its geometry")
     if has_field_role_contract:
         observed_roles = getattr(compiled, "_native_field_roles", None)
         if (

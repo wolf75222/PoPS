@@ -8,9 +8,9 @@ cfl . h_min / max speed (``include/pops/runtime/system.hpp:872-874@bb9``). The r
 frontiers. ``cfl_limit([advection, drift], cfl=)`` keeps the smallest of their limits, which b6's
 selection gives when the list names every flux of the model.
 
-It is a bridge, as the scheme words of ``pops.lib.numerics.schemes``: it subclasses the surface's
-``StepRuleValue`` and names b6's ``AdaptiveCFL``, until N8 writes the step rules of 5.11 with the
-surface (a function of ``cell``). The value is a ``pops.StepRuleValue``; ``realize`` builds the
+It is a bridge of MG9 (``tests/gates/mg9_bridges.toml``), as ``cg()`` of ``pops.lib.solve``: it
+subclasses the surface's ``StepRuleValue`` and names b6's ``AdaptiveCFL``, until N8 elaborates
+``dt=`` as a function of ``cell`` and the step rules of 5.11 are written with the surface. The value is a ``pops.StepRuleValue``; ``realize`` builds the
 step rule of N8, ``StepRule(cfl, max_dt, strategy=AdaptiveCFL(cfl, max_dt))``: the compiled run of
 ``System::run_advance`` executes the rule, and ``pops.run`` on the same artifact runs master's
 ``AdaptiveCFL``. The pairing is this word's; the core never reads its options (CF2).
@@ -34,7 +34,7 @@ def _positive(value: Any, name: str) -> float:
     return value
 
 
-class CflLimit(StepRuleValue):
+class _CflLimit(StepRuleValue):
     """The value of ``cfl_limit(flux, cfl=, max_dt=None)``."""
 
     word = "cfl_limit"
@@ -61,7 +61,7 @@ def cfl_limit(flux: Any = None, *, cfl: Any = None, max_dt: Any = None, **earlie
         raise TypeError("cfl_limit(flux, cfl=...) takes the flux whose speeds bound the step")
     if cfl is None:
         raise TypeError("cfl_limit(flux, cfl=...) needs cfl=, the Courant number")
-    return CflLimit(flux, _positive(cfl, "cfl"),
+    return _CflLimit(flux, _positive(cfl, "cfl"),
                     None if max_dt is None else _positive(max_dt, "max_dt"))
 
 

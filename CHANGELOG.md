@@ -40,7 +40,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   outflow runs bit for bit as the same case written by hand, and as master's `AdaptiveCFL`.
   A compiled run with the rule refuses every global step bound (`add_dt_bound`), even one added
   before `bind`, which the `step_cfl` route admits: a case with such a bound cannot yet take
-  `cfl_limit` in a compiled run (review R2 of #782).
+  `cfl_limit` in a compiled run (review R2 of #782). `cfl_limit` is a bridge of MG9
+  (`tests/gates/mg9_bridges.toml`, owner N8): `scripts/mg9_bridges.py` finds a subclass of
+  `StepRuleValue` as it finds a `SchemeValue`, and the entry leaves before the exit of phase 1,
+  when N8 elaborates `dt=` as a function of `cell`.
 - ROM-98 (N15, lot « solves »): `pops.unknown`, `pops.solve`, `pops.Tolerance`,
   `Advance(tolerance=)` and `Program(solvers=)` of spec 0.3, 2.6.7, `cg()` in `pops.lib.solve`
   (a bridge of MG9 on b6's native conjugate gradients) and `imex_euler` in
@@ -54,6 +57,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
   until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
   case written by hand for b6 and N8 (program IR, artifact, identity, C++).
+- ROM-110 (N17, L1a): static geometry arrays of a structured configuration (C1). A layout whose
+  coordinate map reads neither the clock nor a discrete input (`MovingControlVolumes` over a
+  logical `Uniform` grid with a clock-free `GeometryEvolution`) is read at resolution as static
+  geometry arrays instead of being refused with `native_geometry_evolution_unavailable`: a map of
+  rank one as node positions with exact node differences, a chart of rank two with the rule that
+  its layout states (D0b). The System generates them once at bind, the same on every rank (cell
+  measures and centroids; face area vectors, measures, unit normals and centroids; distances and
+  widths), and refuses them collectively unless their certificates hold (positive measures,
+  det DX > 0, closed cells, identified seams). The generated faces of a block then read the
+  physical normal (F.n, bounded by sum_k |n_k| rho(A_k)) and the measures of the arrays, and the
+  prepared diffusion of a Program reads their distances and measures. The consumers it serves are
+  stated as capability rules at resolution; the others are refused there with a
+  `static_geometry_*` code. A box layout is unchanged. The two graphs of C1 are
+  `examples/api_v02/models_static_geometry.py`; core ledger entry
+  `static-geometry-arrays-of-a-structured-configuration`.
 - ROM-98 (N15, lot D-E, part E): the projection of an analytic initial value (spec 0.3, 2.6.2,
   CN12, SU9; OD31). `initial={u: pops.project(e, quadrature=Q)}` averages e over each cell by
   the rule Q (one `pops.Quadrature` or one per axis) mapped onto the cell, and
@@ -752,7 +770,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the frequency that the refused attempt's faces recorded (typed payload
   `pops.face-step-frequency@1`), and `AdaptiveCFL` retries once with its step capped at cfl over
   that frequency (spec 21.6, `Retry(max_attempts=2)`). A face that records the radius is never
-  refused, so its steps are unchanged.
+  refused, so its steps are unchanged. A nonlinear face records its speeds at the retry's own
+  stage states; when they are faster, the retry is refused too and that second refusal stops the
+  run. A refusal that `AdaptiveCFL` does not retry says why in its `retry stopped` note. AMR
+  runs take the same retry, once per macro step (native test on tutorial 06).
 - Divide and reduce exact weights without copying the remainder for each quotient bit:
   `ExactWeight` division subtracts in place and shortcuts one-limb and power-of-two divisors,
   and its gcd is binary. Limbs and budget refusals are unchanged. Every accepted AMR step

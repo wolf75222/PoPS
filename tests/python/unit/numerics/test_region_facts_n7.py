@@ -20,7 +20,7 @@ from pops._ir.index_analysis import Read, Region, Truth
 from pops._ir.index_maps import DataMap
 from pops._ir.refusals import ClassNotReached
 from pops.codegen import region_facts
-from pops.lib.numerics import realize_face_flux
+from pops.lib.numerics.face_flux import realize_face_flux
 from pops.numerics import DiscretizationPlan, StateStorage, reconstruction, riemann, variables
 from pops.numerics.nonconservative import CoordinatedFiniteVolume, PathConservativeFiniteVolume
 from pops.numerics.spatial import FiniteVolume

@@ -130,6 +130,7 @@ class _FacadeCompileMixin(_FacadeModel):
         declare_auxiliary_providers: bool = True,
         model_source_policy: str = "allow_missing",
         _native_route: Any = None,
+        _native_geometry: Any = None,
     ) -> Any:
         """Compiles the model into a CompiledModel (Phase A). Delegates the GENERATION + compilation to
         the native package compiler, then
@@ -147,6 +148,8 @@ class _FacadeCompileMixin(_FacadeModel):
         - ``target``: ``"system"`` or ``"amr_system"``;
         - ``_native_route``: the one catalogue ``(variables, limiter, Riemann)`` route the package
           instantiates, as ``pops.compile`` resolves it for a Case block; ``None`` keeps every route.
+        - ``_native_geometry``: the static geometry contract when the block's layout is mapped
+          (N17, C1), so that route reads the static arrays; ``None`` reads the logical box.
 
         NO ``device`` argument: the GPU/MPI/AMR capabilities are checked at wiring time
         (add_equation) / at execution, not frozen at compile time (DSL_MODEL_DESIGN.md point 7).
@@ -209,11 +212,13 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen._compile_emit import (
             _native_amr_field_roles_identity,
             _normalize_native_amr_field_roles,
+            normalize_native_geometry,
             normalize_native_route,
         )
 
         normalized_field_roles = _normalize_native_amr_field_roles(_native_field_roles)
         native_route = normalize_native_route(_native_route)
+        native_geometry = normalize_native_geometry(_native_geometry)
 
         m = self._m
         if target == "amr_system" and _native_field_roles is None and bool(m._elliptic_fields):
@@ -287,6 +292,9 @@ class _FacadeCompileMixin(_FacadeModel):
         if native_route is not None:
             # A package keeping every route adds no component: its identity is unchanged.
             spec_components["native_route"] = "/".join(native_route)
+        if native_geometry is not None:
+            # A package of the logical box adds no component either.
+            spec_components["native_geometry"] = native_geometry
         spec_identity = artifact_spec_identity(
             semantic_identity,
             target=target,
@@ -323,6 +331,7 @@ class _FacadeCompileMixin(_FacadeModel):
                 consumer_owner_qid=consumer_owner_qid,
                 declare_auxiliary_providers=declare_auxiliary_providers,
                 _native_route=native_route,
+                _native_geometry=native_geometry,
             )
 
         # The facade owns the params-included identity, so its cache cannot delegate the
@@ -414,6 +423,8 @@ class _FacadeCompileMixin(_FacadeModel):
             cm._native_field_roles = normalized_field_roles
         if native_route is not None:
             cm._native_route = native_route
+        if native_geometry is not None:
+            cm._native_geometry = native_geometry
         # Exact ABI order of only the RuntimeParamRef nodes actually read by emitted formulas.
         # BindSchema routes qualified values into this local vector; declarations that are never
         # read do not create native slots.

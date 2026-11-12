@@ -9,6 +9,7 @@ case written by hand for b6 (SU-T3: program IR, artifact without provenance, sem
 C++). The run is checked natively by
 ``tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py``.
 """
+import inspect
 import json
 import types
 
@@ -16,6 +17,7 @@ import pytest
 
 import pops
 import pops.analytic as an
+from examples.api_v02 import b6_numerics
 import pops.surface as surface
 from pops import math as pm
 from pops.codegen.program_codegen import emit_cpp_program
@@ -25,15 +27,14 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import Analytic
-from pops.lib.numerics.schemes import rusanov
+from pops.lib.numerics import rusanov, upwind
 from pops.lib.time import cfl_limit
 from pops.lib.time.methods import ssprk2
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
-from pops.numerics.spatial import FiniteVolume
+from pops.numerics import DiscretizationPlan
 from pops.params import ConstParam
 from pops.projection import ConservativeCellAverage
-from pops.surface.math import ddt, div, grad, vector
+from pops.surface.math import ddt, div, dot, grad, vector
 from pops.time._program.elaboration import Advance, StepRule, elaborate
 from pops.time._step.strategy import AdaptiveCFL
 from pops.time._program.traced_method import Candidate, method
@@ -65,10 +66,10 @@ def _parts():
     return types.SimpleNamespace(domain=domain, model=model, u=u, advection=advection)
 
 
-def _case(parts, dt, schemes=None):
+def _case(parts, dt, schemes=None, **advance):
     numerics = surface.Numerics(represent={parts.u: surface.CellAverage()},
                                 schemes=schemes or {parts.advection: rusanov()})
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=parts.model), dt=dt),
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=parts.model), dt=dt, **advance),
                               initial={parts.u: 0.05})
     return surface.Case(model=parts.model, numerics=numerics, program=program,
                         layout={parts.domain: surface.Uniform(cells=(16, 8))})
@@ -92,9 +93,7 @@ def _hand_case(rule):
     rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u))
     plan = DiscretizationPlan()
     selection = rate.select(flux_u)
-    plan.rates.add(selection, FiniteVolume(flux=flux_u, variables=variables.Conservative(u),
-                                           reconstruction=reconstruction.FirstOrder(),
-                                           riemann=riemann.Rusanov()))
+    plan.rates.add(selection, b6_numerics.rusanov(flux_u, u))
     case = pops.Case("advection")
     block = case.block("advection", model)
     case.numerics(plan, block=block)
@@ -210,9 +209,54 @@ def test_a_rule_that_leaves_out_a_flux_of_the_model_names_its_lot():
     second = model.flux(of=u, value=vector(0.0, 0.25) * u)
     model.balance(ddt(u) == -div(first) - div(second))
     parts = types.SimpleNamespace(domain=domain, model=model, u=u, advection=first)
-    with pytest.raises(surface.NotYetElaborated, match="leaves out the flux"):
-        _case(parts, cfl_limit(first, cfl=0.45),
-              schemes={first: rusanov(), second: rusanov()})
+    rule = cfl_limit(first, cfl=0.45); line = inspect.currentframe().f_lineno  # noqa: E702
+    with pytest.raises(surface.NotYetElaborated, match="leaves out the flux") as caught:
+        _case(parts, rule, schemes={first: rusanov(), second: rusanov()})
+    # the refusal points at the rule, not at the Case (review O1 of #788)
+    assert (caught.value.site.file, caught.value.site.line) == (__file__, line)
+
+
+def test_a_flux_that_no_balance_reads_is_refused_by_the_coverage():
+    """Review O2 of #788: a flux in no balance is the coverage's refusal (T5), not the rule's."""
+    domain = surface.Box(x=surface.Periodic(0, 1), y=surface.Periodic(0, 1))
+    model = surface.Model("advection")
+    u = model.quantity("u", surface.Scalar(domain))
+    used = model.flux(of=u, value=vector(1.0, 0.25) * u)
+    model.flux(of=u, value=vector(5.0, 0.0) * u)
+    model.balance(ddt(u) == -div(used))
+    parts = types.SimpleNamespace(domain=domain, model=model, u=u, advection=used)
+    with pytest.raises(surface.CoverageNotExact, match="is in no balance"):
+        _case(parts, cfl_limit(used, cfl=0.45))
+
+
+def test_a_flux_without_derived_waves_names_its_lot():
+    domain = surface.Box(x=surface.Periodic(0, 1), y=surface.Periodic(0, 1))
+    model = surface.Model("advection")
+    u = model.quantity("u", surface.Scalar(domain))
+    advection = model.flux(of=u, value=vector(abs(u), 0.25 * u))
+    model.balance(ddt(u) == -div(advection))
+    parts = types.SimpleNamespace(domain=domain, model=model, u=u, advection=advection)
+    rule = cfl_limit(advection, cfl=0.45); line = inspect.currentframe().f_lineno  # noqa: E702
+    # rusanov() refuses such a flux itself (its spectral radius); upwind states its speed
+    with pytest.raises(surface.NotYetElaborated, match="are not derived") as caught:
+        _case(parts, rule,
+              schemes={advection: upwind(speed=lambda face: dot(vector(1.0, 0.25), face.normal))})
+    assert "recorded face speeds of ROM-108" in str(caught.value)
+    assert (caught.value.site.file, caught.value.site.line) == (__file__, line)
+
+
+def test_a_rule_with_a_solve_tolerance_names_its_lot():
+    """D6: N8's StepRule carries no solve request, so tolerance= beside a rule is refused."""
+    parts = _parts()
+    with pytest.raises(surface.NotYetElaborated, match="the solve requests of a step rule"):
+        _case(parts, cfl_limit(parts.advection, cfl=0.45),
+              tolerance=surface.Tolerance(rtol=1e-8))
+
+
+def test_a_rule_over_a_flux_of_another_model_is_refused():
+    parts, other = _parts(), _parts()
+    with pytest.raises(ValueError, match="a flux of another model"):
+        _case(parts, cfl_limit(other.advection, cfl=0.45))
 
 
 def test_a_rule_in_a_model_with_diffusion_names_its_lot():

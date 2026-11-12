@@ -603,6 +603,11 @@ jobs:
       - name: Engine guard exception lists against the base
         run: python3 -m tests.python.architecture.frozen_engine.refresh_exceptions --check-base HEAD^1
 
+      # Spec 0.3 MG9 (Linear N3, ROM-87): the registry of the bridges of pops.lib holds every bridge
+      # and every module written with a b6 signature, and records no more than its first parent.
+      - name: MG9 bridges of pops.lib against the base
+        run: python3 scripts/mg9_bridges.py check --check-base HEAD^1
+
       - name: M2 temporal gate manifest
         run: python3 scripts/run_m2_gate.py --check-only
 
@@ -955,6 +960,17 @@ jobs:
           python3 scripts/ci_assemble_installed_wheel.py \
             --package build-kokkos-py/python --dimension "$POPS_NATIVE_DIM" \
             --output-dir "$RUNNER_TEMP/pops-ci-wheel"
+      # Shards may run on another runner image than this job during a GitHub image rollout. They
+      # read this record to check the module's baked include contract on their runner before any
+      # test, and to name both images and the differing Debian packages if it does not hold.
+      - name: Record the runner that built Dim=${{ matrix.dimension }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-kokkos-py/python
+          PYTHONNOUSERSITE: "1"
+        run: >-
+          python3 scripts/ci_native_build_runner.py record
+          --dimension "$POPS_NATIVE_DIM" --wheel-dir "$RUNNER_TEMP/pops-ci-wheel"
+          --output "$RUNNER_TEMP/pops-ci-wheel/native-build-runner.json"
       - name: Upload Python module artifact
         uses: actions/upload-artifact@v7
         with:
@@ -983,7 +999,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 145-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 147-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -996,7 +1012,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "146"
+      SHARD_TOTAL: "147"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1091,6 +1107,15 @@ jobs:
           name: gate-python-build-kokkos-py-dim1
           path: .pops-ci/python-packages/dim1
 
+      # The build job may have run on another runner image (GitHub image rollout). Rebuild here
+      # only when the module's baked include contract does not hold on this runner.
+      - name: Dim1 native module for this runner
+        if: steps.test-plan.outputs.dim1_count != '0'
+        uses: ./.github/actions/native-module-for-runner
+        with:
+          dimension: '1'
+          package-dir: .pops-ci/python-packages/dim1
+
       - name: Download Dim2 Python module artifact
         if: steps.test-plan.outputs.dim2_count != '0'
         uses: actions/download-artifact@v8
@@ -1098,12 +1123,30 @@ jobs:
           name: gate-python-build-kokkos-py-dim2
           path: .pops-ci/python-packages/dim2
 
+      # The build job may have run on another runner image (GitHub image rollout). Rebuild here
+      # only when the module's baked include contract does not hold on this runner.
+      - name: Dim2 native module for this runner
+        if: steps.test-plan.outputs.dim2_count != '0'
+        uses: ./.github/actions/native-module-for-runner
+        with:
+          dimension: '2'
+          package-dir: .pops-ci/python-packages/dim2
+
       - name: Download Dim3 Python module artifact
         if: steps.test-plan.outputs.dim3_count != '0'
         uses: actions/download-artifact@v8
         with:
           name: gate-python-build-kokkos-py-dim3
           path: .pops-ci/python-packages/dim3
+
+      # The build job may have run on another runner image (GitHub image rollout). Rebuild here
+      # only when the module's baked include contract does not hold on this runner.
+      - name: Dim3 native module for this runner
+        if: steps.test-plan.outputs.dim3_count != '0'
+        uses: ./.github/actions/native-module-for-runner
+        with:
+          dimension: '3'
+          package-dir: .pops-ci/python-packages/dim3
 
       - name: Cache ccache (Python runtime loaders)
         if: steps.test-plan.outputs.python_shard_count != '0'
@@ -1263,6 +1306,12 @@ jobs:
         with:
           name: gate-python-build-kokkos-py-dim2
           path: .pops-ci/python-packages/dim2
+
+      - name: Dim2 native module for this runner
+        uses: ./.github/actions/native-module-for-runner
+        with:
+          dimension: '2'
+          package-dir: .pops-ci/python-packages/dim2
 
       - name: Cache ccache (Python runtime loaders)
         uses: actions/cache@v6
