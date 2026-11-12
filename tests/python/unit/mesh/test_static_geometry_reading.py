@@ -22,10 +22,11 @@ from pops.lib.quadrature import GaussLegendre
 from pops.mesh import CartesianGrid, GeometryEvolution, MovingControlVolumes, normalize_layout_plan
 from pops.mesh._static_geometry import is_static_coordinate_map
 from pops.numerics import reconstruction, riemann
+from pops.physics.diffusion import DiffusiveBoundary
 from pops.time import AdaptiveCFL
 
-from tests.python.integration.runtime.test_n17_static_geometry_graphs import (
-    build_graph_1, build_graph_2)
+from examples.api_v02.models_static_geometry import (
+    build_annulus_free_stream, build_graded_diffusion)
 
 
 def _refusal(layout, owner="pops-static-geometry"):
@@ -36,7 +37,7 @@ def _refusal(layout, owner="pops-static-geometry"):
 
 
 def test_a_clock_free_map_is_static_and_a_clocked_one_is_not():
-    _, layout, _, _ = build_graph_1()
+    _, layout, _, _ = build_annulus_free_stream()
     assert is_static_coordinate_map(layout.evolution.to_data())
     from tests.python.unit.mesh.test_moving_geometry_contract import request
     _, moving = request()
@@ -46,12 +47,12 @@ def test_a_clock_free_map_is_static_and_a_clocked_one_is_not():
 def test_a_chart_without_its_rule_is_refused():
     """D0b, SU9: the measures of a chart are generated with a stated quadrature; omitted is
     refused, never defaulted."""
-    _, layout, _, _ = build_graph_1(geometry=None)
+    _, layout, _, _ = build_annulus_free_stream(geometry=None)
     assert _refusal(layout) == "static_geometry_rule_missing"
 
 
 def test_node_positions_refuse_a_rule_that_would_state_nothing():
-    _, layout, _, _ = build_graph_2(geometry=GaussLegendre(2))
+    _, layout, _, _ = build_graded_diffusion(geometry=GaussLegendre(2))
     assert _refusal(layout) == "static_geometry_rule_unused"
 
 
@@ -99,7 +100,29 @@ def test_consumers_that_read_the_logical_spacings_are_refused_at_resolution(vari
     by a fixed step; every other consumer of a mapped layout is refused before any C++ (a wall
     reads the logical axis, HLL reads signed wave speeds, a prescribed inflow state is not on the
     allowlist of this lot)."""
-    case, layout, _, _ = build_graph_1(**variant)
+    case, layout, _, _ = build_annulus_free_stream(**variant)
     with pytest.raises(StaticGeometryConsumerError) as caught:
         pops.resolve(pops.validate(case), layout=layout)
     assert caught.value.code == code
+
+
+def test_source_authored_traces_are_refused_at_resolution():
+    """A trace authored in source compiles to a stencil of its own; on a mapped layout the faces
+    are one resolved catalogue route that reads the arrays, so the source route is refused even at
+    formal order one."""
+    traces = reconstruction.User(lambda sample: sample(0), formal_order=1)
+    case, layout, _, _ = build_annulus_free_stream(traces=traces)
+    with pytest.raises(StaticGeometryConsumerError) as caught:
+        pops.resolve(pops.validate(case), layout=layout)
+    assert caught.value.code == "static_geometry_source_numerics_unavailable"
+    assert caught.value.evidence == {"part": "reconstruction"}
+
+
+def test_diffusive_boundary_data_that_reads_a_coordinate_is_refused():
+    """The trace value + slope.x of a diffusive boundary would read the logical position x."""
+    walls = (DiffusiveBoundary(0, "lower", "value", 1.0, slope=(0.5,)),
+             DiffusiveBoundary(0, "upper", "conormal", 0.0))
+    case, layout, _, _ = build_graded_diffusion(walls=walls)
+    with pytest.raises(StaticGeometryConsumerError) as caught:
+        pops.resolve(pops.validate(case), layout=layout)
+    assert caught.value.code == "static_geometry_boundary_data_unavailable"

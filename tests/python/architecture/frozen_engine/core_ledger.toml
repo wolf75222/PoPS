@@ -156,3 +156,90 @@ paths = [
   "src/runtime/system/system_impl.hpp",
   "src/runtime/system/system_program.cpp",
 ]
+
+[[mechanism]]
+id = "static-geometry-arrays-of-a-structured-configuration"
+issue = "ROM-110"
+rule = "IR26"
+pre_freeze = true
+what = """
+A layout whose coordinate map reads neither the clock nor a discrete input is served by the static
+geometry arrays of its configuration, the zero-velocity case of the geometry-evolution contract
+(D0b, D18, D21), whose one provider before was the moving interval of rank one. A map of rank one
+is read as node positions with exact node differences; a map of rank two is a chart whose measures
+and face integrals take the rule that the layout states (D0b). At bind the System generates the
+arrays once, the same on every rank, from the analytic programs of the map evaluated with their
+forward-mode derivatives by the native interpreter: cell measures and centroids; face area
+vectors, measures, unit normals and centroids; distances across faces (across the seam of a
+periodic axis with its translation); widths. It refuses them collectively unless their
+certificates hold (finite and positive measures, det DX > 0 at every rule point, every cell closed
+to 8 eps sum |S|, the seams identified). The generated faces of a block compiled for such a layout
+read the physical unit normal and the face measure of the arrays, F.n = sum_k n_k F_k with the
+bound sum_k |n_k| rho(A_k), and the cell measure of the arrays in place of the products of
+spacings; the prepared diffusion of a Program reads their distances, face measures and cell
+measures. The consumers it serves are stated as capability rules at resolution, never by method
+name (CF2): face laws whose requirements are the normal flux, the provider pack and the stability
+bound, traces of formal order one, boundaries that extend the interior state, the scalar diagonal
+diffusion of node positions of rank one, FixedDt and bound initial values. On a box nothing is
+materialized and the generated code is unchanged. Rank three, the renormalization of child
+measures at regrid and the graded surface are L1b; G03 extends the same entry per interval."""
+structures = [
+  { case = "N17-annulus", builder = "build_annulus_free_stream", structure = "2-D isothermal Euler, a vector balance in Cartesian components on a charted annulus, theta periodic" },
+  { case = "N17-graded", builder = "build_graded_diffusion", structure = "1-D scalar diffusion with no-flux ends on graded nodes x = tanh(3 s) / tanh(3)" },
+]
+measurement = """
+At the base d06bb2c1 both builders were refused at resolution with
+native_geometry_evolution_unavailable: no static provider existed (graphs committed failing first,
+tests/python/integration/runtime/test_n17_static_geometry_graphs.py). With this mechanism (gcc 13,
+Kokkos 4.4.1 Serial, one cloud container): on the annulus the cell measures equal the polar
+measures (r2^2 - r1^2) dtheta / 2 to 3.5e-16 relative (GaussLegendre(2) integrates det DX = r
+exactly), every cell closes within 0.025 of its bound 8 eps sum |S|, a constant Cartesian state
+stays bitwise constant over 4 SSPRK2 steps, and a state that varies along both axes, which moves by
+2.4 percent, takes the steps of an independent NumPy assembly of the same Rusanov faces on the
+polar chords to 5.2e-16 relative; on the logical box the faces would be axis-aligned and the
+measures uniform. The graded segment (widths in a ratio of 92), on a native build of rank one, has
+widths and cell measures equal bitwise to its node differences, takes 8 steps of an independent
+NumPy assembly of the same two-point scheme on the graded cells to 8.9e-16 relative, and keeps its
+inventory sum |K| u to 2.2e-16 relative
+(tests/python/integration/runtime/test_n17_static_geometry_graded_native.py)."""
+refusal_set = "removed: native_geometry_evolution_unavailable for a clock-free map of rank one or two whose consumers the arrays serve; added at resolution, for a layout that the arrays serve: a static_geometry_* refusal for every consumer they do not serve (trace, face law, sampling, spatial operator, source-authored numerics, diffusion, boundary, boundary data, initial value, step strategy, Program operation, several layouts), and for a map that reads a parameter, whose rank is not its layout's or is neither one nor two, with a component that reads no coordinate, a chart without its rule or node positions with one, a frame mismatch, a layout with no native projection, an adaptive layout or an embedded boundary; at bind: one collective refusal when a certificate fails; unchanged for every box and for the moving interval"
+paths = [
+  "include/pops/mesh/geometry/coordinate_map.hpp",
+  "include/pops/mesh/geometry/prepared_metric_provider.hpp",
+  "include/pops/mesh/geometry/static_geometry.hpp",
+  "include/pops/numerics/diffusion/prepared_diffusion.hpp",
+  "include/pops/numerics/fv/normal_flux.hpp",
+  "include/pops/numerics/spatial/embedded_boundary/operator.hpp",
+  "include/pops/numerics/spatial/nd/finite_volume.hpp",
+  "include/pops/numerics/spatial/operators/cartesian_operator.hpp",
+  "include/pops/numerics/spatial/operators/masked_operator.hpp",
+  "include/pops/runtime/analytic/expression.hpp",
+  "include/pops/runtime/builders/compiled/dsl_block.hpp",
+  "include/pops/runtime/builders/compiled/generated_system_block.hpp",
+  "include/pops/runtime/program/external_riemann_brick.hpp",
+  "include/pops/runtime/program/program_context.hpp",
+  "include/pops/runtime/system.hpp",
+  "include/pops/runtime/system/native_package_capability.hpp",
+  "python/bindings/core/init/init_system.cpp",
+  "python/pops/codegen/_artifact_identity.py",
+  "python/pops/codegen/_compile_drivers.py",
+  "python/pops/codegen/_compile_emit.py",
+  "python/pops/codegen/_native_spatial_layout.py",
+  "python/pops/codegen/_orchestration_compile.py",
+  "python/pops/codegen/_phases.py",
+  "python/pops/codegen/_static_geometry_consumers.py",
+  "python/pops/codegen/program_emit_diffusion.py",
+  "python/pops/codegen/program_emit_ops.py",
+  "python/pops/codegen/program_moving_layout_contract.py",
+  "python/pops/mesh/_static_geometry.py",
+  "python/pops/mesh/moving.py",
+  "python/pops/physics/_authoring_codegen.py",
+  "python/pops/physics/_facade_compile.py",
+  "python/pops/runtime/_runtime_executor.py",
+  "python/pops/runtime/_runtime_mesh_lowering.py",
+  "src/runtime/system/system_embedded_boundary.cpp",
+  "src/runtime/system/system_impl.hpp",
+  "src/runtime/system/system_install.cpp",
+  "src/runtime/system/system_program.cpp",
+  "src/runtime/system/system_static_geometry.cpp",
+]

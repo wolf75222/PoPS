@@ -1,12 +1,12 @@
-"""The two failing graphs of C1, static geometry arrays of a structured configuration (N17, CF15).
+"""The two graphs of C1, static geometry arrays of a structured configuration (N17, CF15).
 
 Spec 0.3 D0b: the measures, face vectors and normals of a mapped configuration are geometry arrays
 generated « as for a moving configuration (D18, D21) at zero velocity ». At the base the geometry
-evolution contract (``pops.mesh.moving``) has one provider, the periodic Uniform1D carrier of a
-moving interval, so a clock-free map of rank one or two is refused at resolution, before any C++,
-with ``native_geometry_evolution_unavailable``. The two graphs are written below the surface with
-the descriptors that exist there (design note N17, section 4, DN14), so that each fails for C1's
-reason and for no missing word of C2:
+evolution contract (``pops.mesh.moving``) had one provider, the periodic Uniform1D carrier of a
+moving interval, and refused a clock-free map of rank one or two with
+``native_geometry_evolution_unavailable``. The two graphs were committed failing first; they are
+written below the surface with the descriptors that exist there (design note N17, section 4,
+DN14), so that each failed for C1's reason and for no missing word of C2:
 
 * graph (1), a vector balance in Cartesian components on a charted support (the structure of the
   diocotron on a disk, probe 2): isothermal Euler on a 4 x 8 annulus 1 <= r <= 2, theta periodic,
@@ -17,8 +17,13 @@ reason and for no missing word of C2:
   written with exp, which reads no clock either. A map of rank one is read as node positions with
   exact node differences, so it states no rule.
 
-The reference box of each layout is logical and the physical domain is the image of the map, fixed
-in time (note, section 4, « How C1 reads the geometry-evolution contract »).
+Their builders now live in examples/api_v02/models_static_geometry.py, where the core ledger names
+them (FC7). The reference box of each layout is logical and the physical domain is the image of the
+map, fixed in time (note, section 4, « How C1 reads the geometry-evolution contract »). Both graphs
+resolve to static geometry arrays, and graph (1) runs natively: the constant state stays constant
+to rounding on the annulus, because the faces of every cell close, and the cell measures are the
+polar ones. Graph (2) runs on a native build of rank one, in
+test_n17_static_geometry_graded_native.py.
 """
 from __future__ import annotations
 
@@ -27,149 +32,20 @@ import math
 import numpy as np
 import pops
 import pytest
-from pops import math as pm
-from pops.analytic import coordinates, cos, exp, sin
-from pops.boundary import TransportBoundarySet
-from pops.boundary.transport import Outflow
+from examples.api_v02.models_static_geometry import (
+    ANNULUS_CELLS, ANNULUS_DT, ANNULUS_STEPS, SOUND_SPEED, build_annulus_free_stream,
+    build_graded_diffusion)
 from pops.codegen._layout_resolution import resolve_native_spatial_layouts
 from pops.codegen._native_spatial_layout import native_spatial_layouts
 from pops.codegen._static_geometry_consumers import static_geometry_layouts
-from pops.domain import CartesianDomain
-from pops.frames import Cartesian1D, Cartesian2D
-from pops.initial import InitialCondition
-from pops.layouts import Uniform
-from pops.lib.initial import BindArray
-from pops.lib.quadrature import GaussLegendre
-from pops.mesh import (CartesianGrid, GeometryEvolution, MovingControlVolumes, PeriodicAxes,
-                       normalize_layout_plan)
-from pops.numerics import Diffusion, DiscretizationPlan, reconstruction, riemann, variables
-from pops.numerics.spatial import FiniteVolume
-from pops.physics.diffusion import DiffusiveBoundary
-from pops.projection import ConservativeCellAverage
-from pops.time import FixedDt
-
-# Graph (1): the annulus and its constant state.
-ANNULUS_CELLS = (4, 8)
-SOUND_SPEED = 1.0
-FREE_STREAM = (1.3, 0.7, -0.4)            # rho, mx, my: a constant Cartesian state
-ANNULUS_DT = 0.01
-ANNULUS_STEPS = 4
-
-# Graph (2): the graded segment and its diffusion.
-GRADED_CELLS = 32
-GRADING = 3.0
-CONDUCTIVITY = 0.01
-GRADED_DT = 1.0e-5
-GRADED_STEPS = 8
+from pops.mesh import normalize_layout_plan
+from tests.python.support.collective_checks import collective_call, collective_check
+from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.public_native_profile import compile_profile_plan_once, native_profile
 
 
-def _ssprk2(case, block, state, rate, dt, name, step=None):
-    """Two authored stages, the SSPRK2 of the corpus builders."""
-    program = pops.Program(name)
-    temporal = program.state(block[state])
-    u0 = temporal.n
-    k0 = program.value(name + "_k0", rate(u0), at=program.stage(name + "_stage0", c=0))
-    point1 = program.stage(name + "_stage1", c=1)
-    u1 = program.value(name + "_predictor", u0 + program.dt*k0, at=point1)
-    k1 = program.value(name + "_k1", rate(u1), at=point1)
-    program.commit(temporal.next, program.value(name + "_accepted", .5*u0 + .5*(u1 + program.dt*k1),
-                                                at=temporal.next.point))
-    program.step_strategy(FixedDt(dt) if step is None else step)
-    case.program(program)
-
-
-def _initial(case, subject, values):
-    case.initials.add(InitialCondition(state=subject, value=BindArray(),
-                                       projection=ConservativeCellAverage()))
-    return {subject: np.ascontiguousarray(values, dtype=float)}
-
-
-def annulus_map(frame):
-    """The polar map of graph (1): it reads the logical coordinates only, no clock."""
-    r, theta = coordinates(frame)
-    return GeometryEvolution((r*cos(theta), r*sin(theta)))
-
-
-def build_graph_1(*, geometry=GaussLegendre(2), faces=riemann.Rusanov(),
-                  traces=reconstruction.FirstOrder(), step=None, walls=Outflow):
-    """Graph (1): isothermal Euler in Cartesian components on the 4 x 8 annulus.
-
-    The keywords name the variants that the refusal tests of the static reading use."""
-    frame = CartesianDomain("n17_annulus_logical", (1.0, 0.0),
-                            (2.0, 2*math.pi)).frame(Cartesian2D())
-    x, y = frame.axes          # below the surface the axes of the frame name the image components
-    model = pops.Model("N17_isothermal_euler", frame=frame)
-    U = model.state("conserved", components=("rho", "mx", "my"))
-    rho, mx, my = U
-    vx, vy = mx/rho, my/rho
-    c2 = SOUND_SPEED*SOUND_SPEED
-    flux = model.flux("isothermal_euler_flux", state=U, frame=frame,
-                      components={x: (mx, mx*vx + c2*rho, my*vx),
-                                  y: (my, mx*vy, my*vy + c2*rho)},
-                      waves={x: (vx - SOUND_SPEED, vx, vx + SOUND_SPEED),
-                             y: (vy - SOUND_SPEED, vy, vy + SOUND_SPEED)})
-    rate = model.rate("isothermal_euler", equation=pm.ddt(U) == -pm.div(flux))
-    case = pops.Case("N17_graph_1_annulus_free_stream")
-    block = case.block("gas", model)
-    plan = DiscretizationPlan()
-    plan.rates.add(rate, FiniteVolume(flux=flux, variables=variables.Conservative(U),
-                                      reconstruction=traces, riemann=faces))
-    boundaries = frame.boundaries
-    periodic = PeriodicAxes((frame.axes[1],))
-    plan.boundaries.add(TransportBoundarySet({
-        boundaries.x_min: walls(state=block[U]),
-        boundaries.x_max: walls(state=block[U]),
-    }, periodic=periodic))
-    case.numerics(plan, block=block)
-    _ssprk2(case, block, U, rate, ANNULUS_DT, "N17_graph_1_SSPRK2", step)
-    grid = CartesianGrid(frame=frame, cells=ANNULUS_CELLS, periodic=periodic)
-    layout = MovingControlVolumes(Uniform(grid), evolution=annulus_map(frame), geometry=geometry)
-    initial = np.empty((3, ANNULUS_CELLS[1], ANNULUS_CELLS[0]))
-    for component, value in enumerate(FREE_STREAM):
-        initial[component] = value
-    return case, layout, _initial(case, block[U], initial), initial
-
-
-def graded_nodes(cells=GRADED_CELLS, beta=GRADING):
-    """The nodes tanh(beta s) / tanh(beta) at s = k / cells, in binary64."""
-    s = np.arange(cells + 1)/cells
-    return np.tanh(beta*s)/np.tanh(beta)
-
-
-def graded_map(frame, beta=GRADING):
-    """x = tanh(beta s) / tanh(beta), written with exp (pops.analytic has no tanh)."""
-    s, = coordinates(frame)
-    growth = exp(2*beta*s)
-    return GeometryEvolution(((growth - 1)/((growth + 1)*math.tanh(beta)),))
-
-
-def build_graph_2(*, geometry=None):
-    """Graph (2): diffusion with no-flux ends on 32 graded cells."""
-    frame = CartesianDomain("n17_graded_logical", (0.0,), (1.0,)).frame(Cartesian1D())
-    model = pops.Model("N17_graded_diffusion", frame=frame)
-    U = model.state("heat", components=("u",))
-    walls = (DiffusiveBoundary(0, "lower", "conormal", 0.0),
-             DiffusiveBoundary(0, "upper", "conormal", 0.0))
-    flux = model.diffusive_flux("conduction", state=U,
-                                value=pm.CoeffGradient(U[0], ((CONDUCTIVITY,),)),
-                                boundaries=walls)
-    rate = model.rate("heat_balance", equation=pm.ddt(U) == pm.div(flux))
-    case = pops.Case("N17_graph_2_graded_diffusion")
-    block = case.block("rod", model)
-    plan = DiscretizationPlan()
-    plan.rates.add(rate, Diffusion(flux=flux))
-    case.numerics(plan, block=block)
-    _ssprk2(case, block, U, rate, GRADED_DT, "N17_graph_2_SSPRK2")
-    layout = MovingControlVolumes(Uniform(CartesianGrid(frame=frame, cells=(GRADED_CELLS,))),
-                                  evolution=graded_map(frame), geometry=geometry)
-    nodes = graded_nodes()
-    centres = (nodes[:-1] + nodes[1:])/2
-    initial = (1.0 + 0.5*np.cos(math.pi*centres))[None]
-    return case, layout, _initial(case, block[U], initial), initial
-
-
-GRAPHS = {"graph (1) annulus free stream": build_graph_1,
-          "graph (2) graded diffusion": build_graph_2}
+GRAPHS = {"graph (1) annulus free stream": build_annulus_free_stream,
+          "graph (2) graded diffusion": build_graded_diffusion}
 
 
 @pytest.mark.parametrize("label,kind", [("graph (1) annulus free stream", "chart"),
@@ -200,3 +76,123 @@ def _nodes(data):
             pending.extend(node.values())
         elif isinstance(node, list):
             pending.extend(node)
+
+
+def run_graph(build, *, dimension, scope, steps, dt):
+    """Resolve, compile, bind and run one graph natively; return its runtime and its report."""
+    _, world = native_profile(dimension=dimension, scope=scope)
+    case, layout, initial_values, initial = collective_call(world, build)
+    plan = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
+    artifact = compile_profile_plan_once(world, plan, route=scope, compile_artifact=pops.compile)
+    runtime = collective_call(world, lambda: pops.bind(
+        artifact, initial_values=initial_values,
+        resources={"execution_context": artifact_execution_context(artifact)}))
+    report = collective_call(world, lambda: pops.run(runtime, t_end=steps*dt, max_steps=steps,
+                                                     console=False))
+    return world, runtime, report, initial
+
+
+def perturbed_annulus_state():
+    """Cell averages (rho, mx, my) by (theta, r) that vary along both logical axes."""
+    radii = 1.0 + (np.arange(ANNULUS_CELLS[0]) + 0.5)/ANNULUS_CELLS[0]
+    angles = 2*math.pi*(np.arange(ANNULUS_CELLS[1]) + 0.5)/ANNULUS_CELLS[1]
+    r, theta = np.meshgrid(radii, angles)
+    return np.stack((1.3 + 0.2*np.cos(theta)*(r - 1.0), 0.7 + 0.1*np.sin(theta),
+                     -0.4 + 0.1*np.cos(2*theta)*(r - 1.0)))
+
+
+def annulus_faces():
+    """The area vectors and cell measures of the annulus from its polar map, independently of the
+    arrays: the rotated chords between the images of the logical nodes, oriented toward increasing
+    logical index, the seam theta = 2 pi identified with theta = 0, and the polar measures."""
+    cells_r, cells_theta = ANNULUS_CELLS
+    radii = 1.0 + np.arange(cells_r + 1)/cells_r
+    angles = 2*math.pi*np.arange(cells_theta + 1)/cells_theta
+    x = radii[None, :]*np.cos(angles)[:, None]
+    y = radii[None, :]*np.sin(angles)[:, None]
+    along_theta = (x[1:, :] - x[:-1, :], y[1:, :] - y[:-1, :])
+    along_r = (x[:, 1:] - x[:, :-1], y[:, 1:] - y[:, :-1])
+    radial = np.stack((along_theta[1], -along_theta[0]))
+    angular = np.stack((-along_r[1], along_r[0]))
+    angular[:, -1, :] = angular[:, 0, :]
+    measures = 0.5*(radii[1:]**2 - radii[:-1]**2)*(2*math.pi/cells_theta)
+    return radial, angular, np.broadcast_to(measures, (cells_theta, cells_r))
+
+
+def _normal_flux(state, nx, ny):
+    rho, mx, my = state
+    vx, vy = mx/rho, my/rho
+    c2 = SOUND_SPEED*SOUND_SPEED
+    return np.stack((mx*nx + my*ny, (mx*vx + c2*rho)*nx + mx*vy*ny,
+                     my*vx*nx + (my*vy + c2*rho)*ny))
+
+
+def _rusanov(left, right, area):
+    """F.n |S| of the Rusanov face on the unit normal n of the area vector S, with the speed
+    max over both traces of sum_k |n_k| (|v_k| + c)."""
+    magnitude = np.hypot(area[0], area[1])
+    nx, ny = area[0]/magnitude, area[1]/magnitude
+
+    def bound(state):
+        rho, mx, my = state
+        return (np.abs(nx)*(np.abs(mx/rho) + SOUND_SPEED)
+                + np.abs(ny)*(np.abs(my/rho) + SOUND_SPEED))
+
+    speed = np.maximum(bound(left), bound(right))
+    return (0.5*(_normal_flux(left, nx, ny) + _normal_flux(right, nx, ny))
+            - 0.5*speed*(right - left))*magnitude
+
+
+def annulus_oracle(initial, steps, dt):
+    """Two authored SSPRK2 stages of the Rusanov finite volumes on the physical faces of the
+    annulus, with Outflow ends in r (the ghost repeats the cell) and theta periodic."""
+    radial, angular, measures = annulus_faces()
+
+    def rate(state):
+        along_r = np.concatenate((state[:, :, :1], state, state[:, :, -1:]), axis=2)
+        along_theta = np.concatenate((state[:, -1:, :], state, state[:, :1, :]), axis=1)
+        through_r = _rusanov(along_r[:, :, :-1], along_r[:, :, 1:], radial)
+        through_theta = _rusanov(along_theta[:, :-1, :], along_theta[:, 1:, :], angular)
+        return -((through_r[:, :, 1:] - through_r[:, :, :-1])
+                 + (through_theta[:, 1:, :] - through_theta[:, :-1, :]))/measures
+
+    state = np.array(initial, dtype=float)
+    for _ in range(steps):
+        predictor = state + dt*rate(state)
+        state = 0.5*state + 0.5*(predictor + dt*rate(predictor))
+    return state
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_graph_1_runs_on_the_physical_faces_of_the_annulus(isolated_native_cache, native_cxx,
+                                                           kokkos_root):
+    """CF15, second half of the flip for graph (1): the faces read the physical normals and
+    measures of the arrays, so a constant Cartesian state stays constant to rounding, the cell
+    measures are the polar measures (r2^2 - r1^2) dtheta / 2 (the rule integrates det DX = r
+    exactly), and a state that varies along both axes takes the steps of an independent NumPy
+    assembly of the same Rusanov faces on the polar chords (on the logical box it would not)."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    world, runtime, report, initial = run_graph(
+        build_annulus_free_stream, dimension=2, scope="N17 graph 1 annulus", steps=ANNULUS_STEPS,
+        dt=ANNULUS_DT)
+    state = collective_call(world, lambda: runtime.state_global("gas"))
+    arrays = collective_call(world, lambda: runtime._executor._s._static_geometry_snapshot())
+    perturbed = perturbed_annulus_state()
+    world, varied, varied_report, _ = run_graph(
+        lambda: build_annulus_free_stream(state=perturbed), dimension=2,
+        scope="N17 graph 1 annulus", steps=ANNULUS_STEPS, dt=ANNULUS_DT)
+    varied_state = collective_call(world, lambda: varied.state_global("gas"))
+    _, _, polar = annulus_faces()
+    with collective_check(world):
+        assert report.accepted_steps == ANNULUS_STEPS
+        assert arrays["kind"] == "chart" and 0.0 <= arrays["closure_ratio"] <= 1.0
+        measures = np.asarray(arrays["cell_measure"])
+        assert measures.shape == (ANNULUS_CELLS[1], ANNULUS_CELLS[0])
+        np.testing.assert_allclose(measures, polar, rtol=1e-13, atol=0.0)
+        scale = np.max(np.abs(initial))
+        assert np.max(np.abs(np.asarray(state) - initial))/scale <= 1e-13
+        assert varied_report.accepted_steps == ANNULUS_STEPS
+        expected = annulus_oracle(perturbed, ANNULUS_STEPS, ANNULUS_DT)
+        np.testing.assert_allclose(np.asarray(varied_state), expected, rtol=1e-13, atol=0.0)

@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1168,
+    "estimated_count": 1169,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7017,6 +7017,7 @@
       "tests/python/integration/runtime/test_multisupport_double_consume_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_parent_reject_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_stale_assessment_v14_native.py",
+      "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
       "tests/python/integration/runtime/test_n17_static_geometry_graphs.py",
       "tests/python/integration/runtime/test_native_amr12_state_carrier_failures.py",
       "tests/python/integration/runtime/test_native_retry_transactions.py",
@@ -8106,7 +8107,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1233,
+    "total_files": 1234,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8536,30 +8537,38 @@
       }
     },
     "n17_20261111_static_geometry": {
-      "basis": "Unmeasured CI scheduling estimate for the two source-only modules of N17 L1a (ROM-110, static geometry arrays of a structured configuration): the two graphs of C1 (CF15), which elaborate, validate and resolve a 4 x 8 annulus and a 32-cell graded segment and read their clock-free maps at resolution, and the unit refusals of the static reading, which resolve the same graphs with one changed consumer each. 15 s each, the middle source-only tier of api_v02_20261013 (5/15/60 s), heavier than the analogue test_moving_geometry_contract.py (5 s) since each case resolves a whole case. The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions (no native module), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the three modules of N17 L1a (ROM-110, static geometry arrays of a structured configuration). The graphs of C1 (CF15) resolve a 4 x 8 annulus and a 32-cell graded segment, then compile the annulus natively once (a 2-D isothermal Euler package on the static route and its two-stage Program) and bind and run it twice: 300 s, the native tier of api_v02_20261013 for one cold compile (300/600/900/1200 s), as the analogue test_lib_face_body_swap_native.py (600 s) compiles several. The graded file compiles a 1-D diffusion Program on a native build of rank one once: 300 s. The unit refusals of the static reading resolve the same graphs with one changed consumer each, now 15 cases: 60 s, the upper source-only tier (5/15/60 s). The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, native modules of rank two and one, each test on its isolated package cache, other pytest sessions running beside them); they are not GitHub CI file wall times. Existing weights, shard count, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
-        "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": "tests/python/unit/mesh/test_moving_geometry_contract.py",
+        "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": "tests/python/integration/runtime/test_diffusion_device_publication_native.py",
+        "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": "tests/python/integration/runtime/test_lib_face_body_swap_native.py",
         "tests/python/unit/mesh/test_static_geometry_reading.py": "tests/python/unit/mesh/test_moving_geometry_contract.py"
       },
       "estimates_seconds": {
-        "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": 15,
-        "tests/python/unit/mesh/test_static_geometry_reading.py": 15
+        "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": 300,
+        "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": 300,
+        "tests/python/unit/mesh/test_static_geometry_reading.py": 60
       },
       "local_receipts": {
+        "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": {
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=1 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
+          "passed": 1,
+          "seconds": 37.2
+        },
         "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": {
-          "command": "PYTHONPATH=python pytest -q tests/python/integration/runtime/test_n17_static_geometry_graphs.py",
-          "passed": 2,
-          "seconds": 4.39
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=2 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_static_geometry_graphs.py",
+          "passed": 3,
+          "seconds": 55.39
         },
         "tests/python/unit/mesh/test_static_geometry_reading.py": {
-          "command": "PYTHONPATH=python pytest -q tests/python/unit/mesh/test_static_geometry_reading.py",
-          "passed": 10,
-          "seconds": 7.71
+          "command": "PYTHONPATH=python:. pytest -q tests/python/unit/mesh/test_static_geometry_reading.py",
+          "passed": 15,
+          "seconds": 15.08
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": "65b66df6c73d0c026e9858c2a44d008b0f5548a1198f0c86dfb7b3025e9c8b82",
-        "tests/python/unit/mesh/test_static_geometry_reading.py": "9e7896b18a0833dc1e0da753eeefd3768ad7036894834e35fbe57d324f9a21d0"
+        "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": "98a5f3ba7db3991fa0191e517f7dda765fd9971476c15b8cb81dca89ca2f8398",
+        "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": "8cfb8bc6c41d219698508fc85d841a44d8960dc331340d3ec29f9790f0890c69",
+        "tests/python/unit/mesh/test_static_geometry_reading.py": "93ea92eb6e0fcf208232f2b30fb14984841ed3711874d2b3a78e06cc9920c7e9"
       }
     }
   },
@@ -9794,6 +9803,7 @@
   "tests/python/unit/surface/test_su_t2_scheme_refusals.py": 5,
   "tests/python/unit/surface/test_su_t3_schemes.py": 60,
   "tests/python/unit/surface/test_su_t3_schemes_2d.py": 60,
-  "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": 15,
-  "tests/python/unit/mesh/test_static_geometry_reading.py": 15
+  "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": 300,
+  "tests/python/unit/mesh/test_static_geometry_reading.py": 60,
+  "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": 300
 }

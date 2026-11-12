@@ -88,6 +88,12 @@ def _check_finite_volume(layout: Any, block: Any, method: Any) -> None:
                 "block %r reconstructs traces of formal order %r; on a mapped layout the faces "
                 "read the cell values (formal order %d)"
                 % (block.name, order, STATIC_GEOMETRY_TRACE_ORDER), formal_order=order)
+    for part, descriptor in (("reconstruction", method.reconstruction), ("face", method.riemann)):
+        if "source_identity" in (getattr(descriptor, "options", None) or {}):
+            _refuse(layout, "static_geometry_source_numerics_unavailable",
+                    "block %r authors its %s in source; on a mapped layout the faces are one "
+                    "resolved catalogue route that reads the arrays" % (block.name, part),
+                    part=part)
     requirements = getattr(method.riemann, "requirements", None) or {}
     required = frozenset(requirements.get("capabilities", ()))
     unserved = sorted(required - NORMAL_FACE_CAPABILITIES)

@@ -504,15 +504,6 @@ def compile(plan: Any) -> Any:
     if type(plan) is not ResolvedSimulationPlan:
         raise TypeError("pops.compile requires the ResolvedSimulationPlan returned by pops.resolve")
     plan.verify()
-    from pops.codegen._static_geometry_consumers import (StaticGeometryConsumerError,
-                                                         static_geometry_layouts)
-
-    for handle in static_geometry_layouts(plan.layout_plan):
-        # Fail closed until the native route that reads the arrays is generated (N17, C1).
-        raise StaticGeometryConsumerError(
-            "static_geometry_native_route_unavailable",
-            "layout %s reads static geometry arrays; their native route is not generated yet"
-            % handle.qualified_id, layout_id=handle.qualified_id)
     from pops.codegen._orchestration_compile import compile_install_models
 
     models = compile_install_models(plan, plan.compile_options)
