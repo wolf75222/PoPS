@@ -374,6 +374,16 @@ class ModuleManifest:
             global_quantities=_thaw_json(self.global_quantities),
         )
 
+    def artifact_data(self) -> Any:
+        """Identity projection of the manifest (CC2): every row of :meth:`to_dict` except the
+        source span of each operator, which is provenance and stays in :meth:`to_dict`."""
+        result = self.to_dict()
+        result["operators"] = [
+            {key: value for key, value in row.items() if key != "provenance"}
+            for row in result["operators"]
+        ]
+        return result
+
     def to_dict(self) -> Any:
         result = {
             "schema_version": self.schema_version,

@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1173,
+    "estimated_count": 1175,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6973,6 +6973,7 @@
       "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py",
       "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py",
       "tests/python/integration/runtime/test_hyqmom15_relaxation_runtime.py",
+      "tests/python/integration/runtime/test_identity_provenance_free_native.py",
       "tests/python/integration/runtime/test_imex_checkpoint_publication_rollback.py",
       "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py",
       "tests/python/integration/runtime/test_imex_nonautonomous_field.py",
@@ -7597,6 +7598,7 @@
       "tests/python/unit/problem/test_deep_freeze_storage.py",
       "tests/python/unit/problem/test_definition_fingerprint_scope.py",
       "tests/python/unit/problem/test_handle_data_model.py",
+      "tests/python/unit/problem/test_identity_provenance_free.py",
       "tests/python/unit/problem/test_parameter_artifact_identity.py",
       "tests/python/unit/problem/test_snapshot_hash_protocols.py",
       "tests/python/unit/problem/test_snapshot_projection_work.py",
@@ -8111,7 +8113,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1238,
+    "total_files": 1240,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8598,6 +8600,31 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_surface_lot_g_run_native.py": "45d1aafc35a83db8e2274a1732dab9f06878480df02191d13c64f24d8a60f680",
         "tests/python/unit/surface/test_lot_g_run.py": "859552675f8fe2e04cd697047966a158b024f3720516839bc62d1da2e9bb70ac"
+      }
+    },
+    "n11_20261111_identity_provenance": {
+      "basis": "Unmeasured CI scheduling estimates for N11 lot 2a (ROM-93 with G07 ROM-25, rule CC2, gap C48), not CI receipts. The unit module resolves one small transport case written to temporary directories (two paths, a comment shift, a changed constant), Python bodies with comments and docstrings, and the artifact projection of M01 and M03, without compiling, on the 15 s source-only tier, as the analogue test_rate_expression_closure_n11.py. The native module compiles one transport artifact cold and once more from the cache, on the 600 s native tier, as the analogue test_balance_multiplicity_runtime.py. The local receipts are pytest session times on a 4-core container beside other local test sessions; they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/problem/test_identity_provenance_free.py": "tests/python/unit/physics/test_rate_expression_closure_n11.py",
+        "tests/python/integration/runtime/test_identity_provenance_free_native.py": "tests/python/integration/runtime/test_balance_multiplicity_runtime.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/problem/test_identity_provenance_free.py": 15,
+        "tests/python/integration/runtime/test_identity_provenance_free_native.py": 600
+      },
+      "local_receipts": {
+        "tests/python/unit/problem/test_identity_provenance_free.py": {
+          "cases": 8,
+          "session_seconds": 8.5
+        },
+        "tests/python/integration/runtime/test_identity_provenance_free_native.py": {
+          "cases": 1,
+          "session_seconds": 47.1
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/problem/test_identity_provenance_free.py": "3d6d1c30a30bf7aacd80361ca65ecfefe9811e18c2c3695e3ed545eb59437e39",
+        "tests/python/integration/runtime/test_identity_provenance_free_native.py": "c77bc5641c6cd4c7392006368461778ec682b43fe4f639891c2465a4e6af11c8"
       }
     },
     "ci_20261112_n15_surface_lot_b": {
@@ -9862,6 +9889,8 @@
   "tests/python/unit/time/test_candidate_guards_n8.py": 600,
   "tests/python/unit/surface/test_lot_g_run.py": 15,
   "tests/python/integration/runtime/test_surface_lot_g_run_native.py": 900,
+  "tests/python/unit/problem/test_identity_provenance_free.py": 15.0,
+  "tests/python/integration/runtime/test_identity_provenance_free_native.py": 600.0,
   "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py": 600,
   "tests/python/unit/surface/test_lot_b_boundaries.py": 60
 }
