@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1189,
+    "estimated_count": 1193,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7021,6 +7021,9 @@
       "tests/python/integration/runtime/test_multisupport_double_consume_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_parent_reject_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_stale_assessment_v14_native.py",
+      "tests/python/integration/runtime/test_n17_graded_box_native.py",
+      "tests/python/integration/runtime/test_n17_graded_plane_native.py",
+      "tests/python/integration/runtime/test_n17_graded_ring_native.py",
       "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
       "tests/python/integration/runtime/test_n17_static_geometry_graphs.py",
       "tests/python/integration/runtime/test_native_amr12_state_carrier_failures.py",
@@ -7743,6 +7746,7 @@
       "tests/python/unit/surface/test_lot_b_boundaries.py",
       "tests/python/unit/surface/test_lot_e_project.py",
       "tests/python/unit/surface/test_lot_g_run.py",
+      "tests/python/unit/surface/test_n17_graded.py",
       "tests/python/unit/surface/test_quadrature.py",
       "tests/python/unit/surface/test_solver_reference_n9.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
@@ -8127,7 +8131,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1254,
+    "total_files": 1258,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8840,6 +8844,57 @@
         "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": "98a5f3ba7db3991fa0191e517f7dda765fd9971476c15b8cb81dca89ca2f8398",
         "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": "8cfb8bc6c41d219698508fc85d841a44d8960dc331340d3ec29f9790f0890c69",
         "tests/python/unit/mesh/test_static_geometry_reading.py": "93ea92eb6e0fcf208232f2b30fb14984841ed3711874d2b3a78e06cc9920c7e9"
+      }
+    },
+    "n17_20261112_graded_spacing": {
+      "basis": "Unmeasured CI scheduling estimates for the modules of N17 L1b (ROM-110, graded spacing at the surface and the static arrays of a graded box of rank three). The graded ring compiles two surface Programs (two-point diffusion and Rusanov advection) on a native build of rank one and reads the arrays of the layout at 32 to 256 cells without compiling: 600 s, two cold compiles of the native tier of api_v02_20261013 (300/600/900/1200 s). The graded plane (rank two) and the graded box (rank three) compile one surface Program each: 300 s, as the graded file of N17 L1a. The surface unit file elaborates the graded cases and their refusals without compiling: 15 s, the source-only tier (5/15/60 s). The refusal file of the static reading, now 18 cases, keeps its 60 s. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, native modules of ranks one, two and three, each native file on its isolated package cache); they are not GitHub CI file wall times. Existing weights, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_n17_graded_ring_native.py": "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
+        "tests/python/integration/runtime/test_n17_graded_plane_native.py": "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
+        "tests/python/integration/runtime/test_n17_graded_box_native.py": "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
+        "tests/python/unit/surface/test_n17_graded.py": "tests/python/unit/surface/test_su_t2_solve_refusals.py",
+        "tests/python/unit/mesh/test_static_geometry_reading.py": "tests/python/unit/mesh/test_moving_geometry_contract.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_n17_graded_ring_native.py": 600,
+        "tests/python/integration/runtime/test_n17_graded_plane_native.py": 300,
+        "tests/python/integration/runtime/test_n17_graded_box_native.py": 300,
+        "tests/python/unit/surface/test_n17_graded.py": 15,
+        "tests/python/unit/mesh/test_static_geometry_reading.py": 60
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_n17_graded_ring_native.py": {
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=1 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_graded_ring_native.py",
+          "passed": 5,
+          "seconds": 80.53
+        },
+        "tests/python/integration/runtime/test_n17_graded_plane_native.py": {
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=2 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_graded_plane_native.py",
+          "passed": 1,
+          "seconds": 45.23
+        },
+        "tests/python/integration/runtime/test_n17_graded_box_native.py": {
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=3 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_graded_box_native.py",
+          "passed": 1,
+          "seconds": 41.2
+        },
+        "tests/python/unit/surface/test_n17_graded.py": {
+          "command": "PYTHONPATH=python:. pytest -q tests/python/unit/surface/test_n17_graded.py",
+          "passed": 18,
+          "seconds": 8.53
+        },
+        "tests/python/unit/mesh/test_static_geometry_reading.py": {
+          "command": "PYTHONPATH=python:. pytest -q tests/python/unit/mesh/test_static_geometry_reading.py",
+          "passed": 18,
+          "seconds": 18.97
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_n17_graded_ring_native.py": "3354cb9dc4d55776256629865a91d86bf13377f6322641f80d4e31e44d5557fa",
+        "tests/python/integration/runtime/test_n17_graded_plane_native.py": "fb4f13b6121dfcda3f927fa9a23a4aa31b0e450f064ce1cefd749f31d3c69227",
+        "tests/python/integration/runtime/test_n17_graded_box_native.py": "d555e3e9011e4138afd5d3590c9bfe7e0c3168e6b95474640ad72e8078d2f09a",
+        "tests/python/unit/surface/test_n17_graded.py": "574ab1393ceb310c9a60e84663d69d927c36bbbdd3e96b10ed3b49fd0659bbfb",
+        "tests/python/unit/mesh/test_static_geometry_reading.py": "7df05a9d3870bfebb6beaaf3b82a70ffba8196e4e3457576d956e2a11893b6f9"
       }
     }
   },
@@ -10096,5 +10151,9 @@
   "tests/python/unit/surface/test_su_t2_solve_refusals.py": 15,
   "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": 300,
   "tests/python/unit/mesh/test_static_geometry_reading.py": 60,
-  "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": 300
+  "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": 300,
+  "tests/python/integration/runtime/test_n17_graded_ring_native.py": 600,
+  "tests/python/integration/runtime/test_n17_graded_plane_native.py": 300,
+  "tests/python/integration/runtime/test_n17_graded_box_native.py": 300,
+  "tests/python/unit/surface/test_n17_graded.py": 15
 }
