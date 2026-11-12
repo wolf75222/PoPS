@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from pops._ir.data_model import is_finite_array
 
 if TYPE_CHECKING:
     from pops.graph_functions import GraphFunction
@@ -26,7 +27,7 @@ def inventory(value, where):
     require_owned(value.prog, value, where)
     def check(signature):
         kind = signature['vtype']
-        if kind == 'array':
+        if is_finite_array(kind):
             check(signature['element'])
         elif kind == 'product':
             for _, child in signature['members']:

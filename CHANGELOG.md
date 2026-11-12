@@ -147,8 +147,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `python/pops` that compared a `vtype` spelling to ask « field » or « finite array » now asks
   `pops._ir.data_model` (`value_kind`, `is_field_leaf`, `is_finite_array`, `is_finite_index`,
   `field_role`), which reads the kind from the head of the IR type of the spelling; role tests
-  (`state`, `rhs`) stay. The architecture test keeps the builder and the lowering on these functions
-  only, and `scripts/n10_dispatch_inventory.py` lists role rows only. The generated C++ of the 40
+  (`state`, `rhs`) stay. This covers every form of the comparison, including a name bound to the
+  spelling, a module constant and a tuple over several lines, and modules outside the builder and
+  the lowering (`bundles.py`, `scientific_graph.py`, `graph_derivatives.py`,
+  `_finite_differential.py`, `finite_contributions.py`). `scripts/n10_dispatch_inventory.py` reads
+  the syntax tree, and the architecture test fails on each of those forms. Outside
+  `pops._ir.data_model`, the inventory now lists role rows only. The generated C++ of the 40
   API profiles is unchanged (DM-T1). The layout records (`data_layout_and_distribution`, schema 3)
   name their node, type an `iterate` result as `Iteration(S)`, a field publication as the product of
   its bound components and a product without members as `Product()`, read G13's field-element rule

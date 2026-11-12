@@ -18,7 +18,7 @@ import hashlib
 import json
 
 from pops._ir.quantity import PhysicalDimension
-from pops._ir.data_model import is_field_leaf, is_finite_array
+from pops._ir.data_model import is_field_leaf, is_finite_array, value_kind
 
 
 DIMENSIONLESS = PhysicalDimension()
@@ -161,11 +161,11 @@ def _meaning_data(data) -> _Meaning:
             return {key: visit(child) for key, child in signature["members"]}
         if kind == "variant":
             return _Sum(tuple((key, visit(child)) for key, child in signature["members"]))
-        if kind == "array":
+        if is_finite_array(kind):
             return _Array(_domain(signature), visit(signature["element"]))
-        if kind in ("index", "index_set", "bool", "int64"):
+        if kind in ("bool", "int64") or value_kind(kind) in ("index_set", "index"):
             return _Discrete(kind)
-        if kind in ("state", "rhs", "scalar_field"):
+        if is_field_leaf(kind):
             return tuple(_Scalar(unit, context, data.get("affine", "linear"),
                                  data.get("affine_origin"), domain=domain) for unit in units)
         if kind == "scalar":
@@ -188,11 +188,11 @@ def _untyped(signature) -> _Meaning:
         return {key: _untyped(child) for key, child in signature["members"]}
     if kind == "variant":
         return _Sum(tuple((key, _untyped(child)) for key, child in signature["members"]))
-    if kind in ("bool", "int64", "index", "index_set"):
+    if kind in ("bool", "int64") or value_kind(kind) in ("index_set", "index"):
         return _Discrete(kind)
     if kind == "scalar": return _Scalar(DIMENSIONLESS)
-    if kind == "array": return _Array(_domain(signature), _untyped(signature["element"]))
-    if kind in ("state", "rhs", "scalar_field"):
+    if is_finite_array(kind): return _Array(_domain(signature), _untyped(signature["element"]))
+    if is_field_leaf(kind):
         return tuple(_Scalar(DIMENSIONLESS) for _ in signature["space"].components)
     raise TypeError("untyped scientific real payload needs a declared schema")
 

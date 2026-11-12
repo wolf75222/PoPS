@@ -3,6 +3,7 @@
 from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any
+from pops._ir.data_model import is_field_leaf
 
 
 def slots(
@@ -58,7 +59,7 @@ def unpack_record(signature: Mapping[str, Any], token: str) -> Any:
         else:
             expression = "std::any_cast<const %s&>(%s)" % (finite_cpp_type(sig), cell)
             parent[key] = (
-                "(*(%s))" % expression if kind in ("state", "rhs", "scalar_field") else expression
+                "(*(%s))" % expression if is_field_leaf(kind) else expression
             )
     return result[0]
 

@@ -386,3 +386,61 @@ def test_an_array_of_fields_is_resident_as_g13_lot_3_stores_it():
         "device: columns of the default memory space")
     assert _finite_residency({"vtype": "array", "family": 0, "element": field,
                               "ownership": "contiguous_distributed"}) == "host: structural cells"
+
+
+@pytest.mark.parametrize("identifier", ("M01", "M18", "T06", "T08"))
+def test_the_kind_read_from_the_spelling_is_the_kind_of_the_real_type(identifier):
+    # Review of #777, P1: ``value_kind`` reads the kind from the head of the type that the spelling
+    # encodes, on a symbolic support (note §3.4, addendum of lot 1b). Under the plan's placements
+    # the real ``ir_type`` of every value has the same head, and every field leaf is stored on
+    # ``Patches`` or ``LevelPatches``. A spelling that could carry two heads breaks this test.
+    # Fields (M01), an iterate (M18), finite arrays and indices (T06) and AMR levels (T08).
+    from pops._ir.data_model import (_kind_of_type, data_layout_and_distribution, ir_type,
+                                     support_placements, value_kind)
+    from pops.time._graph.value_traversal import walk_program_nodes
+
+    plan = _plan(identifier)
+    placements = support_placements(plan)
+    nodes = list(walk_program_nodes(plan.time._values))
+    records = data_layout_and_distribution(plan)["values"]
+    assert len(nodes) == len(records)
+    kinds = set()
+    for node, record in zip(nodes, records, strict=True):
+        assert record["node"] == int(node.id)
+        typed = ir_type(node, placements, program=identifier)
+        if isinstance(typed, A.Untyped):
+            continue
+        kind = value_kind(node)
+        kinds.add(kind)
+        assert _kind_of_type(typed) == kind, (node.vtype, typed)
+        if kind == "field":
+            assert record["layout"] in ("Patches", "LevelPatches"), (node.vtype, record)
+    assert kinds & {"field", "finite"}, kinds
+
+
+def test_no_value_is_spelled_vector_field():
+    # Review of #777, P2: ``vector_field`` has no kind probe (it reads ``other``) because no builder
+    # spells a value so; ``Local.vector_field`` returns a ``scalar_field`` of d components. Pin it
+    # where values are written: no ``vtype`` keyword, ``"vtype"`` entry or first argument of a
+    # builder's ``_new`` in python/pops spells it.
+    import ast
+    from pathlib import Path
+
+    sources = Path(__file__).resolve().parents[4] / "python" / "pops"
+    writes = []
+    for path in sorted(sources.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            spelled = []
+            if isinstance(node, ast.keyword) and node.arg == "vtype":
+                spelled.append(node.value)
+            elif (isinstance(node, ast.Call) and node.args
+                  and getattr(node.func, "attr", getattr(node.func, "id", None)) == "_new"):
+                spelled.append(node.args[0])  # ``_new(vtype, op, ...)`` of the Program builders
+            elif isinstance(node, ast.Dict):
+                spelled.extend(value for key, value in zip(node.keys, node.values, strict=True)
+                               if isinstance(key, ast.Constant) and key.value == "vtype")
+            writes.extend("%s:%d" % (path.name, value.lineno) for value in spelled
+                          if isinstance(value, ast.Constant) and value.value == "vector_field")
+    assert not writes, writes
+    local = (sources / "time" / "_program" / "local.py").read_text(encoding="utf-8")
+    assert '"scalar_field", "vector_field", tuple(components)' in local

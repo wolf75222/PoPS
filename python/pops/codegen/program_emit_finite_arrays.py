@@ -95,7 +95,7 @@ def finite_cpp_type(signature):
     kind = signature["vtype"]
     if signature.get("ownership") == "contiguous_distributed":
         ns = "pops::runtime::program::distributed::"
-        if kind == "array":
+        if is_finite_array(kind):
             element = signature["element"]
             requests = (value_kind(element) == "index" and
                         element.get("ownership") == "contiguous_distributed")
@@ -108,12 +108,12 @@ def finite_cpp_type(signature):
         return capability_cpp_type(signature)
     if kind in ("product", "variant"):
         return "pops_algebra_finite::Record"
-    if kind == "array":
+    if is_finite_array(kind):
         from .program_emit_finite_kokkos import device_array
         if field_array(signature):
             return "pops_algebra_finite::FieldArray"
         return "pops_algebra_finite::" + ("DeviceArray" if device_array(signature) else "Array")
-    if kind in ("state", "rhs", "scalar_field"):
+    if is_field_leaf(kind):
         return "std::shared_ptr<pops::MultiFab<pops::kNativeDimension>>"
     return {"scalar":"pops::Real", "int64":"std::int64_t", "bool":"bool",
             "index_set":"pops_algebra_finite::DomainRef", "index":"pops_algebra_finite::Index"}[kind]

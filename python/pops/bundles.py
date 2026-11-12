@@ -8,7 +8,7 @@ which returns the complete package, including geometry, maps and histories.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from pops._ir.data_model import value_kind
+from pops._ir.data_model import is_finite_array, is_finite_index, value_kind
 if TYPE_CHECKING:
     from pops.graph_functions import GraphFunction
 
@@ -36,7 +36,7 @@ def _path(value):
 def _project_type(signature, path, *, domain=False):
     for key in path:
         kind = signature["vtype"]
-        if kind == "array" and key == "[]" and not domain:
+        if is_finite_array(kind) and key == "[]" and not domain:
             signature = signature["element"]
         elif kind in ("product", "variant") and (kind == "product" or not domain):
             try:
@@ -56,14 +56,14 @@ def _dependent_paths(signature, prefix=(), *, root=True):
         if not is_root and item.get("bundle") is not None:
             continue
         kind = item["vtype"]
-        if kind in ("array", "index", "index_set"):
+        if is_finite_index(kind):
             yield path, item
         if kind in ("product", "variant"):
             stack.extend((child, (*path, name), False)
                          for name, child in reversed(item["members"]))
-        elif kind == "array":
+        elif is_finite_array(kind):
             stack.append((item["element"], (*path, "[]"), False))
-        elif kind not in ("index", "index_set", "scalar", "int64", "bool"):
+        elif kind not in ("scalar", "int64", "bool") and value_kind(kind) not in ("index_set", "index"):
             raise TypeError("Bundle data requires finite arrays and structural leaves; "
                             "a legacy Field needs an explicit representation map")
 

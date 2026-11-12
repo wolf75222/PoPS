@@ -12,7 +12,7 @@ Distributed gid/index/rank/at_local require a lexical local region.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
-from pops._ir.data_model import value_kind
+from pops._ir.data_model import is_finite_array, is_finite_index, value_kind
 
 if TYPE_CHECKING:
     from pops.time.value_signatures import ValueSignature
@@ -136,7 +136,7 @@ def transportable(sig):
         children = ()
         if kind in ("product", "variant"):
             children = tuple(child for _, child in item["members"])
-        elif kind in ("array", "index_set", "index") and item.get("ownership") in (
+        elif is_finite_index(kind) and item.get("ownership") in (
             "replicated",
             OWNERSHIP,
         ):
@@ -144,7 +144,7 @@ def transportable(sig):
                 raise TypeError(
                     "distributed structural transport requires an exact bounded domain family"
                 )
-            if kind == "array":
+            if is_finite_array(kind):
                 children = (item["element"],)
         elif kind not in ("scalar", "int64", "bool"):
             raise TypeError(

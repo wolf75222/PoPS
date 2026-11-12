@@ -7,8 +7,9 @@ a ``vtype`` spelling now asks the one function of ``pops._ir.data_model`` (``val
 ``is_field_leaf``, ``is_finite_array``, ``is_finite_index``, ``field_role``), which reads the kind
 from the head of the IR type (note §3.4). These tests keep it so:
 
-* no line outside that module compares a field or finite spelling (the dispatch inventory has
-  role rows only, R3);
+* no comparison outside that module reads a field or finite spelling, in any form (a name bound to
+  the spelling, a module constant, a tuple over several lines: review of #777, B1); the dispatch
+  inventory has role rows only there (R3);
 * the Program builder (``python/pops/time``) and the lowering (``python/pops/codegen``) import
   only the kind functions from what carries the type, so no acceptance or emitter reads a
   placement, a layout record or an index set before the lots that own them (A2);
@@ -22,9 +23,13 @@ import ast
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 SOURCES = ROOT / "python" / "pops"
 GUARDED = ("codegen", "time")
+# The one function: the only module that compares a field or finite spelling.
+ONE_FUNCTION = "python/pops/_ir/data_model.py"
 CARRIERS = frozenset(("pops._ir.arrays", "pops._ir.index_sets", "pops._ir.data_model"))
 CARRIER_NAMES = frozenset(("arrays", "index_sets", "data_model"))
 KIND_FUNCTIONS = frozenset(("field_role", "is_field_leaf", "is_finite_array", "is_finite_index",
@@ -78,22 +83,51 @@ def test_builder_and_lowering_read_only_the_kind_of_a_value():
         "index sets and layout records belong to later lots:\n" + "\n".join(offenders))
 
 
-def test_no_line_compares_a_field_or_finite_spelling_outside_the_one_function():
+def _inventory():
     path = ROOT / "scripts" / "n10_dispatch_inventory.py"
     spec = importlib.util.spec_from_file_location("n10_dispatch_inventory_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    rows = [row for row in module.rows() if row[2] != "role"]
+    return module
+
+
+def test_no_line_compares_a_field_or_finite_spelling_outside_the_one_function():
+    rows = [row for row in _inventory().rows()
+            if row[2] != "role" and row[0] != ONE_FUNCTION]
     assert not rows, (
         "ask pops._ir.data_model (value_kind, is_field_leaf, is_finite_array, is_finite_index, "
         "field_role) instead of comparing a vtype spelling:\n"
         + "\n".join("%s:%d %s" % (file, line, text) for file, line, _, text in rows))
-    assert module._kind('if value.vtype in ("state", "rhs", "scalar_field"):') == "field"
-    assert module._kind('if sig["vtype"] == "array":') == "finite"
-    assert module._kind('if value.get("vtype") != "index_set":') == "finite"
-    assert module._kind('if value.vtype == "rhs":') == "role"
-    assert module._kind('signature = dict(domain, vtype="array")') is None
+
+
+@pytest.mark.parametrize(("source", "kind"), (
+    ('if value.vtype in ("state", "rhs", "scalar_field"):\n    pass\n', "field"),
+    ('if sig["vtype"] == "array":\n    pass\n', "finite"),
+    ('if value.get("vtype") != "index_set":\n    pass\n', "finite"),
+    ('if "index" == getattr(value, "vtype", None):\n    pass\n', "finite"),
+    ('if value.vtype == "rhs":\n    pass\n', "role"),
+    # The three forms that the line pattern of lot 1a missed (review of #777, B1): a name bound
+    # to the spelling, a module constant, a tuple over several lines.
+    ('def f(sig):\n    kind = sig["vtype"]\n    return kind in ("state", "rhs", "scalar_field")\n',
+     "field"),
+    ('_DISCRETE = frozenset({"bool", "int64", "index", "index_set"})\n'
+     'def f(value):\n    return value.vtype in _DISCRETE\n', "finite"),
+    ('def f(sig):\n    return sig["vtype"] not in (\n        "array",\n        "index_set",\n'
+     '    )\n', "finite"),
+    ('def f(sig):\n    if (kind := sig["vtype"]) == "array":\n        pass\n', "finite"),
+))
+def test_the_inventory_sees_every_form_of_a_comparison(source, kind):
+    assert [found for _, found, _ in _inventory().rows_of(source)] == [kind], source
+
+
+@pytest.mark.parametrize("source", (
+    'signature = dict(domain, vtype="array")\n',
+    'def f(sig):\n    kind = sig["vtype"]\n    return value_kind(kind) in ("index_set", "index")\n',
+    'def f(sig):\n    kind = sig["vtype"]\n    return kind in ("product", "variant")\n',
+))
+def test_the_inventory_counts_no_encoding_and_no_kind_call(source):
+    assert _inventory().rows_of(source) == [], source
 
 
 def test_no_emitter_or_acceptance_reads_the_layout_records():

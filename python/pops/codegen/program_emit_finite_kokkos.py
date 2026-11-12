@@ -111,7 +111,7 @@ def _capture_type(signature):
     if _flat(signature):
         return True
     return signature.get("ownership") == "replicated" and (
-        kind in ("index_set", "index") or (kind == "array" and _flat(signature["element"]))
+        value_kind(kind) in ("index_set", "index") or (is_finite_array(kind) and _flat(signature["element"]))
     )
 
 

@@ -52,9 +52,9 @@ def _element_type(signature):
     if kind in ("product", "variant"):
         for _, child in signature["members"]:
             _element_type(child)
-    elif kind == "array":
+    elif is_finite_array(kind):
         _element_type(signature["element"])
-    elif kind not in ("scalar", "int64", "bool", "index", "index_set", "state", "rhs", "scalar_field"):
+    elif kind not in ("scalar", "int64", "bool") and value_kind(kind) not in ("field", "index_set", "index"):
         raise TypeError("replicated array elements require finite handled values, products or variants")
 
 
