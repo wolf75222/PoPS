@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import inspect
 import math as _pymath
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -73,6 +74,8 @@ class _Lowering:
         self.name = name
         self.count = 0
         self.templates: list = []
+        # The block of the problem's fields, which owns the scalars that its pairings reduce.
+        self.block: Any = None
 
     def fresh(self, what: str) -> str:
         self.count += 1
@@ -232,6 +235,14 @@ class Field:
             raise TypeError("a field of a solver is scaled by a scalar only")
         return Field(factor.value * self.expression, self.template)
 
+    def __truediv__(self, other):
+        """v / s, each value divided by the scalar (the native's normalized difference)."""
+        from pops.time.expressions import as_expression
+
+        divisor = other.value if isinstance(other, Scalar) else \
+            _scalar_input(other, "a divided field")
+        return Field(as_expression(self.expression) / divisor, self.template)
+
     def __mul__(self, other):
         if isinstance(other, Scalar):
             return Field(other.value * self.expression, self.template)
@@ -290,7 +301,17 @@ class Record:
 
 def _number_scalar(context: _Lowering, number: Any, name: str) -> Any:
     value = _scalar_input(number, "a record")
-    return context.program.scalar_expression(context.fresh(name), value)
+    return _owned_scalar(context, context.program.scalar_expression(context.fresh(name), value))
+
+
+def _owned_scalar(context: _Lowering, value: Any) -> Any:
+    """A literal Scalar of the solver in the block of the problem's fields, as its reduced
+    scalars are, so that a record or a choice mixes them with one structural type."""
+    if value.block is None and context.block is not None:
+        return context.program._new("scalar", "scalar_expression", value.inputs,
+                                    dict(value.attrs), context.fresh("owned"), context.block,
+                                    inherit_state_ref=False)
+    return value
 
 
 @dataclass(frozen=True)
@@ -363,11 +384,19 @@ def choose(condition: Any, *, then: Any, otherwise: Any) -> Any:
         def build(_program: Any) -> Any:
             value = function()
             results[key] = value
+            if isinstance(value, (Scalar, int, float)) and not isinstance(value, bool):
+                # A choice of numbers is a number (IR4 cond): one reduced Scalar, without the
+                # State authority of its inputs, so that both arms have one structural type. A
+                # literal arm takes the block of the predicate, as its other arm has it.
+                return _owned_scalar(context, program.scalar_expression(
+                    context.fresh("chosen"), _scalar_input(value, "pops.choose")))
             return _lower_arm(context, value, as_result=True)
         return build
 
     chosen = program.branch(_bool(condition), arm(then, "then"), arm(otherwise, "otherwise"),
                             name=context.fresh("choose"))
+    if chosen.vtype == "scalar":
+        return Scalar(chosen)
     return chosen
 
 
@@ -382,8 +411,34 @@ class Request:
     problem: Problem
 
     def norm(self, value: Any) -> Scalar:
-        """The norm of the request: sqrt of the pairing of a field with itself."""
-        return _sqrt(self.problem.pairing(value, value))
+        """The norm of the request: the square root of the pairing of a field with itself,
+        measured scale-safely as the native's residual norm is.
+
+        The largest magnitude m of the field is reduced first. Within [_NORM_LOW, _NORM_HIGH] the
+        pairing of the field with itself cannot overflow or underflow, and the norm is
+        sqrt(<v, v>), the native's rounding at ordinary scales. Outside it, the field is divided
+        by m first, and the norm is m * sqrt(<v/m, v/m>). A field that holds a value that is not
+        finite has the norm m = +inf, which the solver refuses, and is never paired (a pairing of
+        such a field is a refusal of the run, not of the solve)."""
+        program = self.problem._context.program
+        field = value.value("n")
+        largest = Scalar(program.norm_inf_all(field))
+
+        def measured() -> Scalar:
+            def ordinary() -> Scalar:
+                return _sqrt(self.problem.pairing(value, value))
+
+            def scaled() -> Scalar:
+                divisor = Scalar(program.scalar_expression(
+                    self.problem._context.fresh("norm_scale"),
+                    _ir_maximum(largest.value, _MIN_NORMAL)))
+                unit = value / divisor
+                return largest * _sqrt(self.problem.pairing(unit, unit))
+
+            return choose((largest >= _NORM_LOW) & (largest <= _NORM_HIGH),
+                          then=ordinary, otherwise=scaled)
+
+        return choose(largest < _pymath.inf, then=measured, otherwise=lambda: largest)
 
     def met(self, residual: Scalar) -> Scalar:
         """The stop of SV3: r <= max(atol, rtol * ref), the physical threshold of the native
@@ -396,6 +451,19 @@ class Request:
 
 def _sqrt(value: Scalar) -> Scalar:
     return value.__pops_elementary__("sqrt")
+
+
+def _ir_maximum(left: Any, right: Any) -> Any:
+    from pops._ir.ops import maximum
+    return maximum(left, right)
+
+
+# The scale-safe norm (Request.norm): within [_NORM_LOW, _NORM_HIGH] the squares of the values and
+# their sum over up to 1e16 cells are normal doubles; outside it the field is divided by its
+# largest magnitude first. _MIN_NORMAL keeps that division defined for the zero field.
+_MIN_NORMAL = sys.float_info.min
+_NORM_LOW = 2.0 ** -480
+_NORM_HIGH = 2.0 ** 480
 
 
 class Problem:
@@ -462,8 +530,15 @@ class Problem:
                 % (" ".join(missing), " ".join(missing)),
                 write="a realization whose preconditions the problem meets, such as gmres()")
 
-    def candidate(self, solution: Any, *, iterations: Any) -> _Candidate:
-        return _Candidate(solution, iterations)
+    def candidate(self, solution: Any, *, iterations: Any, residual_norm: Any) -> _Candidate:
+        """The solver's candidate: the solution, the count and the norm of the last true
+        residual, each a field of the result of ``region.iterate`` (SV5: the evidence reads them,
+        so the record's layout stays the solver's)."""
+        for name, item in (("solution", solution), ("residual_norm", residual_norm)):
+            if not isinstance(item, _Deferred):
+                raise TypeError("problem.candidate(%s=...) takes a field of the result of "
+                                "region.iterate, got %r" % (name, item))
+        return _Candidate(solution, iterations, residual_norm)
 
     def __getattr__(self, name: str) -> Any:
         raise NotYetElaborated("problem.%s, a reading of the problem of a solver" % name, _G10)
@@ -570,6 +645,7 @@ class _StateApply:
 class _Candidate:
     solution: Any
     iterations: Any
+    residual_norm: Any
 
 
 class Region:
@@ -720,6 +796,7 @@ def lower_solver(value: SolverValue, program: Any, linear: Any, name: Any = None
     def body(_program: Any) -> Any:
         with _lowering(context):
             problem = Problem(context, linear, apply, value.request)
+            context.block = problem.rhs.expression.block
             result = value.definition.function(problem=problem, region=Region(context),
                                                **value.options)
         if not isinstance(result, _Candidate) or not isinstance(result.solution, _Deferred):
@@ -773,7 +850,8 @@ class ReferenceOutcome:
         if self._success is None:
             raise TypeError("the evidence of a solve is readable only after consume (SV5)")
         if self._evidence is None:
-            self._evidence = ReferenceEvidence(self._program, self._success)
+            self._evidence = ReferenceEvidence(self._program, self._success,
+                                               self._candidate.residual_norm.name)
         return self._evidence
 
     def __repr__(self) -> str:
@@ -784,9 +862,10 @@ class ReferenceOutcome:
 class ReferenceEvidence:
     """The evidence of a consumed reference solve (SV5), the fields of the native's."""
 
-    def __init__(self, program: Any, success: Any) -> None:
+    def __init__(self, program: Any, success: Any, residual_norm: str) -> None:
         self._program = program
         self._success = success
+        self._residual_norm = residual_norm
 
     @property
     def iterations(self) -> Any:
@@ -795,7 +874,7 @@ class ReferenceEvidence:
     @property
     def residual_norm(self) -> Any:
         state = self._program._product_get(self._success, "state")
-        return self._program._product_get(state, "confirmed")
+        return self._program._product_get(state, self._residual_norm)
 
     @property
     def reason(self) -> str:
@@ -809,6 +888,7 @@ class ReferenceEvidence:
 
 __all__ = [
     "BudgetExhausted", "FAILURE_CODES", "FAILURES_BY_CODE", "OUTSIDE_OWNERS", "PropertyNotDerived",
-    "ReferenceOutcome", "SolveFailed", "StateOperator", "SolverDefinition", "SolverValue", "choose", "fail",
+    "ReferenceOutcome", "SolveFailed", "StateOperator", "SolverDefinition", "SolverValue",
+    "choose", "fail",
     "lower_solver", "record", "solver",
 ]

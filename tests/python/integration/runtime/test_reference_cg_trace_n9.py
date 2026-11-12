@@ -162,3 +162,33 @@ def test_the_variants_of_the_native_branches(isolated_native_cache, native_cxx, 
     reference = _run("reference", b, c=-1.0, rtol=1e-10, maxit=200)
     assert "breakdown" in native["error"]
     assert "StepAttemptRejected" in reference["error"] and "code=21" in reference["error"]
+
+
+@pytest.mark.parametrize("scale", [1e160, 1e-160])
+def test_the_recurrence_is_scaled_as_the_native(
+        scale, isolated_native_cache, native_cxx, kokkos_root):
+    """Review F1 of #775: data of large or small magnitude. The recurrence runs in the units of
+    the cycle scale on both routes, so r.r neither overflows at 1e160 nor underflows at 1e-160;
+    the counts, the variant and the solution are those of order one, scaled."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    b = np.random.default_rng(2026).standard_normal((1, 16, 16)) * scale
+    controls = dict(c=0.1, rtol=1e-10, maxit=500)
+    native, reference = _run("native", b, **controls), _run("reference", b, **controls)
+    assert "error" not in native and "error" not in reference, (native, reference)
+    assert reference["iterations"] == native["iterations"]
+    np.testing.assert_allclose(reference["x"], native["x"], rtol=0.0,
+                               atol=64 * np.finfo(float).eps * np.abs(native["x"]).max())
+
+
+def test_a_right_hand_side_that_is_not_finite_fails_the_solve(
+        isolated_native_cache, native_cxx, kokkos_root):
+    """A NaN in b: an invalid evaluation of the solve at 0 iterations on both routes, never a
+    failure of the run (the scale-safe norm never pairs a field that is not finite)."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    b = np.random.default_rng(2026).standard_normal((1, 16, 16))
+    b[0, 3, 5] = np.nan
+    controls = dict(c=0.1, rtol=1e-10, maxit=500)
+    native, reference = _run("native", b, **controls), _run("reference", b, **controls)
+    assert "invalid_evaluation" in native["error"], native
+    assert "StepAttemptRejected" in reference["error"], reference
+    assert "code=3" in reference["error"] or "code=22" in reference["error"], reference

@@ -176,16 +176,16 @@ __all__ = [
     "Model", "Numerics", "OpenMP", "Output", "Periodic", "Positive", "Program", "Quadrature",
     "Resources", "Scalar", "Tensor", "Uniform", "Vector", "bind", "claim", "compile", "every", "inspect",
     "record", "discrete", "math", "method", "scheme",
-    # @pops.solver and the words of its body (N9 lot 4); pops.BudgetExhausted and
-    # pops.SolveFailed are the variants of T39 that a run raises and a solver fails with
-    "BudgetExhausted", "PropertyNotDerived", "SolveFailed", "choose", "fail", "solver",
+    # @pops.solver and the words of its body (N9 lot 4); pops.fail takes the variants of T39
+    # listed with the failures of a run below
+    "PropertyNotDerived", "choose", "fail", "solver",
     # the refusals of §14.1 that this lot raises, and the values that the library reads
     "AmbiguousElaboration", "AntiDiffusive", "ClosedBodyViolation", "ContradictsDerivation",
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
     "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
-    # the failures of a run (T39), lot G
-    "BudgetExhausted", "RunFailed",
+    # the failures of a run (T39), lot G, which a solver also fails with (N9 lot 4)
+    "BudgetExhausted", "RunFailed", "SolveFailed",
     "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]

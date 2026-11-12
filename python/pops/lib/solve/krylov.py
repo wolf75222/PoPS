@@ -7,9 +7,15 @@ The body mirrors the native ``solve_cg`` and its wrapper branch by branch (N9 lo
   residual is not finite;
 * each step tests the curvature and ``r.r`` for finiteness, the curvature for definiteness, then
   alpha, the updated residual norm and beta for finiteness, and ``r.r > 0`` before beta;
-* the recursion is rescaled by its cycle scale: the norm of the first residual, then of the last
-  confirmed one; a step confirms the true residual when its estimate meets the request or when
-  the scaled norm reaches the subnormal zone, and restarts the recurrence from it otherwise;
+* the recurrence runs in the units of its cycle scale, the norm of the first true residual, then
+  of the last confirmed one (``generic_krylov.hpp:2036-2040``, ``rebase_cycle_residual``): r and d
+  are the residual and the direction divided by the scale, the operator is A / scale, so that
+  r.r, the curvature, alpha and beta are of order one whatever the magnitude of the data, and x
+  stays in physical units; the norms of true residuals are measured scale-safely
+  (``request.norm``);
+* a step confirms the true residual when its estimate meets the request or when the normalized
+  norm reaches the subnormal zone, and restarts the whole recurrence from it otherwise, with the
+  confirmed norm as the new scale and r.r = 1;
 * the last step allowed does not confirm inside the recurrence: it measures the true residual of
   the candidate once, as the wrapper does, when the estimate is reached, and is
   ``BudgetExhausted`` otherwise.
@@ -61,31 +67,61 @@ def cg(problem, region, preconditioner=None, max_iterations=2000):
 
     x0 = problem.guess
     r0 = problem.rhs - A(x0)
-    rr0 = dot(r0, r0)
-    norm0 = sqrt(rr0)
-    start = pops.record(x=x0, r=r0, d=r0, rr=rr0, scale=norm0, confirmed=norm0, k=0, done=0)
+    norm0 = request.norm(r0)
+    # The recurrence runs on the residual divided by its cycle scale, the norm of the last true
+    # residual (generic_krylov.hpp:2036-2040, rebase_cycle_residual): r and d stay of order one
+    # whatever the magnitude of the data, and x stays in physical units. The division is guarded
+    # so that a zero start (which stops at once) never divides 0 by 0.
+    def measured():
+        return norm0
+
+    def one():
+        return 1.0
+
+    unit0 = r0 / pops.choose(norm0 > 0, then=measured, otherwise=one)
+
+    def paired():
+        return dot(unit0, unit0)
+
+    def unpaired():
+        return 0.0
+
+    rr0 = pops.choose(finite(norm0), then=paired, otherwise=unpaired)
+    start = pops.record(x=x0, r=unit0, d=unit0, rr=rr0, scale=norm0, confirmed=norm0, k=0,
+                        done=0)
 
     def stop(s):
         # The guess that meets the request stops before the first step (0 iterations); after a
         # step, only an accepted candidate stops, so that the count is the native's (D3).
         return request.met(s.confirmed) | (s.done > 0)
 
+    def reached(normalized, scale):
+        # The estimate in the cycle's units meets the physical threshold (normalized_threshold).
+        return request.met(normalized * scale)
+
     def step(s):
-        Ad = A(s.d)
-        curvature = dot(s.d, Ad)
+        def started():
+            # The operator in the cycle's units: (A d) / scale, the native's normalized
+            # difference, so that alpha carries the scale and x moves in physical units.
+            Ad = A(s.d) / s.scale
+            curvature = dot(s.d, Ad)
 
-        def checked():
-            def definite():
-                alpha = s.rr / curvature
+            def checked():
+                def definite():
+                    alpha = s.rr / curvature
 
-                def advance():
-                    return advanced(s, Ad, alpha)
+                    def advance():
+                        return advanced(s, Ad, alpha)
 
-                return pops.choose(finite(alpha), then=advance, otherwise=invalid)
+                    return pops.choose(finite(alpha), then=advance, otherwise=invalid)
 
-            return pops.choose(curvature > 0, then=definite, otherwise=breakdown)
+                return pops.choose(curvature > 0, then=definite, otherwise=breakdown)
 
-        return pops.choose(finite(curvature) & finite(s.rr), then=checked, otherwise=invalid)
+            return pops.choose(finite(curvature) & finite(s.rr), then=checked, otherwise=invalid)
+
+        # A start whose residual is not finite never pairs it: it fails at 0 iterations, as the
+        # wrapper does (generic_krylov.hpp:2027).
+        return pops.choose(finite(s.scale), then=started, otherwise=invalid)
 
     def advanced(s, Ad, alpha):
         x = s.x + alpha * s.d
@@ -95,7 +131,7 @@ def cg(problem, region, preconditioner=None, max_iterations=2000):
         k = s.k + 1
 
         def judged():
-            reached = request.met(norm)
+            estimate = reached(norm, s.scale)
 
             def at_cap():
                 # The last step does not confirm in the recurrence (l. 938-945); the wrapper
@@ -106,7 +142,7 @@ def cg(problem, region, preconditioner=None, max_iterations=2000):
 
                     def checked():
                         def accepted():
-                            return pops.record(x=x, r=true, d=s.d, rr=rr, scale=s.scale,
+                            return pops.record(x=x, r=r, d=s.d, rr=rr, scale=s.scale,
                                                confirmed=measured, k=k, done=1)
 
                         return pops.choose(request.met(measured), then=accepted,
@@ -114,11 +150,10 @@ def cg(problem, region, preconditioner=None, max_iterations=2000):
 
                     return pops.choose(finite(measured), then=checked, otherwise=invalid)
 
-                return pops.choose(reached, then=candidate, otherwise=budget)
+                return pops.choose(estimate, then=candidate, otherwise=budget)
 
             def inside():
-                normalized = norm / s.scale
-                extreme = (normalized > 0) & (normalized < SQRT_MIN_NORMAL)
+                extreme = (norm > 0) & (norm < SQRT_MIN_NORMAL)
 
                 def confirm():
                     true = problem.rhs - A(x)
@@ -126,20 +161,20 @@ def cg(problem, region, preconditioner=None, max_iterations=2000):
 
                     def checked():
                         def solved():
-                            return pops.record(x=x, r=true, d=s.d, rr=rr, scale=s.scale,
+                            return pops.record(x=x, r=r, d=s.d, rr=rr, scale=s.scale,
                                                confirmed=measured, k=k, done=1)
 
                         def restart():
-                            # rebase_cycle_residual: the confirmed residual is the new cycle
-                            # scale, and the whole recurrence restarts from it.
-                            squared = measured * measured
+                            # rebase_cycle_residual: the confirmed norm is the new cycle scale,
+                            # the residual in its units has norm one, and the whole recurrence
+                            # restarts from it (r.r = 1 * 1, l. 957).
+                            unit = true / measured
 
                             def restarted():
-                                return pops.record(x=x, r=true, d=true, rr=squared,
-                                                   scale=measured, confirmed=measured, k=k,
-                                                   done=0)
+                                return pops.record(x=x, r=unit, d=unit, rr=1.0, scale=measured,
+                                                   confirmed=measured, k=k, done=0)
 
-                            return pops.choose(finite(squared), then=restarted, otherwise=invalid)
+                            return restarted()
 
                         return pops.choose(request.met(measured), then=solved, otherwise=restart)
 
@@ -157,11 +192,12 @@ def cg(problem, region, preconditioner=None, max_iterations=2000):
 
                     return pops.choose(s.rr > 0, then=positive, otherwise=breakdown)
 
-                return pops.choose(reached | extreme, then=confirm, otherwise=carry)
+                return pops.choose(estimate | extreme, then=confirm, otherwise=carry)
 
             return pops.choose(k == max_iterations, then=at_cap, otherwise=inside)
 
         return pops.choose(finite(norm), then=judged, otherwise=invalid)
 
     result = region.iterate(start=start, step=step, stop=stop, max_steps=max_iterations)
-    return problem.candidate(result.x, iterations=result.iterations)
+    return problem.candidate(result.x, iterations=result.iterations,
+                             residual_norm=result.confirmed)

@@ -8628,30 +8628,30 @@
       }
     },
     "ci_20261111_n9_lot4_reference_cg": {
-      "basis": "Unmeasured CI scheduling estimates for N9 lot 4 (ROM-90, reference CG in surface words). Unit module: 15 s, source-only tier of api_v02_20261013, analogue test_su_t2_scheme_refusals.py widened since it lowers the reference CG Program and generates C++ without compiling. Native module: 900 s, above the 600 s native tier of the analogue test_public_krylov_lifecycle.py because the local receipt alone is 578 s, since it compiles and runs the reference and the native CG on two Helmholtz grids with three seeds each, then four failure variants. Local receipts come from pytest on a 4-core container; they are not GitHub CI file wall times. Existing weights, the Python shard total, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for N9 lot 4 (ROM-90, reference CG in surface words). Unit module: 15 s, source-only tier of api_v02_20261013, analogue test_su_t2_scheme_refusals.py widened since it lowers the reference CG Program and generates C++ without compiling. Native module: 1200 s, above the 600 s native tier of the analogue test_public_krylov_lifecycle.py because the local receipt alone is 601 s, since it compiles and runs the reference and the native CG on two Helmholtz grids with three seeds each, four failure variants, data scaled by 1e+160 and 1e-160 and a right-hand side that is not finite (review F1 of #775). Local receipts come from pytest on a 4-core container; they are not GitHub CI file wall times. Existing weights, the Python shard total, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/surface/test_solver_reference_n9.py": "tests/python/unit/surface/test_su_t2_scheme_refusals.py",
         "tests/python/integration/runtime/test_reference_cg_trace_n9.py": "tests/python/integration/runtime/test_public_krylov_lifecycle.py"
       },
       "estimates_seconds": {
         "tests/python/unit/surface/test_solver_reference_n9.py": 15,
-        "tests/python/integration/runtime/test_reference_cg_trace_n9.py": 900
+        "tests/python/integration/runtime/test_reference_cg_trace_n9.py": 1200
       },
       "local_receipts": {
         "tests/python/unit/surface/test_solver_reference_n9.py": {
-          "cases": 21,
-          "phase_seconds": 9.5,
-          "session_seconds": 10.4
+          "cases": 22,
+          "phase_seconds": 10.4,
+          "session_seconds": 11.3
         },
         "tests/python/integration/runtime/test_reference_cg_trace_n9.py": {
-          "cases": 3,
-          "phase_seconds": 555.3,
-          "session_seconds": 561.0
+          "cases": 6,
+          "phase_seconds": 600.1,
+          "session_seconds": 600.9
         }
       },
       "source_sha256": {
-        "tests/python/unit/surface/test_solver_reference_n9.py": "7219ce6cc43f51e2a968b3e0807e55a8070da403110400659e0461007675c34c",
-        "tests/python/integration/runtime/test_reference_cg_trace_n9.py": "3e3ea68a44cd9d93b6f1f924c10756d74d91d0fef97417b3ad4314033b4c9744"
+        "tests/python/unit/surface/test_solver_reference_n9.py": "48ba238b0ab978671a3389ef72834c804a12d3cd30809b3228c81dd53646d678",
+        "tests/python/integration/runtime/test_reference_cg_trace_n9.py": "f33e2024649186169ecee56ac39b4b3512045dee13672643c2c1c8689aa17c72"
       }
     }
   },
@@ -9894,5 +9894,5 @@
   "tests/python/unit/problem/test_identity_provenance_free.py": 15.0,
   "tests/python/integration/runtime/test_identity_provenance_free_native.py": 600.0,
   "tests/python/unit/surface/test_solver_reference_n9.py": 15,
-  "tests/python/integration/runtime/test_reference_cg_trace_n9.py": 900
+  "tests/python/integration/runtime/test_reference_cg_trace_n9.py": 1200
 }

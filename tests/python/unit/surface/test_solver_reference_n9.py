@@ -189,14 +189,18 @@ def test_the_failures_are_variants_of_t39_with_their_reason():
     assert codes == {11, 21, 22, 23}
 
 
-def test_the_solve_reduces_six_pairings_in_its_program():
-    # SV20 duty 3. Before the loop: the reference norm |b| and the first residual. In a step: the
-    # curvature (d, Ad) and r.r of the updated residual. A confirmation and the check at the cap
-    # each add the pairing of the true residual, and run only on their branch.
+def test_the_solve_reduces_its_pairings_and_norms_in_its_program():
+    # SV20 duty 3. Four norms of the request, each the largest magnitude (norm_inf_all) and one of
+    # two pairings on its branch (sqrt(<v, v>) at ordinary scales, or of v / max|v| outside):
+    # |b|, the first residual, the true residual of a confirmation and of the check at the cap.
+    # Three more pairings in the recurrence: r.r of the first scaled residual, the curvature
+    # (d, Ad) and r.r of the updated residual. Only one arm of each branch runs.
     program, _ = _program(_reference())
-    pairings = [value for value in _walk(program._values)
-                if value.op == "reduce" and value.attrs.get("kind") == "dot_all"]
-    assert len(pairings) == 6
+    reductions = [value.attrs.get("kind") for value in _walk(program._values)
+                  if value.op == "reduce"]
+    assert reductions.count("norm_inf_all") == 4
+    assert reductions.count("dot_all") == 4 * 2 + 3
+    assert len(reductions) == 15
 
 
 def _m08_source_with_evidence(retry_can_change):
@@ -228,3 +232,17 @@ def test_the_evidence_of_a_solve_kept_across_attempts_is_not_yet_elaborated():
 def test_the_evidence_of_a_retryable_solve_is_emitted():
     source, solve = _m08_source_with_evidence(True)
     assert "const pops::SolveReport kr%d_evidence = kr%d.report();" % (solve, solve) in source
+
+
+def test_the_candidate_names_the_fields_of_its_evidence():
+    # Review O1 of #775: the evidence reads the residual norm from the field that the solver's
+    # candidate names, not from a field of CG's record.
+    @surface.solver
+    def literal_norm(problem, region, max_iterations=3):
+        start = surface.record(x=problem.guess, n=1.0)
+        result = region.iterate(start=start, step=lambda s: s, stop=lambda s: s.n > 0,
+                                max_steps=max_iterations)
+        return problem.candidate(result.x, iterations=result.iterations, residual_norm=1.0)
+
+    with pytest.raises(TypeError, match="residual_norm=...\\) takes a field of the result"):
+        _program(literal_norm().with_request(rtol=1e-8, atol=0.0))
