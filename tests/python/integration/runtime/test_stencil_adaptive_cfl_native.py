@@ -10,12 +10,12 @@ under ``FixedDt`` (the incident sum).
   step dt = 0.02 is admitted for nu = 0.001 (dt (2 a / h + 4 nu / h^2) = 0.66) and refused with
   the reason 503 for nu = 0.05 (1.66), which dt = 0.01 admits (0.83). The value of nu is bound to
   one artifact for each step (CF15).
-* Under ``AdaptiveCFL``, the proposed step is master's cfl h / max s, which does not count the
-  frequency of the stencil, while the guard does: the first attempt is refused (503) however
-  small nu is. ROM-108 (the step and the face speeds) makes the proposal count it. The test
-  records the gap by its refusal, which ROM-108 turns into an admitted step when it rebases on
-  N3 lot 1 (O4 of the review of the lot note). It is not an xfail: in a lane with
-  POPS_REQUIRE_NATIVE_TESTS=1 the conftest fails every native test that does not pass.
+* Under ``AdaptiveCFL``, the first proposal is master's cfl h / max s, which does not count the
+  frequency of the stencil, while the guard does: it is refused (503). Since ROM-108 (#769) the
+  refusal carries the frequency that the faces and the stencil recorded at the beginning state,
+  a / h + 4 nu / h^2, and AdaptiveCFL retries once at cfl over it, which the guard admits: one
+  step accepted at its second attempt (O4 of the review of the lot note; before ROM-108 the run
+  stopped at its first step).
 """
 import numpy as np
 import pops
@@ -50,10 +50,14 @@ def _artifact(world, strategy, name):
     return artifact, block[state], nu
 
 
-def _step(world, artifact, subject, nu, value, t_end):
-    runtime = collective_call(world, lambda: pops.bind(
+def _bound(world, artifact, subject, nu, value):
+    return collective_call(world, lambda: pops.bind(
         artifact, params={nu: value}, initial_values={subject: _initial()},
         resources={"execution_context": artifact_execution_context(artifact)}))
+
+
+def _step(world, artifact, subject, nu, value, t_end):
+    runtime = _bound(world, artifact, subject, nu, value)
     collective_call(world, lambda: pops.run(runtime, t_end=t_end, max_steps=1, console=False))
 
 
@@ -76,13 +80,17 @@ def test_the_guard_counts_the_frequency_of_the_stencil_under_a_fixed_step(
 @pytest.mark.compiler
 @pytest.mark.kokkos
 @pytest.mark.native_loader
-def test_adaptive_cfl_proposes_a_step_that_the_guard_refuses_beside_a_stencil_until_rom_108(
+def test_adaptive_cfl_takes_the_step_that_the_guard_admits_beside_a_stencil(
         isolated_native_cache, native_cxx, kokkos_root):
     del isolated_native_cache, native_cxx, kokkos_root
     from pops.time import AdaptiveCFL
 
+    nu = 0.001
     _native, world = native_profile(dimension=2, scope="stencil adaptive cfl")
-    artifact = _artifact(world, AdaptiveCFL(cfl=0.4), "stencil_guard_adaptive")
-    # ROM-108: the proposal counts the frequency of the stencil, and this step is admitted
-    with pytest.raises(Exception, match="user_face_numerical_stability.*reason_code=503"):
-        _step(world, *artifact, 0.001, 1.0)
+    artifact, subject, handle = _artifact(world, AdaptiveCFL(cfl=0.4), "stencil_guard_adaptive")
+    runtime = _bound(world, artifact, subject, handle, nu)
+    report = collective_call(world, lambda: pops.step(runtime, t_bound=1.0, console=False))
+    clock = collective_call(world, lambda: float(runtime.time()))
+    # the step cfl / (a / h + 4 nu / h^2) of the recorded frequency, at the second attempt
+    assert (report.accepted_steps, report.rejected_steps, clock) == (
+        1, 1, pytest.approx(0.4 / (CELLS + 4 * nu * CELLS ** 2), rel=1e-12))
