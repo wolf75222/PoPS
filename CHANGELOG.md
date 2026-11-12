@@ -38,6 +38,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   four ulp below). A later run
   of the surface off the lattice of the first one is no longer refused, and no publication is
   repeated at the time and step where the previous run ended. Rows and identities are unchanged.
+- ROM-98 (N15, lot D-E, part D): `dt=cfl_limit(flux, cfl=, max_dt=None)` (spec 0.3, 2.6.2,
+  2.6.9, SD44, SD70; OD31). `from pops.lib.time import cfl_limit`;
+  `pops.Advance(method, dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2))` elaborates onto N8's
+  compiled step rule, `StepRule(cfl, max_dt, strategy=AdaptiveCFL(cfl, max_dt))`: each step is
+  b6's CFL selection on the wave speeds of the model, capped by `max_dt`, and the run lands on
+  its frontiers; `pops.run` on the artifact takes master's `AdaptiveCFL`. The core knows a
+  library step rule as `pops.StepRuleValue` (its fluxes and its realization), not by its name
+  (CF2). A rule that leaves out a transport flux of the model, a model with a diffusive flux and
+  a flux without derived waves refuse with their lot. A 64 x 64 advection with inflow and
+  outflow runs bit for bit as the same case written by hand, and as master's `AdaptiveCFL`.
+  A compiled run with the rule refuses every global step bound (`add_dt_bound`), even one added
+  before `bind`, which the `step_cfl` route admits: a case with such a bound cannot yet take
+  `cfl_limit` in a compiled run (review R2 of #782). `cfl_limit` is a bridge of MG9
+  (`tests/gates/mg9_bridges.toml`, owner N8): `scripts/mg9_bridges.py` finds a subclass of
+  `StepRuleValue` as it finds a `SchemeValue`, and the entry leaves before the exit of phase 1,
+  when N8 elaborates `dt=` as a function of `cell`.
 - ROM-98 (N15, lot « solves »): `pops.unknown`, `pops.solve`, `pops.Tolerance`,
   `Advance(tolerance=)` and `Program(solvers=)` of spec 0.3, 2.6.7, `cg()` in `pops.lib.solve`
   (a bridge of MG9 on b6's native conjugate gradients) and `imex_euler` in
