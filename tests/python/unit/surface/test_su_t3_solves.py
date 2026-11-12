@@ -229,3 +229,42 @@ def test_inspect_reports_the_solve_and_its_certificate(l1d):
     assert "SPD certificate = derived (IR16) from the substituted operator" in report
     assert "kappa = nu = 0.01 >= 0" in report
     assert "tolerance = pops.Tolerance(rtol=1e-10, atol=1e-12) (stated)" in report
+
+
+def test_a_relation_solve_enters_no_field_cache_and_is_never_kept_across_attempts(l1d, monkeypatch):
+    """The relation solve is the third writer of ``trial_site`` (``relations.require_success``)
+    beside the field requests of N8 lot 5 and the guards of lot 6. Its right-hand side is the
+    ``linear_combine`` of its known part, never a ``field_problem_load``: the b6 key and the
+    traced cache of the lot « reuse across stages » leave it out, and ``_attempt_reuse`` (T7
+    across attempts, lot 6) skips it. Its site is retryable under ``cg()``; a fixed one, forced
+    here, is skipped too, because the reuse across attempts is argued for field requests only."""
+    from pops.codegen import program_emit_solve as emit_solve
+    from pops.codegen import program_field_reuse as field_reuse
+
+    resolved = l1d["hand_resolved"]
+    program = resolved.time
+    (solve,) = [value for value in program._values if value.op == "solve_linear"]
+    site = emit_solve._trial_site(program, solve)
+    assert site == {"site": "imex_euler/solve", "retry_can_change": True}
+    assert solve.inputs[1].op == "linear_combine"
+    assert not any(value.op == "field_problem_load" for value in program._values)
+    # Neither cache: the b6 key and the time-independent request both ask for a field load.
+    assert field_reuse._key(solve, {}, target="system") is None
+    assert not field_reuse._time_independent_request(solve, target="system")
+    assert not field_reuse.reuse_field_solve(solve, {}, [], target="system")
+    # The emission reaches the attempt reuse with a prepared Krylov solve, which declines it.
+    seen = []
+    attempt_reuse = emit_solve._attempt_reuse
+
+    def spy(*args, **kwargs):
+        seen.append((kwargs["prepared"], attempt_reuse(*args, **kwargs)))
+        return seen[-1][1]
+
+    monkeypatch.setattr(emit_solve, "_attempt_reuse", spy)
+    source = _cpp(resolved)
+    assert seen == [(True, None)]
+    assert "attempt_slot" not in source and "field.reuses/" not in source
+    # A fixed relation site (none exists under cg(), see test_relations_n8.py) is not kept either.
+    monkeypatch.setattr(emit_solve, "_trial_site",
+                        lambda prog, value: dict(site, retry_can_change=False))
+    assert attempt_reuse(program, solve, [], [], "sol", target="system", prepared=True) is None

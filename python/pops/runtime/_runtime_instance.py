@@ -1756,6 +1756,14 @@ class RuntimeInstance:
         try:
             temporal = getattr(native, "_temporal_restart_state", None)
             prepared_run.begin(temporal, time=native.time(), macro_step=native.macro_step())
+            if _accepted_step_limit is None:
+                from pops.runtime._amr_system import AmrSystem
+
+                if isinstance(native, AmrSystem):
+                    # pops.run starts a run: a Regrid's every(k) counts its accepted steps from
+                    # here (spec 5.2, N8 « Ancrage des calendriers au départ du run », D6);
+                    # pops.step continues the current run.
+                    native._mark_run_start()
             from pops.runtime._run_manifest import begin_run
 
             manifest = begin_run(
