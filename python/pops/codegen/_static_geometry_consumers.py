@@ -33,8 +33,11 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
+from pops.time._program.stencil_flux import OPERATION as _STENCIL_OPERATION
+
+# The operation of a stencil flux is named once, by the module that builds it.
 STATIC_GEOMETRY_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs",
-                                         "stencil_flux_divergence", "reduce", "scalar_isfinite",
+                                         _STENCIL_OPERATION, "reduce", "scalar_isfinite",
                                          "acceptance_guard"})
 # What a physical face normal provides to a face law: the normal flux F.n, a bound of the normal
 # spectral radius, and the provider pack of each trace.
@@ -236,7 +239,7 @@ def validate_static_geometry_consumers(plan: Any) -> None:
                 source != "default" for source in (value.attrs.get("sources") or ()))):
             _refuse(layout, "static_geometry_consumer_unavailable",
                     "a rate with named fluxes or named sources")
-        if value.op == "stencil_flux_divergence":
+        if value.op == _STENCIL_OPERATION:
             _check_stencil(layout, value, reading.rank, reading.kind)
         if value.op == "reduce" and value.block is None:
             _refuse(layout, "static_geometry_consumer_unavailable",

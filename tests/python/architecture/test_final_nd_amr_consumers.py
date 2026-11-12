@@ -869,7 +869,9 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
         "pops/runtime/program/hierarchy_control_failure.hpp":
             (64, "hierarchy_control_failure"),
         "pops/numerics/spatial/nd/face_frequency.hpp":
-            (80, "maximum_incident_face_frequency"),
+            # N17 L1b (ROM-110): the same frequency on static geometry arrays, each face speed
+            # weighed by |S| / |K| in place of 1 / dx, takes 73 to 133 lines (+60), margin 7.
+            (80 + 60, "maximum_incident_face_frequency"),
         "pops/runtime/program/prepared_amr_field_residual.hpp":
             # The clang-format 19.1.7 sweep of N5 takes this file from 874 to 979
             # lines (+105) with the same tokens; the margin stays 26 lines.

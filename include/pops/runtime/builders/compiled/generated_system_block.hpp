@@ -1614,13 +1614,23 @@ PreparedSystemBlock<Dim> select_reconstruction(Request request) {
   throw std::logic_error("generated limiter route escaped its exhaustive selector");
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request, class Numerical>
+/// `Geometry` is GeneratedStaticGeometryFace for a package compiled for static geometry arrays
+/// (N17, C1): its face reads the cell values as traces and the physical normals and measures of
+/// the arrays. Resolution refuses any other trace there; a block of the logical box that such a
+/// package would build is refused when it is prepared on the arrays (materialize_block).
+template <int Dim, nd::ReconstructionVariables Variables, class Geometry = GeneratedCatalogueRoutes,
+          class Request, class Numerical>
 PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numerical numerical) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   switch (parse_limiter_route(request.routes.limiter, "generated System face block")) {
     case LimiterRouteId::kNone:
-      return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(std::move(request),
-                                                                          NoSlope{}, numerical);
+      if constexpr (route_reads_static_geometry<Geometry>)
+        return materialize_block<Dim, Model, NoSlope, Numerical, Variables,
+                                 StaticArraysBlockGeometry>(std::move(request), NoSlope{},
+                                                            numerical);
+      else
+        return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(std::move(request),
+                                                                            NoSlope{}, numerical);
     case LimiterRouteId::kMinmod:
       return materialize_block<Dim, Model, Minmod, Numerical, Variables>(std::move(request),
                                                                          Minmod{}, numerical);
@@ -1845,33 +1855,15 @@ auto prepare_generated_system_block(Request request, Numerical numerical)
     throw std::invalid_argument("generated System face source identity differs from package");
   if constexpr (path_conservative_model<Model>) {
     throw std::invalid_argument("source face needs a composed path face policy");
-  } else if constexpr (route_reads_static_geometry<Geometry>) {
-    using generated_system_detail::StaticArraysBlockGeometry;
-    if (parse_limiter_route(request.routes.limiter, "generated System face block") !=
-        LimiterRouteId::kNone)
-      throw std::invalid_argument(
-          "a source face on static geometry arrays reads the cell values as its traces");
-    switch (parse_recon_route(request.routes.reconstruction, "generated System face block")) {
-      case ReconRouteId::kConservative:
-        return generated_system_detail::materialize_block<Dim, Model, NoSlope, Numerical,
-                                                          nd::ReconstructionVariables::Conservative,
-                                                          StaticArraysBlockGeometry>(
-            std::move(request), NoSlope{}, numerical);
-      case ReconRouteId::kPrimitive:
-        return generated_system_detail::materialize_block<Dim, Model, NoSlope, Numerical,
-                                                          nd::ReconstructionVariables::Primitive,
-                                                          StaticArraysBlockGeometry>(
-            std::move(request), NoSlope{}, numerical);
-    }
-    throw std::logic_error("generated face reconstruction route escaped its exhaustive selector");
   } else {
     switch (parse_recon_route(request.routes.reconstruction, "generated System face block")) {
       case ReconRouteId::kConservative:
         return generated_system_detail::select_reconstruction_with_face<
-            Dim, nd::ReconstructionVariables::Conservative>(std::move(request), numerical);
+            Dim, nd::ReconstructionVariables::Conservative, Geometry>(std::move(request),
+                                                                      numerical);
       case ReconRouteId::kPrimitive:
         return generated_system_detail::select_reconstruction_with_face<
-            Dim, nd::ReconstructionVariables::Primitive>(std::move(request), numerical);
+            Dim, nd::ReconstructionVariables::Primitive, Geometry>(std::move(request), numerical);
     }
     throw std::logic_error("generated face reconstruction route escaped its exhaustive selector");
   }
