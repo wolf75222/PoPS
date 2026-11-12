@@ -254,9 +254,13 @@ def _model_snapshot_value(model: Any, *, artifact: bool = False) -> Any:
     to_dict = getattr(built, "to_dict", None)
     if not callable(to_dict):
         raise TypeError("model manifest() must return an object exposing to_dict()")
-    manifest_data = to_dict()
     if artifact:
+        # CC2: operator source spans are provenance; the manifest's identity projection omits them.
+        projection = getattr(built, "artifact_data", None)
+        manifest_data = projection() if callable(projection) else to_dict()
         manifest_data = _artifact_manifest_data(manifest_owner, manifest_data)
+    else:
+        manifest_data = to_dict()
     result = {
         "type": "%s.%s" % (type(model).__module__, type(model).__qualname__),
         "manifest": manifest_data,

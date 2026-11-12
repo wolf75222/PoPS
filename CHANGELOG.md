@@ -31,6 +31,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
   until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
   case written by hand for b6 and N8 (program IR, artifact, identity, C++).
+- ROM-98 (N15, lot G): a case of the surface compiles, binds and runs (spec 0.3, 2.6.2, 2.6.6,
+  §5.2, CC14; OD31). `pops.compile(case, target=pops.OpenMP())`, `pops.bind(artifact,
+  params={b: v}, data={u0: array}, resources=pops.Resources(threads=n), directory=d)` and
+  `simulation.run(until=t, max_steps=n)` run the b6 compile and the compiled run of N8; arrays
+  are in the order of the support's axes. `pops.Output(pops.record(u=u), when=[t1, t2] |
+  pops.every(time=h) | pops.every(steps=k), write=npz(path, metadata=pops.record(...)))` lowers
+  to the Outputs of N8, and `pops.lib.output.npz` writes the series of an Output after each run.
+  `pops.RunFailed` and `pops.BudgetExhausted` carry the surface `RunResult`. A 2D periodic case
+  runs bit for bit as the same case written by hand for b6.
 - ROM-98 (N15, lot 2b): schemes of one's own on a support of rank two and three. A flux is
   written by its axis components, `model.flux(of=u, value=vector(a, b) * u)`, and lowered on the
   b6 dictionary per axis with the waves dF_a/du of each component; in a scheme,
@@ -147,6 +156,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-93 with ROM-25 (N11 lot 2a, G07): source spans leave every artifact identity (spec 0.3 CC2,
+  gap C48). The same case loaded from two checkout paths, or with comment lines inserted, now has
+  one `snapshot.artifact_hash`, one `plan_identity` and one compiled `artifact_identity`: the time
+  program of the compile context is projected without provenance, and `ModuleManifest.artifact_data()`
+  drops each operator's source span from the snapshot projection and the binary evidence. The full
+  snapshot (`snapshot.hash`) and the manifest keep file and line as provenance. A docstring no
+  longer changes the identity of a Python operator body, as a comment or a line shift already did.
+  `ARTIFACT_SCHEMA_VERSION` is 7, so every artifact hash changes once; semantic identities do not.
 - A `format-bench` job of `ci.yml`, aggregated by `gate`, replays
   `scripts/test_check_clang_format.sh`, the bench of `scripts/check_clang_format.sh`, on every full
   plan and when the plan sees the script, the bench or a style file (`.clang-format`,
@@ -155,6 +172,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3b): a criterion written as regions of `cell` now compiles on a plan with
+  several layouts. `pops.compile` generates each adaptive layout's criterion into that layout's
+  Program slice, and the layout's AmrSystem installs the entry of its own slice; no native code
+  changes. `Regrid(criterion, when)` on a plan with several layouts stays refused (write
+  `tagging=` and `regrid=` on each adaptive layout). The multi-layout AMR cases of the test suite
+  (physical maps, interstage maps, m19, sol61) write regions; on three adaptive layouts, graph and
+  region routes give bitwise identical hierarchies.
 - ROM-95 (N12, lot 3a, part 2): the 19 `examples/api_v02` AMR cases and the condensed_fac/01,
   diocotron/01, 02 and 04, hyqmom (`_amr_hybrid`) and initial_field_ghost/01 tutorials write their
   tagging as regions of `cell`; the three reviewed api_v02 modules that changed carry new source
@@ -617,12 +641,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-93 (N11 lot 1 follow-up): the empty sum `ddt(U) == RateExpr(())` is again the zero rate of b6 and
+  reaches the prepared IR as the zero identity; lot 1 had refused it. Spec 0.3 R7 refuses no empty
+  balance. The bare literal `ddt(U) == 0` stays refused, as in b6.
+
 - ROM-85 (#749 follow-up): `scripts/dmt1.py emit` failed on M15 in the gate-python shards, which
   export a Kokkos root for their native tests: the real `compile_native` that it runs
   authenticates that root against the Kokkos contract of `_pops`, which it never loads. `emit` now
   drops the Kokkos root overrides from its own environment, as it fixes the other toolchain facts
   that need `_pops`; the emitted units are unchanged. Its test runs under a Kokkos root everywhere
   and prints the profile's error and trace when it fails.
+- ROM-18 (#699 follow-up, found by DM-T2 of ROM-85): a generated package compiled for its one
+  resolved route lost up to 19 % per step on M01 against b6 (face kernel x1.65), with bit-identical
+  states. GCC sizes its inlining budget on the whole translation unit (`inline-unit-growth`), and
+  the single-route package is a small unit: the budget ran out before the metric accessors, so
+  every face called `cell_measure`, `reference_cell` and `face_measure` through the PLT. Those
+  accessors are now `POPS_HD_FORCEINLINE`, and the prescribed boundary trace of a face, taken on two
+  faces of a row, is out of line (`POPS_HD_OUTLINE`). The face body no longer depends on how many
+  routes the package instantiates; results stay bit for bit, no threshold changes.
 - ROM-17: build PoPS against conda-forge's Kokkos 5.2.2. Its HWLOC TPL names the prefix's
   `include/` with a trailing separator next to Kokkos' own `include`, so the include contract kept
   both spellings and counted four defining headers instead of two, and configuration stopped.

@@ -21,8 +21,14 @@ PHYSICAL = PhysicalSupport((("position", "periodic-position"),))
 ROOT = Path(__file__).resolve().parents[4]
 
 
+def _first_above(subject, threshold):
+    """The refine region of one adaptive layout, written as a function of cell (DM13b)."""
+    from pops.math import ValueExpr
+    return lambda cell: cell.value(ValueExpr(subject)["first"]) > threshold
+
+
 def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_by_dt=False,
-                            adaptive_execution=None, with_fields=False):
+                            adaptive_execution=None, with_fields=False, graph=False):
     phase_frame = Rectangle("phase axes v then x", (-2, 0), (2, 1)).frame(Cartesian2D())
     physical_frame = Rectangle("physical x then hidden", (0, 0), (1, 1)).frame(Cartesian2D())
     case = pops.Case("independent weighted moments and explicit extension")
@@ -165,7 +171,9 @@ def resolve_interstage_maps(directory, *, reverse=False, adaptive=False, retry_b
             transfer.state(block_states[name], StateTransfer())
             descriptors[name] = AMR(grid=physical_mesh if name == "integral" else phase_mesh,
                 hierarchy=AMRHierarchy(max_levels=2, ratios=((2, 1) if name == "integral" else (2, 2),)),
-                tagging=AMRTagging(rules=(Tag(ValueExpr(block_states[name])["first"] > case.value(threshold)), Buffer(cells=0)),
+                tagging=AMRTagging(rules=(Tag(ValueExpr(block_states[name])["first"] > case.value(threshold)
+                                              if graph else _first_above(block_states[name], case.value(threshold))),
+                                          Buffer(cells=0)),
                     hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
                 regrid=AMRRegrid.frozen(), transfer=transfer,
                 execution=adaptive_execution or AMRExecution.synchronous()).resolve_for_case(validated.resolve)

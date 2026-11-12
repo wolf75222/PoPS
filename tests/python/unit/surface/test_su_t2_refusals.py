@@ -687,9 +687,9 @@ def test_a_construct_of_a_later_lot_names_the_lot_that_elaborates_it():
     assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("later-dt"))
     assert "a later lot of N8 (the step rules of 5.11, PF8) elaborates it" in str(caught.value)
     with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.compile(None)  # <- later-compile
-    assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("later-compile"))
-    assert "the run of N8 (Simulation.run, RunResult and Output, CC14)" in str(caught.value)
+        surface.CUDA()  # <- later-cuda
+    assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("later-cuda"))
+    assert "the GPU run of Q03a" in str(caught.value)
 
 
 # --- the refusals that the review of lot 1 asked for (#745) -------------------------------------

@@ -121,7 +121,7 @@ class PreparedMappedMetricProvider {
 
   POPS_HD Identity identity() const { return Identity{map_.identity(), domain_}; }
 
-  POPS_HD ReferenceCell<logical_dimension> reference_cell(
+  POPS_HD_FORCEINLINE ReferenceCell<logical_dimension> reference_cell(
       const Index<logical_dimension>& index) const {
     ReferenceCell<logical_dimension> result{};
     for (int axis = 0; axis < logical_dimension; ++axis) {
@@ -152,13 +152,14 @@ class PreparedMappedMetricProvider {
     return map_.jacobian(reference_cell(index).center);
   }
 
-  POPS_HD Real cell_measure(const Index<logical_dimension>& index) const {
+  POPS_HD_FORCEINLINE Real cell_measure(const Index<logical_dimension>& index) const {
     const auto reference = reference_cell(index);
     return map_.cell_measure(reference.lower, reference.upper);
   }
 
   template <int Axis, MetricFaceSide Side>
-  POPS_HD PhysicalPoint oriented_face_area_vector(const Index<logical_dimension>& index) const {
+  POPS_HD_FORCEINLINE PhysicalPoint
+  oriented_face_area_vector(const Index<logical_dimension>& index) const {
     static_assert(Axis >= 0 && Axis < logical_dimension,
                   "prepared metric face axis is outside the provider rank");
     const auto reference = reference_cell(index);

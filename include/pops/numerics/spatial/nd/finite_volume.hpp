@@ -158,7 +158,8 @@ POPS_HD FluxEvaluation<State> reject_face_evaluation(StateConversionStatus statu
 }
 
 template <int Axis, int Dim, class Metric>
-POPS_HD Real face_measure(const Metric& metric, const Index<Dim>& cell, MetricFaceSide side) {
+POPS_HD_FORCEINLINE Real face_measure(const Metric& metric, const Index<Dim>& cell,
+                                      MetricFaceSide side) {
   static_assert(Axis >= 0 && Axis < Dim, "ND metric face axis is outside the dimension");
   typename Metric::PhysicalPoint area{};
   if (side == MetricFaceSide::Upper)
