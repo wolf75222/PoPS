@@ -30,7 +30,6 @@ from ._project import project
 from . import _solver
 from ._quadrature import Quadrature
 from ._run import BudgetExhausted, Output, RunFailed, SolveFailed, every
-from ._step import StepRuleValue
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
@@ -193,6 +192,5 @@ __all__ = [
     "AmbiguousSolvePath", "UnknownSolvePath",
     # the failures of a run (T39), lot G, which a solver also fails with (N9 lot 4)
     "BudgetExhausted", "RunFailed", "SolveFailed",
-    "Choice", "Report", "Row", "SchemeValue", "StepRuleValue", "TermView",
-    "check_plain_function",
+    "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]

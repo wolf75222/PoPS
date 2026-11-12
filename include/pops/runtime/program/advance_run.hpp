@@ -49,7 +49,17 @@ enum class AdvanceRunStop : std::uint8_t {
   kStepBudget = 1,     ///< max_steps accepted steps before the frontier
   kAttemptBudget = 2,  ///< one step spent every attempt of the Advance
   kTrialFailure = 3,   ///< a fixed failure site of the trial ended the step (T38)
+  /// Under a cells rule, an attempt that the face guard refused with the faces' frequency
+  /// (pops.face-step-frequency@1): the compiled run does not retry at that frequency yet (N8
+  /// « dt= as a function of cell », D2), so it stops by name with the frequency.
+  kFaceFrequency = 4,
 };
+
+/// Typed failure schema of the face guard's refusal that carries the faces' frequency (ROM-108).
+inline constexpr std::string_view kFaceStepFrequencySchema = "pops.face-step-frequency@1";
+/// The lot that retries at the faces' frequency on the compiled run, named by kFaceFrequency.
+inline constexpr std::string_view kFaceFrequencyRetryLot =
+    "the faces' frequency retry of the compiled run";
 
 /// The uninterrupted segment of accepted steps of one proposal that a compiled run continues:
 /// its origin and its step count, left at the accepted cursor (time, macro_step). A run at
@@ -74,10 +84,23 @@ struct AdvanceSegment {
 /// at @p fraction and capped at @p max_dt, taken once per step before its attempts and then cut at
 /// the frontier by advance_attempt_duration. A rule has no fixed-proposal segment: each step starts
 /// its own. The library word that elaborates onto it names the rule; the core does not.
+///
+/// A cells rule (N8 « dt= as a function of cell », D2) takes each step's proposal from the generated
+/// entry of the Program, the smallest value over the cells of the function of cell that dt= writes,
+/// at the accepted state; @p fraction is the Courant budget that the rule declares, under which the
+/// attempts run, and @p bound_identity the identity of that bound, which the installed Program
+/// must export. max_dt and speed_floor are a stability rule's; a cells rule reads neither.
+enum class AdvanceStepRuleKind : std::uint8_t {
+  kStability = 0,  ///< b6's selection (N8 « Règle de pas compilée »)
+  kCells = 1,      ///< the generated step bound of the Program (N8 « dt= as a function of cell »)
+};
+
 struct AdvanceStepRule {
   double fraction = 0.0;
   double max_dt = std::numeric_limits<double>::infinity();  ///< +infinity when the rule has none
   double speed_floor = 0.0;  ///< the floor of step_cfl's default, set by the binding
+  AdvanceStepRuleKind kind = AdvanceStepRuleKind::kStability;
+  std::string bound_identity;  ///< a cells rule's bound identity; empty for a stability rule
 };
 
 /// One Output of the elaborated Advance as a compiled run schedules it (CC14).
@@ -112,6 +135,9 @@ struct AdvanceRunReport {
   /// The iteration count and final residual norm of the last of them; -1 and NaN without one.
   std::int64_t last_prepared_solve_iterations = -1;
   double last_prepared_solve_residual = std::numeric_limits<double>::quiet_NaN();
+  /// The faces' frequency of the refusal that stopped a cells rule (kFaceFrequency), the largest
+  /// over the ranks; 0 for any other stop.
+  double face_frequency = 0.0;
   AdvanceSegment segment;                    ///< the segment that the next run continues
   std::vector<AdvanceOutputSample> outputs;  ///< the evaluations of the Outputs, in run order
 };

@@ -221,7 +221,7 @@ def _trial_failures(program: Any, trace: MethodTrace) -> tuple:
     return tuple(rows)
 
 
-def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal | StepRule,
+def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Any,
               name: str | None = None, outputs: Any = (), realization: Any = None) -> Elaboration:
     """Elaborate ``advance`` for the block-qualified ``state`` of ``case``, from ``proposal``.
 
@@ -238,9 +238,11 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal | S
     """
     if not isinstance(advance, Advance):
         raise TypeError("elaborate(advance): an Advance, got %r" % (advance,))
-    if not isinstance(proposal, (Proposal, StepRule)):
-        raise TypeError("elaborate(proposal=...): the first Proposal of the run or a StepRule, "
-                        "got %r" % (proposal,))
+    from pops.time._step.bound import StepBound
+
+    if not isinstance(proposal, (Proposal, StepRule, StepBound)):
+        raise TypeError("elaborate(proposal=...): the first Proposal of the run, a StepRule or a "
+                        "StepBound, got %r" % (proposal,))
     if isinstance(proposal, StepRule) and proposal.strategy is None:
         raise TypeError("elaborate(proposal=StepRule(...)): the rule names no strategy; pops.run "
                         "on the artifact takes StepRule(..., strategy=...)")
@@ -272,7 +274,19 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal | S
     if regions:
         program._set_advance_outputs(regions)
     memory = _lower_memory(program, advance.method, trace)
-    if isinstance(proposal, StepRule):
+    step_bound = None
+    if isinstance(proposal, StepBound):
+        # dt= as a function of cell (N8, D2): the Program generates the bound; Simulation.run takes
+        # the cells rule, pops.run on the artifact the CellStepBound strategy (D4).
+        from pops.time._step.bound import resolve_step_bound
+        from pops.time._step.strategy import CellStepBound
+
+        resolved = resolve_step_bound(proposal, state=state)
+        program._set_advance_step_bound(resolved)
+        program.step_strategy(CellStepBound(resolved.fraction, resolved.qualified_id))
+        first_dt, step_rule = None, None
+        step_bound = (resolved.fraction, resolved.qualified_id)
+    elif isinstance(proposal, StepRule):
         # pops.run on the artifact takes the strategy the rule's library word gives; Simulation.run
         # takes the rule.
         program.step_strategy(proposal.strategy)
@@ -285,7 +299,7 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal | S
     control = AdvanceControl(assessments=(("finite", "default"),),
                              max_attempts=advance.retry.max_attempts,
                              max_transforms=advance.retry.max_transforms, first_dt=first_dt,
-                             step_rule=step_rule,
+                             step_rule=step_rule, step_bound=step_bound,
                              outputs=tuple(region.schedule_data() for region in regions),
                              memory=memory, trial_failures=_trial_failures(program, trace))
     program._set_advance_control(control)

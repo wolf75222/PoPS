@@ -85,6 +85,7 @@ class _ProgramBase:
     _acceptance_guards: tuple
     _advance_control: Any
     _advance_outputs: tuple
+    _advance_step_bound: Any
     _frozen: bool
 
     # --- class-level constant tables (_ProgramConstants) ---

@@ -251,6 +251,46 @@ class ComputedDt(StepStrategy):
                    clip_to_frontier=clipped)
 
 
+@register_step_strategy_type
+@dataclass(frozen=True, slots=True)
+class CellStepBound(StepStrategy):
+    """Take each step from the step bound of a cells rule that the Program generates (N8 « dt= as a
+    function of cell », design note D4): the smallest value over the cells of the function of
+    ``cell`` that ``dt=`` writes, at the accepted state, capped at the final time.
+
+    ``fraction`` is the Courant budget φ that the rule declares, in (0, 1]: the face guards of each
+    attempt check it, and a refusal that carries the faces' frequency F is retried once at φ / F
+    (ROM-108). ``bound`` is the qualified id of the bound. The descriptor names neither a library
+    word nor its options (CF2).
+    """
+
+    fraction: float
+    bound: str
+    kind: ClassVar[str] = "cell_step_bound"
+    # The bound is a stable step for the speeds at the cells, as master's cfl min_a h_a / max_a s_a
+    # is, so a riemann.User guard checks dt max_a s_a / min_a h_a against the budget (ROM-107).
+    face_frequency_rule: ClassVar[str] = "largest_axis"
+
+    def __post_init__(self) -> None:
+        fraction = _positive_float(self.fraction, where="CellStepBound.fraction")
+        if fraction > 1.0:
+            raise ValueError("CellStepBound.fraction is a Courant budget in (0, 1]")
+        object.__setattr__(self, "fraction", fraction)
+        if not isinstance(self.bound, str) or not self.bound:
+            raise TypeError("CellStepBound.bound is the qualified id of the step bound")
+
+    def to_data(self) -> dict[str, Any]:
+        return {"kind": self.kind, "fraction": scalar_data(self.fraction), "bound": self.bound}
+
+    @classmethod
+    def from_data(cls, payload: Mapping[str, Any]) -> CellStepBound:
+        if (not isinstance(payload, Mapping) or payload.get("kind") != cls.kind
+                or set(payload) != {"kind", "fraction", "bound"}):
+            raise ValueError("CellStepBound strategy manifest has invalid keys")
+        return cls(_binary64(payload["fraction"], where="CellStepBound.fraction"),
+                   payload["bound"])
+
+
 # The typed refusal of a riemann.User guard under a strategy that proposes from the face speeds:
 # its payload is the frequency of the refused step, in C hexadecimal notation (ROM-108).
 FACE_STEP_FREQUENCY_SCHEMA = "pops.face-step-frequency@1"
@@ -415,7 +455,7 @@ class ExternalTimeGrid(StepStrategy):
 
 
 __all__ = [
-    "AdaptiveCFL", "ComputedDt", "ErrorControlledDt", "ExternalTimeGrid", "FixedDt", "StepStrategy",
+    "AdaptiveCFL", "CellStepBound", "ComputedDt", "ErrorControlledDt", "ExternalTimeGrid", "FixedDt", "StepStrategy",
     "register_step_strategy_type", "registered_step_strategy_type",
     "validate_step_strategy_manifest",
 ]

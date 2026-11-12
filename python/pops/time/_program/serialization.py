@@ -364,6 +364,11 @@ class _ProgramSerialization(_ProgramBase):
                 # Version 33: the step rule of an Advance (N8 « Règle de pas compilée »):
                 # control schema 4, whose proposal is the rule.
                 _raise_ir_version(result, 33)
+            if advance_control.step_bound is not None:
+                # Version 36: the step bound of an Advance written as a function of cell (N8
+                # « dt= as a function of cell »): control schema 6, whose proposal names the
+                # bound that the Program generates. Versions 34 and 35 are N9's relation solves.
+                _raise_ir_version(result, 36)
         cadence = self.cadence_contract()
         if not cadence.is_default:
             result["cadence"] = cadence.to_data()

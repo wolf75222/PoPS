@@ -8,6 +8,7 @@
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/dynamic/dynlib.hpp>
+#include <pops/runtime/program/generated_step_bound.hpp>
 #include <pops/runtime/program/module_metadata.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
@@ -846,6 +847,25 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
       advance_output_scalar_counts.push_back(scalars);
     }
   }
+  // The step bound of a cells rule (N8 « dt= as a function of cell », D2): the generated entry
+  // that reduces the bound over this rank's cells, and its identity, both or neither.
+  using advance_step_bound_t = int (*)(System<Dim>*, int, double, double*);
+  using advance_step_bound_identity_t = const char* (*)();
+  auto advance_step_bound = reinterpret_cast<advance_step_bound_t>(
+      pops::dynlib::sym(h, pops::runtime::program::kGeneratedStepBoundEntrySymbol));
+  auto advance_step_bound_identity = reinterpret_cast<advance_step_bound_identity_t>(
+      pops::dynlib::sym(h, pops::runtime::program::kGeneratedStepBoundIdentitySymbol));
+  std::string step_bound_identity;
+  if (advance_step_bound || advance_step_bound_identity) {
+    const char* identity = advance_step_bound_identity ? advance_step_bound_identity() : nullptr;
+    if (!advance_attempts || !advance_step_bound || identity == nullptr || identity[0] == '\0') {
+      pops::dynlib::close(h);
+      throw std::runtime_error(
+          "System::install_program: Program declares a step bound without its complete entries; "
+          "regenerate the System artifact");
+    }
+    step_bound_identity = identity;
+  }
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
   const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
   auto install_boundaries = reinterpret_cast<void (*)(System<Dim>*)>(
@@ -1219,6 +1239,16 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     } else {
       p_->program_.advance_output_scalars_ = nullptr;
     }
+    if (!step_bound_identity.empty()) {
+      System<Dim>* self = this;
+      p_->program_.advance_step_bound_ = [self, advance_step_bound](int mode, double target,
+                                                                    double* result) {
+        return advance_step_bound(self, mode, target, result);
+      };
+    } else {
+      p_->program_.advance_step_bound_ = nullptr;
+    }
+    p_->program_.advance_step_bound_identity_ = std::move(step_bound_identity);
     p_->program_.artifact_backed_ = true;
 
     if (!p_->program_.artifact_field_boundary_baseline_)

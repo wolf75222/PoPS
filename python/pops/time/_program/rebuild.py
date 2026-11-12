@@ -105,6 +105,7 @@ def rebuild_program(
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
     out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
     out._advance_control = getattr(self, "_advance_control", None)
+    out._advance_step_bound = getattr(self, "_advance_step_bound", None)
     out._integral_states = dict(getattr(self, "_integral_states", {}))
     out._integral_units = dict(getattr(self, "_integral_units", {}))
     if project_states and getattr(self, "_advance_outputs", ()):
