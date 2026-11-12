@@ -120,7 +120,7 @@ def _case_and_layout(*, validity_threshold=0.0):
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(block_state) > case.value(refine_threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(block_state)) > case.value(refine_threshold)),
                 Buffer(cells=1),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
