@@ -8426,22 +8426,22 @@
       }
     },
     "ci_20261107_n10_index_sets": {
-      "basis": "Unmeasured CI scheduling estimate for the N10 phase 1 module (ROM-85, lots 1a and 1b: index sets of IR2, descriptors of IR3, value types of IR1, the one kind function): 60 s on the api_v02_20261013 source-only tier, about twice the analogue test_typed_index_maps_n7.py: it resolves nine small programs (M01, M08, M10, M12, M18, T06, T08 and the T10 multi-block example) without compilation, runs one DM-T1 emission of M15 in a subprocess (no compiler) and runs no seeded samples; one test parses python/pops (review of #777, P2). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module) that shared the machine with a benchmark; it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimate for the N10 phase 1 module (ROM-85, lots 1a, 1b and 3a: index sets of IR2, descriptors of IR3, value types of IR1, the one kind function, the DM5 report and refusal): 120 s on the api_v02_20261013 source-only tier, about four times the analogue test_typed_index_maps_n7.py: it resolves nine small programs (M01, M08, M10, M12, M18, T06, T08 and the T10 multi-block example) and three examples (distributed_algebra_v14, distributed_program_checks, continuation_regrid_amr) without compilation, runs one DM-T1 emission of M15 in a subprocess (no compiler) and runs no seeded samples; one test parses python/pops (review of #777, P2). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module) that ran alone; it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/numerics/test_index_sets_n10.py": "tests/python/unit/numerics/test_typed_index_maps_n7.py"
       },
       "estimated_seconds": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": 60
+        "tests/python/unit/numerics/test_index_sets_n10.py": 120
       },
       "local_receipts": {
         "tests/python/unit/numerics/test_index_sets_n10.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_index_sets_n10.py",
-          "passed": 25,
-          "seconds": 48.58
+          "passed": 31,
+          "seconds": 92.5
         }
       },
       "source_sha256": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": "86d272d813080b64e422b51c826af47ab67b247f5c21087f2220612a5b29999c"
+        "tests/python/unit/numerics/test_index_sets_n10.py": "4f73198f44f8db7c8c5d939c778d102635553ee70f5afedeb2a355396e4f2d7c"
       }
     },
     "n11_20261108_expression_closure": {
@@ -9933,7 +9933,7 @@
   "tests/python/unit/surface/test_su_t3_parity.py": 60,
   "tests/python/integration/runtime/test_field_requests_n8_native.py": 900,
   "tests/python/unit/time/test_field_requests_n8.py": 120,
-  "tests/python/unit/numerics/test_index_sets_n10.py": 60,
+  "tests/python/unit/numerics/test_index_sets_n10.py": 120,
   "tests/python/unit/physics/test_rate_expression_closure_n11.py": 15.0,
   "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py": 600.0,
   "tests/python/unit/surface/test_quadrature.py": 5,
