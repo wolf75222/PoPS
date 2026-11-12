@@ -45,7 +45,8 @@ VERSIONED_OPS = frozenset(("continuation_open", "continuation_read", "continuati
                           "continuation_regrid_source", "continuation_regrid_base",
                           "continuation_regrid_templates", "continuation_regrid_child_publish",
                           "continuation_regrid_parent_open", "continuation_regrid_parent_publish",
-                          "continuation_source_topology", "continuation_target_topology")) | BUNDLE_OPS
+                          "continuation_source_topology", "continuation_target_topology",
+                          "continuation_regrid_read", "continuation_regrid_integral")) | BUNDLE_OPS
 
 
 def _digest(value):

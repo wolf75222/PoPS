@@ -317,6 +317,7 @@ sdk-support pops/runtime/program/amr_program_context_composite_integral.inc
 sdk-support pops/runtime/program/amr_program_context_affine_measure.inc
 sdk-support pops/runtime/program/amr_program_context_affine_history.inc
 sdk-support pops/runtime/program/composite_integral_kernel.hpp
+sdk-support pops/runtime/program/regrid_read_support.hpp
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_configuration.inc
 sdk-support pops/runtime/program/amr_program_context_cell_temporal_level_runtime.inc
 sdk-support pops/runtime/program/amr_program_context_diffusion.inc
@@ -472,6 +473,7 @@ sdk-support pops/runtime/program/field_topology_view.hpp
 sdk-support pops/runtime/program/amr_program_context_continuation_regrid.inc
 sdk-support pops/runtime/program/amr_program_context_continuation_regrid_child.inc
 sdk-support pops/runtime/program/amr_program_context_continuation_regrid_topology.inc
+sdk-support pops/runtime/program/amr_program_context_regrid_read.inc
 sdk-support pops/runtime/program/amr_program_context_field_allocation.inc
 sdk-support pops/runtime/program/amr_program_context_continuation_field_storage.inc
 sdk-support pops/runtime/program/amr_program_context_continuation_field_provider.inc

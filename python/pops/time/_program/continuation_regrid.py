@@ -17,6 +17,7 @@ REGRID_OPS = frozenset((
     "continuation_regrid_templates", "continuation_regrid_child_publish",
     "continuation_regrid_parent_open", "continuation_regrid_parent_publish",
     "continuation_source_topology", "continuation_target_topology",
+    "continuation_regrid_read", "continuation_regrid_integral",
 ))
 
 
@@ -75,6 +76,154 @@ def base(program, source_level):
                      {"schema": schema})
 
 
+def _source_path(field):
+    """The path of ``field`` inside one ``regrid_source`` image, and that image."""
+    path, cursor = [], field
+    while cursor.op == "product_get":
+        path.append(cursor.attrs["field"])
+        cursor = cursor.inputs[0]
+    if cursor.op != "continuation_regrid_source":
+        raise ValueError("regrid_read reads a Field of a regrid_source image of this child")
+    return tuple(reversed(path)), cursor
+
+
+def read(program, field):
+    """The value of a source Field at each target cell, along the map the regrid issues.
+
+    ``target(c) = field(Parent(r)(c))`` with r the ratio from the source level to the child's
+    level (the identity when they are equal): the phase 1 form of ``region.gather(field,
+    Parent(ratio=r))`` over the target cells (N10 lot 3, DM13). The runtime allocates the target
+    storage with the source Field's components and ghosts; nothing is interpolated.
+    """
+    context = _context(program)
+    if context["scope"] != "child":
+        raise ValueError("regrid_read belongs to a target child region")
+    require_owned(program, field, "regrid_read Field")
+    if field_role(field) not in ("state", "field"):
+        raise TypeError("regrid_read requires a Field leaf of a regrid source image")
+    path, image = _source_path(field)
+    signature = value_signature(field)
+    if signature.get("field_authority") is None and signature.get("block") not in context["blocks"]:
+        raise ValueError("regrid Field has no declared scientific storage owner")
+    try:
+        from .continuation_forest import _field_at
+        written = _field_at(context["level_schema"]["write"], path)
+    except (KeyError, TypeError):
+        written = None
+    result = written if written is not None and field_role(written) == field_role(signature) \
+        else signature
+    return new_typed(program, result, "continuation_regrid_read", (field, image.inputs[0]),
+                     {"path": path, "map": "parent", "dimension": context["dimension"]},
+                     point=result.get("point", field.point))
+
+
+def _read_origin(value):
+    """The ``regrid_read`` a pointwise field value of the child is computed from, if any."""
+    from pops.time._graph.value_traversal import reachable_values
+
+    reads = [item for item in reachable_values(value, (value,)) if item.op == "continuation_regrid_read"]
+    return reads
+
+
+def integral(program, field):
+    """The target level's share of the composite integral of one component (N10 lot 3, §2.2).
+
+    Sum of field(c)·|c|·κ(c) over the valid, active cells of the child's level that the next
+    level does not cover and that this rank owns, then one collective sum (DM9).
+    """
+    from pops.time.expressions import ProgramComponent
+
+    context = _context(program)
+    if context["scope"] != "child":
+        raise ValueError("regrid_integral belongs to a target child region")
+    component = 0
+    if isinstance(field, ProgramComponent):
+        field, component = field.value, field.component
+        selected = True
+    else:
+        selected = False
+    require_owned(program, field, "regrid_integral Field")
+    if field_role(field) not in ("state", "field"):
+        raise TypeError("regrid_integral integrates a Field leaf of the child")
+    from pops.time.expressions import component_names
+    if not selected and len(component_names(field)) != 1:
+        raise ValueError("regrid_integral integrates one component; select it with field[k]")
+    if not _read_origin(field):
+        raise ValueError("regrid_integral integrates a Field computed from regrid_read in this child")
+    return new_typed(program, {"vtype": "scalar"}, "continuation_regrid_integral", (field,),
+                     {"component": component})
+
+
+# DM2 (N10 lot 3, addendum §5): the hierarchy instance of a field leaf of a regrid child. A child
+# reads its sources over H and writes its targets over H' = H.identity + "#regrid". The instance
+# is a plan fact, not a kind: the spelling of a value does not carry it.
+SOURCE_INSTANCE, TARGET_INSTANCE, MIXED_INSTANCES = "H", "H'", "mixed"
+_TARGET_ROOTS = frozenset(("continuation_regrid_read", "continuation_regrid_templates"))
+
+
+def _member(value):
+    """The value a ``product_get`` chain selects, through the products the child built."""
+    while value.op == "product_get":
+        root = _member(value.inputs[0])
+        if root.op != "product":
+            return value
+        names = tuple(root.attrs.get("fields", ()))
+        field = value.attrs["field"]
+        if field not in names:
+            return value
+        value = root.inputs[names.index(field)]
+    return value
+
+
+def hierarchy_instance(value, memo=None):
+    """``H'``, ``H``, ``mixed`` or ``None`` (not a field leaf) for one value of a regrid child."""
+    from pops._ir.data_model import is_field_leaf
+
+    memo = {} if memo is None else memo
+    if value.id in memo:
+        return memo[value.id]
+    memo[value.id] = None  # a cycle reads as no field
+    result = None
+    if is_field_leaf(value):
+        selected = _member(value)
+        if selected is not value:
+            result = hierarchy_instance(selected, memo)
+        elif value.op == "product_get":
+            cursor = value
+            while cursor.op == "product_get":
+                cursor = cursor.inputs[0]
+            result = TARGET_INSTANCE if cursor.op in _TARGET_ROOTS else SOURCE_INSTANCE
+        elif value.op in _TARGET_ROOTS:
+            result = TARGET_INSTANCE
+        else:
+            sides = {hierarchy_instance(item, memo) for item in value.inputs} - {None}
+            if MIXED_INSTANCES in sides or sides >= {SOURCE_INSTANCE, TARGET_INSTANCE}:
+                result = MIXED_INSTANCES
+            elif sides == {TARGET_INSTANCE}:
+                result = TARGET_INSTANCE
+            else:
+                result = SOURCE_INSTANCE
+    memo[value.id] = result
+    return result
+
+
+def require_one_instance(program, approved):
+    """Refuse the first operation of a child that mixes a field over H and a field over H'."""
+    from pops._ir.refusals import HierarchyInstancesMixed
+    from pops.time._graph.value_traversal import reachable_values
+
+    memo = {}
+    for value in sorted(reachable_values(approved, ()), key=lambda item: item.id):
+        if hierarchy_instance(value, memo) != MIXED_INSTANCES:
+            continue
+        sides = {hierarchy_instance(item, memo) for item in value.inputs}
+        if MIXED_INSTANCES not in sides:
+            raise HierarchyInstancesMixed(
+                "%s mixes a field over the hierarchy the regrid replaces (H) with a field over "
+                "the new one (H'); a source field reaches the target only through regrid_read"
+                % value.op, region=program._current_region(), op=value.op)
+
+
 def author_phase(program, metadata, child_author, parent_author, observe, dimension):
     from .continuation_forest import _field_at
     from .versioned_values import _fields, _require, _same
@@ -109,6 +258,7 @@ def author_phase(program, metadata, child_author, parent_author, observe, dimens
                 p.__dict__.pop("_continuation_regrid_authoring", None)
             else:
                 p.__dict__["_continuation_regrid_authoring"] = prior
+        require_one_instance(p, approved)
         signature = _require(p, approved, "continuation_accepted", "complete child regrid")
         _same(child_schema, signature["candidate"]["base"]["schema"], "regrid child schema")
         report = dict(signature["candidate"]["envelope"]["members"])["observations"]

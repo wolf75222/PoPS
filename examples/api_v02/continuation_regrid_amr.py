@@ -2,8 +2,9 @@
 
 The physical equation is q'=q.  Its deliberately simple spatial behavior makes
 the independent oracle exact while still requiring the old Field to move to a
-new fine layout.  The regrid law is periodic piecewise-constant injection from
-level zero; neither that choice nor AB2 is implemented by the native port.
+new fine layout.  The regrid law reads, at each target cell, its parent cell on
+level zero (``regrid_read``, the map Parent(r), periodic): piecewise-constant
+injection. The case chooses the source level; the runtime only copies.
 """
 from __future__ import annotations
 
@@ -218,41 +219,18 @@ def build_continuation_regrid_amr(*, cells=(16, 8), dt=.1, steps=3, reject_regri
         return _approve(b, base, proposal, result, b.product(), advancing=True)
 
     def remap(b, proposal):
-        algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
         source_level = b.int64(0)  # Explicit equation for this profile, not an engine default.
         base = b.regrid_base(source_level)
         old = b.continuation_read(base)
         source = b.regrid_source(source_level)
-        template = proposal["templates"]["field_0"]
-
-        def move(field, output_template, family=None):
-            old_view = b.regrid_topology(field, level=source_level, side="source", dimension=2)
-            exported = b.field_bundle(field, topology=old_view, cell_capacity=16384,
-                                       patch_capacity=256, family=family)
-            new_view = b.regrid_topology(output_template, level=proposal["level"],
-                                        side="target", dimension=2)
-            # Geometry comes from target storage.  An old retained Field is only
-            # an import type/provenance template; it is never read as new storage.
-            target = (b.field_bundle(output_template, topology=new_view, cell_capacity=16384,
-                                     patch_capacity=256, family=exported)
-                      if family is None else family)
-            transferred = _injection(b, algebra, exported, target,
-                                     target_level=proposal["level"], cells=cells)
-            return b.bundle_field(transferred, template=output_template, topology=new_view), transferred
-
-        current, bundle = move(source["state"], template)
-        if independent_previous:
-            previous_view = b.regrid_topology(source["previous"], level=proposal["level"],
-                                               side="target", dimension=2)
-            previous_storage = b.scalar_field(like=source["previous"], topology=previous_view,
-                                               initial=b.float64(0))
-            previous, _ = move(source["previous"], previous_storage)
-        else:
-            previous, _ = move(source["previous"], source["previous"], family=bundle)
+        # The law: each target cell reads its source cell along the map the regrid issues
+        # (Parent(r), the identity on level 0); the runtime allocates the new storage.
+        current = b.regrid_read(source["state"])
+        previous = b.regrid_read(source["previous"])
         result = b.product(state=current, previous=previous, time=old["time"], step=old["step"],
                            counter=old["counter"], controls=old["controls"])
         return _approve(b, base, proposal, result,
-            b.product(mass=_bundle_mass(b, algebra, bundle)), advancing=False)
+            b.product(mass=b.regrid_integral(current[0])), advancing=False)
 
     def remap_parent(b, base, proposal):
         entry = b.continuation_read(base)

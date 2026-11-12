@@ -298,6 +298,16 @@ class _ProgramFieldRepresentation(_ProgramBase):
         from pops.time._program.continuation_regrid import source
         return source(self, level)
 
+    def regrid_read(self, field):
+        """Read a source Field at the child's target cells along the map the regrid issues."""
+        from pops.time._program.continuation_regrid import read
+        return read(self, field)
+
+    def regrid_integral(self, field):
+        """The child's level share of the composite integral of one Field component."""
+        from pops.time._program.continuation_regrid import integral
+        return integral(self, field)
+
     def regrid_base(self, source_level):
         """Choose explicitly the source whose assessed descendant this target becomes."""
         from pops.time._program.continuation_regrid import base

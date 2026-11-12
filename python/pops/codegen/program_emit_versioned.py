@@ -299,6 +299,22 @@ def emit_versioned_op(program, value, var, model, lines, prelude, block_idx, fie
                  message="authenticated regrid topology view")
         var[value.id] = token
         return
+    if op == "continuation_regrid_read":
+        # N10 lot 3: the read along the map the regrid issues; the runtime owns the copy.
+        owned = token + "_owned"
+        lines.append('static_assert(pops::kNativeDimension == %d, "regrid_read dimension mismatch");'
+                     % value.attrs["dimension"])
+        lines.append("const auto %s = ctx.regrid_read(%s, %s);" % (owned, args[0], args[1]))
+        lines.append('ctx.continuation_local_phase([&] { if (!%s) throw std::logic_error('
+                     '"regrid_read returned no owned storage"); }, "regrid_read storage validation");'
+                     % owned)
+        var[value.id] = "(*%s)" % owned
+        return
+    if op == "continuation_regrid_integral":
+        lines.append("const pops::Real %s = ctx.regrid_integral(%s, %d);"
+                     % (token, args[0], value.attrs["component"]))
+        var[value.id] = token
+        return
     if op == "continuation_regular_phase":
         expression = "!ctx.continuation_regrid_phase()"
     elif op == "continuation_regrid_source_count":

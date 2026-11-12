@@ -401,6 +401,13 @@ def _emit_cpp_program_impl(
         if uses_distributed:
             finite_helpers += "\n#include <pops/runtime/program/distributed_array.hpp>\n"
         parts["model_helpers"] = finite_helpers + parts["model_helpers"]
+    # DM6: a Program that relays out through regrid_read exports the bytes it moved.
+    if any("ctx.regrid_read(" in part for part in parts.values() if isinstance(part, str)):
+        parts["model_helpers"] += (
+            "\n#include <pops/runtime/program/regrid_read_support.hpp>\n"
+            'extern "C" std::uint64_t pops_relayout_byte_count() {\n'
+            "  return pops::runtime::program::relayout_bytes().load(std::memory_order_relaxed);\n"
+            "}\n")
     return _PROGRAM_CPP_TEMPLATE.format(**parts)
 
 
