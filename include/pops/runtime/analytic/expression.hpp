@@ -323,6 +323,15 @@ struct AnalyticEvaluation {
 
 static_assert(std::is_trivially_copyable_v<AnalyticEvaluation>);
 
+/// Value and first partial derivatives (the one-jet) of one scalar program with respect to its
+/// ranked coordinates.
+template <int Dim>
+struct AnalyticJet {
+  Real value = Real(0);
+  RealVector<Dim> partials{};
+  bool valid = false;
+};
+
 /// Non-owning POD captured by value in Kokkos Serial/OpenMP/Cuda kernels.  The pointers refer to
 /// Kokkos SharedSpace allocations owned by the corresponding AnalyticProgram.
 struct AnalyticProgramView {
@@ -551,6 +560,284 @@ struct AnalyticProgramView {
     }
     assert(sp == 1);
     return {values[0], validity[0] != std::uint8_t{0}};
+  }
+
+  /// Value and first partial derivatives by forward-mode differentiation of the same validated
+  /// program.
+  /// Every rule is the derivative of its operation, so the partials are exact up to the rounding of
+  /// its own arithmetic. A selection, a minimum or a maximum differentiates the operand that the
+  /// evaluation takes; abs differentiates as sign(a) (zero at a tie); a predicate is constant.
+  /// A program input has no coordinate derivative here and fails closed, as does any non-finite
+  /// value or derivative. The geometry arrays of a mapped configuration (N17) read DX this way.
+  template <int Dim>
+  POPS_HD AnalyticJet<Dim> eval_jet_checked(const RealVector<Dim>& coordinates) const {
+    AnalyticJet<Dim> invalid{};
+    invalid.value = std::numeric_limits<Real>::quiet_NaN();
+    if (required_dimension > Dim || result_type != AnalyticValueType::Scalar)
+      return invalid;
+    Real values[kAnalyticMaxStack];
+    Real slopes[kAnalyticMaxStack][Dim];
+    std::uint8_t validity[kAnalyticMaxStack];
+    std::size_t sp = 0;
+    const auto clear = [&](std::size_t slot) {
+      for (int axis = 0; axis < Dim; ++axis)
+        slopes[slot][axis] = Real(0);
+    };
+    for (std::uint32_t pc = 0; pc < instruction_count; ++pc) {
+      const AnalyticInstruction instruction = instructions[pc];
+      switch (instruction.op) {
+        case AnalyticOp::Constant:
+          values[sp] = literals[instruction.operand];
+          clear(sp);
+          validity[sp++] = std::uint8_t{1};
+          break;
+        case AnalyticOp::X:
+        case AnalyticOp::Y:
+        case AnalyticOp::Z: {
+          const int axis = instruction.op == AnalyticOp::X   ? 0
+                           : instruction.op == AnalyticOp::Y ? 1
+                                                             : 2;
+          const bool available = axis < Dim;
+          values[sp] = available ? coordinates[axis] : std::numeric_limits<Real>::quiet_NaN();
+          clear(sp);
+          if (available)
+            slopes[sp][axis] = Real(1);
+          validity[sp] =
+              available && Kokkos::isfinite(values[sp]) ? std::uint8_t{1} : std::uint8_t{0};
+          ++sp;
+        } break;
+        case AnalyticOp::Input:
+          return invalid;
+        case AnalyticOp::Add:
+        case AnalyticOp::Sub:
+        case AnalyticOp::Mul:
+        case AnalyticOp::Div:
+        case AnalyticOp::Pow:
+        case AnalyticOp::Atan2:
+        case AnalyticOp::Hypot:
+        case AnalyticOp::Min:
+        case AnalyticOp::Max: {
+          const std::size_t right = --sp;
+          const std::size_t left = sp - 1;
+          const Real a = values[left], b = values[right];
+          Real da[Dim], db[Dim];
+          for (int axis = 0; axis < Dim; ++axis) {
+            da[axis] = slopes[left][axis];
+            db[axis] = slopes[right][axis];
+          }
+          Real result = Real(0);
+          for (int axis = 0; axis < Dim; ++axis) {
+            Real slope = Real(0);
+            switch (instruction.op) {
+              case AnalyticOp::Add:
+                slope = da[axis] + db[axis];
+                break;
+              case AnalyticOp::Sub:
+                slope = da[axis] - db[axis];
+                break;
+              case AnalyticOp::Mul:
+                slope = da[axis] * b + a * db[axis];
+                break;
+              case AnalyticOp::Div:
+                slope = (da[axis] - (a / b) * db[axis]) / b;
+                break;
+              case AnalyticOp::Pow: {
+                const Real power = Kokkos::pow(a, b);
+                slope = db[axis] == Real(0) ? b * Kokkos::pow(a, b - Real(1)) * da[axis]
+                                            : b * Kokkos::pow(a, b - Real(1)) * da[axis] +
+                                                  power * Kokkos::log(a) * db[axis];
+              } break;
+              case AnalyticOp::Atan2:
+                slope = (b * da[axis] - a * db[axis]) / (a * a + b * b);
+                break;
+              case AnalyticOp::Hypot:
+                slope = (a * da[axis] + b * db[axis]) / Kokkos::hypot(a, b);
+                break;
+              case AnalyticOp::Min:
+                slope = Kokkos::fmin(a, b) == a ? da[axis] : db[axis];
+                break;
+              default:
+                slope = Kokkos::fmax(a, b) == a ? da[axis] : db[axis];
+                break;
+            }
+            slopes[left][axis] = slope;
+          }
+          switch (instruction.op) {
+            case AnalyticOp::Add:
+              result = a + b;
+              break;
+            case AnalyticOp::Sub:
+              result = a - b;
+              break;
+            case AnalyticOp::Mul:
+              result = a * b;
+              break;
+            case AnalyticOp::Div:
+              result = a / b;
+              break;
+            case AnalyticOp::Pow:
+              result = Kokkos::pow(a, b);
+              break;
+            case AnalyticOp::Atan2:
+              result = Kokkos::atan2(a, b);
+              break;
+            case AnalyticOp::Hypot:
+              result = Kokkos::hypot(a, b);
+              break;
+            case AnalyticOp::Min:
+              result = Kokkos::fmin(a, b);
+              break;
+            default:
+              result = Kokkos::fmax(a, b);
+              break;
+          }
+          values[left] = result;
+          validity[left] = validity[left] && validity[right] && Kokkos::isfinite(result);
+        } break;
+        case AnalyticOp::Neg:
+        case AnalyticOp::Sqrt:
+        case AnalyticOp::Abs:
+        case AnalyticOp::Sin:
+        case AnalyticOp::Cos:
+        case AnalyticOp::Exp:
+        case AnalyticOp::Log:
+        case AnalyticOp::Erf:
+        case AnalyticOp::Erfc: {
+          const std::size_t slot = sp - 1;
+          const Real a = values[slot];
+          Real result = Real(0), factor = Real(0);
+          // Kokkos::numbers is not used: 2/sqrt(pi) is spelled as its binary64 value.
+          constexpr Real two_over_root_pi = Real(1.1283791670955126);
+          switch (instruction.op) {
+            case AnalyticOp::Neg:
+              result = -a;
+              factor = Real(-1);
+              break;
+            case AnalyticOp::Sqrt:
+              result = Kokkos::sqrt(a);
+              factor = Real(0.5) / result;
+              break;
+            case AnalyticOp::Abs:
+              result = Kokkos::fabs(a);
+              factor = a > Real(0) ? Real(1) : a < Real(0) ? Real(-1) : Real(0);
+              break;
+            case AnalyticOp::Sin:
+              result = Kokkos::sin(a);
+              factor = Kokkos::cos(a);
+              break;
+            case AnalyticOp::Cos:
+              result = Kokkos::cos(a);
+              factor = -Kokkos::sin(a);
+              break;
+            case AnalyticOp::Exp:
+              result = Kokkos::exp(a);
+              factor = result;
+              break;
+            case AnalyticOp::Log:
+              result = Kokkos::log(a);
+              factor = Real(1) / a;
+              break;
+            case AnalyticOp::Erf:
+              result = Kokkos::erf(a);
+              factor = two_over_root_pi * Kokkos::exp(-a * a);
+              break;
+            default:
+              result = Kokkos::erfc(a);
+              factor = -two_over_root_pi * Kokkos::exp(-a * a);
+              break;
+          }
+          for (int axis = 0; axis < Dim; ++axis)
+            slopes[slot][axis] *= factor;
+          values[slot] = result;
+          validity[slot] = validity[slot] && Kokkos::isfinite(result);
+        } break;
+        case AnalyticOp::Lt:
+        case AnalyticOp::Le:
+        case AnalyticOp::Gt:
+        case AnalyticOp::Ge:
+        case AnalyticOp::Eq:
+        case AnalyticOp::Ne:
+        case AnalyticOp::And:
+        case AnalyticOp::Or: {
+          const std::size_t right = --sp;
+          const std::size_t left = sp - 1;
+          const Real a = values[left], b = values[right];
+          bool truth = false;
+          switch (instruction.op) {
+            case AnalyticOp::Lt:
+              truth = a < b;
+              break;
+            case AnalyticOp::Le:
+              truth = a <= b;
+              break;
+            case AnalyticOp::Gt:
+              truth = a > b;
+              break;
+            case AnalyticOp::Ge:
+              truth = a >= b;
+              break;
+            case AnalyticOp::Eq:
+              truth = a == b;
+              break;
+            case AnalyticOp::Ne:
+              truth = a != b;
+              break;
+            case AnalyticOp::And:
+              truth = a != Real(0) && b != Real(0);
+              break;
+            default:
+              truth = a != Real(0) || b != Real(0);
+              break;
+          }
+          values[left] = truth ? Real(1) : Real(0);
+          clear(left);
+          validity[left] = validity[left] && validity[right];
+        } break;
+        case AnalyticOp::Not: {
+          const std::size_t slot = sp - 1;
+          values[slot] = values[slot] == Real(0) ? Real(1) : Real(0);
+          clear(slot);
+        } break;
+        case AnalyticOp::Select: {
+          const std::size_t otherwise = --sp;
+          const std::size_t selected = --sp;
+          const std::size_t condition = --sp;
+          const std::size_t chosen = values[condition] != Real(0) ? selected : otherwise;
+          const Real chosen_value = values[chosen];
+          Real chosen_slope[Dim];
+          for (int axis = 0; axis < Dim; ++axis)
+            chosen_slope[axis] = slopes[chosen][axis];
+          const std::uint8_t chosen_validity = validity[chosen] && validity[condition];
+          values[sp] = chosen_value;
+          for (int axis = 0; axis < Dim; ++axis)
+            slopes[sp][axis] = chosen_slope[axis];
+          validity[sp++] = chosen_validity;
+        } break;
+        case AnalyticOp::Between: {
+          const std::size_t upper = --sp;
+          const std::size_t lower = --sp;
+          const std::size_t value = --sp;
+          const Real result =
+              values[value] >= values[lower] && values[value] <= values[upper] ? Real(1) : Real(0);
+          const std::uint8_t result_validity =
+              validity[value] && validity[lower] && validity[upper];
+          values[sp] = result;
+          clear(sp);
+          validity[sp++] = result_validity;
+        } break;
+      }
+    }
+    assert(sp == 1);
+    AnalyticJet<Dim> result{};
+    result.value = values[0];
+    result.valid = validity[0] != std::uint8_t{0};
+    for (int axis = 0; axis < Dim; ++axis) {
+      result.partials[axis] = slopes[0][axis];
+      result.valid = result.valid && Kokkos::isfinite(slopes[0][axis]);
+    }
+    if (!result.valid)
+      return invalid;
+    return result;
   }
 
   template <int Dim>

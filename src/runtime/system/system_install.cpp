@@ -2169,6 +2169,7 @@ void System<Dim>::finalize_native_packages() {
         state.geometry.emplace(p_->geom);
         state.runtime_parameter_byte_capacity = p_->cfg.runtime_parameter_byte_capacity;
         state.periodicity = p_->periodicity;
+        state.static_geometry = p_->static_geometry_;
         state.provider_storage_owner = published_carrier_owner;
         state.phase = runtime::system::NativeCapabilityPhase::install_open;
         pops::dynlib::invoke_with_host_exception(package.install, "pops_install_native");

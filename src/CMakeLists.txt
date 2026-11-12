@@ -18,7 +18,8 @@ set(POPS_RUNTIME_SYSTEM_SOURCES
     runtime/system/system_layout_transfer.cpp
     runtime/system/system_io.cpp
     runtime/system/system_profiling.cpp
-    runtime/system/system_program.cpp)
+    runtime/system/system_program.cpp
+    runtime/system/system_static_geometry.cpp)
 
 set(POPS_RUNTIME_AMR_SOURCES
     runtime/amr/amr_layout_transfer.cpp

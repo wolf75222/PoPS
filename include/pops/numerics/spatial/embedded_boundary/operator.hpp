@@ -219,6 +219,9 @@ template <int Dim, class Model, class BaseMetric, class Reconstruction = NoSlope
   requires(ConservationLaw<Dim, Model> && PreparedMetricProvider<Dim, BaseMetric> &&
            ReconstructionPolicy<Reconstruction>)
 class PreparedEmbeddedBoundaryOperator {
+  static_assert(!metric_has_physical_face_normals<BaseMetric>,
+                "an embedded boundary decorates an axis metric, not physical face normals");
+
  public:
   static constexpr int dimension = Dim;
   static constexpr EmbeddedBoundaryCapabilities<Dim> capabilities() { return {}; }
