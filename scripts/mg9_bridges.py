@@ -9,12 +9,14 @@ neither ``pops`` nor a case.
 
 ``classify`` sorts every module of ``pops.lib`` into a module of the surface (it imports
 ``pops.surface``, or no module of ``pops`` and ``[[earlier]]`` does not list it), a module of
-``[[earlier]]``, a package that only re-exports its submodules, or an unlisted module.
-``found_bridges`` finds the bridges of the modules of the surface by their source: a subclass of
-``SchemeValue``, or a call that builds a native route of face, reconstruction, diffusion or solver
+``[[earlier]]``, a module that only a ``[[bridge]]`` holds (it builds the native route and nothing
+of the surface, like the ghost laws of ``pops.lib.numerics.ghost_laws``), a package that only
+re-exports its submodules, or an unlisted module. ``found_bridges`` finds the bridges of the
+modules of the surface and of the bridge modules by their source: a subclass of ``SchemeValue``,
+or a call that builds a native route of face, reconstruction, diffusion, boundary or solver
 (``riemann.X()`` and ``reconstruction.X()`` other than ``User``, a name imported from
-``pops.numerics`` or ``pops.solvers`` other than ``StencilFlux``), under the public word that
-returns it.
+``pops.numerics``, ``pops.solvers`` or ``pops.boundary`` other than ``StencilFlux``), under the
+public word that returns it.
 
 ``python3 scripts/mg9_bridges.py check [--check-base REVISION]`` checks the registry against the
 tree and, with ``--check-base``, against the registry of the base revision: no bridge, no earlier
@@ -40,7 +42,7 @@ GATE = "mg9-bridges"
 # The native routes that carry a Python body: a face or a reconstruction written in Python
 # (``riemann.User``, ``reconstruction.User``) and the stencil of a face flux (``StencilFlux``).
 WITH_BODY = {"User", "StencilFlux"}
-NATIVE_MODULES = ("pops.numerics", "pops.solvers")
+NATIVE_MODULES = ("pops.numerics", "pops.solvers", "pops.boundary")
 ROUTE_MODULES = {"riemann", "reconstruction"}
 
 
@@ -129,9 +131,10 @@ def is_package_index(tree: ast.Module) -> bool:
 
 
 def classify(root: Path = ROOT, registry: dict | None = None) -> dict:
-    """{dotted name: "surface" | "earlier" | "package" | "unlisted"}."""
+    """{dotted name: "surface" | "earlier" | "bridge" | "package" | "unlisted"}."""
     registry = read(root) if registry is None else registry
     earlier = {module for entry in registry["earlier"] for module in entry["modules"]}
+    bridged = {entry["module"] for entry in registry["bridge"]}
     kinds = {}
     for name, path in library_modules(root).items():
         source = path.read_text(encoding="utf-8")
@@ -139,6 +142,8 @@ def classify(root: Path = ROOT, registry: dict | None = None) -> dict:
             kinds[name] = "surface"
         elif name in earlier:
             kinds[name] = "earlier"
+        elif name in bridged:
+            kinds[name] = "bridge"
         elif is_package_index(ast.parse(source)):
             kinds[name] = "package"
         elif imports_no_pops(source):
@@ -194,6 +199,20 @@ def bridges_of(source: str, module: str) -> set:
                 if word in called:
                     found.add((node.name, where, route))
                     found.discard((word, where, route))
+    # a private builder that the module hands to a public word at import is that word's bridge
+    # (cg.bind_relation_native(_native_cg, ...) in pops.lib.solve)
+    for node in tree.body:
+        call = node.value if isinstance(node, ast.Expr) else None
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute) \
+                or not isinstance(call.func.value, ast.Name) \
+                or call.func.value.id.startswith("_"):
+            continue
+        handed = {arg.id for arg in list(call.args) + [k.value for k in call.keywords]
+                  if isinstance(arg, ast.Name) and arg.id in private}
+        for word, where, route in list(found):
+            if word in handed:
+                found.add((call.func.value.id, where, route))
+                found.discard((word, where, route))
     return found
 
 
@@ -202,7 +221,7 @@ def found_bridges(root: Path = ROOT, kinds: dict | None = None) -> set:
     modules = library_modules(root)
     found = set()
     for name, kind in kinds.items():
-        if kind == "surface":
+        if kind in ("surface", "bridge"):
             found |= bridges_of(modules[name].read_text(encoding="utf-8"), name)
     return found
 

@@ -1290,6 +1290,21 @@ class UserScheme(SchemeValue):
         flux = StencilFlux(dimension=rank, components=1, radius=1, body=body)
         return StencilRealization(flux, self.describe())
 
+    def is_two_point(self, key: Term) -> bool:
+        """Whether the face of this scheme under the diffusive ``key`` of -k grad(w) is the
+        two-point flux -k (w_R - w_L) / face.distance of ``two_point()``, by its normal form (CC2).
+        The matrix-free apply of a solve reads it so (N3 lot 1, D7): a copy of the body written in
+        a case is applied as the word, and any other face is not."""
+        if not isinstance(key, DiffusiveFlux) or self.scheme.is_cell or len(key.variables) != 1:
+            return False
+        (w,) = key.variables
+        left = SchemeLeaf(("trace", "left"), w, "face.left(%s)" % w)
+        right = SchemeLeaf(("trace", "right"), w, "face.right(%s)" % w)
+        distance = SchemeLeaf(("distance",), None, "face.distance")
+        form = Arith("*", (Arith("neg", (key.coefficient,)),
+                           Arith("/", (Arith("-", (right, left)), distance))))
+        return normal_form(self.traced(key).builder.value) == normal_form(form)
+
     def realize(self, view: TermView) -> Any:
         from pops.numerics import reconstruction, riemann, variables
         from pops.numerics.spatial import FiniteVolume

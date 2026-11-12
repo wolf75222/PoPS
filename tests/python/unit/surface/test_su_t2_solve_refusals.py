@@ -15,7 +15,7 @@ import pytest
 import pops.surface as surface
 from pops._ir.refusals import PropertyNotDerived
 from pops.lib.numerics import two_point, upwind
-from pops.lib.solve import cg
+from pops.lib.solve import cg, linear_operator
 from pops.lib.time.methods import imex_euler
 from pops.surface.math import ddt, div, grad
 
@@ -128,17 +128,48 @@ def test_a_coefficient_that_varies_with_the_state_is_refused():
 
 
 def test_a_layout_that_is_not_uniform_and_periodic_is_refused():
-    from pops.lib.numerics.schemes import _TwoPoint
-
+    """The matrix-free apply sits beside cg() (N3 lot 1, D7) and reads the scheme of the key."""
     domain, model, u, u0, advection, diffusion, numerics = _model()
     view = surface.TermView(diffusion, None, None)
+    scheme = numerics.scheme_of(diffusion)
     for layout in ({"uniform": False, "cartesian": True, "periodic": True},
                    {"uniform": True, "cartesian": True, "periodic": False}):
         with pytest.raises(surface.NotYetElaborated, match="uniform, Cartesian and periodic"):
-            _TwoPoint("two_point").linear_operator(view, weight=1, layout=layout)
-    linear = _TwoPoint("two_point").linear_operator(
-        view, weight=1, layout={"uniform": True, "cartesian": True, "periodic": True})
+            linear_operator(view, scheme=scheme, weight=1, layout=layout)
+    linear = linear_operator(view, scheme=scheme, weight=1, layout={
+        "uniform": True, "cartesian": True, "periodic": True})
     assert linear.kappa == 1e-2 and linear.claims().negative_semidefinite
+
+
+def test_the_apply_reads_a_copy_of_two_point_and_refuses_another_face():
+    """A copy of the body of two_point() written in a case is applied as the word (CF4); a
+    diffusive face of another normal form, here the two-point flux plus a constant, whose
+    frequency is still derived (D10), has no apply in this lot (G10)."""
+    import inspect
+
+    import pops.lib.numerics.fluxes as fluxes
+
+    source = inspect.getsource(fluxes)
+    shifted = source.replace("return FaceFlux(dot(term.law(states=states, gradients=gradients), "
+                             "face.normal))", "return FaceFlux(dot(term.law(states=states, "
+                             "gradients=gradients), face.normal) + 1.0)")
+    assert shifted != source
+    layout = {"uniform": True, "cartesian": True, "periodic": True}
+    for text, kappa in ((source, 1e-2), (shifted, None)):
+        namespace = {}
+        exec(compile(text, fluxes.__file__, "exec"), namespace)  # noqa: S102
+        domain, model, u, u0, advection, diffusion, numerics = _model()
+        written = surface.Numerics(represent={u: surface.CellAverage()},
+                                   schemes={advection: upwind(),
+                                            diffusion: namespace["two_point"]()})
+        view = surface.TermView(diffusion, None, None)
+        scheme = written.scheme_of(diffusion)
+        if kappa is not None:
+            assert linear_operator(view, scheme=scheme, weight=1, layout=layout).kappa \
+                == kappa
+            continue
+        with pytest.raises(surface.NotYetElaborated, match="cg\\(\\) states no linear map.*G10"):
+            linear_operator(view, scheme=scheme, weight=1, layout=layout)
 
 
 def test_an_anti_diffusive_relation_is_not_proved_spd_for_cg():

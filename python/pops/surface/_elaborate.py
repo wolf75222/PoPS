@@ -626,20 +626,21 @@ class _Elaboration:
         return plan, selections
 
     def _linear(self, scheme: Any, view: TermView, balance: Balance) -> Any:
-        """The linear map of the rate of a term, asked of its scheme when a solve reads it."""
+        """The linear map of the rate of a term, asked when a solve reads it, never before, of the
+        solver that ``solvers=`` states (N3 lot 1, D7): the matrix-free apply is the solver's,
+        beside ``cg()`` in ``pops.lib.solve``, and it recognizes the scheme by the normal form of
+        its face, so that a copy of ``two_point()`` written in a case is applied as the word."""
         weight = next(-coefficient if isinstance(term, DiffusiveFlux) else coefficient
                       for term, coefficient in balance.occurrences if term is view.term)
 
         def linear() -> Any:
-            operator = getattr(scheme, "linear_operator", None)
+            operator = next((solver.linear_operator for _, solver in self.program.solvers
+                             if hasattr(solver, "linear_operator")), None)
             if operator is None:
-                raise NotYetElaborated(
-                    "the term %s under %r read at the unknown of a solve: its scheme states no "
-                    "linear map; this lot solves a two_point() diffusion of a constant "
-                    "coefficient" % (view.term, scheme),
-                    "G10, the operator generated from the term, with the Newton solves of N9",
-                    site=view.site)
-            return operator(view, weight=weight, layout=self.layout_facts)
+                # no solver states one: the apply of the library, whose solve N8 then refuses
+                # without a solver (auto() of SV11)
+                from pops.lib.solve import linear_operator as operator
+            return operator(view, scheme=scheme, weight=weight, layout=self.layout_facts)
         return linear
 
     # The program.
