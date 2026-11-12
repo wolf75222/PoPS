@@ -682,9 +682,35 @@ class _Elaboration:
                         site=value.site)
         return components
 
+    def step_bound(self, block: Any, states: dict) -> tuple:
+        """``dt=f`` with f a function of ``cell``: the bound that f writes and its b6 expression
+        over the cell reads of the block state and the widths of the cell (N8 « dt= as a function
+        of cell », D1, D3 (a))."""
+        from pops.mesh._amr.refinement_criterion import CellRead, CellWidth
+
+        from ._step_cell import trace, value_key, width_key
+
+        rule = self.program.advance.dt
+        support = self.support()
+        bound = trace(rule, support, tuple(states))
+        inputs: dict = {width_key(index): CellWidth(index) for index in range(support.rank)}
+        for quantity, name in states.items():
+            handle = block[name]
+            (component,) = handle.space.components
+            inputs[value_key(quantity)] = CellRead(handle, component, ())
+        return bound, self.lower(bound, inputs)
+
     def advance(self, case6: Any, block: Any, states: dict, selections: dict) -> Any:
         advance = self.program.advance
         value = advance.method
+        rule: Any = advance.dt
+        if callable(rule) and not is_number(rule):
+            bound, _ = self.step_bound(block, states)
+            raise NotYetElaborated(
+                "pops.Advance(dt=%s), the step bound %s compiled into the run"
+                % (getattr(rule, "__name__", rule), text(bound)),
+                "N8 « dt= as a function of cell », its core entry (design note D2)",
+                site=advance.site)
         components = self.method_components(value, selections)
         trace = _Trace(value.site)
         specialized = specialize(value, components, trace)

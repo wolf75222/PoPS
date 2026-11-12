@@ -675,15 +675,19 @@ def test_an_initial_datum_lives_on_the_support_of_its_quantity():
 
 
 def test_a_construct_of_a_later_lot_names_the_lot_that_elaborates_it():
-    _, model, *_ = _model()
+    domain, model, u, _, advection, diffusion = _transport()
 
     def stable_step(cell):
-        return 1e-3
+        return 1e-3 * cell.width(domain.x)
 
+    advance = surface.Advance(ssprk2(rate=model), dt=stable_step)  # <- later-dt
     with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.Advance(ssprk2(rate=model), dt=stable_step)  # <- later-dt
+        surface.Case(model=model, numerics=_numerics(u, advection, diffusion),
+                     program=surface.Program(advance=advance, initial={u: 1.0}),
+                     layout=_layout(domain))
     assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("later-dt"))
-    assert "a later lot of N8 (the step rules of 5.11, PF8) elaborates it" in str(caught.value)
+    assert "N8 « dt= as a function of cell », its core entry (design note D2) elaborates it" \
+        in str(caught.value)
     with pytest.raises(surface.NotYetElaborated) as caught:
         surface.CUDA()  # <- later-cuda
     assert (caught.value.site.file, caught.value.site.line) == (HERE, _line("later-cuda"))

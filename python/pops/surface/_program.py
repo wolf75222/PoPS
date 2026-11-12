@@ -32,7 +32,6 @@ from ._refusal import (
     user_site,
 )
 
-_N8_STEP = "a later lot of N8 (the step rules of 5.11, PF8)"
 _N8_ACCEPT = "N8 phase 1 (the assessments of T28)"
 
 
@@ -128,9 +127,7 @@ class Advance:
                 "the advance of %s has no step rule; the step size is a choice that PoPS never "
                 "makes by a heuristic" % method.name,
                 write="pops.Advance(%r, dt=...) with a number or a function of cell" % (method,))
-        if callable(dt) and not is_number(dt):
-            raise NotYetElaborated("pops.Advance(dt=<a function of cell>), a step rule", _N8_STEP)
-        if not _positive_number(dt):
+        if not (callable(dt) and not is_number(dt)) and not _positive_number(dt):
             raise TypeError("pops.Advance(dt=...) takes a positive number, a function of cell or "
                             "a controller, got %r" % (dt,))
         if accept is not None:
