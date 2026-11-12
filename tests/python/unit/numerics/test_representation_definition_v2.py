@@ -11,11 +11,12 @@ import pytest
 
 from pops.model.spaces import StateSpace
 from pops.representations.definition import (
-    CONTRACT, OBLIGATIONS, ElaboratedRepresentation, MeasureMissing, RepresentationDefinition,
-    Unknown, body_from_data, call, cell, cell_average, cell_total, coefficients,
-    constant_mode_scale, field, inventory_weights, node_reference, normal_form, point,
-    point_value,
+    CONTRACT, LATER_LOT, NO_EXACT_FORM, NO_MEASURE, OBLIGATIONS, ElaboratedRepresentation,
+    MeasureMissing, RepresentationDefinition, Unknown, body_from_data, call, cell, cell_average,
+    cell_total, cells_not_affine, coefficients, constant_mode_scale, field, inventory_weights,
+    node_reference, normal_form, point, point_value,
 )
+from pops.time._program.traced_method import NotYetElaborated
 
 MEASURE = (("cell.measure", ()), 1)
 INVERSE_MEASURE = (("cell.measure", ()), -1)
@@ -156,6 +157,73 @@ def test_measure_missing_when_not_normalizable_and_no_rule():
                                      rank=1, pairing=GL2)
     reason = ruled.rate_weights()
     assert isinstance(reason, Unknown) and "N16 lot 2" in reason.reason
+    assert (reason.family, reason.lot) == (LATER_LOT, reason.lot) and "N16 lot 2" in reason.lot
+
+
+def test_only_the_two_triggers_of_delta_5_are_measure_missing():
+    """F2 of the review of #789: a weight that a later lot gives is NotYetElaborated, naming it."""
+    xi = point.reference[0]
+    nomeasure = RepresentationDefinition(decode=coefficients[0], rank=1, measure="none")
+    assert nomeasure.rate_weights().family == NO_MEASURE
+    later = {
+        "a stated rule over an opaque decode": RepresentationDefinition(
+            decode=coefficients[0] * call("exp", xi), rank=1, pairing=GL2),
+        "a stated rule over the position": RepresentationDefinition(
+            decode=coefficients[0] * point.position[0], rank=1, pairing=GL2),
+        "a stated rule over a decode not linear in the coefficients": RepresentationDefinition(
+            decode=coefficients[0] * coefficients[0], rank=1, pairing=GL2),
+        "a face carrier": RepresentationDefinition(
+            decode=coefficients[0], rank=1, carrier="face", encode=field[0]),
+    }
+    for case, definition in later.items():
+        weights = definition.rate_weights()
+        assert isinstance(weights, Unknown) and weights.family == LATER_LOT, case
+        with pytest.raises(NotYetElaborated, match="N16 lot 2|G08") as refused:
+            inventory_weights("u", definition)
+        assert not isinstance(refused.value, MeasureMissing), case
+    # normalizable but not linear in the coefficients, no rule: no basis, so MeasureMissing, with
+    # the reason the delta reads as « not normalizable »
+    square = RepresentationDefinition(decode=coefficients[0] * coefficients[0], rank=1)
+    with pytest.raises(MeasureMissing, match="not linear in the coefficients, and the "
+                                             "representation states no rule"):
+        inventory_weights("u", square)
+
+
+def _n17_layout(builder):
+    import pops
+    from pops.mesh import normalize_layout_plan
+    _, layout, _, _ = builder()
+    plan = normalize_layout_plan(layout, owner=pops.Case("g03-ra").owner_path.canonical())
+    (row,) = plan.layouts
+    return row
+
+
+def test_moments_of_the_reference_box_are_refused_on_a_chart():
+    """Review of #789, O1 made blocking: m_K of a decode that reads the point is a moment of the
+    reference box, exact on affine cells only. On N17's annulus chart it is refused by name; on
+    N17's graded node positions (affine cells) and for one constant mode it holds."""
+    from examples.api_v02.models_static_geometry import (
+        build_annulus_free_stream, build_graded_diffusion)
+    annulus, graded = _n17_layout(build_annulus_free_stream), _n17_layout(build_graded_diffusion)
+    assert "chart" in cells_not_affine(annulus) and cells_not_affine(graded) is None
+    assert cells_not_affine(None) is None
+    modal = RepresentationDefinition(decode=coefficients[0] + coefficients[1] * point.reference[0],
+                                     rank=1, size=2, pairing=GL2)
+    with pytest.raises(NotYetElaborated, match="affine cells only.*chart.*N16 lot 2"):
+        inventory_weights("u", modal, layout=annulus)
+    assert inventory_weights("u", modal, layout=graded) == modal.rate_weights()
+    for one_mode in (cell_average(2), cell_total(2), point_value(2)):
+        assert inventory_weights("u", one_mode, layout=annulus) == one_mode.rate_weights()
+
+
+def test_a_moving_map_is_not_affine():
+    from tests.python.unit.mesh.test_moving_geometry_contract import request
+    import pops
+    from pops.mesh import normalize_layout_plan
+    _, moving = request()
+    plan = normalize_layout_plan(moving, owner=pops.Case("g03-ra-moving").owner_path.canonical())
+    (row,) = plan.layouts
+    assert "G03 lots M1 and M2" in cells_not_affine(row)
 
 
 # --- identities (N16 5.5) -------------------------------------------------------------------------
@@ -225,6 +293,39 @@ def test_encode_and_decode_read_only_their_entities():
         RepresentationDefinition(decode=field[0], rank=1)
     with pytest.raises(ValueError, match="never coefficients or point"):
         RepresentationDefinition(decode=coefficients[0], rank=1, encode=point.reference[0])
+    # inside a call whose argument has one, two or three terms (review of #789, F1)
+    xi = point.reference[0]
+    for argument in (field[0], field[0] + 1, field[0] + 1 + field[0] * field[0]):
+        with pytest.raises(ValueError, match="never field"):
+            RepresentationDefinition(decode=coefficients[0] * call("exp", argument), rank=1)
+    for argument in (xi, xi + 1, xi + 1 + xi * xi):
+        with pytest.raises(ValueError, match="never coefficients or point"):
+            RepresentationDefinition(decode=coefficients[0], rank=1,
+                                     encode=field[0] * call("exp", argument))
+    with pytest.raises(ValueError, match="never coefficients or point"):
+        RepresentationDefinition(decode=coefficients[0], rank=1,
+                                 encode=field[0] / (xi + 1))
+    with pytest.raises(ValueError, match="never field"):
+        RepresentationDefinition(decode=coefficients[0] * (field[0] + 2) ** cell.measure, rank=1)
+
+
+@pytest.mark.parametrize("body", (
+    coefficients[0] * call("exp", point.reference[0]),
+    coefficients[0] * call("exp", point.reference[0] + 1),
+    coefficients[0] * call("atan2", point.reference[0] + 1, 1),
+    coefficients[0] * call("exp", point.reference[0] + 1 + point.reference[0] ** 2),
+    coefficients[0] / (point.reference[0] + 3),
+    coefficients[0] * (point.reference[0] + 2) ** cell.measure,
+))
+def test_a_point_read_inside_an_opaque_atom_is_seen(body):
+    """F1 of the review of #789: the arguments of a call are read one normal form at a time."""
+    definition = RepresentationDefinition(decode=body, rank=1)
+    assert definition.point_dependent is True
+    assert isinstance(definition.constant_mode, Unknown)
+    weights = definition.rate_weights()
+    assert isinstance(weights, Unknown) and weights.family == NO_EXACT_FORM
+    with pytest.raises(MeasureMissing, match="states no rule"):
+        inventory_weights("u", definition)
     with pytest.raises(ValueError, match="encode is required"):
         RepresentationDefinition(decode=coefficients[0], rank=1, carrier="node")
 
@@ -238,6 +339,45 @@ def test_indices_inside_the_cell():
         RepresentationDefinition(decode=coefficients[0] * node_reference[2][0], rank=1)
     with pytest.raises(TypeError, match="Python integer"):
         coefficients[1.0]
+
+
+def test_body_data_outside_the_closed_lists_is_refused():
+    """Review of #789, O4: data cannot build a leaf, an operation or a constant that the leaves
+    cannot."""
+    for forged in ({"leaf": "cell.volume", "indices": []}, {"leaf": "coefficients", "indices": [-1]},
+                   {"op": "max", "args": [{"const": [1, 1]}, {"const": [2, 1]}]},
+                   {"op": "neg", "args": [{"const": [1, 1]}, {"const": [2, 1]}]},
+                   {"const": [1, 0]}, {"call": "", "args": []}, ["leaf"]):
+        with pytest.raises(ValueError):
+            body_from_data(forged)
+
+
+def test_the_normal_form_shares_the_algebra_of_the_surface():
+    """Review of #789, O3: the core cannot import the surface's normal form (CC2), so this module
+    has its own until N11's replaces both. Their products and sums of monomials agree on the same
+    data, and the one deliberate difference is stated: a quotient by a monomial of geometry reads
+    (measures and widths, positive by the plan's certificate) divides here, where the surface keeps
+    every quotient by an expression an atom."""
+    from pops.representations import definition as core
+    from pops.surface import _scheme as surface
+    a, b, c = (("leaf", "a"), 1), (("leaf", "b"), 1), (("leaf", "c"), 2)
+    left = {(a,): Fraction(2), (b, c): Fraction(-1, 3), (): Fraction(5)}
+    right = {(a,): Fraction(1, 2), (c,): Fraction(7)}
+    assert core._times(left, right) == surface._times(left, right)
+    for sign in (1, -1):
+        assert core._plus(left, right, sign) == surface._plus(left, right, sign)
+    mu, coefficient = cell.measure, coefficients[0]
+    inverse = {normal_form(coefficient / mu), normal_form((1 / mu) * coefficient),
+               normal_form(coefficient * mu ** -1)}
+    direct = {normal_form(coefficient * mu), normal_form(mu * coefficient),
+              normal_form((mu ** 2 / mu) * coefficient)}
+    assert len(inverse) == 1 and len(direct) == 1 and inverse != direct
+
+
+def test_a_float_is_its_exact_binary_fraction():
+    """Review of #789, O4: 0.1 is the binary64 0.1, not 1/10, as a rule one ulp apart is another."""
+    assert (RepresentationDefinition(decode=0.1 * coefficients[0], rank=1).identity
+            != RepresentationDefinition(decode=Fraction(1, 10) * coefficients[0], rank=1).identity)
 
 
 def test_closed_word_lists_and_rules():

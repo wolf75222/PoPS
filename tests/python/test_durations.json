@@ -8894,7 +8894,7 @@
       }
     },
     "g03_20261112_representation_definition": {
-      "basis": "Unmeasured CI scheduling estimate for the source-only module of G03 lot R-a (ROM-21, contract pops.executable-representation-definition@2): exact normal forms, rate and load weights by exact rational moments, identities and refusals, no native module and no compile. 5 s, the lower source-only tier of api_v02_20261013 (5/15/60 s), above its source-only analogue (2 s). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimate for the source-only module of G03 lot R-a (ROM-21, contract pops.executable-representation-definition@2): exact normal forms, rate and load weights by exact rational moments, identities and refusals, and the normalized layout rows of two N17 graphs and of a moving map (no compile), no native module and no compile. 5 s, the lower source-only tier of api_v02_20261013 (5/15/60 s), above its source-only analogue (2 s). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/unit/numerics/test_representation_definition_v2.py": "tests/python/unit/codegen/test_representation_arity.py"
       },
@@ -8903,12 +8903,12 @@
       },
       "local_receipts": {
         "tests/python/unit/numerics/test_representation_definition_v2.py": {
-          "pytest_seconds": 0.57,
-          "tests": 23
+          "pytest_seconds": 1.42,
+          "tests": 35
         }
       },
       "source_sha256": {
-        "tests/python/unit/numerics/test_representation_definition_v2.py": "cce8e0777f641fb4035f6285e99c7d5fdfe2674fe1ad1c9caa5a2af74b08fc41"
+        "tests/python/unit/numerics/test_representation_definition_v2.py": "0c76eeaecb4238c305757009ceb1188f34b21fc4e225a3ef1ed5ef47ca374e03"
       }
     }
   },
