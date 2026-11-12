@@ -165,6 +165,13 @@ def _per_axis_text(values: tuple, spell: Any) -> str:
         "vector(%s)" % ", ".join(spell(value) for value in values)
 
 
+_G04 = "a later lot of N15 with the boundary relations of G04"
+_GENERATED_GHOSTS = "a later lot of N15 with the generated ghost fills of G04"
+# The depths at which a boundary policy is checked: those that b6 derives at most (WENO5 reads
+# three cells), so that a body that departs from a law of b6 at a depth is refused.
+_GHOST_DEPTHS = (1, 2, 3)
+
+
 def _number(value: Any) -> Any:
     """A number of the surface as b6 takes it: an exact fraction or a decimal becomes a float."""
     if isinstance(value, (Fraction, Decimal)):
@@ -747,24 +754,101 @@ class _Elaboration:
         periodic = tuple(axis for axis, (_, _, flag)
                          in zip(frame.axes, support.bounds(), strict=True) if flag)
         layout = _Uniform(CartesianGrid(frame=frame, cells=uniform.cells,
-                                        periodic=PeriodicAxes(periodic)))
+                                        periodic=PeriodicAxes(periodic) if periodic else None))
         self.rows.append(Row(
             "layout={%r: %r}" % (support, uniform), "case",
-            "Uniform(CartesianGrid(frame=frame, cells=%r, periodic=PeriodicAxes(%s)))"
-            % (uniform.cells, "(%s)" % "".join("%s," % axis for axis in support._names
-                                              if support.periodic(axis))),
+            "Uniform(CartesianGrid(frame=frame, cells=%r, periodic=%s))"
+            % (uniform.cells, "PeriodicAxes((%s))" % "".join(
+                "%s," % axis for axis in support._names if support.periodic(axis))
+               if periodic else None),
             [Choice("cells", uniform.cells, "stated")]))
         return layout
 
-    def boundaries(self, support: Box) -> None:
+    def boundaries(self, support: Box) -> list:
+        """The relations of ``model.on`` that close each boundary piece of the support (2.6.2,
+        D9): each piece that a flux crosses takes one relation of the quantity, and the relations
+        take the boundary policy of the numerics (``MissingBoundaryRealization`` otherwise)."""
         pieces = support.piece_names()
-        if pieces and self.model.terms:
+        relations = list(self.model.boundary_relations)
+        if not pieces:
+            return relations
+        if not self.model.terms:
+            if relations:
+                raise NotYetElaborated("a boundary relation of a balance with no flux",
+                                       _G04, site=relations[0].site)
+            return relations
+        (balance,) = self.model.balances
+        quantity = balance.quantity
+        missing = [name for name in pieces
+                   if not any(relation.quantity is quantity
+                              and any(piece.name == name for piece in relation.pieces)
+                              for relation in relations)]
+        if missing:
             raise MissingBoundaryRealization(
                 "the fluxes of %s cross the boundary pieces %s of %r, which no boundary relation "
-                "closes" % (self.model.terms[0].quantity, ", ".join(pieces), support),
-                write="pops.Periodic(lower, upper) for an axis whose ends are identified; the "
-                      "boundary relations model.on(...) and the boundary policy are elaborated "
-                      "by a later lot of N15 with G04", site=support.site)
+                "closes" % (quantity, ", ".join(missing), support),
+                write="pops.Periodic(lower, upper) for an axis whose ends are identified, or a "
+                      "relation of each piece, model.on(Ω.boundary.%s, %s == g) or "
+                      "model.on(..., outflow(%s))" % (missing[0], quantity, quantity),
+                site=support.site)
+        if self.numerics.boundary is None:
+            raise MissingBoundaryRealization(
+                "the relation %r has no realization: the numerics state no boundary policy"
+                % relations[0], write="pops.Numerics(..., boundary=ghosts())",
+                site=self.numerics.site)
+        return relations
+
+    def boundary_data(self, relations: list) -> dict:
+        """The data g of each value relation, lowered on the model of b6 before its block is
+        made, which registers the parameters that g reads."""
+        return {relation: _number(relation.data) if is_number(relation.data)
+                else self.lower(relation.data)
+                for relation in relations if relation.form == "Value"}
+
+    def boundary_conditions(self, support: Box, frame: Any, block: Any, plan: Any,
+                            states: dict, relations: list, data: dict) -> None:
+        """Run the boundary policy under each relation, check that the ghost it gives is a
+        ghost law of b6, and add the transport boundaries of the block to the plan (T5): the
+        ghost 2 g - u_k of a value and the ghost u_1 of no data, b6's two laws of master
+        (2.6.5), whose b6 conditions ``pops.lib.numerics.ghost_laws`` names (the bridge of the
+        boundary policy, until G04 generates the ghost fills)."""
+        if not relations:
+            return
+        from pops.boundary import TransportBoundarySet
+        from pops.lib.numerics.ghost_laws import realize
+
+        from ._scheme import SchemeLeaf, normal_form
+
+        policy = self.numerics.boundary
+        laws: dict = {}
+        for relation in relations:
+            quantity = relation.quantity
+            state = block[states[quantity]]
+            for _piece, k, value in policy.ghosts(relation, _GHOST_DEPTHS):
+                if relation.form == "Value":
+                    expected = 2 * relation.data - SchemeLeaf(("inner", k), quantity, "u_%d" % k)
+                else:
+                    expected = SchemeLeaf(("inner", 1), quantity, "u_1")
+                if normal_form(value) != normal_form(expected):
+                    raise NotYetElaborated(
+                        "the ghost %s that %r gives under %r at depth %d, which is not a ghost "
+                        "law of b6 (2 g - u_k for a value, u_1 for no data)"
+                        % (text(value), policy, relation, k), _GENERATED_GHOSTS,
+                        site=relation.site)
+            law, spelling, ghost = realize(
+                relation.form, state, data.get(relation), "block[%s]" % quantity.name,
+                self.code(relation.data) if relation.form == "Value" else "")
+            for piece in relation.pieces:
+                laws[getattr(frame.boundaries, piece.name)] = law
+            self.rows.append(Row(
+                repr(relation), "numerics",
+                "%s on %s" % (spelling, ", ".join(piece.name for piece in relation.pieces)),
+                [Choice("form", relation.form, "derived"),
+                 Choice("ghost", "%s, by %r" % (ghost, policy), "derived")]))
+        periodic = tuple(axis for axis, (_, _, flag)
+                         in zip(frame.axes, support.bounds(), strict=True) if flag)
+        plan.boundaries.add(TransportBoundarySet(
+            laws, periodic=PeriodicAxes(periodic) if periodic else None))
 
     def run(self) -> Elaborated:
         model = self.model
@@ -777,7 +861,7 @@ class _Elaboration:
                 "a model of several evolved quantities, whose state is a record (SD42)",
                 "a later lot of N15 with the record states of N8", site=model.balances[1].site)
         support = self.support()
-        self.boundaries(support)
+        relations = self.boundaries(support)
         frame = self.frame(support)
         self.layout_facts = {"uniform": True, "cartesian": True,
                              "periodic": all(support.periodic(axis) for axis in support._names)}
@@ -788,8 +872,10 @@ class _Elaboration:
         terms = self.terms(b6, frame, states)
         rates = {balance: self.rate(b6, balance, terms, states) for balance in model.balances}
         plan, selections = self.plan(rates, terms, states)
+        data = self.boundary_data(relations)
         case6 = _Case(model.name)
         block = case6.block(model.name, b6)
+        self.boundary_conditions(support, frame, block, plan, states, relations, data)
         case6.numerics(plan, block=block)
         self.initial(case6, block, states)
         advance = self.advance(case6, block, states, selections)

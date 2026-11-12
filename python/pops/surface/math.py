@@ -5,9 +5,10 @@ This lot elaborates the field algebra (``+ - * / **``, unary minus, ``abs``, ``p
 exact), the elementary functions that the expressions of b6 lower (``exp``, ``expm1``, ``log``,
 ``sqrt``, ``sin``, ``cos``), the differential words of a balance (``ddt``, ``grad``, ``div``) and
 the predicate words, whose refusals SU4 and SU11 state (``where``, ``equal``, ``all_of``,
-``any_of``, ``none_of``), and, in the body of a scheme (lot 2), ``largest``, ``smallest`` and
-``dot(term.law(...), face.normal)``. Every other word of 2.6.3 is importable and refuses its call with
-``NotYetElaborated``, which names the lot that elaborates it, ``curl`` and ``outflow`` included:
+``any_of``, ``none_of``), in the body of a scheme (lot 2), ``largest``, ``smallest`` and
+``dot(term.law(...), face.normal)``, and ``outflow(q)``, the relation of ``model.on`` whose piece
+carries no data (lot B). Every other word of 2.6.3 is importable and refuses its call with
+``NotYetElaborated``, which names the lot that elaborates it, ``curl`` included:
 CF2 admits the definition of a word of 2.6.3 in this module, by a top-level ``def`` or assignment,
 and refuses the word everywhere else (FC2, R20).
 
@@ -220,7 +221,14 @@ for _word, _owner in _LATER.items():
 
 # CF2 admits these two words only as a top-level definition of this module (FC2, R20).
 curl = _later("curl", _N11)
-outflow = _later("outflow", _TRACES)
+
+
+def outflow(q: _Any) -> _Any:
+    """``outflow(q)``: the empty relation on the trace of q, which states that a piece of
+    ``model.on`` carries no data (R20, SD43); its form is ``NoData`` (lot B of N15)."""
+    from ._model import NoDataRelation
+
+    return NoDataRelation(q, "outflow")
 
 __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
     "Fraction", "pi", "infinity", "ddt", "grad", "div", "curl", *_ELEMENTARY, "where", "equal",

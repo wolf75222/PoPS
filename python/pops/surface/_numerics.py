@@ -1,7 +1,8 @@
 """The numerics level of the surface, 𝔇 (spec 0.3, 2.6.2, 2.6.6; D1, D5).
 
-``pops.Numerics(represent={u: pops.CellAverage()}, schemes={F: s})`` states the representation of
-each quantity and the scheme of each term, keyed by handles (SU8, SU14). The scheme of a key is a
+``pops.Numerics(represent={u: pops.CellAverage()}, schemes={F: s}, boundary=ghosts())`` states the
+representation of each quantity, the scheme of each term, keyed by handles (SU8, SU14), and the
+policy that realizes the relations of ``model.on`` (lot B). The scheme of a key is a
 word called with its options (SU5): ``upwind()``, never ``upwind``. Each term of each balance is
 covered exactly once (``CoverageNotExact``), and the representation of an evolved quantity is
 stated (SU9). ``numerics.of(transport)`` is the realization of a balance or of a term, which a
@@ -174,10 +175,8 @@ class Numerics:
                                                      "pops.Numerics")
             raise TypeError("pops.Numerics takes represent=, schemes= and boundary=, got %s="
                             % name)
-        if boundary is not None:
-            raise NotYetElaborated("pops.Numerics(boundary=...), the boundary policy",
-                                   "a later lot of N15 with the boundary relations of G04")
         self.site = user_site(2)
+        self.boundary = self._boundary(boundary)
         self.represent = self._table(represent, "represent", Quantity)
         for _, representation in self.represent:
             if not isinstance(representation, CellAverage):
@@ -186,6 +185,34 @@ class Numerics:
         self.schemes = self._table(schemes, "schemes", (Flux, DiffusiveFlux))
         for key, scheme in self.schemes:
             self._check_scheme(key, scheme)
+
+    def _boundary(self, policy: Any) -> Any:
+        """``boundary=ghosts()``: a boundary policy, a scheme over ``face`` that returns
+        ``Ghost`` for each relation of ``model.on`` (2.6.2, D9). It runs when the case is built,
+        where the relations of the model are known (lot B)."""
+        if policy is None:
+            return None
+        from ._scheme import SurfaceScheme, UserScheme
+
+        if isinstance(policy, SurfaceScheme):
+            from ._refusal import NotAPopsOperation
+
+            raise NotAPopsOperation(
+                "boundary=%s holds the policy uncalled; a call states its options and runs "
+                "nothing (SU5)" % policy.name, write="boundary=%s()" % policy.name,
+                site=self.site)
+        if isinstance(policy, dict):
+            raise NotYetElaborated("pops.Numerics(boundary={piece: ...}), a policy per piece; "
+                                   "a scheme under the handle of model.on replaces the policy "
+                                   "on its pieces", "a later lot of N15 with the boundary "
+                                                    "relations of G04")
+        if not isinstance(policy, UserScheme) or policy.scheme.is_cell:
+            raise TypeError("pops.Numerics(boundary=...) takes a boundary policy called with its "
+                            "options, such as ghosts(), got %r" % (policy,))
+        if policy.scheme.is_boundary or "face" in policy.scheme.entities:
+            return policy
+        raise TypeError("pops.Numerics(boundary=...) takes a boundary policy, a scheme over face "
+                        "that returns Ghost, got %r" % (policy,))
 
     def _table(self, table: Any, name: str, keys: Any) -> tuple:
         if table is None:
