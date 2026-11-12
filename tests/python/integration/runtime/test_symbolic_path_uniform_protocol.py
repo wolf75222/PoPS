@@ -110,14 +110,46 @@ def test_uniform_path_refusal_preserves_accepted_state_and_clock(
         assert dt * 2 * N * (.5 + .3**2) > 1.
     strategy = AdaptiveCFL(cfl=.25, max_dt=dt) if hot_stage else FixedDt(dt)
     runtime, initial = _bind(strategy, hot_stage=hot_stage)
+    # The hot stage reads 100 q.n, so its faces record a frequency far above the proposal's.
+    # AdaptiveCFL retries such a refusal once at cfl over that frequency (spec 0.3 21.6,
+    # ROM-108): about 1.74e-5 here, which the guard admits. The runtime dt_min puts the witness
+    # beyond that repair, so the refusal of the hot stage is the run's outcome.
+    controls = {"dt_min": 5.e-5} if hot_stage else {}
     # A serial invalid_argument maps to ValueError; collective refusals and the
     # numerical stage guard map to RuntimeError. Both must retain the diagnostic.
-    with pytest.raises((ValueError, RuntimeError), match="user_face_numerical_stability"):
-        pops.run(runtime, t_end=dt, max_steps=1)
+    with pytest.raises((ValueError, RuntimeError),
+                       match="user_face_numerical_stability") as refused:
+        pops.run(runtime, t_end=dt, max_steps=1, **controls)
+    if hot_stage:
+        assert getattr(refused.value, "__notes__", []) == [
+            "retry stopped: the step of the recorded face frequency is below dt_min"]
     np.testing.assert_array_equal(
         np.asarray(runtime.state_global("transport")).reshape(initial.shape), initial)
     assert runtime.time() == 0.
     assert runtime.macro_step() == 0
+
+
+def test_uniform_path_hot_stage_refusal_is_retried_at_the_step_of_its_recorded_faces(
+        isolated_native_cache, native_cxx, kokkos_root):
+    """ROM-108, spec 0.3 21.6: without dt_min, the hot stage's refusal is repaired by the retry.
+
+    The proposal is max_dt = 1e-4. The hot stage reads 100 q.n, where v = 30, so its faces record
+    the frequency 2 N (0.5 + 30**2) on x; the guard refuses the proposal, and AdaptiveCFL retries
+    once at cfl over that frequency, which the guard admits. One step is accepted at that clock,
+    with the explicit Euler state of the hot value; max_steps=1 then ends the run before t_end.
+    """
+    del isolated_native_cache, native_cxx, kokkos_root
+    max_dt, cfl = 1.e-4, .25
+    retried = cfl / (2 * N * (.5 + (100. * .3) ** 2))
+    assert retried < max_dt
+    runtime, initial = _bind(AdaptiveCFL(cfl=cfl, max_dt=max_dt), hot_stage=True)
+    with pytest.raises(RuntimeError, match="max_steps exhausted before t_end: accepted 1 step"):
+        pops.run(runtime, t_end=max_dt, max_steps=1)
+    assert runtime.macro_step() == 1
+    assert runtime.time() == pytest.approx(retried, rel=1.e-15, abs=0.)
+    actual = np.asarray(runtime.state_global("transport")).reshape(initial.shape)
+    expected = _step(100. * initial, runtime.time())
+    np.testing.assert_allclose(actual, expected, rtol=1.e-14, atol=0.)
 
 
 def test_uniform_path_fixed_dt_uses_unit_numerical_budget(
