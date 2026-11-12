@@ -6,24 +6,32 @@
 /// from the analytic programs of X (data, not callbacks) and from a stated quadrature rule on
 /// [0, 1] (D0, D0b):
 ///
-/// * node positions X at the logical nodes;
+/// * node positions X at the logical nodes, the logical node k of an axis of M cells being
+///   lower + (upper - lower) (k / M) with the quotient k / M correctly rounded, so that node k of
+///   M cells and node 2k of 2M cells are one binary64 point and graded nodes nest bitwise;
 /// * cell measure |K| = int_K |det DX|, by the tensor rule (a chart), or the product of the node
 ///   differences (node positions: component a reads the logical coordinate a alone);
 /// * cell centroid int_K X |det DX| / |K| (chart), or the midpoint of the node intervals;
-/// * face area vector S_f oriented toward increasing index: the node in rank one, the rotated
-///   chord in rank two, so that the faces of every cell close exactly in exact arithmetic;
-///   its measure |S_f| and unit normal S_f / |S_f|;
-/// * face centroid (chord midpoint), face distance |c_R - c_L|, and at a physical end of node
-///   positions the mirrored distance 2 |m_f - c_K| (a chart states none there: its chord and its
-///   curved cell need not keep the centroid inside, so the end distance of a chart is NaN, and a
-///   consumer that would read it fails closed); cell width |K| / ((|S_lower| + |S_upper|) / 2).
+/// * face area vector S_f oriented toward increasing index, so that the faces of every cell close
+///   exactly in exact arithmetic: for node positions of any rank, the logical axis times the
+///   product of the node differences of the other axes (the node itself in rank one); for a
+///   chart, of rank two, the rotated chord; its measure |S_f| and unit normal S_f / |S_f|;
+/// * face centroid (the centre of a box face, or the chord midpoint), face distance |c_R - c_L|,
+///   and at a physical end of node positions the mirrored distance 2 |m_f - c_K| (a chart states
+///   none there: its chord and its curved cell need not keep the centroid inside, so the end
+///   distance of a chart is NaN, and a consumer that would read it fails closed); cell width
+///   |K| / ((|S_lower| + |S_upper|) / 2), which for node positions is the node difference itself,
+///   taken exactly.
 ///
 /// The generation certifies what the consumers rely on, and refuses the configuration otherwise:
 /// finite values; positive measures; positive orientation (det DX > 0 at every quadrature point of
-/// a chart, S_f . (c_R - c_L) > 0 across every face); the closure of every cell to its rounding
-/// floor; and, on a periodic axis of a chart, one translation T with X(upper) = X(lower) + T at
-/// every seam node, to the rounding floor of A3 (|X| ulp and ||DX|| ulp of the logical endpoint).
-/// The seam nodes are then identified, so the seam is one face, bitwise, on both sides.
+/// a chart, S_f . (c_R - c_L) > 0 across every face, node positions increasing along their axis);
+/// node positions that keep the bounds of their box (the end nodes of every axis within 4 ulp of
+/// its bounds, then set to them: the nodes move inside the box, the box stays the domain); the
+/// closure of every cell to its rounding floor; and, on a periodic axis of a chart, one
+/// translation T with X(upper) = X(lower) + T at every seam node, to the rounding floor of A3
+/// (|X| ulp and ||DX|| ulp of the logical endpoint). The seam nodes are then identified, so the
+/// seam is one face, bitwise, on both sides.
 
 #pragma once
 
@@ -305,10 +313,17 @@ class StaticGeometry {
         refuse("the logical domain is empty");
       node_extent_[axis] = cells_[axis] + 1;
       cell_count *= cells_[axis];
+      // The logical node k sits at lower + (upper - lower) (k / M), the quotient of two integers
+      // correctly rounded: node k of M cells and node 2k of 2M cells read one binary64 point, so
+      // the nodes of a graded axis nest bitwise across resolutions (design note N17, 3.8). The
+      // last node is the upper bound itself, which the sum may miss by its rounding.
+      const Real lower = geometry.lower()[axis], upper = geometry.upper()[axis];
+      const Real cells = static_cast<Real>(cells_[axis]);
       logical[axis].resize(static_cast<std::size_t>(node_extent_[axis]));
-      for (std::int64_t node = 0; node < node_extent_[axis]; ++node)
+      for (std::int64_t node = 0; node + 1 < node_extent_[axis]; ++node)
         logical[axis][static_cast<std::size_t>(node)] =
-            geometry.face_coordinate(axis, static_cast<int>(domain_.lo[axis] + node));
+            lower + (upper - lower) * (static_cast<Real>(node) / cells);
+      logical[axis].back() = upper;
     }
     std::int64_t node_count = 1;
     for (int axis = 0; axis < Dim; ++axis)
@@ -332,6 +347,23 @@ class StaticGeometry {
             refuse("the coordinate map is not finite at a node of axis " + std::to_string(axis));
           positions[axis][static_cast<std::size_t>(node)] = value.value;
         }
+        // Node positions keep the bounds of their box: the end nodes lie within 4 ulp of the
+        // bounds of the axis and are set to them (DN3). The nodes move inside the box, and the box
+        // stays the domain; a separable map that moves the box would state the domain in the
+        // layout (SU6).
+        const Real lower = geometry.lower()[axis], upper = geometry.upper()[axis];
+        const Real tolerance = Real(4) * ulp(std::max(std::fabs(lower), std::fabs(upper)));
+        Real& first = positions[axis].front();
+        Real& last = positions[axis].back();
+        if (!(std::fabs(first - lower) <= tolerance) || !(std::fabs(last - upper) <= tolerance))
+          refuse(
+              "node positions of axis " + std::to_string(axis) + " must keep the bounds [" +
+              static_geometry_detail::number(lower) + ", " + static_geometry_detail::number(upper) +
+              "] of the box within 4 ulp; the map sends them to [" +
+              static_geometry_detail::number(first) + ", " + static_geometry_detail::number(last) +
+              "]: graded nodes move inside the box, they do not move the box");
+        first = lower;
+        last = upper;
         for (std::int64_t node = 0; node + 1 < node_extent_[axis]; ++node)
           if (!(positions[axis][static_cast<std::size_t>(node + 1)] >
                 positions[axis][static_cast<std::size_t>(node)]))
@@ -513,9 +545,23 @@ class StaticGeometry {
       for_each_index(extent, [&](const auto& face, std::int64_t linear) {
         const auto index = static_cast<std::size_t>(linear);
         RealVector<Dim> area{}, middle{};
-        if constexpr (Dim == 1) {
-          area[0] = Real(1);
-          middle = node_position(face);
+        if (kind_ == StaticGeometryKind::nodes) {
+          // A face of node positions is a face of a box: the logical axis times the product of
+          // the node differences of the other axes (1 in rank one), centred on that face.
+          Real product = Real(1);
+          for (int other = 0; other < Dim; ++other) {
+            const Real low = nodes_[other][static_cast<std::size_t>(node_offset(face))];
+            if (other == axis) {
+              middle[other] = low;
+              continue;
+            }
+            auto end = face;
+            ++end[other];
+            const Real high = nodes_[other][static_cast<std::size_t>(node_offset(end))];
+            product *= high - low;
+            middle[other] = Real(0.5) * (low + high);
+          }
+          area[axis] = product;
         } else if constexpr (Dim == 2) {
           const int tangent = 1 - axis;
           auto end = face;
@@ -526,7 +572,7 @@ class StaticGeometry {
           for (int component = 0; component < Dim; ++component)
             middle[component] = Real(0.5) * (start[component] + stop[component]);
         } else {
-          refuse("rank three is not served");
+          refuse("a chart is served on layouts of rank two");
         }
         Real squared = Real(0);
         for (int component = 0; component < Dim; ++component)
@@ -615,6 +661,18 @@ class StaticGeometry {
           refuse("the area vector of a face of axis " + std::to_string(axis) +
                  " does not point from its left cell to its right cell");
       });
+      // The two copies of a seam face are one face: the upper copy takes the distance of the
+      // lower one bitwise, so that a two-point flux across the seam is one value on both sides.
+      if (periodicity[axis]) {
+        std::array<std::int64_t, Dim> seam = extent;
+        seam[axis] = 1;
+        for_each_index(seam, [&](auto face, std::int64_t) {
+          auto upper = face;
+          upper[axis] = cells_[axis];
+          face_distance_[axis][static_cast<std::size_t>(face_linear(axis, upper))] =
+              face_distance_[axis][static_cast<std::size_t>(face_linear(axis, face))];
+        });
+      }
     }
     for (int axis = 0; axis < Dim; ++axis)
       for (const Real distance : face_distance_[axis])
@@ -632,8 +690,18 @@ class StaticGeometry {
         ++upper[axis];
         const auto low = static_cast<std::size_t>(face_linear(axis, cell));
         const auto high = static_cast<std::size_t>(face_linear(axis, upper));
-        width_[axis][index] = cell_measure_[index] /
-                              (Real(0.5) * (face_measure_[axis][low] + face_measure_[axis][high]));
+        if (kind_ == StaticGeometryKind::nodes) {
+          // |K| / ((|S_lower| + |S_upper|) / 2) is the node difference along the axis: taken
+          // exactly, it is the spacing of a graded box.
+          auto node = cell;
+          ++node[axis];
+          width_[axis][index] = nodes_[axis][static_cast<std::size_t>(node_offset(node))] -
+                                nodes_[axis][static_cast<std::size_t>(node_offset(cell))];
+        } else {
+          width_[axis][index] =
+              cell_measure_[index] /
+              (Real(0.5) * (face_measure_[axis][low] + face_measure_[axis][high]));
+        }
         for (int component = 0; component < Dim; ++component) {
           closure[component] +=
               face_area_[axis][component][high] - face_area_[axis][component][low];

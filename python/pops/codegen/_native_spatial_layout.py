@@ -59,7 +59,8 @@ def _static_geometry_layout(normalized: Any) -> bool:
         raise NativeSpatialLayoutError(
             "native_static_geometry_adaptive_unavailable",
             "static geometry arrays on an adaptive layout need the renormalization of child "
-            "measures at regrid, which is not yet provided", layout_id=layout_id)
+            "measures at regrid (DM12), which lot L4 of N17 provides with the generated "
+            "transfers of G11", layout_id=layout_id)
     if normalized.options.get("embedded_boundary") is not None:
         raise NativeSpatialLayoutError(
             "native_static_geometry_embedded_boundary_unavailable",

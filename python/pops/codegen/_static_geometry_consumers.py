@@ -12,16 +12,22 @@ an allowlist: a consumer joins it when it reads the arrays and a test shows it.
   face descriptor declares). The rule reads capabilities, never the name of a method (CF2);
 * transport boundaries that extend the interior state alone: a ghost state of the state, without
   a formula on its components, a characteristic closure, a field, the clock or a parameter;
-* the scalar isotropic diffusion of a Program on node positions (rank one), with conormal,
-  value or periodic ends whose data reads no coordinate;
-* states and linear combinations of a Program, a fixed step, initial values bound as arrays.
+* the two-point diffusion of a Program, of one component with a diagonal coefficient, on node
+  positions (a graded box, of rank one to three), with conormal, value or periodic ends whose data
+  reads no coordinate;
+* states and linear combinations of a Program, a fixed step, initial values bound as arrays;
+* the reductions that a block owns, which are raw algebra over the cell values and weigh nothing
+  by a measure, and the finite assessment of an elaborated Advance that reads them (isfinite and
+  the acceptance guard). A reduction that no block owns observes a field or an interaction, a
+  service of the System that may weigh by the measures of the logical box, and stays refused.
 """
 from __future__ import annotations
 
 import dataclasses
 from typing import Any
 
-STATIC_GEOMETRY_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs"})
+STATIC_GEOMETRY_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs",
+                                         "reduce", "scalar_isfinite", "acceptance_guard"})
 # What a physical face normal provides to a face law: the normal flux F.n, a bound of the normal
 # spectral radius, and the provider pack of each trace.
 NORMAL_FACE_CAPABILITIES = frozenset({"physical_flux", "provider_pack", "stability_bound"})
@@ -122,6 +128,15 @@ def _extends_the_state(provider: Any) -> bool:
             and not dependencies.time and not dependencies.runtime_params)
 
 
+def _diagonal(law: Any) -> bool:
+    """Every off-diagonal entry of the spatial tensor of the law is an exact zero."""
+    from pops.model.expression_language import Const
+
+    return all(axis == column or (isinstance(value, Const) and value.value == 0)
+               for tensor in law.component_coefficients
+               for axis, row in enumerate(tensor) for column, value in enumerate(row))
+
+
 def _check_diffusion(layout: Any, block: Any, method: Any, rank: int, kind: str) -> None:
     from pops.model.spaces import StateSpace
 
@@ -133,14 +148,19 @@ def _check_diffusion(layout: Any, block: Any, method: Any, rank: int, kind: str)
     if method.transport is not None:
         _refuse(layout, "static_geometry_diffusion_unavailable",
                 "block %r couples diffusion with transport faces in one balance" % block.name)
-    if rank != 1 or kind != "nodes":
+    if kind != "nodes":
         _refuse(layout, "static_geometry_diffusion_unavailable",
-                "block %r diffuses on a %s of rank %d; the diffusion of this lot reads node "
-                "positions of rank one" % (block.name, kind, rank), rank=rank, kind=kind)
-    if len(law.coefficients) != 1 or len(law.coefficients[0]) != 1:
+                "block %r diffuses on a %s of rank %d; the diffusion of the static arrays reads "
+                "node positions (a graded box), whose faces are orthogonal to the line of the "
+                "centroids" % (block.name, kind, rank), rank=rank, kind=kind)
+    # Capabilities, never a method name (CF2): a face that reads its two cells alone (ghost
+    # depth one), one component, a diagonal spatial tensor.
+    if getattr(method, "ghost_depth", None) != 1 or len(law.variables) != 1 or not _diagonal(law):
         _refuse(layout, "static_geometry_diffusion_unavailable",
-                "block %r diffuses a vector or a tensor; the static arrays serve scalar isotropic "
-                "diffusion" % block.name)
+                "block %r diffuses a vector, with a full tensor or through a wider face; the "
+                "static arrays serve the two-point diffusion of one component with a diagonal "
+                "coefficient, whose faces are orthogonal to the line of the centroids on node "
+                "positions" % block.name)
     for boundary in law.boundaries:
         if any(float(value) != 0.0 for value in (boundary.slope or ())):
             _refuse(layout, "static_geometry_boundary_data_unavailable",
@@ -174,6 +194,11 @@ def validate_static_geometry_consumers(plan: Any) -> None:
                 source != "default" for source in (value.attrs.get("sources") or ()))):
             _refuse(layout, "static_geometry_consumer_unavailable",
                     "a rate with named fluxes or named sources")
+        if value.op == "reduce" and value.block is None:
+            _refuse(layout, "static_geometry_consumer_unavailable",
+                    "a reduction %r that no block owns, which observes a field or an interaction "
+                    "through the System" % (value.attrs.get("kind"),),
+                    operations=["reduce"], kind=value.attrs.get("kind"))
     strategy = getattr(plan.time, "_step_strategy", None)
     if type(strategy) is not FixedDt:
         _refuse(layout, "static_geometry_step_unavailable",
