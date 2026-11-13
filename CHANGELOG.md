@@ -37,6 +37,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `pops.inspect(case)` reports where each scheme written with `@pops.scheme` and the method
   are written, « the case file, <file>:<line> » or « pops.lib, <file>:<line> » (S1-b), and the
   slice's native test counts no Python call inside the native run (S2, CF9).
+- CF17 for L1 (exit of phase 1, OD31): `examples/surface/litmus/l1/` writes L1 of 17.1 in the
+  surface (L1-a: `upwind()`, `two_point()`, SSPRK2) and its three swaps, `rusanov()` (L1-b), the
+  upwind face written in the case with `@pops.scheme` (L1-c) and IMEX Euler with `cg()` (L1-d).
+  `tests/python/integration/surface/test_cf17_l1_swaps.py` checks that each swap changes only the
+  lines of the swapped function, lints the four files, and runs them natively in Dim1 at the level
+  of L1-a: L1-b and L1-c give L1-a bit for bit, the integral of u is kept, u stays in [0, 1], no
+  swap is farther from the exact cell averages than L1-a, and no Python runs inside the native run
+  (CF9). The four files are the CF1 case `L1-swaps` (frozen engine unchanged). Until N8 elaborates
+  `dt=` as a function of cell the step is a number, and `nu` is a constant while `cg()` is a
+  bridge.
 - ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
   from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
   `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the

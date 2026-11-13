@@ -16,6 +16,8 @@ include = [
     "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py",
     "examples/surface/tutorials/",
     "tests/python/integration/surface/test_vertical_slice_t02.py",
+    "examples/surface/litmus/",
+    "tests/python/integration/surface/test_cf17_l1_swaps.py",
 ]
 
 # CF1, tried on M01 (Linear N2). Each case names the files that make it up: its builder, the case
@@ -56,4 +58,19 @@ files = [
     "examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py",
     "tests/gates/vertical_slice.toml",
     "tests/python/integration/surface/test_vertical_slice_t02.py",
+]
+
+# CF17 for L1 at the exit of phase 1 (OD31; driver, 13/11 13:35, tranche/decisions_pilote.md): L1-a
+# and its three swaps (rusanov(), the upwind face written in the case, IMEX Euler with cg()) and
+# their test. Adding the four files changes no path of the frozen engine.
+[[case]]
+id = "L1-swaps"
+issue = "ROM-98"
+what = "L1 of 17.1 and the swaps of CF17 (examples/surface/litmus/l1)"
+files = [
+    "examples/surface/litmus/l1/l1_a.py",
+    "examples/surface/litmus/l1/l1_b.py",
+    "examples/surface/litmus/l1/l1_c.py",
+    "examples/surface/litmus/l1/l1_d.py",
+    "tests/python/integration/surface/test_cf17_l1_swaps.py",
 ]

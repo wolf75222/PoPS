@@ -136,6 +136,7 @@
     "tests/python/integration/runtime/test_stencil_flux_v02_native.py": 2,
     "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": 1,
     "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py": 3,
+    "tests/python/integration/surface/test_cf17_l1_swaps.py": 1,
     "tests/python/unit/runtime/test_computed_frontier_clipping.py": 2,
     "tests/python/unit/runtime/test_computed_program_frontier.py": 2,
     "tests/python/unit/runtime/test_step_strategy.py": 2
