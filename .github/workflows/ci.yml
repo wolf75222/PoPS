@@ -1971,6 +1971,12 @@ jobs:
             --wheel-directory "$wheel_directory" \
             --install-root "$RUNNER_TEMP/pops-mpi-producer-installed" \
             --receipt-dir "$wheel_directory/producer-proof"
+          # The runner and include contract that built this module: an mpi-python group on another
+          # runner image rebuilds the module there instead of failing every native test.
+          PYTHONPATH="$PWD/build-mpi/python" PYTHONNOUSERSITE=1 \
+            /usr/bin/python3 scripts/ci_native_build_runner.py record \
+            --dimension 2 --wheel-dir "$wheel_directory" \
+            --output "$wheel_directory/native-build-runner.json"
 
       - name: Publish authenticated MPI Python wheel and exact group plan
         uses: actions/upload-artifact@v7
@@ -2058,6 +2064,12 @@ jobs:
         with:
           name: gate-mpi-python-wheel
           path: ${{ runner.temp }}/pops-mpi-python-wheel
+      # During a GitHub image rollout the mpi job and this group can run on two images; the
+      # module's include contract then refuses every native compile. Rebuild it here first.
+      - name: MPI Dim2 native module for this runner
+        uses: ./.github/actions/mpi-module-for-runner
+        with:
+          package-dir: ${{ runner.temp }}/pops-mpi-python-wheel
       - name: Authenticate fresh MPI wheel installation
         timeout-minutes: 8
         run: |
