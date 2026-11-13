@@ -31,15 +31,6 @@ owner = "N9, the lot « La référence sous les solves de relation »: the refer
 refusal = "tests/python/unit/surface/test_su_t2_solve_refusals.py::test_a_coefficient_that_is_a_parameter_names_the_bridge_that_reads_it"
 exit_test = "L1-d of §17.1 with nu = model.parameter('nu', admissible=pops.Positive()) solved through cg(), the step bound with two values of nu"
 
-# The ghost laws of the boundary policy ghosts() (N15 lot B, #774): the elaborator adds to the block
-# the b6 Inflow (2 g - u_k) or Outflow (u_1) that the body of the policy states. The module holds
-# only that bridge; G04 removes it when it generates the ghost fills from the body.
-[[bridge]]
-word = "realize"
-module = "pops.lib.numerics.ghost_laws"
-route = "pops.boundary.transport.Inflow, pops.boundary.transport.Outflow"
-owner = "G04, the ghost fills generated from the body of the boundary policy (N15)"
-
 # The step rule cfl_limit() of N15 lot D-E, part D (#788), accepted as a bridge by the pilot's
 # ruling (driver, 12/11) and counted in the exit list of phase 1: its value subclasses the
 # surface's StepRuleValue and realizes N8's compiled StepRule paired with b6's AdaptiveCFL of the

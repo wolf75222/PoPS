@@ -190,10 +190,11 @@ def _per_axis_text(values: tuple, spell: Any) -> str:
 
 
 _G04 = "a later lot of N15 with the boundary relations of G04"
-_GENERATED_GHOSTS = "a later lot of N15 with the generated ghost fills of G04"
-# The depths at which a boundary policy is checked: those that b6 derives at most (WENO5 reads
-# three cells), so that a body that departs from a law of b6 at a depth is refused.
-_GHOST_DEPTHS = (1, 2, 3)
+# The reads that a generated ghost of G04-a does not take (D3), with their owners.
+_NORMAL_GHOSTS = "a later lot of G04 with the characteristic and reflected ghosts"
+_SYMBOLIC_DEPTH = ("G04 phase 2, with the symbolic depth of 2.6.6 (the generated ghosts of G04-a "
+                   "read the cells 1..D of the halo of the block)")
+_FACE_CENTRE_DATA = "G04, with the boundary data read at the centre of the face (C44)"
 
 
 _ANALYTIC_LOT = "a later lot of N15 with the generated initial values of G07"
@@ -1116,46 +1117,85 @@ class _Elaboration:
                 else self.lower(relation.data)
                 for relation in relations if relation.form == "Value"}
 
+    def ghost_depth(self, plan: Any) -> int:
+        """The halo depth D of the block, derived from the plan (G04-a, R1): the largest
+        ``ghost_depth`` of the methods of its rates and states, and of the storage that a rate
+        asks. The composition of the halos of resolved operations is known only at compilation,
+        where the package refuses a block that stores more ghost cells than D."""
+        depth = 1
+        for _subject, method in (*plan.rates.items(), *plan.states.items()):
+            depth = max(depth, int(getattr(method, "ghost_depth", 1)))
+            requirements: Any = getattr(method, "runtime_storage_requirements", None)
+            if requirements is not None:
+                storage: Any = requirements()
+                if storage is not None:
+                    depth = max(depth, int(storage["ghost_depth"]))
+        return depth
+
+    def ghost_reads(self, relation: Any, policy: Any, k: int, value: Any, depth: int) -> None:
+        """Refuse a read that a generated ghost of this lot does not take (D3), each by its
+        name and its owner."""
+        from ._expr import walk
+        from ._scheme import SchemeLeaf
+
+        for node in walk(value):
+            if isinstance(node, SchemeLeaf) and node.key[0] == "normal":
+                raise NotYetElaborated(
+                    "face.normal in the ghost that %r gives under %r at depth %d"
+                    % (policy, relation, k), _NORMAL_GHOSTS, site=relation.site)
+            if isinstance(node, SchemeLeaf) and node.key[0] == "inner" and node.key[1] > depth:
+                raise NotYetElaborated(
+                    "%s in the ghost that %r gives under %r at depth %d, deeper than the %d "
+                    "ghost cell%s of the block" % (text(node), policy, relation, k, depth,
+                                                   "" if depth == 1 else "s"),
+                    _SYMBOLIC_DEPTH, site=relation.site)
+            if isinstance(node, Coordinate):
+                raise NotYetElaborated(
+                    "the coordinate %s in the ghost that %r gives under %r" % (node, policy,
+                                                                               relation),
+                    _FACE_CENTRE_DATA, site=relation.site)
+
     def boundary_conditions(self, support: Box, frame: Any, block: Any, plan: Any,
-                            states: dict, relations: list, data: dict) -> None:
-        """Run the boundary policy under each relation, check that the ghost it gives is a
-        ghost law of b6, and add the transport boundaries of the block to the plan (T5): the
-        ghost 2 g - u_k of a value and the ghost u_1 of no data, b6's two laws of master
-        (2.6.5), whose b6 conditions ``pops.lib.numerics.ghost_laws`` names (the bridge of the
-        boundary policy, until G04 generates the ghost fills)."""
+                            states: dict, relations: list) -> None:
+        """Run the boundary policy under each relation at the depths 1..D of the block, and add
+        to the plan (T5) the b6 ``SourceGhost`` of each piece, the ghost cells generated from the
+        body of the policy (G04-a): the model package compiles them, the prepared boundary fills
+        them on the device."""
         if not relations:
             return
         from pops.boundary import TransportBoundarySet
-        from pops.lib.numerics.ghost_laws import realize
-
-        from ._scheme import SchemeLeaf, normal_form
+        from pops.boundary.transport import SourceGhost
 
         policy = self.numerics.boundary
+        depth = self.ghost_depth(plan)
+        depths = tuple(range(1, depth + 1))
         laws: dict = {}
         for relation in relations:
             quantity = relation.quantity
             state = block[states[quantity]]
-            for _piece, k, value in policy.ghosts(relation, _GHOST_DEPTHS):
-                if relation.form == "Value":
-                    expected = 2 * relation.data - SchemeLeaf(("inner", k), quantity, "u_%d" % k)
-                else:
-                    expected = SchemeLeaf(("inner", 1), quantity, "u_1")
-                if normal_form(value) != normal_form(expected):
-                    raise NotYetElaborated(
-                        "the ghost %s that %r gives under %r at depth %d, which is not a ghost "
-                        "law of b6 (2 g - u_k for a value, u_1 for no data)"
-                        % (text(value), policy, relation, k), _GENERATED_GHOSTS,
-                        site=relation.site)
-            law, spelling, ghost = realize(
-                relation.form, state, data.get(relation), "block[%s]" % quantity.name,
-                self.code(relation.data) if relation.form == "Value" else "")
+            values: dict = {}
+            for piece, k, value in policy.ghosts(relation, depths):
+                self.ghost_reads(relation, policy, k, value, depth)
+                values.setdefault(piece.name, {})[k] = value
             for piece in relation.pieces:
-                laws[getattr(frame.boundaries, piece.name)] = law
+                bodies = values[piece.name]
+
+                def body(inner: Any, k: int, bodies: dict = bodies) -> tuple:
+                    inputs = {("inner", j): inner(j)[0] for j in depths}
+                    return (self.lower(bodies[k], inputs),)
+
+                laws[getattr(frame.boundaries, piece.name)] = SourceGhost(
+                    state=state, body=body, depth=depth)
+            first = values[relation.pieces[0].name]
             self.rows.append(Row(
                 repr(relation), "numerics",
-                "%s on %s" % (spelling, ", ".join(piece.name for piece in relation.pieces)),
+                "SourceGhost(state=block[%s], body=the Ghost of %r, depth=%d) on %s"
+                % (quantity.name, policy, depth,
+                   ", ".join(piece.name for piece in relation.pieces)),
                 [Choice("form", relation.form, "derived"),
-                 Choice("ghost", "%s, by %r" % (ghost, policy), "derived")]))
+                 Choice("ghost", "%s, by %r" % ("; ".join("k=%d: %s" % (k, text(first[k]))
+                                                         for k in depths), policy),
+                        "derived")]))
         periodic = tuple(axis for axis, (_, _, flag)
                          in zip(frame.axes, support.bounds(), strict=True) if flag)
         plan.boundaries.add(TransportBoundarySet(
@@ -1184,10 +1224,10 @@ class _Elaboration:
         terms = self.terms(b6, frame, states)
         rates = {balance: self.rate(b6, balance, terms, states) for balance in model.balances}
         plan, selections = self.plan(rates, terms, states)
-        data = self.boundary_data(relations)
+        self.boundary_data(relations)
         case6 = _Case(model.name)
         block = case6.block(model.name, b6)
-        self.boundary_conditions(support, frame, block, plan, states, relations, data)
+        self.boundary_conditions(support, frame, block, plan, states, relations)
         case6.numerics(plan, block=block)
         self.initial(case6, block, states, frame)
         advance = self.advance(case6, block, states, selections)

@@ -10,8 +10,7 @@ neither ``pops`` nor a case.
 ``classify`` sorts every module of ``pops.lib`` into a module of the surface (it imports
 ``pops.surface``, or no module of ``pops`` and ``[[earlier]]`` does not list it), a module of
 ``[[earlier]]``, a module that only a ``[[bridge]]`` holds (it builds the native route and nothing
-of the surface, like the ghost laws of ``pops.lib.numerics.ghost_laws``), a package that only
-re-exports its submodules, or an unlisted module. ``found_bridges`` finds the bridges of the
+of the surface), a package that only re-exports its submodules, or an unlisted module. ``found_bridges`` finds the bridges of the
 modules of the surface and of the bridge modules by their source: a subclass of ``SchemeValue``
 or of ``StepRuleValue`` (a value of the surface that realizes itself as a native route), or a
 call that builds a native route of face, reconstruction, diffusion, boundary or solver
