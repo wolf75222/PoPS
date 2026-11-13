@@ -15536,8 +15536,8 @@ void AmrSystem<Dim>::set_generated_tagging(
           "AMR generated refinement criterion requires one complete unique pre-materialization "
           "authority");
     typename Impl::TaggingSpec::Generated generated{
-        identity,         field_identities, field_blocks, field_variables, field_components, {},
-        parameters,       parameter_blocks, parameter_slots};
+        identity, field_identities, field_blocks,     field_variables, field_components,
+        {},       parameters,       parameter_blocks, parameter_slots};
     for (std::size_t row = 0; row < parameter_blocks.size(); ++row)
       if (parameter_blocks[row] < 0 || parameter_slots[row] < 0)
         throw std::invalid_argument(
@@ -27275,8 +27275,7 @@ template void AmrSystem<kNativeDimension>::set_generated_tagging(
     const std::string&, const std::vector<std::string>&, const std::vector<std::string>&,
     const std::vector<std::vector<std::string>>&, const std::vector<std::vector<int>>&,
     const std::vector<std::vector<std::size_t>>&, const std::vector<double>&,
-    const std::vector<int>&, const std::vector<int>&, int, const std::string&,
-    const std::string&);
+    const std::vector<int>&, const std::vector<int>&, int, const std::string&, const std::string&);
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::tagging_requests(int);
 template void AmrSystem<kNativeDimension>::set_generated_regrid_decision(
     const std::string&, const std::vector<std::string>&, const std::vector<std::string>&,
