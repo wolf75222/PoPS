@@ -37,6 +37,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `pops.inspect(case)` reports where each scheme written with `@pops.scheme` and the method
   are written, « the case file, <file>:<line> » or « pops.lib, <file>:<line> » (S1-b), and the
   slice's native test counts no Python call inside the native run (S2, CF9).
+- The model source map (S2 of the vertical slice, driver 13:35): `compiled.source_maps` adds,
+  under `block:<name>`, the map `pops.model-source-map@1` of each block whose model C++ holds a
+  policy generated from a Python body, the face of `riemann.User` (`UserFacePolicy`) and the
+  trace of `reconstruction.User` (`UserReconstructionPolicy`): its lines in the retained C++, its
+  source identity and the origin of its body, the case file or `pops.lib` with its file, line and
+  function (`pops._source_origin`). The surface gives each brick the origin of the
+  `@pops.scheme` body it realizes; `riemann.User(origin=)` and `reconstruction.User(origin=)`
+  take it, and default to their own body's. The origin is local provenance, off the identity of
+  the descriptor and of the artifact: the generated C++ and its cache key do not change.
+  `compiled.inspect()` reports the bodies under `model_source_maps`. On the slice, the face is
+  « the case file, …/02_openmp_explicit_ssprk2.py:34 » and the reconstruction « pops.lib,
+  pops/lib/numerics/limiters.py:45 ».
 - CF17 for L1 (exit of phase 1, OD31): `examples/surface/litmus/l1/` writes L1 of 17.1 in the
   surface (L1-a: `upwind()`, `two_point()`, SSPRK2) and its three swaps, `rusanov()` (L1-b), the
   upwind face written in the case with `@pops.scheme` (L1-c) and IMEX Euler with `cg()` (L1-d).

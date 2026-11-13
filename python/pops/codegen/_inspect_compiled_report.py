@@ -317,12 +317,22 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
                  "header_signature": _abi_token(abi_key, "headers") or "unknown",
                  "cache_key": _short(cache_key),
                  "cache_keys": cache_keys}
+    maps = getattr(compiled, "source_maps", {})
     artifacts["program_source_maps"] = {
         owner: {"source_sha256": data["source_sha256"], "map_sha256": data["map_sha256"],
                 "operation_emissions": len(data["operations"]),
                 "unlocated_ssa": len(data["unlocated"]), "complete": data["complete"],
                 "evidence": data["evidence"]}
-        for owner, data in getattr(compiled, "source_maps", {}).items()
+        for owner, data in maps.items() if data["contract"] == "pops.program-source-map@1"
+    }
+    from pops._source_origin import origin_text
+    artifacts["model_source_maps"] = {
+        owner: {"source_sha256": data["source_sha256"], "map_sha256": data["map_sha256"],
+                "bodies": [{"policy": row["policy"], "lines": row["ranges"],
+                            "written_in": None if row["origin"] is None
+                            else origin_text(row["origin"])} for row in data["bodies"]],
+                "complete": data["complete"], "evidence": data["evidence"]}
+        for owner, data in maps.items() if data["contract"] == "pops.model-source-map@1"
     }
     from pops._capabilities import native_capability_report
     try:

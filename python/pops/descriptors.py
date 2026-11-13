@@ -137,6 +137,7 @@ class BrickDescriptor:
         available: bool = True,
         expression: Any = None,
         builder: Any = None,
+        origin: Any = None,
     ) -> None:
         if brick_type not in BRICK_TYPES:
             raise ValueError(
@@ -161,6 +162,10 @@ class BrickDescriptor:
         # the function that AUTHORS the solver IR. Like ``expression`` it is kept OFF
         # the identity key (a callable is not part of the brick's value identity).
         self.builder = builder
+        # Optional origin of a generated brick's Python body (``pops._source_origin``): where
+        # its file, line and function are, read by the model source map. Local provenance, kept
+        # OFF the identity key: moving the file that holds the body changes no artifact.
+        self.origin = origin
 
     def freeze(self) -> BrickDescriptor:
         """Freeze this brick descriptor: a later attribute mutation RAISES (ADC-563). Returns ``self``.
