@@ -197,3 +197,7 @@ def test_the_swaps_run_natively_at_the_level_of_l1a(runs):
     # c = 1 where the upwind face carries no numerical diffusion, measured 1.4e-4)
     assert 0.015 < errors["a"] < 0.025, errors
     assert max(errors.values()) == errors["a"], errors
+    # L1-d on its own: the explicit face is an exact shift at c = 1, so its distance is that of
+    # backward Euler on the diffusion (measured 1.4e-4); the bound catches a tenfold growth that
+    # L1-a's level would not see (review O1)
+    assert errors["d"] < 1e-3, errors

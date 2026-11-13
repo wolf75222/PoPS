@@ -22,7 +22,7 @@ nu = model.constant("nu", value=NU)
 u0 = model.data("u0", pops.Scalar(domain))
 advection = model.flux(of=u, value=a * u)
 diffusion = model.diffusive_flux(of=u, value=-nu * grad(u))
-model.balance(ddt(u) == -div(advection) - div(diffusion))
+model.balance(ddt(u) == -div(advection + diffusion))
 
 numerics = pops.Numerics(represent={u: pops.CellAverage()},
                          schemes={advection: upwind(), diffusion: two_point()})

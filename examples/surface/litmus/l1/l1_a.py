@@ -4,7 +4,10 @@
 L1-a writes upwind() for the advection, two_point() for the diffusion and SSPRK2. L1-b, L1-c and
 L1-d differ from it only in the lines of the function that they swap. Until N8 elaborates dt= as a
 function of cell, the combined restriction c_a + 2 r_d <= 1 is a number, and nu is a constant
-while cg() is a bridge (MG9). The claim of 17.1 waits for the claims of the surface (T6).
+while cg() is a bridge (MG9). The claim of 17.1 waits for the claims of the surface (T6). The
+methods come from pops.lib.time.methods, since pops.lib.time does not export them (until 17.1 is
+amended or pops.lib.time re-exports them), and the cell centres are computed with numpy, since
+the artifact has no cells yet (until the lot that gives it artifact.cells, §4.3).
 """
 import numpy
 
@@ -23,7 +26,7 @@ nu = model.constant("nu", value=NU)
 u0 = model.data("u0", pops.Scalar(domain))
 advection = model.flux(of=u, value=a * u)
 diffusion = model.diffusive_flux(of=u, value=-nu * grad(u))
-model.balance(ddt(u) == -div(advection) - div(diffusion))
+model.balance(ddt(u) == -div(advection + diffusion))
 
 numerics = pops.Numerics(represent={u: pops.CellAverage()},
                          schemes={advection: upwind(), diffusion: two_point()})
