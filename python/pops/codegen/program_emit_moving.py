@@ -6,6 +6,7 @@ an immutable-grid residual and reinterpret that residual as a moving flux.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 
 from pops.identity.scalar import scalar_cpp
 from ._compiled_parameter import _decode_scalar, _thaw_json
@@ -44,72 +45,79 @@ def _entry(value, authority):
     if physical.op == "principal_rate":
         entry = principal_for_value(model, physical)
     else:
-        from pops.numerics.principal import PrincipalGroup
-        from pops.numerics.spatial import FiniteVolume
-        from .program_models import ProgramModelGraph
-        if type(authority) is not ProgramModelGraph:
-            raise ValueError("moving single-state transport requires resolved numerical authority")
-        rows=[row for row in authority.numerics_for_block(physical.block).rates
-              if row.rate.registered_operator_name==physical.attrs["operator_handle"].registered_operator_name]
-        if len(rows)!=1 or type(rows[0].method) is not FiniteVolume:
-            raise NotImplementedError("moving physical rate needs its declared FiniteVolume realization")
         if not physical.attrs.get("flux") or physical.attrs.get("sources"):
             raise ValueError("moving physical rate must contain only its original conservative flux")
         from pops.time.references import canonical_handle
-        state=canonical_handle(physical.inputs[0].attrs["state"])
-        group=PrincipalGroup((state,),(canonical_handle(rows[0].rate),),(rows[0].method,),1)
-        module=authority.source_module_for_owner(physical.block.model_owner_path)
-        view=module.operator_registry().get(rows[0].rate.registered_operator_name).lowering.get("physical_balance")
-        if view is None or not view.accumulation.is_identity or len(view.occurrences)!=1 or \
-                view.occurrences[0].kind!="flux" or view.occurrences[0].coefficient!=-1:
-            raise ValueError("moving transport requires the original identity-accumulation -div(flux) Equation")
-        if module.primitive_coordinates():
-            raise NotImplementedError("single-state moving physical coordinates need a prepared conversion provider")
-        from pops._ir import Var
-        from pops._ir.application import substitute_quantities
-        from pops._ir.primitive_expansion import expand_primitive_recipes
-        from pops._ir.visitors import _children
-        impl=model._m
-        def native(body):
-            expanded=expand_primitive_recipes(body,impl.prim_defs)
-            pending=list(expanded.values()) if isinstance(expanded,dict) else list(expanded)
-            replacements={}; seen=set()
-            while pending:
-                node=pending.pop()
-                if isinstance(node,(tuple,list)): pending.extend(node); continue
-                if id(node) in seen: continue
-                seen.add(id(node))
-                if isinstance(node,Var):
-                    if node.kind!="cons" or node.name not in impl.cons_names:
-                        raise NotImplementedError("moving physical flux needs an interval-qualified provider for %s"%node.name)
-                    replacements[id(node)]=Var("pops_principal_%d"%impl.cons_names.index(node.name),"cons")
-                pending.extend(_children(node))
-            from pops.model.handles import StateHandle
-            declaration=state.declaration_ref or state
-            if not isinstance(declaration,StateHandle):
-                raise ValueError("moving physical transport lost its exact StateSpace declaration")
-            state_handle=module.state_handle(declaration.space)
-            quantities={(state_handle,i):Var("pops_principal_%d"%i,"cons")
-                        for i in range(group.component_count)}
-            return substitute_quantities(expanded,quantities,expression_bindings=replacements)
-        body=module.operator_registry().get(view.occurrences[0].payload.reg_name).body
-        if tuple(body) != ("x",):
-            raise NotImplementedError("moving transport needs the prepared 1D physical face provider")
-        if not getattr(impl,"_eig",None):
-            raise ValueError("moving transport requires its authored physical wave-speed bound")
-        entry={"group":group,"fluxes":(native(body),),"waves":native(impl._eig),
-            "axes":tuple(body),"conversion":None,
-            "cpp_name":"PoPSPrincipal_"+group.identity.token.split(":")[-1][:24],
-            "parameter_indices":tuple((node.name,index) for index,node in enumerate(impl.assign_runtime_indices()))}
-    group = entry["group"]
-    if group.dimension != 1 or len(group.states) != 1:
-        raise NotImplementedError("this moving face provider realizes one complete 1D state; "
-                                  "joint-state/higher-dimensional geometry providers are not installed")
-    method = group.methods[0]
-    if method.reconstruction.name != "firstorder":
-        raise NotImplementedError("the selected reconstruction needs a moving stencil metric provider")
-    if method.riemann.native_id != "pops::RusanovFlux":
-        raise NotImplementedError("the selected numerical flux needs a moving FaceContext provider")
+        entry=fv_rate_entry(authority,model,physical.block,physical.attrs["operator_handle"],
+                            canonical_handle(physical.inputs[0].attrs["state"]))
+    return _check_face_provider(value,entry)
+
+
+def fv_rate_entry(authority, model, block, operator_handle, state):
+    """The face provider entry of one single-state FiniteVolume rate of ``block``: its group, its
+    flux and wave-speed bodies on the principal variables, and its C++ name. The b6 interval
+    producer and the moving total rate of G03 lot M1b read the same entry."""
+    from pops.numerics.principal import PrincipalGroup
+    from pops.numerics.spatial import FiniteVolume
+    from pops.time.references import canonical_handle
+    from .program_models import ProgramModelGraph
+    if type(authority) is not ProgramModelGraph:
+        raise ValueError("moving single-state transport requires resolved numerical authority")
+    rows=[row for row in authority.numerics_for_block(block).rates
+          if row.rate.registered_operator_name==operator_handle.registered_operator_name]
+    if len(rows)!=1 or type(rows[0].method) is not FiniteVolume:
+        raise NotImplementedError("moving physical rate needs its declared FiniteVolume realization")
+    group=PrincipalGroup((state,),(canonical_handle(rows[0].rate),),(rows[0].method,),1)
+    module=authority.source_module_for_owner(block.model_owner_path)
+    view=module.operator_registry().get(rows[0].rate.registered_operator_name).lowering.get("physical_balance")
+    if view is None or not view.accumulation.is_identity or len(view.occurrences)!=1 or \
+            view.occurrences[0].kind!="flux" or view.occurrences[0].coefficient!=-1:
+        raise ValueError("moving transport requires the original identity-accumulation -div(flux) Equation")
+    if module.primitive_coordinates():
+        raise NotImplementedError("single-state moving physical coordinates need a prepared conversion provider")
+    from pops._ir import Var
+    from pops._ir.application import substitute_quantities
+    from pops._ir.primitive_expansion import expand_primitive_recipes
+    from pops._ir.visitors import _children
+    impl=model._m
+    def native(body):
+        expanded=expand_primitive_recipes(body,impl.prim_defs)
+        # A mapping of axes (the wave speeds) may come back as a read-only mapping proxy: walk its
+        # values, never its keys, or a bare state variable would stay unbound (G03 lot M1b).
+        pending=list(expanded.values()) if isinstance(expanded,Mapping) else list(expanded)
+        replacements={}; seen=set()
+        while pending:
+            node=pending.pop()
+            if isinstance(node,(tuple,list)): pending.extend(node); continue
+            if id(node) in seen: continue
+            seen.add(id(node))
+            if isinstance(node,Var):
+                if node.kind!="cons" or node.name not in impl.cons_names:
+                    raise NotImplementedError("moving physical flux needs an interval-qualified provider for %s"%node.name)
+                replacements[id(node)]=Var("pops_principal_%d"%impl.cons_names.index(node.name),"cons")
+            pending.extend(_children(node))
+        from pops.model.handles import StateHandle
+        declaration=state.declaration_ref or state
+        if not isinstance(declaration,StateHandle):
+            raise ValueError("moving physical transport lost its exact StateSpace declaration")
+        state_handle=module.state_handle(declaration.space)
+        quantities={(state_handle,i):Var("pops_principal_%d"%i,"cons")
+                    for i in range(group.component_count)}
+        return substitute_quantities(expanded,quantities,expression_bindings=replacements)
+    body=module.operator_registry().get(view.occurrences[0].payload.reg_name).body
+    if tuple(body) != ("x",):
+        raise NotImplementedError("moving transport needs the prepared 1D physical face provider")
+    if not getattr(impl,"_eig",None):
+        raise ValueError("moving transport requires its authored physical wave-speed bound")
+    entry={"group":group,"fluxes":(native(body),),"waves":native(impl._eig),
+        "axes":tuple(body),"conversion":None,
+        "cpp_name":"PoPSPrincipal_"+group.identity.token.split(":")[-1][:24],
+        "parameter_indices":tuple((node.name,index) for index,node in enumerate(impl.assign_runtime_indices()))}
+    return entry
+
+
+def _check_face_provider(value, entry):
+    check_relative_face(entry)
     # Native Rusanov averages the two physical trace fluxes. Applying it to
     # F-wg*U therefore fixes its mesh-density trace to (UL+UR)/2. A different
     # declared projection cannot be cancelled in a receipt decomposition and
@@ -120,6 +128,19 @@ def _entry(value, authority):
             "face_weights=(1/2,1/2); this projection needs a prepared numerical-face provider "
             "that consumes its declared density weights")
     return entry
+
+
+def check_relative_face(entry):
+    """One complete 1D state, first order, Rusanov: the faces that the relative struct serves."""
+    group = entry["group"]
+    if group.dimension != 1 or len(group.states) != 1:
+        raise NotImplementedError("this moving face provider realizes one complete 1D state; "
+                                  "joint-state/higher-dimensional geometry providers are not installed")
+    method = group.methods[0]
+    if method.reconstruction.name != "firstorder":
+        raise NotImplementedError("the selected reconstruction needs a moving stencil metric provider")
+    if method.riemann.native_id != "pops::RusanovFlux":
+        raise NotImplementedError("the selected numerical flux needs a moving FaceContext provider")
 
 
 def _law(value):
@@ -249,31 +270,43 @@ def check_moving_program(program, authority, target):
         _entry(value,authority); _law(value); _source(value,authority)
 
 
+def relative_struct(name, entry):
+    """``<name>Relative``: the model of ``entry`` with the flux F(u) - w u and the speeds
+    |λ - w|, w the member ``mesh_speed`` that the caller sets at each face."""
+    from .program_emit_principal import _checked
+    base=entry["cpp_name"]
+    wave_lines,wave_values,wave_invalid=_checked(entry["waves"]["x"],entry["group"].component_count,indent="    ")
+    return ["struct %sRelative : %s {"%(name,base),"  pops::Real mesh_speed{};",
+        "  template<int Axis> POPS_HD State flux(const State& u) const {",
+        "    auto result=%s::template flux<Axis>(u);"%base,
+        "    for(int c=0;c<n_vars;++c) result[c]-=mesh_speed*u[c]; return result; }",
+        "  template<int Axis> POPS_HD pops::Real max_wave_speed(const State& u) const {",
+        "    static_assert(Axis==0); const auto params=parameter_sets[0]; pops::Real result=0;",
+        *wave_lines,
+        "    if(%s) return std::numeric_limits<pops::Real>::quiet_NaN();"%wave_invalid,
+        *("    result=Kokkos::max(result,Kokkos::abs((%s)-mesh_speed));"%wave for wave in wave_values),
+        "    return result; }",
+        "  template<int Axis> POPS_HD void wave_speeds(const State& u,pops::Real& lo,pops::Real& hi) const {",
+        "    %s::template wave_speeds<Axis>(u,lo,hi); lo-=mesh_speed; hi-=mesh_speed; }"%base,"};"]
+
+
 def emit_moving_helpers(program, authority):
+    from .program_emit_principal import emit_principal_model
     lines=[]
     emitted=set()
     for value in moving_updates(program):
         entry=_entry(value,authority); name="PoPSMoving_%d"%value.id; base=entry["cpp_name"]
         if value.inputs[1].op=="rhs" and base not in emitted:
-            from .program_emit_principal import emit_principal_model
             lines.append(emit_principal_model(entry)); emitted.add(base)
-        from .program_emit_principal import _checked
-        wave_lines,wave_values,wave_invalid=_checked(entry["waves"]["x"],entry["group"].component_count,indent="    ")
         lines += ["struct %sLaw {"%name,
             "  POPS_HD pops::Real operator()(pops::Real reference,pops::Real physical_time) const {",
-            *_law(value),"  }","};",
-            "struct %sRelative : %s {"%(name,base),"  pops::Real mesh_speed{};",
-            "  template<int Axis> POPS_HD State flux(const State& u) const {",
-            "    auto result=%s::template flux<Axis>(u);"%base,
-            "    for(int c=0;c<n_vars;++c) result[c]-=mesh_speed*u[c]; return result; }",
-            "  template<int Axis> POPS_HD pops::Real max_wave_speed(const State& u) const {",
-            "    static_assert(Axis==0); const auto params=parameter_sets[0]; pops::Real result=0;",
-            *wave_lines,
-            "    if(%s) return std::numeric_limits<pops::Real>::quiet_NaN();"%wave_invalid,
-            *("    result=Kokkos::max(result,Kokkos::abs((%s)-mesh_speed));"%wave for wave in wave_values),
-            "    return result; }",
-            "  template<int Axis> POPS_HD void wave_speeds(const State& u,pops::Real& lo,pops::Real& hi) const {",
-            "    %s::template wave_speeds<Axis>(u,lo,hi); lo-=mesh_speed; hi-=mesh_speed; }"%base,"};"]
+            *_law(value),"  }","};", *relative_struct(name,entry)]
+    from .program_emit_moving_total import moving_total_entry, moving_total_rates
+    for value in moving_total_rates(program):
+        entry=moving_total_entry(value,authority); base=entry["cpp_name"]
+        if base not in emitted:
+            lines.append(emit_principal_model(entry)); emitted.add(base)
+        lines += relative_struct("PoPSMovingTotal_%d"%value.id,entry)
     return "\n".join(lines)+("\n" if lines else "")
 
 

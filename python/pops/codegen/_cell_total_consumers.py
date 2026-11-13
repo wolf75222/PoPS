@@ -10,7 +10,8 @@ serves it (note §4.3, §13, §14; driver's rulings of 12/11 23:00 and 23:05):
   fixed step until lot T teaches the selection the represented state;
 - a hierarchy: restriction of a total is a sum and prolongation gives each child μ(child)·ū of
   its parent, so today's transfer is wrong on U (C1, G11);
-- a moving configuration: the volume member of G03 lots M1 and M2;
+- the b6 interval route of a moving map: its volume is a member of the candidate (G03 lots M1 and
+  M2), whose rate of a total is ``moving_total_rate`` (lot M1b);
 - an initial value projected on the analytic route: the b6 ``ConservativeCellAverage`` gives
   averages; the encode of a projection waits for N16's table (plan/routes_transitoires.md, line 4);
 - any Program operation other than the stored state, its linear combinations and the two rates
@@ -27,7 +28,8 @@ from pops.time._program.traced_method import NotYetElaborated
 
 # The operations that a Program of a total may hold: the state, its combinations, and the rates
 # that read the decoded density (program_emit_totals.TOTAL_RATE_OPS).
-CELL_TOTAL_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs"})
+CELL_TOTAL_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs",
+                                    "moving_total_rate"})
 
 
 class CellTotalNotYetElaborated(NotYetElaborated):
@@ -75,7 +77,13 @@ def validate_cell_total_consumers(plan: Any) -> None:
                 "prolongation gives each child mu(child) times the density of its parent", "G11")
     if plan.time is None:
         _refuse("cell_total_program", name, "a case without a Program", "the Program of the case")
-    ops = sorted({value.op for value in all_ops(plan.time)} - CELL_TOTAL_PROGRAM_OPS)
+    # The block of the members of a moving configuration advances its own state by its own
+    # source (G03 lot M1a); its operations are not operations on a total.
+    from pops.codegen._moving_members_consumers import member_blocks
+    members = {block.name for block in member_blocks(plan)}
+    ops = sorted({value.op for value in all_ops(plan.time)
+                  if value.block is None or value.block.local_id not in members}
+                 - CELL_TOTAL_PROGRAM_OPS)
     if any(op in ("geometry_state", "reynolds_update") for op in ops):
         _refuse("cell_total_moving", name, "a moving configuration, whose volume is a member of "
                 "the candidate", "G03 lots M1 and M2")

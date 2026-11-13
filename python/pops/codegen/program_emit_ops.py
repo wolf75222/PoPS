@@ -474,6 +474,10 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         from .program_emit_moving import emit_moving_op
         emit_moving_op(program, v, var, lines, prelude, model, block_idx)
         return
+    if v.op == "moving_total_rate":
+        from .program_emit_moving_total import emit_moving_total_rate
+        emit_moving_total_rate(v, var, lines, authority=model, blocks=block_idx)
+        return
     from pops.codegen.program_models import model_for_node
     node_model = model_for_node(model, v) if model is not None and (
         v.block is not None or v.attrs.get("operator_handle") is not None) else model

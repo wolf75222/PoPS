@@ -367,6 +367,17 @@ class MovingMembers:
                                            projection=ConservativeCellAverage()))
         _register(model, self)
 
+    def transport(self, rate: Any) -> Any:
+        """The rate of a block of totals on this configuration (G03 lot M1b): a function of the
+        totals U, the members M and their rate k_M of one stage, with ``rate`` the FiniteVolume
+        rate of the model of the block of U, whose face this configuration makes relative
+        (``pops.time._program.moving_total_rate``)."""
+        def evaluate(state: Any, members: Any, member_rate: Any, *, name: Any = None) -> Any:
+            from pops.time._program.moving_total_rate import moving_total_rate
+            return moving_total_rate(state.prog, name or "%s_on_%s" % (rate.name, self.block.name),
+                                     state, members, member_rate, rate=rate)
+        return evaluate
+
     def initial_values(self) -> dict[Any, np.ndarray]:
         """``initial_values=`` of ``pops.bind`` for the members, keyed by the block's state."""
         return {self.block[self.state]: self.configuration.initial_members()}
