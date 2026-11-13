@@ -262,7 +262,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `two_point()`) are removed: the operator is the discrete operator that the explicit route
   evaluates. `pops.lib.solve` is a package (`claims`, `refused`). A fixed failure site under a
   reference realization is refused at elaboration (§3.7), and a b6 rate op that a region does not
-  run is refused by name. `tests/gates/mg9_bridges.toml` loses its `cg` entry.
+  run is refused by name. `tests/gates/mg9_bridges.toml` loses its `cg` entry. Cost (reported,
+  not gated, driver's ruling of 13/11): the relation solves under `cg()` are about 470 times
+  slower than before this lot at 64² and about 2600 times at 256². On L1-d a step takes 2.47 s
+  at 64² and 259 s at 256² (11 GB resident), against 5.3 ms and 99 ms for the same step on b6's
+  native CG. The region recorded the face expressions of every iterate; the follow-up « Le coût
+  de la région d'un solveur » removes them.
 - ROM-85 (N10, phase 1, lot 3a): strict mode on `Patches` (spec 0.3 DM5). The layout record
   (`data_layout_and_distribution`, schema 4) lists every general access of the plan
   (`general_accesses`: node, op, array, layout and IR8 provenance of the index) for `at` and the
