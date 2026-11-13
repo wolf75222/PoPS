@@ -42,7 +42,6 @@ FIELD_RELATIVE_TOL=FIELD_RESIDUAL_BUDGET/FIELD_FORCING_BOUND
 def build(*,ghost=True,boundary_composer=None):
     frame=Rectangle('initial field ghost',(0.,0.),(1.,1.)).frame(Cartesian2D())
     model=pops.Model('growth with screened field',frame=frame)
-    threshold=model.param(RuntimeParam('tag_threshold',default=.7))
     state=model.state('U',components=('c','m'),sampling='cell_average')
     c,m=state
     flux=model.flux('zero',frame=frame,state=state,components={a:(0*c,0*m) for a in frame.axes},waves={a:(0*c,0*m) for a in frame.axes})
@@ -51,6 +50,7 @@ def build(*,ghost=True,boundary_composer=None):
     phi=model.field('phi')
     operator=model.field_operator('screened',unknown=phi,equation=-laplacian(unknown(phi))+(1/ALPHA)*unknown(phi)==m/ALPHA,outputs=(FieldOutput('phi',phi),))
     case=pops.Case('accepted initial Field/Ghost scientific board')
+    threshold=case.param(RuntimeParam('tag_threshold',default=.7))
     block=case.block('marker',model)
     field=case.field(operator,FieldDiscretization(method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(AllPhysicalBoundaries(),Neumann(0.)),),
@@ -67,7 +67,7 @@ def build(*,ghost=True,boundary_composer=None):
     case.initials.add(InitialCondition(state=block[state],value=Analytic(frame=frame,components=(cos(2*math.pi*x(frame)),2+0*x(frame))),projection=ConservativeCellAverage()))
     transfer=AMRTransfer();transfer.state(block[state],StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")));transfer.field(field,EllipticRecompute())
     layout=AMR(grid=CartesianGrid(frame=frame,cells=(8,8)),hierarchy=AMRHierarchy(max_levels=2,ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])['c']>model.value(threshold)),Buffer(cells=0, selection="refine-requests")),hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
+        tagging=AMRTagging(rules=(Tag(lambda cell: cell.value(ValueExpr(block[state])['c']) > case.value(threshold)),Buffer(cells=0, selection="refine-requests")),hysteresis=Hysteresis(0,EqualityPolicy.HOLD),conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(1000,clock=program.clock)),transfer=transfer,
         execution=AMRExecution.synchronous(accepted_halo=AcceptedHaloPreparation(cells=(1,1))))
     return case,layout

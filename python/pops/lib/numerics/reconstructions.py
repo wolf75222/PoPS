@@ -1,14 +1,14 @@
 """Per-axis reconstructions written in Python (spec 0.3 sections 4.3 and 4.4, IR25; N3).
 
+Since N3 lot 2 ``muscl`` and its limiters are written with the surface in
+:mod:`pops.lib.numerics.limiters`, and their b6 bodies are the oracles of
+``examples/api_v02/b6_reconstructions.py``. This module keeps the b6 ``Reconstruct`` and ``weno5``
+until lot 3 ports ``weno5`` (MG9, ``[[earlier]]``).
+
 ``Reconstruct(rep, value)`` is the builder of section 4.3: ``value(c, a)`` gives the trace of
 the cell ``c`` on its face on the positive side of the axis ``a``, and the trace on the face on
-the negative side is the same body with its offsets along ``a`` mirrored. ``muscl(rep, limiter)``
-is the MUSCL face value of the catalogue, written with it:
-
-    u_c + limiter(u_c - u_(c-1), u_(c+1) - u_c) / 2
-
-so that master's ``MUSCL(VanLeer())`` is ``muscl(Uh, vanleer)``, and ``weno5(rep)`` is the
-WENO5-Z face value of master's ``WENO5()``. The body runs once, now, and
+the negative side is the same body with its offsets along ``a`` mirrored. ``weno5(rep)`` is the
+WENO5-Z face value of master's ``WENO5()``, written with it. The body runs once, now, and
 its expression becomes the generated C++ of the face reconstruction; no native reconstruction or
 limiter is named.
 
@@ -17,7 +17,7 @@ which a face flux of :mod:`pops.lib.numerics.fluxes` or a ``FiniteVolume`` takes
 ``reconstruction=``. It fixes three properties of this lot, each stated where it applies:
 
 * componentwise: ``c.value(rep)`` is one component of ``rep``, and the body is applied to each
-  component of a record state on its own, as section 4.4 applies ``muscl`` to each field;
+  component of a record state on its own;
 * one body for every axis: ``a`` is the axis of the face, the same for each axis of the support,
   and the generated kernel applies the body along each axis, mirrored on the negative face. A
   body that asks which axis it is (``a == x``) is refused, since it would choose one branch for
@@ -120,32 +120,6 @@ def Reconstruct(rep: Any, value: Callable[..., Any], *, formal_order: int | None
         return reconstruction.User(
             body, formal_order=int(max(offsets, default=0) - min(offsets, default=0) + 1))
     return reconstruction.User(body, formal_order=formal_order)
-
-
-def muscl(rep: Any, limiter: Callable[[Any, Any], Any]) -> Any:
-    """MUSCL reconstruction of ``rep`` with ``limiter`` (section 4.4): the trace
-    u_c + limiter(u_c - u_(c-1), u_(c+1) - u_c) / 2 on the positive face of each axis, mirrored
-    on the negative one; master's ``MUSCL(VanLeer())`` is ``muscl(Uh, vanleer)``.
-
-    ``limiter`` is passed uncalled, for example :func:`pops.lib.numerics.limiters.vanleer`. The
-    trace is second order where the limiter keeps the slope (claim of section 13), and the body
-    reads one cell on each side, so the derived ghost depth is 2.
-
-    With the limiters of :mod:`pops.lib.numerics.limiters`, the generated trace is the native
-    MUSCL trace bit for bit wherever the latter is finite, except for the sign of a zero trace of
-    a cell value -0 on the negative face (the native policy multiplies the slope by the face's
-    orientation; the mirrored body does not), and except where vanleer's product of the two
-    differences passes the largest double, which the generated face refuses.
-    """
-    if not callable(limiter):
-        raise TypeError("muscl(rep, limiter) requires a limiter function limiter(a, b), passed "
-                        "uncalled")
-
-    def value(c, a):
-        u = c.value(rep)
-        return u + .5*limiter(u - c.shift(a, -1).value(rep), c.shift(a, 1).value(rep) - u)
-
-    return Reconstruct(rep, value, formal_order=2)
 
 
 # The constants of the native WENO5-Z policy (include/pops/numerics/fv/reconstruction.hpp and
@@ -284,4 +258,4 @@ def weno5(rep: Any, epsilon: float | None = None) -> Any:
     return Reconstruct(rep, value, formal_order=5)
 
 
-__all__ = ["Reconstruct", "muscl", "weno5"]
+__all__ = ["Reconstruct", "weno5"]

@@ -257,7 +257,7 @@ def _authored_case(*, adaptive: bool) -> tuple[pops.Case, Any]:
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(evolved) > case.value(threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(evolved)) > case.value(threshold)),
                 Buffer(cells=1),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
