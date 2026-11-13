@@ -9076,12 +9076,12 @@
         },
         "tests/python/unit/surface/test_n17_chart.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/surface/test_n17_chart.py",
-          "passed": 23,
-          "seconds": 3.41
+          "passed": 27,
+          "seconds": 5.33
         }
       },
       "source_sha256": {
-        "tests/python/unit/surface/test_n17_chart.py": "72480c6ef3e5bb358dae82aaecde995b10ae736dc5a49f5af449416e9c853dcc",
+        "tests/python/unit/surface/test_n17_chart.py": "662d10c1c88132c82c9c738c561edaa9bc24c1a1c9df4a8f6702266969321aae",
         "tests/python/integration/runtime/test_n17_chart_annulus_native.py": "d05ac96ea44f91bc9d4174e5abe6f8e7a66ec8d2789d76e3384543d08b435af5"
       }
     },

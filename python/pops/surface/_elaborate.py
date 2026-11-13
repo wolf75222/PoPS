@@ -43,8 +43,8 @@ from pops.time._program import relations as _relations
 
 from ._expr import Arith, Call, Expr, Predicate, is_number, text
 from ._geometry import (
-    CHART_POINT_READS, FRAME_AXES, MAP_WORDS, Charted, Coordinate, FrameCoordinate,
-    LogicalCoordinate, MathConstant, Support,
+    CHART_GHOSTS, CHART_POINT_READS, CHART_RECONSTRUCTIONS, FRAME_AXES, MAP_WORDS, Charted,
+    Coordinate, FrameCoordinate, LogicalCoordinate, MathConstant, Support,
 )
 from ._method import MethodValue, _Trace, specialize, translate
 from ._model import (
@@ -669,6 +669,16 @@ class _Elaboration:
                 realization = scheme.realize(TermView(term, terms[term], states[term.quantity],
                                                       slope=slope, unit_flux=speed,
                                                       lower=self.lower))
+                if self.charted and not isinstance(term, DiffusiveFlux):
+                    order = (getattr(getattr(realization, "reconstruction", None), "options",
+                                     None) or {}).get("formal_order", 1)
+                    if order != 1:
+                        raise NotYetElaborated(
+                            "%r of %s on the charted support %r, whose traces are reconstructed "
+                            "to the formal order %s from the logical stencil of a cell"
+                            % (scheme, term, term.quantity.space.support, order),
+                            CHART_RECONSTRUCTIONS,
+                            site=getattr(scheme, "site", None) or self.numerics.site)
                 if isinstance(term, DiffusiveFlux):
                     if not isinstance(realization, StencilRealization):
                         raise TypeError("the scheme %r of the diffusive flux %s gives %r; a "
@@ -689,6 +699,15 @@ class _Elaboration:
                                                                   list)())
                 if speed is not None:
                     choices.append(Choice("speed", "s = F(1)·n = %s" % text(speed), "derived"))
+                reads_radius = getattr(scheme, "reads_radius", None)
+                if self.charted and reads_radius is not None and reads_radius(term):
+                    # DN31: a transitional route, until the exact radius on a physical normal.
+                    choices.append(Choice(
+                        "speed on the chart", "the face input s, spectral_radius(term, u, n) at "
+                        "the two traces, is the bound sum_k |n_k| rho(A_k) of b6 on the physical "
+                        "normal of a face, not the exact radius rho(sum_k n_k A_k): equal on an "
+                        "axis normal, larger off it and without bound near a face tangent to the "
+                        "flow; a transitional route until lot L2d of N17 (DN31)", "derived"))
                 self.rows.append(Row(
                     "schemes={%s: %r}" % (term, scheme), "numerics",
                     ("%s, %s" % (self.names[term], scheme.describe()))
@@ -1394,6 +1413,14 @@ class _Elaboration:
                 "the relation %r has no realization: the numerics state no boundary policy"
                 % relations[0], write="pops.Numerics(..., boundary=ghosts())",
                 site=self.numerics.site)
+        if self.charted:
+            # DN30: outflow(u) extends the cell; a value reflects it across a face of the chart.
+            for relation in relations:
+                if relation.form == "Value":
+                    raise NotYetElaborated(
+                        "the value relation %s of the charted support %r, whose ghost 2 g - u_k "
+                        "is the reflection of a cell across a face of the chart"
+                        % (relation, support), CHART_GHOSTS, site=relation.site)
         return relations
 
     def boundary_data(self, relations: list) -> dict:

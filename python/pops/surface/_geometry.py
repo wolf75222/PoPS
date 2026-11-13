@@ -49,6 +49,13 @@ _L3 = "lot L3 of N17 (ROM-110), with the measure densities of axisymmetry"
 # DN30: a coordinate read on a charted support waits for the reads at the points of a chart.
 CHART_POINT_READS = ("lot L2b of N17 (ROM-110), which reads it at the image of the centre of a "
                      "cell and at the centroid of a face (DN7, DN30)")
+# DN30: the consumers that the arrays of a chart do not serve yet stay refused, where the case is
+# built: a value relation, whose ghost is the reflection of a cell across a face of the chart, and
+# traces reconstructed above the cell values, whose slopes read the logical stencil of a cell.
+CHART_GHOSTS = ("lot L2b of N17 (ROM-110), which reflects the ghost of a value relation across "
+                "the face of a chart (DN25, DN30)")
+CHART_RECONSTRUCTIONS = ("lot L2b of N17 (ROM-110), with the centred gradient of a chart that a "
+                         "reconstruction above the cell values reads (DN25, DN30)")
 
 
 class MathConstant(Expr):

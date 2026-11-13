@@ -101,8 +101,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   on which the chart does not depend on the other coordinate is degenerate: it leaves `σ.boundary`,
   and a case on that support waits for lot L2c with `identify` of G09. A coordinate read on a
   charted support, in a value of the model or an initial value, and `pops.project` there wait for
-  lot L2b, which reads them at the points of the chart; `σ.weighted` waits for lot L3. The case is
-  `examples/api_v02/models_charted_supports.py`, a scalar advected by `rusanov()` on the annulus.
+  lot L2b, which reads them at the points of the chart, and so do a value relation (its ghost is
+  the reflection of a cell across a face of the chart) and a reconstruction above the cell values,
+  refused where the case is built (`NotYetElaborated`); `σ.weighted` waits for lot L3. On the
+  physical normal of a chart the face input s of a face authored in source, which `rusanov()`
+  reads as its spectral radius, is b6's bound sum_k |n_k| rho(A_k), not the exact radius of
+  `spectral_radius`: equal on an axis normal, larger off it and without bound near a face tangent
+  to the flow. It is a transitional route until lot L2d of N17, which generates the exact radius;
+  `pops.inspect` names it on the row of the scheme. An array that a run published on another
+  support, the box of the chart or the same box under another chart, is refused as a datum of the
+  chart (`SupportMismatch`). The case is `examples/api_v02/models_charted_supports.py`, a scalar
+  advected by `rusanov()` on the annulus.
 - ROM-110 (N17, L1b): graded spacing at the surface, and the static geometry arrays of a graded
   box of rank three. `pops.Graded(base=pops.Uniform(cells=c), nodes={box.x: f})` places node k of
   an axis at f(s), s = k / c correctly rounded, f a plain function that PoPS calls once with the
