@@ -26,6 +26,10 @@ if TYPE_CHECKING:
 else:
     _ProgramBase = object
 
+# The Program operation of centred differences, named once by the module that records it; the
+# consumers that serve it on static geometry arrays import it (N17 L2b-2).
+CENTRED_DIFFERENCES = "gradient"
+
 
 def _prepared_local_nonlinear_controls(prepared: Any, *, where: str) -> dict[str, Any]:
     """Validate the small immutable provider protocol and return canonical IR controls."""
@@ -795,12 +799,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             from pops.time.field_sampling import scalar_co_location
             scalar_co_location(out, phi, "gradient", same_space=False)
             out = self.scalar_field(name=out.name, like=out)
-            return self._new("scalar_field", "gradient", (out, phi),
+            return self._new("scalar_field", CENTRED_DIFFERENCES, (out, phi),
                 {"ncomp": output_components, "spatial_dimension": output_components,
                  "stencil_access": StencilAccess.nearest_neighbour()}, out.name, phi.block,
                 space=out.space, point=phi.point, inherit_state_ref=False)
         return self._new(
-            "scalar_field", "gradient", (out, phi),
+            "scalar_field", CENTRED_DIFFERENCES, (out, phi),
             {"ncomp": output_components, "spatial_dimension": output_components,
              "stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
 

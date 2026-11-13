@@ -101,6 +101,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   at `pops.bind` report the largest sine. The cases are the annulus with its walls held at given
   values (`build_annulus_diffusion`) and the doubly periodic unit square turned by pi / 6 and
   sheared (`build_chart_diffusion`).
+- ROM-110 (N17, L2b-2): the centred slope of the static arrays (DN38 to DN40 of the design note).
+  The Program operation of centred differences (`gradient` of `pops.Program`) is served on every
+  static layout, node positions of ranks one to three and a chart of rank two, with the two
+  operations through which a Program consumes it: the allocation of its scratch and the cellwise
+  algebra of Program values, which reads values, scalars and literals and never a coordinate. The
+  slope g_K of a cell solves delta X g = delta e, row a of delta X the difference of the centroids
+  of the two neighbours of K along a: the stored centroids inside the domain, the centroid at the
+  other end translated by the seam across a periodic axis, and at a physical end the centroid of K
+  reflected through the centroid of its end face, 2 m_f - c_K. The values are those of the
+  boundary session of the Program. The geometric part is one header function of the view of the
+  arrays, `pops::centroid_slope` with `pops::neighbour_centroid`
+  (`include/pops/mesh/geometry/centroid_slope.hpp`), callable from a generated kernel: the
+  generated cell read of `centred_gradient()` (N15) will call it. The elimination with partial
+  pivoting returns on node positions the quotient of the differences by the diagonal, bitwise. The
+  arrays keep the periodicity of each axis and the translation of its seam, which their view
+  carries and their snapshot publishes with the face centroids. The generated step guards the
+  operation with the guard of the arrays; the Laplacian and the divergence of a Program stay
+  refused on them (`static_geometry_consumer_unavailable`). The surface word `centred_gradient()`
+  stays refused until N15. The case is the slope of a graded rod and of a graded ring
+  (`build_graded_slope`); in ranks two and three no Program consumes a slope of one component per
+  axis, and a runtime-private seam of the System evaluates the function for the tests.
 - ROM-110 (N17, L2a): the charted support at the surface (D0b; DN25 to DN34 of the design note).
   `σ.chart(x=e_x, y=e_y)` states the chart of a support of rank two, one expression of the
   coordinates of σ per axis of the Cartesian frame. The keywords name the frame axes, which key the

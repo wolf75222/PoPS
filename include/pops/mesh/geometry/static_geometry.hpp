@@ -24,7 +24,9 @@
 ///   largest sine between the normal of a face and the line of the two centroids that it separates
 ///   (at a physical end, of the centroid of the end cell and the face centroid). A two-point face
 ///   takes that line for its normal; the faces of node positions are orthogonal to it, to rounding,
-///   and a chart reports how far its faces are from it.
+///   and a chart reports how far its faces are from it;
+/// * the periodicity of each axis and the translation T of its seam, which the view carries by
+///   value for the consumers that read a neighbour across the seam (centroid_slope.hpp).
 ///
 /// The generation certifies what the consumers rely on, and refuses the configuration otherwise:
 /// finite values; positive measures; positive orientation (det DX > 0 at every quadrature point of
@@ -73,7 +75,10 @@ struct StaticGeometryRule {
 
 /// Non-owning, trivially copyable reading of the arrays, captured by value in kernels. Cell arrays
 /// cover the logical domain; the face arrays of an axis cover its faces lo..hi+1. A reading
-/// outside them is NaN, so a consumer that reaches past the arrays fails closed.
+/// outside them is NaN, so a consumer that reaches past the arrays fails closed. The periodicity
+/// of each axis and the translation T of its seam (X(upper) = X(lower) + T; zero on an axis that
+/// is not periodic and on a closed seam) are carried by value, for the consumers that read a
+/// neighbour across the seam (centroid_slope.hpp).
 template <int Dim>
 struct StaticGeometryView {
   static_assert(Dim >= 1 && Dim <= 3);
@@ -86,6 +91,8 @@ struct StaticGeometryView {
   std::array<std::array<const Real*, Dim>, Dim> face_normal{};
   std::array<std::array<const Real*, Dim>, Dim> face_centroid{};
   std::array<const Real*, Dim> face_distance{};
+  std::array<bool, Dim> periodic{};
+  std::array<RealVector<Dim>, Dim> seam_translation{};
 
   POPS_HD bool contains_cell(const Index<Dim>& cell) const {
     for (int axis = 0; axis < Dim; ++axis)
@@ -264,11 +271,21 @@ class StaticGeometry {
   /// at a physical end of the centroid of the end cell and the face centroid (DN36): 0 to rounding
   /// on node positions, measured and not required on a chart.
   [[nodiscard]] Real orthogonality() const noexcept { return orthogonality_; }
+  /// Whether each logical axis is periodic, as the arrays were generated.
+  [[nodiscard]] const std::array<bool, Dim>& periodicity() const noexcept { return periodicity_; }
+  /// The translation T of the seam of each periodic axis, X(upper) = X(lower) + T: the period along
+  /// the axis for node positions, the certified translation of a chart, zero on a closed seam and
+  /// on an axis that is not periodic.
+  [[nodiscard]] const std::array<RealVector<Dim>, Dim>& seam_translation() const noexcept {
+    return seam_translation_;
+  }
 
   [[nodiscard]] StaticGeometryView<Dim> view() const noexcept {
     StaticGeometryView<Dim> view{};
     view.domain = domain_;
     view.cell_measure = cell_measure_.data();
+    view.periodic = periodicity_;
+    view.seam_translation = seam_translation_;
     for (int axis = 0; axis < Dim; ++axis) {
       view.centroid[axis] = centroid_[axis].data();
       view.width[axis] = width_[axis].data();
@@ -488,6 +505,8 @@ class StaticGeometry {
               nodes_[component][static_cast<std::size_t>(low)] + reference[component];
       });
     }
+    periodicity_ = periodicity;
+    seam_translation_ = seam_translation;
 
     // Cells: measure and centroid.
     cell_measure_.assign(static_cast<std::size_t>(cell_count), Real(0));
@@ -785,6 +804,8 @@ class StaticGeometry {
   Box<Dim> domain_{};
   Real closure_ratio_ = Real(0);
   Real orthogonality_ = Real(0);
+  std::array<bool, Dim> periodicity_{};
+  std::array<RealVector<Dim>, Dim> seam_translation_{};
   std::array<Storage, Dim> nodes_{};
   Storage cell_measure_;
   std::array<Storage, Dim> centroid_{};
