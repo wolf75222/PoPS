@@ -6723,7 +6723,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1199,
+    "estimated_count": 1200,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7743,6 +7743,7 @@
       "tests/python/unit/surface/test_n3_lot2_muscl.py",
       "tests/python/unit/surface/test_published_representation.py",
       "tests/python/unit/surface/test_quadrature.py",
+      "tests/python/unit/surface/test_representation_n16.py",
       "tests/python/unit/surface/test_solver_reference_n9.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
       "tests/python/unit/surface/test_su_t2_scheme_refusals.py",
@@ -8125,7 +8126,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1264,
+    "total_files": 1265,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9012,6 +9013,25 @@
       },
       "source_sha256": {
         "tests/python/integration/surface/test_vertical_slice_t02.py": "97c4be37f32ce838f1fce52abd87464343436b10d0728af1d171d831da0bdb5b"
+      }
+    },
+    "n16_20261112_lot1_representation_construct": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only unit module of N16 lot 1 (ROM-109): @pops.representation, pops.Coefficients, pops.Dual and the words of pops.lib.representations, their identities against contract @2 of G03 lot R-a (CF4), the refusals of the lot (SU-T2), and the L1 case of section 17.1 validated, resolved and emitted as C++ under three spellings of the cell average (SU-T3), with no compile and no native module. 15 s, the middle source-only tier of api_v02_20261013 (5/15/60 s): lighter than test_su_t3_parity.py (60 s), which resolves many more cases, heavier than test_quadrature.py (5 s). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_representation_n16.py": "tests/python/unit/surface/test_su_t3_parity.py"
+      },
+      "estimated_seconds": {
+        "tests/python/unit/surface/test_representation_n16.py": 15
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_representation_n16.py": {
+          "command": "PYTHONPATH=python pytest -q tests/python/unit/surface/test_representation_n16.py",
+          "passed": 58,
+          "seconds": 5.93
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_representation_n16.py": "7bd966620e17d60dc3b5663a14918cccf119428c29f2a999ff21e2b879ba32a4"
       }
     }
   },
@@ -10278,5 +10298,6 @@
   "tests/python/unit/time/test_scientific_erasure_inventory.py": 5,
   "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
   "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
-  "tests/python/integration/surface/test_vertical_slice_t02.py": 300
+  "tests/python/integration/surface/test_vertical_slice_t02.py": 300,
+  "tests/python/unit/surface/test_representation_n16.py": 15
 }
