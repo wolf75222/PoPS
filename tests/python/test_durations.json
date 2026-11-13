@@ -9024,13 +9024,13 @@
       }
     },
     "g03_20261113_nonlinear_accumulation": {
-      "basis": "Unmeasured CI scheduling estimates for G03 lot A (ROM-21, a nonlinear accumulation recovered on each point). The native file compiles and runs two 1-D Programs on a native build of rank one (the witness on the 64 graded cells of N17 and on 64 uniform cells with a history): 600 s, the tier of its analogue test_g03_cell_totals_native.py. The unit file resolves the witness and emits the recovery without compiling: 15 s, the middle source-only tier. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, native module of rank one); they are not GitHub CI file wall times. Existing weights, shard count, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for G03 lot A (ROM-21, a nonlinear accumulation recovered on each point). The native file compiles and runs two 1-D Programs on a native build of rank one (the witness on the 64 graded cells of N17 and on 64 uniform cells with a history): 300 s, the tier of test_n17_static_geometry_graded_native.py (one compile, 300 s) rather than of test_g03_cell_totals_native.py (five compiles, 600 s). The unit file resolves the witness and emits the recovery without compiling: 15 s, the middle source-only tier. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, native module of rank one); they are not GitHub CI file wall times. Existing weights, shard count, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
-        "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": "tests/python/integration/runtime/test_g03_cell_totals_native.py",
+        "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
         "tests/python/unit/numerics/test_nonlinear_accumulation_recovery.py": "tests/python/unit/numerics/test_cell_total_lowering.py"
       },
       "estimates_seconds": {
-        "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": 600,
+        "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": 300,
         "tests/python/unit/numerics/test_nonlinear_accumulation_recovery.py": 15
       },
       "local_receipts": {
@@ -10318,6 +10318,6 @@
   "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
   "tests/python/integration/runtime/test_g03_cell_totals_native.py": 600,
   "tests/python/unit/numerics/test_cell_total_lowering.py": 15,
-  "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": 600,
+  "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": 300,
   "tests/python/unit/numerics/test_nonlinear_accumulation_recovery.py": 15
 }
