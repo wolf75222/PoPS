@@ -8,6 +8,8 @@ average to rounding.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -113,3 +115,39 @@ def test_a_diffusion_of_a_total_is_the_two_point_scheme_on_its_density(
         np.testing.assert_allclose(total/measures, expected, rtol=1e-13, atol=0.0)
         inventory = np.sum(measures*initial[0])
         assert abs(np.sum(total) - inventory) <= 1e-13*inventory
+
+
+def test_the_drift_of_the_inventory_of_a_total_is_pinned_to_its_rounding(
+        isolated_native_cache, native_cxx, kokkos_root):
+    """Condition (a) of the driver's ruling of 13/11 12:10: on the graded diffusion with no-flux
+    ends, Σ U is conserved exactly by the scheme, and the decode/encode pair rounds μ·(S/μ) once
+    per cell and stage. The drift of the exactly summed inventory over the run is measured and
+    pinned below N·eps·Σ|U|, N = steps × stages × cells, the bound that the pr/ file states. The
+    drift measured at e61f43ec is 0.0 under an exact sum, against a bound of 1.1e-13."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    world, report, total, initial = _run(
+        build_graded_diffusion_total, "G03 R-b inventory drift", DIFFUSION_STEPS,
+        DIFFUSION_DT, block="rod")
+    measures = np.diff(graded_nodes())
+    start = initial[0]*measures
+    drift = abs(math.fsum(total) - math.fsum(start))
+    bound = DIFFUSION_STEPS*2*measures.size*np.finfo(float).eps*math.fsum(abs(start))
+    with collective_check(world):
+        assert report.accepted_steps == DIFFUSION_STEPS
+        assert drift <= bound
+
+
+def test_an_average_runs_bit_for_bit_as_the_case_without_a_representation(
+        isolated_native_cache, native_cxx, kokkos_root):
+    """Condition (c) of the same ruling (MG1): a row cell_average(1) emits nothing new, so Burgers
+    with that row runs bit for bit as Burgers without a row."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    world, report, average, _ = _run(
+        build_burgers, "G03 R-b average row", BURGERS_STEPS, BURGERS_DT, represent="average",
+        periodic=True)
+    _, _, bare, _ = _run(
+        build_burgers, "G03 R-b no row", BURGERS_STEPS, BURGERS_DT, represent=None,
+        periodic=True)
+    with collective_check(world):
+        assert report.accepted_steps == BURGERS_STEPS
+        np.testing.assert_array_equal(average, bare)
