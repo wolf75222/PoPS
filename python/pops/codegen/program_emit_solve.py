@@ -1490,6 +1490,10 @@ def emit_reference_solve(program: Any, v: Any, var: Any, model: Any, lines: list
         "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
         "ctx.alloc_scalar_field(%d, %d));" % (solution, components, ghosts))
     region = dict(var)
+    # The region records no face expression: its value leaves by the raw copy below into a buffer
+    # reset at allocation, as the native CG's solution (program_solver_region).
+    from pops.codegen.program_solver_region import enter_solver_region
+    enter_solver_region(region, v.id)
     _emit_region(program, v.attrs["body_block"], region, model, lines, prelude, block_idx,
                  field_plans, target)
     captured = region[v.attrs["body"].id]
@@ -1503,7 +1507,7 @@ def emit_reference_solve(program: Any, v: Any, var: Any, model: Any, lines: list
     lines.append("  %s.residual_norm = static_cast<pops::Real>(%s);"
                  % (report, output["residual_norm"]))
     lines.append("  %s.mark_solved();" % report)
-    for index, (code, failure, reason) in enumerate(v.attrs["realization"]["failures"]):
+    for code, failure, reason in v.attrs["realization"]["failures"]:
         lines.append("} else if (%s == 1 && %s == %d) {" % (origin, status, int(code)))
         lines.append("  %s.mark_failed(%s, %s, %s);" % (
             report, _SOLVE_STATUS_CPP[failure],

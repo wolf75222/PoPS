@@ -37,6 +37,13 @@ def emit_affine_expression(value, var, lines, *, block_index, explicit):
     terms = affine_field_terms(value)
     if terms is None:
         return
+    from pops.codegen.program_solver_region import in_solver_region
+    stability = explicit and value.id not in var.get(("authored_stability_updates",), ())
+    # A solver's region attaches no face expression (program_solver_region); the coefficients are
+    # still evaluated when an explicit update's stability reads them.
+    unrecorded = in_solver_region(var)
+    if unrecorded and not stability:
+        return
     from pops.codegen.program_emit_expressions import pointwise_scalar_aliases
     # Use the same authenticated primitive reads as the numerical kernel. A scalar
     # SSA may denote a PreparedIntegralCapture or host structural projection;
@@ -46,9 +53,11 @@ def emit_affine_expression(value, var, lines, *, block_index, explicit):
                                        name="affine_coefficients_%d" % value.id,
                                        scalars={item.id: item for item in value.inputs
                                                 if item.vtype == "scalar"})
-    if explicit and value.id not in var.get(("authored_stability_updates",), ()):
+    if stability:
         emit_runtime_affine_stability(value, tuple(zip((x[0] for x in terms), tokens, strict=True)),
                                       var, lines, block_index=block_index)
+    if unrecorded:
+        return
     alias = "affine_term_%d" % value.id
     lines.append("using %s = typename std::remove_reference_t<decltype(ctx)>::UniformAffineTerm;" % alias)
     rows = ", ".join("%s{&%s, %s, %s}" % (alias, var[node.id], token,

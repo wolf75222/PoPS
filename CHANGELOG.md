@@ -281,6 +281,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `regrid_topology`, `scalar_field(topology=, initial=)`, the `field_topology` value type and the
   native bundle and allocation fragments. The three regrid cases ran bit for bit equal to the
   bridge on every cell, halo included, before the deletion.
+- ROM-90 (N9, « Le coût de la région d'un solveur »): a solver's region records no face
+  expression. The value of a reference solve's region leaves it by a raw copy into the prelude
+  buffer that the native CG also writes, so the face-record expressions that b6 keeps for the
+  publication of an accepted state were computed in the region and dropped at its boundary.
+  Inside the region the lowering now emits the pure field algebra (`PureFieldAlgebra::axpy` and
+  `lincomb`, the kernels of `ctx.axpy` and `ctx.lincomb`), captures no StencilFlux face, brackets
+  no write and attaches no affine expression; outside it the generated C++ is unchanged. The
+  relation solves of `cg()` give the same states bit for bit and, on L1-d, run at 1.4 times the
+  native witness at 64² and 2.6 times at 256² (18 ms and 270 ms per step, against 2.47 s and
+  259 s before). `benchmarks/n9_relation_cost` measures the ratio in A B B A blocks against the
+  bound of 10 that the driver set on 13/11.
 - ROM-90 (N9, « La référence sous les solves de relation »): `cg()` of `pops.lib.solve` is no
   longer a bridge of MG9 on b6's native CG. `cg().linear_solver(request=)` returns the reference
   with the request's tolerances, `SolverDefinition.declare_relation(requires=, description=)`

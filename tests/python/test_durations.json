@@ -6723,7 +6723,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1206,
+    "estimated_count": 1207,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7751,6 +7751,7 @@
       "tests/python/unit/surface/test_quadrature.py",
       "tests/python/unit/surface/test_representation_n16.py",
       "tests/python/unit/surface/test_solver_reference_n9.py",
+      "tests/python/unit/surface/test_solver_region_cost_n9.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
       "tests/python/unit/surface/test_su_t2_scheme_refusals.py",
       "tests/python/unit/surface/test_su_t2_solve_refusals.py",
@@ -8132,7 +8133,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1271,
+    "total_files": 1272,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9136,6 +9137,25 @@
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_relation_solve_reference_n9_native.py": "921d7da790dad47a6703cc3480edfc90de4f2a772f150f861f5c688d43d0bc0c"
+      }
+    },
+    "n9_20261113_solver_region_cost": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only module of N9 « Le coût de la région d'un solveur » (ROM-90): 30 s, twice the 15 s of its analogue test_solver_reference_n9.py, since it elaborates and resolves L1-d and generates its C++ (as test_su_t3_solves.py does) besides the b6 reference Program, without compiling. The local receipt comes from scripts/ci_pytest_timings.py on a 4-core container under the load of three native sessions; it is not a GitHub CI file wall time. Existing weights, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_solver_region_cost_n9.py": "tests/python/unit/surface/test_solver_reference_n9.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/surface/test_solver_region_cost_n9.py": 30
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_solver_region_cost_n9.py": {
+          "cases": 4,
+          "phase_seconds": 18.3,
+          "session_seconds": 19.6
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_solver_region_cost_n9.py": "8be989c8e26ab8f68c20f3e0f7098c2b37500d9f6342ddea8a6f82dcd1924463"
       }
     }
   },
@@ -10409,5 +10429,6 @@
   "tests/python/integration/runtime/test_amr_physical_maps_layout_regions.py": 590,
   "tests/python/integration/runtime/test_state_operand_n9_native.py": 600,
   "tests/python/integration/runtime/test_relation_solve_parameter_n9_native.py": 900,
-  "tests/python/integration/runtime/test_relation_solve_reference_n9_native.py": 1200
+  "tests/python/integration/runtime/test_relation_solve_reference_n9_native.py": 1200,
+  "tests/python/unit/surface/test_solver_region_cost_n9.py": 30
 }

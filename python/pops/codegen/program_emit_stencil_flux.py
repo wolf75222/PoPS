@@ -194,7 +194,9 @@ def emit_stencil_exchange_capture(value, var, *, block, target):
     follows the field selected by control flow, including repeated evaluations
     of the same authored node; no branch-local reference escapes the region.
     """
-    if target == "amr_system":
+    from pops.codegen.program_solver_region import in_solver_region
+    # A solver's region publishes no face (program_solver_region): its faces are not records.
+    if target == "amr_system" or in_solver_region(var):
         return []
     from pops.codegen.program_emit_transport_exchanges import emit_transport_exchanges
 
