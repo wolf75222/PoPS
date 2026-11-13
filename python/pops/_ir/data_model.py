@@ -354,7 +354,8 @@ _ISSUING = frozenset(("finite_range_set", *_ISSUERS))
 
 
 def _family_of(value: Any) -> Any:
-    signature = (getattr(value, "attrs", None) or {}).get("signature")
+    attrs: Any = getattr(value, "attrs", None) or {}
+    signature: Any = attrs.get("signature")
     family = signature.get("family") if hasattr(signature, "get") else None
     return family if type(family) is int else None
 
@@ -485,7 +486,8 @@ def _layout(value: Any, value_type: Any, placements: Placements, plan: Any,
         if len(found) < 2 or None in found:
             origin = "untyped: no node of the plan issues the rows or the requests"
         else:
-            origin = "constraint" if "constraint" in {row[0] for row in found} else "plan"
+            origins = {row[0] for row in found if row is not None}
+            origin = "constraint" if "constraint" in origins else "plan"
         return ("members", "offsets Local, the local rows plus one on each rank; indices "
                 "Contiguous, as the requests", origin, "per member")
     if isinstance(value_type, (A.Product, A.Variant, A.Result, A.Iteration)):

@@ -1485,6 +1485,7 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_api_v02_scoped_stencil_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_auxiliary_regrid_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_distributed_balanced_domain_native_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_api_v02_unconstrained_distributed_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_history_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_regrid_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_forest_native_mpi2.py", nproc = 2, native_dimension = 2 },
@@ -1706,6 +1707,7 @@ mpi_receivers = [
   { path = "tests/python/integration/runtime/test_distributed_algebra_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_distributed_algebra_mpi2.py" },
   { path = "tests/python/integration/runtime/test_distributed_failure_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_distributed_failure_mpi2.py" },
   { path = "tests/python/integration/runtime/test_distributed_gc_v14_native.py", entrypoint = "tests/python/integration/mpi/test_api_v14_distributed_gc_mpi2.py" },
+  { path = "tests/python/integration/runtime/test_api_v02_unconstrained_distributed_native.py", entrypoint = "tests/python/integration/mpi/test_api_v02_unconstrained_distributed_mpi2.py" },
 ]
 mpi_entrypoints = [
   { path = "tests/python/integration/runtime/test_m15_mpi_collective_rejection.py", nproc = 2, native_dimension = 1 },

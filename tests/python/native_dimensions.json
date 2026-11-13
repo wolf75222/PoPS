@@ -83,6 +83,7 @@
     "tests/python/integration/runtime/test_api_v02_temporal_hierarchy_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_terminal_failure_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_transport_oracles_native.py": 2,
+    "tests/python/integration/runtime/test_api_v02_unconstrained_distributed_native.py": 2,
     "tests/python/integration/runtime/test_api_v02_variants_native.py": 2,
     "tests/python/integration/runtime/test_array_derivatives_v14_native.py": 2,
     "tests/python/integration/runtime/test_bundle_remap_v14_native.py": 2,

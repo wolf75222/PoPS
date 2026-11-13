@@ -257,7 +257,8 @@ class _ProgramFiniteArrays(_ProgramBase):
         signature = {"vtype": "index_set", "family": family_id, "capacity": capacity,
                      "ownership": "replicated", "point": count.point}
         inputs = (count,) if witness is None else (count, witness)
-        attrs = {"fresh_family": family is None or isinstance(family, IndexFamily)}
+        attrs: dict[str, object] = {
+            "fresh_family": family is None or isinstance(family, IndexFamily)}
         if not stated and witness is None:
             attrs["storage_origin"] = "plan"
         return new_typed(self, signature, "finite_range_set", inputs, attrs, point=count.point)

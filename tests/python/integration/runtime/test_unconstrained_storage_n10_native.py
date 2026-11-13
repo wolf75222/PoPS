@@ -4,7 +4,7 @@ Four replicated cases of ``examples/api_v02`` are built twice, as written and wi
 ``ownership="replicated"`` dropped (``tests/python/support/unconstrained.py``), compiled, bound and
 run to their end time on one rank. The plan chooses the same ``Replicated`` storage, so the decoded
 accepted state is bitwise equal. The distributed half runs on MPI2 in
-``tests/python/integration/mpi/test_unconstrained_storage_n10_native_mpi2.py``.
+``tests/python/integration/mpi/test_api_v02_unconstrained_distributed_mpi2.py``.
 """
 import importlib
 
@@ -51,8 +51,15 @@ def _run(world, name, *, constrained):
         resources={"execution_context": artifact_execution_context(artifact)}))
     collective_call(world, lambda: pops.run(runtime, t_end=spec.t_end, max_steps=64,
                                             console=False))
+    if CASES[name][1] == "build_finite_amr":
+        # An AMR runtime has no continuation image; its accepted state is the field per level.
+        levels = collective_call(world, lambda: runtime.n_levels())
+        return spec, {"root": {"step": int(collective_call(world, lambda: runtime.macro_step())),
+                               "levels": [np.asarray(collective_call(
+                                   world, lambda level=level: runtime.block_level_state_global(
+                                       "method", level))) for level in range(levels)]}}
     image = collective_call(world, lambda: _image(runtime))
-    return spec, image
+    return spec, _decode(spec, image)
 
 
 # The issuer of a set instance is derived from the program identity, which differs because the
@@ -89,7 +96,7 @@ def test_a_replicated_case_runs_bitwise_alike_without_its_constraints(
     spec, written = _run(world, name, constrained=True)
     _, chosen = _run(world, name, constrained=False)
     with collective_check(world):
-        before, after = _decode(spec, written), _decode(spec, chosen)
+        before, after = written, chosen
         assert before["root"]["step"] > 0
         _equal(before["root"], after["root"])
     record_property("steps", before["root"]["step"])

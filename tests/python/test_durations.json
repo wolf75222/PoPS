@@ -3041,6 +3041,23 @@
           "native_dimension": 2,
           "registration": "v10"
         },
+        "tests/python/integration/runtime/test_api_v02_unconstrained_distributed_native.py": {
+          "basis": "Unmeasured cold-compiler scheduling allowance for N10 lot 4 (DM3): two distributed cases built as written and with their offsets replaced by a balanced domain, each compiled and run twice on two ranks. MPI2 CI via exact per-rank pytest receipts. MPI3 local reception only. No execution claimed by registration.",
+          "ci_ranks": [
+            2
+          ],
+          "declared_cases": 2,
+          "entrypoint": "tests/python/integration/mpi/test_api_v02_unconstrained_distributed_mpi2.py",
+          "estimated_seconds": 900,
+          "execution_lane": "mpi_only",
+          "kind": "native_profile",
+          "local_reception_ranks": [
+            2,
+            3
+          ],
+          "native_dimension": 2,
+          "registration": "n10_lot4_20261113"
+        },
         "tests/python/integration/runtime/test_api_v02_drift_wetdry_native.py": {
           "kind": "native_profile",
           "registration": "completion_20261015",
@@ -6723,7 +6740,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1191,
+    "estimated_count": 1193,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7078,6 +7095,7 @@
       "tests/python/integration/runtime/test_tensor_transport_composition.py",
       "tests/python/integration/runtime/test_terminal_failure_finite_helpers_native.py",
       "tests/python/integration/runtime/test_traced_methods_n8_native.py",
+      "tests/python/integration/runtime/test_unconstrained_storage_n10_native.py",
       "tests/python/integration/runtime/test_uniform_accepted_storage_observation.py",
       "tests/python/integration/runtime/test_uniform_accepted_storage_observation_v2.py",
       "tests/python/integration/runtime/test_uniform_checkpoint_provisional_effect.py",
@@ -7511,6 +7529,7 @@
       "tests/python/unit/numerics/test_hall_independent_oracle.py",
       "tests/python/unit/numerics/test_index_sets_n10.py",
       "tests/python/unit/numerics/test_indicator_stencils.py",
+      "tests/python/unit/numerics/test_layout_invariance_n10.py",
       "tests/python/unit/numerics/test_lib_numerics_faces.py",
       "tests/python/unit/numerics/test_lib_numerics_reconstructions.py",
       "tests/python/unit/numerics/test_m05_shear_independent_review.py",
@@ -8117,7 +8136,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1256,
+    "total_files": 1258,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8442,6 +8461,33 @@
       },
       "source_sha256": {
         "tests/python/unit/numerics/test_index_sets_n10.py": "871a656e2bdfe5c5c3296a53a3f7e66f381ad8095c9d63e892dbe097e6c8d9cf"
+      }
+    },
+    "ci_20261113_n10_lot4_layouts": {
+      "basis": "Unmeasured CI scheduling estimates for N10 lot 4 (ROM-85, DM3 and DM4: the origin of the storage choices, the cases built without their constraints, LayoutMismatch, csr typed). The unit module resolves six cases twice (with and without their storage constraints, the distributed ones for 2 and 3 ranks) and emits the C++ of the four replicated ones twice, without compiling: 300 s on the source-only tier, from a local receipt of 246 s. The native module compiles and runs four replicated cases twice each with cold caches (eight artifacts), one rank: 1800 s, from a local session of about 1360 s for the four cases. The local receipts are pytest session times on a 4-core container beside other local sessions; they are not GitHub CI file wall times. The MPI-only module test_api_v02_unconstrained_distributed_native.py runs under its MPI2 entrypoint and is outside the Python shard catalog. The Python shard total becomes 148, the smallest that holds the 1800 s native file beside the rest of the catalog under the 35 min budget. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/numerics/test_layout_invariance_n10.py": "tests/python/unit/numerics/test_index_sets_n10.py",
+        "tests/python/integration/runtime/test_unconstrained_storage_n10_native.py": "tests/python/integration/runtime/test_finite_bdf2_v14_native.py"
+      },
+      "estimated_seconds": {
+        "tests/python/unit/numerics/test_layout_invariance_n10.py": 300,
+        "tests/python/integration/runtime/test_unconstrained_storage_n10_native.py": 1800
+      },
+      "local_receipts": {
+        "tests/python/unit/numerics/test_layout_invariance_n10.py": {
+          "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_layout_invariance_n10.py",
+          "passed": 31,
+          "seconds": 246.1
+        },
+        "tests/python/integration/runtime/test_unconstrained_storage_n10_native.py": {
+          "command": "POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_unconstrained_storage_n10_native.py (installed dim2 Kokkos OpenMP module)",
+          "passed": 4,
+          "seconds": 1360
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/numerics/test_layout_invariance_n10.py": "3cab6912ba781b5bd8f1e8735edd93658a9725d0785867d3e73489b6d97c640d",
+        "tests/python/integration/runtime/test_unconstrained_storage_n10_native.py": "1f8d1829fa81622ac1d9a8185909e0560ae21882ae94c793ad28a02e35f4be8e"
       }
     },
     "n11_20261108_expression_closure": {
@@ -10134,5 +10180,7 @@
   "tests/python/unit/numerics/test_stencil_runtime_parameter.py": 15,
   "tests/python/integration/runtime/test_stencil_runtime_parameter_native.py": 300,
   "tests/python/unit/surface/test_n3_lot1_library_words.py": 60,
-  "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": 600
+  "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": 600,
+  "tests/python/unit/numerics/test_layout_invariance_n10.py": 300,
+  "tests/python/integration/runtime/test_unconstrained_storage_n10_native.py": 1800
 }
