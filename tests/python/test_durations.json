@@ -2962,7 +2962,7 @@
         },
         "tests/python/integration/runtime/test_api_v02_continuum_native.py": {
           "declared_cases": 8,
-          "estimated_seconds": 600,
+          "estimated_seconds": 1470,
           "kind": "native_profile",
           "native_dimension": 2,
           "registration": "completion_20261015_existing"
@@ -3158,7 +3158,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 1,
-          "estimated_seconds": 520,
+          "estimated_seconds": 650,
           "ci_ranks": [
             1,
             2
@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1200,
+    "estimated_count": 1201,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7103,6 +7103,7 @@
       "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py",
       "tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py",
       "tests/python/integration/runtime/test_w11_child_trace_rollback.py",
+      "tests/python/integration/surface/test_vertical_slice_t02.py",
       "tests/python/unit/amr/test_accepted_halo_preparation.py",
       "tests/python/unit/amr/test_explicit_local_storage_authority.py",
       "tests/python/unit/amr/test_external_amr_providers.py",
@@ -8138,7 +8139,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1265,
+    "total_files": 1266,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8992,6 +8993,41 @@
         "tests/python/unit/surface/test_n3_lot2_muscl.py": "5e02066ad264d3d8bb12fe34e46cd8b506cbf0a8b7cd0c420672c29dc3b6969b"
       }
     },
+    "b03_20261113_shard128_continuum_hall_weights": {
+      "basis": "CI pytest timestamps (collection end or previous PASSED to PASSED). In shard 128 of batch 43318819535 (1261299b, image 20261111.370.1, no module rebuild) test_api_v02_continuum_native.py took 1334 s for its 8 cases against a 600-second row, and the step reached its 45-minute limit 590 s into the single case of test_api_v02_hall_mhd_ct.py (520-second row). The same files took 799 s and 429 s in shard 127 of run 43297784672 (1f567778). Each planning weight rounds the larger observation up by about ten percent, as b03_f5_hyqmom15_final_example_weight does; for the hall file the larger observation is the stopped case, a lower bound. No deadline, test selection or assertion changes.",
+      "observed_seconds": {
+        "run 43318819535 job 131538183494 (1261299b, shard 128), test_api_v02_continuum_native.py, 8 cases": 1334,
+        "run 43318819535 job 131538183494 (1261299b, shard 128), test_api_v02_hall_mhd_ct.py, stopped at the 45-minute step limit (lower bound)": 590,
+        "run 43297784672 (1f567778, shard 127), test_api_v02_continuum_native.py, 8 cases": 799,
+        "run 43297784672 (1f567778, shard 127), test_api_v02_hall_mhd_ct.py, 1 case": 429
+      },
+      "previous_weight_seconds": {
+        "tests/python/integration/runtime/test_api_v02_continuum_native.py": 600,
+        "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 520
+      },
+      "weights_seconds": {
+        "tests/python/integration/runtime/test_api_v02_continuum_native.py": 1470,
+        "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 650
+      }
+    },
+    "ci_20261112_vertical_slice": {
+      "basis": "Unmeasured CI scheduling estimate for the test of the vertical slice of the exit of phase 1 (OD31: master's tutorial 02 written in the surface), on the api_v02_20261013 tiers. 300 s for test_vertical_slice_t02.py: since #799 its registry is empty, so besides the lint SU-T1 of the case file and the order of its registry it runs the file natively to its end, one compiled Dim2 artifact and 29 steps on 64 x 64 cells, a quarter of the four artifacts of the analogue test_surface_lot_e_project_native.py (900 s), rounded up. The local receipts come from pytest on a 4-core container (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "tests/python/integration/runtime/test_surface_lot_e_project_native.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": 300
+      },
+      "local_receipts": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": {
+          "cases": 3,
+          "session_seconds": 11.69
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "97c4be37f32ce838f1fce52abd87464343436b10d0728af1d171d831da0bdb5b"
+      }
+    },
     "ci_20261113_g04a_generated_ghosts": {
       "basis": "Unmeasured CI scheduling estimate for the Dim2 native module of N15 lot B after G04-a (ROM-22, the ghost cells generated from the body of the boundary policy): it now compiles nine artifacts once per module (the surface advection and its hand-written b6 form at first order, under muscl(limiter=vanleer), with a periodic axis and with the linear extrapolation, and a surface case whose ghost is not finite) and refuses a tenth before C++, then runs eleven compiled runs of 50 steps on 16 x 8 cells; 1200 s on the api_v02_20261013 tiers, as the analogue test_candidate_guards_n8_native.py (1200 s, 792 s locally) and above test_field_requests_n8_native.py (900 s, 651 s locally). The source-only module keeps its 60 s (24 cases, one more level-1 C++ emission per case). The local receipts come from pytest on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial build of _pops, Dim2); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
@@ -9120,7 +9156,7 @@
   "tests/python/integration/runtime/test_api_v02_continuation_forest_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_continuation_history_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_continuation_regrid_native.py": 1200,
-  "tests/python/integration/runtime/test_api_v02_continuum_native.py": 600,
+  "tests/python/integration/runtime/test_api_v02_continuum_native.py": 1470,
   "tests/python/integration/runtime/test_api_v02_corrected_field_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py": 3315,
   "tests/python/integration/runtime/test_api_v02_distributed_kokkos_native.py": 900,
@@ -9134,7 +9170,7 @@
   "tests/python/integration/runtime/test_api_v02_flux_correction_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_graph_functions_native.py": 900,
   "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 5100,
-  "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 520,
+  "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 650,
   "tests/python/integration/runtime/test_api_v02_history_transfer_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
   "tests/python/integration/runtime/test_api_v02_implicit_derivatives_native.py": 1200,
@@ -10275,5 +10311,6 @@
   "tests/python/unit/surface/test_published_representation.py": 15,
   "tests/python/unit/time/test_scientific_erasure_inventory.py": 5,
   "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
-  "tests/python/unit/surface/test_n3_lot2_muscl.py": 90
+  "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
+  "tests/python/integration/surface/test_vertical_slice_t02.py": 300
 }
