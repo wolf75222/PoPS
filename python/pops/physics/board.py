@@ -451,6 +451,116 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._invalidate_authoring_views()
         return value
 
+    def coordinate(self, name: Any) -> Any:
+        """Name the coordinates q of a nonlinear accumulation, before its law (G03 lot A).
+
+        The value is the primitive q, which :meth:`accumulation` defines as the pointwise root of
+        its law. A flux that reads q before that definition is refused, as any undefined
+        primitive is."""
+        from pops._ir.expr import Var
+        name = require_name(name, "coordinate name")
+        if name in self._dsl._m.prim_defs or name in self._pending_coordinates():
+            raise ValueError("coordinate %r is already declared" % name)
+        self._coordinates = {**self._pending_coordinates(), name: None}
+        return Var(name, "prim")
+
+    def _pending_coordinates(self) -> dict:
+        return getattr(self, "_coordinates", {})
+
+    def accumulation(self, state: Any, *, coordinates: Any, law: Any, admissible: Any,
+                     representation: Any, recovery: Any = None) -> Any:
+        """``stored = model.accumulation(E, coordinates=T, law=T + T**2, admissible=(-0.5, None),
+        representation=cell_average(1, GaussLegendre(2)), recovery=LocalRoot(tolerance=...))``.
+
+        The state holds U, the coefficients of Q(q) under ``representation``; ``ddt(stored)`` is
+        the balance of U, whose increment is the method's combination of its rates. The
+        coordinates q are recovered from U on each point as the root of Q(q) = U on the
+        admissible set [lower, upper) (``upper`` None for +inf), with the tolerance of
+        ``recovery``, and every flux reads q as a definition over U (note §6, E3). The surface
+        keys the recovery by the accumulation in ``solvers=``; below it, ``recovery=`` states it.
+
+        Refused: a representation without a rule (``AmbiguousElaboration`` naming
+        ``quadrature=``, D3); a law that is not proved increasing on the admissible set
+        (``AmbiguousElaboration`` naming ``admissible=``, R8); a recovery left unstated (its
+        tolerance is a choice, SU9); a state of several components or a representation other
+        than one constant mode of an average (``NotYetElaborated``)."""
+        import math
+
+        from pops._ir.balance import Accumulation
+        from pops._ir.expr import Expr, Var
+        from pops._ir.local_root import (
+            BOUND_KIND, LocalRoot, PointwiseRoot, derivative_interval, substitute)
+        from pops.representations.definition import (
+            RepresentationDefinition, constant_mode_scale)
+        from pops.surface._refusal import AmbiguousElaboration, NotYetElaborated
+
+        from .board_handles import StateHandle
+
+        self._guard_mutable("declare an accumulation")
+        if not isinstance(state, StateHandle) or self._states.get(state.name) != state:
+            raise ValueError("accumulation requires this Model's exact state declaration")
+        components = tuple(state)
+        if len(components) != 1:
+            raise NotYetElaborated(
+                "an accumulation law over a state of %d components" % len(components),
+                "a later lot of G03 (lot A recovers one coordinate per point)")
+        if (not isinstance(coordinates, Var) or coordinates.kind != "prim"
+                or coordinates.name not in self._pending_coordinates()
+                or self._pending_coordinates()[coordinates.name] is not None):
+            raise ValueError("accumulation(coordinates=) takes one undefined model.coordinate(...)")
+        if not isinstance(law, Expr):
+            raise TypeError("accumulation(law=) is a symbolic expression of its coordinates")
+        if type(representation) is not RepresentationDefinition:
+            raise TypeError("accumulation(representation=) is a RepresentationDefinition")
+        if constant_mode_scale(representation) != "cell_measure":
+            raise NotYetElaborated(
+                "an accumulation under a representation other than the average of one constant "
+                "mode", "N16 lot 2 (a point-dependent decode)")
+        if representation.pairing is None:
+            raise AmbiguousElaboration(
+                "the density of %s is the projection of Q(q_h) under the rule of its "
+                "representation, and the representation states no rule (D3)" % state.name,
+                write="representation=cell_average(1, quadrature=GaussLegendre(2))")
+        if (not isinstance(admissible, tuple) or len(admissible) != 2
+                or type(admissible[0]) not in (int, float) or not math.isfinite(admissible[0])
+                or (admissible[1] is not None and (type(admissible[1]) not in (int, float)
+                                                   or not admissible[1] > admissible[0]))):
+            raise ValueError("accumulation(admissible=) is (lower, upper), lower finite and "
+                             "upper a larger number or None for +inf")
+        lower = float(admissible[0])
+        upper = math.inf if admissible[1] is None else float(admissible[1])
+        if recovery is None:
+            raise AmbiguousElaboration(
+                "the coordinates %s are recovered from %s by a solve whose tolerance changes the "
+                "result, and the accumulation states none (SU9)" % (coordinates.name, state.name),
+                write="recovery=LocalRoot(tolerance=1e-13, max_iterations=200)")
+        if type(recovery) is not LocalRoot:
+            raise TypeError("accumulation(recovery=) is a LocalRoot")
+        bound = Var("pops_root_" + coordinates.name, BOUND_KIND)
+        bound_law = substitute(law, coordinates.name, bound, kind="prim")
+        from pops._ir.lowering import diff
+        slope = diff(bound_law, bound)
+        try:
+            enclosure = derivative_interval(slope, bound.name, lower, upper)
+        except ValueError as error:
+            enclosure = (-math.inf, math.inf)
+            reason = str(error)
+        else:
+            reason = "Q' is enclosed in [%r, %r] there" % enclosure
+        samples = [lower + (min(upper, lower + 1.0) - lower)*k/4 for k in range(1, 4)]
+        if enclosure[0] < 0 or not any(float(slope.eval({bound.name: x})) > 0 for x in samples):
+            raise AmbiguousElaboration(
+                "the law %s of %s is not proved increasing on its admissible set [%r, %r) (%s); "
+                "a law that is not injective needs a selection (R8 item 5)"
+                % (law, state.name, lower, upper, reason),
+                write="admissible=(lower, upper), a set where Q is increasing")
+        root = PointwiseRoot(bound_law, bound, components[0], lower=lower, upper=upper,
+                             recovery=recovery, name=coordinates.name)
+        self.primitive(coordinates.name, root)
+        self._coordinates = {**self._pending_coordinates(), coordinates.name: state.name}
+        return Accumulation(state, coordinates, law, representation.to_data(), representation.pairing,
+                            root)
+
     def primitive_state(
         self, *components: Any, conservative: Any, roles: Any = None, states: Any = None,
     ) -> None:

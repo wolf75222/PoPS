@@ -19,7 +19,7 @@ def occurrence_text(occurrence):
 
 
 def diffusion_balance_supported(view):
-    if view is None or not view.accumulation.is_identity or not any(
+    if view is None or not view.accumulation.advances_stored_state or not any(
             row.kind in {"diffusion", "coupled_gradient"} for row in view.occurrences):
         return False
     return all(row.kind in {"diffusion", "coupled_gradient", "source", "flux"}

@@ -14,6 +14,7 @@ from pops._ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, 
 from pops._ir.visitors import _dag_key_ids, _key, _children
 from pops._ir.expr import _wrap
 from pops._ir.control_expr import Where, Rounded, has_evaluation_boundary
+from pops._ir.local_root import PointwiseRoot
 
 
 _CPP_KEYWORDS = frozenset({
@@ -74,6 +75,8 @@ def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None, guarded: Any = None)
     if isinstance(e, Var):
         from .cpp_symbols import variable_identifier
         return variable_identifier(e.name,e.kind)
+    if isinstance(e, PointwiseRoot):
+        return e.emit_cpp(_cpp_cse(e.target, cse_map, key_memo, guarded))
     if isinstance(e, Neg):
         return "(-%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, Sqrt):

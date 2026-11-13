@@ -110,7 +110,7 @@ def prepare_principal_carrier(emitter, module, numerics):
         for rate in group.rates:
             operator = module.operator_registry().get(rate.registered_operator_name)
             view = operator.lowering.get("physical_balance")
-            if view is None or not view.accumulation.is_identity:
+            if view is None or not view.accumulation.advances_stored_state:
                 raise ValueError("principal transport requires an authenticated identity accumulation")
             terms = tuple(view.occurrences)
             if len(terms) != 1 or terms[0].kind != "flux" or terms[0].coefficient != -1:
