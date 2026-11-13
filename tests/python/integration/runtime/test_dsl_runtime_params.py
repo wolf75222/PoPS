@@ -186,7 +186,7 @@ def _resolved_analytic_initial_parameter_case(*, target: str):
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=AMRTagging(
                 rules=(
-                    Tag(ValueExpr(block_state) > case.value(refine_threshold)),
+                    Tag(lambda cell: cell.value(ValueExpr(block_state)) > case.value(refine_threshold)),
                     Buffer(cells=1),
                 ),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
@@ -327,7 +327,7 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=AMRTagging(
                 rules=(
-                    Tag(ValueExpr(state_instance) > case.value(refine_threshold)),
+                    Tag(lambda cell: cell.value(ValueExpr(state_instance)) > case.value(refine_threshold)),
                     Buffer(cells=1),
                 ),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

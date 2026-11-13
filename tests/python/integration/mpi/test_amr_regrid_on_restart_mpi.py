@@ -435,8 +435,8 @@ def _shared_interface_resolved(component):
     transfer.state(right_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     tagging = AMRTagging(
         rules=(
-            Tag(ValueExpr(core.tracer_state) > core.case.value(core.refine_threshold)),
-            Tag(ValueExpr(right_state) > core.case.value(core.refine_threshold)),
+            Tag(lambda cell: cell.value(ValueExpr(core.tracer_state)) > core.case.value(core.refine_threshold)),
+            Tag(lambda cell: cell.value(ValueExpr(right_state)) > core.case.value(core.refine_threshold)),
             Buffer(cells=1, selection="refine-requests"),
         ),
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),

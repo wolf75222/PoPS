@@ -715,8 +715,9 @@ class AmrSystem {
                                      std::size_t indicator_count);
   /// The identity of the installed generated regrid decision, empty when the cadence decides.
   POPS_EXPORT std::string generated_regrid_decision_identity() const;
-  /// The inputs and the result of the last generated regrid decision: the accepted step count,
-  /// 1 or 0 for the decision, then the reduced value of each indicator. Empty before the first
+  /// The inputs and the result of the last generated regrid decision: the accepted step count of
+  /// the run (from run_start_step), 1 or 0 for the decision, then the reduced value of each
+  /// indicator. Empty before the first
   /// decision. An inspection route: it publishes nothing.
   POPS_EXPORT std::vector<double> last_regrid_decision() const;
   /// The requests that the tagging authority makes on one live parent level after its equality
@@ -1464,6 +1465,13 @@ class AmrSystem {
   /// requires an immediately preceding restore_program_cadence_window; neither the start nor
   /// accumulated variable-dt duration can be inferred from the clock. @throws on invalid state.
   POPS_EXPORT void set_clock(double t, int macro_step);
+  /// Starts a run at the current macro step: a generated Regrid decision's every(k) counts the
+  /// accepted steps from it (spec 5.2, N8 « Ancrage des calendriers au départ du run », D6).
+  /// pops.run and AmrSystem.run call it at their start; pops.step continues the current run.
+  /// set_clock starts a run too. Private binding _mark_run_start.
+  POPS_EXPORT void mark_run_start();
+  /// The macro step at which the current run started (0 at construction).
+  POPS_EXPORT int run_start_step() const;
 
   /// @name AMR / MPI profiling (Spec 5 sec.12.5, ADC-479 criterion 43)
   /// Per-phase wall-clock timing of the AMR runtime: the engine times its non-numeric phases --

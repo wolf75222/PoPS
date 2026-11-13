@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 from collections.abc import Callable
-from pops._ir.data_model import is_finite_array, is_finite_index, value_kind
+from pops._ir.data_model import is_field_leaf, is_finite_array, is_finite_index, value_kind
 
 if TYPE_CHECKING:
     from pops.time.value_signatures import ValueSignature
@@ -27,6 +27,16 @@ from pops.time._program.structured_control import (
 )
 from pops.time._program.value_validation import require_owned, validate_input_regions
 
+
+def strict_access(program, array, op):
+    """DM5: refuse a table or CSR gather of a field leaf (an array on ``Patches``), typed."""
+    if is_field_leaf(array):
+        from pops._ir.refusals import GeneralAccessOnPatches
+
+        raise GeneralAccessOnPatches(
+            "%s reads a field leaf through a table or CSR index; on Patches such an access needs "
+            "a request of the case, and phase 1 has no request form" % op,
+            region=program._current_region(), op=op)
 
 @dataclass(frozen=True, eq=False)
 class IndexFamily:
@@ -275,6 +285,7 @@ class _ProgramFiniteArrays(_ProgramBase):
     def at(self, array, index):
         require_owned(self, array, "at array")
         require_owned(self, index, "at index")
+        strict_access(self, array, "at")
         if not is_finite_array(array) or value_kind(index) != "index":
             raise TypeError("at requires an Array and a checked Index, never a naked Int64")
         if finite_signature(array)["ownership"] != "replicated":
@@ -364,6 +375,7 @@ class _ProgramFiniteArrays(_ProgramBase):
         """Replicated gather, composed solely from map and checked at."""
         require_owned(self, values, "gather values")
         require_owned(self, indices, "gather indices")
+        strict_access(self, values, "gather")
         if not is_finite_array(values) or not is_finite_array(indices) \
                 or value_kind(finite_signature(indices)["element"]) != "index":
             raise TypeError("gather requires values:Array(E,T), indices:Array(D,Index(E))")
@@ -394,6 +406,7 @@ class _ProgramFiniteArrays(_ProgramBase):
         """Functional ordered accumulation; duplicate destinations retain source order."""
         for value in (values, indices, domain, initial):
             require_owned(self, value, "scatter_reduce")
+        strict_access(self, values, "scatter_reduce")
         if not is_finite_array(values) or not is_finite_array(indices) or value_kind(domain) != "index_set":
             raise TypeError("scatter_reduce requires arrays of values/indices and an IndexSet")
         if finite_signature(values)["ownership"] != "replicated":
