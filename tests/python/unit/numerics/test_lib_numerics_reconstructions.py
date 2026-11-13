@@ -1,4 +1,8 @@
-"""N3 (ROM-87): Reconstruct, muscl and the limiters of pops.lib.numerics.
+"""N3 (ROM-87): the b6 Reconstruct, weno5, muscl and limiters, the parity oracles of the surface.
+
+Since N3 lots 2 and 3 these b6 bodies are the parity oracles of
+``examples/api_v02/b6_reconstructions.py`` (D5), imported from there; the words of the surface
+are tested by ``tests/python/unit/surface/test_n3_lot2_muscl.py`` and ``test_n3_lot3_weno5.py``.
 
 * CF4, IR25: ``muscl(U, limiter)`` is the same construction as the one written by hand, with
   ``Reconstruct`` and with ``reconstruction.User``: the three have one source identity, so they
@@ -34,8 +38,10 @@ import pytest
 
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.lib.numerics import Reconstruct, mc, minmod, muscl, superbee, vanleer, weno5
 from pops.numerics import reconstruction
+
+from examples.api_v02.b6_reconstructions import (Reconstruct, mc, minmod, muscl, superbee,
+                                                 vanleer, weno5)
 
 REPO = Path(__file__).resolve().parents[4]
 LIMITERS = {"minmod": (minmod, "Minmod"), "vanleer": (vanleer, "VanLeer"),

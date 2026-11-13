@@ -3913,6 +3913,10 @@ struct AmrSystem<Dim>::Impl {
   std::vector<GlobalDtBound> dt_bounds;
   double accepted_time = 0.0;
   int macro_step = 0;
+  /// The macro step at which the current run started: a Regrid's every(k) counts the accepted
+  /// steps of the run from it (spec 5.2, N8 « Ancrage des calendriers au départ du run », D6).
+  /// 0 at construction; set by mark_run_start and by set_clock.
+  int run_start_step = 0;
   mutable int checkpoint_regrid_count_value = 0;
   mutable std::vector<int> last_replay_regrid_steps;
   std::string last_dt_reason;
@@ -4865,8 +4869,10 @@ struct AmrSystem<Dim>::Impl {
     try {
       std::vector<Real> indicators(largest.begin(), largest.end());
       std::vector<Real> parameters(spec.parameters.begin(), spec.parameters.end());
+      if (macro_step < run_start_step)
+        throw std::logic_error("AMR generated regrid decision precedes the start of its run");
       const runtime::amr::GeneratedRegridDecisionRequest request{
-          static_cast<std::int64_t>(macro_step),
+          static_cast<std::int64_t>(macro_step - run_start_step),
           static_cast<Real>(accepted_time),
           indicators.data(),
           indicators.size(),
@@ -4887,7 +4893,9 @@ struct AmrSystem<Dim>::Impl {
     if (all_reduce_max(static_cast<long>(regrid != 0), lane) !=
         -all_reduce_max(-static_cast<long>(regrid != 0), lane))
       throw std::runtime_error("AMR generated regrid decision differs between MPI ranks");
-    last_regrid_decision.assign({static_cast<double>(macro_step), regrid != 0 ? 1.0 : 0.0});
+    // The count that the decision read: the accepted steps of the run.
+    last_regrid_decision.assign(
+        {static_cast<double>(macro_step - run_start_step), regrid != 0 ? 1.0 : 0.0});
     last_regrid_decision.insert(last_regrid_decision.end(), largest.begin(), largest.end());
     return regrid != 0;
   }
@@ -23895,6 +23903,19 @@ void AmrSystem<Dim>::set_clock(double accepted_time, int macro_step) {
   p_->staged_field_candidate_observations.clear();
   p_->accepted_time = accepted_time;
   p_->macro_step = macro_step;
+  // A restored clock starts the count of the run that follows it (D6).
+  p_->run_start_step = macro_step;
+}
+
+template <int Dim>
+void AmrSystem<Dim>::mark_run_start() {
+  p_->require_no_native_package_callback("mark_run_start");
+  p_->run_start_step = p_->macro_step;
+}
+
+template <int Dim>
+int AmrSystem<Dim>::run_start_step() const {
+  return p_->run_start_step;
 }
 
 template <int Dim>
@@ -27694,6 +27715,8 @@ template Extent<kNativeDimension> AmrSystem<kNativeDimension>::spatial_shape() c
 template double AmrSystem<kNativeDimension>::time() const;
 template int AmrSystem<kNativeDimension>::macro_step() const;
 template void AmrSystem<kNativeDimension>::set_clock(double, int);
+template void AmrSystem<kNativeDimension>::mark_run_start();
+template int AmrSystem<kNativeDimension>::run_start_step() const;
 template void AmrSystem<kNativeDimension>::enable_profiling();
 template void AmrSystem<kNativeDimension>::disable_profiling();
 template bool AmrSystem<kNativeDimension>::is_profiling() const;

@@ -130,7 +130,7 @@ def build(n, *, guarded=False):
     threshold = case.param(RuntimeParam("refine threshold", default=1 + .3 / np.sqrt(2)))
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(n,n), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(blocks[2][marker_state]) > case.value(threshold)),
+        tagging=AMRTagging(rules=(Tag(lambda cell: cell.value(ValueExpr(blocks[2][marker_state])) > case.value(threshold)),
                                   Buffer(cells=3*n//16-1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(1000, clock=program.clock)), transfer=transfer,

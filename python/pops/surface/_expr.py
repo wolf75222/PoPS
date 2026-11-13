@@ -330,10 +330,18 @@ class Predicate(_Symbolic):
 
 
 def walk(value: Any) -> Any:
-    """Every node of an expression, the root first."""
+    """Every node of an expression, the root first, each node once: a node that several others
+    share (a Python variable read twice, as the body of ``weno5`` reads its subexpressions) is
+    visited at its first occurrence only, so that the walk is linear in the nodes and not in the
+    unfolded tree (N3 lot 3)."""
     stack = [value]
+    seen: set = set()
     while stack:
         node = stack.pop()
+        if isinstance(node, (Expr, Predicate, Relation)):
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
         yield node
         if isinstance(node, Expr):
             stack.extend(reversed(node.children()))

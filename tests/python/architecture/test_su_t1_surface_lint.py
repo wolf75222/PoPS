@@ -3,13 +3,14 @@
 The gallery of the surface (``examples/surface/gallery``, the cases and library drafts of
 ``/mnt/project-files/dsl/cases/after/`` as R12c left them, with the quadrature rules imported from
 ``pops.lib.quadrature`` since the review of 11/11 (P3, D0), and with the four scheme words of
-``pops.lib.numerics`` since N3 lot 1 (D8); pinned here by hash) and every module
-of ``pops.lib`` that is written with the surface pass the lint of ``scripts/surface_lint.py``. A
-module of the surface that the MG9 registry lists as a bridge (``tests/gates/mg9_bridges.toml``,
-``[[bridge]]``) is excepted for the words of b6 that it imports to return a native route: since
-N3 lot 1 (ROM-87), ``pops.lib.numerics.schemes`` being gone, that is ``pops.lib.solve`` and its
-``cg()`` (#776), until the N9 lot « La référence sous les solves de relation ». The test fails on a new finding and on an
-exception that no longer holds.
+``pops.lib.numerics`` since N3 lot 1, ``muscl`` since lot 2 (D8), and the gallery ``mc`` and
+``superbee`` of the amended spec since lot 3; pinned here by hash) and every
+module of ``pops.lib`` that is written with the surface pass the lint of
+``scripts/surface_lint.py``. A module of the surface that the MG9 registry lists as a bridge
+(``tests/gates/mg9_bridges.toml``, ``[[bridge]]``) is excepted for the words of b6 that it imports
+to return a native route: since N3 lot 1 (ROM-87), ``pops.lib.numerics.schemes`` being gone, that
+is ``pops.lib.solve`` and its ``cg()`` (#776), until the N9 lot « La référence sous les solves de
+relation ». The test fails on a new finding and on an exception that no longer holds.
 
 Each rule fails or warns on a statement written for it, so that a lint that sees nothing fails
 here. The words of the lint come from the spec (``--words``), whose hash the word file records.
@@ -41,7 +42,7 @@ GALLERY_SHA256 = {
     "l4_two_fluid_drag.py": "8b1a4dd29f75ba8632df993fcfbe2e43fa86c470b6833d9c573d02a008bf173b",
     "lib_methods.py": "a3f35db05eca230fef657f5e11b57d29c0d5b47aa65e39271d2dfb1c3b9fd8ae",
     "lib_models.py": "bfe1d3b06ba66b93d1850d32994b9d1357624adf0c3ead13d9ff9ece3a8be774",
-    "lib_schemes.py": "5663cb9ba00f679d2c3b7307181562501e028c84001f1126fab7753473f7ea04",
+    "lib_schemes.py": "c33ab783718254ff07da022d1b76a618f1331aa0aa04b520ceae4e72f4b13648",
     "m10_drift_diffusion.py": "e90c3636f7ac4c65721937fa0b1520b797024dd3b3d886f306da2e796e9f1cec",
     "m19_vlasov_bgk.py": "5aa4f38164b3fc1df744ad578d90e479ff688abe7cde4ad13ad2ad4578ba961a",
     "m26_aggregation_diffusion.py":
@@ -82,8 +83,12 @@ def test_the_gallery_is_the_gallery_of_r12c():
 
 
 # D8 of N3 lot 1 (ROM-87): the gallery writes the four scheme words of pops.lib.numerics as the
-# library does, so that a case that copies a body of the gallery gets the library's word (CF4).
-LIBRARY_WORDS = ("rusanov", "upwind", "hll", "two_point", "_differentiated")
+# library does, so that a case that copies a body of the gallery gets the library's word (CF4);
+# N3 lot 2 extends it to muscl. The limiters keep the formula of their row in the gallery and the
+# guards of master in the library (P2).
+FLUX_WORDS = ("rusanov", "upwind", "hll", "two_point", "_differentiated")
+RECONSTRUCTION_WORDS = ("muscl",)
+LIBRARY_WORDS = FLUX_WORDS + RECONSTRUCTION_WORDS
 
 
 def _functions(path):
@@ -106,11 +111,14 @@ def _functions(path):
 
 def test_the_gallery_writes_the_scheme_words_of_the_library():
     """The bodies, the signatures, the decorators and the docstrings (up to their line breaks) of
-    upwind, rusanov, hll and two_point are those of python/pops/lib/numerics/fluxes.py."""
+    upwind, rusanov, hll and two_point are those of python/pops/lib/numerics/fluxes.py, and the
+    ones of muscl that of python/pops/lib/numerics/limiters.py."""
     gallery = _functions(GALLERY / "lib_schemes.py")
-    library = _functions(LIBRARY / "numerics" / "fluxes.py")
-    assert sorted(library) == sorted(LIBRARY_WORDS)
-    assert gallery == library
+    fluxes = _functions(LIBRARY / "numerics" / "fluxes.py")
+    reconstructions = _functions(LIBRARY / "numerics" / "limiters.py")
+    assert sorted(fluxes) == sorted(FLUX_WORDS)
+    assert sorted(reconstructions) == sorted(RECONSTRUCTION_WORDS)
+    assert gallery == {**fluxes, **reconstructions}
 
 
 def test_the_gallery_passes_the_lint(words):

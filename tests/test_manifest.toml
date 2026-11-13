@@ -1715,6 +1715,11 @@ mpi_entrypoints = [
 ]
 
 [[python.suite]]
+name = "pops_python_integration_surface"
+path = "tests/python/integration/surface"
+labels = ["integration", "python", "surface", "runtime", "medium"]
+
+[[python.suite]]
 name = "pops_python_unit_analytic"
 path = "tests/python/unit/analytic"
 labels = ["unit", "python", "analytic", "runtime", "fast"]
