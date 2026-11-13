@@ -18,6 +18,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- OD31 (vertical slice of the exit of phase 1): master's tutorial 02 written in the surface,
+  `examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py`, with its upwind
+  flux (in master's arithmetic) and its SSPRK2 written in the case file. The pieces that PoPS does
+  not run yet were listed in `tests/gates/vertical_slice.toml` in the order of the file (statement,
+  refusal, owner); `muscl(limiter=vanleer)` left the list with N3 lot 2 (#795) and the import of
+  `ghosts` from `pops.lib.numerics` with #799, so the list is empty and
+  `tests/python/integration/surface/test_vertical_slice_t02.py` runs the file natively to its end;
+  the list only shrinks (`scripts/vertical_slice.py check --check-base`, a step of the
+  architecture job). The case is the CF1 case `T02-slice` (frozen engine unchanged) and its
+  directory is a case path of CF8. The MG8 job runs the file against master's tutorial 02
+  (`scripts/run_mg8_rewritten.py`, contract `tests/gates/mg8_rewritten.toml`): the file as written
+  differs from master only in the rounding of exp in the initial data, in the 12 recorded cells,
+  each by 2 ulp at most, and by at most 1e-12 relative at t = 0.2 (cause C44, removed with G07);
+  with master's initial array bound as data, it is bit for bit at t = 0 and t = 0.2. The bound only
+  shrinks (MG6). `benchmarks/slice/t02_pf10.py` measures PF10 (1) and (3) for the slice.
 - ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
   from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
   `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the
@@ -28,6 +43,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
   sliver step at a frontier, when a CFL step ends within four ulp short of it or when
   `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-89 (N8, « Ancrage des calendriers au départ du run », spec §5.2): a schedule counts from
+  the start of each run. `every(time=h)` publishes at `t0 + k h`, computed exactly from the run's
+  start `t0` and rounded once, and `every(steps=k)` counts the accepted steps of the run, for an
+  Output as for `Regrid(criterion, every(k))` (the AMR hierarchy keeps the step its run started
+  at; `pops.run` starts a run, `pops.step` continues the current one). A lattice time within four
+  ulp of `until`, below or above, is published at `until`; this also applies to a first run,
+  where a lattice time a few ulp above `until` used to be dropped (lists keep the one-sided rule,
+  four ulp below). A later run
+  of the surface off the lattice of the first one is no longer refused, and no publication is
+  repeated at the time and step where the previous run ended. Rows and identities are unchanged.
+- ROM-98 (N15, lot D-E, part D): `dt=cfl_limit(flux, cfl=, max_dt=None)` (spec 0.3, 2.6.2,
+  2.6.9, SD44, SD70; OD31). `from pops.lib.time import cfl_limit`;
+  `pops.Advance(method, dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2))` elaborates onto N8's
+  compiled step rule, `StepRule(cfl, max_dt, strategy=AdaptiveCFL(cfl, max_dt))`: each step is
+  b6's CFL selection on the wave speeds of the model, capped by `max_dt`, and the run lands on
+  its frontiers; `pops.run` on the artifact takes master's `AdaptiveCFL`. The core knows a
+  library step rule as `pops.StepRuleValue` (its fluxes and its realization), not by its name
+  (CF2). A rule that leaves out a transport flux of the model, a model with a diffusive flux and
+  a flux without derived waves refuse with their lot. A 64 x 64 advection with inflow and
+  outflow runs bit for bit as the same case written by hand, and as master's `AdaptiveCFL`.
+  A compiled run with the rule refuses every global step bound (`add_dt_bound`), even one added
+  before `bind`, which the `step_cfl` route admits: a case with such a bound cannot yet take
+  `cfl_limit` in a compiled run (review R2 of #782). `cfl_limit` is a bridge of MG9
+  (`tests/gates/mg9_bridges.toml`, owner N8): `scripts/mg9_bridges.py` finds a subclass of
+  `StepRuleValue` as it finds a `SchemeValue`, and the entry leaves before the exit of phase 1,
+  when N8 elaborates `dt=` as a function of `cell`.
 - ROM-98 (N15, lot « solves »): `pops.unknown`, `pops.solve`, `pops.Tolerance`,
   `Advance(tolerance=)` and `Program(solvers=)` of spec 0.3, 2.6.7, `cg()` in `pops.lib.solve`
   (a bridge of MG9 on b6's native conjugate gradients) and `imex_euler` in
@@ -272,6 +313,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3c, part 1): the tests and test fixtures that wrote AMR tagging as a ValueExpr
+  graph without testing the graph itself write regions of `cell` (66 files); a partial
+  per-layout case on the physical maps shows each of three layouts refining its own part of the
+  domain, with the same boxes on graph and region routes. The tests of the tag graph, of the VM
+  and of external Tagger components keep the graph; they leave with the VM (lot 3c, part 2).
 - ROM-95 (N12, lot 3b): a criterion written as regions of `cell` now compiles on a plan with
   several layouts. `pops.compile` generates each adaptive layout's criterion into that layout's
   Program slice, and the layout's AmrSystem installs the entry of its own slice; no native code

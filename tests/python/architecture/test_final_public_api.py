@@ -152,6 +152,7 @@ def test_program_and_time_library_expose_only_final_authoring_spelling() -> None
         "SSPRK3",
         "SSPRK3_TABLEAU",
         "Strang",
+        "cfl_limit",
         "every",
     )
     for removed in (

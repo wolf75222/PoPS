@@ -58,7 +58,7 @@ from ._scheme import StencilRealization
 
 _LATER = "a later lot of N15"
 # The words of pops.math that b6's analytic expressions have (pops.analytic), for initial values.
-_ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs", "atan2")
+_ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs")
 _FRAMES = {1: Cartesian1D, 2: Cartesian2D, 3: Cartesian3D}
 
 
@@ -126,7 +126,7 @@ class Elaborated:
     """What a case elaborates into: the b6 case, its layout and block, the rows of its report."""
 
     __slots__ = ("case", "layout", "block", "model", "plan", "states", "names", "advance", "rows",
-                 "params", "outputs")
+                 "params", "outputs", "representations")
 
     def __init__(self, **fields: Any) -> None:
         for name in self.__slots__:
@@ -141,6 +141,27 @@ def elaborate_case(case: Any) -> Elaborated:
         return _Elaboration(case).run()
     except SurfaceRefusal as refusal:
         raise refusal.traced_at(case.site) from None
+
+
+def elaborated_representation(quantity: Any, support: Box) -> Any:
+    """The elaborated identity of a quantity's representation (G03 lot E, K4).
+
+    b6's state carries neither the support nor the representation of the quantity it elaborates
+    (``b6.state(name, components=(name,))``), so two quantities of equal shape on two supports, or
+    under two representations, would be interchangeable once elaborated. The surface keeps, beside
+    each state, ``Representation(space, definition)`` of contract @2 (G03 lot R): the space is the
+    support's coordinates and the scalar value, never the quantity's name (P10), and the definition
+    is the one of ``pops.CellAverage()``, the representation that the surface elaborates today.
+    Nothing of it enters b6, so no identity or manifest of a case changes (N16 5.5). Published
+    arrays carry it, and ``bind`` reads it back (``surface/_run.py``)."""
+    from pops.model.spaces import Space
+    from pops._ir.quantity import PhysicalSupport
+    from pops.representations.definition import ElaboratedRepresentation, cell_average
+    coordinates = tuple(
+        (name, ("periodic[%r, %r)" if periodic else "[%r, %r]") % (float(lower), float(upper)))
+        for name, (lower, upper, periodic) in zip(support._names, support.bounds(), strict=True))
+    space = Space("scalar", components=("value",), support=PhysicalSupport(coordinates))
+    return ElaboratedRepresentation(space, cell_average(support.rank))
 
 
 # b6 selects a term of a balance whose weight is 1 or -1 only (the partitions of a physical
@@ -173,6 +194,12 @@ _GENERATED_GHOSTS = "a later lot of N15 with the generated ghost fills of G04"
 # The depths at which a boundary policy is checked: those that b6 derives at most (WENO5 reads
 # three cells), so that a body that departs from a law of b6 at a depth is refused.
 _GHOST_DEPTHS = (1, 2, 3)
+
+
+_ANALYTIC_LOT = "a later lot of N15 with the generated initial values of G07"
+_STEP_REQUEST = "a later lot of N8 (the solve requests of a step rule, 5.5)"
+_STEP_PARTS = "a later lot of N8 with the step rules of 5.11 per flux (PF8)"
+_FACE_SPEEDS = "a later lot of N8 (the recorded face speeds of ROM-108 in the compiled step rule)"
 
 
 def _tensor(mapped: list) -> list:
@@ -281,6 +308,10 @@ class _Elaboration:
         self.layout_facts: dict = {}
         self.params: dict = {}
         self.lowered_outputs: tuple = ()
+        self.rule: Any = None
+        # N3 lot 3 (P4): the b6 expression of each node of the body of a scheme, by identity, for
+        # the inputs of the body lowered last; a shared node is lowered once, as b6 built it.
+        self._lowered: tuple = (None, {})
 
     # The support and its frame.
 
@@ -323,6 +354,20 @@ class _Elaboration:
     def lower(self, value: Any, inputs: dict | None = None) -> Any:
         """The b6 expression of a value of the model; ``inputs`` gives the b6 expressions of the
         reads of the entities of a scheme, inside the body of a scheme (lot 2)."""
+        if inputs is not None:
+            known, lowered = self._lowered
+            if known is not inputs:
+                known, lowered = inputs, {}
+                self._lowered = (known, lowered)
+            seen = lowered.get(id(value))
+            if seen is not None and seen[0] is value:
+                return seen[1]
+            result = self._lower(value, inputs)
+            lowered[id(value)] = (value, result)
+            return result
+        return self._lower(value, None)
+
+    def _lower(self, value: Any, inputs: dict | None) -> Any:
         if inputs is not None:
             scheme = self._scheme_value(value, inputs)
             if scheme is not None:
@@ -376,11 +421,20 @@ class _Elaboration:
         if pair is not None:
             return inputs[("speeds", pair)]
         if isinstance(value, Predicate):
-            if value.op not in ("<", "<=", ">", ">="):
+            # N3 lot 2 (P4): equal(a, b) is b6 ==, all_of and any_of the left folds of & and |,
+            # and none_of([p, q, ...]) is ~(p | q | ...), ~p for one predicate.
+            if value.op in ("all_of", "any_of", "none_of"):
+                items = [self.lower(arg, inputs) for arg in value.args]
+                result = items[0]
+                for item in items[1:]:
+                    result = result & item if value.op == "all_of" else result | item
+                return ~result if value.op == "none_of" else result
+            if value.op not in ("<", "<=", ">", ">=", "equal"):
                 raise NotYetElaborated("%s in the body of a scheme" % text(value), _LATER)
             left, right = (self.lower(arg, inputs) for arg in value.args)
             return {"<": lambda: left < right, "<=": lambda: left <= right,
-                    ">": lambda: left > right, ">=": lambda: left >= right}[value.op]()
+                    ">": lambda: left > right, ">=": lambda: left >= right,
+                    "equal": lambda: left == right}[value.op]()
         if isinstance(value, Call) and value.word == "where":
             predicate, then, otherwise = value.args
             then_value, otherwise_value = self.lower(then, inputs), self.lower(otherwise, inputs)
@@ -618,11 +672,11 @@ class _Elaboration:
                     % (balance.name or balance.quantity.name, self.names[term],
                        scheme.describe()), choices))
         for quantity in states:
-            self.rows.append(Row("represent={%s: %r}" % (quantity, self.numerics
-                                                          .representation_of(quantity)),
+            representation = self.numerics.representation_of(quantity)
+            self.rows.append(Row("represent={%s: %r}" % (quantity, representation),
                                  "numerics", "the cell averages of %s, projected by "
                                  "ConservativeCellAverage()" % quantity,
-                                 [Choice("representation", "pops.CellAverage()", "stated")]))
+                                 [Choice("representation", repr(representation), "stated")]))
         return plan, selections
 
     def _linear(self, scheme: Any, view: TermView, balance: Balance) -> Any:
@@ -694,10 +748,16 @@ class _Elaboration:
         request = None if advance.tolerance is None else advance.tolerance.request()
         realization = self.realization(value)
         outputs = self.outputs(block)
+        rule = self.rule
+        if rule is not None and request is not None:
+            raise NotYetElaborated("%r with tolerance=, the request of the solves of a step that "
+                                   "a step rule chooses" % (rule,), _STEP_REQUEST,
+                                   site=advance.site)
+        proposal = _n8.Proposal(float(advance.dt), request=request) if rule is None \
+            else rule.realize()
         try:
             elaboration = _n8.elaborate(_n8.Advance(specialized, retry=retry), case=case6,
-                                        state=block[states[quantity]],
-                                        proposal=_n8.Proposal(float(advance.dt), request=request),
+                                        state=block[states[quantity]], proposal=proposal,
                                         realization=realization, outputs=outputs)
         except Exception as error:
             translated = translate(error, trace)
@@ -711,14 +771,20 @@ class _Elaboration:
         self.rows.append(Row(
             repr(advance), "program",
             "elaborate(Advance(%s(%s), retry=Retry(max_attempts=%d)), case=case, state=block[%s], "
-            "proposal=Proposal(%r%s)%s), the traced method of N8"
+            "proposal=%s%s), the traced method of N8"
             % (value.name, ", ".join(components), retry.max_attempts, quantity.name,
-               float(advance.dt), "" if request is None else ", request=%r" % (request,),
+               "Proposal(%r%s)" % (float(advance.dt), "" if request is None
+                                   else ", request=%r" % (request,)) if rule is None
+               else repr(proposal),
                "" if not realization else ", realization={%s}" % ", ".join(
                    "%r: %r" % item for item in realization.items())),
             [Choice("method", "%s, %d evaluations of its rates"
                     % (value.name, len(elaboration.trace.evaluations)), "stated"),
              Choice("dt", advance.dt, "stated"),
+             *([] if rule is None else [Choice(
+                 "speeds", "the wave speeds dF/du of %s, recorded by b6 on each cell (R9, SD44); "
+                           "each step lands on the frontiers of the run" % ", ".join(
+                               text(flux) for flux in rule.fluxes), "derived")]),
              Choice("attempts", retry.max_attempts,
                     "default" if advance.attempts is None else "stated"),
              Choice("accept", "finite()", "default")]
@@ -766,6 +832,43 @@ class _Elaboration:
                     else "not derived", "derived"),
              Choice("failure", "SolveFailed fails the attempt (T38)", "derived")])
 
+    def step_rule(self, dt: Any) -> Any:
+        """The step rule of a library given as ``dt=`` (lot D-E), checked against what b6's
+        selection reads: the speeds of every transport flux of the model, derived (R9), and no
+        diffusive limit; ``None`` for a number."""
+        from ._step import StepRuleValue
+
+        if not isinstance(dt, StepRuleValue):
+            return None
+        model = self.model
+        for flux in dt.fluxes:
+            if flux.model is not model:
+                raise ValueError("%r reads %s, a flux of another model" % (dt, text(flux)))
+        named = {id(flux) for flux in dt.fluxes}
+        # a term in no balance is left to the coverage of the terms, which refuses it (T5)
+        integrated = {id(term) for balance in model.balances for term in balance.terms}
+        transports = [term for term in model.terms if isinstance(term, Flux)
+                      and not isinstance(term, DiffusiveFlux) and id(term) in integrated]
+        missing = [term for term in transports if id(term) not in named]
+        if missing:
+            raise NotYetElaborated(
+                "%r, a step rule that leaves out the flux %s of the model, whose speeds b6's "
+                "selection reads with the others" % (dt, text(missing[0])), _STEP_PARTS,
+                site=dt.site)
+        diffusive = [term for term in model.terms if isinstance(term, DiffusiveFlux)
+                     and id(term) in integrated]
+        if diffusive:
+            raise NotYetElaborated(
+                "%r in a model with the diffusive flux %s, whose limit b6's selection adds to "
+                "the step" % (dt, text(diffusive[0])), _STEP_PARTS, site=dt.site)
+        for flux in dt.fluxes:
+            if flux.slopes() is None:
+                raise NotYetElaborated(
+                    "%r reads the speeds of %s, whose waves dF/%s are not derived (R9); the speed "
+                    "that the face fluxes record (SD44)" % (dt, text(flux), flux.quantity),
+                    _FACE_SPEEDS, site=dt.site)
+        return dt
+
     def outputs(self, block: Any) -> tuple:
         """The Outputs of N8 of the case's outputs, in their order (CC14; lot G)."""
         lowered = []
@@ -779,9 +882,11 @@ class _Elaboration:
             schedule = ("every(%d)" % output.every_steps if output.every_steps is not None
                         else "at=every_dt(%r)" % output.every_time if output.every_time is not None
                         else "at=%r" % (output.times,))
-            if output.every_steps is not None or output.every_time is not None:
-                schedule += (", the lattice from the start of the simulation; a later run that "
-                             "starts off it is refused (N8)")
+            if output.every_steps is not None:
+                schedule += (", after every k-th accepted step of each run, counted from its "
+                             "start t0 (N8)")
+            elif output.every_time is not None:
+                schedule += ", at t0 + k h, t0 the start of each run (N8)"
             self.rows.append(Row(
                 repr(output), "program",
                 "Output(lambda B, interval: Product(%s), %s), evaluated by the compiled run (CC14)"
@@ -948,6 +1053,10 @@ class _Elaboration:
         if isinstance(value, Call) and value.word in _ANALYTIC_WORDS:
             args = [self.analytic(arg, frame, point, bounds) for arg in value.args]
             return getattr(an, value.word)(*args)
+        if isinstance(value, Call):
+            raise NotYetElaborated("%s in an initial value, a word that b6's analytic "
+                                   "expressions (pops.analytic) do not have" % text(value),
+                                   _ANALYTIC_LOT)
         raise NotYetElaborated("%s in an initial value" % text(value),
                                "N11 (expression closure, C1)")
 
@@ -1081,6 +1190,7 @@ class _Elaboration:
                 "a later lot of N15 with the record states of N8", site=model.balances[1].site)
         support = self.support()
         relations = self.boundaries(support)
+        self.rule = self.step_rule(self.program.advance.dt)
         frame = self.frame(support)
         self.layout_facts = {"uniform": True, "cartesian": True,
                              "periodic": all(support.periodic(axis) for axis in support._names)}
@@ -1102,7 +1212,9 @@ class _Elaboration:
         return Elaborated(case=case6, layout=layout, block=block, model=b6, plan=plan,
                           states=states, names=self.names, advance=advance,
                           rows=tuple(self.rows), params=dict(self.params),
-                          outputs=self.lowered_outputs)
+                          outputs=self.lowered_outputs,
+                          representations={quantity: elaborated_representation(quantity, support)
+                                           for quantity in states})
 
 
 def inspect_case(case: Any) -> Report:

@@ -14,6 +14,8 @@
 include = [
     "examples/api_v02/",
     "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py",
+    "examples/surface/tutorials/",
+    "tests/python/integration/surface/test_vertical_slice_t02.py",
 ]
 
 # CF1, tried on M01 (Linear N2). Each case names the files that make it up: its builder, the case
@@ -40,4 +42,18 @@ issue = "ROM-95"
 what = "pressure-gradient refinement criterion written as regions of cell (DM13b, CF5b)"
 files = [
     "tests/python/integration/amr/test_refinement_criterion_pressure_probe.py",
+]
+
+# The vertical slice of the exit of phase 1 (OD31, condition S3 of the slice's note): master's
+# tutorial 02 written in the surface, with its upwind flux and its SSPRK2 written in the case file,
+# its registry of the pieces still refused and its test. Adding the case changes no path
+# of the frozen engine.
+[[case]]
+id = "T02-slice"
+issue = "ROM-98"
+what = "master's tutorial 02 written in the surface (OD31, examples/surface/tutorials)"
+files = [
+    "examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py",
+    "tests/gates/vertical_slice.toml",
+    "tests/python/integration/surface/test_vertical_slice_t02.py",
 ]
