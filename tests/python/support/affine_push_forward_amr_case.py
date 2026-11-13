@@ -109,7 +109,8 @@ def affine_amr_case(*, levels=1, case_name="affine_amr_public_body",
         grid=CartesianGrid(frame=frame, cells=(CELLS, CELLS), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,)*(levels-1)),
         tagging=AMRTagging(
-            rules=(Tag((indicator > case.value(lower)) & ~(indicator > case.value(upper))),
+            rules=(Tag(lambda cell: (cell.value(indicator) > case.value(lower))
+                       & ~(cell.value(indicator) > case.value(upper))),
                    Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,

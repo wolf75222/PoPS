@@ -10,7 +10,8 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
 from pops.lib.amr import StateTransfer
-from pops.lib.initial import Constant
+from pops.analytic import x, y
+from pops.lib.initial import Analytic, Constant
 from pops.math import Const, ValueExpr, ddt, div
 from pops.mesh import (AxisQuadrature, CartesianGrid, LayoutPlanBuilder, LayoutMappingOperation,
                        LayoutRepresentation, LayoutSynchronization, PhysicalSupportMap,
@@ -32,12 +33,16 @@ def _value_above(subject, threshold):
     return lambda cell: cell.value(ValueExpr(subject)) > threshold
 
 
-def resolve_amr_maps(directory, *, initial=2., graph=False, refine=-100.):
+def resolve_amr_maps(directory, *, initial=2., graph=False, refine=-100., profile=None):
+    """``profile`` maps each block to its own refine threshold and starts every block from
+    ``initial`` plus its position coordinate, so that each layout refines a part of its domain."""
     case = pops.Case("distinct adaptive moment and extension")
     program = pops.Program("one accepted AMR mapping cadence")
     phase = Rectangle("v,x", (-2, 0), (2, 1)).frame(Cartesian2D())
     space = Rectangle("x,hidden", (0, 0), (1, 1)).frame(Cartesian2D())
     threshold = case.param(RuntimeParam("refine", default=refine))
+    thresholds = {name: case.param(RuntimeParam("refine " + name, default=value))
+                  for name, value in (profile or {}).items()}
     states, grids = {}, {}
     for name, frame, support, shape, ratio in (
             ("distribution", phase, PHASE, (4, 8), (2, 2)),
@@ -60,16 +65,21 @@ def resolve_amr_maps(directory, *, initial=2., graph=False, refine=-100.):
         factor = 3 if name == "moment" else 1
         value = program.value(name + " update", factor * temporal.n, at=temporal.next.point)
         program.commit(temporal.next, value)
-        case.initials.add(InitialCondition(state=block[state], value=Constant((initial,)),
+        start = (Constant((initial,)) if profile is None
+                 else Analytic(frame=frame, components=(
+                     initial + (x(frame) if frame is space else y(frame)),)))
+        case.initials.add(InitialCondition(state=block[state], value=start,
                                           projection=ConservativeCellAverage()))
+        limit = case.value(thresholds.get(name, threshold))
         transfer = AMRTransfer()
         transfer.state(block[state], StateTransfer())
         grids[name] = AMR(
             grid=CartesianGrid(frame=frame, cells=shape, periodic=PeriodicAxes(frame.axes)),
             hierarchy=AMRHierarchy(max_levels=2, ratios=(ratio,)),
-            tagging=AMRTagging(rules=(Tag(ValueExpr(block[state]) > case.value(threshold) if graph
-                                      else _value_above(block[state], case.value(threshold))),
-                                  Buffer(cells=0)),
+            tagging=AMRTagging(rules=(Tag(ValueExpr(block[state]) > limit if graph
+                                      else _value_above(block[state], limit)),
+                                  Buffer(cells=0) if profile is None
+                                  else Buffer(cells=0, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid.frozen(), transfer=transfer, execution=AMRExecution.synchronous())
@@ -225,6 +235,46 @@ def test_native_amr_maps_regions_match_the_tag_graph(tmp_path, refine):
         assert graph_image.keys() == region_image.keys()
         for key, value in graph_image.items():
             np.testing.assert_array_equal(region_image[key], value)
+
+
+def _fine_boxes(instance):
+    return {name: sorted((tuple(lower), tuple(upper))
+                         for level, lower, upper in
+                         instance._executor.executor_for_block(name)._s.patch_boxes() if level == 1)
+            for name in ("distribution", "moment", "extension")}
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_native_amr_maps_each_layout_refines_its_own_region_as_the_tag_graph(tmp_path):
+    """Review A1 of lot 3b: from a non-uniform state, with one threshold per layout inside its
+    range, each layout refines a different part of its domain; the regions generated into each
+    Program slice give the same boxes and states as the tag graph."""
+    import numpy as np
+    from tests.python.support.native_execution_context import artifact_execution_context
+
+    # Every block starts from 1 + position, position in (0, 1) along its 8-cell axis.
+    profile = {"distribution": 1.25, "moment": 1.5, "extension": 1.75}
+    boxes, images = {}, {}
+    for graph in (True, False):
+        plan = resolve_amr_maps(tmp_path / ("graph" if graph else "regions"), graph=graph,
+                                initial=1., profile=profile)
+        artifact = pops.compile(plan)
+        instance = pops.bind(
+            artifact, resources={"execution_context": artifact_execution_context(artifact)})
+        boxes[graph] = _fine_boxes(instance)
+        pops.run(instance, t_end=0.01, max_steps=1)
+        images[graph] = _hierarchy_image(instance)
+    assert boxes[True] == boxes[False]
+    # Every layout refines part of its domain, and no two layouts refine the same part.
+    cells = {name: sum(int(np.prod(np.subtract(upper, lower) + 1)) for lower, upper in rows)
+             for name, rows in boxes[False].items()}
+    full = {"distribution": 4 * 8 * 4, "moment": 8 * 1 * 2, "extension": 4 * 8 * 4}
+    assert all(0 < cells[name] < full[name] for name in cells), cells
+    assert boxes[False]["distribution"] != boxes[False]["extension"]
+    assert images[True].keys() == images[False].keys()
+    for key, value in images[True].items():
+        np.testing.assert_array_equal(images[False][key], value)
 
 
 @pytest.mark.compiler
