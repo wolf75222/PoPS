@@ -48,8 +48,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
     (+infinity, 2.6.9): without `max_dt` it is the IEEE quotient `w / +0` (w > 0 by the
     geometry), not the `where(s > 0, ..., +infinity)` of the design note, because a constant of
     an expression is finite; the division raises the `FE_DIVBYZERO` flag, which no build traps.
-    A divisor of -0 gives -infinity, a typed failure. `cfl_limit(..., cfl=1.5)` is refused by name: the Courant number of a step rule is
-    in (0, 1]; #788's bridge accepted any positive finite `cfl`, as master's `AdaptiveCFL`.
+    A divisor of -0 gives -infinity, a typed failure. `cfl_limit(..., cfl=1.5)` is refused by
+    name: the Courant number of a step rule is in (0, 1]; #788's bridge accepted any positive
+    finite `cfl`, as master's `AdaptiveCFL`.
     #788's refusals (a transport flux left out, a diffusive flux, waves not derived) stay in
     `cfl_limit`'s body. `pops.StepRuleValue` and the MG9 entry of `cfl_limit` are removed.
   - A face guard that refuses an attempt with the faces' frequency (`pops.face-step-frequency@1`,
@@ -61,7 +62,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
     reads (its value is installed with the parameters of a kernel; a later lot of N8 « dt= as a
     function of cell » installs it for the bound); and, by the run, the plans on which b6's
     selection does more than read speeds: a default Poisson solve (`set_poisson`, or the Poisson
-    source of an evolving block; a generated block whose model has no `elliptic_rhs` has none),
+    source of an evolving block, decided on the provider identity of its elliptic brick:
+    `NoElliptic` and the zero brick that codegen gives a model without `elliptic_rhs` are none),
     an auxiliary refreshed before the selection, source and parabolic frequencies,
     `stability_dt`, substeps or a stride, coupled frequencies, other than one evolving block,
     `add_dt_bound` and `set_dt_bound`.
