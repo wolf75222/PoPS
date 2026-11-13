@@ -54,7 +54,7 @@ CHART_POINT_READS = ("lot L2b of N17 (ROM-110), which reads it at the image of t
 # traces reconstructed above the cell values, whose slopes read the logical stencil of a cell.
 CHART_GHOSTS = ("lot L2b of N17 (ROM-110), which reflects the ghost of a value relation across "
                 "the face of a chart (DN25, DN30)")
-CHART_RECONSTRUCTIONS = ("lot L2b of N17 (ROM-110), with the centred gradient of a chart that a "
+CHART_RECONSTRUCTIONS = ("lot L2b of N17 (ROM-110), with the centred slopes of a chart that a "
                          "reconstruction above the cell values reads (DN25, DN30)")
 
 
