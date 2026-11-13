@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/core/model/physical_model.hpp>
+#include <pops/mesh/geometry/static_geometry.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -64,7 +65,26 @@ struct GeneratedResolvedRoute {
   }
 };
 
+/// The resolved route of a package compiled for a layout served by static geometry arrays (N17,
+/// C1): the same single route, whose faces read the physical normals, measures and cell measures
+/// of the arrays that the block request carries. Only such a package instantiates that reading.
+template <nd::ReconstructionVariables Variables, class Reconstruction, class Numerical>
+struct GeneratedStaticGeometryRoute : GeneratedResolvedRoute<Variables, Reconstruction, Numerical> {
+  static constexpr bool reads_static_geometry = true;
+};
+
+template <class Routes>
+inline constexpr bool route_reads_static_geometry = [] {
+  if constexpr (requires { Routes::reads_static_geometry; })
+    return static_cast<bool>(Routes::reads_static_geometry);
+  return false;
+}();
+
 namespace generated_system_detail {
+
+/// The metric of a generated block: the uniform logical box, or the static geometry arrays.
+struct CartesianBlockGeometry {};
+struct StaticArraysBlockGeometry {};
 
 /// Convert one primitive cell without exposing a rejected or partially materialized candidate.
 ///
@@ -711,10 +731,27 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
 }
 
 template <int Dim, class Model, class Reconstruction, class Numerical,
-          nd::ReconstructionVariables Variables, class Request>
+          nd::ReconstructionVariables Variables, class BlockGeometry = CartesianBlockGeometry,
+          class Request>
 PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction reconstruction,
                                            Numerical numerical) {
   static_assert(Model::dimension == Dim);
+  constexpr bool static_arrays = std::is_same_v<BlockGeometry, StaticArraysBlockGeometry>;
+  if constexpr (static_arrays) {
+    static_assert(!DiffusiveModel<Model>,
+                  "an isotropic two-point term reads the logical spacing, not the arrays");
+    if (!request.static_geometry)
+      throw std::invalid_argument(
+          "generated System package compiled for static geometry arrays was prepared without "
+          "them");
+    if (request.static_geometry->domain() != request.geometry.domain())
+      throw std::invalid_argument(
+          "static geometry arrays and the generated System block cover different domains");
+  } else if (request.static_geometry) {
+    throw std::invalid_argument(
+        "generated System block reads the uniform spacings of its logical box, but the System "
+        "carries static geometry arrays (N17); compile the package for that mapped layout");
+  }
   constexpr int provider_count = provider_count_for<Model, Dim>();
   if constexpr (provider_count > 0) {
     if (!request.provider_plan ||
@@ -737,10 +774,19 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   Extent<Dim> ghosts{};
   for (int axis = 0; axis < Dim; ++axis)
     ghosts[axis] = storage_ghost_depth;
-  const auto spatial =
-      nd::prepare_cartesian_operator<Dim, Model, Reconstruction, Numerical, Variables>(
+  const auto spatial = [&] {
+    if constexpr (static_arrays)
+      return nd::prepare_cartesian_operator<Dim, Model, PreparedStaticGeometryMetric<Dim>,
+                                            Reconstruction, Numerical, Variables>(
+          request.model, PreparedStaticGeometryMetric<Dim>(request.static_geometry->view()),
+          reconstruction, numerical, request.routes.positivity_floor);
+    else
+      return nd::prepare_cartesian_operator<Dim, Model, Reconstruction, Numerical, Variables>(
           request.geometry, request.model, reconstruction, numerical,
           request.routes.positivity_floor);
+  }();
+  // The arrays that the static metric views stay alive with every closure that reads them.
+  const auto static_geometry_owner = request.static_geometry;
   const Model model = request.model;
   const auto provider_storage_owner = request.provider_storage;
   const auto provider_plan_owner = request.provider_plan;
@@ -808,8 +854,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
         }
       };
 
-  auto flux = [spatial, prepare_state, provider_storage_owner, provider_plan_owner,
-               provider_storage, provider_plan,
+  auto flux = [spatial, static_geometry_owner, prepare_state, provider_storage_owner,
+               provider_plan_owner, provider_storage, provider_plan,
                geometry](MultiFab<Dim>& state, MultiFab<Dim>& residual,
                          const PreparedHyperbolicBoundary<Dim>* boundary) {
     require_same_layout(state, residual, Model::n_vars, "generated flux residual");
@@ -864,9 +910,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
         if (boundary != nullptr && *external_ghost_boundary)
           (*external_ghost_boundary)(point, state, geometry, lane);
       };
-  auto flux_with_transport = [spatial, prepare_state_with_external, provider_storage_owner,
-                              provider_plan_owner, provider_storage, provider_plan, geometry,
-                              external_boundary_flux](
+  auto flux_with_transport = [spatial, static_geometry_owner, prepare_state_with_external,
+                              provider_storage_owner, provider_plan_owner, provider_storage,
+                              provider_plan, geometry, external_boundary_flux](
                                  const runtime::multiblock::BoundaryEvaluationPoint& point,
                                  MultiFab<Dim>& state, MultiFab<Dim>& residual,
                                  const PreparedHyperbolicBoundary<Dim>* boundary,
@@ -967,31 +1013,43 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
         copy_valid(candidate, residual);
       };
 
-  nd::BoundaryFaceOmission<Dim> physical_omission;
-  physical_omission.domain = request.geometry.domain();
-  for (int axis = 0; axis < Dim; ++axis) {
-    const bool periodic = request.topology.is_periodic(Face<Dim>{axis, BoundarySide::lower});
-    physical_omission.lower[axis] = !periodic;
-    physical_omission.upper[axis] = !periodic;
+  // A mask-qualified (staircase or cut-cell) operator reads the axis faces of the logical box: a
+  // mapped layout has none (static arrays refuse an embedded boundary when they are installed).
+  EmbeddedResidualFamily<Dim> staircase_family{}, cut_cell_family{};
+  if constexpr (!static_arrays) {
+    nd::BoundaryFaceOmission<Dim> physical_omission;
+    physical_omission.domain = request.geometry.domain();
+    for (int axis = 0; axis < Dim; ++axis) {
+      const bool periodic = request.topology.is_periodic(Face<Dim>{axis, BoundarySide::lower});
+      physical_omission.lower[axis] = !periodic;
+      physical_omission.upper[axis] = !periodic;
+    }
+    auto masked_operator =
+        nd::prepare_masked_cartesian_operator<Dim, Model,
+                                              std::remove_cvref_t<decltype(spatial.metric())>,
+                                              Reconstruction, Numerical, Variables>(
+            model, spatial.metric(), reconstruction, numerical, request.routes.positivity_floor);
+    auto staircase_flux = [masked_operator, prepare_state, provider_storage_owner,
+                           provider_plan_owner, provider_storage, provider_plan, physical_omission](
+                              MultiFab<Dim>& state, MultiFab<Dim>& residual, const auto& embedded) {
+      prepare_state(state, nullptr);
+      assemble_masked_residual_with_plan<Dim, Model>(masked_operator, state, provider_storage,
+                                                     provider_plan, embedded.active_mask(),
+                                                     residual, physical_omission);
+    };
+    staircase_family =
+        make_embedded_residual_family<Dim>(std::move(staircase_flux), embedded_source);
+    cut_cell_family = make_cut_cell_residual_family<Dim, Variables>(
+        model, spatial.metric(), reconstruction, numerical, request.routes.positivity_floor,
+        prepare_state, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan,
+        physical_omission, embedded_source);
   }
-  auto masked_operator =
-      nd::prepare_masked_cartesian_operator<Dim, Model,
-                                            std::remove_cvref_t<decltype(spatial.metric())>,
-                                            Reconstruction, Numerical, Variables>(
-          model, spatial.metric(), reconstruction, numerical, request.routes.positivity_floor);
-  auto staircase_flux = [masked_operator, prepare_state, provider_storage_owner,
-                         provider_plan_owner, provider_storage, provider_plan, physical_omission](
-                            MultiFab<Dim>& state, MultiFab<Dim>& residual, const auto& embedded) {
-    prepare_state(state, nullptr);
-    assemble_masked_residual_with_plan<Dim, Model>(masked_operator, state, provider_storage,
-                                                   provider_plan, embedded.active_mask(), residual,
-                                                   physical_omission);
-  };
 
   PreparedSystemBlock<Dim> result;
-  result.provider_identity = "pops.generated.cartesian.nd/" + std::to_string(Dim) + "/" +
-                             request.routes.limiter + "/" + request.routes.riemann + "/" +
-                             request.routes.reconstruction;
+  result.provider_identity = std::string(static_arrays ? "pops.generated.static-arrays.nd/"
+                                                       : "pops.generated.cartesian.nd/") +
+                             std::to_string(Dim) + "/" + request.routes.limiter + "/" +
+                             request.routes.riemann + "/" + request.routes.reconstruction;
   result.provider_components = provider_count;
   result.ghosts = ghosts;
 
@@ -1021,12 +1079,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
           return SolveOutcome::collective_lane(SolveReport::capability_failure(), lane);
         }
       };
-  result.closures.staircase =
-      make_embedded_residual_family<Dim>(std::move(staircase_flux), embedded_source);
-  result.closures.cut_cell = make_cut_cell_residual_family<Dim, Variables>(
-      model, spatial.metric(), reconstruction, numerical, request.routes.positivity_floor,
-      prepare_state, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan,
-      physical_omission, embedded_source);
+  result.closures.staircase = std::move(staircase_family);
+  result.closures.cut_cell = std::move(cut_cell_family);
   result.closures.rhs_at_point = [full](const auto&, MultiFab<Dim>& state,
                                         MultiFab<Dim>& residual) {
     full(state, residual, nullptr);
@@ -1126,14 +1180,26 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
           apply_pointwise_projection<Dim, Model>(model, state, provider_storage, provider_plan,
                                                  &embedded.active_mask(), lane);
         };
-    result.closures.staircase.project = embedded_projection;
-    result.closures.cut_cell.project = embedded_projection;
+    if constexpr (!static_arrays) {
+      result.closures.staircase.project = embedded_projection;
+      result.closures.cut_cell.project = embedded_projection;
+    }
   }
 
-  result.maximum_speed = [model, provider_storage_owner, provider_plan_owner, provider_storage,
-                          provider_plan](const MultiFab<Dim>& state, const ExecutionLane& lane) {
-    return maximum_speed<Dim>(model, state, provider_storage, provider_plan, lane);
-  };
+  // The largest axis speed bounds a step on the uniform spacings of the logical box; a mapped
+  // layout has no such spacing, so its provider refuses: a stability step on it fails closed, the
+  // same on every rank (FixedDt is the served step, and resolution refuses the others first).
+  if constexpr (static_arrays)
+    result.maximum_speed = [](const MultiFab<Dim>&, const ExecutionLane&) -> Real {
+      throw std::runtime_error(
+          "generated System block on static geometry arrays (N17) publishes no largest axis "
+          "speed: a stability step on a mapped layout is not served, FixedDt is");
+    };
+  else
+    result.maximum_speed = [model, provider_storage_owner, provider_plan_owner, provider_storage,
+                            provider_plan](const MultiFab<Dim>& state, const ExecutionLane& lane) {
+      return maximum_speed<Dim>(model, state, provider_storage, provider_plan, lane);
+    };
   result.poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
     add_poisson_rhs<Dim>(model, state, rhs);
   };
@@ -1212,6 +1278,10 @@ PreparedSystemBlock<Dim> materialize_state_block(Request request) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   static_assert(PhysicalStateFor<Model, Dim>);
   if constexpr (path_conservative_model<Model>) {
+    if (request.static_geometry)
+      throw std::invalid_argument(
+          "a path face reads the logical axis of its box; the System carries static geometry "
+          "arrays (N17)");
     const std::string expected_face =
         coordinated_face_model<Model>
             ? std::string("coordinated_face:v1:") + std::string(Model::path_operator_identity())
@@ -1467,10 +1537,15 @@ template <int Dim, class Model, class Reconstruction, class Numerical,
 PreparedSystemBlock<Dim> materialize_block(Routes, Request request,
                                            [[maybe_unused]] Reconstruction reconstruction,
                                            [[maybe_unused]] Numerical numerical) {
-  if constexpr (Routes::template instantiates<Variables, Reconstruction, Numerical>())
-    return materialize_block<Dim, Model, Reconstruction, Numerical, Variables>(
-        std::move(request), reconstruction, numerical);
-  else
+  if constexpr (Routes::template instantiates<Variables, Reconstruction, Numerical>()) {
+    if constexpr (route_reads_static_geometry<Routes>)
+      return materialize_block<Dim, Model, Reconstruction, Numerical, Variables,
+                               StaticArraysBlockGeometry>(std::move(request), reconstruction,
+                                                          numerical);
+    else
+      return materialize_block<Dim, Model, Reconstruction, Numerical, Variables>(
+          std::move(request), reconstruction, numerical);
+  } else
     throw std::invalid_argument(
         "generated System package was compiled for another catalogue numerical route than " +
         request.routes.reconstruction + "/" + request.routes.limiter + "/" +

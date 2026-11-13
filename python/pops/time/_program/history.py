@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops.time._program.value_validation import require_history_space, require_top_level
 from pops.time.values import _is_field_value
+from pops._ir.data_model import field_role
 
 if TYPE_CHECKING:
     from pops.time._program.contract import _ProgramBase
@@ -274,7 +275,7 @@ class _ProgramHistory(_ProgramBase):
             max_lag = history_depth
         ring_slots = max_lag + 1
         policy = self._policy_for_history_store(name, ring_slots, checkpoint_policy)
-        if value.vtype in ("state", "rhs") or getattr(value.space, "kind", None) == "state":
+        if field_role(value) in ("state", "rhs") or getattr(value.space, "kind", None) == "state":
             require_history_space(self, name, value.space)
             self._declare_history_block(name, value.block)
             self._declare_history_state(name, value.state_ref, value.block)
@@ -296,7 +297,7 @@ class _ProgramHistory(_ProgramBase):
             if self._histories_ncomp.get(name, width) != width:
                 raise ValueError("store_history: solved field gradient history width changed")
             self._histories_ncomp[name] = width
-        elif value.vtype == "scalar_field" and value.block is not None:
+        elif field_role(value) == "field" and value.block is not None:
             # A block-owned scalar scratch/solve already carries its exact component
             # count. A store-only ring must register that count and owner without
             # inventing a history read (which has temporal semantics after regrid).

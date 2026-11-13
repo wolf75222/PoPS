@@ -51,9 +51,20 @@ OUTPUTS = (
 )
 
 
-def _with_outputs(case, block, state, flow, dt, *, name):
+# S3 of the run-anchored note (D5): every_dt(0.1) and a list, over runs to 0.1 + 0.2, 0.6, 0.8.
+S3_OUTPUTS = (
+    Output(_mass, at=every_dt(0.1)),
+    Output(_snapshot, at=(0.3, 0.45)),
+)
+
+
+def _with_outputs(case, block, state, flow, dt, *, name, outputs=OUTPUTS):
     return elaborate(Advance(early.shu_osher_ssprk2(flow=flow)), case=case, state=block[state],
-                     proposal=Proposal(dt), name=name, outputs=OUTPUTS)
+                     proposal=Proposal(dt), name=name, outputs=outputs)
+
+
+def _with_s3_outputs(case, block, state, flow, dt, *, name):
+    return _with_outputs(case, block, state, flow, dt, name=name, outputs=S3_OUTPUTS)
 
 
 def _artifact(world, monkeypatch, route, label):
@@ -123,7 +134,8 @@ def artifacts(tmp_path_factory, native_cxx, kokkos_root):
         _, world = native_profile(dimension=2, scope="N8 advance outputs")
         outputs = _artifact(world, patch, _with_outputs, "outputs")
         plain = _artifact(world, patch, None, "no outputs")
-        yield world, outputs, plain
+        s3 = _artifact(world, patch, _with_s3_outputs, "S3 outputs")
+        yield world, outputs, plain, s3
 
 
 def _reference(world, spec, artifact, frontiers):
@@ -141,7 +153,7 @@ def _reference(world, spec, artifact, frontiers):
 
 
 def test_outputs_land_on_their_times_and_publish_the_accepted_state(artifacts):
-    world, (spec, traced), (plain_spec, plain) = artifacts
+    world, (spec, traced), (plain_spec, plain), _ = artifacts
     manifest = traced.manifest().to_dict()["payload"]["control"]
     assert manifest["schema"] == "pops.advance-control@2"
     assert [row["at"] for row in manifest["outputs"]] == [
@@ -190,26 +202,88 @@ def test_outputs_land_on_their_times_and_publish_the_accepted_state(artifacts):
     _bitwise(_state(world, runtime), reference[0.1][0])
 
 
-def test_every_k_counts_the_accepted_steps_across_runs(artifacts):
-    world, (spec, traced), _ = artifacts
+def test_every_k_counts_the_accepted_steps_of_each_run(artifacts):
+    """every(k) is due after the k-th, 2k-th, ... accepted step of each run, counted from its
+    start (spec 5.2, run-anchored note D4), not after the multiples of the global macro step."""
+    world, (spec, traced), _, _ = artifacts
     runtime = _bind(world, spec, traced)
     simulation = collective_call(world, lambda: Simulation(runtime))
     first = collective_call(world, lambda: simulation.run(0.04))
+    # The run to 0.04 takes 16 steps; one step more (0.001 < STEP) puts the next run off the
+    # multiples of 16, where the run's count and the global macro step differ.
+    collective_call(world, lambda: simulation.run(0.041))
     second = collective_call(world, lambda: simulation.run(0.1))
     with collective_check(world):
         cadence = OUTPUTS[2]
         assert [row.macro_step for row in first.outputs[cadence]] == [0, 16]
-        # A run evaluates its Outputs at its start; every(16) continues from the macro step.
-        start = first.continuation.macro_step
-        assert [row.macro_step for row in second.outputs[cadence]] == [start, 16 * 2]
+        assert first.continuation.macro_step == 16
+        # A run evaluates its Outputs at its start; every(16) counts from there.
+        start = second.continuation.macro_step - second.steps
+        assert start == 17  # the two rules differ on this run
+        assert [row.macro_step for row in second.outputs[cadence]] == [
+            start, *(start + 16 * i for i in range(1, second.steps // 16 + 1))]
+        assert second.steps >= 16
         assert [row.time for row in second.outputs[OUTPUTS[1]]] == [
-            0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1]
-        assert [row.time for row in second.outputs[OUTPUTS[0]]] == [0.04, 0.05]
+            0.041, 0.051, 0.061, 0.071, 0.081, 0.091]
+        assert [row.time for row in second.outputs[OUTPUTS[0]]] == [0.041, 0.05]
         assert second.time == 0.1
 
 
+def test_a_later_run_off_the_grid_anchors_every_dt_at_its_start(artifacts):
+    """A run to 0.035, then a run to 0.1 with every_dt(0.01): the second publishes its start
+    0.035, then 0.045, ..., 0.095 (t0 + k h, D1), and lands on 0.1 without a publication of
+    every_dt there. Each record is the state of the runs driven to each frontier in turn."""
+    world, (spec, traced), (plain_spec, plain), _ = artifacts
+    runtime = _bind(world, spec, traced)
+    simulation = collective_call(world, lambda: Simulation(runtime))
+    first = collective_call(world, lambda: simulation.run(0.035))
+    second = collective_call(world, lambda: simulation.run(0.1))
+    anchored = [0.045, 0.055, 0.065, 0.075, 0.085, 0.095]
+    frontiers = sorted({0.01, 0.0123, 0.02, 0.03, 0.035, 0.05, *anchored, 0.1})
+    reference = _reference(world, plain_spec, plain, frontiers)
+    with collective_check(world):
+        assert [row.time for row in first.outputs[OUTPUTS[1]]] == [0.0, 0.01, 0.02, 0.03]
+        assert [row.time for row in second.outputs[OUTPUTS[1]]] == [0.035, *anchored]
+        assert second.time == 0.1 and second.failure is None
+        for row in second.outputs[OUTPUTS[1]]:
+            _, macro_step, total = reference[row.time]
+            assert row.macro_step == macro_step and row["mass"] == total
+        assert [row.time for row in second.outputs[OUTPUTS[0]]] == [0.035, 0.05]
+        _bitwise(second.outputs[OUTPUTS[0]][1]["u"], reference[0.05][0])
+    _bitwise(_state(world, runtime), reference[0.1][0])
+
+
+def test_s3_lands_the_anchored_time_on_until(artifacts):
+    """S3 (D5): runs to 0.1 + 0.2, 0.6 and 0.8 with every_dt(0.1) and the list (0.3, 0.45). Run 2
+    anchors at 0.30000000000000004, whose third time 0.6000000000000001 lies one ulp above until:
+    it lands on 0.6, so run 2's last publication is at 0.6 itself (without D5 it ends at 0.5).
+    The list is one-sided: 0.3 lies one ulp below run 1's until and is published there."""
+    world, _, (plain_spec, plain), (spec, s3) = artifacts
+    runtime = _bind(world, spec, s3)
+    simulation = collective_call(world, lambda: Simulation(runtime))
+    start = 0.1 + 0.2
+    runs = [collective_call(world, lambda until=until: simulation.run(until))
+            for until in (start, 0.6, 0.8)]
+    frontiers = [0.1, 0.2, start, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8]
+    reference = _reference(world, plain_spec, plain, frontiers)
+    tenths, listed = S3_OUTPUTS
+    with collective_check(world):
+        assert [row.time for row in runs[0].outputs[tenths]] == [0.0, 0.1, 0.2, start]
+        assert [row.time for row in runs[1].outputs[tenths]] == [start, 0.4, 0.5, 0.6]
+        assert [row.time for row in runs[2].outputs[tenths]] == [0.6, 0.7, 0.8]
+        assert [row.time for row in runs[0].outputs[listed]] == [0.0, start]
+        assert [row.time for row in runs[1].outputs[listed]] == [start, 0.45]
+        for run in runs:
+            for row in run.outputs[tenths] + run.outputs[listed]:
+                state, macro_step, total = reference[row.time]
+                assert row.macro_step == macro_step and row["mass"] == total
+                if "u" in row.values:
+                    _bitwise(row["u"], state)
+    _bitwise(_state(world, runtime), reference[0.8][0])
+
+
 def test_a_time_after_until_stays_ahead_and_a_budget_keeps_the_publications(artifacts):
-    world, (spec, traced), _ = artifacts
+    world, (spec, traced), _, _ = artifacts
     runtime = _bind(world, spec, traced)
     simulation = collective_call(world, lambda: Simulation(runtime))
 
@@ -241,7 +315,7 @@ def test_a_time_after_until_stays_ahead_and_a_budget_keeps_the_publications(arti
 
 
 def test_a_run_with_outputs_refuses_a_schedule_the_native_run_cannot_take(artifacts):
-    world, (spec, traced), _ = artifacts
+    world, (spec, traced), _, _ = artifacts
     runtime = _bind(world, spec, traced)
     native = runtime._executor._s
     with collective_check(world):
@@ -264,14 +338,15 @@ SCHEDULE_SHIM = r"""
 namespace program = pops::runtime::program;
 
 // One Output with its step cadence and its times; returns whether it is due after the
-// publication at (time, macro_step) and moves *cursor as run_advance does.
-extern "C" int due(double time, std::int64_t macro_step, std::int64_t every_steps,
+// publication at time, the run_steps-th accepted step of the run, and moves *cursor as
+// run_advance does.
+extern "C" int due(double time, std::int64_t run_steps, std::int64_t every_steps,
                    const double* at, std::size_t count, std::size_t* cursor) {
   std::vector<program::AdvanceOutputSchedule> schedule(1);
   schedule[0].every_steps = every_steps;
   schedule[0].at.assign(at, at + count);
   std::vector<std::size_t> cursors{*cursor};
-  const bool result = program::advance_output_due(0, time, macro_step, schedule, cursors);
+  const bool result = program::advance_output_due(0, time, run_steps, schedule, cursors);
   *cursor = cursors[0];
   return result ? 1 : 0;
 }
@@ -320,4 +395,9 @@ def test_a_publication_that_passes_several_times_evaluates_its_output_once(nativ
     assert shim.next_frontier(0.3, 1.0, times, 3, cursor.value) == 1.0
     # every(k) is due on the multiples of k whether or not a time is reached.
     assert publish(0.4, 4, every=2) == (True, 3) and publish(0.5, 5, every=2) == (False, 3)
+    # The count is the run's own (review O2 of the run-anchored note): a run that starts after 7
+    # global steps passes 1, 2, 3, ... and is due after its 3rd and 6th step for every(3).
+    cursor.value = 3
+    run = [publish(0.6 + 0.01 * steps, steps, every=3)[0] for steps in range(1, 7)]
+    assert run == [False, False, True, False, False, True]
 

@@ -136,7 +136,7 @@ def artifacts(tmp_path_factory, native_cxx, kokkos_root):
 def native_face(artifacts):
     """M01 on b6's native Rusanov face, elaborated with the default Retry() and with
     Retry(max_attempts=3), by attempt budget, in the cache of the module. That face bounds no step
-    by itself, unlike M01's default face pops.lib.numerics.rusanov, so an overflowing step reaches
+    by itself, unlike M01's default face, the b6 rusanov of examples.api_v02.b6_numerics, so an overflowing step reaches
     the candidate."""
     build = functools.partial(early.build_m01, scheme=early.native_rusanov)
     with pytest.MonkeyPatch.context() as patch:
@@ -292,7 +292,7 @@ def test_a_failed_trial_leaves_the_run_with_its_native_error(artifacts):
     runtime = _bind(world, spec, traced)
     simulation = collective_call(world, lambda: Simulation(runtime))
     before = _state(world, runtime)
-    # M01's face, pops.lib.numerics.rusanov, bounds the step by its Courant number: a step of 1e308
+    # M01's face, the b6 rusanov of examples.api_v02.b6_numerics, bounds the step by its Courant number: a step of 1e308
     # fails the trial at the first stage that reads the face, before any candidate exists.
     with collective_check(world):
         with pytest.raises(RuntimeError, match="user_face_numerical_stability"):

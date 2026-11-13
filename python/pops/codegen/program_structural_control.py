@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from typing import Any
+from pops._ir.data_model import is_field_leaf
 
 
 class _OwnedFieldSlot(str):
@@ -44,7 +45,7 @@ def make_slots(
             output = {"code": code, "origin": origin}
             parent[key] = output
             stack.append((sig["success"], output, "value"))
-        elif kind in ("state", "rhs", "scalar_field"):
+        elif is_field_leaf(kind):
             owner = token + "_owner"
             lines.append("std::shared_ptr<pops::MultiFab<pops::kNativeDimension>> %s;" % owner)
             parent[key] = _OwnedFieldSlot(owner)
@@ -102,7 +103,7 @@ def copy_structure(signature, destination, source, lines, *, references):
                 lines.append("const bool %s = %s && %s_code == 0;" % (flag, active, token))
                 stack.append((sig["success"], target["value"], value["value"], flag))
             continue
-        is_field = kind in ("state", "rhs", "scalar_field")
+        is_field = is_field_leaf(kind)
         if is_field and not isinstance(target, _OwnedFieldSlot):
             raise TypeError("structured Field copy requires an explicit owning slot")
         lines.append("%s %s{};" % (finite_cpp_type(sig), token))

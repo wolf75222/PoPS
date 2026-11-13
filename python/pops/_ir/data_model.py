@@ -25,25 +25,27 @@ manifest reporter and the tests (review of the N10 note, A2):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any
 
 from pops._ir import arrays as A
 from pops._ir import index_sets as S
 
 __all__ = [
-    "LayoutRecord", "Placements", "data_layout_and_distribution", "ir_type", "support_placements",
+    "LayoutRecord", "Placements", "data_layout_and_distribution", "field_role", "ir_type",
+    "is_field_leaf", "is_finite_array", "is_finite_index", "support_placements", "value_kind",
 ]
 
 _FIELD_ROLES = {"state": "state", "rhs": "rhs", "scalar_field": "field", "vector_field": "field"}
-# Spellings of the §3.1 table that a later lot types, with that lot (review of #749, optional).
+# Spellings of the §3.1 table that a later lot types, with that lot (note §3.10, review of #749 R2).
 _LATER = {
-    "vector_field": "lot 1b types it with the frame's axes (a field leaf)",
-    "iteration_result": "lot 1b types it with its body's state (IR1 Iteration)",
-    "fields": "lot 1b types it as a product of its field leaves",
-    "field_topology": "lot 4 types the hierarchy value of a topology (DM13)",
-    "state_geometry": "lot 3 provides the geometry arrays from the plan (DM6)",
-    "csr": "lot 4 types it as a product of range-set arrays (DM4)",
-    "mask": "lot 4 types it as an array of Bool (DM4)",
+    "vector_field": ("no builder spells a value so: Local.vector_field returns a scalar_field of d "
+                     "components, typed as a field leaf"),
+    "field_topology": "lot 3 of phase 1 types the hierarchy value of a topology (DM13)",
+    "state_geometry": ("G03 types it: the swept geometry of a moving state, held by the runtime "
+                       "and checked against its coordinate law (ALE: R26, D18, D21, probe M28)"),
+    "csr": "lot 4 of phase 1 types it as a product of range-set arrays (DM4)",
+    "mask": "phase 2 types it as an array of Bool with the one codec (DM4, CN11)",
 }
 _CONTINUATION = frozenset((
     "continuation_base", "continuation_candidate", "continuation_assessment",
@@ -182,7 +184,9 @@ def _signature_type(signature: Any, placements: Placements, program: str,
     if kind in ("product", "variant"):
         members = signature.get("members")
         if not members:
-            return A.Untyped("a %s record without members, which IR1 does not type" % kind)
+            if kind == "product":
+                return A.Product()
+            return A.Untyped("a variant without cases, which IR1 does not type")
         rows = tuple((name, _signature_type(child, placements, program))
                      for name, child in members)
         return A.Variant(*rows) if kind == "variant" else A.Product(*rows)
@@ -213,6 +217,24 @@ def _signature_type(signature: Any, placements: Placements, program: str,
     return A.Untyped("value type %r is in no row of the §3.1 table" % (kind,))
 
 
+def _published_fields(value: Any, placements: Placements, program: str) -> Any:
+    """``Product(component=Array(D, Float64), ...)``: one source component per binding (§3.1)."""
+    attrs = getattr(value, "attrs", None) or {}
+    bindings = tuple(attrs.get("bindings") or ()) if hasattr(attrs, "get") else ()
+    inputs = tuple(getattr(value, "inputs", ()) or ())
+    if not bindings or len(bindings) != len(inputs):
+        return A.Untyped("a field publication whose bindings do not name its inputs one by one")
+    members = []
+    for binding, source in zip(bindings, inputs, strict=True):
+        source_type = ir_type(source, placements, program=program)
+        if isinstance(source_type, A.Untyped):
+            return source_type
+        if not isinstance(source_type, A.Array):
+            return A.Untyped("a field publication of a %r input" % (source.vtype,))
+        members.append((str(binding["component"]), A.Array(source_type.domain, A.Float64)))
+    return A.Product(*members)
+
+
 def ir_type(value: Any, placements: Placements, *, program: str = "program") -> Any:
     """The IR type of one Program value; ``Untyped`` with a reason, never an exception (A1)."""
     kind = value.vtype
@@ -223,10 +245,17 @@ def ir_type(value: Any, placements: Placements, *, program: str = "program") -> 
     attrs = getattr(value, "attrs", None) or {}
     if hasattr(attrs, "get") and attrs.get("storage_allocation") == _ON_TOPOLOGY:
         return A.Untyped("a field allocated on a topology lives on the levels of the hierarchy "
-                         "that the topology names (DM13, lot 4)")
+                         "that the topology names (DM13, lot 3 of phase 1)")
     if count is None and hasattr(attrs, "get"):
         # A ``scalar_field()`` without a block carries its component count here (review T3).
         count = attrs.get("ncomp")
+    if kind == "iteration_result":
+        state = attrs.get("state_signature") if hasattr(attrs, "get") else None
+        if state is None:
+            return A.Untyped("an iteration without the signature of its state")
+        return A.Iteration(_signature_type(state, placements, program))
+    if kind == "fields":
+        return _published_fields(value, placements, program)
     try:
         from pops.time.value_signatures import value_signature
 
@@ -247,6 +276,7 @@ class LayoutRecord:
     """The layout of one data value of the plan (DM3), as the manifest reports it."""
 
     value: str
+    node: int
     spelling: str
     role: str | None
     type: str
@@ -256,7 +286,8 @@ class LayoutRecord:
     residency: str
 
     def to_data(self) -> dict[str, Any]:
-        return {"value": self.value, "spelling": self.spelling, "role": self.role,
+        return {"value": self.value, "node": self.node, "spelling": self.spelling,
+                "role": self.role,
                 "type": self.type, "layout": self.layout, "distribution": self.distribution,
                 "origin": self.origin, "residency": self.residency}
 
@@ -281,9 +312,12 @@ _FIELD_RESIDENCY = "device: views of the default memory space"
 
 
 def _finite_residency(signature: Any) -> str:
-    """G13's rule, read where it is written (``device_array``), never restated here."""
+    """G13's rules, read where they are written (``field_array``, then ``device_array``)."""
+    from pops.codegen.program_emit_finite_arrays import field_array
     from pops.codegen.program_emit_finite_kokkos import device_array
 
+    if field_array(signature):
+        return "device: one column per box of the default memory space"
     if device_array(signature):
         return "device: columns of the default memory space"
     return "host: structural cells"
@@ -324,6 +358,56 @@ def _layout(value: Any, value_type: Any, placements: Placements, plan: Any) -> t
     return "Local", "every rank", "plan", unstated
 
 
+# DM5 (N10 lot 3, addendum §3): the general accesses of phase 1, with the input that carries
+# their index (``at`` and the local access take an index; the imports take requests or a CSR).
+_GENERAL_ACCESSES = {
+    "finite_at": 1, "distributed_local_at": 1, "distributed_import": 1,
+    "distributed_import_csr": 1, "distributed_scatter_reduce": 1,
+}
+_ARGUMENTS = frozenset(("finite_index_argument", "distributed_index_argument"))
+_ARRAY_READS = frozenset(_GENERAL_ACCESSES)
+# Op prefixes whose value depends on the run's state: a continuation, a solve or an attempt.
+_COMPUTED_PREFIXES = ("continuation_", "solve", "attempt_")
+
+
+def _provenance(carrier: Any, nodes: tuple[Any, ...]) -> str:
+    """IR8 provenance of an index: ``computed``, ``data`` or ``arithmetic``.
+
+    ``computed`` when the index depends on a field leaf, a continuation or a solve (the run's
+    state); ``data`` when it reads an array and none of those; ``arithmetic`` when it reads only
+    the argument, constants and integer operations.
+    """
+    from pops.time._graph.value_traversal import reachable_values
+
+    reached = reachable_values(carrier, nodes)
+    if any(is_field_leaf(value) or str(value.op).startswith(_COMPUTED_PREFIXES)
+           for value in reached):
+        return "computed"
+    if any(value.op in _ARRAY_READS for value in reached):
+        return "data"
+    return "arithmetic"
+
+
+def _general_accesses(values: tuple[Any, ...], layouts: dict[int, str]) -> list[dict[str, Any]]:
+    """One row per general access of the plan (DM5): its node, op, array, layout and provenance.
+
+    The array is the one the access reaches: the array read, or the array a scatter writes.
+    """
+    rows = []
+    for value in values:
+        position = _GENERAL_ACCESSES.get(value.op)
+        if position is None:
+            continue
+        carrier = value.inputs[position]
+        if carrier.op in _ARGUMENTS:
+            continue  # the index of the map itself: the identity, a typed access
+        array = value if value.op == "distributed_scatter_reduce" else value.inputs[0]
+        rows.append({"node": int(value.id), "op": value.op, "array": int(array.id),
+                     "layout": layouts.get(int(array.id), "untyped"),
+                     "provenance": _provenance(carrier, values)})
+    return rows
+
+
 def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
     """The manifest field ``data_layout_and_distribution`` (CC10) of a resolved plan."""
     try:
@@ -337,7 +421,8 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
     program = str(getattr(plan.time, "name", None) or "program")
     records = []
     # Every depth of the Program: the bodies of its control blocks hold field leaves too (T2).
-    for value in walk_program_nodes(plan.time._values):
+    nodes = tuple(walk_program_nodes(plan.time._values))
+    for value in nodes:
         try:
             value_type = ir_type(value, placements, program=program)
             layout, distribution, origin, residency = _layout(value, value_type, placements, plan)
@@ -346,14 +431,130 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
             layout = distribution = origin = residency = "untyped"
         records.append(LayoutRecord(
             value=str(value.name if getattr(value, "name", None) else value.id),
-            spelling=value.vtype, role=_FIELD_ROLES.get(value.vtype), type=repr(value_type),
+            node=int(value.id), spelling=value.vtype, role=_FIELD_ROLES.get(value.vtype), type=repr(value_type),
             layout=layout, distribution=distribution, origin=origin,
             residency=residency).to_data())
+    try:
+        accesses = _general_accesses(nodes, {row["node"]: row["layout"] for row in records})
+    except Exception as exc:  # noqa: BLE001 - A1: reported, never refused
+        accesses = [{"untyped": "%s: %s" % (type(exc).__name__, exc)}]
     return {
-        "schema_version": 2,
+        "schema_version": 4,
         "placements": {block: configuration.identity
                        for block, configuration in sorted(placements.configurations.items())},
         "values": records,
+        # DM5: no row is on Patches or LevelPatches; the builder refuses a field leaf there.
+        "general_accesses": accesses,
         "untyped": sum(1 for row in records if row["layout"] == "untyped"),
         "unplaced": unplaced,
     }
+
+
+# ------------------------------------------------------------------------------------------------
+# Lot 1b: the one function that tells a field leaf from a finite array (note §3.4).
+#
+# The serialized spelling of a value (``vtype``) is the canonical encoding of its IR type and its
+# role: ``state``, ``rhs`` and ``scalar_field`` encode ``(Array(cells(κ_σ), T), role)``, ``array``
+# encodes ``Array(range_set, T)``. The builder and the emitters ask the kind of a value here, and
+# the kind is read from the head of the IR type that ``_signature_type`` gives the spelling, on a
+# symbolic support: which support a field lives on, and its element type, never change its kind.
+
+class _EverySupport(dict):
+    """A placement table that places every block on one symbolic support."""
+
+    def __init__(self, configuration: S.Configuration):
+        super().__init__()
+        self._configuration = configuration
+
+    def __contains__(self, block: object) -> bool:
+        return True
+
+    def __getitem__(self, block: str) -> S.Configuration:
+        return self._configuration
+
+
+def _symbolic_placements() -> Placements:
+    configuration = S.Configuration("pops.ir.kind@support", (1,), (False,))
+    return Placements(_EverySupport(configuration), {}, _EverySupport(False),  # type: ignore[arg-type]
+                      {}, configuration)
+
+
+# The smallest signature of each spelling whose type head is its kind: a field leaf of one
+# component, an array of scalars over one family, an index set and an index of that family.
+_KIND_PROBES = {
+    "state": {"vtype": "state", "block": "b"},
+    "rhs": {"vtype": "rhs", "block": "b"},
+    "scalar_field": {"vtype": "scalar_field", "block": "b"},
+    "array": {"vtype": "array", "family": 0, "element": {"vtype": "scalar"}},
+    "index_set": {"vtype": "index_set", "family": 0},
+    "index": {"vtype": "index", "family": 0},
+}
+_KINDS: dict[str, str] = {}
+
+
+def _kind_of_type(value_type: Any) -> str:
+    if isinstance(value_type, A.Array):
+        if isinstance(value_type.domain, (S.Entities, S.Union, S.Level)):
+            return "field"
+        return "finite"
+    if isinstance(value_type, A.IndexSetType):
+        return "index_set"
+    if isinstance(value_type, A.Index):
+        return "index"
+    return "other"
+
+
+def _kinds() -> dict[str, str]:
+    if not _KINDS:
+        placements = _symbolic_placements()
+        for spelling, probe in _KIND_PROBES.items():
+            _KINDS[spelling] = _kind_of_type(_signature_type(probe, placements, "kind", 1))
+    return _KINDS
+
+
+def _spelling(value: Any) -> Any:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return value.get("vtype")
+    return getattr(value, "vtype", None)
+
+
+def value_kind(value: Any) -> str:
+    """``field``, ``finite``, ``index_set``, ``index`` or ``other``: the head of its IR type.
+
+    ``value`` is a live Program value, its serialized signature, or its spelling. A field leaf is
+    an ``Array`` over entities or levels (stored on ``Patches`` or ``LevelPatches``); any other
+    ``Array`` is ``finite``; an index set and an index of the finite world are ``index_set`` and
+    ``index``.
+    """
+    return _kinds().get(_spelling(value), "other")
+
+
+def is_field_leaf(value: Any) -> bool:
+    """Whether ``value`` is a field leaf: an ``Array`` over the cells or levels of a support."""
+    return value_kind(value) == "field"
+
+
+def is_finite_array(value: Any) -> bool:
+    """Whether ``value`` is an ``Array`` over a range set (a finite array)."""
+    return value_kind(value) == "finite"
+
+
+def is_finite_index(value: Any) -> bool:
+    """Whether ``value`` is a finite array, or an index set or index of the finite world."""
+    return value_kind(value) in ("finite", "index_set", "index")
+
+
+_ROLES = {"state": "state", "rhs": "rhs", "scalar_field": "field"}
+
+
+def field_role(value: Any) -> str | None:
+    """The role of a field leaf (``state``, ``rhs`` or ``field``); ``None`` for any other value.
+
+    A state and its rate have one type; the role is what tells them apart, and a plain field (a
+    scratch or a solve operand) from both.
+    """
+    if not is_field_leaf(value):
+        return None
+    return _ROLES[_spelling(value)]

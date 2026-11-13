@@ -41,6 +41,7 @@ from pops.codegen.krylov_contract import (
     validated_prepared_problem_contract,
 )
 from pops.codegen._rhs_coherence import plan_rhs_coherence
+from pops._ir.data_model import field_role
 
 
 def _program_nodes(program: Any) -> Any:
@@ -135,14 +136,21 @@ def _attempt_reuse(program: Any, solve: Any, prelude: list[str], lines: list[str
                    *, target: str, prepared: bool) -> str | None:
     """The flag of a solve that a retry of its step keeps, or None (T7 across attempts, N8 lot 6).
 
-    Only the prepared Krylov solve of a uniform Program at a fixed trial site of a traced method
-    (T38: its dependency set excludes the proposal) is kept. Its solution buffer is persistent, and
+    Only the prepared Krylov solve of a uniform Program for a field request at a fixed trial site
+    of a traced method (T38: its dependency set excludes the proposal) is kept. Its solution buffer is persistent, and
     the request owns it: no other node writes it. The slot records the epoch and duration of the
     attempt that completed the solve, after its guard accepted it; System::run_advance keeps the
     epoch across the retries of one accepted step, and any other step starts a new one.
     """
     site = _trial_site(program, solve)
     if site is None or site["retry_can_change"] or target != "system" or not prepared:
+        return None
+    # A field request only: its load is a field_problem_load. A relation solve of a traced method
+    # (relations.require_success, N15) carries a trial site too, but the argument of T7 across
+    # attempts is made for field requests; under cg() a relation site is never fixed anyway, since
+    # IR16 puts p.dt in every b_k (test_su_t3_solves.py,
+    # test_a_relation_solve_enters_no_field_cache_and_is_never_kept_across_attempts).
+    if solve.inputs[1].op != "field_problem_load":
         return None
     writers = [node.name for node in _program_nodes(program)
                if node is not solve and any(item is solve for item in node.inputs)
@@ -607,7 +615,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         if w.op not in ("where", "cell_compare", "linear_combine"):
             continue
         for operand in w.inputs:
-            if operand.id not in local_ids and operand.vtype == "scalar_field":
+            if operand.id not in local_ids and field_role(operand) == "field":
                 external_fields[operand.id] = operand
     for operand in external_fields.values():
         if scalar_owner_index is None or operand.attrs.get("scalar_storage") is None:

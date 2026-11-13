@@ -9,6 +9,7 @@ from pops.time._program.value_validation import (
 )
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.values import ProgramValue
+from pops._ir.data_model import field_role
 
 
 def affine_moment_update(
@@ -149,12 +150,12 @@ def validate_affine_moment_prefix(program: Any) -> None:
             # algorithmic state. It does not enter the converged source equation.
             # Do not mark it visited: the same history must still be refused if
             # another edge uses it as an RHS, coefficient or physical state.
-            if (value.op == "solve_linear" and value.vtype == "scalar_field"
+            if (value.op == "solve_linear" and field_role(value) == "field"
                     and value.attrs.get("problem_kind") in {
                         "matrix_free_linear", "scalar_tensor_elliptic_hierarchy"}
                     and value.attrs.get("has_guess") is True and index == 2
                     and len(value.inputs) == 3 and child.op == "history"
-                    and child.vtype == "scalar_field" and child.attrs.get("ncomp") == 1
+                    and field_role(child) == "field" and child.attrs.get("ncomp") == 1
                     and child.attrs.get("schedule") is None):
                 continue
             walk(child, seen)

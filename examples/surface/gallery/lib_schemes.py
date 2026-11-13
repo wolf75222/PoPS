@@ -32,36 +32,45 @@ from pops.discrete import (FaceFlux, FaceValue, CellRate, CellValue, CellResidua
 
 @pops.scheme
 def rusanov(face, term, reconstruction=None):
-    """F* = (F(uL).n + F(uR).n) / 2 - s (uR - uL) / 2, s the larger spectral radius of the two sides (R9), which the
-    flux records as its speed."""
+    """F* = (F(uL).n + F(uR).n) / 2 - s (uR - uL) / 2, s the larger spectral radius of the two
+    sides (R9), which the flux records as its speed."""
     q = term.quantity
     n = face.normal
     left = face.left(q)
     right = face.right(q)
     speed = largest([spectral_radius(term, left, n), spectral_radius(term, right, n)])
-    average = (dot(term.law(states={q: left}), n) + dot(term.law(states={q: right}), n)) / 2
-    return FaceFlux(average - speed * (right - left) / 2, reconstruction=reconstruction, speed=speed)
+    flux_left = dot(term.law(states={q: left}), n)
+    flux_right = dot(term.law(states={q: right}), n)
+    return FaceFlux(0.5 * (flux_left + flux_right) - 0.5 * speed * (right - left),
+                    reconstruction=reconstruction, speed=speed)
 
 
 @pops.scheme
 def upwind(face, term, speed=None, reconstruction=None):
-    """F* = s u_L where s > 0 and s u_R elsewhere, s being recorded as the speed of the flux. Without `speed`, the
-    flux must be F(u) = F(1) u, linear in the scalar state u, and s = F(1).n is derived exactly: term.expect refuses
-    another flux (RealizationMismatch, whose message names rusanov() and hll()), and a speed that reads the
-    derivative of a field, such as grad(phi), is not derived (AmbiguousElaboration, whose message names speed=).
-    With `speed=f`, s = f(face) is the normal speed, the velocity of the term dotted with face.normal, whose sign
-    follows the orientation of the face, and nothing is checked: u is upwinded at that speed, which pops.inspect
-    reports as stated. On a product support `speed=` is a table keyed by factor, `speed={velocity: f}`, and a
-    factor that the table omits takes the derived speed (SD73)."""
+    """F* = s u_L where s > 0 and s u_R elsewhere, s being recorded as the speed of the flux.
+    Without `speed`, the flux must be F(u) = F(1) u, linear in the scalar state u: term.expect
+    refuses another flux (RealizationMismatch, whose message names rusanov() and hll()), and the
+    face is the one of rusanov(), whose spectral radius is |F(1).n| on both sides, so that it is
+    the upwind flux in master's arithmetic. With `speed=f`, s = f(face) is the normal speed, the
+    velocity of the term dotted with face.normal, whose sign follows the orientation of the face,
+    and nothing is checked: u is upwinded at that speed, which pops.inspect reports as stated. On
+    a product support `speed=` is a table keyed by factor, `speed={velocity: f}`, and a factor
+    that the table omits takes the derived speed (SD73)."""
     q = term.quantity
+    n = face.normal
+    left = face.left(q)
+    right = face.right(q)
     stated = _stated_speed(face, speed)
     if stated is None:                      # Python data, decided once at authoring time (E4)
-        unit_flux = term.law(states={q: 1})
-        term.expect(unit_flux * q)
-        s = dot(unit_flux, face.normal)
-    else:
-        s = stated(face)
-    return FaceFlux(where(s > 0, s * face.left(q), s * face.right(q)), reconstruction=reconstruction, speed=s)
+        term.expect(term.law(states={q: 1}) * q,
+                    write="rusanov() or hll(), which take the wave speeds of the flux")
+        radius = largest([spectral_radius(term, left, n), spectral_radius(term, right, n)])
+        flux_left = dot(term.law(states={q: left}), n)
+        flux_right = dot(term.law(states={q: right}), n)
+        return FaceFlux(0.5 * (flux_left + flux_right) - 0.5 * radius * (right - left),
+                        reconstruction=reconstruction, speed=radius)
+    s = stated(face)
+    return FaceFlux(where(s > 0, s * left, s * right), reconstruction=reconstruction, speed=s)
 
 
 def _stated_speed(face, speed):
@@ -79,9 +88,11 @@ def _stated_speed(face, speed):
 
 @pops.scheme
 def hll(face, term, reconstruction=None):
-    """F* = F_L where s_L >= 0, F_R where s_R <= 0, and (s_R F_L - s_L F_R + s_L s_R (u_R - u_L)) / (s_R - s_L)
-    elsewhere, with F_L = F(u_L).n, F_R = F(u_R).n, s_L the smaller of the two slowest speeds and s_R the larger
-    of the two fastest speeds (R9), as master's HLL. The flux records the larger of |s_L| and |s_R| as its speed."""
+    """F* = F_L where s_L >= 0, F_R where s_R <= 0, and
+    (s_R F_L - s_L F_R + s_L s_R (u_R - u_L)) / (s_R - s_L) elsewhere, with F_L = F(u_L).n,
+    F_R = F(u_R).n, s_L the smaller of the two slowest speeds and s_R the larger of the two
+    fastest speeds (R9), as master's HLL. The flux records the larger of |s_L| and |s_R| as its
+    speed."""
     q = term.quantity
     n = face.normal
     left = face.left(q)
@@ -90,9 +101,10 @@ def hll(face, term, reconstruction=None):
     fast = largest([fastest_speed(term, left, n), fastest_speed(term, right, n)])
     flux_left = dot(term.law(states={q: left}), n)
     flux_right = dot(term.law(states={q: right}), n)
-    star = (fast * flux_left - slow * flux_right + slow * fast * (right - left)) / (fast - slow)
-    return FaceFlux(where(slow >= 0, flux_left, where(fast <= 0, flux_right, star)), reconstruction=reconstruction,
-                    speed=largest([abs(slow), abs(fast)]))
+    star = (fast * flux_left - slow * flux_right + slow * fast * (right - left)) \
+        * (1.0 / (fast - slow))
+    return FaceFlux(where(slow >= 0, flux_left, where(fast <= 0, flux_right, star)),
+                    reconstruction=reconstruction, speed=largest([abs(slow), abs(fast)]))
 
 
 # Reconstruction and limiters
@@ -106,7 +118,7 @@ def muscl(cell, term, axis, limiter):
     centre = cell.value(q)
     backward = centre - cell.shift(axis, -1).value(q)
     forward = cell.shift(axis, 1).value(q) - centre
-    return Reconstruct(centre + limiter(backward, forward) / 2)
+    return Reconstruct(centre + 0.5 * limiter(backward, forward))
 
 
 def minmod(a, b):
@@ -124,8 +136,8 @@ def vanleer(a, b):
 @pops.scheme
 def two_point(face, term):
     """F* = F(u_f, g_f).n, with u_f = (u_L + u_R) / 2 the face mean of each quantity and
-    g_f = (w_R - w_L) / face.distance n the two-point normal gradient of each w that the law differentiates, a
-    gradient variable or a first-order input (E2, SD51)."""
+    g_f = (w_R - w_L) / face.distance n the two-point normal gradient of each w that the law
+    differentiates, a gradient variable or a first-order input (E2, SD51)."""
     states = {r: face.average(r) for r in term.quantities}
     gradients = {w: face.normal_gradient(w) * face.normal for w in _differentiated(term)}
     return FaceFlux(dot(term.law(states=states, gradients=gradients), face.normal))

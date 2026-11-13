@@ -603,6 +603,11 @@ jobs:
       - name: Engine guard exception lists against the base
         run: python3 -m tests.python.architecture.frozen_engine.refresh_exceptions --check-base HEAD^1
 
+      # Spec 0.3 MG9 (Linear N3, ROM-87): the registry of the bridges of pops.lib holds every bridge
+      # and every module written with a b6 signature, and records no more than its first parent.
+      - name: MG9 bridges of pops.lib against the base
+        run: python3 scripts/mg9_bridges.py check --check-base HEAD^1
+
       - name: M2 temporal gate manifest
         run: python3 scripts/run_m2_gate.py --check-only
 
@@ -994,7 +999,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 145-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 148-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -1007,7 +1012,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "146"
+      SHARD_TOTAL: "148"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache

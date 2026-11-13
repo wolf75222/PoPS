@@ -1,17 +1,21 @@
 """The program, the case and their inspection (spec 0.3, 2.6.2, 2.6.6; §5.2, Q3, 14.1).
 
 ``pops.Advance(method, dt=1e-3, attempts=2)`` is one attempt loop of a method: a number ``dt`` is
-a fixed proposal, ``attempts=`` the number of attempts of a step (T38), and an omitted ``accept=``
-is ``finite()``. ``pops.Program(advance=A, initial={u: u0})`` gives the initial value of each
+a fixed proposal, a step rule of a library (``_step``, such as ``cfl_limit`` of ``pops.lib.time``)
+the rule of N8 that chooses each step, ``attempts=`` the number of attempts of a step (T38), and
+an omitted ``accept=`` is ``finite()``. ``pops.Program(advance=A, initial={u: u0})`` gives the initial value of each
 evolved quantity, a datum being supplied at bind under the representation of its arrays (Q3).
 ``pops.Case(model=, numerics=, program=, layout={Ω: pops.Uniform(cells=256)})`` holds them, and is
 traced when it is built: its model, numerics and program are elaborated into a b6 case, and its
 methods are traced once (SU5). ``pops.inspect(case)`` runs ``validate`` and ``resolve`` and
 reports without compiling (SU12).
 
-The step rule that is a function of ``cell``, the acceptances, the tolerance, the solvers and the
-claims have no elaborated form yet; each refuses with ``NotYetElaborated`` and the lot that
-elaborates it. The outputs, compile, bind and run are lot G (``_run``).
+``tolerance=pops.Tolerance(rtol=, atol=)`` is the request of the solves of the method (SV3), and
+``pops.Program(solvers={imex: cg()})`` their solvers, keyed by the method or ``method.name``.
+
+The step rule that is a function of ``cell``, the acceptances and the claims have no elaborated
+form yet; each refuses with ``NotYetElaborated`` and the lot that elaborates it. The outputs,
+compile, bind and run are lot G (``_run``).
 """
 from __future__ import annotations
 
@@ -31,6 +35,71 @@ from ._refusal import (
 
 _N8_STEP = "a later lot of N8 (the step rules of 5.11, PF8)"
 _N8_ACCEPT = "N8 phase 1 (the assessments of T28)"
+
+
+class Tolerance:
+    """``pops.Tolerance(rtol=None, atol=None)``: the request of a solve (SV3, 2.6.2).
+
+    Given to ``pops.Advance(tolerance=...)`` it is the request of every solve of the method, the
+    root request of the step; given to ``pops.solve(..., tolerance=...)`` it is that solve's.
+    """
+
+    __slots__ = ("rtol", "atol")
+
+    def __init__(self, *, rtol: Any = None, atol: Any = None, observe: Any = None,
+                 norm: Any = None) -> None:
+        if observe is not None or norm is not None:
+            raise NotYetElaborated("pops.Tolerance(observe=..., norm=...), what a tolerance "
+                                   "observes and its norm (SV3, D16, D17)",
+                                   "a later lot of N15 with the requests of N9")
+        for name, value in (("rtol", rtol), ("atol", atol)):
+            if value is not None and not _positive_number(value):
+                raise TypeError("pops.Tolerance(%s=...) takes a positive number, got %r"
+                                % (name, value))
+        if rtol is None and atol is None:
+            raise TypeError("pops.Tolerance states rtol=, atol= or both (SV3)")
+        self.rtol = rtol
+        self.atol = atol
+
+    def request(self) -> Any:
+        """The request of N8 that this tolerance states, ``Request(rtol=, atol=)``."""
+        from pops.time._program.relations import Request
+
+        return Request(rtol=self.rtol, atol=self.atol)
+
+    def __repr__(self) -> str:
+        return "pops.Tolerance(%s)" % ", ".join(
+            "%s=%r" % (name, value) for name, value in (("rtol", self.rtol), ("atol", self.atol))
+            if value is not None)
+
+
+def _solvers(solvers: Any, advance: Any) -> tuple:
+    """``solvers={key: solver}``: each key a method value or a solve path ``method.name`` of the
+    advance, each solver a value of ``pops.lib.solve`` (2.6.2, SU8)."""
+    from ._solver import SolverValue
+
+    from ._method import SolvePath
+
+    if solvers is None:
+        return ()
+    if not isinstance(solvers, dict):
+        raise TypeError("pops.Program(solvers={key: solver}) takes a dictionary keyed by "
+                        "handles, got %r" % (solvers,))
+    rows = []
+    for key, solver in solvers.items():
+        if isinstance(key, str):
+            raise TypeError("pops.Program(solvers=...) is keyed by handles, not by the string %r "
+                            "(SU8)" % key)
+        if not isinstance(key, (MethodValue, SolvePath)):
+            raise NotYetElaborated("pops.Program(solvers={%r: ...}), a key other than a method or "
+                                   "a solve of a method" % (key,),
+                                   "a later lot of N15 with the field, relation and term solves "
+                                   "of N9")
+        if not isinstance(solver, SolverValue):
+            raise TypeError("pops.Program(solvers={%r: ...}) takes a solver of pops.lib.solve "
+                            "or of @pops.solver, such as cg(), got %r" % (key, solver))
+        rows.append((key, solver))
+    return tuple(rows)
 
 
 class Advance:
@@ -60,17 +129,21 @@ class Advance:
                 "the advance of %s has no step rule; the step size is a choice that PoPS never "
                 "makes by a heuristic" % method.name,
                 write="pops.Advance(%r, dt=...) with a number or a function of cell" % (method,))
-        if callable(dt) and not is_number(dt):
-            raise NotYetElaborated("pops.Advance(dt=<a function of cell>), a step rule", _N8_STEP)
-        if not _positive_number(dt):
+        from ._step import StepRuleValue
+
+        if callable(dt) and not is_number(dt) and not isinstance(dt, StepRuleValue):
+            raise NotYetElaborated(
+                "pops.Advance(dt=<a function of cell>), a step rule, has no elaborated form yet; "
+                "%s elaborates it%s" % (_N8_STEP, StepRuleValue.meanwhile()), None)
+        if not isinstance(dt, StepRuleValue) and not _positive_number(dt):
             raise TypeError("pops.Advance(dt=...) takes a positive number, a function of cell or "
                             "a controller, got %r" % (dt,))
         if accept is not None:
             raise NotYetElaborated("pops.Advance(accept=...), checks other than the default "
                                    "finite()", _N8_ACCEPT)
-        if tolerance is not None:
-            raise NotYetElaborated("pops.Advance(tolerance=...), the root request of SV3",
-                                   "a later lot of N8 with the requests of N9")
+        if tolerance is not None and not isinstance(tolerance, Tolerance):
+            raise TypeError("pops.Advance(tolerance=...) takes a pops.Tolerance(rtol=..., "
+                            "atol=...), got %r" % (tolerance,))
         if first_dt is not None or choices is not None:
             raise NotYetElaborated("pops.Advance(first_dt=..., choices=...), a controller",
                                    "N8 phase 2 (controllers)")
@@ -81,11 +154,14 @@ class Advance:
         self.method = method
         self.dt = dt
         self.attempts = attempts
+        self.tolerance = tolerance
 
     def __repr__(self) -> str:
         text = "pops.Advance(%r, dt=%r" % (self.method, self.dt)
         if self.attempts is not None:
             text += ", attempts=%d" % self.attempts
+        if self.tolerance is not None:
+            text += ", tolerance=%r" % (self.tolerance,)
         return text + ")"
 
 
@@ -147,8 +223,7 @@ class Program:
             raise TypeError("pops.Program has no option %s" % ", ".join(sorted(earlier)))
         if not isinstance(advance, Advance):
             raise TypeError("pops.Program(advance=...) takes a pops.Advance, got %r" % (advance,))
-        if solvers is not None:
-            raise NotYetElaborated("pops.Program(solvers=...)", "a later lot of N15 with N9")
+        self.solvers = _solvers(solvers, advance)
         if regrid is not None:
             raise NotYetElaborated("pops.Program(regrid=...)", "a later lot of N15 with N12")
         if equivalence is not None:

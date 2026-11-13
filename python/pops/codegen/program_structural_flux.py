@@ -6,6 +6,7 @@ changes a numerical coefficient. Unknown structural paths remain unproved.
 from __future__ import annotations
 
 from pops.time.values import ProgramValue
+from pops._ir.data_model import is_field_leaf
 
 
 def field_region_origins(operations):
@@ -106,7 +107,7 @@ def field_projection_sources(value: ProgramValue, *, region_origins=None):
             # These authenticated native images are the incoming state for this
             # invocation, not another evaluation of a current-step face flux.
             continue
-        elif not path and node.vtype in {"state", "rhs", "scalar_field"}:
+        elif not path and is_field_leaf(node):
             sources[node.id] = node
         else:
             return None

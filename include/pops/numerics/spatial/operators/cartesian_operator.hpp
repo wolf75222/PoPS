@@ -7,6 +7,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/geometry/prepared_metric_provider.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/numerics/fv/normal_flux.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/path_flux.hpp>
 #include <pops/numerics/spatial/nd/finite_volume.hpp>
@@ -212,6 +213,8 @@ struct IdentityFaceTrace {
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
           class Reconstruction, class NumericalFlux, class ProviderStorage, class TraceTransform>
 struct MaterializeFaceFlux {
+  static_assert(!(metric_has_physical_face_normals<Metric> && DiffusiveModel<Model>),
+                "an isotropic two-point term reads the logical spacing, not a physical normal");
   Model model;
   Metric metric;
   Reconstruction reconstruction;
@@ -276,9 +279,17 @@ struct MaterializeFaceFlux {
     else
       context = metric_face_context<Axis, MetricFaceSide::Upper>(metric, left_cell);
 
-    const auto evaluation =
-        evaluate_numerical_flux_at(numerical_flux, model, traces.left, providers, left_cell,
-                                   traces.right, providers, right_cell, context);
+    // The face law on the logical axis of a Cartesian metric, or on the physical normal that a
+    // mapped metric publishes (N17): the choice is a property of the metric type.
+    const auto evaluation = [&] {
+      if constexpr (metric_has_physical_face_normals<Metric>)
+        return evaluate_numerical_flux_on_normal_at(numerical_flux, model, traces.left, providers,
+                                                    left_cell, traces.right, providers, right_cell,
+                                                    context);
+      else
+        return evaluate_numerical_flux_at(numerical_flux, model, traces.left, providers, left_cell,
+                                          traces.right, providers, right_cell, context);
+    }();
     if (!evaluation.succeeded()) {
       fail(face, FiniteVolumeStatus::InvalidWaveSpeed);
       return;
@@ -340,6 +351,8 @@ struct MaterializeResidual {
 /// These small integers remain exactly representable in every supported Real.
 template <int Axis, int Dim, class Model, class Metric, class ProviderStorage>
 struct MaterializePathFace {
+  static_assert(!metric_has_physical_face_normals<Metric>,
+                "a path face reads its logical axis, not a physical normal");
   Model model;
   Metric metric;
   FieldView<const Real, Dim> state;

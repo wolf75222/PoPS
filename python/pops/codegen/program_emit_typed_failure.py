@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pops._ir.data_model import field_role, is_finite_index
 
 
 def _nodes(signature):
@@ -19,7 +20,7 @@ def _nodes(signature):
 
 
 def _has_field(signature):
-    return any(node["vtype"] in ("state", "scalar_field") for node in _nodes(signature))
+    return any(field_role(node) in ("state", "field") for node in _nodes(signature))
 
 
 def _has_distributed(signature):
@@ -28,7 +29,7 @@ def _has_distributed(signature):
 
 def _require_supported_transport(signature):
     for node in _nodes(signature):
-        if node["vtype"] in ("array", "index_set", "index"):
+        if is_finite_index(node):
             if node.get("ownership") not in ("replicated", "contiguous_distributed"):
                 raise NotImplementedError("typed terminal finite payload requires an exact supported ownership")
             if type(node.get("family")) is not int or type(node.get("capacity")) is not int:

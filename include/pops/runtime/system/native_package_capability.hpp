@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/mesh/geometry/geometry.hpp>
+#include <pops/mesh/geometry/static_geometry.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 #include <pops/runtime/system/exact_aux_registry.hpp>
 #include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
@@ -223,6 +224,8 @@ struct NativePackageCapabilityState final {
   std::optional<Geometry<Dim>> geometry;
   std::optional<std::uint64_t> runtime_parameter_byte_capacity;
   std::array<bool, Dim> periodicity{};
+  // The static geometry arrays of a mapped layout (N17, C1); null on the uniform logical box.
+  std::shared_ptr<const StaticGeometry<Dim>> static_geometry;
   std::shared_ptr<const AuxiliaryStorageGroups<Dim>> provider_storage_owner;
   std::shared_ptr<ExactAuxiliaryRegistry<Dim>> detached_registry;
   // Registry plans live in a value-swapped registry candidate. Keep the one selected plan in
@@ -245,6 +248,7 @@ struct NativePackageCapabilityState final {
     phase = NativeCapabilityPhase::revoked;
     provider_storage_owner.reset();
     detached_registry.reset();
+    static_geometry.reset();
   }
   void reset_for_retry() noexcept {
     static_assert(std::is_nothrow_destructible_v<PreparedNativeSystemPackage<Dim>>);
@@ -253,6 +257,7 @@ struct NativePackageCapabilityState final {
     provider_storage_owner.reset();
     detached_registry.reset();
     geometry.reset();
+    static_geometry.reset();
     phase = NativeCapabilityPhase::revoked;
     commit_called = false;
     revoke_called = false;
@@ -317,6 +322,12 @@ class PreparedNativeBlockInstaller final {
     state_->require(NativeCapabilityPhase::install_open,
                     "PreparedNativeBlockInstaller::periodicity");
     return state_->periodicity;
+  }
+  /// The static geometry arrays of the mapped layout, or null on the uniform logical box.
+  [[nodiscard]] std::shared_ptr<const StaticGeometry<Dim>> static_geometry() const {
+    state_->require(NativeCapabilityPhase::install_open,
+                    "PreparedNativeBlockInstaller::static_geometry");
+    return state_->static_geometry;
   }
   [[nodiscard]] std::shared_ptr<const AuxiliaryStorageGroups<Dim>> provider_storage() const {
     state_->require(NativeCapabilityPhase::install_open,

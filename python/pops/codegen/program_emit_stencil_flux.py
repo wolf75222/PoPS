@@ -2,15 +2,45 @@
 
 from fractions import Fraction
 from typing import Any
+from pops._ir.data_model import is_field_leaf
 
 
-def emit_stencil_flux(value, var, lines, *, block, target):
+def _runtime_parameter_binding(declaration, model):
+    """The host line that binds ``params`` for a body that reads runtime parameters, or ``None``.
+
+    A runtime parameter that a stencil body reads is one of the model of its block (checked when
+    the Program is built); the face reads its current value from ``ctx.program_params(block)``,
+    the table that a ``riemann.User`` face of the same model reads, so ``params.get(i)`` takes the
+    stable index of that model (N3 lot 1)."""
+    from pops.model.stencil_expression import runtime_parameters
+
+    reads = runtime_parameters(declaration.rows)
+    if not reads:
+        return None
+    if model is None:
+        raise ValueError("stencil flux reads the runtime parameter %r and has no model authority"
+                         % reads[0].name)
+    from pops.codegen.program_emit_params import _formula_carrier
+
+    nodes = _formula_carrier(model).assign_runtime_indices()
+    declared = {node.name for node in nodes}
+    for node in reads:
+        if node.name not in declared:
+            raise ValueError(
+                "stencil flux reads the runtime parameter %r, which no formula of the model of "
+                "its block reads, so the block's RuntimeParams table has no slot for it"
+                % node.name)
+    return reads
+
+
+def emit_stencil_flux(value, var, lines, *, block, target, model=None):
     from pops.time._program.stencil_flux import validate_stencil_flux
     from pops.codegen.cpp_writer import _cse_emit
     from pops.time._evaluation_point import evaluation_stage_fraction
     from pops.codegen.program_value_authority import DelegatedOutputPublication
 
     declaration = validate_stencil_flux(value)
+    runtime_reads = _runtime_parameter_binding(declaration, model)
     state = var[value.inputs[0].id]
     prepared = "stencil_prepared_%d" % value.id
     out = "stencil_rhs_%d" % value.id
@@ -78,10 +108,16 @@ def emit_stencil_flux(value, var, lines, *, block, target):
         buffer = "stencil_parameter_%d_%d" % (value.id, index)
         lines.append("const pops::Real %s = %s;" % (buffer, var[parameter.id]))
         scalar_buffers.append(buffer)
+    if runtime_reads:
+        # Read once per evaluation on the host, captured by value into the face closure, as the
+        # model kernels bind it (ADC-510): the value is bind data, not generated code.
+        lines.append("const pops::RuntimeParams stencil_params_%d = ctx.program_params(%d);"
+                     % (value.id, block))
     before_write = len(lines)
     lines += [
         "%s.apply(%s, %s, [&](std::size_t li) {" % (prepared, state, out),
         "  const auto q = std::as_const(%s).fab(li).view();" % state,
+        *(["  const auto params = stencil_params_%d;" % value.id] if runtime_reads else []),
         "  const auto geometry = %s_geometry;" % prepared,
         "  return [=] POPS_HD(const pops::Index<pops::kNativeDimension>& face, int axis) {",
         "    pops::runtime::program::StencilFaceResult<%d> result;" % declaration.components,
@@ -183,7 +219,7 @@ def stencil_expression_write(value, var, *, has_output_boundary):
     native algebra operation installs their exact affine expression.
     """
     if (not var.get(("stencil_flux_expressions",), False)
-            or value.vtype not in ("state", "rhs", "scalar_field")
+            or not is_field_leaf(value)
             or value.op in ("state", "history")
             or not has_output_boundary and value.op != "project"):
         return [], []
@@ -194,7 +230,7 @@ def stencil_expression_write(value, var, *, has_output_boundary):
           and value.attrs.get("numerical_pointwise_rate") == "pops.pointwise-rate@1")
     inputs = [] if fresh else [
         "&(%s)" % var[source.id] for source in value.inputs
-        if source.vtype in ("state", "rhs", "scalar_field", "vector_field", "mask")
+        if (is_field_leaf(source) or source.vtype in ("vector_field", "mask"))
     ]
     output = var[value.id]
     return (["ctx.prepare_stencil_expression_write(%s, {%s});" % (output, ", ".join(inputs))],

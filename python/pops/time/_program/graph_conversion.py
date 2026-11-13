@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 from weakref import WeakKeyDictionary
+from pops._ir.data_model import is_finite_index
 
 
 # Detached Programs are deeply frozen and graphs retain no authoring authorities.
@@ -128,7 +129,7 @@ def program_to_graph(program: Any) -> Any:
             "space": result.space.to_data() if result.space is not None else None,
             "block": result.block.inspect() if result.block is not None else None,
         }
-        if result.vtype in ("product", "variant", "iteration_result", "result", "index_set", "index", "array", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
+        if is_finite_index(result) or result.vtype in ("product", "variant", "iteration_result", "result", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
             from pops.time.canonical_data import _json_ready
             signature["structure"] = _json_ready(result.attrs.get("signature", result.attrs.get(
                 "state_signature", result.attrs.get("success_signature"))))
