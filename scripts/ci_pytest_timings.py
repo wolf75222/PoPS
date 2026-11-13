@@ -25,9 +25,9 @@ ORDINARY_BUDGET_SECONDS = 35 * 60
 # (ORDINARY_MARGIN_SECONDS, pinned by test_ci_shard_binpack.py); a lot that crosses it raises
 # SHARD_TOTAL. 165 bins since the shard 128 recalibration of batch 43318819535
 # (b03_20261113_shard128_continuum_hall_weights) merged with #797 and #798; 166 with the graded
-# natives of N17 L1b (#804).
+# natives of N17 L1b (#804); 167 with the two-point native of the chart of N17 L2b-1.
 ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
-SHARD_TOTAL = 166
+SHARD_TOTAL = 167
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
