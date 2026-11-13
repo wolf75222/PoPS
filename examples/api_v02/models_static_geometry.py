@@ -258,7 +258,7 @@ def build_graded_slope(*, periodic=False, operation="gradient"):
     case = pops.Case("N17_graded_slope" + ("_ring" if periodic else "_rod"))
     block = case.block("rod", model)
     plan = DiscretizationPlan()
-    plan.states.add(U, StateStorage(ghost_depth=1))
+    plan.states.add(U, StateStorage())
     case.numerics(plan, block=block)
     subject = block[U]
     case.initials.add(InitialCondition(state=subject, value=BindArray(),
