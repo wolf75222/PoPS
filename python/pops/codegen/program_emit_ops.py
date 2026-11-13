@@ -486,6 +486,10 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     # at step-body scope -- later nodes read them (e.g. r2 / acc3). Additive, ~free when profiling
     # is off (record early-returns), changes no numerics; ops emitting no statement (pure inline
     # token: cfl / compare) are skipped by the len guard below. _start marks this op's first line.
+    # G03 lot R-b: a rate of a cell total reads the decoded density, written before the
+    # operation's own storage setup and evaluation (program_emit_totals.py).
+    from .program_emit_totals import begin_total_rate, end_total_rate
+    total_rate = begin_total_rate(v, var, lines, model=model, block=bidx)
     _profile_start = len(lines)
     # Operation lowering explicitly identifies the storage setup needed by both cadence
     # branches. Evaluation context and kernels remain in the guarded body.
@@ -2025,6 +2029,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             if "cell_field_projection" in v.attrs:
                 from pops.codegen.program_emit_stencil_inputs import emit_cell_sample_extension
                 emit_cell_sample_extension(v,var,lines,block=bidx,target=target)
+    end_total_rate(v, var, lines, total_rate)
     if (v.op == "linear_combine" and len(v.inputs) == 1
             and dict(v.attrs["coeffs"][0]) == {0: 1} and v.id not in committed_ids):
         from .program_emit_transform_obligation import emit_pending_presence

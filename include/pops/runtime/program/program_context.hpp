@@ -28,6 +28,7 @@
 #include <pops/runtime/program/prepared_integral_capture.hpp>
 #include <pops/runtime/program/program_value_authority.hpp>
 #include <pops/runtime/program/field_exchange_expression.hpp>
+#include <pops/runtime/program/cell_total_scale.hpp>
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/spatial_interaction_history_source.hpp>
@@ -1158,6 +1159,16 @@ class ProgramContext {
             std::initializer_list<ExactCoefficientTerm>) const {
     axpy(destination, factor, source);
   }
+
+  /// G03 lot R-b (ROM-21): ū = U/μ(K), the decode of a cell total into the stage field that the
+  /// face pass, the ghost fill and the diffusion read (cell_total_scale.hpp). Transitional: see
+  /// plan/routes_transitoires.md.
+  void decode_cell_total(const field_type& total, field_type& density) const {
+    scale_by_cell_measure_(total, density, true);
+  }
+
+  /// G03 lot R-b (ROM-21): R <- μ(K) R, the rate of the total from the rate of its density.
+  void encode_cell_total_rate(field_type& rate) const { scale_by_cell_measure_(rate, rate, false); }
 
   void lincomb(field_type& destination, Real left_factor, const field_type& left, Real right_factor,
                const field_type& right) const {
@@ -2799,6 +2810,35 @@ class ProgramContext {
   /// neg_div_flux_default_into prepares a boundary session for it per evaluation
   /// (System::requires_block_boundary_session). The Outflow row of
   /// test_api_v02_python_faces_native.py compares the two routes on such a block.
+  void scale_by_cell_measure_(const field_type& source, field_type& destination,
+                              bool divide) const {
+    if (source.layout() != destination.layout() || source.ncomp() != destination.ncomp())
+      throw std::invalid_argument("cell total scaling requires fields of one layout");
+    const std::array<const void*, 1> inputs{{&source}};
+    field_exchanges_->prepare_write(&destination, inputs);
+    CellTotalScaleKernel<Dim> kernel{};
+    const auto arrays = system_->static_geometry();
+    kernel.mapped = arrays != nullptr;
+    if (kernel.mapped)
+      kernel.arrays = arrays->view();
+    const Geometry<Dim> uniform = geometry();
+    for (int axis = 0; axis < Dim; ++axis)
+      kernel.uniform_measure *= uniform.spacing(axis);
+    if (!std::isfinite(kernel.uniform_measure) || !(kernel.uniform_measure > Real(0)))
+      throw std::runtime_error("cell total scaling requires a positive cell measure");
+    kernel.divide = divide;
+    count_kernel_();
+    for (std::size_t local = 0; local < destination.local_size(); ++local) {
+      kernel.destination = destination.fab(local).view();
+      kernel.source = source.fab(local).view();
+      for (int component = 0; component < destination.ncomp(); ++component) {
+        kernel.component = component;
+        for_each_cell(destination.box(local), kernel);
+      }
+    }
+    field_exchanges_->finish_write(&destination);
+  }
+
   void neg_div_flux_default_observed_into_(int program_block, field_type& state_value,
                                            field_type& rhs, int rate_id,
                                            std::vector<nd::FaceField<Dim>>* faces,
