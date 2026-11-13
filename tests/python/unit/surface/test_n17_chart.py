@@ -18,6 +18,11 @@ the face input s of rusanov() is the bound sum_k |n_k| rho(A_k) of b6, which pop
 transitional route (DN31), and an array that a run published on another support is not a datum
 of the chart (DN34). The run is the native test test_n17_chart_annulus_native.py.
 
+Since lot L2b-1 a diffusive flux served by ``two_point()`` on a charted support resolves, as one
+law on every logical axis (DN35), and ``pops.inspect`` states that its faces take the line of the
+two centroids for the normal (K-orthogonality), which the arrays bound at ``pops.bind`` measure
+(DN36); the run is test_n17_chart_two_point_native.py.
+
 At the base a support had no reading ``chart`` and ``pops.Uniform`` no keyword ``geometry``;
 every test below fails there (CF15).
 """
@@ -30,7 +35,7 @@ import pytest
 
 import pops.surface as surface
 from examples.api_v02.models_charted_supports import (
-    ANNULUS_CELLS, ANNULUS_RADII, build_chart_annulus, radial_nodes,
+    ANNULUS_CELLS, ANNULUS_RADII, build_chart_annulus, build_chart_diffusion, radial_nodes,
 )
 from pops.codegen._static_geometry_consumers import static_geometry_layouts
 from pops.lib.numerics import rusanov
@@ -380,6 +385,35 @@ def test_an_array_published_on_another_support_is_not_a_datum_of_the_annulus():
                 "periodic[0.0, 6.283185307179586) x %s" % chart) in message
     (representation,) = on_annulus.elaborated.representations.values()
     _run.require_published_under(_published_on(on_annulus), representation, "pops.bind")
+
+
+# --- two-point faces on a chart (DN35, DN36) ---------------------------------------------------
+
+def _scheme_row(report):
+    (row,) = [row for row in report.rows if row.construct.startswith("schemes={")]
+    return row
+
+
+@pytest.mark.parametrize("chart", ["turned", "sheared"])
+def test_two_point_on_a_chart_states_that_its_faces_assume_k_orthogonality(chart):
+    """DN36: K-orthogonality is measured, not required. The diffusion of -k grad(u) by two_point()
+    on a charted square resolves (one law on every logical axis, DN35), and pops.inspect states on
+    the row of its scheme that a face takes the line of its two centroids for its normal, and that
+    the arrays bound at pops.bind report the largest sine of the two."""
+    case, _, _ = build_chart_diffusion(chart)
+    report, reading = _reading(case)
+    assert (reading.kind, reading.rank) == ("chart", 2)
+    choices = {choice.name: choice for choice in _scheme_row(report).choices}
+    assert choices["faces"].origin == "derived"
+    assert "K-orthogonality" in choices["faces"].value
+    assert "the line of its two centroids" in choices["faces"].value
+    assert "the largest sine" in choices["faces"].value
+
+
+def test_two_point_on_a_box_states_no_assumption_of_its_faces():
+    case, _, _ = build_chart_diffusion(None)
+    names = [choice.name for choice in _scheme_row(surface.inspect(case)).choices]
+    assert "faces" not in names
 
 
 def test_the_annulus_bounds_and_cells_are_logical():

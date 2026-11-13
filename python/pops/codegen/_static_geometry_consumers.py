@@ -16,17 +16,27 @@ an allowlist: a consumer joins it when it reads the arrays and a test shows it.
 * transport boundaries that extend the interior state alone: a ghost state of the state, without
   a formula on its components, a characteristic closure, a field, the clock or a parameter;
 * the two-point diffusion of a Program, of one component with a diagonal coefficient, on node
-  positions (a graded box, of rank one to three), with conormal, value or periodic ends whose data
-  reads no coordinate;
+  positions (a graded box, of rank one to three) and, with one coefficient on every logical axis,
+  on a chart of rank two (DN35), with conormal, value or periodic ends whose data reads no
+  coordinate;
 * the divergence of a stencil flux (``StencilFlux``, the realization of ``two_point()`` since N3
-  lot 1) on node positions, whose row of axis a reads the two cells of its face and the spacing of
-  a alone: the arrays give that spacing as the distance across the face, whose faces are
-  orthogonal to the line of the centroids, and the measures of its faces and cells;
+  lot 1), whose row of axis a reads the two cells of its face and the spacing of a alone, and on a
+  chart is one law on every logical axis (DN35): the arrays give that spacing as the distance
+  across the face, and the measures of its faces and cells;
 * states and linear combinations of a Program, a fixed step, initial values bound as arrays;
 * the reductions that a block owns, which are raw algebra over the cell values and weigh nothing
   by a measure, and the finite assessment of an elaborated Advance that reads them (isfinite and
   the acceptance guard). A reduction that no block owns observes a field or an interaction, a
   service of the System that may weigh by the measures of the logical box, and stays refused.
+
+A two-point face reads the difference of its two cells over the distance of their centroids along
+the normal of the face. The faces of node positions are orthogonal to the line of the centroids; a
+face of a chart takes that line for its normal (K-orthogonality), which is measured, not required:
+the arrays publish the largest sine between the two beside the closure ratio, and ``pops.inspect``
+states the assumption (DN36). A law that reads the normal through n.n = 1 alone (a scalar
+coefficient, the same row on every logical axis) gives, with the axis normal, the flux density
+along the physical normal; one that reads more of it (diag(k_x, k_y), whose normal flux on a chart
+is (k_x n_x^2 + k_y n_y^2) du/dn) is refused on a chart (DN35).
 """
 from __future__ import annotations
 
@@ -125,19 +135,43 @@ def _check_finite_volume(layout: Any, block: Any, method: Any) -> None:
                 "block %r samples its faces; a sampled face reads logical positions" % block.name)
 
 
+def _renamed(key: Any, names: dict) -> Any:
+    """The structural key ``key`` of an expression, its variables renamed by ``names``."""
+    if type(key) is tuple:
+        if len(key) == 3 and key[0] == "var" and key[2] in names:
+            return ("var", key[1], names[key[2]])
+        return tuple(_renamed(part, names) for part in key)
+    return key
+
+
+def _one_law(declaration: Any, rank: int) -> bool:
+    """The rows of a stencil flux are one law on every logical axis (DN35): the row of axis a,
+    the samples of its two cells and its spacing renamed, is the row of every other axis."""
+    from pops._ir.visitors import _key
+
+    rows = []
+    for axis, row in enumerate(declaration.rows):
+        left = tuple(-1 if d == axis else 0 for d in range(rank))
+        names = {declaration.spacing[axis].name: "spacing"}
+        for offset, component, symbol in declaration.samples:
+            if tuple(offset) == left:
+                names[symbol.name] = "left %d" % component
+            elif tuple(offset) == (0,) * rank:
+                names[symbol.name] = "right %d" % component
+        rows.append(tuple(_renamed(_key(value), names) for value in row))
+    return all(row == rows[0] for row in rows[1:])
+
+
 def _check_stencil(layout: Any, value: Any, rank: int, kind: str) -> None:
     """A stencil flux reads, on the faces of axis a, the two cells of the face and the spacing of
-    a, which the arrays of node positions give as the distance across the face."""
+    a, which the arrays give as the distance across the face. On a chart its rows are one law on
+    every logical axis, which reads the normal of a face through n.n = 1 alone, so that the row of
+    the axis normal is the flux density along the physical normal (DN35)."""
     from pops.model.stencil_expression import row_leaf_names
     from pops.time._program.stencil_flux import validate_stencil_flux
 
     block = value.block
     name = getattr(block, "name", block)
-    if kind != "nodes":
-        _refuse(layout, "static_geometry_stencil_unavailable",
-                "block %r divides a stencil flux by the spacings of a %s of rank %d; the arrays "
-                "serve the stencil of node positions, whose faces are orthogonal to the line of "
-                "the centroids" % (name, kind, rank), rank=rank, kind=kind)
     declaration = validate_stencil_flux(value)
     for axis, row in enumerate(declaration.rows):
         leaves = row_leaf_names(row)
@@ -152,10 +186,16 @@ def _check_stencil(layout: Any, value: Any, rank: int, kind: str) -> None:
             reads.append("a field")
         if reads:
             _refuse(layout, "static_geometry_stencil_unavailable",
-                    "block %r reads, on the faces of axis %d of a stencil flux, %s; on node "
-                    "positions a stencil reads the two cells of its face and the spacing of its "
-                    "axis, which is the distance across the face" % (name, axis, " and ".join(reads)),
-                    axis=axis, reads=reads)
+                    "block %r reads, on the faces of axis %d of a stencil flux, %s; on static "
+                    "geometry arrays a stencil reads the two cells of its face and the spacing of "
+                    "its axis, which is the distance across the face"
+                    % (name, axis, " and ".join(reads)), axis=axis, reads=reads)
+    if kind == "chart" and not _one_law(declaration, rank):
+        _refuse(layout, "static_geometry_stencil_unavailable",
+                "block %r writes its stencil flux as a different law on each logical axis of a "
+                "chart of rank %d; the normal of a face of a chart is not its axis, and a stencil "
+                "is served there as one law on every logical axis, which reads the normal through "
+                "n.n = 1 (a scalar coefficient)" % (name, rank), rank=rank, kind=kind)
 
 
 def _extends_the_state(provider: Any) -> bool:
@@ -182,6 +222,17 @@ def _diagonal(law: Any) -> bool:
                for axis, row in enumerate(tensor) for column, value in enumerate(row))
 
 
+def _isotropic(law: Any) -> bool:
+    """Every diagonal entry of the spatial tensor of the law is one expression (DN35)."""
+    from pops._ir.visitors import _key
+
+    for tensor in law.component_coefficients:
+        entries = [_key(row[axis]) for axis, row in enumerate(tensor)]
+        if any(entry != entries[0] for entry in entries[1:]):
+            return False
+    return True
+
+
 def _check_diffusion(layout: Any, block: Any, method: Any, rank: int, kind: str) -> None:
     from pops.model.spaces import StateSpace
 
@@ -193,19 +244,20 @@ def _check_diffusion(layout: Any, block: Any, method: Any, rank: int, kind: str)
     if method.transport is not None:
         _refuse(layout, "static_geometry_diffusion_unavailable",
                 "block %r couples diffusion with transport faces in one balance" % block.name)
-    if kind != "nodes":
-        _refuse(layout, "static_geometry_diffusion_unavailable",
-                "block %r diffuses on a %s of rank %d; the diffusion of the static arrays reads "
-                "node positions (a graded box), whose faces are orthogonal to the line of the "
-                "centroids" % (block.name, kind, rank), rank=rank, kind=kind)
     # Capabilities, never a method name (CF2): a face that reads its two cells alone (ghost
     # depth one), one component, a diagonal spatial tensor.
     if getattr(method, "ghost_depth", None) != 1 or len(law.variables) != 1 or not _diagonal(law):
         _refuse(layout, "static_geometry_diffusion_unavailable",
                 "block %r diffuses a vector, with a full tensor or through a wider face; the "
                 "static arrays serve the two-point diffusion of one component with a diagonal "
-                "coefficient, whose faces are orthogonal to the line of the centroids on node "
-                "positions" % block.name)
+                "coefficient" % block.name)
+    if kind == "chart" and not _isotropic(law):
+        _refuse(layout, "static_geometry_diffusion_unavailable",
+                "block %r diffuses on a chart of rank %d with a coefficient that differs by "
+                "logical axis; the normal of a face of a chart is not its axis, and its two-point "
+                "face is served with one coefficient on every logical axis, whose normal flux "
+                "k du/dn reads the normal through n.n = 1" % (block.name, rank), rank=rank,
+                kind=kind)
     for boundary in law.boundaries:
         if any(float(value) != 0.0 for value in (boundary.slope or ())):
             _refuse(layout, "static_geometry_boundary_data_unavailable",

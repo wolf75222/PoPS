@@ -32,7 +32,7 @@ from pops.physics.diffusion import DiffusiveBoundary
 from pops.time import AdaptiveCFL, FixedDt
 
 from examples.api_v02.models_static_geometry import (
-    _initial, _ssprk2, annulus_map, build_annulus_free_stream, build_graded_diffusion)
+    _initial, _ssprk2, build_annulus_diffusion, build_annulus_free_stream, build_graded_diffusion)
 
 
 def _refusal(layout, owner="pops-static-geometry"):
@@ -146,50 +146,34 @@ def test_source_authored_traces_are_refused_at_resolution():
     assert caught.value.evidence == {"part": "reconstruction"}
 
 
-def _chart_diffusion():
-    """The scalar diffusion of the annulus of graph (1), conormal walls, theta periodic."""
-    frame = CartesianDomain("n17_chart_diffusion", (1.0, 0.0), (2.0, 2*math.pi)).frame(Cartesian2D())
-    model = pops.Model("N17_chart_diffusion", frame=frame)
-    U = model.state("heat", components=("u",))
-    walls = (DiffusiveBoundary(0, "lower", "conormal", 0.0),
-             DiffusiveBoundary(0, "upper", "conormal", 0.0),
-             DiffusiveBoundary(1, "lower", "periodic"), DiffusiveBoundary(1, "upper", "periodic"))
-    flux = model.diffusive_flux("conduction", state=U,
-                                value=pm.CoeffGradient(U[0], ((0.01, 0.0), (0.0, 0.01))),
-                                boundaries=walls)
-    rate = model.rate("heat_balance", equation=pm.ddt(U) == pm.div(flux))
-    case = pops.Case("N17_chart_diffusion")
-    block = case.block("ring", model)
-    plan = DiscretizationPlan()
-    plan.rates.add(rate, Diffusion(flux=flux))
-    case.numerics(plan, block=block)
-    _ssprk2(case, block, U, rate, 1e-4, "N17_chart_diffusion_SSPRK2")
-    periodic = PeriodicAxes((frame.axes[1],))
-    layout = MovingControlVolumes(Uniform(CartesianGrid(frame=frame, cells=(4, 8),
-                                                        periodic=periodic)),
-                                  evolution=annulus_map(frame), geometry=GaussLegendre(2))
-    _initial(case, block[U], np.ones((1, 8, 4)))
-    return case, layout
+def test_one_coefficient_on_every_axis_diffuses_on_a_chart():
+    """DN35: the two-point face of a chart reads the distance of the centroids along the physical
+    normal of the face, and a law with one coefficient on every logical axis reads that normal
+    through n.n = 1 only: the annulus diffused with walls held at given values resolves to a chart,
+    whose end faces read the mirrored distance 2 |m_f - c_K|."""
+    case, layout, _, _ = build_annulus_diffusion()
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    (reading,) = static_geometry_layouts(resolved.layout_plan).values()
+    assert reading.kind == "chart" and reading.rank == 2
 
 
-def test_the_diffusion_of_a_chart_is_refused_at_resolution():
-    """The two-point flux reads the distance of the centroids along the face normal, which holds
-    on node positions, whose faces are orthogonal to the line of the centroids, and not on a chart
-    (its faces are chords); a chart is refused at every rank."""
-    case, layout = _chart_diffusion()
+def test_a_coefficient_that_differs_by_axis_is_refused_on_a_chart():
+    """On a chart the normal flux of diag(k_x, k_y) is (k_x n_x^2 + k_y n_y^2) du/dn, which the
+    coefficient of one logical axis does not give (DN35); it is refused at resolution."""
+    case, layout, _, _ = build_annulus_diffusion(tensor=((0.05, 0.0), (0.0, 0.1)))
     with pytest.raises(StaticGeometryConsumerError) as caught:
         pops.resolve(pops.validate(case), layout=layout)
     assert caught.value.code == "static_geometry_diffusion_unavailable"
-    assert "diffuses on a chart of rank 2" in str(caught.value)
+    assert "one coefficient on every logical axis" in str(caught.value)
 
 
-def _plane_diffusion(method):
+def _plane_diffusion(method, tensor=((0.01, 0.0), (0.0, 0.01))):
     """The scalar diffusion of a graded plane (node positions of rank two), both axes periodic."""
     frame = CartesianDomain("n17_plane_diffusion", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
     model = pops.Model("N17_plane_diffusion", frame=frame)
     U = model.state("U", components=("u",))
     flux = model.diffusive_flux("conduction", state=U,
-                                value=pm.CoeffGradient(U[0], ((0.01, 0.0), (0.0, 0.01))),
+                                value=pm.CoeffGradient(U[0], tensor),
                                 boundaries=tuple(DiffusiveBoundary(axis, side, "periodic")
                                                  for axis in (0, 1) for side in ("lower", "upper")))
     rate = model.rate("heat_balance", equation=pm.ddt(U) == pm.div(flux))
@@ -216,6 +200,9 @@ def test_the_two_point_diffusion_of_a_graded_plane_resolves_and_a_wider_face_is_
     case, layout = _plane_diffusion(Diffusion)
     resolved = pops.resolve(pops.validate(case), layout=layout)
     assert resolved is not None
+    # On node positions the normal of a face is its axis: a coefficient per axis is served.
+    case, layout = _plane_diffusion(Diffusion, tensor=((0.01, 0.0), (0.0, 0.02)))
+    assert pops.resolve(pops.validate(case), layout=layout) is not None
     case, layout = _plane_diffusion(TensorDiffusion)
     with pytest.raises(StaticGeometryConsumerError) as caught:
         pops.resolve(pops.validate(case), layout=layout)
@@ -225,15 +212,17 @@ def test_the_two_point_diffusion_of_a_graded_plane_resolves_and_a_wider_face_is_
 
 def _stencil_body(read):
     """The two-point face -k (u_R - u_L) / h of a StencilFlux and its incident frequency
-    (k / h) / h; ``read`` names a variant that divides by the spacing of the other axis or reads
-    the cell diagonal to the face instead of its left cell."""
+    (k / h) / h; ``read`` names a variant that divides by the spacing of the other axis, reads
+    the cell diagonal to the face instead of its left cell, or takes k = 0.01 (a + 1) on the faces
+    of axis a (``"per axis"``)."""
     def body(sample, spacing, axis):
         h = spacing[1 - axis] if read == "other spacing" else spacing[axis]
         left = [-1 if d == axis else 0 for d in range(2)]
         if read == "diagonal":
             left[1 - axis] = 1
+        k = 0.01 * (axis + 1) if read == "per axis" else 0.01
         gradient = (sample((0, 0), 0) - sample(tuple(left), 0)) / h
-        return (-(0.01 * gradient),), (0.01 / h) / h
+        return (-(k * gradient),), (k / h) / h
 
     return body
 
@@ -271,14 +260,17 @@ def _stencil_plane(read="two cells", chart=False):
     ("two cells", False, None),
     ("other spacing", False, "the spacing of another axis"),
     ("diagonal", False, "a cell beyond the two cells of its face"),
-    ("two cells", True, "a chart of rank 2"),
+    ("per axis", False, None),
+    ("two cells", True, None),
+    ("per axis", True, "one law on every logical axis"),
+    ("other spacing", True, "the spacing of another axis"),
 ])
 def test_a_stencil_flux_reads_its_two_cells_and_the_distance_across_its_face(read, chart, reason):
-    """The divergence of a StencilFlux (two_point() since N3 lot 1) is served on node positions:
-    the row of axis a reads the two cells of its face and the spacing of a, which the arrays give
-    as the distance across the face, and its faces are orthogonal to the line of the centroids. A
-    row that reads the spacing of another axis or a cell beyond its two cells, and any stencil on
-    a chart, are refused at resolution, before any C++."""
+    """The divergence of a StencilFlux (two_point() since N3 lot 1) is served on node positions
+    and on a chart: the row of axis a reads the two cells of its face and the spacing of a, which
+    the arrays give as the distance across the face. A row that reads the spacing of another axis
+    or a cell beyond its two cells is refused at resolution, before any C++, and on a chart so are
+    rows that differ by axis, whose law reads more of the normal than n.n = 1 (DN35)."""
     case, layout = _stencil_plane(read, chart)
     if reason is None:
         assert pops.resolve(pops.validate(case), layout=layout) is not None

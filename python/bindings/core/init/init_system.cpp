@@ -1181,6 +1181,7 @@ void bind_system_physics(py::class_<System>& cls) {
              result["kind"] =
                  geometry->kind() == pops::StaticGeometryKind::chart ? "chart" : "nodes";
              result["closure_ratio"] = static_cast<double>(geometry->closure_ratio());
+             result["orthogonality"] = static_cast<double>(geometry->orthogonality());
              result["cell_measure"] = cell_array(view.cell_measure);
              py::tuple centroid(Dim), width(Dim), face_measure(Dim), face_distance(Dim),
                  face_normal(Dim), nodes(Dim);

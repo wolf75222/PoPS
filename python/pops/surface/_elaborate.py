@@ -699,6 +699,12 @@ class _Elaboration:
                                                                   list)())
                 if speed is not None:
                     choices.append(Choice("speed", "s = F(1)·n = %s" % text(speed), "derived"))
+                if isinstance(term, DiffusiveFlux) and self.charted:
+                    # DN36: K-orthogonality is measured, not required; the inspection states it.
+                    choices.append(Choice(
+                        "faces", "a face of the chart takes the line of its two centroids for its "
+                        "normal (K-orthogonality, DN36); the arrays bound at pops.bind report the "
+                        "largest sine of the two as orthogonality", "derived"))
                 reads_radius = getattr(scheme, "reads_radius", None)
                 if self.charted and reads_radius is not None and reads_radius(term):
                     # DN31: a transitional route, until the exact radius on a physical normal.
