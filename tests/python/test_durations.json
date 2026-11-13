@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1208,
+    "estimated_count": 1210,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7944,7 +7944,9 @@
       "tests/python/unit/time/test_variant_temporal_envelope.py",
       "tests/python/unit/time/test_variant_types_v09.py",
       "tests/python/integration/runtime/test_surface_n15_sources_native.py",
-      "tests/python/unit/surface/test_n15_sources.py"
+      "tests/python/unit/surface/test_n15_sources.py",
+      "tests/python/integration/runtime/test_surface_n15_cell_load_native.py",
+      "tests/python/unit/surface/test_n15_cell_load.py"
     ],
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates. Local source/native qualification timings are not substituted for CI per-file measurements.",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
@@ -8146,7 +8148,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1273,
+    "total_files": 1275,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9102,6 +9104,31 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_surface_n15_sources_native.py": "4479d8a929e4a51940639bbe62f7668a0c739df98e9e9f92342321cd8cc088dc",
         "tests/python/unit/surface/test_n15_sources.py": "0eac7f2d9bc0eb22714b3ad147d038b4a749db339d43ad822f4a2a66a2294622"
+      }
+    },
+    "n15_20261113_faceflux_cellrate_fc2": {
+      "basis": "Unmeasured CI scheduling estimates for N15 FaceFlux/CellRate lot FC-2 (ROM-98): cell.load(e) and the coordinates read at the centre of the cell. The native file compiles three surface cases once in a module fixture (a load under a Gauss rule, a coordinate at the centre, the law of a source under pointwise()): 300 s, the tier of one module of compiles, as test_surface_n15_sources_native.py. The unit file elaborates and resolves about twenty surface cases without compiling: 30 s, the source-only tier above its receipt. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.01 Serial, native module of rank one, contended by a concurrent unit run); they are not GitHub CI file wall times. Existing weights, shard count, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": "tests/python/integration/runtime/test_surface_n15_sources_native.py",
+        "tests/python/unit/surface/test_n15_cell_load.py": "tests/python/unit/surface/test_n15_sources.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": 300,
+        "tests/python/unit/surface/test_n15_cell_load.py": 30
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": {
+          "pytest_seconds": 121.26,
+          "tests": 3
+        },
+        "tests/python/unit/surface/test_n15_cell_load.py": {
+          "pytest_seconds": 18.44,
+          "tests": 17
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": "057742116d5cc798364ea6b75bcb08545cdda8a89976e922de0b1f0f5fed735f",
+        "tests/python/unit/surface/test_n15_cell_load.py": "315191ebf49597681d62bf0d4b39691a932ace16d5a69094208239447c52edbe"
       }
     }
   },
@@ -10377,5 +10404,7 @@
   "tests/python/integration/runtime/test_surface_n16_three_words_native.py": 300,
   "tests/python/unit/numerics/test_n16_three_words_rows.py": 60,
   "tests/python/integration/runtime/test_surface_n15_sources_native.py": 300,
-  "tests/python/unit/surface/test_n15_sources.py": 60
+  "tests/python/unit/surface/test_n15_sources.py": 60,
+  "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": 300,
+  "tests/python/unit/surface/test_n15_cell_load.py": 30
 }

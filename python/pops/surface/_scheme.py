@@ -36,7 +36,7 @@ import inspect as _inspect
 from fractions import Fraction
 from typing import Any
 
-from ._expr import Arith, Call, Expr, Predicate, Relation, is_number, text, walk
+from ._expr import Arith, Call, Expr, Predicate, Relation, is_number, operand, text, walk
 from ._geometry import Coordinate, MathConstant
 from ._method import ENTITY_PARAMETERS
 from ._model import (
@@ -74,8 +74,6 @@ _N16_REGION_FORM = ("N16 lot 2, with the region form of CellRate (a cell rate th
 _N16_PER_SIDE = "N16 lot 2, with the per-side values of D6 (2.6.8)"
 _N16_VOLUME = "N16 lot 2, with the volume term of the weak form of div (D1b)"
 _N16_INTEGRALS = "N16 lot 2, with the integrals of 4.3 (a total)"
-_FC2 = ("the N15 lot of cell.load and of the coordinates read at the centre (FaceFlux/CellRate "
-        "lot FC-2)")
 
 # Refusal tables of the surface (CF2, §21.7): the reads of 2.6.4 that a later lot elaborates and
 # whose names the core does not otherwise spell, keyed by the read, with the sentence of their lot.
@@ -128,6 +126,25 @@ class SchemeLeaf(Expr):
 
     def _text(self, precedence: int) -> str:
         return self._spelling
+
+
+class LoadValue(Expr):
+    """``cell.load(e)``: the load of e on the cell, ∫_K e dμ under the rule of the representation
+    (N16 4.3, D2); under one constant mode its rate is the mean of e under that rule (N15
+    FaceFlux/CellRate lot FC-2, note §3.6)."""
+
+    __slots__ = ("value",)
+
+    key = ("load",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def children(self) -> tuple:
+        return (self.value,)
+
+    def _text(self, precedence: int) -> str:
+        return "cell.load(%s)" % text(self.value)
 
 
 class LawValue(Expr):
@@ -767,7 +784,6 @@ class RateCell(_Unread):
     _later_reads = _LATER_CELL
     _later = {"width": _GEOMETRY, "center": _GEOMETRY, "lower": _GEOMETRY, "upper": _GEOMETRY,
               "measure": _GEOMETRY, "displacement": _GEOMETRY,
-              "load": _FC2,
               "integral": _N16_INTEGRALS,
               "shift": _N16_REGION_FORM, "lower_face": _N16_REGION_FORM,
               "upper_face": _N16_REGION_FORM,
@@ -781,6 +797,11 @@ class RateCell(_Unread):
     def value(self, quantity: Any) -> Any:
         quantity = _own_quantity(self._key, quantity, "cell.value")
         return SchemeLeaf(("sample", 0), quantity, "cell.value(%s)" % quantity)
+
+    def load(self, value: Any) -> Any:
+        """``cell.load(e)``: the load of e on the cell (N16 4.3), whose kind the builder types
+        (``_builder_value.classify``)."""
+        return LoadValue(operand(value, "cell.load(e)"))
 
     def __repr__(self) -> str:
         return "cell"
@@ -1310,15 +1331,10 @@ class UserScheme(SchemeValue):
 
     def _traced_rate(self, key: Term) -> CellRate:
         """The ``CellRate`` of a scheme over ``cell`` under a source, run once (no axis): its value
-        reads ``cell.value`` of the key's quantity, numbers, constants and parameters (FC-1)."""
-        from ._geometry import Coordinate
-
+        reads ``cell.value`` of the key's quantity, numbers, constants, parameters, the
+        coordinates of the support at the centre of the cell and ``cell.load(e)`` (FC-1, FC-2)."""
         ran = self._run({"cell": RateCell(key), "term": TermEntity(key)}, key)
         for node in walk(ran.value):
-            if isinstance(node, Coordinate):
-                raise NotYetElaborated(
-                    "the scheme %s under %s, whose CellRate reads the coordinate %s at the "
-                    "centre of the cell" % (self, key, node), _FC2, site=self.site)
             if isinstance(node, Call) and node.word == "grad":
                 raise NotYetElaborated(
                     "the scheme %s under %s, whose CellRate reads %s" % (self, key, text(node)),
