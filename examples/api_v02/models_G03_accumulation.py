@@ -114,8 +114,8 @@ def _ssprk3_increment(case, block, state, rate, dt, *, history):
     delta = program.value(name + "_delta",
                           program.dt*(k0/6 + k1/6 + (2/3)*k2), at=temporal.next.point)
     if history:
-        program.store_history("previous", u0, depth=1)
-        program.store_history("increment", delta, depth=1)
+        program.store_history("previous", u0)
+        program.store_history("increment", delta)
     program.commit(temporal.next, program.value(name + "_accepted", u0 + delta,
                                                 at=temporal.next.point))
     program.step_strategy(FixedDt(dt))

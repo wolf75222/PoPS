@@ -26,7 +26,8 @@ from examples.api_v02.models_static_geometry import graded_nodes
 def _root(**keywords):
     q = Var("pops_root_T", BOUND_KIND)
     return PointwiseRoot(q + q*q, q, Var("e", "cons"), lower=LOWER, upper=math.inf,
-                         recovery=LocalRoot(**keywords), name="T"), q
+                         recovery=LocalRoot(**{"tolerance": 1e-13, "max_iterations": 200,
+                                               **keywords}), name="T"), q
 
 
 @pytest.mark.parametrize("value", [0.0, 1e-9, 0.3, 0.75, 2.0, 1e3, -0.25, -0.2])
