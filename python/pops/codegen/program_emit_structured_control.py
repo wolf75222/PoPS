@@ -5,11 +5,8 @@ from typing import Any
 import json
 
 from pops.time._program.structured_control import value_signature
-from pops.time._program.versioned_values import VERSIONED_OPS
-from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
 from pops.time._program.distributed_arrays import GLOBAL_OPS as _DISTRIBUTED, local_effects
-from .program_emit_finite_arrays import FINITE_OPS
-from pops.graph_functions import _NATIVE_FIELD_ALGEBRA
+from pops._ir.effects import region_safe
 
 
 STRUCTURED_OPS = frozenset((
@@ -23,23 +20,6 @@ STRUCTURED_OPS = frozenset((
     "variant_require_success",
 ))
 
-# A checked execution-effect profile, not a model/solver catalog. These operations have either
-# no recoverable failure or lane-uniform native status handling. Extend only after checking the
-# emitter's failure rendezvous, never simply because an operation is numerically useful.
-_REGION_SAFE_OPS = _NATIVE_FIELD_ALGEBRA | FIELD_REPRESENTATION_OPS | STRUCTURED_OPS | FINITE_OPS | (VERSIONED_OPS - {'continuation_open', 'continuation_publish'}) | frozenset((
-    "state", "linear_combine", "pointwise_expression", "scalar_op", "compare", "reduce",
-    "cfl", "hmin", "branch", "scalar_field", "where", "cell_compare",
-    "field_component", "vector_field", "requested_dt", "invocation_level",
-    "scalar_isfinite", "scalar_expression", "provenance_bind",
-    # PreparedStencilFlux converges allocation, halo, kernel and validity failures;
-    # guarded capture retains its exchanges across the region's lexical lifetime.
-    "stencil_flux_divergence", "acceptance_guard",
-    # Root-issued sidecars remain lexical captures. Every delivery rechecks the
-    # exact context/point/live attempt and converges failure before leaving the loop.
-    "interval_end", "interval_check",
-))
-
-
 def _check_region_effects(block):
     for value in block:
         if value.op in _DISTRIBUTED:
@@ -48,7 +28,7 @@ def _check_region_effects(block):
         if value.op == "laplacian" and value.inputs and "spatial_port_storage" in value.inputs[0].attrs:
             from pops.time._program.spatial_interaction import validate_computed_laplacian
             validate_computed_laplacian(value)
-        elif value.op not in _REGION_SAFE_OPS:
+        elif not region_safe(value.op):
             raise NotImplementedError(
                 "structured region operation %r has no checked lane-uniform failure contract"
                 % value.op)

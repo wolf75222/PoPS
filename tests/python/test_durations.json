@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1200,
+    "estimated_count": 1203,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7542,6 +7542,7 @@
       "tests/python/unit/numerics/test_principal_grouping_contract.py",
       "tests/python/unit/numerics/test_principal_storage_route.py",
       "tests/python/unit/numerics/test_region_facts_n7.py",
+      "tests/python/unit/numerics/test_region_reads_g02.py",
       "tests/python/unit/numerics/test_representation_definition_v2.py",
       "tests/python/unit/numerics/test_retained_stencil_v02.py",
       "tests/python/unit/numerics/test_scoped_stencil_v02.py",
@@ -7800,6 +7801,7 @@
       "tests/python/unit/time/test_distributed_case_graphs.py",
       "tests/python/unit/time/test_distributed_derivatives_v14.py",
       "tests/python/unit/time/test_distributed_structural_depth.py",
+      "tests/python/unit/time/test_effect_table_ir5.py",
       "tests/python/unit/time/test_elementary_algebra_v02.py",
       "tests/python/unit/time/test_evolved_amr_history_slots.py",
       "tests/python/unit/time/test_evolved_amr_spatial_reference.py",
@@ -7877,6 +7879,7 @@
       "tests/python/unit/time/test_realization_contributions.py",
       "tests/python/unit/time/test_realization_delivery_adversarial.py",
       "tests/python/unit/time/test_realization_delivery_loops.py",
+      "tests/python/unit/time/test_recursive_graph_function_ir6.py",
       "tests/python/unit/time/test_relations_n8.py",
       "tests/python/unit/time/test_relations_v09.py",
       "tests/python/unit/time/test_retained_continuation_fields.py",
@@ -8138,7 +8141,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1265,
+    "total_files": 1268,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8990,6 +8993,38 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": "1b56bb0e19dbe393d54e9be407e8e94e3cce583763aee41db93f53cd409318b2",
         "tests/python/unit/surface/test_n3_lot2_muscl.py": "5e02066ad264d3d8bb12fe34e46cd8b506cbf0a8b7cd0c420672c29dc3b6969b"
+      }
+    },
+    "g02_20261113_lot_l_effects": {
+      "basis": "Unmeasured CI scheduling estimates for the three source-only modules of G02 lot L (ROM-20): the effect table of the Program IR and its readers (IR5), the refusal of a named body that reaches its own elaboration (IR6), and the reads walker of the region analyses over local control (G02 design note 5.4). 5 s each, the lowest source-only tier of api_v02_20261013: they elaborate a few GraphFunctions and surface solvers and build regions over typed maps, with no native compile and no plan resolution. The local receipts come from pytest on a 4-core container, one module per session; they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/numerics/test_region_reads_g02.py": "tests/python/unit/numerics/test_region_facts_n7.py",
+        "tests/python/unit/time/test_effect_table_ir5.py": "tests/python/unit/time/test_graph_functions.py",
+        "tests/python/unit/time/test_recursive_graph_function_ir6.py": "tests/python/unit/time/test_graph_functions.py"
+      },
+      "estimates_seconds": {
+        "tests/python/unit/numerics/test_region_reads_g02.py": 5,
+        "tests/python/unit/time/test_effect_table_ir5.py": 5,
+        "tests/python/unit/time/test_recursive_graph_function_ir6.py": 5
+      },
+      "local_receipts": {
+        "tests/python/unit/numerics/test_region_reads_g02.py": {
+          "cases": 7,
+          "session_seconds": 0.43
+        },
+        "tests/python/unit/time/test_effect_table_ir5.py": {
+          "cases": 10,
+          "session_seconds": 0.58
+        },
+        "tests/python/unit/time/test_recursive_graph_function_ir6.py": {
+          "cases": 5,
+          "session_seconds": 1.97
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/numerics/test_region_reads_g02.py": "023e0a5a7198c62c560f4f3a8b0cb9a0c83799fdd231c70eea1cce8bdd64f46d",
+        "tests/python/unit/time/test_effect_table_ir5.py": "0b02e635996b361190bee41158e925ce078a1afe38fe4dacbe7c61e6147baed0",
+        "tests/python/unit/time/test_recursive_graph_function_ir6.py": "d15e95ed2aa39475f0f0212407e661c2bcd666fe8b68c93ed86f369ce83a2b87"
       }
     }
   },
@@ -10257,5 +10292,8 @@
   "tests/python/unit/surface/test_published_representation.py": 15,
   "tests/python/unit/time/test_scientific_erasure_inventory.py": 5,
   "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
-  "tests/python/unit/surface/test_n3_lot2_muscl.py": 90
+  "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
+  "tests/python/unit/numerics/test_region_reads_g02.py": 5,
+  "tests/python/unit/time/test_effect_table_ir5.py": 5,
+  "tests/python/unit/time/test_recursive_graph_function_ir6.py": 5
 }

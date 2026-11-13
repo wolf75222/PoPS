@@ -18,50 +18,14 @@ from pops.time import Program
 from pops.time._authoring import authoring_transaction, require_program
 from pops.time._program.structured_control import new_typed, value_signature
 from pops.time._program.value_validation import require_owned, validate_input_regions
-from pops.time._program.versioned_values import VERSIONED_OPS
-from pops.time._program.distributed_arrays import GLOBAL_OPS as _DISTRIBUTED, LOCAL_OPS as _LOCAL
 from pops.time.variant_types import ValueType, as_type, instantiate
 from pops.time.values import ProgramValue, _Coeff
 from pops._ir.data_model import is_finite_index
+from pops._ir.effects import graph_effect_words, has_graph_contract
+from pops._ir.elaboration import elaborating
 
 
 _BLOCKS = ("body_block", "cond_block", "true_block", "false_block")
-# This is a language-effect profile, not a list of physical models. In particular, creation of
-# state/history resources, publication and implicit reads of an ambient timestep are not calls.
-_PURE = frozenset({"provenance_bind",
-    "product", "product_get", "scalar_op", "scalar_expression", "compare", "bool_constant", "bool_op", "int64_constant",
-    "int64_op", "int64_cast", "int64_compare", "finite_real", "scalar_isfinite",
-    "region_argument", "region_index", "linear_combine", "invocation_level",
-    "pointwise_expression", "field_component", "vector_field", "cell_compare", "where",
-    "branch", "structured_fold", "structured_iterate", "iteration_success", "iteration_is_ok",
-    "capture_result", "result_ok", "result_error", "result_success", "result_is_ok",
-    "result_payload", "iteration_payload", "result_match", "variant_construct", "variant_is",
-    "variant_payload", "variant_require_success", "variant_unreachable",
-    "finite_range_set", "finite_size", "finite_domain", "finite_same_domain", "finite_index", "finite_index_value",
-    "finite_index_argument", "finite_at", "finite_map", "finite_scan",
-})
-# Native field algebra allocates invocation-owned temporaries, converges kernel
-# failures before collectives, and exposes consumed solver status. Its ordinary
-# source/provider/linear-operator validators still authenticate every operand.
-_NATIVE_FIELD_ALGEBRA = frozenset({"field_problem_load", "field_problem_coefficients",
-    "matrix_free_operator", "apply_in", "apply_out", "field_problem_apply", "solve_linear",
-    "solve_outcome", "solve_outcome_component", "field_gradient"})
-_COLLECTIVE = frozenset({"reduce", "stencil_flux_divergence", "acceptance_guard"}) | _NATIVE_FIELD_ALGEBRA
-_RENDEZVOUS = frozenset({"scalar_op", "scalar_expression", "finite_real", "int64_op", "int64_cast", "branch",
-                        "structured_fold", "structured_iterate", "iteration_success",
-                        "result_success", "variant_require_success", "variant_is", "result_match"})
-_FINITE_CHECKED = frozenset({"finite_range_set", "finite_same_domain", "finite_index", "finite_at", "finite_map", "finite_scan"})
-_PARTIAL = frozenset({"stencil_flux_divergence", "acceptance_guard", "scalar_op", "scalar_expression", "int64_op", "int64_cast", "structured_fold",
-                      "structured_iterate", "iteration_success", "result_success",
-                      "variant_require_success", "variant_unreachable", "pointwise_expression",
-                      "finite_real", "branch", "variant_is", "result_match"})
-_SCOPED_CAPABILITIES = VERSIONED_OPS - {"continuation_open", "continuation_publish"}
-_PURE = _PURE | _SCOPED_CAPABILITIES
-_PURE = _PURE | _LOCAL
-_COLLECTIVE = _COLLECTIVE | _DISTRIBUTED
-_PARTIAL = _PARTIAL | _SCOPED_CAPABILITIES
-_PARTIAL = _PARTIAL | _DISTRIBUTED | _NATIVE_FIELD_ALGEBRA
-_RENDEZVOUS = _RENDEZVOUS | _SCOPED_CAPABILITIES
 _SCALARS = frozenset({"scalar", "int64", "bool"})
 
 
@@ -305,7 +269,7 @@ class _Codec:
                 or type(node["id"]) is not int or node["id"] < 0:
             raise ValueError("malformed GraphFunction operation record")
         op = node["op"]
-        if op not in _PURE | _COLLECTIVE:
+        if not has_graph_contract(op):
             raise ValueError("GraphFunction operation has no declared effect contract: %s" % op)
         if node["id"] in self.values:
             raise ValueError("duplicate GraphFunction SSA definition")
@@ -462,13 +426,7 @@ def _validate_operation(op, inputs, attrs, signature):
 
 
 def _effects(value):
-    if value.op not in _PURE | _COLLECTIVE:
-        raise ValueError("GraphFunction operation has no declared effect contract: %s" % value.op)
-    effects = set()
-    if value.op in _PARTIAL | _FINITE_CHECKED:
-        effects.add("failure")
-    if value.op in _COLLECTIVE | _RENDEZVOUS | _FINITE_CHECKED:
-        effects.add("collective")
+    effects = set(graph_effect_words(value.op))
     for key in _BLOCKS:
         for child in value.attrs.get(key, ()):
             effects.update(_effects(child))
@@ -621,7 +579,10 @@ def graph(*, inputs, output, captures=None, effects=None):
             raise TypeError("graph requires a Python elaborator")
         program, args = _formals(inputs)
         def elaborate(p):
-            return builder(p, args, frozen_captures) if captures is not None else builder(p, args)
+            with elaborating(builder, name=getattr(builder, "__qualname__", repr(builder))):
+                if captures is not None:
+                    return builder(p, args, frozen_captures)
+                return builder(p, args)
         is_result = output.signature["vtype"] == "variant" and set(
             dict(output.signature["members"])) == {"ok", "err"}
         result = program.capture(elaborate) if is_result else elaborate(program)

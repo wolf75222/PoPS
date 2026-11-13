@@ -1,5 +1,5 @@
 """Typed refusals of the region analyses (spec 0.3 IR13, IR17, IR19, IR21, D5, R7, the refusal table
-of §14.1).
+of §14.1), and of the elaboration of a named body (IR6).
 
 Each refusal names the phase that raises it and what it refuses: a region refusal names the
 region and the first map, coefficient or construct that blocks it, a coverage refusal the term,
@@ -173,6 +173,24 @@ class TermNotAdditive(ValueError):
                          % (type(self).__name__, self.rule, self.phase, message, held, where))
 
 
+class RecursiveGraphFunction(ValueError):
+    """A named body whose elaboration reaches its own elaboration again (IR6, §14.1).
+
+    ``cycle`` holds (name, Python origin) for each elaboration of the cycle, the first and the last
+    naming the same definition. A recursion is written as ``iterate``.
+    """
+
+    rule = "IR6"
+    phase = "validate"
+
+    def __init__(self, cycle: tuple) -> None:
+        self.cycle = tuple(cycle)
+        path = " -> ".join("%s (%s)" % (name, origin) for name, origin in self.cycle)
+        super().__init__("RecursiveGraphFunction (IR6, validate): %s reaches its own elaboration "
+                         "again: %s; a recursion is written as iterate" % (self.cycle[0][0], path))
+
+
 __all__ = ["ClassNotReached", "ConservationNotStructural", "CoverageNotExact",
            "DeliveryNotStructural", "GeneralAccessOnPatches", "PropertyNotDerived",
-           "RegionRefusal", "ScheduleIllegal", "TermNotAdditive"]
+           "RecursiveGraphFunction", "RegionRefusal", "ScheduleIllegal", "TermNotAdditive"]
+

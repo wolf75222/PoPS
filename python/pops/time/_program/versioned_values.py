@@ -323,8 +323,8 @@ def validate_continuations(program, *, target=None):
     publications = [value for value in values if value.op == "continuation_publish"]
     if len(opened) != 1 or opened[0].region or len(publications) != 1 or publications[0].region:
         raise ValueError("Continuation requires one initialization and one root publication")
-    from pops.graph_functions import _PURE, _COLLECTIVE
-    allowed = _PURE | _COLLECTIVE | VERSIONED_OPS | {
+    from pops._ir.effects import has_graph_contract
+    allowed = set(VERSIONED_OPS) | {
         "state", "requested_dt", "reached_duration", "history", "store_history"}
     if forest is not None:
         allowed |= {"post_synchronization", "composite_integral", "composite_pair", "attempt_start"}
@@ -357,7 +357,7 @@ def validate_continuations(program, *, target=None):
         # Their own provider/lowerability contracts still run after this check.
         # History stores retain their top-level effect contract; the enclosing
         # System attempt owns them together with the continuation image.
-        if value.op not in allowed and forest is None:
+        if value.op not in allowed and not has_graph_contract(value.op) and forest is None:
             raise NotImplementedError("Continuation operation %r is not a qualified pure trial/projection" % value.op)
         if value.op == "reached_duration" and value.id > publications[0].id:
             raise ValueError("reached duration must precede the complete continuation publication")

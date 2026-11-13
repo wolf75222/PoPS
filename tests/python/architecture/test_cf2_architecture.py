@@ -510,6 +510,83 @@ def test_base_check_refuses_a_site_moved_by_hand_and_accepts_a_moved_line(tmp_pa
     assert not moved and [site.path for site in added] == ["b.hpp"]
 
 
+def test_a_declared_move_explains_one_site_moved_onto_another_line(tmp_path):
+    """G02 lot L: a statement merged into another file changes its line, so the base check refuses
+    its sites unless the PR declares the move (accepted_moves.txt). A declaration explains one site
+    of its target file, only when a site of its source file with the same term and excerpt is gone;
+    a declaration that explains nothing is returned, and the check refuses it."""
+    def tree(name, files):
+        root = tmp_path / name
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text)
+        return root
+
+    def sites(root):
+        return [occurrence for rel in ("a.py", "b.py", "c.py")
+                for occurrence, sense in scan.cf2_sites(rel, root) if sense is None]
+
+    def check(head, declared):
+        moved, added, unused = ratchet.moves_against_base(sites(base), sites(head), base, head,
+                                                          declared)
+        return ([(old.path, new.path) for old, new in moved],
+                [(site.path, site.excerpt) for site in added], unused)
+
+    base = tree("base", {"a.py": 'OPS = frozenset({"rusanov", "x"})\n', "b.py": "y = 1\n",
+                         "c.py": "z = 1\n"})
+    merged = tree("merged", {"a.py": "OPS = None\n", "b.py": 'ROWS = {"rusanov": "graph"}\n',
+                             "c.py": "z = 1\n"})
+    rusanov = ("a.py", "b.py", "rusanov", '"rusanov"')
+    assert check(merged, ()) == ([], [("b.py", '"rusanov"')], [])
+    assert check(merged, (rusanov,)) == ([("a.py", "b.py")], [], [])
+    # the source site must be gone, from the file that the declaration names
+    stayed = tree("stayed", {"a.py": 'OPS = frozenset({"rusanov", "x"})\n',
+                             "b.py": 'ROWS = {"rusanov": "graph"}\n', "c.py": "z = 1\n"})
+    assert check(stayed, (rusanov,)) == ([], [("b.py", '"rusanov"')], [rusanov])
+    assert check(merged, (("c.py", "b.py", "rusanov", '"rusanov"'),))[1:] == (
+        [("b.py", '"rusanov"')], [("c.py", "b.py", "rusanov", '"rusanov"')])
+    # one declaration explains one site: a second copy in the target file is new
+    twice = tree("twice", {"a.py": "OPS = None\n",
+                           "b.py": 'ROWS = {"rusanov": "graph"}\nALIAS = "rusanov"\n',
+                           "c.py": "z = 1\n"})
+    assert check(twice, (rusanov,))[1:] == ([("b.py", '"rusanov"')], [])
+    # a declaration that matches no site of the tree is unused
+    assert check(base, (rusanov,)) == ([], [], [rusanov])
+
+
+def test_check_base_reads_the_moves_that_the_pr_declares(tmp_path, monkeypatch):
+    """End to end: a site merged into another file on a changed line fails against HEAD until the PR
+    adds its move to accepted_moves.txt, and a declared move that the tree does not make fails."""
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                        *args], check=True, stdout=subprocess.DEVNULL)
+
+    engine = scan.FrozenEngine(core_include=("include/",), core_exclude=(), native_tree="native/")
+    (tmp_path / "include").mkdir()
+    (tmp_path / "include" / "a.hpp").write_text('auto routes = {"rusanov", "x"};\n')
+    (tmp_path / "include" / "b.hpp").write_text("int y;\n")
+    git("init", "-q")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    monkeypatch.setattr(scan, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(refresh_exceptions, "LISTS", {
+        "t": (tmp_path / "t_exceptions.txt", lambda root: cf2.current_entries(root, engine)[0])})
+    (tmp_path / "include" / "a.hpp").write_text("auto routes = {};\n")
+    (tmp_path / "include" / "b.hpp").write_text('int y;\nauto row = Row{"rusanov", 3};\n')
+    assert refresh_exceptions.check_base("HEAD", ["t"]) == 1
+    declared = tmp_path / refresh_exceptions.MOVES
+    declared.parent.mkdir(parents=True, exist_ok=True)
+    declared.write_text("# moves\nt rusanov include/a.hpp -> include/b.hpp | the list becomes a row"
+                        ' | "rusanov"\n')
+    assert refresh_exceptions.check_base("HEAD", ["t"]) == 0
+    with declared.open("a") as stream:
+        stream.write('t rusanov include/a.hpp -> include/b.hpp | a second move | "rusanov"\n')
+    assert refresh_exceptions.check_base("HEAD", ["t"]) == 1
+    declared.write_text('t rusanov include/a.hpp -> include/b.hpp | no excerpt\n')
+    with pytest.raises(ratchet.MalformedList, match="accepted_moves.txt:1"):
+        refresh_exceptions.check_base("HEAD", ["t"])
+
+
 def test_check_base_scans_the_base_revision_in_a_worktree(tmp_path, monkeypatch):
     """End to end, as CI runs it: a site added to the working tree fails against HEAD, and the
     temporary worktree is removed."""

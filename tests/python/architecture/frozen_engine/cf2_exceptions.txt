@@ -5785,6 +5785,9 @@ python/pops/_ir/__init__.py:90 laplacian G10 | "laplacian"
 python/pops/_ir/balance.py:145 gradient G10 | "coupled_gradient"
 python/pops/_ir/balance.py:300 divergence G10 | "multiple divergence occurrences require an explicit numerical coverage construction"
 python/pops/_ir/balance.py:302 divergence G10 | "signed or scaled divergence requires a matching numerical construction"
+python/pops/_ir/effects.py:86 cfl N8 | "cfl"
+python/pops/_ir/effects.py:143 gradient G10 | "field_gradient"
+python/pops/_ir/effects.py:198 divergence G10 | "stencil_flux_divergence"
 python/pops/_ir/elliptic.py:116 gradient G10 | CoeffGradient
 python/pops/_ir/elliptic.py:122 gradient G10 | "CoeffGradient scale"
 python/pops/_ir/elliptic.py:125 gradient G10 | CoeffGradient
@@ -6679,25 +6682,23 @@ python/pops/codegen/program_emit_stencil_flux.py:269 divergence G10 | "stencil_f
 python/pops/codegen/program_emit_stencil_flux.py:294 divergence G10 | "stencil_flux_divergence"
 python/pops/codegen/program_emit_stencil_flux.py:350 divergence G10 | "stencil_flux_divergence"
 python/pops/codegen/program_emit_stencil_inputs.py:9 divergence G10 | "stencil_flux_divergence"
-python/pops/codegen/program_emit_structured_control.py:31 cfl N8 | "cfl"
-python/pops/codegen/program_emit_structured_control.py:36 divergence G10 | "stencil_flux_divergence"
-python/pops/codegen/program_emit_structured_control.py:48 laplacian G10 | "laplacian"
-python/pops/codegen/program_emit_structured_control.py:49 laplacian G10 | validate_computed_laplacian
-python/pops/codegen/program_emit_structured_control.py:50 laplacian G10 | validate_computed_laplacian
-python/pops/codegen/program_emit_structured_control.py:59 laplacian G10 | emit_region_laplacian
-python/pops/codegen/program_emit_structured_control.py:65 laplacian G10 | validate_computed_laplacian
-python/pops/codegen/program_emit_structured_control.py:66 laplacian G10 | validate_computed_laplacian
-python/pops/codegen/program_emit_structured_control.py:69 laplacian G10 | "region_laplacian_%d"
-python/pops/codegen/program_emit_structured_control.py:75 laplacian G10 | "ctx.require_cartesian_generated_operator(%d, "region computed Laplacian");"
-python/pops/codegen/program_emit_structured_control.py:80 laplacian G10 | "throw std::invalid_argument("region Laplacian requires distinct, identical componentwise stencil storage");"
-python/pops/codegen/program_emit_structured_control.py:83 laplacian G10 | "throw std::invalid_argument("region Laplacian requires one input ghost per axis");"
-python/pops/codegen/program_emit_structured_control.py:85 laplacian G10 | "pops::collectively_rethrow_exception(%s_error, %s_lane, "region Laplacian preflight");"
-python/pops/codegen/program_emit_structured_control.py:91 laplacian G10 | "throw std::invalid_argument("region Laplacian requires explicit periodic boundaries; physical boundary port not implemented");"
-python/pops/codegen/program_emit_structured_control.py:93 laplacian G10 | "pops::collectively_rethrow_exception(%s_error, %s_lane, "region Laplacian boundary contract");"
-python/pops/codegen/program_emit_structured_control.py:94 laplacian G10 | "try { ctx.laplacian(%s_out, %s_in, *%s_boundary); }"
-python/pops/codegen/program_emit_structured_control.py:97 laplacian G10 | "pops::collectively_rethrow_exception(%s_error, %s_lane, "region Laplacian evaluation");"
-python/pops/codegen/program_emit_structured_control.py:109 laplacian G10 | "pops::collectively_rethrow_exception(%s_error, %s_lane, "region Laplacian finite scan");"
-python/pops/codegen/program_emit_structured_control.py:111 laplacian G10 | "throw pops::runtime::program::StepAttemptRejected(pops::SolveStatus::kInvalidEvaluation, "region_laplacian", "nonfinite provisional stencil output");"
+python/pops/codegen/program_emit_structured_control.py:28 laplacian G10 | "laplacian"
+python/pops/codegen/program_emit_structured_control.py:29 laplacian G10 | validate_computed_laplacian
+python/pops/codegen/program_emit_structured_control.py:30 laplacian G10 | validate_computed_laplacian
+python/pops/codegen/program_emit_structured_control.py:39 laplacian G10 | emit_region_laplacian
+python/pops/codegen/program_emit_structured_control.py:45 laplacian G10 | validate_computed_laplacian
+python/pops/codegen/program_emit_structured_control.py:46 laplacian G10 | validate_computed_laplacian
+python/pops/codegen/program_emit_structured_control.py:49 laplacian G10 | "region_laplacian_%d"
+python/pops/codegen/program_emit_structured_control.py:55 laplacian G10 | "ctx.require_cartesian_generated_operator(%d, "region computed Laplacian");"
+python/pops/codegen/program_emit_structured_control.py:60 laplacian G10 | "throw std::invalid_argument("region Laplacian requires distinct, identical componentwise stencil storage");"
+python/pops/codegen/program_emit_structured_control.py:63 laplacian G10 | "throw std::invalid_argument("region Laplacian requires one input ghost per axis");"
+python/pops/codegen/program_emit_structured_control.py:65 laplacian G10 | "pops::collectively_rethrow_exception(%s_error, %s_lane, "region Laplacian preflight");"
+python/pops/codegen/program_emit_structured_control.py:71 laplacian G10 | "throw std::invalid_argument("region Laplacian requires explicit periodic boundaries; physical boundary port not implemented");"
+python/pops/codegen/program_emit_structured_control.py:73 laplacian G10 | "pops::collectively_rethrow_exception(%s_error, %s_lane, "region Laplacian boundary contract");"
+python/pops/codegen/program_emit_structured_control.py:74 laplacian G10 | "try { ctx.laplacian(%s_out, %s_in, *%s_boundary); }"
+python/pops/codegen/program_emit_structured_control.py:77 laplacian G10 | "pops::collectively_rethrow_exception(%s_error, %s_lane, "region Laplacian evaluation");"
+python/pops/codegen/program_emit_structured_control.py:89 laplacian G10 | "pops::collectively_rethrow_exception(%s_error, %s_lane, "region Laplacian finite scan");"
+python/pops/codegen/program_emit_structured_control.py:91 laplacian G10 | "throw pops::runtime::program::StepAttemptRejected(pops::SolveStatus::kInvalidEvaluation, "region_laplacian", "nonfinite provisional stencil output");"
 python/pops/codegen/program_field_plan.py:147 jacobi N9 | "SpatialBasisJacobi@1"
 python/pops/codegen/program_field_plan.py:147 lu N9 | "FullResidualBasisLU@1"
 python/pops/codegen/program_field_plan.py:147 lu N9 | "pops.amr.full-residual-basis-lu@1"
@@ -6884,9 +6885,6 @@ python/pops/fields/rhs.py:112 charge-density N3 | "ChargeDensity block"
 python/pops/fields/rhs.py:220 charge-density N3 | "ChargeDensity"
 python/pops/fields/solve.py:138 dirichlet G04 | "dirichlet"
 python/pops/fields/solve.py:138 neumann G04 | "neumann"
-python/pops/graph_functions.py:47 gradient G10 | "field_gradient"
-python/pops/graph_functions.py:48 divergence G10 | "stencil_flux_divergence"
-python/pops/graph_functions.py:53 divergence G10 | "stencil_flux_divergence"
 python/pops/layouts/__init__.py:114 zero-flux G04 | "zero_flux"
 python/pops/linalg/problem.py:82 cg N9 | certifies_cg
 python/pops/math.py:10 laplacian G10 | "laplacian"

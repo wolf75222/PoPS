@@ -1,0 +1,97 @@
+schema_version = 1
+gate = "ir5-private-lists"
+# IR5 (spec 0.3): « No construct has a private list of admitted operations ». Every Program
+# operation has one row in the effect table, python/pops/_ir/effects.py (G02 lot L, design note
+# §5.1); region safety, device placement and the GraphFunction effect words are read from it.
+#
+# [[list]] names each module-level set literal of three or more names that all have a row in the
+# effect table and that still stands in python/pops, with what it is, its owner and the lot that
+# removes it. tests/python/architecture/test_ir5_private_lists.py checks this file against the tree
+# in both directions: an unlisted set fails, and so does an entry whose set is gone, so the entry
+# leaves with its set. The list only shrinks: a new set of operation names is a row of the effect
+# table, not a new entry here.
+#
+# kind = "dispatch": the operations that one emitter or authoring module defines and lowers; it
+# chooses code, not admission. kind = "structural": how a value relates to its inputs (IR19's
+# typed delivery). kind = "admission": a private list of admitted operations, the counter-example
+# of IR5. At the end of G02 lot L no list owned by G02 remains: the ten effect lists of the note's
+# gap E5 are rows of the effect table. The unary dictionary of fields/spatial_interaction.py maps
+# expression node classes, not operation names, and goes with lot P, which owns the table of
+# elementary functions (§9).
+
+[[list]]
+module = "pops.codegen.program_emit_finite_arrays"
+name = "FINITE_OPS"
+kind = "dispatch"
+owner = "the finite-array emitter"
+removed_by = "not planned: a dispatch catalog"
+
+[[list]]
+module = "pops.codegen.program_emit_structured_control"
+name = "STRUCTURED_OPS"
+kind = "dispatch"
+owner = "the structured-control emitter"
+removed_by = "not planned: a dispatch catalog"
+
+[[list]]
+module = "pops.codegen.typed_delivery"
+name = "_SETS"
+kind = "structural"
+owner = "N7 (IR19 typed delivery)"
+removed_by = "not planned: structural rules of IR19"
+
+[[list]]
+module = "pops.codegen.typed_delivery"
+name = "_OVER"
+kind = "structural"
+owner = "N7 (IR19 typed delivery)"
+removed_by = "not planned: structural rules of IR19"
+
+[[list]]
+module = "pops.codegen.typed_delivery"
+name = "_SAME"
+kind = "structural"
+owner = "N7 (IR19 typed delivery)"
+removed_by = "not planned: structural rules of IR19"
+
+[[list]]
+module = "pops.time._program.continuation_forest"
+name = "FOREST_OPS"
+kind = "dispatch"
+owner = "the AMR continuation forest"
+removed_by = "not planned: a dispatch catalog"
+
+[[list]]
+module = "pops.time._program.continuation_regrid"
+name = "REGRID_OPS"
+kind = "dispatch"
+owner = "the AMR continuation regrid"
+removed_by = "not planned: a dispatch catalog"
+
+[[list]]
+module = "pops.time._program.distributed_arrays"
+name = "GLOBAL_OPS"
+kind = "dispatch"
+owner = "N10 (one array type)"
+removed_by = "not planned: a dispatch catalog"
+
+[[list]]
+module = "pops.time._program.distributed_arrays"
+name = "LOCAL_OPS"
+kind = "admission"
+owner = "N10 (one array type): the operations a distributed local body admits"
+removed_by = "unassigned: a row word of the effect table when N10 merges the array routes"
+
+[[list]]
+module = "pops.time._program.field_representation"
+name = "FIELD_REPRESENTATION_OPS"
+kind = "dispatch"
+owner = "the field representation ports"
+removed_by = "not planned: a dispatch catalog"
+
+[[list]]
+module = "pops.time._program.outputs"
+name = "_OUTPUT_READONLY_OPS"
+kind = "admission"
+owner = "the outputs of an elaborated Advance (§5.2, T33)"
+removed_by = "unassigned: the record body of an Output reads the effect table"

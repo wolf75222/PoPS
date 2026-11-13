@@ -1,0 +1,18 @@
+# Moves of engine-guard sites that a PR declares (spec 0.3, MG6; Linear N2, G02 lot L).
+#
+# refresh_exceptions.py --check-base REV fails on any site of a PR that REV does not hold, unless the
+# site moved from another file with its source line: a file renamed or split keeps its lines. A
+# statement merged into another file changes its line, so its sites fail even though they only moved.
+# A PR declares such a move here, one line per site, with its reason:
+#
+#     <list> <term> <source path> -> <target path> | <reason> | <excerpt>
+#
+# A declaration explains one site of the target file with that term and excerpt, and only when a
+# site of the source file with the same term and excerpt is gone (ratchet.moves_against_base); a
+# declaration that explains no site fails. Only the lines that a PR adds are checked; the lines
+# already here record the moves of earlier PRs. The issue that owns the site does not change, and
+# the list still only shrinks: a declared move adds no site that the base does not hold somewhere.
+# A move that turns a site into new knowledge is a new occurrence: remove it instead (MG6).
+cf2 cfl python/pops/codegen/program_emit_structured_control.py -> python/pops/_ir/effects.py | G02 lot L (ROM-20), IR5: the private list _REGION_SAFE_OPS becomes the region word of the row of the operation cfl in the effect table; N8 still owns the site | "cfl"
+cf2 divergence python/pops/codegen/program_emit_structured_control.py -> python/pops/_ir/effects.py | G02 lot L (ROM-20), IR5: _REGION_SAFE_OPS of the structured-control emitter and _COLLECTIVE and _PARTIAL of graph_functions (three sites, all gone) become the row of the operation stencil_flux_divergence in the effect table (one site); G10 still owns it | "stencil_flux_divergence"
+cf2 gradient python/pops/graph_functions.py -> python/pops/_ir/effects.py | G02 lot L (ROM-20), IR5: the private list _NATIVE_FIELD_ALGEBRA of graph_functions becomes the row of the operation field_gradient in the effect table; G10 still owns the site | "field_gradient"

@@ -39,6 +39,7 @@ from ._model import (
     BoundaryRelation, DiffusiveFlux, Flux, ModelConstant, Parameter, Quantity, Term,
 )
 from ._numerics import SchemeValue, TermView
+from pops._ir.elaboration import elaborating
 from ._refusal import (
     AmbiguousElaboration, NotAPopsOperation, NotYetElaborated, RealizationMismatch,
     SupportMismatch, user_site,
@@ -1151,7 +1152,8 @@ class UserScheme(SchemeValue):
                             "term": BoundaryTermEntity(relation), "depth": k}
                 arguments = {name: entities[name] for name in self.scheme.entities}
                 arguments.update(self.options)
-                result = self.scheme.body(**arguments)
+                with elaborating(self.scheme, name="@pops.scheme " + self.scheme.name):
+                    result = self.scheme.body(**arguments)
                 if not isinstance(result, Ghost):
                     raise RealizationMismatch(
                         "the boundary policy %s returns %r under %r, which Ghost covers"
@@ -1170,7 +1172,8 @@ class UserScheme(SchemeValue):
     def _run(self, entities: dict, key: Term) -> Any:
         arguments = {name: entities[name] for name in self.scheme.entities}
         arguments.update(self.options)
-        result = self.scheme.body(**arguments)
+        with elaborating(self.scheme, name="@pops.scheme " + self.scheme.name):
+            result = self.scheme.body(**arguments)
         if result is None:
             raise TypeError("the scheme %s returns no builder; a scheme returns one builder of "
                             "pops.discrete, such as FaceFlux(value)" % self.scheme.name)

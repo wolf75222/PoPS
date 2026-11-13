@@ -19,7 +19,9 @@ their excerpts became spellings and their sites occurrences).
 
 ``--check-base REV`` writes nothing. It scans the tree of REV (a temporary worktree) and the
 current tree with the current scanner of every list, and fails on any site of the current tree that
-REV does not hold, unless the site moved from another file with its source line. It also scans the
+REV does not hold, unless the site moved from another file with its source line, or the PR declares
+the move, with its reason, in ``accepted_moves.txt`` (a statement merged into another file changes
+its line: a private list of operation names that becomes rows of the effect table). It also scans the
 current tree with the scanner of REV (``--sites-json``, which prints ``{list: [[path, line, term,
 excerpt], ...]}``) and fails where the current scanner sees fewer sites of a (path, term) than the
 scanner of REV, unless the PR declares that narrowing, with its reason, in
@@ -54,6 +56,10 @@ LISTS = {
 NARROWINGS = scan.HERE.relative_to(scan.REPO_ROOT) / "accepted_narrowings.txt"
 _NARROWING = re.compile(
     r"^(?P<list>\S+) (?P<path>\S+) (?P<term>\S+) (?P<count>[1-9][0-9]*) \| (?P<reason>\S.*)$")
+# The moves that PRs declare: a site that leaves one file and enters another on a changed line.
+MOVES = scan.HERE.relative_to(scan.REPO_ROOT) / "accepted_moves.txt"
+_MOVE = re.compile(r"^(?P<list>\S+) (?P<term>\S+) (?P<source>\S+) -> (?P<target>\S+)"
+                   r" \| (?P<reason>[^|]*[^|\s]) \| (?P<excerpt>\S.*)$")
 
 
 def refresh(name: str, allow_moves: bool, bootstrap: bool) -> int:
@@ -101,6 +107,32 @@ def read_narrowings(path: pathlib.Path) -> list[tuple[str, str, str, int, str]]:
         declared.append((match["list"], match["path"], match["term"], int(match["count"]),
                          match["reason"]))
     return declared
+
+
+def read_moves(path: pathlib.Path) -> list[tuple[str, str, str, str, str]]:
+    """(list, source path, target path, term, excerpt) of every move that a file declares."""
+    if not path.exists():
+        return []
+    declared = []
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not raw.strip() or raw.startswith("#"):
+            continue
+        match = _MOVE.match(raw)
+        if match is None:
+            raise ratchet.MalformedList(
+                "%s:%d is not '<list> <term> <source path> -> <target path> | <reason> | <excerpt>'"
+                ": %r" % (path.name, number, raw))
+        declared.append((match["list"], match["source"], match["target"], match["term"],
+                         match["excerpt"]))
+    return declared
+
+
+def _moves_declared_in_this_pr(base_root: pathlib.Path, root: pathlib.Path) -> list:
+    """The moves that the lines added to accepted_moves.txt since the base declare, with
+    multiplicity; the lines already in the base record the moves of earlier PRs."""
+    added = collections.Counter(read_moves(root / MOVES))
+    added.subtract(collections.Counter(read_moves(base_root / MOVES)))
+    return sorted(move for move, copies in added.items() for _ in range(max(copies, 0)))
 
 
 def narrowings(before, after) -> dict:
@@ -159,13 +191,23 @@ def check_base(rev: str, names) -> int:
                 print(error, file=sys.stderr)
                 return 2
             declared = _declared_in_this_pr(base_root, root)
+            moves = _moves_declared_in_this_pr(base_root, root)
             for name in names:
                 path, current = LISTS[name]
                 head = current(root)
-                moved, added = ratchet.new_sites(current(base_root), head, base_root, root)
+                mine = [move[1:] for move in moves if move[0] == name]
+                moved, added, unused = ratchet.moves_against_base(current(base_root), head,
+                                                                  base_root, root, mine)
                 for before, after in moved:
                     print("%s: moved %s %s:%d -> %s:%d" % (name, before.term, before.path,
                                                           before.line, after.path, after.line))
+                if unused:
+                    failed = True
+                    print("%s: %s declares %d move(s) that this tree does not make:"
+                          % (name, MOVES.name, len(unused)), file=sys.stderr)
+                    for source, target, term, excerpt in unused:
+                        print("  %s %s -> %s | %s" % (term, source, target, excerpt),
+                              file=sys.stderr)
                 if added:
                     failed = True
                     print("%s: %d site(s) that %s does not hold (MG6: a list only shrinks; remove "
@@ -177,11 +219,12 @@ def check_base(rev: str, names) -> int:
                     print("%s: no site beyond %s" % (path.name, rev))
                 failed |= _check_narrowings(name, rev, (base_scans or {}).get(name), head,
                                             declared)
-            unchecked = sorted(key for key in declared if key[0] not in names)
+            unchecked = sorted(({key[0] for key in declared} | {move[0] for move in moves})
+                               - set(names))
             if unchecked:
                 failed = True
-                print("%s: declared narrowings of lists that were not checked: %s"
-                      % (NARROWINGS.name, unchecked), file=sys.stderr)
+                print("%s, %s: declarations of lists that were not checked: %s"
+                      % (NARROWINGS.name, MOVES.name, unchecked), file=sys.stderr)
         finally:
             subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force",
                             str(base_root)], check=False)

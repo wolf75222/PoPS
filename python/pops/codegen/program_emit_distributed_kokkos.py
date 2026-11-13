@@ -6,7 +6,6 @@ import json
 
 from pops.time._program.structured_control import value_signature
 from .program_emit_finite_kokkos import (
-    _OPS,
     _NS,
     _TYPES,
     _walk,
@@ -18,6 +17,7 @@ from .program_emit_finite_kokkos import (
     _captures,
 )
 from pops._ir.data_model import is_finite_array, is_finite_index, value_kind
+from pops._ir.effects import device_lowered
 
 _DN = "pops::runtime::program::distributed::"
 _CV = "pops::runtime::program::ContinuationValue<pops::kNativeDimension>"
@@ -163,7 +163,7 @@ def admission(value):
         return "local result requires structural storage", None
     nodes = tuple(_walk(block))
     for node in nodes:
-        if node.op not in _OPS:
+        if not device_lowered(node.op):
             return "missing device lowering: " + node.op, None
         if node.op == "branch" and not _flat(value_signature(node)):
             return "branch result requires structural storage", None
