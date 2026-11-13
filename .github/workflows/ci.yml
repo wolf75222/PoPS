@@ -121,6 +121,7 @@ jobs:
             base=(--check-base "$BASE_SHA")
           fi
           python3 scripts/run_mg8_tutorials.py check --source . --verify-commits "${base[@]}"
+          python3 scripts/run_mg8_rewritten.py check --source . "${base[@]}"
       - name: Upload shared changed files
         uses: actions/upload-artifact@v7
         with:
@@ -607,6 +608,11 @@ jobs:
       # and every module written with a b6 signature, and records no more than its first parent.
       - name: MG9 bridges of pops.lib against the base
         run: python3 scripts/mg9_bridges.py check --check-base HEAD^1
+
+      # OD31 (vertical slice of the exit of phase 1): the pieces of the slice's case file that PoPS
+      # does not run yet follow the file, and the list records no more than its first parent.
+      - name: Vertical slice pieces against the base
+        run: python3 scripts/vertical_slice.py check --check-base HEAD^1
 
       - name: M2 temporal gate manifest
         run: python3 scripts/run_m2_gate.py --check-only
@@ -2705,11 +2711,11 @@ jobs:
   # that fails prints its logs and those stacks in the job log, which every reader has, unlike the
   # published runs. Each rank compiles into a JIT cache of its own: master compiles the same model
   # on every rank into one file of a shared cache without the cache lock. The job's limit is the
-  # sum of the bounded steps (45 + 45 + 45 + 45 + 60 + 15 = 255 min) and of the setup.
+  # sum of the bounded steps (45 + 45 + 45 + 45 + 60 + 30 + 15 = 285 min) and of the setup.
   mg8-tutorials:
     name: ubuntu-24.04 / MG8 master tutorials (${{ matrix.lane }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 285
+    timeout-minutes: 315
     needs: [set-mode]
     if: needs.set-mode.outputs.full == 'true' || needs.set-mode.outputs.python_required == 'true'
     strategy:
@@ -2900,6 +2906,18 @@ jobs:
             --kokkos-root "$KOKKOS_PREFIX" --mpiexec "$(command -v mpiexec)" \
             --watchdog 3300 --tutorial 14 --output "$RUNNER_TEMP/mg8/candidate"
           echo "candidate exit $?"
+
+      # OD31, S1-c of the vertical slice: master's tutorial 02 written in the surface, as written
+      # (within the bound of tests/gates/mg8_rewritten.toml) and with master's initial array bound
+      # as data (bit for bit), against the archive of master's run above.
+      - name: Run the vertical slice against master's tutorial 02 (MG8 rewritten lane)
+        if: ${{ !cancelled() && matrix.lane == 'serial-dim2' }}
+        timeout-minutes: 30
+        run: |
+          python3 scripts/run_mg8_rewritten.py run --source . \
+            --reference "$RUNNER_TEMP/mg8/reference" --output "$RUNNER_TEMP/mg8/rewritten" \
+            --python "$(command -v python)" --pythonpath .mg8/head-package --include include \
+            --kokkos-root "$KOKKOS_PREFIX" --watchdog 1500
 
       - name: Compare with master (${{ matrix.lane }})
         if: ${{ !cancelled() }}
