@@ -504,6 +504,7 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
             snapshot.artifact_identity,
             snapshot.bind_identity,
         ),
+        _checkpoint_program_id=lambda: make_identity("program", {"test": "manifest"}),
         last_run_identity=run.run_identity,
     )
     payload = {
@@ -536,6 +537,8 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
     assert str(payload[IDENTITY_KEY]) == restart.token
     manifest = json.loads(payload[MANIFEST_KEY])
     assert manifest["runtime_kind"] == "uniform"
+    assert manifest["program_id"]["domain"] == "program"
+    assert manifest["program_id"]["hexdigest"] == owner._checkpoint_program_id().hexdigest
     assert manifest["arrays"]["inactive_level"]["shape"] == [0, 4]
     assert manifest["arrays"]["macro_step"]["shape"] == []
     assert not payload["state_tracer"].flags.c_contiguous
@@ -550,6 +553,12 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
         )
     assert saved_restart == restart
     assert saved_manifest["arrays"]["macro_step"]["shape"] == []
+
+    # N11 lot 2b: the compiled program_id is checked first, whatever else the runtime shares.
+    other = SimpleNamespace(**vars(owner))
+    other._checkpoint_program_id = lambda: make_identity("program", {"test": "other flags"})
+    with pytest.raises(ValueError, match=r"program identity \(program_id\) does not match"):
+        authenticate_checkpoint_payload(other, PayloadView(), runtime_kind="uniform")
 
     payload["state_tracer"] = np.arange(12, dtype=np.float64).reshape(3, 4) + 1.0
     with pytest.raises(ValueError, match="digest mismatch"):

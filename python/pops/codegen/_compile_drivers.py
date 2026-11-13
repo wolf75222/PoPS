@@ -687,6 +687,27 @@ def _compile_problem_impl(
     )
     program_hash = semantic.hexdigest
     cache_key = spec_identity.hexdigest
+    from pops.codegen._artifact_identity import program_toolchain_evidence
+
+    toolchain_evidence = program_toolchain_evidence(
+        target=target,
+        abi_key=abi_key,
+        compiler=cc,
+        standard=eff_std,
+        cflags=cflags,
+        lflags=lflags,
+        optflags=optflags,
+        libraries=library_manifests,
+        native_components=[
+            {
+                "manifest": component.manifest(),
+                "manifest_sha256": component.manifest_sha256,
+            }
+            for component in native_components
+        ],
+        native_dimension=native_dimension,
+        toolchain_capture=toolchain_capture,
+    )
 
     # The Module manifest (ADC-585): attached on BOTH the cache-hit and fresh-compile path; its
     # abi_key slot is bound in CompiledProblem. None for a bare dsl.Model with no backing Module.
@@ -740,6 +761,7 @@ def _compile_problem_impl(
         )
         compiled.semantic_identity = semantic
         compiled.artifact_spec_identity = spec_identity
+        compiled.toolchain_evidence = toolchain_evidence
         compiled.binary_identity = binary
         compiled.artifact_identity = artifact
         cenv.run_dumps(compiled)

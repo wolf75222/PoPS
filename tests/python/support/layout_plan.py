@@ -67,12 +67,20 @@ def final_amr_layout(
 
 
 def resolved_layout_contract(
-    layout: Any, *, target: str, block_names: Any,
+    layout: Any, *, target: str, block_names: Any, owner: Any = None,
 ) -> tuple[Any, Any]:
-    """Return an exact plan/coverage pair for a synthetic already-resolved test record."""
+    """Return an exact plan/coverage pair for a synthetic already-resolved test record.
+
+    ``owner`` is the Case whose blocks the plan places; without it, the plan is owned by a
+    synthetic case of its own, which a resolved plan of another case cannot present (N11 lot 2b-i:
+    the presentation of a resolved plan refuses the owners of another case).
+    """
     names = tuple(block_names)
-    token = hashlib.sha256((target + "\0" + "\0".join(names)).encode()).hexdigest()[:12]
-    owner = OwnerPath.case("test-resolved-layout-%s" % token)
+    if owner is None:
+        token = hashlib.sha256((target + "\0" + "\0".join(names)).encode()).hexdigest()[:12]
+        owner = OwnerPath.case("test-resolved-layout-%s" % token)
+    else:
+        owner = OwnerPath.coerce(owner).canonical()
     blocks = tuple(Handle(name, kind="block", owner=owner) for name in names)
     descriptor = layout
     required = ("validate", "options", "requirements", "capabilities")

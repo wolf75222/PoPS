@@ -22,7 +22,7 @@ def archive(ranks):
     capture_program_shards(data, [b"POPSANDF" + bytes([rank]) for rank in range(ranks)])
     _seal_checkpoint_payload_with_identities(data, runtime_kind="amr", **{
         name: make_identity(name if name != "run" else "run", {"fixture": 1})
-        for name in ("semantic", "artifact", "bind", "run")})
+        for name in ("semantic", "artifact", "bind", "program", "run")})
     target = BytesIO()
     np.savez_compressed(target, **data)
     return data, target.getvalue()

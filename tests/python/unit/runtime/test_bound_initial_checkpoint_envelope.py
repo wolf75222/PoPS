@@ -29,9 +29,10 @@ from pops.time import AdaptiveCFL, Program
 class _Owner(_LifecycleMixin):
     def __init__(self):
         identities = tuple(make_identity(domain, {"fixture": "bound-initial"})
-                           for domain in ("semantic", "artifact", "bind"))
+                           for domain in ("semantic", "artifact", "bind", "program"))
         self._bound_snapshot = SimpleNamespace(**dict(zip(
-            ("semantic_identity", "artifact_identity", "bind_identity"), identities, strict=True)))
+            ("semantic_identity", "artifact_identity", "bind_identity", "program_id"), identities,
+            strict=True)))
         self._last_run_identity = self._last_run_manifest = self._restart_lineage_identity = None
         self._time, self._step = 0., 0
         self._temporal_restart_state = TemporalRestartState()
@@ -104,7 +105,8 @@ def test_legacy_run_envelope_and_identity_remain_exactly_unchanged():
     old_route = deepcopy(payload)
     semantic, artifact, bind = owner._checkpoint_identities()
     old_identity = _seal_checkpoint_payload_with_identities(old_route, runtime_kind="uniform",
-        semantic=semantic, artifact=artifact, bind=bind, run=request.run_identity)
+        semantic=semantic, artifact=artifact, bind=bind, program=owner._checkpoint_program_id(),
+        run=request.run_identity)
     identity = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
     assert identity == old_identity and payload[MANIFEST_KEY] == old_route[MANIFEST_KEY]
     assert checkpoint_run_identity(payload) == request.run_identity
@@ -119,7 +121,8 @@ def _public_owner(executor):
     owner._executor = executor
     semantic, artifact, bind = executor._checkpoint_identities()
     owner._install_plan = SimpleNamespace(
-        artifact=SimpleNamespace(semantic_identity=semantic, artifact_identity=artifact),
+        artifact=SimpleNamespace(semantic_identity=semantic, artifact_identity=artifact,
+                                 program_id=executor._checkpoint_program_id()),
         bind_identity=bind,
     )
     return owner
