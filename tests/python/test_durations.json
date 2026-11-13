@@ -9091,7 +9091,8 @@
       "local_receipts": {
         "tests/python/integration/runtime/test_surface_n15_sources_native.py": {
           "pytest_seconds": 267.27,
-          "tests": 4
+          "tests": 4,
+          "note": "before its fifth test, the NumPy oracle of the average; the five ran with test_g03_cell_totals_native.py and test_surface_n16_three_words_native.py in one session of 898.59 s, 15 passed"
         },
         "tests/python/unit/surface/test_n15_sources.py": {
           "pytest_seconds": 37.34,
@@ -9099,7 +9100,7 @@
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_surface_n15_sources_native.py": "034dcc875edf12496018a34534992b8dd62493d0892da5231703ec10b9d598a5",
+        "tests/python/integration/runtime/test_surface_n15_sources_native.py": "4479d8a929e4a51940639bbe62f7668a0c739df98e9e9f92342321cd8cc088dc",
         "tests/python/unit/surface/test_n15_sources.py": "0eac7f2d9bc0eb22714b3ad147d038b4a749db339d43ad822f4a2a66a2294622"
       }
     }

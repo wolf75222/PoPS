@@ -5,6 +5,8 @@ The case is du/dt = -div(a u) + S, S = -k u (a = 1, k = 2), on 16 periodic cells
 (μ(K) = 3/16), with ``upwind()``, the SSPRK2 of ``pops.lib.time.methods`` and a fixed step. Its
 initial value is the datum u0, the coefficients of each representation supplied at bind.
 
+- Under ``CellAverage()`` the run follows the update written in NumPy: the upwind face of a u is
+  a u_left, the source -k u_K, and SSPRK2 (note §4).
 - Under ``CellTotal()``, bound with μ(K) times the averages, the run is μ(K) times the run under
   ``CellAverage()``, to rounding: the named source reads ū = U/μ(K) and its rate is multiplied by
   μ(K), as the rate of the transport (G03 lot R-b, route line 6; N16 5.1, A1).
@@ -95,6 +97,23 @@ def _run(artifacts, name, coefficients):
     artifact, u, u0 = artifacts[name]
     result = surface.bind(artifact, data={u0: coefficients}).run(until=UNTIL)
     return np.asarray(result.state[u], dtype=float)
+
+
+def _oracle(values):
+    h = LENGTH / CELLS
+
+    def rate(u):
+        return -(u - np.roll(u, 1)) / h - DECAY * u
+
+    for _ in range(STEPS):
+        first = values + DT * rate(values)
+        values = (values + first + DT * rate(first)) / 2
+    return values
+
+
+def test_a_source_under_an_average_follows_the_update_written_by_hand(artifacts):
+    np.testing.assert_allclose(_run(artifacts, "average", _averages()), _oracle(_averages()),
+                               rtol=1e-12, atol=0)
 
 
 def test_a_source_under_a_total_runs_the_average_times_the_measure(artifacts):
