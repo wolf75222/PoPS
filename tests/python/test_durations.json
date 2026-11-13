@@ -9159,7 +9159,7 @@
       }
     },
     "n17_20261113_centroid_slope": {
-      "basis": "Unmeasured CI scheduling estimates for the modules of N17 L2b-2 (ROM-110, the centred slope of the static arrays, DN38 to DN40). The native module of rank one compiles two Programs (the slope of a graded rod with physical ends and of a graded periodic ring, written below the surface), binds and runs each for one step, and evaluates the slope of the arrays through the runtime-private seam of a bare System: 600 s, one tier of api_v02_20261013 (300/600/900/1200 s) per cold compile, as the graded diffusion of N17 L1a (one compile, 300 s). The native module of rank two compiles nothing: bare native Systems generate the arrays of four layouts (two charts and two of node positions) and evaluate the slope through the same seam: 60 s, the top of the source-only tier, as the native files of the moments that load the native module without compiling (test_fan_li15_admissibility_native.py). The graded box of rank three gains one case of the same seam, which compiles nothing, and keeps its 300 s; the refusal file of the static reading, now 30 cases, keeps its 60 s. Existing weights, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the modules of N17 L2b-2 (ROM-110, the centred slope of the static arrays, DN38 to DN40). The native module of rank one compiles two Programs (the slope of a graded rod with physical ends and of a graded periodic ring, written below the surface), binds and runs each for one step, and evaluates the slope of the arrays through the runtime-private seam of a bare System: 600 s, one tier of api_v02_20261013 (300/600/900/1200 s) per cold compile, as the graded diffusion of N17 L1a (one compile, 300 s). The native module of rank two compiles nothing: bare native Systems generate the arrays of four layouts (two charts and two of node positions) and evaluate the slope through the same seam: 60 s, the top of the source-only tier, as the native files of the moments that load the native module without compiling (test_fan_li15_admissibility_native.py). The graded box of rank three gains one case of the same seam, which compiles nothing, and keeps its 300 s; the refusal file of the static reading, now 30 cases, keeps its 60 s. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, a native module of the rank of each file, the native files of rank one on their isolated package cache, other pytest sessions running beside them); they are not GitHub CI file wall times. Existing weights, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/integration/runtime/test_n17_centroid_slope_rod_native.py": "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
         "tests/python/integration/runtime/test_n17_centroid_slope_native.py": "tests/python/unit/moments/test_fan_li15_admissibility_native.py",
@@ -9171,6 +9171,34 @@
         "tests/python/integration/runtime/test_n17_centroid_slope_native.py": 60,
         "tests/python/integration/runtime/test_n17_graded_box_native.py": 300,
         "tests/python/unit/mesh/test_static_geometry_reading.py": 60
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_n17_centroid_slope_rod_native.py": {
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=1 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_centroid_slope_rod_native.py",
+          "passed": 4,
+          "seconds": 57.41
+        },
+        "tests/python/integration/runtime/test_n17_centroid_slope_native.py": {
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=2 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_centroid_slope_native.py",
+          "passed": 6,
+          "seconds": 2.33
+        },
+        "tests/python/integration/runtime/test_n17_graded_box_native.py": {
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=3 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_graded_box_native.py",
+          "passed": 2,
+          "seconds": 39.56
+        },
+        "tests/python/unit/mesh/test_static_geometry_reading.py": {
+          "command": "PYTHONPATH=python:. pytest -q tests/python/unit/mesh/test_static_geometry_reading.py",
+          "passed": 30,
+          "seconds": 23.09
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_n17_centroid_slope_rod_native.py": "7d6288c50878a54e94847734e21d077f58096aaf8e13c73adcef511f3da0ba1e",
+        "tests/python/integration/runtime/test_n17_centroid_slope_native.py": "d17fc3a391479a180fde4f2d5ffc8f6b5b2aa4e2d2bd8f161fb3bcec2c48229b",
+        "tests/python/integration/runtime/test_n17_graded_box_native.py": "0207bd69eea29637f57a4ac76a6d26ce4f1e8244befb34c1fd1e26e4c8953dcd",
+        "tests/python/unit/mesh/test_static_geometry_reading.py": "e02cefb718290ee667364707e457b8b8cf79480e73037cc1b07b2e4037463d33"
       }
     }
   },
