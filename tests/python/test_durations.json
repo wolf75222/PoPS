@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1201,
+    "estimated_count": 1202,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7103,6 +7103,7 @@
       "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py",
       "tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py",
       "tests/python/integration/runtime/test_w11_child_trace_rollback.py",
+      "tests/python/integration/surface/test_cf17_l1_swaps.py",
       "tests/python/integration/surface/test_vertical_slice_t02.py",
       "tests/python/unit/amr/test_accepted_halo_preparation.py",
       "tests/python/unit/amr/test_explicit_local_storage_authority.py",
@@ -8139,7 +8140,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1266,
+    "total_files": 1267,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9026,6 +9027,24 @@
       },
       "source_sha256": {
         "tests/python/integration/surface/test_vertical_slice_t02.py": "2cf9c9d7911d01fa626f846afe031456628b53a9dea35324b43bb3f8fd7d1234"
+      }
+    },
+    "ci_20261113_cf17_l1": {
+      "basis": "Unmeasured CI scheduling estimate for CF17 of L1 at the exit of phase 1 (OD31), on the api_v02_20261013 tiers: 600 s for test_cf17_l1_swaps.py, which reads the diff of the four L1 files and lints them (source-only), then compiles four Dim1 artifacts (L1-a, its rusanov(), case-written face and IMEX Euler with cg() swaps) and runs each natively to t = 1 on 256 cells (1567 SSPRK2 steps or 256 IMEX steps), as the four artifacts of the analogue test_surface_lot_e_project_native.py (900 s) on cells of one axis. The local receipt comes from pytest on a 4-core container with a cold artifact cache (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim1); it is not GitHub CI file wall time. Replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/surface/test_cf17_l1_swaps.py": "tests/python/integration/runtime/test_surface_lot_e_project_native.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/surface/test_cf17_l1_swaps.py": 600
+      },
+      "local_receipts": {
+        "tests/python/integration/surface/test_cf17_l1_swaps.py": {
+          "cases": 5,
+          "session_seconds": 179.22
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/surface/test_cf17_l1_swaps.py": "0375f8af6eb067120afa9d3ceaad1c60471d205a9af635a33c2e19eda7b459b6"
       }
     }
   },
@@ -10294,5 +10313,6 @@
   "tests/python/unit/time/test_scientific_erasure_inventory.py": 5,
   "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
   "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
-  "tests/python/integration/surface/test_vertical_slice_t02.py": 300
+  "tests/python/integration/surface/test_vertical_slice_t02.py": 300,
+  "tests/python/integration/surface/test_cf17_l1_swaps.py": 600
 }

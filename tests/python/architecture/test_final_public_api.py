@@ -154,10 +154,19 @@ def test_program_and_time_library_expose_only_final_authoring_spelling() -> None
         "Strang",
         "cfl_limit",
         "every",
+        "imex_euler",
+        "ssprk2",
     )
+    # ssprk2 and imex_euler are the @pops.method of pops.lib.time.methods, re-exported so that a
+    # case imports them as spec 17.1 writes it (driver 14:12); never the retired b6 factories.
+    from pops.lib.time import methods
+    from pops.surface._method import SurfaceMethod
+
+    for name in ("imex_euler", "ssprk2"):
+        assert getattr(libtime, name) is getattr(methods, name)
+        assert type(getattr(libtime, name)) is SurfaceMethod
     for removed in (
         "forward_euler",
-        "ssprk2",
         "ssprk3",
         "rk4",
         "rk",
