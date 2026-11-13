@@ -83,7 +83,9 @@ def installed_packages() -> dict[str, str] | None:
 def package_files(package: str) -> list[str]:
     result = subprocess.run(["dpkg-query", "-L", package], capture_output=True, text=True,
                             check=False, env={**os.environ, "LC_ALL": "C"})
-    return [line for line in result.stdout.splitlines() if line.startswith("/")]
+    # dpkg lists the package's directories too; only files can explain a tree difference.
+    return [line for line in result.stdout.splitlines()
+            if line.startswith("/") and not os.path.isdir(line)]
 
 
 def module_contract(dimension: int) -> dict:

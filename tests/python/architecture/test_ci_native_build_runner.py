@@ -252,7 +252,20 @@ def test_rebuild_replays_the_build_job_recipe_and_proves_the_contract():
             "${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}") in build
     assert ("key: ccache-${{ runner.os }}-python-build-dim${{ inputs.dimension }}-${{ github.ref }}-"
             "${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}") in action
+    # actions/cache versions an entry by its literal path: restore under the path the build job
+    # saved (its CCACHE_DIR), then hand it to the dimension's own directory.
+    assert "CCACHE_DIR: ${{ github.workspace }}/.ccache-py" in build
+    assert "key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}" in build
+    restore = action.split("- name: Restore Dim${{ inputs.dimension }} module build ccache", 1)[1]
+    restore = restore.split("\n    - name: ", 1)[0]
+    assert "path: ${{ github.workspace }}/.ccache-py\n" in restore
+    aside = action.split("- name: Set aside this job's ccache", 1)[1].split("\n    - name: ", 1)[0]
+    assert 'mv "${{ github.workspace }}/.ccache-py" "$aside"' in aside
+    assert action.index("- name: Set aside this job's ccache") < action.index(
+        "- name: Restore Dim${{ inputs.dimension }} module build ccache")
     rebuild = action.split("- name: Rebuild Dim${{ inputs.dimension }} module on this runner", 1)[1]
+    assert rebuild.index('mv .ccache-py "$CCACHE_DIR"') < rebuild.index('mv "$aside" .ccache-py') \
+        < rebuild.index("cmake --preset ci-kokkos-python")
     rebuild, proof = rebuild.split(
         "- name: Prove the rebuilt Dim${{ inputs.dimension }} module contract holds here", 1)
     for command in ("scripts/verify_installed_native.py --expect-dim \"$dim\" --expect-serial",
@@ -267,7 +280,7 @@ def test_rebuild_replays_the_build_job_recipe_and_proves_the_contract():
     # Nothing in the route may relax or bypass the include contract.
     for forbidden in ("POPS_SKIP", "include_contract = None", "--no-verify", "continue-on-error"):
         assert forbidden not in action
-    for step in ("Check", "Restore", "Rebuild", "Prove"):
+    for step in ("Check", "Set aside", "Restore", "Rebuild", "Prove"):
         assert f"- name: {step} " in action
 
 
