@@ -8138,7 +8138,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1265,
+    "total_files": 1267,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8990,6 +8990,21 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": "1b56bb0e19dbe393d54e9be407e8e94e3cce583763aee41db93f53cd409318b2",
         "tests/python/unit/surface/test_n3_lot2_muscl.py": "5e02066ad264d3d8bb12fe34e46cd8b506cbf0a8b7cd0c420672c29dc3b6969b"
+      }
+    },
+    "n12_20261113_model_parameters": {
+      "basis": "Measured local durations for the two test modules of N12 lot 3c-2a (ROM-95, a refinement region reads a runtime parameter of its model), from scripts/ci_pytest_timings.py receipts (reported_phase_seconds, rounded up) on one 4-core cloud container beside other local sessions, gcc 13.3, Kokkos 4.4.01 Serial, Dim2, cold isolated native cache. They are local measurements, not GitHub CI wall times, and are not listed in estimated_files; replace from complete CI per-file receipts.",
+      "files": {
+        "tests/python/unit/amr/test_refinement_criterion_model_parameters.py": {
+          "measured_seconds": 27,
+          "local_receipt": "8 passed, reported_phase_seconds 26.8 (13/11, source-only, no compile)",
+          "source_sha256": "cdaafc2373553c8799f24bd127df5600d9ccd95193f754b266977eff22e82b0a"
+        },
+        "tests/python/integration/amr/test_refinement_criterion_model_parameters_native.py": {
+          "measured_seconds": 325,
+          "local_receipt": "4 passed, reported_phase_seconds 324.8 (13/11, two Programs compiled cold, seven adaptive runs of the tutorial-09 case, one compile refusal)",
+          "source_sha256": "ed1e54887e4479df2cab9b9ad856012fe3d0496d37d95bcff7ee660acb7a4068"
+        }
       }
     }
   },
@@ -10257,5 +10272,7 @@
   "tests/python/unit/surface/test_published_representation.py": 15,
   "tests/python/unit/time/test_scientific_erasure_inventory.py": 5,
   "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
-  "tests/python/unit/surface/test_n3_lot2_muscl.py": 90
+  "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
+  "tests/python/unit/amr/test_refinement_criterion_model_parameters.py": 27,
+  "tests/python/integration/amr/test_refinement_criterion_model_parameters_native.py": 325
 }

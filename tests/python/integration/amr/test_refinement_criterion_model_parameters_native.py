@@ -120,3 +120,46 @@ def test_compile_refuses_a_model_parameter_that_no_formula_reads(native_cache) -
     del native_cache
     with pytest.raises(ValueError, match=r"'nu' of block 'tracer'.*no slot.*case\.param"):
         _compiled(_model_rules, unread_model_parameters=("nu",))
+
+
+def _param_routes(compiled):
+    for owner in (compiled, getattr(compiled, "_compiled", None),
+                  getattr(compiled, "artifact", None)):
+        routes = getattr(owner, "program_param_routes", None)
+        if routes is not None:
+            return tuple(routes)
+    raise AssertionError("the compiled Program carries no program_param_routes")
+
+
+def test_a_native_table_change_drops_the_prepared_tagging_program(native_cache) -> None:
+    """Review R2 of #801: a native set_program_params on a table that the criterion reads, behind
+    the facade that pops.bind freezes, drops the prepared tagging program, and the next tagging
+    reads the table as it then stands."""
+    del native_cache
+    compiled, names = _compiled(_model_rules)
+    runtime = _bound(compiled, names, BOUND)
+    before = _row(runtime)
+    coarse = np.frombuffer(before["coarse"], dtype=np.float64)
+    requests = np.frombuffer(before["requests"], dtype=np.uint8)
+    assert np.array_equal(requests == 1, coarse > BOUND)
+
+    routes = _param_routes(compiled)
+    ((block, _name, _slot, _default),) = [row for row in routes if row[1] == "nu"]
+    values = [OTHER if row[1] == "nu" else row[3]
+              for row in sorted(routes, key=lambda row: row[2]) if row[0] == block]
+    with pytest.raises(RuntimeError, match="frozen once pops.bind completes"):
+        runtime._executor.set_program_params(block, values)
+    runtime._executor._s.set_program_params(block, values)
+
+    regrids = before["regrids"]
+    while float(runtime.time()) < T_END:
+        pops.step(runtime, t_bound=T_END)
+        row = _row(runtime)
+        if row["regrids"] == regrids:
+            continue
+        regrids = row["regrids"]
+        coarse = np.frombuffer(row["coarse"], dtype=np.float64)
+        requests = np.frombuffer(row["requests"], dtype=np.uint8)
+        assert np.array_equal(requests == 1, coarse > OTHER)
+        assert not np.array_equal(requests == 1, coarse > BOUND)
+    assert regrids > before["regrids"]
