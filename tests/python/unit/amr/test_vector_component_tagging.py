@@ -1,4 +1,8 @@
-"""A vector state's selected component remains qualified through the tagging VM."""
+"""A vector state's selected component remains qualified through a refinement region.
+
+These cases ran on the tag-graph VM until N12 lot 3c-2b removed it; they now write the same value
+and gradient indicators as regions of ``cell`` (``cell.value`` and ``gradient_norm``).
+"""
 from __future__ import annotations
 
 import pops
@@ -12,9 +16,9 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
-from pops.lib.amr import StateTransfer
+from pops.lib.amr import StateTransfer, gradient_norm
 from pops.lib.initial import BindArray
-from pops.math import ValueExpr, ddt, div, grad, norm
+from pops.math import ValueExpr, ddt, div
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
@@ -37,9 +41,10 @@ def _case(*, component="mx", gradient=False, layout_frame=None,
     block = case.block("fluid", model)
     subject = block[state]
     numerics = DiscretizationPlan()
-    numerics.rates.add(rate, FiniteVolume(
+    method = FiniteVolume(
         flux=flux, variables=variables.Conservative(state),
-        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
+        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov())
+    numerics.rates.add(rate, method)
     case.numerics(numerics, block=block)
     program = pops.Program("advance")
     q = program.state(subject)
@@ -54,7 +59,13 @@ def _case(*, component="mx", gradient=False, layout_frame=None,
     value = ValueExpr(subject)
     if component is not None:
         value = value[component]
-    indicator = norm(grad(value)) if gradient else value
+    stencil = method.amr_indicator_stencil(dimension=2)
+
+    def indicator(cell):
+        if gradient:
+            return gradient_norm(cell, value, axes=frame.axes, stencil=stencil)
+        return cell.value(value)
+
     transfer = AMRTransfer()
     transfer.state(subject, StateTransfer())
     grid_frame = frame if layout_frame is None else layout_frame
@@ -63,7 +74,8 @@ def _case(*, component="mx", gradient=False, layout_frame=None,
                            periodic=PeriodicAxes(grid_frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=(Tag(indicator > case.value(high)), Coarsen(indicator < case.value(low)),
+            rules=(Tag(lambda cell: indicator(cell) > case.value(high)),
+                   Coarsen(lambda cell: indicator(cell) < case.value(low)),
                    Buffer(cells=1)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS),
@@ -73,31 +85,33 @@ def _case(*, component="mx", gradient=False, layout_frame=None,
 
 
 @pytest.mark.parametrize("gradient", [False, True])
-@pytest.mark.parametrize("component,expected", [("mx", "mx"), (2, "my")])
-def test_selected_component_reaches_resolved_graph_and_native_vm(gradient, component, expected):
+@pytest.mark.parametrize("component,expected", [("mx", (1, "mx")), (2, (2, "my"))])
+def test_selected_component_reaches_the_resolved_criterion_and_its_native_tables(
+        gradient, component, expected):
     from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
 
     case, subject, high, low, layout = _case(component=component, gradient=gradient)
     resolved = pops.resolve(pops.validate(case), layout=layout)
-    graph = resolved.bootstrap_plan.tagging
+    criterion = resolved.bootstrap_plan.tagging
     params = {case.resolve(high): 1.2, case.resolve(low): .8}
-    data = graph.runtime_tagging_data(params)
-    assert data["refine"]["variable"] == expected
-    assert data["coarsen"]["variable"] == expected
-    assert data["refine"]["indicator"]["qualified_id"] == case.resolve(subject).qualified_id
+    data = criterion.runtime_criterion_data(params)
+    index, name = expected
+    # One field: the selected component, read at the cell or over the gradient stencil.
+    (row,) = data["fields"]
+    assert row["state"] == case.resolve(subject).qualified_id
+    assert (row["block"], row["variables"], row["components"]) == ("fluid", [name], [index])
+    assert row["reach"] == ([1, 1] if gradient else [0, 0])
+    assert data["parameters"] == [1.2, .8]
 
     class NativeProbe:
-        def _set_bootstrap_tagging(self, *args):
+        def _set_generated_tagging(self, *args):
             self.args = args
 
     native = NativeProbe()
     flow_bootstrap_tagging(native, resolved.bootstrap_plan, params, clock_identity="case::clock")
-    assert native.args[0] == ["state", "state"]
-    assert native.args[1] == [case.resolve(subject).qualified_id] * 2
-    assert native.args[2:4] == (["fluid", "fluid"], [expected, expected])
-    assert native.args[5] == ([4, 5] if gradient else [1, 2])
-    assert native.args[6] == [1.2, .8]
-    assert native.args[7] == ([0, 0] if gradient else [-1, -1])
+    assert native.args[0] == criterion.qualified_id
+    assert native.args[1:7] == ([case.resolve(subject).qualified_id], ["fluid"], [[name]],
+                                [[index]], [[1, 1] if gradient else [0, 0]], [1.2, .8])
 
 
 @pytest.mark.parametrize("gradient", [False, True])
@@ -110,25 +124,26 @@ def test_two_component_state_with_full_physical_type_resolves_its_selected_indic
         support=PhysicalSupport((("x", "position"), ("y", "position"))),
         sampling="cell_average")
     resolved = pops.resolve(pops.validate(case), layout=layout)
-    data = resolved.bootstrap_plan.tagging.runtime_tagging_data(
+    data = resolved.bootstrap_plan.tagging.runtime_criterion_data(
         {case.resolve(high): 1.2, case.resolve(low): .8})
-    assert data["refine"]["variable"] == data["coarsen"]["variable"] == "second"
-    assert data["refine"]["indicator"]["qualified_id"] == case.resolve(subject).qualified_id
+    (row,) = data["fields"]
+    assert (row["variables"], row["components"]) == (["second"], [1])
+    assert row["state"] == case.resolve(subject).qualified_id
 
 
-def test_component_selection_changes_the_authenticated_graph_identity():
-    graphs = []
+def test_component_selection_changes_the_authenticated_criterion_identity():
+    criteria = []
     for component in ("rho", "my"):
         case, _, _, _, layout = _case(component=component)
-        graphs.append(pops.resolve(pops.validate(case), layout=layout).bootstrap_plan.tagging)
-    assert graphs[0].qualified_id != graphs[1].qualified_id
+        criteria.append(pops.resolve(pops.validate(case), layout=layout).bootstrap_plan.tagging)
+    assert criteria[0].qualified_id != criteria[1].qualified_id
 
 
 @pytest.mark.parametrize("gradient", [False, True])
 def test_vector_indicator_requires_explicit_selection(gradient):
-    case, _, _, _, layout = _case(component=None, gradient=gradient)
-    with pytest.raises(ValueError, match="Select a typed component indicator explicitly"):
-        pops.resolve(pops.validate(case), layout=layout)
+    # The region is traced where the rule is written, so the refusal comes from there.
+    with pytest.raises(TypeError, match="one typed component of a state"):
+        _case(component=None, gradient=gradient)
 
 
 @pytest.mark.parametrize("component,error", [

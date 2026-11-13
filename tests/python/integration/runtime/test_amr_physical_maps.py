@@ -33,7 +33,7 @@ def _value_above(subject, threshold):
     return lambda cell: cell.value(ValueExpr(subject)) > threshold
 
 
-def resolve_amr_maps(directory, *, initial=2., graph=False, refine=-100., profile=None):
+def resolve_amr_maps(directory, *, initial=2., refine=-100., profile=None):
     """``profile`` maps each block to its own refine threshold and starts every block from
     ``initial`` plus its position coordinate, so that each layout refines a part of its domain."""
     case = pops.Case("distinct adaptive moment and extension")
@@ -76,8 +76,7 @@ def resolve_amr_maps(directory, *, initial=2., graph=False, refine=-100., profil
         grids[name] = AMR(
             grid=CartesianGrid(frame=frame, cells=shape, periodic=PeriodicAxes(frame.axes)),
             hierarchy=AMRHierarchy(max_levels=2, ratios=(ratio,)),
-            tagging=AMRTagging(rules=(Tag(ValueExpr(block[state]) > limit if graph
-                                      else _value_above(block[state], limit)),
+            tagging=AMRTagging(rules=(Tag(_value_above(block[state], limit)),
                                   Buffer(cells=0) if profile is None
                                   else Buffer(cells=0, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
@@ -215,17 +214,16 @@ PROFILE = {"distribution": 1.25, "moment": 1.5, "extension": 1.75}
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-@pytest.mark.parametrize("graph", (True, False), ids=("graph", "regions"))
 @pytest.mark.parametrize("refine", (-100., 100.))
-def test_native_amr_maps_regions_match_the_recorded_tag_graph(tmp_path, refine, graph):
+def test_native_amr_maps_regions_match_the_recorded_tag_graph(tmp_path, refine):
     """Each layout's region criterion is generated into its own Program slice (lot 3b): three
     hierarchies refine, or stay coarse, exactly as the tag graph decided, recorded before the VM
     was removed (lot 3c-2b)."""
     from pops.mesh._amr import ResolvedRefinementCriterion
     from tests.python.support.amr_graph_oracles import assert_observations, layouts_trajectory
 
-    plan = resolve_amr_maps(tmp_path, graph=graph, refine=refine)
-    assert graph or {type(row.authorities.bootstrap.tagging)
+    plan = resolve_amr_maps(tmp_path, refine=refine)
+    assert {type(row.authorities.bootstrap.tagging)
                      for row in plan.layout_amr_authorities.values()} == {
         ResolvedRefinementCriterion}
     observations, margins, _ = layouts_trajectory(plan, MAPS, dict.fromkeys(MAPS, refine))
@@ -237,8 +235,7 @@ def test_native_amr_maps_regions_match_the_recorded_tag_graph(tmp_path, refine, 
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-@pytest.mark.parametrize("graph", (True, False), ids=("graph", "regions"))
-def test_native_amr_maps_each_layout_refines_its_own_region_as_the_tag_graph(tmp_path, graph):
+def test_native_amr_maps_each_layout_refines_its_own_region_as_the_tag_graph(tmp_path):
     """Review A1 of lot 3b: from a non-uniform state, with one threshold per layout inside its
     range, each layout refines a different part of its domain; the regions generated into each
     Program slice give the boxes that the tag graph gave, recorded before the VM was removed."""
@@ -246,7 +243,7 @@ def test_native_amr_maps_each_layout_refines_its_own_region_as_the_tag_graph(tmp
     from tests.python.support.amr_graph_oracles import assert_observations, layouts_trajectory
 
     # Every block starts from 1 + position, position in (0, 1) along its 8-cell axis.
-    plan = resolve_amr_maps(tmp_path, graph=graph, initial=1., profile=PROFILE)
+    plan = resolve_amr_maps(tmp_path, initial=1., profile=PROFILE)
     observations, margins, _ = layouts_trajectory(plan, MAPS, PROFILE)
     assert_observations("physical_maps/a1_profile", observations, margins)
     boxes = {name: [row[1:] for row in observations[0][name]["boxes"] if row[0] == 1]
@@ -262,15 +259,14 @@ def test_native_amr_maps_each_layout_refines_its_own_region_as_the_tag_graph(tmp
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-@pytest.mark.parametrize("graph", (True, False), ids=("graph", "regions"))
-def test_native_amr_internal_maps_refine_as_the_recorded_tag_graph(tmp_path, graph):
+def test_native_amr_internal_maps_refine_as_the_recorded_tag_graph(tmp_path):
     """The three adaptive layouts of the internal maps refine as the tag graph decided (review R1
     of lot 3c part 1): its boxes were recorded before the VM was removed."""
     from tests.python.integration.runtime.test_interstage_physical_maps import resolve_interstage_maps
     from tests.python.support.amr_graph_oracles import assert_observations, layouts_trajectory
 
     stages = ("population", "integral", "extended")
-    plan = resolve_interstage_maps(tmp_path, adaptive=True, graph=graph)
+    plan = resolve_interstage_maps(tmp_path, adaptive=True)
     observations, margins, _ = layouts_trajectory(plan, stages, dict.fromkeys(stages, -100.))
     assert_observations("interstage/adaptive", observations, margins)
 

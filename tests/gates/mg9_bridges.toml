@@ -94,7 +94,7 @@ words = [
     "ConservativeInjection", "ConservativeLinear", "DivergencePreservingFace", "EllipticRecompute",
     "FaceTransfer", "FluxRegisterReflux", "Knapsack", "LinearTimeInterpolation",
     "MeasuredKnapsack", "NodeMultilinear", "NodeTransfer", "PatchTopologyRebuild", "RoundRobin",
-    "SpaceFillingCurve", "StateTransfer", "SymbolicTagger", "VolumeAverage", "gradient_norm",
+    "SpaceFillingCurve", "StateTransfer", "VolumeAverage", "gradient_norm",
 ]
 owner = "N12, the hierarchies and their policies"
 

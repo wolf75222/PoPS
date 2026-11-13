@@ -28,7 +28,7 @@ EXPECTED_ISSUES = tuple("ADC-%d" % number for number in range(672, 679))
 EXPECTED_REQUIREMENTS = {
     "ghost_plan",
     "layout_plan",
-    "tagging_graph",
+    "refinement_criterion",
     "hierarchy_regrid",
     "transfer_bootstrap",
     "clocks_reflux",
@@ -41,13 +41,13 @@ ALLOWED_PYTEST_TARGETS = {
     "ghost_plan",
     "layout_plan",
     "lowering_coverage",
-    "tagging_graph",
+    "refinement_criterion",
     "hierarchy_regrid",
     "transfer_bootstrap",
     "restart_hierarchy_policy",
 }
 NATIVE_PYTEST_FILES = {
-    "tests/python/integration/amr/test_amr_magnitude_tagging_native.py",
+    "tests/python/integration/amr/test_refinement_criterion_model_parameters_native.py",
 }
 _GTEST_DECLARATION = re.compile(
     r"\bTEST(?:_F)?\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"

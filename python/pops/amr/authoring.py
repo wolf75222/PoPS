@@ -8,9 +8,7 @@ from fractions import Fraction
 from typing import Any, ClassVar
 
 from pops._ir import Expr
-from pops._ir.quantity import PhysicalDimension, PhysicalSupport
-from pops._ir.visitors import _key
-from pops.mesh._amr.tagging_graph import ConflictPolicy, Hysteresis
+from pops.mesh._amr.tagging_policy import ConflictPolicy, Hysteresis
 from pops.time import Schedule
 
 
@@ -66,33 +64,6 @@ def resolve_transition_ratios(
             row = (authored,) * dimension
         resolved.append(row)
     return tuple(resolved)
-
-
-def _strict_key_data(value: Any) -> Any:
-    if type(value) in (PhysicalDimension, PhysicalSupport):
-        # Space keys retain these two physical descriptors as typed values. Their
-        # canonical data preserves rational powers, coordinate order and unknownness.
-        return _strict_key_data(value.to_data())
-    if value is None or isinstance(value, (bool, int, str)):
-        return value
-    if isinstance(value, float):
-        if value != value or value in (float("inf"), float("-inf")):
-            raise ValueError("expression identity contains a non-finite float")
-        return {"binary64": value.hex()}
-    if isinstance(value, (tuple, list)):
-        return [_strict_key_data(item) for item in value]
-    if isinstance(value, dict):
-        if any(not isinstance(key, str) or not key for key in value):
-            raise TypeError("expression identity mappings require non-empty string keys")
-        return {key: _strict_key_data(item) for key, item in value.items()}
-    raise TypeError("expression identity contains unsupported %s" % type(value).__name__)
-
-
-def _expression_data(value: Expr) -> dict[str, Any]:
-    return {
-        "protocol": "pops.expr.key.v1",
-        "value": _strict_key_data(_key(value)),
-    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,34 +326,33 @@ class AMRExecution:
     runtime_execution_data = to_data
 
 
+_REGION_FORM = ("write the predicate as a function of cell, such as "
+                "%s(lambda cell: cell.value(q) > case.value(t))")
+
+
 def _rule_predicate(predicate: Any, *, where: str) -> Any:
-    """A Boolean expression of the tag graph, or a region: a function of ``cell`` (DM13b)."""
+    """A region: a function of ``cell``, traced once (DM13b)."""
     from pops.mesh._amr.refinement_criterion import RefinementRegion
 
     if type(predicate) is RefinementRegion:
         return predicate
     if isinstance(predicate, Expr):
-        if not callable(getattr(predicate, "resolve_for_amr_predicate", None)):
-            raise TypeError("%s requires a typed symbolic Boolean expression" % where)
-        return predicate
+        # The tag graph that read an expression of the state went in N12 lot 3c-2b.
+        raise TypeError("%s no longer takes an expression of the state: %s"
+                        % (where, _REGION_FORM % where))
     if callable(predicate):
         return RefinementRegion.trace(predicate)
-    raise TypeError(
-        "%s requires a typed symbolic Boolean expression or a function of cell" % where)
+    raise TypeError("%s requires a function of cell: %s" % (where, _REGION_FORM % where))
 
 
 def _predicate_data(predicate: Any) -> dict[str, Any]:
-    from pops.mesh._amr.refinement_criterion import RefinementRegion
-
-    if type(predicate) is RefinementRegion:
-        return {"protocol": "pops.amr.refinement-region.v1", "value": predicate.key_data()}
-    return _expression_data(predicate)
+    return {"protocol": "pops.amr.refinement-region.v1", "value": predicate.key_data()}
 
 
 @dataclass(frozen=True, slots=True)
 class Tag:
-    """Refine where ``predicate`` holds: a Boolean expression, or a function of ``cell`` whose
-    Boolean result is generated into the compiled Program (DM13b)."""
+    """Refine where ``predicate`` holds: a function of ``cell`` whose Boolean result is generated
+    into the compiled Program (DM13b)."""
 
     predicate: Any
     action: ClassVar[str] = "refine"
@@ -444,7 +414,7 @@ class Buffer:
 
 @dataclass(frozen=True, slots=True)
 class AMRTagging:
-    """Callback-free tag graph with explicit stability, equality and conflict semantics."""
+    """The regions of a layout, with explicit stability, equality and conflict semantics."""
 
     rules: tuple[Any, ...]
     hysteresis: Hysteresis
@@ -463,14 +433,6 @@ class AMRTagging:
             raise TypeError("AMRTagging.hysteresis must be an exact Hysteresis")
         if type(self.conflict_policy) is not ConflictPolicy:
             raise TypeError("AMRTagging.conflict_policy must be an exact ConflictPolicy")
-        from pops.mesh._amr.refinement_criterion import RefinementRegion
-
-        regions = {type(rule.predicate) is RefinementRegion
-                   for rule in rules if type(rule) is not Buffer}
-        if len(regions) != 1:
-            raise TypeError(
-                "AMRTagging writes every Tag and Coarsen predicate the same way: either all as "
-                "functions of cell or all as tag-graph expressions")
         object.__setattr__(self, "rules", rules)
 
     @property

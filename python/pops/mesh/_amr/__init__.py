@@ -49,22 +49,6 @@ from .hierarchy_resolution import (
     ResolvedHierarchy,
     resolve_hierarchy,
 )
-from .tagging_graph import (
-    Above,
-    AllOf,
-    AnyOf,
-    Below,
-    ConflictPolicy,
-    DiscreteIndicatorContext,
-    EqualityPolicy,
-    GradientAbove,
-    GradientBelow,
-    Hysteresis,
-    MagnitudeAbove,
-    Not,
-    TagExpr,
-    TaggingGraph,
-)
 from .refinement_criterion import (
     CriterionCell,
     RefinementCriterionField,
@@ -78,14 +62,7 @@ from .regrid_decision import (
     ResolvedRegridDecision,
     resolve_regrid_decision,
 )
-from .tagging_resolution import (
-    ResolvedTaggingGraph,
-    TagDecision,
-    TagNodeRegistration,
-    TagNodeRegistry,
-    TaggingState,
-    resolve_tagging_graph,
-)
+from .tagging_policy import ConflictPolicy, EqualityPolicy, Hysteresis
 from .transfer import AMRTransfer, ResolvedAMRTransfer
 
 # ResolvedHierarchy transports the exact per-axis ratio selected by the hierarchy.  This token is
@@ -474,21 +451,9 @@ __all__ = [
     "BufferCells",
     "IgnoreAMRCriteria",
     "NATIVE_RATIO_POLICY",
-    "Above",
-    "AllOf",
-    "AnyOf",
-    "Below",
     "ConflictPolicy",
-    "DiscreteIndicatorContext",
     "EqualityPolicy",
-    "GradientAbove",
-    "GradientBelow",
     "Hysteresis",
-    "MagnitudeAbove",
-    "Not",
-    "TagExpr",
-    "TaggingGraph",
-    "ResolvedTaggingGraph",
     "CriterionCell",
     "RefinementCriterionField",
     "RefinementRegion",
@@ -498,11 +463,6 @@ __all__ = [
     "RegridWhen",
     "ResolvedRegridDecision",
     "resolve_regrid_decision",
-    "TagDecision",
-    "TagNodeRegistration",
-    "TagNodeRegistry",
-    "TaggingState",
-    "resolve_tagging_graph",
     "CanonicalOptions",
     "ClusteringPolicy",
     "DerivedNestingRequirements",

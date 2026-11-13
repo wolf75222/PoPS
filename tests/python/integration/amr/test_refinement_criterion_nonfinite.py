@@ -1,11 +1,11 @@
-"""A refinement criterion that reads a non-finite sample rejects the level, on both routes (N12).
+"""A refinement criterion that reads a non-finite sample rejects the level (N12).
 
 The case advects two components with the method of the parity cases: ``u``, the Gaussian of
 tutorial 09, and ``q = 1e200 x``, whose discrete gradient overflows. Two rules read that gradient
 behind a left operand: ``(u > and_left) & (|grad q| > 1)`` and ``(u > or_left) | (|grad q| > 1)``.
-The tag-graph VM evaluates every leaf of a rule, so it rejects the level at ``bind`` whatever the
-left operands decide; written as functions of ``cell``, the same rules must be rejected with the
-same message, both when the left operands leave the right ones to decide and when they decide alone
+The tag-graph VM, removed in lot 3c-2b, evaluated every leaf of a rule, so it rejected the level at
+``bind`` whatever the left operands decided; written as functions of ``cell``, the same rules are
+rejected with the message that it gave, both when the left operands leave the right ones to decide and when they decide alone
 (``u > 10`` is false and ``u > 0`` true on every cell): a region evaluates every comparison before
 ``&`` and ``|`` join them, as IR4 evaluates the operands of an operation.
 """
@@ -36,7 +36,7 @@ from pops.layouts import AMR
 from pops.lib.amr import StateTransfer, gradient_norm
 from pops.lib.initial import Analytic
 from pops.lib.time import SSPRK2
-from pops.math import ValueExpr, ddt, div, grad, norm
+from pops.math import ValueExpr, ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
@@ -53,7 +53,7 @@ N = 32
 REFUSAL = "rejected a non-finite indicator sample"
 
 
-def _case(route):
+def _case():
     domain = Rectangle("unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).tag("fluid")
     frame = domain.frame(Cartesian2D())
     x_axis, y_axis = frame.axes
@@ -93,17 +93,13 @@ def _case(route):
               for key, value in {"and_left": 0.0, "or_left": 10.0, "right": 1.0}.items()}
     value = {key: case.value(handle) for key, handle in params.items()}
     u, q = ValueExpr(state)["u"], ValueExpr(state)["q"]
-    if route == "graph":
-        rules = (Tag((u > value["and_left"]) & (norm(grad(q)) > value["right"])),
-                 Tag((u > value["or_left"]) | (norm(grad(q)) > value["right"])))
-    else:
-        stencil = method.amr_indicator_stencil(dimension=2)
+    stencil = method.amr_indicator_stencil(dimension=2)
 
-        def steep(cell):
-            return gradient_norm(cell, q, axes=frame.axes, stencil=stencil) > value["right"]
+    def steep(cell):
+        return gradient_norm(cell, q, axes=frame.axes, stencil=stencil) > value["right"]
 
-        rules = (Tag(lambda cell: (cell.value(u) > value["and_left"]) & steep(cell)),
-                 Tag(lambda cell: (cell.value(u) > value["or_left"]) | steep(cell)))
+    rules = (Tag(lambda cell: (cell.value(u) > value["and_left"]) & steep(cell)),
+             Tag(lambda cell: (cell.value(u) > value["or_left"]) | steep(cell)))
     tagging = AMRTagging(rules=rules + (Buffer(cells=2),),
                          hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                          conflict_policy=ConflictPolicy.REFINE_WINS)
@@ -118,10 +114,9 @@ def _case(route):
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-@pytest.mark.parametrize("route", ("graph", "region"))
-def test_a_non_finite_sample_rejects_the_level_on_both_routes(route, isolated_native_cache) -> None:
+def test_a_non_finite_sample_rejects_the_level(isolated_native_cache) -> None:
     del isolated_native_cache
-    case, layout, params = _case(route)
+    case, layout, params = _case()
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     # The left operands leave the gradient to decide, then decide alone without reading it.
     for and_left, or_left in ((0.0, 10.0), (10.0, 0.0)):

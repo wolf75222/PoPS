@@ -11,12 +11,11 @@ from the block's RuntimeParams table, the table that the faces and stencils of t
 the native tagging plan is prepared. A threshold that no relation reads belongs to the case (spec
 0.3, Q4).
 
-A region decides as a rule of the tag graph does. The comparisons that ``~``, ``&`` and ``|`` join
-are a strict ``<`` or ``>``, and one at exact equality decides nothing (``EqualityPolicy.HOLD``);
+A region decides as a rule of the tag graph, removed in N12 lot 3c-2b, did. The comparisons that
+``~``, ``&`` and ``|`` join are a strict ``<`` or ``>``, and one at exact equality decides nothing (``EqualityPolicy.HOLD``);
 ``~``, ``&`` and ``|`` follow Kleene's three-valued logic, and a rule acts on the cells where its
 region is certainly true (:func:`certainly`). Each of these comparisons is evaluated, so a
-non-finite value that any of them reads rejects the level, as it does for the bytecode. A
-``where`` inside an operand, which the tag graph cannot write, is the ``cond`` of IR4: its test is
+non-finite value that any of them reads rejects the level. A ``where`` inside an operand is the ``cond`` of IR4: its test is
 a two-valued Boolean that may compare with ``<=``, ``>=`` or ``==``, and only the branch that it
 selects is evaluated, so a non-finite value read only in the other branch does not reject the
 level.
@@ -24,8 +23,7 @@ level.
 The resolved criterion decides ``where(refine, refine, where(coarsen, coarsen, keep))`` on each
 cell of a level, ``refine`` being the union of the refine regions and ``coarsen`` the union of the
 coarsen regions. The compiled Program carries it as generated C++; the native tagging plan hands it
-the patches of a level and applies hysteresis and the buffer downstream, as for the bytecode of the
-tag graph. The core never learns which quantities, offsets or arithmetic the criterion uses.
+the patches of a level and applies hysteresis and the buffer downstream. The core never learns which quantities, offsets or arithmetic the criterion uses.
 """
 from __future__ import annotations
 
@@ -36,14 +34,14 @@ import json
 import math
 from typing import Any
 
-from pops._ir.expr import BooleanAnd, BooleanNot, BooleanOr, Compare, Const, Expr, Var
+from pops._ir.expr import BooleanAnd, BooleanNot, BooleanOr, Compare, Const, Expr, Var, is_boolean_expression
 from pops._ir.handle_expr import ValueExpr
 from pops._ir.quantity import QuantityRef
 from pops._ir.values import RuntimeParamRef
 from pops._ir.visitors import _children, _key
 from pops.model import Handle, OwnerPath, ParamHandle
 
-from .tagging_graph import ConflictPolicy, EqualityPolicy, Hysteresis
+from .tagging_policy import ConflictPolicy, EqualityPolicy, Hysteresis
 
 _SCHEMA_VERSION = 1
 
@@ -161,19 +159,18 @@ class CriterionCell:
 
 
 def _boolean(value: Any) -> bool:
-    return isinstance(value, Expr) and callable(getattr(value, "resolve_for_amr_predicate", None))
+    return is_boolean_expression(value)
 
 
 _STRICT = {"lt": "gt", "gt": "lt"}
 _DECISION = ("a refinement region compares with a strict < or > and joins comparisons with &, | "
-             "and ~: as for a leaf of the tag graph, a comparison at exact equality decides "
-             "nothing (EqualityPolicy.HOLD)")
+             "and ~: a comparison at exact equality decides nothing (EqualityPolicy.HOLD)")
 
 
 def certainly(expression: Expr, truth: bool = True) -> Expr:
     """The two-valued expression of the cells where a region is certainly ``truth``.
 
-    As a leaf of the tag graph, a strict comparison at exact equality decides nothing: ``a < b`` is
+    A strict comparison at exact equality decides nothing: ``a < b`` is
     certainly true where a < b and certainly false where a > b. ``~``, ``&`` and ``|`` follow
     Kleene's three-valued logic, so the result joins strict comparisons of the same operands with
     ``&`` and ``|`` and holds no negation: ``~(a < b)`` is certainly true where a > b only. The
@@ -204,7 +201,7 @@ class RefinementRegion:
             raise TypeError(
                 "a refinement region must return a Boolean expression, such as a comparison of "
                 "cell values with a threshold")
-        # Refused at the author's line: a comparison that no leaf of the tag graph decides.
+        # Refused at the author's line: a comparison that decides nothing under HOLD.
         certainly(self.expression)
 
     @classmethod

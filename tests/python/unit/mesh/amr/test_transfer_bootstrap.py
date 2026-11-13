@@ -19,7 +19,6 @@ from pops.mesh import CartesianGrid, LayoutPlanBuilder, PeriodicAxes
 from pops.initial import InitialConditionPlanBuilder, InitialConditionSource
 from pops.mesh._amr import (
     AnalyticReprojection,
-    Above,
     BootstrapOrdering,
     BootstrapSelection,
     CanonicalOptions,
@@ -37,8 +36,9 @@ from pops.mesh._amr import (
     EqualityPolicy,
     ProlongFromParent,
     PatchGenerationPolicy,
-    TaggingGraph,
+    RefinementRegion,
     resolve_bootstrap,
+    resolve_refinement_criterion,
     resolve_hierarchy,
 )
 from pops.mesh._amr.transfer import (
@@ -131,7 +131,7 @@ def _ranked_face_layout(dimension: int, ratios: tuple[int, ...]):
         grid=grid,
         hierarchy=AMRHierarchy(len(ratios) + 1, ratios),
         tagging=AMRTagging(
-            rules=(Tag(Const(1.0) > Const(0.0)), Buffer(1)),
+            rules=(Tag(lambda cell: Const(1.0) > Const(0.0)), Buffer(1)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),
@@ -298,17 +298,32 @@ def _hierarchy(transfer):
     return resolve_hierarchy(plan, provider, HierarchyResolutionContext(Clock("t", owner=OWNER)))
 
 
-def _tagging(state):
-    graph = TaggingGraph(
-        refine=Above(
-            state,
-            ParamHandle("refine", owner=OWNER, param_kind="runtime"),
-        ),
-        coarsen=None,
+def _criterion(threshold):
+    """A resolved region ``value > threshold``.
+
+    The states of these layouts are bare handles, and a region reads a typed state, so the region
+    reads the state of a model of its own: bootstrap carries the criterion by its identity only.
+    """
+    import pops
+    from pops.math import ValueExpr
+
+    model = pops.Model("tagged")
+    declared = model.state("U", components=("u",))
+    case = pops.Case("tagged")
+    state = case.resolve(case.block("tagged", model)[declared])
+    region = RefinementRegion.trace(lambda cell: cell.value(state) > ValueExpr(threshold))
+    return resolve_refinement_criterion(
+        (("refine", region),),
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
-        conflict_policy=ConflictPolicy.ERROR,
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+        dimension=2,
+        admit_state=lambda handle: None,
     )
-    return graph.resolve()
+
+
+def _tagging(state):
+    del state
+    return _criterion(ParamHandle("refine", owner=OWNER, param_kind="runtime"))
 
 
 def test_exact_transfer_key_separates_representation_and_storage():

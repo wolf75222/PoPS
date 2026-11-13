@@ -53,7 +53,6 @@ def _adaptive_layout(
         embedded_boundary=embedded_boundary,
         patch_layout=base.patch_layout,
         load_balance=base.load_balance,
-        tagger=base.tagger,
         clustering=base.clustering,
         reflux=base.reflux,
     )

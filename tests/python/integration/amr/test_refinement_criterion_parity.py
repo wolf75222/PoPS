@@ -1,11 +1,11 @@
-"""Native parity of a refinement criterion written as regions of cell with the tag-graph VM (N12).
+"""A refinement criterion written as regions of cell decides as the tag-graph VM did (N12).
 
 Each case runs the physics of scalar-advection tutorial 09 with the criterion written as functions
 of ``cell`` and generated into the compiled Program (spec 0.3, DM13b). At bind and after every
 accepted step, the levels, the patch boxes, the counts of the level-0 requests that the native
 tagging plan derives (after its equality and conflict policies) and the regrid count must be those
 that the bytecode tag graph gave, recorded in ``tests/python/data/amr_graph_oracles.json`` before
-the VM was removed (lot 3c-2b; ``tests/python/support/amr_graph_oracles.py`` says how). The run
+the VM was removed in lot 3c-2b (``tests/python/support/amr_graph_oracles.py`` says how). The run
 must also keep every compared value at least 1e-9 (relative) away from its threshold, off the
 cells that sit on it exactly, so that the recorded marks do not depend on the last bit of a build.
 The ``negation`` case cannot (its band sits on the background value, and cells sit one ulp from
@@ -29,7 +29,6 @@ import pops
 import pytest
 from pops.amr import Coarsen, EqualityPolicy, Hysteresis, Tag
 from pops.lib.amr import gradient_norm
-from pops.math import ValueExpr, grad, norm
 from tests.python.support.amr_graph_oracles import (
     advection_requests,
     advection_trajectory,
@@ -50,30 +49,6 @@ THRESHOLDS = {
     "negation_refine": 0.30, "band_lower": 0.04, "band_upper": 0.05,
 }
 HYSTERESIS = {"composite": Hysteresis(1, EqualityPolicy.HOLD)}
-
-
-def _graph_rules(kind):
-    def rules(names):
-        value = ValueExpr(names.state)
-        magnitude = norm(grad(value))
-        if kind == "value":
-            return (Tag(value > names.value("value_refine")),
-                    Coarsen(value < names.value("value_coarsen")))
-        if kind == "gradient":
-            return (Tag(magnitude > names.value("refine")),
-                    Coarsen(magnitude < names.value("coarsen")))
-        if kind == "negation":
-            return (Tag(value > names.value("negation_refine")),
-                    Tag((value > names.value("band_lower")) & ~(value > names.value("band_upper"))),
-                    Coarsen(~(value < names.value("band_upper"))))
-        return (
-            Tag(value > names.value("composite_refine")),
-            Tag((magnitude > names.value("composite_gradient"))
-                & (value > names.value("composite_level"))),
-            Coarsen((value < names.value("composite_coarsen"))
-                    & (magnitude < names.value("composite_flat"))),
-        )
-    return rules
 
 
 def _region_rules(kind):
@@ -130,12 +105,9 @@ def _trajectory(rules, kind):
 @pytest.mark.compiler
 @pytest.mark.native_loader
 @pytest.mark.parametrize("kind", ("value", "gradient", "composite", "negation"))
-@pytest.mark.parametrize("route", ("graph", "region"))
-def test_region_criterion_decides_as_the_recorded_tag_graph(
-        route, kind, criterion_native_cache) -> None:
+def test_region_criterion_decides_as_the_recorded_tag_graph(kind, criterion_native_cache) -> None:
     del criterion_native_cache
-    rules = _region_rules(kind) if route == "region" else _graph_rules(kind)
-    observations, margins, samples = _trajectory(rules, kind)
+    observations, margins, samples = _trajectory(_region_rules(kind), kind)
 
     if kind == "negation":
         # The band sits on the background value, and some cells sit one ulp from it, so marks
@@ -170,3 +142,38 @@ def test_region_criterion_decides_as_the_recorded_tag_graph(
         requests = np.frombuffer(requests, dtype=np.uint8)
         assert requests.shape == state.shape
         assert not requests[on_threshold].any()
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_a_checkpoint_of_the_tag_graph_route_is_refused_by_identity(
+        tmp_path, criterion_native_cache) -> None:
+    """O3 of the lot 3c-2b note: the ``value`` case, written on the graph route and checkpointed
+    at the commit before the graph went (``tests/python/data/amr_graph_checkpoint.json`` names it),
+    is refused by the same case written as regions, by identity, before any state changes. Its own
+    checkpoint restarts, so the refusal is the identity's."""
+    import hashlib
+    import json
+    import shutil
+    from pathlib import Path
+
+    del criterion_native_cache
+    data = Path(__file__).resolve().parents[2] / "data"
+    provenance = json.loads((data / "amr_graph_checkpoint.json").read_text(encoding="utf-8"))
+    fixture = data / provenance["file"]
+    assert hashlib.sha256(fixture.read_bytes()).hexdigest() == provenance["sha256"]
+    graph_checkpoint = tmp_path / "graph" / provenance["file"]
+    graph_checkpoint.parent.mkdir()
+    shutil.copyfile(fixture, graph_checkpoint)
+
+    case, layout, _ = advection_case(_region_rules("value"), thresholds=THRESHOLDS,
+                                     name="refinement_criterion_parity")
+    runtime = pops.bind(pops.compile(pops.resolve(pops.validate(case), layout=layout)))
+    pops.step(runtime, t_bound=T_END)
+    own = runtime.checkpoint(tmp_path / "region.npz")
+    time, step = runtime.time(), runtime.macro_step()
+    with pytest.raises(ValueError, match="checkpoint semantic_identity does not match"):
+        runtime.restart(graph_checkpoint)
+    assert (runtime.time(), runtime.macro_step()) == (time, step)
+    runtime.restart(own)
+    assert (runtime.time(), runtime.macro_step()) == (time, step)

@@ -1,19 +1,19 @@
 """Internal resolution of the final object-level AMR authoring surface.
 
-This module is the only join between continuous-looking tagging expressions, resolved numerical
-stencils, layout ownership, hierarchy providers, transfers and Case initial conditions.  Every
-extension is invoked through a narrow protocol; there is no class-name or string-selector switch.
+This module is the only join between refinement regions, layout ownership, hierarchy providers,
+transfers and Case initial conditions.  Every extension is invoked through a narrow protocol; there
+is no class-name or string-selector switch.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 from types import MappingProxyType
 
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
-from pops.model import Handle, OwnerPath, ParamHandle
+from pops.model import Handle, OwnerPath
 
 from .authoring import (
     AMRRegrid,
@@ -93,28 +93,14 @@ def _protocol(value: Any, name: str, *, where: str) -> Callable[..., Any]:
     return method
 
 
-def _declaration_references(value: Any, *, where: str) -> tuple[Handle, ...]:
-    """Read one expression's reference protocol without accepting opaque containers."""
-    provider = getattr(value, "declaration_references", None)
-    if not callable(provider):
-        return ()
-    raw = provider()
-    if isinstance(raw, (str, bytes)) or not isinstance(raw, Iterable):
-        raise TypeError("%s.declaration_references() must return an iterable of Handles" % where)
-    references = tuple(raw)
-    if any(not isinstance(reference, Handle) for reference in references):
-        raise TypeError("%s.declaration_references() must contain only Handles" % where)
-    return references
-
-
 def _handle_token(domain: str, payload: Any) -> str:
     return make_identity(domain, semantic_value(payload, where=domain)).token
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedTaggingAuthority:
-    """Resolved tag graph, or refinement criterion written as regions of ``cell``, plus the
-    explicit spatial dilation requested by authoring.
+    """Resolved refinement criterion, written as regions of ``cell``, plus the explicit spatial
+    dilation requested by authoring.
 
     ``selection`` is None for master's Buffer, whose cells join the transition buffer, and
     ``"refine-requests"`` for API 0.2's tag selection (pops.amr.tag-selection@1).
@@ -125,12 +111,11 @@ class ResolvedTaggingAuthority:
     selection: str | None = None
 
     def __post_init__(self) -> None:
-        from pops.mesh._amr import ResolvedRefinementCriterion, ResolvedTaggingGraph
+        from pops.mesh._amr import ResolvedRefinementCriterion
 
-        if type(self.graph) not in (ResolvedTaggingGraph, ResolvedRefinementCriterion):
+        if type(self.graph) is not ResolvedRefinementCriterion:
             raise TypeError(
-                "ResolvedTaggingAuthority.graph must be a ResolvedTaggingGraph or a "
-                "ResolvedRefinementCriterion")
+                "ResolvedTaggingAuthority.graph must be a ResolvedRefinementCriterion")
         if isinstance(self.buffer_cells, bool) or not isinstance(self.buffer_cells, int) \
                 or self.buffer_cells < 0:
             raise ValueError("ResolvedTaggingAuthority.buffer_cells must be an integer >= 0")
@@ -267,206 +252,6 @@ class AMRTaggingResolutionContext:
                 % state.qualified_id)
         self._indicator_layout(state)
 
-    def _discrete_context(self, state: Handle) -> Any:
-        from pops.mesh._amr import DiscreteIndicatorContext
-        from pops.numerics import StateStorage
-
-        if not isinstance(state, Handle) or state.kind != "state" or not state.is_resolved:
-            raise TypeError(
-                "AMR discrete indicators require an owner-qualified block-state Handle"
-            )
-        if state.owner_path.nodes[0] != self.owner.nodes[0]:
-            raise ValueError("AMR gradient indicator belongs to a different Case owner")
-        matches = []
-        for plan in self.numerics:
-            for rate in plan.rates:
-                if type(rate.method) is StateStorage:
-                    continue  # Pointwise storage does not declare a spatial gradient stencil.
-                subject = rate.method.variables.options.get("state")
-                if isinstance(subject, Handle) and subject.qualified_id == state.qualified_id:
-                    matches.append((plan, rate.method))
-        if not matches:
-            raise ValueError(
-                "AMR indicator state %s has no resolved spatial discretization"
-                % state.qualified_id
-            )
-        plan_ids = {plan.identity.token for plan, _ in matches}
-        methods = {_handle_token("amr-indicator-method", method.to_data())
-                   for _, method in matches}
-        if len(plan_ids) != 1 or len(methods) != 1:
-            raise ValueError(
-                "AMR indicator state %s has ambiguous discrete methods; select one exact "
-                "state-to-discretization authority" % state.qualified_id
-            )
-        plan, method = matches[0]
-        layout = self._indicator_layout(state)
-        lower_stencil = getattr(method, "amr_indicator_stencil", None)
-        if not callable(lower_stencil):
-            raise NotImplementedError(
-                "AMR indicator discretization does not provide amr_indicator_stencil(...)"
-            )
-        lowering = lower_stencil(dimension=_dimension(self.layout_plan))
-        from pops.numerics.indicator_stencils import DiscreteGradientStencil
-
-        if type(lowering) is not DiscreteGradientStencil:
-            raise TypeError(
-                "amr_indicator_stencil(...) must return a DiscreteGradientStencil")
-        discretization = Handle(
-            "discretization_%s" % plan.identity.token,
-            kind="discretization",
-            owner=self.owner,
-        )
-        stencil_payload = {
-            "method": method.to_data(),
-            "state": state.canonical_identity(),
-            "layout": layout.canonical_identity(),
-            "lowering": lowering.to_data(),
-        }
-        stencil = Handle(
-            "stencil_%s" % _handle_token("amr-indicator-stencil", stencil_payload),
-            kind="stencil",
-            owner=self.owner,
-        )
-        return DiscreteIndicatorContext(layout, discretization, stencil, lowering)
-
-    def resolve_value_indicator(
-        self,
-        *,
-        handle: Handle,
-        action: str,
-        comparison: str,
-        threshold: ParamHandle,
-        component: str | None = None,
-    ) -> Any:
-        """Bind a direct block-state value to strict Above/Below tagging leaves."""
-        from pops.mesh._amr import Above, Below
-
-        if not isinstance(handle, Handle) or handle.kind != "state" or not handle.is_resolved:
-            raise TypeError(
-                "AMR value indicators require an owner-qualified block-state Handle")
-        if handle.owner_path.nodes[0] != self.owner.nodes[0]:
-            raise ValueError(
-                "AMR value indicator %s belongs to a different Case owner"
-                % handle.qualified_id)
-        self._indicator_layout(handle)
-        components = tuple(getattr(getattr(handle, "space", None), "components", ()))
-        if component is not None and (type(component) is not str or component not in components):
-            raise ValueError("AMR indicator component must belong to its typed Space")
-        if component is None and len(components) != 1:
-            raise ValueError(
-                "AMR direct state indicators require a scalar state; state %s has components %s. "
-                "Select a typed component indicator explicitly."
-                % (handle.qualified_id, components))
-        if action == "refine" and comparison == "gt":
-            return Above(handle, threshold, component=component)
-        if action == "coarsen" and comparison == "lt":
-            return Below(handle, threshold, component=component)
-        expected = "strict >" if action == "refine" else "strict <"
-        raise ValueError("AMR %s value rule requires %s threshold" % (action, expected))
-
-    def resolve_gradient_magnitude(
-        self,
-        *,
-        field: Any,
-        scale: Any,
-        action: str,
-        comparison: str,
-        threshold: ParamHandle,
-    ) -> Any:
-        """Bind ``norm(grad(state))`` to the exact selected FV layout and stencil."""
-        from pops.mesh._amr import GradientAbove, GradientBelow
-        from pops._ir.quantity import QuantityRef
-
-        if isinstance(scale, bool) or scale != 1:
-            raise NotImplementedError(
-                "the installed discrete-gradient provider requires unit gradient scale; "
-                "a scaled indicator needs an explicit provider that preserves that scale"
-            )
-        refs = _declaration_references(field, where="AMR gradient indicator")
-        state = getattr(field, "handle", None)
-        if len(refs) != 1 or state is not refs[0] or not isinstance(state, Handle):
-            raise TypeError(
-                "norm(grad(...)) AMR tagging requires ValueExpr(block[state]) or its typed component; "
-                "compound indicators need their own resolve_for_amr_tagging protocol"
-            )
-        context = self._discrete_context(state)
-        component = field.component if isinstance(field, QuantityRef) else None
-        components = tuple(getattr(getattr(state, "space", None), "components", ()))
-        if isinstance(field, QuantityRef) and field.space != getattr(state, "space", None):
-            raise ValueError("AMR indicator cannot change the declaration's physical type")
-        if component is not None and (type(component) is not str or component not in components):
-            raise ValueError("AMR indicator component must belong to its typed Space")
-        if component is None and len(components) != 1:
-            raise ValueError(
-                "AMR gradient indicators require a scalar state; state %s has components %s. "
-                "Select a typed component indicator explicitly."
-                % (state.qualified_id, components))
-        if action == "refine" and comparison == "gt":
-            return GradientAbove(state, threshold, context, component=component)
-        if action == "coarsen" and comparison == "lt":
-            return GradientBelow(state, threshold, context, component=component)
-        expected = "strict >" if action == "refine" else "strict <"
-        raise ValueError("AMR %s gradient rule requires %s threshold" % (action, expected))
-
-    def resolve_comparison(self, predicate: Any, *, action: str) -> Any:
-        """Lower one comparison leaf; Boolean composition remains owned by Expr node protocols."""
-        comparison = getattr(predicate, "comparison", None)
-        left = getattr(predicate, "a", None)
-        right = getattr(predicate, "b", None)
-        if comparison not in {"lt", "gt"}:
-            raise ValueError("AMR tagging supports only strict < or > comparison leaves")
-        left_threshold = _threshold_candidate(left)
-        right_threshold = _threshold_candidate(right)
-        if (left_threshold is None) == (right_threshold is None):
-            raise TypeError(
-                "AMR comparison must contain exactly one runtime parameter threshold"
-            )
-        if left_threshold is not None:
-            comparison = {"lt": "gt", "gt": "lt"}[comparison]
-            indicator, threshold = right, left_threshold
-        else:
-            indicator, threshold = left, right_threshold
-        protocol = getattr(indicator, "resolve_for_amr_tagging", None)
-        if not callable(protocol):
-            raise TypeError("AMR indicator must implement resolve_for_amr_tagging(...)")
-        return protocol(
-            self, action=action, comparison=comparison, threshold=threshold)
-
-
-def _threshold(value: Any) -> ParamHandle:
-    refs = _declaration_references(value, where="AMR threshold")
-    handle = getattr(value, "handle", None)
-    if len(refs) != 1 or handle is not refs[0] or not isinstance(handle, ParamHandle):
-        raise TypeError(
-            "AMR tagging thresholds must be explicit ValueExpr(RuntimeParam Handle) values"
-        )
-    if not handle.is_resolved or handle.param_kind != "runtime":
-        raise TypeError("AMR tagging thresholds must be canonical runtime ParamHandles")
-    return handle
-
-
-def _threshold_candidate(value: Any) -> ParamHandle | None:
-    refs = _declaration_references(value, where="AMR threshold candidate")
-    handle = getattr(value, "handle", None)
-    if len(refs) == 1 and handle is refs[0] and isinstance(handle, ParamHandle):
-        return _threshold(value)
-    return None
-
-
-def _resolve_predicate(predicate: Any, *, action: str, context: Any) -> Any:
-    protocol = getattr(predicate, "resolve_for_amr_predicate", None)
-    if not callable(protocol):
-        raise TypeError("AMR predicate must implement resolve_for_amr_predicate(...)")
-    return protocol(context, action=action)
-
-
-def _union(values: list[Any]) -> Any:
-    from pops.mesh._amr import AnyOf
-
-    if not values:
-        return None
-    return values[0] if len(values) == 1 else AnyOf(*values)
-
 
 def resolve_tagging(
     authoring: Any,
@@ -474,15 +259,12 @@ def resolve_tagging(
     *,
     when: Any = None,
 ) -> ResolvedTaggingAuthority:
-    """Resolve an object-level priority list into one authenticated inert tag graph, or one
-    refinement criterion written as regions of ``cell``, with the dilation and the selection of
-    its Buffer.
+    """Resolve an object-level priority list into one refinement criterion written as regions of
+    ``cell``, with the dilation and the selection of its Buffer.
 
     ``when`` is the traced ``when`` body of a ``Regrid(criterion, when)`` written in the Program
-    (DM13b); it is resolved with the criterion, whose rules are then functions of ``cell``.
+    (DM13b); it is resolved with the criterion.
     """
-    from pops.mesh._amr import TaggingGraph
-
     for method in ("resolve_references", "inspect"):
         if not callable(getattr(authoring, method, None)):
             raise TypeError("resolve_tagging authoring must implement %s()" % method)
@@ -491,18 +273,15 @@ def resolve_tagging(
     from pops.mesh._amr import RefinementRegion, resolve_refinement_criterion
 
     resolved = authoring.resolve_references(context.resolve)
-    roots: dict[str, list[Any]] = {"refine": [], "coarsen": []}
     regions: list[tuple[str, Any]] = []
     buffer_cells = None
     selection = None
     for rule in resolved.rules:
         action = getattr(rule, "action", None)
-        if action in roots and type(rule.predicate) is RefinementRegion:
+        if action in ("refine", "coarsen"):
+            if type(rule.predicate) is not RefinementRegion:
+                raise TypeError("AMR tagging rule %s holds no region of cell" % action)
             regions.append((action, rule.predicate))
-        elif action in roots:
-            roots[action].append(
-                _resolve_predicate(rule.predicate, action=action, context=context)
-            )
         elif action == "buffer":
             buffer_cells = rule.cells
             selection = getattr(rule, "selection", None)
@@ -512,41 +291,26 @@ def resolve_tagging(
             )
     if buffer_cells is None:
         raise ValueError("AMR tagging resolution lost its explicit Buffer authority")
-    if when is not None and not regions:
-        raise TypeError(
-            "Regrid(criterion, when) generates its criterion into the Program: write every Tag "
-            "and Coarsen predicate as a function of cell")
-    if regions:
-        if roots["refine"] or roots["coarsen"]:
-            raise TypeError(
-                "AMR tagging writes every predicate as a function of cell or none of them")
-        decision = None
-        if when is not None:
-            from pops.mesh._amr import resolve_regrid_decision
+    decision = None
+    if when is not None:
+        from pops.mesh._amr import resolve_regrid_decision
 
-            decision = resolve_regrid_decision(
-                when.resolve_references(context.resolve),
-                dimension=_dimension(context.layout_plan),
-                admit_state=context.admit_criterion_state,
-            )
-        graph = resolve_refinement_criterion(
-            tuple(regions),
-            hysteresis=resolved.hysteresis,
-            conflict_policy=resolved.conflict_policy,
+        decision = resolve_regrid_decision(
+            when.resolve_references(context.resolve),
             dimension=_dimension(context.layout_plan),
             admit_state=context.admit_criterion_state,
-            decision=decision,
         )
-    else:
-        graph = TaggingGraph(
-            refine=_union(roots["refine"]),
-            coarsen=_union(roots["coarsen"]),
-            hysteresis=resolved.hysteresis,
-            conflict_policy=resolved.conflict_policy,
-        ).resolve()
-    # Both routes carry the Buffer's selection: master's transition reach, or the cells around
-    # each refine request (pops.amr.tag-selection@1).
-    return ResolvedTaggingAuthority(graph, buffer_cells, selection)
+    criterion = resolve_refinement_criterion(
+        tuple(regions),
+        hysteresis=resolved.hysteresis,
+        conflict_policy=resolved.conflict_policy,
+        dimension=_dimension(context.layout_plan),
+        admit_state=context.admit_criterion_state,
+        decision=decision,
+    )
+    # The Buffer's selection: master's transition reach, or the cells around each refine request
+    # (pops.amr.tag-selection@1).
+    return ResolvedTaggingAuthority(criterion, buffer_cells, selection)
 
 
 @dataclass(frozen=True, slots=True)
@@ -916,7 +680,6 @@ def resolve_amr_authorities(
     execution: Any,
     patch_layout: Any,
     load_balance: Any,
-    tagger: Any,
     clustering: Any,
     reflux: Any,
     context: AMRResolutionContext,
@@ -964,7 +727,7 @@ def resolve_amr_authorities(
                 raise TypeError("AMR %s authority must implement %s()" % (slot, method))
     if type(context) is not AMRResolutionContext:
         raise TypeError("AMR resolution requires an AMRResolutionContext")
-    providers = (tagger, clustering, reflux)
+    providers = (clustering, reflux)
     for value in providers:
         for method in ("inspect", "resolve_references", "lower_amr_provider"):
             if not callable(getattr(value, method, None)):
@@ -990,7 +753,6 @@ def resolve_amr_authorities(
     provider_context = AMRProviderLoweringContext(
         layout_identity=context.layout_plan.qualified_id,
         components=context.components,
-        tagging_graph=resolved_tagging.graph,
         clock_identity=context.program.clock.qualified_id,
     )
     provider_bindings = {}
@@ -1006,12 +768,9 @@ def resolve_amr_authorities(
         if lowered.role in provider_bindings:
             raise ValueError("AMR provider roles must be unique")
         provider_bindings[lowered.role] = lowered.data
-    if set(provider_bindings) != {"clustering", "tagger", "reflux"}:
-        raise ValueError(
-            "AMR resolution requires exact clustering, tagger and reflux provider roles")
-    provider_bindings = {
-        role: provider_bindings[role] for role in ("clustering", "tagger", "reflux")
-    }
+    if set(provider_bindings) != {"clustering", "reflux"}:
+        raise ValueError("AMR resolution requires exact clustering and reflux provider roles")
+    provider_bindings = {role: provider_bindings[role] for role in ("clustering", "reflux")}
     resolved_hierarchy = _hierarchy(
         hierarchy,
         patch_layout,

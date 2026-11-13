@@ -41,8 +41,7 @@ _MOMENTS = ("python/pops/moments/", "include/pops/numerics/moments/")
 # The refinement criteria outside the tag-graph VM itself (C36).
 _TAGGING = ("include/pops/runtime/amr/prepared_tagging_execution.hpp",
             "include/pops/runtime/dynamic/component_consumers.hpp",
-            "python/pops/numerics/indicator_stencils.py", "python/pops/mesh/_amr/tagging_graph.py",
-            "python/pops/mesh/_amr/tagging_resolution.py", "python/pops/mesh/_amr/__init__.py",
+            "python/pops/numerics/indicator_stencils.py", "python/pops/mesh/_amr/__init__.py",
             "python/pops/amr/_resolution.py")
 # Diffusion, which G05 takes over with TensorDiffusion (section 18.4).
 _DIFFUSION = ("include/pops/numerics/diffusion/", "python/pops/numerics/diffusion.py",

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops._ir import _children, _wrap
+from pops._ir import _children, _wrap, is_boolean_expression
 from pops._ir.quantity import QuantityRef
 
 if TYPE_CHECKING:
@@ -68,7 +68,7 @@ class _RecoveryMixin(_HyperbolicModel):
             if component not in constraints:
                 continue
             predicate = _wrap(constraints[component])
-            if not callable(getattr(predicate, "resolve_for_amr_predicate", None)):
+            if not is_boolean_expression(predicate):
                 raise TypeError(
                     "recovery_admissibility[%r] requires a typed symbolic Boolean expression"
                     % component

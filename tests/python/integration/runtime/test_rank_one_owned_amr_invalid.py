@@ -27,7 +27,7 @@ def _distributed(layout):
         regrid=layout.regrid, transfer=layout.transfer, execution=layout.execution,
         embedded_boundary=layout.embedded_boundary,
         patch_layout=PatchLayout(distribute_coarse=True, coarse_max_grid=4),
-        load_balance=layout.load_balance, tagger=layout.tagger,
+        load_balance=layout.load_balance,
         clustering=layout.clustering, reflux=layout.reflux,
     )
 

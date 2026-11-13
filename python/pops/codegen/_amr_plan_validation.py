@@ -160,9 +160,8 @@ def validate_amr_authorities(plan: Any) -> None:
             subject.qualified_id for subject in plan.amr_transfer.flat_physical_subjects
         }
     providers = plan.amr_providers
-    if tuple(providers) != ("clustering", "tagger", "reflux"):
-        raise ValueError(
-            "AMR plan requires exact clustering, tagger and reflux provider bindings")
+    if tuple(providers) != ("clustering", "reflux"):
+        raise ValueError("AMR plan requires exact clustering and reflux provider bindings")
     # Component inputs deliberately admit both source authorities and already-compiled
     # artifacts.  Their representations differ, but both expose the same authenticated
     # projection protocol.  Index that projection instead of reaching through the source-only
@@ -190,7 +189,6 @@ def validate_amr_authorities(plan: Any) -> None:
             frozen_binding=binding,
             layout_identity=plan.layout_plan.qualified_id,
             component_inputs=component_inputs,
-            resolved_tagging_identity=plan.bootstrap_plan.tagging.qualified_id,
         )
     hierarchy = plan.resolved_hierarchy
     transitions = hierarchy.plan.transitions
@@ -274,15 +272,7 @@ def validate_amr_authorities(plan: Any) -> None:
 
     # A refinement criterion is complete by construction: compile generates it into the Program.
     if type(plan.bootstrap_plan.tagging) is not ResolvedRefinementCriterion:
-        tagging_provider = getattr(plan.bootstrap_plan.tagging, "runtime_tagging_data", None)
-        if not callable(tagging_provider):
-            raise TypeError("resolved AMR tagging must implement runtime_tagging_data(params)")
-        tagging_manifest = tagging_provider()
-        if type(tagging_manifest) is not dict \
-                or tagging_manifest.get("graph_type") != "amr_tagging_runtime" \
-                or not tagging_manifest.get("lowerings"):
-            raise TypeError(
-                "resolved AMR tagging returned an incomplete runtime provider manifest")
+        raise TypeError("resolved AMR tagging must be a ResolvedRefinementCriterion")
     initial_ids = {row.subject.qualified_id for row in plan.initial_condition_plan.bindings}
     for constraint in plan.bootstrap_plan.constraints:
         options = constraint.options.to_data()

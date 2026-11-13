@@ -1,0 +1,10 @@
+{
+  "schema": "pops.amr-graph-checkpoint.v1",
+  "about": "An AMR checkpoint written by the tag-graph route before the VM was removed (N12 lot 3c-2b, O3 of its note): the value case of test_refinement_criterion_parity.py, its criterion written as a ValueExpr graph, stepped once. A run of the same case written as regions must refuse it by identity: PoPS keeps no reader of a plan identity that it no longer builds.",
+  "file": "amr_graph_checkpoint.npz",
+  "sha256": "0c667d099a2efe69b8fcd4e77900c1273609329efeb109099e814c4e74190e74",
+  "commit": "c1a3369d6, the first commit of N12 lot 3c-2b (it still has the graph)",
+  "build": "gcc 13.3, Kokkos 4.4.01 Serial, Dim2, Release",
+  "command": "python3.12 produce.py tests/python/data/amr_graph_checkpoint.npz (from the repository root, with the producer below)",
+  "producer": "\"\"\"O3 of the N12 lot 3c-2b note: an AMR checkpoint written by the tag-graph route before it went.\n\nRun at commit c1a3369d6 (the first commit of 3c-2b, which still has the graph), from the repository\nroot: python3.12 produce.py tests/python/data/amr_graph_checkpoint.npz. The case is the ``value``\ncase of test_refinement_criterion_parity.py, written on the graph route, stepped once.\n\"\"\"\nimport sys\n\nimport pops\nfrom pops.amr import Coarsen, Tag\nfrom pops.math import ValueExpr\nfrom tests.python.integration.amr.test_refinement_criterion_parity import THRESHOLDS\nfrom tests.python.support.refinement_criterion_cases import T_END, advection_case\n\n\ndef rules(names):\n    value = ValueExpr(names.state)\n    return (Tag(value > names.value(\"value_refine\")),\n            Coarsen(value < names.value(\"value_coarsen\")))\n\n\ncase, layout, _ = advection_case(rules, thresholds=THRESHOLDS, name=\"refinement_criterion_parity\")\nruntime = pops.bind(pops.compile(pops.resolve(pops.validate(case), layout=layout)))\npops.step(runtime, t_bound=T_END)\nruntime.checkpoint(sys.argv[1])\nprint(\"levels\", runtime.n_levels(), \"time\", runtime.time(), \"macro_step\", runtime.macro_step())\n"
+}

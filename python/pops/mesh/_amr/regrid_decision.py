@@ -58,18 +58,15 @@ class RegridBodyError(TypeError):
     """A ``when`` body of ``Regrid`` reads outside what T33 allows, or does not return a Bool."""
 
 
-def _not_a_predicate(self: Any, context: Any, *, action: str) -> Any:
-    raise TypeError("%s belongs to the when body of a Regrid, not to a Tag or Coarsen rule"
-                    % type(self).__name__)
-
-
 class EveryAcceptedSteps(Expr):
     """``B.steps % k == 0``: true after every k-th accepted step of the run (5.11, ``every``)."""
 
+    # A when body reads it as a Boolean. A region that holds it is refused by the criterion,
+    # since it is neither a cell read, a width nor a parameter.
+    __pops_ir_boolean__ = True
+
     def __init__(self, k: int) -> None:
         self.k = k
-
-    resolve_for_amr_predicate = _not_a_predicate
 
     def __pops_ir_children__(self) -> tuple:
         return ()
@@ -368,16 +365,11 @@ class Regrid:
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        from pops.amr.authoring import AMRTagging, Buffer
-        from .refinement_criterion import RefinementRegion
+        from pops.amr.authoring import AMRTagging
 
+        # Every Tag and Coarsen predicate is a region of cell, generated into the Program (DM13b).
         if type(self.criterion) is not AMRTagging:
             raise TypeError("Regrid(criterion, when): the criterion is an AMRTagging")
-        if any(type(rule.predicate) is not RefinementRegion
-               for rule in self.criterion.rules if type(rule) is not Buffer):
-            raise TypeError(
-                "Regrid(criterion, when): the criterion writes every Tag and Coarsen predicate "
-                "as a function of cell, generated into the Program (DM13b)")
         object.__setattr__(self, "when", RegridWhen.trace(self.when))
 
     def to_data(self) -> dict[str, Any]:

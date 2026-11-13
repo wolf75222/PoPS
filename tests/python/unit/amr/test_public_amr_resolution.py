@@ -71,7 +71,6 @@ def _resolved_target(
             execution=authored_layout.execution,
             patch_layout=(authored_layout.patch_layout if patch_layout is None else patch_layout),
             load_balance=(authored_layout.load_balance if load_balance is None else load_balance),
-            tagger=authored_layout.tagger,
             clustering=authored_layout.clustering,
         )
     case = pops.validate(target.authoring.case)
@@ -447,7 +446,6 @@ def test_load_balance_protocol_rejects_identity_not_covering_options():
         execution=authored.execution,
         patch_layout=authored.patch_layout,
         load_balance=ForgedPolicy(),
-        tagger=authored.tagger,
         clustering=authored.clustering,
     )
     with pytest.raises(ValueError, match="does not authenticate"):
@@ -508,7 +506,6 @@ def test_patch_layout_protocol_refuses_noncanonical_options():
         transfer=authored.transfer,
         execution=authored.execution,
         patch_layout=ExtraOption(),
-        tagger=authored.tagger,
         clustering=authored.clustering,
     )
     with pytest.raises(TypeError, match="exact amr_patch_layout schema-v1"):
@@ -538,7 +535,6 @@ def test_patch_layout_protocol_refuses_unstable_options():
         transfer=authored.transfer,
         execution=authored.execution,
         patch_layout=UnstableOption(),
-        tagger=authored.tagger,
         clustering=authored.clustering,
     )
     with pytest.raises(TypeError, match="must be deterministic"):
@@ -566,15 +562,14 @@ def test_regrid_authority_requires_the_exact_public_type_before_resolution():
         execution=authored.execution,
         patch_layout=authored.patch_layout,
         load_balance=authored.load_balance,
-        tagger=authored.tagger,
         clustering=authored.clustering,
     )
     with pytest.raises(TypeError, match="exact AMRRegrid"):
         invalid.options()
 
 
-def test_final_amr_authorities_derive_discrete_context_and_nesting():
-    from pops.mesh._amr import GradientAbove, GradientBelow
+def test_final_amr_authorities_derive_the_criterion_and_nesting():
+    from pops.mesh._amr import ResolvedRefinementCriterion
 
     target, layout, layout_plan, authorities = _resolved_target()
     assert layout.capabilities().get("transition_ratios") == [[2, 2], [2, 2]]
@@ -592,58 +587,17 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
     assert all(row.lookahead == 1 for row in authorities.hierarchy.plan.transitions)
     assert authorities.transfer.layout_plan_id == layout_plan.qualified_id
 
-    graph = authorities.tagging.graph.graph
-    assert type(graph.refine) is GradientAbove
-    assert type(graph.coarsen) is GradientBelow
-    assert graph.refine.indicator == target.authoring.case.resolve(target.authoring.tracer_state)
-    assert graph.refine.context == graph.coarsen.context
-    assert graph.refine.context.layout == layout_plan.layout_for(graph.refine.indicator)
-    assert graph.refine.context.discretization.kind == "discretization"
-    assert graph.refine.context.stencil.kind == "stencil"
-    assert graph.refine.context.lowering.route == "linear_axis_stencil_l2_v1"
-    assert graph.refine.context.lowering.dimension == 2
-    assert [axis.offsets for axis in graph.refine.context.lowering.axes] == [(-1, 1), (-1, 1)]
+    # The refine and coarsen regions read the gradient of the tracer over the stencil of its
+    # method: one field, read one cell away along each axis.
+    criterion = authorities.tagging.graph
+    assert type(criterion) is ResolvedRefinementCriterion
+    (field,) = criterion.fields
+    state = target.authoring.case.resolve(target.authoring.tracer_state)
+    assert field.state == state
+    assert layout_plan.layout_for(field.state) is not None
+    assert field.canonical_identity()["reach"] == [1, 1]
     assert authorities.initial_conditions.layout_plan_id == layout_plan.qualified_id
     assert authorities.bootstrap.tagging == authorities.tagging.graph
-
-
-def test_gradient_tagging_fails_at_resolve_without_context_or_one_consumer_layout():
-    from pops.amr._resolution import AMRTaggingResolutionContext
-    from pops.math import ValueExpr
-    from pops.mesh import LayoutPlanBuilder
-    from pops.model import Handle
-
-    target = _example().build_final_case()
-    case = pops.validate(target.authoring.case)
-    descriptor = target.layout.resolve_for_case(case.resolve)
-    owner = case.owner_path.canonical()
-    numerics = tuple(
-        case._resolved_numerics_for(name) for name in sorted(case._numerics_assignments)
-    )
-    threshold = case.resolve(target.authoring.refine_threshold)
-
-    missing = Handle("missing-discrete-state", kind="state", owner=owner)
-    missing_builder = LayoutPlanBuilder(owner)
-    missing_layout = missing_builder.layout("only", descriptor)
-    missing_builder.assign_state(missing, missing_layout)
-    missing_plan = missing_builder.resolve(states=(missing,))
-    missing_context = AMRTaggingResolutionContext(owner, missing_plan, numerics, case.resolve)
-    with pytest.raises(ValueError, match="has no resolved spatial discretization"):
-        missing_context.resolve_gradient_magnitude(
-            field=ValueExpr(missing), scale=1, action="refine", comparison="gt", threshold=threshold
-        )
-
-    state = case.resolve(target.authoring.tracer_state)
-    multiple_builder = LayoutPlanBuilder(owner)
-    first = multiple_builder.layout("first", descriptor)
-    multiple_builder.layout("second", descriptor)
-    multiple_builder.assign_state(state, first)
-    multiple_plan = multiple_builder.resolve(states=(state,))
-    multiple_context = AMRTaggingResolutionContext(owner, multiple_plan, numerics, case.resolve)
-    with pytest.raises(ValueError, match="requires exactly one adaptive layout authority"):
-        multiple_context.resolve_gradient_magnitude(
-            field=ValueExpr(state), scale=1, action="refine", comparison="gt", threshold=threshold
-        )
 
 
 def test_temporal_relations_are_exact_explicit_and_independent_from_spatial_ratios():
@@ -676,7 +630,6 @@ def test_temporal_relations_are_exact_explicit_and_independent_from_spatial_rati
 
 def test_runtime_authority_installs_exact_temporal_relation_without_spatial_inference():
     from pops import interfaces
-    from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
     from pops.amr import (
         AMRClockRelation,
         AMRExecution,
@@ -688,8 +641,6 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
         proven_serial_manifest,
     )
     from pops.runtime._runtime_authorities import install_runtime_authorities
-
-    tagging_abi = NATIVE_TAGGING_PROGRAM_ABI
 
     class Engine:
         _s = None
@@ -743,37 +694,6 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
                 "maximum_box_size": 32,
                 "layout_identity": layout_identity,
             },
-            "tagger": {
-                "schema_version": 1,
-                "provider_type": "builtin_amr_tagger",
-                "runtime_installation": {
-                    "schema_version": 1,
-                    "protocol": "builtin",
-                },
-                "provider_id": "pops.lib.amr::symbolic_tagger",
-                "provider_identity": "test::tagger-provider",
-                "native_interface": interfaces.Tagger.to_data(),
-                "layout_identity": layout_identity,
-                "clock_identity": "test::clock",
-                "tagging_graph_identity": "test::tagging-graph",
-                "tagging_capability": {
-                    "schema_version": 1,
-                    "capability_type": "amr_tagging_program",
-                    "leaf_opcodes": list(tagging_abi["leaf_opcodes"]),
-                    "leaf_opcode_ids": list(tagging_abi["leaf_opcodes"].values()),
-                    "logical_opcodes": list(tagging_abi["logical_opcodes"]),
-                    "logical_opcode_ids": list(tagging_abi["logical_opcodes"].values()),
-                    "candidate_outputs": list(tagging_abi["candidate_outputs"]),
-                    "indicator_stencil_routes": list(tagging_abi["indicator_stencil_routes"]),
-                    "maximum_stencil_terms": tagging_abi["maximum_stencil_terms"],
-                    "maximum_instruction_count": tagging_abi["maximum_instruction_count"],
-                    "non_finite_policy": tagging_abi["non_finite_policy"],
-                    "persistent_hysteresis": tagging_abi["persistent_hysteresis"],
-                    "execution_mode": "native_backend",
-                    "collective_scope": "none",
-                    "memory_spaces": list(tagging_abi["memory_spaces"]),
-                },
-            },
             "reflux": {
                 "schema_version": 1,
                 "provider_type": "builtin_amr_reflux",
@@ -799,12 +719,14 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
 def test_tagging_resolution_preserves_native_persistent_hysteresis():
     from pops.amr import ConflictPolicy, EqualityPolicy, Hysteresis
 
-    authored = Hysteresis(min_cycles=3, equality=EqualityPolicy.COARSEN)
+    # A criterion written as regions holds requests under HOLD and REFINE_WINS only
+    # (test_refinement_criterion_regions.py); the number of cycles is free.
+    authored = Hysteresis(min_cycles=3, equality=EqualityPolicy.HOLD)
     _, _, _, authorities = _resolved_target(
         hysteresis=authored,
-        conflict_policy=ConflictPolicy.ERROR,
+        conflict_policy=ConflictPolicy.REFINE_WINS,
     )
-    assert authorities.tagging.graph.graph.hysteresis == authored
+    assert authorities.tagging.graph.hysteresis == authored
 
 
 def test_tagging_authority_requires_exact_explicit_policy_types():
@@ -842,7 +764,7 @@ def test_public_resolve_derives_every_amr_authority_without_manual_injection():
     assert resolved.amr_execution.mode == "subcycled"
 
 
-def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
+def test_runtime_tagging_installs_the_tables_of_the_generated_criterion():
     from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
 
     target, _, _, authorities = _resolved_target()
@@ -851,50 +773,38 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
     class NativeProbe:
         call = None
 
-        def _set_bootstrap_tagging(self, *args):
+        def _set_generated_tagging(self, *args):
             self.call = args
 
     native = NativeProbe()
     flow_bootstrap_tagging(native, authorities.bootstrap, params, clock_identity="case::clock")
     assert native.call is not None
     (
-        subject_kinds,
-        subject_identities,
+        identity,
+        states,
         blocks,
         variables,
-        field_component_indices,
-        leaf_ops,
+        components,
+        reaches,
         thresholds,
-        stencil_indices,
-        stencils,
-        refine_ops,
-        refine_args,
-        coarsen_ops,
-        coarsen_args,
+        parameter_blocks,
+        parameter_slots,
         min_cycles,
-        equality,
-        conflict,
         clock,
         provider,
     ) = native.call
-    assert subject_kinds == ["state", "state"]
-    assert len(subject_identities) == 2
-    assert subject_identities[0] == subject_identities[1]
-    assert subject_identities[0]
-    assert blocks == ["tracer", "tracer"]
-    # The runtime VM consumes the scalar component token, not the aggregate state handle.
-    assert variables == ["u", "u"]
-    assert field_component_indices == [-1, -1]
-    assert leaf_ops == [4, 5]
+    assert identity == authorities.bootstrap.tagging.qualified_id
+    assert states == [target.authoring.case.resolve(target.authoring.tracer_state).qualified_id]
+    assert blocks == ["tracer"]
+    # The criterion reads the scalar component token of the state, over a one-cell stencil.
+    assert variables == [["u"]]
+    assert components == [[0]]
+    assert reaches == [[1, 1]]
     assert thresholds == [0.10, 0.04]
-    assert stencil_indices == [0, 0]
-    assert len(stencils) == 1
-    assert stencils[0]["route"] == "linear_axis_stencil_l2_v1"
-    assert (refine_ops, refine_args) == ([4], [0])
-    assert (coarsen_ops, coarsen_args) == ([5], [1])
-    assert (min_cycles, equality, conflict) == (0, "hold", "refine_wins")
+    assert (parameter_blocks, parameter_slots) == ([], [])
+    assert min_cycles == 0
     assert clock == "case::clock"
-    assert provider.startswith("pops.bound-amr-tagging-program.v1:sha256:")
+    assert provider.startswith("pops.bound-amr-refinement-criterion.v1:sha256:")
 
 
 def test_layout_preserves_heterogeneous_exact_rank_transitions():
