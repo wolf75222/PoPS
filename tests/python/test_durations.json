@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1205,
+    "estimated_count": 1207,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7021,6 +7021,7 @@
       "tests/python/integration/runtime/test_multisupport_double_consume_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_parent_reject_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_stale_assessment_v14_native.py",
+      "tests/python/integration/runtime/test_n17_chart_annulus_native.py",
       "tests/python/integration/runtime/test_n17_graded_box_native.py",
       "tests/python/integration/runtime/test_n17_graded_plane_native.py",
       "tests/python/integration/runtime/test_n17_graded_ring_native.py",
@@ -7754,6 +7755,7 @@
       "tests/python/unit/surface/test_lot_d_step_rule.py",
       "tests/python/unit/surface/test_lot_e_project.py",
       "tests/python/unit/surface/test_lot_g_run.py",
+      "tests/python/unit/surface/test_n17_chart.py",
       "tests/python/unit/surface/test_n17_graded.py",
       "tests/python/unit/surface/test_n3_lot1_library_words.py",
       "tests/python/unit/surface/test_n3_lot2_muscl.py",
@@ -8143,7 +8145,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1270,
+    "total_files": 1272,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9054,6 +9056,33 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": "1b56bb0e19dbe393d54e9be407e8e94e3cce583763aee41db93f53cd409318b2",
         "tests/python/unit/surface/test_n3_lot2_muscl.py": "5e02066ad264d3d8bb12fe34e46cd8b506cbf0a8b7cd0c420672c29dc3b6969b"
+      }
+    },
+    "n17_20261113_charted_support": {
+      "basis": "Unmeasured CI scheduling estimates for the two modules of N17 L2a (ROM-110, the charted support at the surface, σ.chart and geometry=). The annulus of L1a written with the surface compiles two surface Programs on a native build of rank two (the charted annulus and the same annulus with graded radial nodes) and binds and runs each twice: 600 s, two tiers of api_v02_20261013 (300/600/900/1200 s), one per cold compile, as the graphs of N17 L1a. The surface unit file elaborates the charted cases and the refusals of the chart, the rule and the readings without compiling: 15 s, the source-only tier (5/15/60 s), as the graded file of L1b. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, a native module of rank two, the native file on its isolated package cache, other native builds and pytest sessions running beside it); they are not GitHub CI file wall times. Existing weights, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_n17_chart_annulus_native.py": "tests/python/integration/runtime/test_n17_static_geometry_graphs.py",
+        "tests/python/unit/surface/test_n17_chart.py": "tests/python/unit/surface/test_n17_graded.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_n17_chart_annulus_native.py": 600,
+        "tests/python/unit/surface/test_n17_chart.py": 15
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_n17_chart_annulus_native.py": {
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=2 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_chart_annulus_native.py",
+          "passed": 2,
+          "seconds": 92.04
+        },
+        "tests/python/unit/surface/test_n17_chart.py": {
+          "command": "PYTHONPATH=python:. pytest -q tests/python/unit/surface/test_n17_chart.py",
+          "passed": 27,
+          "seconds": 5.33
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_n17_chart.py": "662d10c1c88132c82c9c738c561edaa9bc24c1a1c9df4a8f6702266969321aae",
+        "tests/python/integration/runtime/test_n17_chart_annulus_native.py": "d05ac96ea44f91bc9d4174e5abe6f8e7a66ec8d2789d76e3384543d08b435af5"
       }
     },
     "b03_20261113_shard128_continuum_hall_weights": {
@@ -10361,5 +10390,7 @@
   "tests/python/integration/runtime/test_n17_graded_plane_native.py": 1200,
   "tests/python/integration/runtime/test_n17_graded_box_native.py": 300,
   "tests/python/unit/surface/test_n17_graded.py": 15,
+  "tests/python/unit/surface/test_n17_chart.py": 15,
+  "tests/python/integration/runtime/test_n17_chart_annulus_native.py": 600,
   "tests/python/integration/surface/test_vertical_slice_t02.py": 300
 }

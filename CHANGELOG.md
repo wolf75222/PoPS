@@ -82,6 +82,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
   until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
   case written by hand for b6 and N8 (program IR, artifact, identity, C++).
+- ROM-110 (N17, L2a): the charted support at the surface (D0b; DN25 to DN34 of the design note).
+  `σ.chart(x=e_x, y=e_y)` states the chart of a support of rank two, one expression of the
+  coordinates of σ per axis of the Cartesian frame. The keywords name the frame axes, which key the
+  components of a flux and of a vector (`σ.axes`, `σ.x`); the coordinates of σ stay the logical
+  axes (`σ.r`), which name the mesh axes, `cells=` in their order, the boundary pieces and the node
+  functions of `pops.Graded` (S6). `chart` and `weighted` are readings that no axis may take (SU8).
+  The layout states the quadrature rule of the measures, `pops.Uniform(cells=..., geometry=rule)`:
+  required on a charted support (`AmbiguousElaboration`), refused on a box and on node positions,
+  whose geometry is exact (`SupportMismatch`). A charted case elaborates to the chart of C1 that
+  the static geometry arrays serve since L1a, and a graded chart composes its node functions with
+  the chart, X(f(s), theta). Refused when the chart is written: a chart of rank one, or one whose
+  components each read one coordinate, a different one, naming `pops.Graded` (it only moves the
+  nodes); a keyword that names an axis of σ, a count other than the rank, a component that reads
+  no coordinate or a coordinate that no component reads (`SupportMismatch`); a frame not named x
+  and y (`NotYetElaborated`, the supports of G03); rank three (planned, not covered); a word that
+  the analytic programs of bind lack (N11); a second chart, and `identify` after `chart`. A piece
+  on which the chart does not depend on the other coordinate is degenerate: it leaves `σ.boundary`,
+  and a case on that support waits for lot L2c with `identify` of G09. A coordinate read on a
+  charted support, in a value of the model or an initial value, and `pops.project` there wait for
+  lot L2b, which reads them at the points of the chart, and so do a value relation (its ghost is
+  the reflection of a cell across a face of the chart) and a reconstruction above the cell values,
+  refused where the case is built (`NotYetElaborated`); `σ.weighted` waits for lot L3. On the
+  physical normal of a chart the face input s of a face authored in source, which `rusanov()`
+  reads as its spectral radius, is b6's bound sum_k |n_k| rho(A_k), not the exact radius of
+  `spectral_radius`: equal on an axis normal, larger off it and without bound near a face tangent
+  to the flow. It is a transitional route until lot L2d of N17, which generates the exact radius;
+  `pops.inspect` names it on the row of the scheme. An array that a run published on another
+  support, the box of the chart or the same box under another chart, is refused as a datum of the
+  chart (`SupportMismatch`). The case is `examples/api_v02/models_charted_supports.py`, a scalar
+  advected by `rusanov()` on the annulus.
 - ROM-110 (N17, L1b): graded spacing at the surface, and the static geometry arrays of a graded
   box of rank three. `pops.Graded(base=pops.Uniform(cells=c), nodes={box.x: f})` places node k of
   an axis at f(s), s = k / c correctly rounded, f a plain function that PoPS calls once with the

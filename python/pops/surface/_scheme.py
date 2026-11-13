@@ -458,7 +458,14 @@ def spectral_radius(term: Any, value: Any, normal: Any) -> Any:
 
     At a bare trace, ``face.left(u)`` or ``face.right(u)``, it is a read of the face, which lowers
     to that expansion; and ``largest`` of the radii at the two traces is the face input ``s`` of
-    ``riemann.User``, the larger spectral radius that b6 generates from the same waves."""
+    ``riemann.User``, the larger spectral radius that b6 generates from the same waves.
+
+    On the physical normal of a charted support (N17 L2a) that input is not the exact radius: b6
+    serves the bound sum_k |n_k| rho(A_k) of the axis radii, equal to it on an axis normal, larger
+    off it and without bound near a face tangent to the flow. It is a transitional route of the
+    native face (DN31), removed by lot L2d of N17, which generates the exact radius on a physical
+    normal; ``pops.inspect`` names it on the row of the scheme. A scheme that wants the exact
+    normal speed of a known velocity states it, ``upwind(speed=dot(v, face.normal))``."""
     radius = abs(_wave(term, value, normal, "spectral_radius"))
     if isinstance(value, SchemeLeaf) and value.key[0] == "trace":
         side = value.key[1]
@@ -1193,13 +1200,26 @@ class UserScheme(SchemeValue):
         builder = self.traced(key).builder
         return reads_speed_pair(builder.value, builder.speed)
 
+    def reads_radius(self, key: Term) -> bool:
+        """Whether the face of the key reads the face input ``s``, the larger spectral radius of
+        R9 at the two traces: as its speed when it states none, or in its value or its speed. On
+        the physical normal of a chart b6 serves the bound sum_k |n_k| rho(A_k) for it (DN31)."""
+        if self.scheme.is_cell or isinstance(key, DiffusiveFlux):
+            return False
+        builder = self.traced(key).builder
+        return builder.speed is None or any(
+            isinstance(node, SchemeLeaf) and node.key[0] == "radius"
+            for value in (builder.value, builder.speed) if value is not None
+            for node in walk(value))
+
     def traced(self, key: Term) -> Traced:
         """The builder that the scheme gives under ``key``, run once per key (SU5), and for a face
-        scheme once per axis of the support, ``face.axis`` being Python data."""
+        scheme once per logical axis of the support (S6: the axes of a box, the logical axes of
+        a charted support), ``face.axis`` being Python data."""
         for known, traced in self._traced:
             if known is key:
                 return traced
-        axes = key.quantity.support.axes
+        axes = key.quantity.support._logical_axes
         if self.scheme.is_cell:
             builder = None
             for axis in axes:
@@ -1497,7 +1517,7 @@ def face_function(function: Any, view: TermView, where: str, reconstructed: bool
     check_plain_function(function, where)
     key = view.term
     value = None
-    for axis in key.quantity.support.axes:
+    for axis in key.quantity.support._logical_axes:
         ran = function(FaceEntity(key, axis))
         _expression(ran, "the value of %s" % where)
         _reads(ran, ("trace", "normal", "cell"), where, "face", site=user_site(2))
