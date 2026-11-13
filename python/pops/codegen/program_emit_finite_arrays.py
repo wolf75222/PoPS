@@ -101,8 +101,6 @@ def finite_cpp_type(signature):
                         element.get("ownership") == "contiguous_distributed")
             return ns + ("Requests" if requests else "ArrayRef<pops::kNativeDimension>")
         return ns + {"index_set":"DomainRef", "index":"Index"}[kind]
-    if kind == "field_topology":
-        return "pops::runtime::program::FieldTopologyView<pops::kNativeDimension>"
     if kind.startswith("continuation_"):
         from .program_emit_versioned import capability_cpp_type
         return capability_cpp_type(signature)

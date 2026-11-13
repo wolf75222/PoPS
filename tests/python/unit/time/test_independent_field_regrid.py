@@ -1,58 +1,30 @@
-"""Source contracts for independent provider topology; native proof is separate."""
+"""The independent provider-owned Field moves through regrid_read; native proof is separate.
+
+N10 lot 3b: the port deleted the topology, the bundles and ``scalar_field(topology=)``, and the
+refusals that guarded their arguments (another Field's topology, a ``dimension=`` mismatch, a
+target width chosen by the case) went with them: the read allocates from the source Field.
+"""
 import pytest
-from pops.codegen.program_emit_field_representation import emit_field_representation
-from pops.time._program.distributed_arrays import Distributed
-from pops.time._program.field_representation import validate_field_representation_program
-from pops.time._program.detach import detach_compiled_program
-from pops.time.value_signatures import value_signature, same_signature
-from tests.python.unit.fields.test_independent_field_authority_v02 import source
 
 
-def fixture():
-    program, observations, field, problem = source(joint=True)
-    first, second = [observations[field[unknown]] for unknown in problem.unknowns]
-    Distributed(program, storage_bytes=1024*1024, storage_versions=128)
-    program.__dict__["_continuation_regrid_authoring"] = {"blocks": (), "dimension": 2}
-    topology = program.regrid_topology(first, level=program.int64(0), side="source", dimension=2)
-    return program, first, second, topology
+def test_independent_field_is_read_with_its_exact_provider_and_no_state_owner():
+    from examples.api_v02.continuation_independent_regrid import build_independent_continuation_regrid
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.time._graph.value_traversal import walk_program_nodes
+    from pops.time._program.continuation_regrid import TARGET_INSTANCE, hierarchy_instance
+    from pops.time.value_signatures import same_signature, value_signature
 
-
-def test_independent_field_exports_with_exact_provider_without_state_owner():
-    p, field, _other, topology = fixture()
-    bundle = p.field_bundle(field, topology=topology, cell_capacity=512, patch_capacity=16)
-    target = p.regrid_topology(field, level=p.int64(1), side="target", dimension=2)
-    destination = p.scalar_field("target", like=field, topology=target, initial=p.float64(0))
-    assert same_signature(value_signature(destination), value_signature(field))
-    restored = p.bundle_field(bundle, template=field, topology=target)
-    assert restored.block is None
-    assert same_signature(value_signature(restored), value_signature(field))
-    var = {field.id: "old_field", topology.id: "old_topology", target.id: "new_topology"}
-    lines = []
-    emit_field_representation(p, bundle, var, None, lines, [], {}, {}, "amr_system")
-    code = "\n".join(lines)
-    assert "old_topology.program_block() != -1" in code
-    assert "old_topology.field_provider()" in code and "field_problem" in code
-    assert "ctx.export_field_bundle(old_field" in code
-    detached = detach_compiled_program(p)
-    validate_field_representation_program(detached)
-    assert detached._ir_hash() == p._ir_hash()
-
-
-def test_other_unknown_cannot_borrow_same_width_provider_topology():
-    p, _field, other, topology = fixture()
-    before = len(p._values)
-    with pytest.raises(TypeError, match="exact topology"):
-        p.field_bundle(other, topology=topology, cell_capacity=512, patch_capacity=16)
-    assert len(p._values) == before
-
-
-def test_provider_cannot_choose_unbound_dimension_or_storage_width():
-    p, field, _other, topology = fixture()
-    with pytest.raises(ValueError, match="dimension"):
-        p.regrid_topology(field, level=p.int64(0), side="target", dimension=3)
-    target = p.regrid_topology(field, level=p.int64(0), side="target", dimension=2)
-    with pytest.raises(ValueError, match="component"):
-        p.scalar_field("wrong_width", 2, like=field, topology=target, initial=p.float64(0))
+    program = build_independent_continuation_regrid().case._time
+    reads = [value for value in walk_program_nodes(program._values)
+             if value.op == "continuation_regrid_read"]
+    assert [value.attrs["path"] for value in reads] == [("state",), ("previous",)]
+    previous = reads[1]
+    assert previous.block is None
+    assert value_signature(previous)["field_authority"]["kind"] == "field_problem"
+    assert same_signature(value_signature(previous), value_signature(previous.inputs[0]))
+    assert all(hierarchy_instance(value) == TARGET_INSTANCE for value in reads)
+    source = emit_cpp_program(program, target="amr_system")
+    assert source.count("ctx.regrid_read(") == 2
 
 
 @pytest.mark.parametrize("axes", [None, [1, 0]])

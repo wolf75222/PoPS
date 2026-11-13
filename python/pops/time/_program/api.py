@@ -18,7 +18,7 @@ from pops.time._cadence import ProgramCadence
 from pops.time._program.authoring import _ProgramAuthoring
 from pops.time._program.structured_control import _ProgramStructuredControl
 from pops.time._program.finite_arrays import _ProgramFiniteArrays
-from pops.time._program.field_representation import _ProgramFieldRepresentation
+from pops.time._program.continuation_regrid import _ProgramRegrid
 from pops.time._program.versioned_values import _ProgramVersionedValues
 from pops.time._program.expressions import _ProgramExpressions
 from pops.time._program.stencil_flux import _ProgramStencilFlux
@@ -51,7 +51,7 @@ from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue u
 @register_program_type
 class Program(
     _ProgramFiniteArrays,
-    _ProgramFieldRepresentation,
+    _ProgramRegrid,
     _ProgramVersionedValues,
     _ProgramStencilFlux,
     _ProgramStructuredControl,

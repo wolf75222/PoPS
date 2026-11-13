@@ -9,10 +9,11 @@ formula becomes the generated C++ (G2).
   they replace are the parity oracles of ``examples/api_v02/b6_numerics.py`` (D5).
 * :mod:`.limiters` -- ``muscl(limiter=)``, a scheme that returns ``Reconstruct``, and the slope
   limiters ``minmod``, ``vanleer``, ``mc`` and ``superbee``, passed uncalled to it, written with the
-  surface (2.6.9, N3 lot 2). Their b6 bodies are the parity oracles of
-  ``examples/api_v02/b6_reconstructions.py``.
-* :mod:`.reconstructions` -- the b6 per-axis ``Reconstruct`` builder and ``weno5`` (N3), until
-  lot 3 ports ``weno5``.
+  surface (2.6.9, N3 lot 2).
+* :mod:`.reconstructions` -- ``weno5(epsilon=)``, a scheme that returns ``Reconstruct``, written
+  with the surface (2.6.9, N3 lot 3). The b6 ``Reconstruct`` builder is not ported (D4): a case
+  writes ``Reconstruct`` from ``pops.surface.discrete``. The b6 bodies of ``muscl``, its limiters
+  and ``weno5`` are the parity oracles of ``examples/api_v02/b6_reconstructions.py``.
 * :mod:`.boundaries` -- ``ghosts()``, the boundary policy of 2.6.9, written with the surface
   (N15 lot B): the ghost 2g - u_k of a value and u_1 of no data. The package re-exports it, so
   that a case writes ``from pops.lib.numerics import upwind, muscl, vanleer, ghosts`` as the
@@ -27,10 +28,10 @@ formula becomes the generated C++ (G2).
 from .boundaries import ghosts
 from .fluxes import hll, rusanov, two_point, upwind
 from .limiters import mc, minmod, muscl, superbee, vanleer
-from .reconstructions import Reconstruct, weno5
+from .reconstructions import weno5
 
 __all__ = [
     "ghosts", "hll", "rusanov", "two_point", "upwind",
-    "Reconstruct", "muscl", "weno5", "mc", "minmod", "superbee", "vanleer",
+    "muscl", "weno5", "mc", "minmod", "superbee", "vanleer",
 ]
 

@@ -29,6 +29,7 @@ from ._program import (
 from ._project import project
 from . import _solver
 from ._quadrature import Quadrature
+from ._representation import Coefficients, Dual, representation
 from ._run import BudgetExhausted, Output, RunFailed, SolveFailed, every
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
@@ -48,6 +49,8 @@ _RUN = "the run of N8 (Simulation.run, RunResult and Output, CC14) and a later l
 _HIERARCHY = "a later lot of N15 with the hierarchies of N12"
 _REPRESENT = "a later lot of N15 with the representations and projections of G03 and G07"
 _SUPPORTS = "a later lot of N15 with the supports of G03 and G09"
+# The named representations are words of pops.lib.representations (N16 lot 1), not of pops.
+_LIB_REPRESENTATION = "the word %s() of pops.lib.representations (N16 lot 1), of which %s"
 _LATER_N15 = "a later lot of N15"
 
 # The constructs of 2.6.2, 2.6.4 and 2.6.8 that this lot does not elaborate, with their owner.
@@ -63,9 +66,14 @@ _LATER = {
     "Scientific": _RUN, "Bitwise": _RUN, "Reproducible": _RUN, "Cache": _RUN,
     "Regrid": _HIERARCHY, "Level": _HIERARCHY, "invalidate": _HIERARCHY, "remap": _HIERARCHY,
     "restrict_onto": _HIERARCHY, "replace_contribution": _HIERARCHY,
-    "CellTotal": _REPRESENT,
-    "PointValue": _REPRESENT, "FaceNormalIntegral": _REPRESENT, "EdgeCirculation": _REPRESENT,
-    "DualLoad": _REPRESENT, "Covector": _REPRESENT, "reconstruct": _REPRESENT,
+    "CellTotal": _LIB_REPRESENTATION % ("CellTotal", "G03 lot M1 gives the surface route"),
+    "PointValue": _LIB_REPRESENTATION % ("PointValue", "the N16 lot that retires the transitional "
+                                         "table of CellAverage() gives the projection by encode"),
+    "FaceNormalIntegral": _LIB_REPRESENTATION % ("FaceNormalIntegral", "G08 elaborates its "
+                                                 "carrier"),
+    "EdgeCirculation": _LIB_REPRESENTATION % ("EdgeCirculation", "G08 elaborates its carrier"),
+    "DualLoad": _LIB_REPRESENTATION % ("DualLoad", "N16 lot 2 elaborates the loads"),
+    "Covector": _REPRESENT, "reconstruct": _REPRESENT,
     "Weak": _REPRESENT, "Pointwise": _REPRESENT, "Approximate": _REPRESENT,
     "Realizable": _REPRESENT,
     "product": _SUPPORTS, "Fibre": _SUPPORTS, "Line": _SUPPORTS, "Ball": _SUPPORTS,
@@ -142,7 +150,8 @@ _EARLIER = {
                                    "of cell, since accept= holds checks only"),
 }
 
-_LIBRARY = "pops.lib.numerics, pops.lib.time.methods and pops.lib.quadrature"
+_LIBRARY = ("pops.lib.numerics, pops.lib.time.methods, pops.lib.quadrature and "
+            "pops.lib.representations")
 
 
 def _later(name: str, owner: str) -> _Any:
@@ -180,6 +189,8 @@ __all__ = [
     "Resources", "Scalar", "Tensor", "Tolerance", "Uniform", "Vector", "bind", "claim", "compile",
     "every", "inspect", "project", "record", "discrete", "math", "method", "scheme", "solve",
     "unknown",
+    # @pops.representation and what it returns (N16 lot 1, D1b)
+    "Coefficients", "Dual", "representation",
     # @pops.solver and the words of its body (N9 lot 4); pops.fail takes the variants of T39
     # listed with the failures of a run below
     "PropertyNotDerived", "choose", "fail", "solver",
