@@ -606,13 +606,13 @@ void bind_system_assembly(py::class_<System>& cls) {
              double gamma, int substeps, bool evolve, int stride, const std::vector<double>& params,
              double positivity_floor, int newton_max_iters, double newton_rel_tol,
              double newton_abs_tol, double newton_fd_eps, double newton_damping,
-             bool newton_diagnostics) {
+             bool newton_diagnostics, std::optional<double> smoothness_epsilon) {
             NewtonOptions newton = newton_options_from_abi(
                 newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
-            system.register_native_package(name, so_path, expected_model_identity,
-                                           expected_binary_identity, limiter, riemann, recon, time,
-                                           gamma, substeps, evolve, stride, params,
-                                           positivity_floor, newton, newton_diagnostics);
+            system.register_native_package(
+                name, so_path, expected_model_identity, expected_binary_identity, limiter, riemann,
+                recon, time, gamma, substeps, evolve, stride, params, positivity_floor, newton,
+                newton_diagnostics, smoothness_epsilon);
           },
           py::arg("name"), py::arg("so_path"), py::arg("expected_model_identity"),
           py::arg("expected_binary_identity"), py::arg("limiter") = "minmod",
@@ -626,7 +626,7 @@ void bind_system_assembly(py::class_<System>& cls) {
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
           py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
-          py::arg("newton_diagnostics") = false)
+          py::arg("newton_diagnostics") = false, py::arg("smoothness_epsilon") = py::none())
       .def("_register_external_riemann_package", &System::register_external_riemann_package,
            py::arg("name"), py::arg("so_path"), py::arg("brick_id"), py::arg("expected_sha256"),
            py::arg("expected_nvars"), py::arg("expected_provider_count"),

@@ -9300,7 +9300,6 @@ python/pops/runtime/_system_install.py:277 gamma N3 | gamma
 python/pops/runtime/_system_install.py:277 gamma N3 | gamma
 python/pops/runtime/_system_install.py:282 weno N3 | "weno_epsilon"
 python/pops/runtime/_system_install.py:282 weno N3 | weno_epsilon
-python/pops/runtime/_system_install.py:283 weno N3 | weno_epsilon
 python/pops/runtime/_system_install.py:284 weno N3 | "weno"
 python/pops/runtime/_system_install.py:285 weno N3 | weno_epsilon
 python/pops/runtime/_system_install.py:286 weno N3 | "System.add_equation.weno_epsilon"
@@ -9308,7 +9307,6 @@ python/pops/runtime/_system_install.py:286 weno N3 | weno_epsilon
 python/pops/runtime/_system_install.py:289 adiabatic N3 | adiabatic_index
 python/pops/runtime/_system_install.py:289 gamma N3 | gamma
 python/pops/runtime/_system_install.py:356 gamma N3 | gamma
-python/pops/runtime/_system_install.py:361 weno N3 | weno_epsilon
 python/pops/runtime/_system_install.py:374 gamma N3 | gamma
 python/pops/runtime/_system_install.py:380 newton N9 | _compiled_newton_kwargs
 python/pops/runtime/_system_install.py:398 poisson G10 | set_poisson

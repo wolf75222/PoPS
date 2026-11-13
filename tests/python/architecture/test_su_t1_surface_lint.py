@@ -42,7 +42,7 @@ GALLERY_SHA256 = {
     "l4_two_fluid_drag.py": "8b1a4dd29f75ba8632df993fcfbe2e43fa86c470b6833d9c573d02a008bf173b",
     "lib_methods.py": "a3f35db05eca230fef657f5e11b57d29c0d5b47aa65e39271d2dfb1c3b9fd8ae",
     "lib_models.py": "bfe1d3b06ba66b93d1850d32994b9d1357624adf0c3ead13d9ff9ece3a8be774",
-    "lib_schemes.py": "c33ab783718254ff07da022d1b76a618f1331aa0aa04b520ceae4e72f4b13648",
+    "lib_schemes.py": "680d0106b15f0f7655e0b83bd2304b32a0aec20009111352eb6867ed6aa63673",
     "m10_drift_diffusion.py": "e90c3636f7ac4c65721937fa0b1520b797024dd3b3d886f306da2e796e9f1cec",
     "m19_vlasov_bgk.py": "5aa4f38164b3fc1df744ad578d90e479ff688abe7cde4ad13ad2ad4578ba961a",
     "m26_aggregation_diffusion.py":
@@ -84,10 +84,12 @@ def test_the_gallery_is_the_gallery_of_r12c():
 
 # D8 of N3 lot 1 (ROM-87): the gallery writes the four scheme words of pops.lib.numerics as the
 # library does, so that a case that copies a body of the gallery gets the library's word (CF4);
-# N3 lot 2 extends it to muscl. The limiters keep the formula of their row in the gallery and the
-# guards of master in the library (P2).
+# N3 lot 2 extends it to muscl, N3 lot 3-eps to weno5 and its helpers. The limiters keep the formula
+# of their row in the gallery and the guards of master in the library (P2).
 FLUX_WORDS = ("rusanov", "upwind", "hll", "two_point", "_differentiated")
-RECONSTRUCTION_WORDS = ("muscl",)
+LIMITED_WORDS = ("muscl",)
+WENO_WORDS = ("weno5", "_regulariser", "_smaller", "_weights", "_core", "_weno5z")
+RECONSTRUCTION_WORDS = LIMITED_WORDS + WENO_WORDS
 LIBRARY_WORDS = FLUX_WORDS + RECONSTRUCTION_WORDS
 
 
@@ -111,11 +113,13 @@ def _functions(path):
 
 def test_the_gallery_writes_the_scheme_words_of_the_library():
     """The bodies, the signatures, the decorators and the docstrings (up to their line breaks) of
-    upwind, rusanov, hll and two_point are those of python/pops/lib/numerics/fluxes.py, and the
-    ones of muscl that of python/pops/lib/numerics/limiters.py."""
+    upwind, rusanov, hll and two_point are those of python/pops/lib/numerics/fluxes.py, the ones of
+    muscl that of python/pops/lib/numerics/limiters.py, and the ones of weno5 and its helpers those
+    of python/pops/lib/numerics/reconstructions.py."""
     gallery = _functions(GALLERY / "lib_schemes.py")
     fluxes = _functions(LIBRARY / "numerics" / "fluxes.py")
-    reconstructions = _functions(LIBRARY / "numerics" / "limiters.py")
+    reconstructions = {**_functions(LIBRARY / "numerics" / "limiters.py"),
+                       **_functions(LIBRARY / "numerics" / "reconstructions.py")}
     assert sorted(fluxes) == sorted(FLUX_WORDS)
     assert sorted(reconstructions) == sorted(RECONSTRUCTION_WORDS)
     assert gallery == {**fluxes, **reconstructions}

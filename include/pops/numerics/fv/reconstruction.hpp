@@ -21,6 +21,7 @@
 #include <cmath>
 #include <concepts>
 #include <limits>
+#include <optional>
 #include <type_traits>
 
 namespace pops {
@@ -421,6 +422,14 @@ inline Reconstruction configured_reconstruction(Real smoothness_epsilon = kWenoE
   if constexpr (requires(Reconstruction& value, Real eps) { value.set_smoothness_epsilon(eps); })
     reconstruction.set_smoothness_epsilon(smoothness_epsilon);
   return reconstruction;
+}
+
+/// The same policy with the smoothness epsilon a route carries: none keeps the policy's default.
+template <class Reconstruction>
+inline Reconstruction configured_reconstruction(std::optional<Real> smoothness_epsilon) {
+  if (smoothness_epsilon)
+    return configured_reconstruction<Reconstruction>(*smoothness_epsilon);
+  return configured_reconstruction<Reconstruction>();
 }
 
 }  // namespace pops

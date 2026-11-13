@@ -85,7 +85,8 @@ void register_native_package(System<Dim>* system, const std::string& name,
                              const std::string& recon, const std::string& time, double gamma,
                              int substeps, bool evolve, int stride,
                              const std::vector<double>& params, double positivity_floor,
-                             NewtonOptions newton = {}, bool newton_diagnostics = false) {
+                             NewtonOptions newton = {}, bool newton_diagnostics = false,
+                             std::optional<double> smoothness_epsilon = std::nullopt) {
   constexpr const char* context = "System::_install_native_block";
   if (substeps < 1)
     throw std::runtime_error(std::string(context) + ": substeps >= 1");
@@ -196,6 +197,7 @@ void register_native_package(System<Dim>* system, const std::string& name,
   using installer_capability = runtime::system::PreparedNativeBlockInstaller<Dim>;
   auto capability = std::make_shared<capability_state>();
   capability->identity = name;
+  capability->smoothness_epsilon = smoothness_epsilon;
   auto routes_capability =
       runtime::system::NativePackageCapabilityFactory<Dim>::route_registrar(capability);
   auto block_capability =

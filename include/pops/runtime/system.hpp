@@ -321,7 +321,8 @@ class System {
       const std::string& recon = "conservative", const std::string& time = "explicit",
       double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
       bool evolve = true, int stride = 1, const std::vector<double>& params = {},
-      double positivity_floor = 0.0, NewtonOptions newton = {}, bool newton_diagnostics = false);
+      double positivity_floor = 0.0, NewtonOptions newton = {}, bool newton_diagnostics = false,
+      std::optional<double> smoothness_epsilon = std::nullopt);
 
   /// Authenticate and stage one exact-ranked external Riemann package. The external DSO owns the
   /// prepared model and numerical flux type; its handle is retained by the ordinary native-package
