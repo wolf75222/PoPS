@@ -120,6 +120,15 @@ def measure(args) -> int:
                            "started before the first bind" % (threads["running"], args.threads))
     runtimes = {"slice": simulation._simulation._runtime,
                 "master": b6.bind(master_artifact, initial_state={"tracer": initial_state})}
+    from pops.runtime import _threading
+
+    native = _threading._selected_native_module()
+    concurrency = int(native.runtime_environment_report()["kokkos_concurrency"]) \
+        if native is not None else None
+    if concurrency != args.threads:
+        raise RuntimeError("Kokkos runs %r threads, the bench asked %d" % (concurrency,
+                                                                          args.threads))
+    threads = dict(threads, kokkos_concurrency=concurrency)
     blocks = {"slice": slice_artifact.case.model.name, "master": "tracer"}
 
     def advance(route, steps):

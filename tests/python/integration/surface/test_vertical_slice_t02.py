@@ -2,9 +2,11 @@
 
 The case file ``examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py`` is
 master's tutorial 02 written in the surface, its upwind flux and its SSPRK2 written in the file.
-Until every piece of ``tests/gates/vertical_slice.toml`` is lifted, the file stops on the first
-one: this test runs it and checks the statement and the refusal that the registry records (no
-skip, no xfail: CF14). The file passes the lint SU-T1 and imports only the surface and the library
+While ``tests/gates/vertical_slice.toml`` lists a piece, the file stops on the first one, and
+this test checks the statement and the refusal that the registry records; with the registry empty
+(since #799), it runs the file natively to its end, which writes master's two records (no skip, no
+xfail: CF14). Only that test compiles and loads native code, so only it carries the native
+markers (review O2). The file passes the lint SU-T1 and imports only the surface and the library
 (S1-a).
 """
 from __future__ import annotations
@@ -14,6 +16,8 @@ import runpy
 import sys
 import traceback
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -66,7 +70,10 @@ def test_the_registry_follows_the_case_file():
     assert gate.check(ROOT) == []
 
 
-def test_the_case_file_stops_on_the_first_piece_of_the_registry(tmp_path, monkeypatch):
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_the_case_file_runs_to_its_end_or_to_the_first_piece(tmp_path, monkeypatch):
     error = _run(tmp_path, monkeypatch)
     pieces = REGISTRY["piece"]
     if not pieces:

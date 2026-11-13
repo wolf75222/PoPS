@@ -8994,21 +8994,21 @@
       }
     },
     "ci_20261112_vertical_slice": {
-      "basis": "Unmeasured CI scheduling estimate for the source-only test of the vertical slice of the exit of phase 1 (OD31: master's tutorial 02 written in the surface), on the source-only tiers of api_v02_20261013 (5/15/60 s): 15 s, for the lint SU-T1 of the case file, the order of its registry and one run of the file in a fresh directory up to the first piece that PoPS does not run yet, before any compile, as the analogue test_su_t2_refusals.py. The local receipt comes from pytest on a 4-core container; it is not GitHub CI file wall time. When the registry is empty the test runs the file to its end, natively, and this estimate is replaced from a receipt.",
+      "basis": "Unmeasured CI scheduling estimate for the test of the vertical slice of the exit of phase 1 (OD31: master's tutorial 02 written in the surface), on the api_v02_20261013 tiers. 300 s for test_vertical_slice_t02.py: since #799 its registry is empty, so besides the lint SU-T1 of the case file and the order of its registry it runs the file natively to its end, one compiled Dim2 artifact and 29 steps on 64 x 64 cells, a quarter of the four artifacts of the analogue test_surface_lot_e_project_native.py (900 s), rounded up. The local receipts come from pytest on a 4-core container (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Replace only from complete CI per-file receipts.",
       "analogues": {
-        "tests/python/integration/surface/test_vertical_slice_t02.py": "tests/python/unit/surface/test_su_t2_refusals.py"
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "tests/python/integration/runtime/test_surface_lot_e_project_native.py"
       },
       "estimates_seconds": {
-        "tests/python/integration/surface/test_vertical_slice_t02.py": 15
+        "tests/python/integration/surface/test_vertical_slice_t02.py": 300
       },
       "local_receipts": {
         "tests/python/integration/surface/test_vertical_slice_t02.py": {
           "cases": 3,
-          "session_seconds": 4.46
+          "session_seconds": 11.69
         }
       },
       "source_sha256": {
-        "tests/python/integration/surface/test_vertical_slice_t02.py": "eff7192ce05bc011a78bcd1dc4031a6034db79eb5b33e7e44e58448fc80d3652"
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "97c4be37f32ce838f1fce52abd87464343436b10d0728af1d171d831da0bdb5b"
       }
     }
   },
@@ -10277,5 +10277,5 @@
   "tests/python/unit/time/test_scientific_erasure_inventory.py": 5,
   "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
   "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
-  "tests/python/integration/surface/test_vertical_slice_t02.py": 15
+  "tests/python/integration/surface/test_vertical_slice_t02.py": 300
 }
