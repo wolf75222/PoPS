@@ -315,9 +315,10 @@ struct PreparedSystemBlock {
   SystemBlockClosures<Dim> closures;
   std::function<Real(const field_type&, const ExecutionLane&)> maximum_speed;
   std::function<void(const field_type&, field_type&)> poisson_rhs;
-  /// poisson_rhs adds nothing (a generated block whose model has no elliptic_rhs): the runtime
-  /// does not take its presence for a Poisson source (N8 « dt= as a function of cell »).
-  bool poisson_source_empty = false;
+  /// The elliptic closure above adds a source that is not identically zero: false for a block
+  /// without one and for a generated block whose elliptic brick is the zero one (N8 « dt= as a
+  /// function of cell »).
+  bool elliptic_source = false;
   std::function<void(const double*, double*)> primitive_to_conservative;
   std::function<RecoveryReport(const double*, double*)> conservative_to_primitive;
   UniformCellRecovery batch_conservative_to_primitive;

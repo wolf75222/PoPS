@@ -784,8 +784,8 @@ class _Elaboration:
             stated = (Choice("dt", "%s, the smallest over the cells of %s at the accepted state "
                                    "(PF8)" % (getattr(rule, "__name__", rule), text(bound)),
                              "stated"),
-                      Choice("fraction", "%r, the Courant budget of the face guards of each "
-                                         "attempt (C2)%s" % (
+                      Choice("fraction", "%r, the budget of the face guards of each attempt "
+                                         "(C2)%s" % (
                                              control.step_bound[0],
                                              ", declared by the rule (step_fraction)"
                                              if proposal.origin == "stated"

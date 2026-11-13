@@ -25,15 +25,18 @@ from ._expr import Expr, is_number, text, walk
 from ._geometry import Coordinate
 from ._model import DiffusiveFlux, Flux, Quantity
 from ._refusal import NotYetElaborated
-from ._scheme import SchemeLeaf, substitute
+from ._scheme import _LATER_CELL, SchemeLeaf, substitute
 
 _LOT = "a later lot of N8 « dt= as a function of cell »"
+# The reads of a cell that a later lot elaborates; a read that needs a scheme (cell.gradient) is
+# the surface's own refusal table, with the lot of its schemes (CF2, §21.7).
 _LATER = {
-    "shift": _LOT, "displacement": _LOT, "gradient": _LOT, "center": _LOT, "lower": _LOT,
+    "shift": _LOT, "displacement": _LOT, "center": _LOT, "lower": _LOT,
     "upper": _LOT, "measure": _LOT, "load": "a later lot of N8 with the fields of a solve",
     "lower_face": _LOT, "upper_face": _LOT,
     "parent": "a later lot of N8 with the hierarchies of N12",
     "level": "a later lot of N8 with the hierarchies of N12",
+    **_LATER_CELL,
 }
 
 

@@ -43,6 +43,13 @@ class StepFractionScope {
   double prior_;
 };
 
+/// The slot of that fraction in a System's state, for the scopes of run_advance and
+/// step_at_fraction.
+template <class Impl>
+double& step_fraction_slot(Impl& impl) {
+  return impl.active_program_step_courant_;
+}
+
 }  // namespace
 
 POPS_EXPORT std::string abi_key() {
@@ -382,7 +389,7 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     // its budget against it.
     std::optional<StepFractionScope> fraction_scope;
     if (rule != nullptr)
-      fraction_scope.emplace(p_->active_program_step_courant_, rule->fraction);
+      fraction_scope.emplace(step_fraction_slot(*p_), rule->fraction);
     // The epoch before the first attempt of this step: a retry keeps the epoch of the step only
     // when an earlier attempt opened it, so an attempt rejected before its begin_step never
     // lends a later one the epoch of the previous accepted step (review of the code, O1).
@@ -1521,14 +1528,14 @@ void System<Dim>::require_cells_rule_plan_() const {
   // elaborator refuses them, and the run checks the installed System again.
   const char* refused = nullptr;
   int evolving = 0;
-  if (p_->explicit_default_poisson_requested_)
-    refused = "a default Poisson solve (set_poisson)";
-  for (const typename Impl::Species& block : p_->sp) {
+  if (p_->default_field_solve_requested_)
+    refused = "the default field solve that the System requests before each selection";
+  for (const auto& block : p_->sp) {
     if (!block.evolve)
       continue;
     ++evolving;
-    if (block.add_poisson_rhs && !block.poisson_source_empty)
-      refused = "a default Poisson solve (the Poisson source of an evolving block)";
+    if (block.elliptic_source)
+      refused = "the elliptic source of an evolving block, which the default field solve reads";
     else if (!block.stability_consumer_qid.empty())
       refused = "an auxiliary refreshed before the stability selection";
     else if (block.source_frequency)
@@ -1547,7 +1554,9 @@ void System<Dim>::require_cells_rule_plan_() const {
   if (!p_->coupling_.dt_bounds.empty())
     refused = "the global bounds of add_dt_bound, which read outside the accepted state";
   if (p_->program_.dt_bound_)
-    refused = "the Program dt bound of set_dt_bound, a closure on cfl that a cells rule has not";
+    refused =
+        "the Program dt bound of set_dt_bound, a closure on the fraction of a stability "
+        "rule, which a cells rule has not";
   if (refused != nullptr)
     throw std::logic_error(
         std::string("System::run_advance with dt= as a function of cell refuses ") + refused +
@@ -1559,7 +1568,7 @@ void System<Dim>::step_at_fraction(double dt, double fraction) {
   if (!std::isfinite(fraction) || !(fraction > 0.0) || fraction > 1.0)
     throw std::invalid_argument("System::step_at_fraction requires a Courant budget in (0, 1]");
   // The attempt runs at the budget of its cells rule, as run_advance's do (design note D4).
-  const StepFractionScope fraction_scope(p_->active_program_step_courant_, fraction);
+  const StepFractionScope fraction_scope(step_fraction_slot(*p_), fraction);
   step(dt);
 }
 

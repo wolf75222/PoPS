@@ -329,8 +329,8 @@ def test_a_poisson_source_is_refused_by_name(tmp_path, native_cxx, kokkos_root, 
     from pops.time._step.bound import StepBound
 
     artifact = _hand_muscl(proposal=StepBound(CellWidth(0), 2), poisson_source=True)
-    with pytest.raises(RuntimeError, match=r"refuses a default Poisson solve \(the Poisson source "
-                                           r"of an evolving block\)"):
+    with pytest.raises(RuntimeError, match=r"refuses the elliptic source of an evolving block, "
+                                           r"which the default field solve reads"):
         Simulation(_bound(artifact)).run(T_END)
 
 

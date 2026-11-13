@@ -571,6 +571,7 @@ void System<Dim>::set_poisson(const std::string& rhs, const std::string& solver,
   (void)poisson_options(topology, bc, rel_tol, abs_tol, max_iterations);
   p_->poisson_solver_ = solver;
   p_->explicit_default_poisson_requested_ = true;
+  p_->default_field_solve_requested_ = true;
   p_->poisson_bc_ = bc;
   p_->poisson_abs_tol_ = abs_tol;
   p_->poisson_rel_tol_ = rel_tol;

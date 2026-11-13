@@ -194,7 +194,7 @@ def test_inspect_reports_the_bound_and_its_budget():
     report = str(surface.inspect(_case(parts, cfl_limit(parts.advection, cfl=0.45,
                                                         max_dt=1e-2))))
     assert "dt = cfl_limit, the smallest over the cells of " in report
-    assert "fraction = 0.45, the Courant budget of the face guards of each attempt (C2), " \
+    assert "fraction = 0.45, the budget of the face guards of each attempt (C2), " \
            "declared by the rule (step_fraction) (stated)" in report
     assert "proposal=StepBound(" in report
 

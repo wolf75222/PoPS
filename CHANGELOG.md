@@ -78,7 +78,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
     function of cell » installs it for the bound); and, by the run, the plans on which b6's
     selection does more than read speeds: a default Poisson solve (`set_poisson`, or the Poisson
     source of an evolving block, decided on the provider identity of its elliptic brick:
-    `NoElliptic` and the zero brick that codegen gives a model without `elliptic_rhs` are none),
+    `NoElliptic` and the zero brick that codegen gives a model without `elliptic_rhs` are none;
+    the run names them « the default field solve » and « the elliptic source of an evolving
+    block »),
     an auxiliary refreshed before the selection, source and parabolic frequencies,
     `stability_dt`, substeps or a stride, coupled frequencies, other than one evolving block,
     `add_dt_bound` and `set_dt_bound`.

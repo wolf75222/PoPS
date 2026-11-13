@@ -1205,17 +1205,17 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
     add_poisson_rhs<Dim>(model, state, rhs);
   };
-  // The closure adds nothing for a model without elliptic_rhs, or whose elliptic brick is the
+  // The closure adds a source unless the model has no elliptic_rhs, or its elliptic brick is the
   // zero right-hand side (NoElliptic, or the brick codegen emits for a model without
-  // set_elliptic_rhs): a cells rule reads that (N8).
-  result.poisson_source_empty = [] {
+  // set_elliptic_rhs), decided on the brick's provider identity: a cells rule reads that (N8).
+  result.elliptic_source = [] {
     if constexpr (requires(const Model& provider) { provider.ell.provider_identity(); }) {
       using Elliptic = std::remove_cvref_t<decltype(std::declval<const Model&>().ell)>;
       const std::string_view name = Elliptic::provider_identity().name;
-      return name == NoElliptic::provider_identity().name ||
-             name == std::string_view("pops.codegen.zero-elliptic-rhs-brick");
+      return name != NoElliptic::provider_identity().name &&
+             name != std::string_view("pops.codegen.zero-elliptic-rhs-brick");
     } else
-      return !requires(const Model& provider, const typename Model::State& value) {
+      return requires(const Model& provider, const typename Model::State& value) {
         provider.elliptic_rhs(value);
       };
   }();

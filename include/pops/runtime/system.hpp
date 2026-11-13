@@ -1649,9 +1649,9 @@ class System {
   /// it as the proposal of a step. Collective. @return the selected dt.
   double select_step_(double fraction, double speed_floor, double max_dt, double min_dt);
   /// Refuses, under a cells rule, a System whose b6 selection would do more than read speeds: a
-  /// default Poisson solve, a stability auxiliary, a source or parabolic frequency, a stability_dt,
-  /// substeps or stride, coupled frequencies, global or Program dt bounds, or other than one
-  /// evolving block (design note D2, C3, C5).
+  /// default field solve or an elliptic source, a stability auxiliary, a source or parabolic
+  /// frequency, a stability_dt, substeps or stride, coupled frequencies, global or Program dt
+  /// bounds, or other than one evolving block (design note D2, C3, C5).
   void require_cells_rule_plan_() const;
   /// Internal result boundary shared by field, local-source and Program prepared-linear solves.
   [[nodiscard]] POPS_EXPORT SolveOutcome track_solve_outcome(SolveOutcome outcome) const noexcept;
