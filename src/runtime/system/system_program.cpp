@@ -5,6 +5,7 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/numerics/spatial/nd/face_frequency.hpp>
+#include <pops/numerics/spatial/nd/static_geometry_face_frequency.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/program_diagnostics_checkpoint.hpp>

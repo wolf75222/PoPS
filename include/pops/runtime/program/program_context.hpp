@@ -20,6 +20,7 @@
 #include <pops/runtime/program/solve_gates.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/spatial/nd/face_frequency.hpp>
+#include <pops/numerics/spatial/nd/static_geometry_face_frequency.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>

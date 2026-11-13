@@ -869,9 +869,7 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
         "pops/runtime/program/hierarchy_control_failure.hpp":
             (64, "hierarchy_control_failure"),
         "pops/numerics/spatial/nd/face_frequency.hpp":
-            # N17 L1b (ROM-110): the same frequency on static geometry arrays, each face speed
-            # weighed by |S| / |K| in place of 1 / dx, takes 73 to 133 lines (+60), margin 7.
-            (80 + 60, "maximum_incident_face_frequency"),
+            (80, "maximum_incident_face_frequency"),
         "pops/runtime/program/prepared_amr_field_residual.hpp":
             # The clang-format 19.1.7 sweep of N5 takes this file from 874 to 979
             # lines (+105) with the same tokens; the margin stays 26 lines.
@@ -902,6 +900,31 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
         assert len(source.splitlines()) <= budget, (path, budget)
         assert not _fixed_rank_authorities(source), path
         assert not (set(_local_includes(source)) & (COMPATIBILITY_UMBRELLAS | CONTEXT_FRAGMENT_PATHS)), path
+
+
+def test_static_geometry_face_frequency_is_its_own_bounded_contract() -> None:
+    # N17 L1b (ROM-110), driver 13/11 12:10: the face frequency on static geometry arrays is a
+    # header of its own, bounded at the size of its content; the box contract above keeps its 80
+    # lines, and the adaptive program context includes neither this header nor the arrays (AMR on
+    # mapped configurations is a later lot of N17).
+    path = "pops/numerics/spatial/nd/static_geometry_face_frequency.hpp"
+    budget, owner = 78, "maximum_incident_face_frequency"
+    dependencies = frozenset({
+        "pops/mesh/execution/for_each.hpp",
+        "pops/mesh/geometry/static_geometry.hpp",
+        "pops/mesh/storage/mf_arith.hpp",
+        "pops/numerics/spatial/nd/face_field.hpp",
+        "pops/numerics/spatial/nd/face_frequency_rule.hpp",
+    })
+    source = (INCLUDE / path).read_text(encoding="utf-8")
+    assert owner in source, (path, owner)
+    assert len(source.splitlines()) <= budget, (path, budget)
+    assert frozenset(_local_includes(source)) == dependencies
+    assert not _fixed_rank_authorities(source), path
+    box = _direct_local_includes("pops/numerics/spatial/nd/face_frequency.hpp")
+    assert path not in box and "pops/mesh/geometry/static_geometry.hpp" not in box
+    for member in _semantic_closure(ROOTS["program"]):
+        assert path not in _direct_local_includes(member), member
 
 
 def test_local_include_parser_authenticates_both_delimiters_and_hidden_fragments() -> None:
