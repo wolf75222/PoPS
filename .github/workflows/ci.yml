@@ -121,6 +121,7 @@ jobs:
             base=(--check-base "$BASE_SHA")
           fi
           python3 scripts/run_mg8_tutorials.py check --source . --verify-commits "${base[@]}"
+          python3 scripts/run_mg8_rewritten.py check --source . "${base[@]}"
       - name: Upload shared changed files
         uses: actions/upload-artifact@v7
         with:
@@ -608,6 +609,11 @@ jobs:
       - name: MG9 bridges of pops.lib against the base
         run: python3 scripts/mg9_bridges.py check --check-base HEAD^1
 
+      # OD31 (vertical slice of the exit of phase 1): the pieces of the slice's case file that PoPS
+      # does not run yet follow the file, and the list records no more than its first parent.
+      - name: Vertical slice pieces against the base
+        run: python3 scripts/vertical_slice.py check --check-base HEAD^1
+
       - name: M2 temporal gate manifest
         run: python3 scripts/run_m2_gate.py --check-only
 
@@ -999,7 +1005,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 148-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 165-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -1012,7 +1018,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "149"
+      SHARD_TOTAL: "166"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1971,6 +1977,12 @@ jobs:
             --wheel-directory "$wheel_directory" \
             --install-root "$RUNNER_TEMP/pops-mpi-producer-installed" \
             --receipt-dir "$wheel_directory/producer-proof"
+          # The runner and include contract that built this module: an mpi-python group on another
+          # runner image rebuilds the module there instead of failing every native test.
+          PYTHONPATH="$PWD/build-mpi/python" PYTHONNOUSERSITE=1 \
+            /usr/bin/python3 scripts/ci_native_build_runner.py record \
+            --dimension 2 --wheel-dir "$wheel_directory" \
+            --output "$wheel_directory/native-build-runner.json"
 
       - name: Publish authenticated MPI Python wheel and exact group plan
         uses: actions/upload-artifact@v7
@@ -2026,6 +2038,8 @@ jobs:
     name: ubuntu-24.04 / MPI Python ${{ matrix.group }}
     runs-on: ubuntu-24.04
     # 15m cold dependencies + 8m wheel authentication + unchanged 35m tests + 2m receipts.
+    # A module rebuild for another runner image (12m watchdog) uses the measured slack: in batch
+    # 43318819535 setup took at most 3m, authentication 0.2m and a group's tests 18.9m.
     timeout-minutes: 60
     needs: [set-mode, mpi]
     if: needs.set-mode.outputs.mpi_required == 'true'
@@ -2058,6 +2072,12 @@ jobs:
         with:
           name: gate-mpi-python-wheel
           path: ${{ runner.temp }}/pops-mpi-python-wheel
+      # During a GitHub image rollout the mpi job and this group can run on two images; the
+      # module's include contract then refuses every native compile. Rebuild it here first.
+      - name: MPI Dim2 native module for this runner
+        uses: ./.github/actions/mpi-module-for-runner
+        with:
+          package-dir: ${{ runner.temp }}/pops-mpi-python-wheel
       - name: Authenticate fresh MPI wheel installation
         timeout-minutes: 8
         run: |
@@ -2705,11 +2725,11 @@ jobs:
   # that fails prints its logs and those stacks in the job log, which every reader has, unlike the
   # published runs. Each rank compiles into a JIT cache of its own: master compiles the same model
   # on every rank into one file of a shared cache without the cache lock. The job's limit is the
-  # sum of the bounded steps (45 + 45 + 45 + 45 + 60 + 15 = 255 min) and of the setup.
+  # sum of the bounded steps (45 + 45 + 45 + 45 + 60 + 30 + 15 = 285 min) and of the setup.
   mg8-tutorials:
     name: ubuntu-24.04 / MG8 master tutorials (${{ matrix.lane }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 285
+    timeout-minutes: 315
     needs: [set-mode]
     if: needs.set-mode.outputs.full == 'true' || needs.set-mode.outputs.python_required == 'true'
     strategy:
@@ -2900,6 +2920,18 @@ jobs:
             --kokkos-root "$KOKKOS_PREFIX" --mpiexec "$(command -v mpiexec)" \
             --watchdog 3300 --tutorial 14 --output "$RUNNER_TEMP/mg8/candidate"
           echo "candidate exit $?"
+
+      # OD31, S1-c of the vertical slice: master's tutorial 02 written in the surface, as written
+      # (within the bound of tests/gates/mg8_rewritten.toml) and with master's initial array bound
+      # as data (bit for bit), against the archive of master's run above.
+      - name: Run the vertical slice against master's tutorial 02 (MG8 rewritten lane)
+        if: ${{ !cancelled() && matrix.lane == 'serial-dim2' }}
+        timeout-minutes: 30
+        run: |
+          python3 scripts/run_mg8_rewritten.py run --source . \
+            --reference "$RUNNER_TEMP/mg8/reference" --output "$RUNNER_TEMP/mg8/rewritten" \
+            --python "$(command -v python)" --pythonpath .mg8/head-package --include include \
+            --kokkos-root "$KOKKOS_PREFIX" --watchdog 1500
 
       - name: Compare with master (${{ matrix.lane }})
         if: ${{ !cancelled() }}
