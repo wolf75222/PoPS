@@ -7,6 +7,7 @@
 #include "output_moving_geometry_binding.hpp"
 
 #include <pops/core/identity/sha256.hpp>
+#include <pops/mesh/geometry/centroid_slope.hpp>
 #include <pops/runtime/checkpoint/uniform_migration_authority.hpp>
 #include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
@@ -1153,8 +1154,8 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("kind"), py::arg("opcodes"), py::arg("literals"), py::arg("rule_nodes"),
            py::arg("rule_weights"))
       // A host snapshot of the installed arrays for evidence and tests: cell arrays in the NumPy
-      // order of the state, face arrays per axis with the axis extent grown by one; None on the
-      // uniform logical box.
+      // order of the state, face arrays per axis with the axis extent grown by one, and the
+      // periodicity and seam translation of each axis; None on the uniform logical box.
       .def("_static_geometry_snapshot",
            [](const System& s) -> py::object {
              constexpr int Dim = pops::kNativeDimension;
@@ -1184,7 +1185,8 @@ void bind_system_physics(py::class_<System>& cls) {
              result["orthogonality"] = static_cast<double>(geometry->orthogonality());
              result["cell_measure"] = cell_array(view.cell_measure);
              py::tuple centroid(Dim), width(Dim), face_measure(Dim), face_distance(Dim),
-                 face_normal(Dim), nodes(Dim);
+                 face_normal(Dim), face_centroid(Dim), nodes(Dim), periodic(Dim),
+                 seam_translation(Dim);
              for (int axis = 0; axis < Dim; ++axis) {
                centroid[static_cast<std::size_t>(axis)] = cell_array(view.centroid[axis]);
                width[static_cast<std::size_t>(axis)] = cell_array(view.width[axis]);
@@ -1192,11 +1194,19 @@ void bind_system_physics(py::class_<System>& cls) {
                    face_array(axis, view.face_measure[axis]);
                face_distance[static_cast<std::size_t>(axis)] =
                    face_array(axis, view.face_distance[axis]);
-               py::tuple normal(Dim);
-               for (int component = 0; component < Dim; ++component)
+               py::tuple normal(Dim), middle(Dim), translation(Dim);
+               for (int component = 0; component < Dim; ++component) {
                  normal[static_cast<std::size_t>(component)] =
                      face_array(axis, view.face_normal[axis][component]);
+                 middle[static_cast<std::size_t>(component)] =
+                     face_array(axis, view.face_centroid[axis][component]);
+                 translation[static_cast<std::size_t>(component)] =
+                     static_cast<double>(view.seam_translation[axis][component]);
+               }
                face_normal[static_cast<std::size_t>(axis)] = normal;
+               face_centroid[static_cast<std::size_t>(axis)] = middle;
+               periodic[static_cast<std::size_t>(axis)] = view.periodic[axis];
+               seam_translation[static_cast<std::size_t>(axis)] = translation;
                const auto& positions = geometry->nodes()[static_cast<std::size_t>(axis)];
                auto node_extent = shape;
                for (int other = 0; other < Dim; ++other)
@@ -1209,9 +1219,60 @@ void bind_system_physics(py::class_<System>& cls) {
              result["face_measure"] = face_measure;
              result["face_distance"] = face_distance;
              result["face_normal"] = face_normal;
+             result["face_centroid"] = face_centroid;
              result["nodes"] = nodes;
+             result["periodic"] = periodic;
+             result["seam_translation"] = seam_translation;
              return result;
            })
+      // Runtime-private seam of the centred slope of the arrays (N17 L2b-2, DN40), for tests: the
+      // slope of every cell from given differences e(K + 1_a) - e(K - 1_a), one array per axis in
+      // the NumPy order of the state, by pops::centroid_slope, the function that the Program
+      // operation of centred differences calls. A Program consumes a slope of one component per
+      // axis in rank one only, so ranks two and three read the function here.
+      .def(
+          "_static_geometry_centroid_slopes",
+          [](const System& s,
+             py::array_t<double, py::array::c_style | py::array::forcecast> differences) {
+            constexpr int Dim = pops::kNativeDimension;
+            const auto geometry = s.static_geometry();
+            if (!geometry)
+              throw std::invalid_argument(
+                  "centroid slopes: the differences need the static geometry arrays of a mapped "
+                  "layout, and none are installed");
+            const auto shape = s.spatial_shape();
+            std::vector<py::ssize_t> expected = ranked_numpy_shape(shape);
+            expected.insert(expected.begin(), static_cast<py::ssize_t>(Dim));
+            bool matches = differences.ndim() == static_cast<py::ssize_t>(expected.size());
+            for (std::size_t index = 0; matches && index < expected.size(); ++index)
+              matches = differences.shape(static_cast<py::ssize_t>(index)) == expected[index];
+            if (!matches)
+              throw std::invalid_argument(
+                  "centroid slopes: the differences are one array per axis over the cells of the "
+                  "arrays, in the NumPy order of the state");
+            pops::device_fence();
+            const auto view = geometry->view();
+            const auto cells = static_cast<std::size_t>(view.domain.numPts());
+            const double* data = differences.data();
+            std::vector<double> slopes(cells * static_cast<std::size_t>(Dim));
+            for (std::size_t offset = 0; offset < cells; ++offset) {
+              pops::Index<Dim> cell{};
+              std::size_t rest = offset;
+              for (int axis = 0; axis < Dim; ++axis) {
+                const auto extent = static_cast<std::size_t>(view.domain.length(axis));
+                cell[axis] = view.domain.lo[axis] + static_cast<int>(rest % extent);
+                rest /= extent;
+              }
+              pops::RealVector<Dim> delta{};
+              for (int axis = 0; axis < Dim; ++axis)
+                delta[axis] = data[static_cast<std::size_t>(axis) * cells + offset];
+              const pops::RealVector<Dim> slope = pops::centroid_slope(view, cell, delta);
+              for (int axis = 0; axis < Dim; ++axis)
+                slopes[static_cast<std::size_t>(axis) * cells + offset] = slope[axis];
+            }
+            return to_ranked_state<Dim>(slopes, Dim, shape);
+          },
+          py::arg("differences"))
       // Toggles only the installed level-set transport mode without redefining its expression.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
       .def("embedded_boundary_mask",

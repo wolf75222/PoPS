@@ -124,6 +124,7 @@
     "tests/python/integration/runtime/test_multisupport_double_consume_v14_native.py": 2,
     "tests/python/integration/runtime/test_multisupport_parent_reject_v14_native.py": 2,
     "tests/python/integration/runtime/test_multisupport_stale_assessment_v14_native.py": 2,
+    "tests/python/integration/runtime/test_n17_centroid_slope_rod_native.py": 1,
     "tests/python/integration/runtime/test_n17_graded_box_native.py": 3,
     "tests/python/integration/runtime/test_n17_graded_ring_native.py": 1,
     "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py": 1,

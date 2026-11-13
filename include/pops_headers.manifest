@@ -66,6 +66,7 @@ api pops/mesh/geometry/geometry.hpp
 api pops/mesh/geometry/swept_interval.hpp
 api pops/mesh/geometry/prepared_metric_provider.hpp
 api pops/mesh/geometry/static_geometry.hpp
+api pops/mesh/geometry/centroid_slope.hpp
 test-only pops/mesh/nd_proof/local_neighbors.hpp
 test-only pops/mesh/nd_proof/periodicity.hpp
 test-only pops/mesh/nd_proof/translation_schedule.hpp

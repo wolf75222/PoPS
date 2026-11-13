@@ -1613,9 +1613,12 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         if target == "system":
             owner = _cartesian_generated_owner_index(
                 block_idx, v, where="preflight gradient %r" % v.name)
-            lines.append(
-                "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (owner, json.dumps("gradient")))
+            # On static geometry arrays the slope reads their centroids (N17 L2b-2); the Cartesian
+            # guard refuses a System that carries them.
+            from pops.codegen.program_emit_diffusion import program_reads_static_geometry
+            guard = ("require_static_geometry_operator" if program_reads_static_geometry(model)
+                     else "require_cartesian_generated_operator")
+            lines.append("ctx.%s(%d, %s);" % (guard, owner, json.dumps("gradient")))
         lines.append("ctx.gradient(%s, %s);" % (_deref(var[o.id]), _deref(var[p.id])))
         var[v.id] = var[o.id]
     elif v.op == "divergence":

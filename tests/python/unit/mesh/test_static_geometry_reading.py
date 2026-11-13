@@ -8,6 +8,7 @@ its exact reason; the clock-reading maps keep the refusals of the moving route
 """
 import functools
 import math
+import re
 
 import numpy as np
 import pops
@@ -32,7 +33,8 @@ from pops.physics.diffusion import DiffusiveBoundary
 from pops.time import AdaptiveCFL, FixedDt
 
 from examples.api_v02.models_static_geometry import (
-    _initial, _ssprk2, build_annulus_diffusion, build_annulus_free_stream, build_graded_diffusion)
+    _initial, _ssprk2, build_annulus_diffusion, build_annulus_free_stream, build_graded_diffusion,
+    build_graded_slope)
 
 
 def _refusal(layout, owner="pops-static-geometry"):
@@ -289,3 +291,35 @@ def test_diffusive_boundary_data_that_reads_a_coordinate_is_refused():
     with pytest.raises(StaticGeometryConsumerError) as caught:
         pops.resolve(pops.validate(case), layout=layout)
     assert caught.value.code == "static_geometry_boundary_data_unavailable"
+
+
+@pytest.mark.parametrize("periodic", [False, True], ids=["rod", "ring"])
+def test_the_centred_slope_of_a_program_is_served_on_the_arrays(periodic):
+    """N17 L2b-2 (DN38): the Program operation of centred differences is served on the static
+    arrays, with the two operations through which a Program consumes it, the allocation of its
+    scratch and the cellwise algebra of Program values, which reads no coordinate. The generated
+    step guards it with the guard of the arrays, not with the Cartesian guard that refuses them."""
+    from pops.codegen._orchestration_compile import build_program_model_graph
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    case, layout, _ = build_graded_slope(periodic=periodic)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    (reading,) = static_geometry_layouts(resolved.layout_plan).values()
+    assert (reading.kind, reading.rank) == ("nodes", 1)
+    code = emit_cpp_program(resolved.time, model_graph=build_program_model_graph(resolved),
+                            target="system")
+    assert re.search(r'ctx\.require_static_geometry_operator\(\d+, "gradient"\);\s*'
+                     r'ctx\.gradient\(', code)
+    assert not re.search(r'require_cartesian_generated_operator\(\d+, "gradient"\)', code)
+
+
+@pytest.mark.parametrize("operation", ["laplacian", "divergence"])
+def test_the_other_stencil_operations_of_a_program_stay_refused_on_the_arrays(operation):
+    """The Laplacian and the divergence of a Program read the uniform spacings of the logical box:
+    they stay refused before any C++, alone, while the scratch and the cellwise algebra around them
+    are served."""
+    case, layout, _ = build_graded_slope(operation=operation)
+    with pytest.raises(StaticGeometryConsumerError) as caught:
+        pops.resolve(pops.validate(case), layout=layout)
+    assert caught.value.code == "static_geometry_consumer_unavailable"
+    assert caught.value.evidence == {"operations": [operation]}

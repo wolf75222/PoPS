@@ -927,6 +927,29 @@ def test_static_geometry_face_frequency_is_its_own_bounded_contract() -> None:
         assert path not in _direct_local_includes(member), member
 
 
+def test_centroid_slope_is_its_own_bounded_contract() -> None:
+    # N17 L2b-2 (ROM-110), design note N17 DN38: the geometric part of the centred slope of static
+    # geometry arrays is one header function of their view, which the Program operation of centred
+    # differences calls and the generated cell read of N15 will call; a header of its own, bounded
+    # at the size of its content, outside the adaptive program context (AMR on mapped
+    # configurations is a later lot of N17).
+    path = "pops/mesh/geometry/centroid_slope.hpp"
+    budget, owner = 110, "centroid_slope"
+    dependencies = frozenset({
+        "pops/core/foundation/types.hpp",
+        "pops/mesh/geometry/static_geometry.hpp",
+        "pops/mesh/index/real_vector.hpp",
+    })
+    source = (INCLUDE / path).read_text(encoding="utf-8")
+    assert owner in source, (path, owner)
+    assert len(source.splitlines()) <= budget, (path, budget)
+    assert frozenset(_local_includes(source)) == dependencies
+    assert not _fixed_rank_authorities(source), path
+    assert path in _direct_local_includes("pops/runtime/program/program_context.hpp")
+    for member in _semantic_closure(ROOTS["program"]):
+        assert path not in _direct_local_includes(member), member
+
+
 def test_local_include_parser_authenticates_both_delimiters_and_hidden_fragments() -> None:
     assert _local_includes('#include <pops/a.hpp>\n#include "pops/b.hpp"') == (
         "pops/a.hpp",

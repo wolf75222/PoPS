@@ -10,6 +10,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/centroid_slope.hpp>
 #include <pops/mesh/geometry/swept_interval.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/consensus_words.hpp>
@@ -111,6 +112,30 @@ struct GradientKernel {
       ++upper[axis];
       result(cell, axis) = (value(upper, 0) - value(lower, 0)) / (Real(2) * geometry.spacing(axis));
     }
+  }
+};
+
+/// The centred slope on static geometry arrays (N17 L2b-2, DN38): the differences of the two
+/// neighbour values along each axis, solved against the differences of the neighbour centroids by
+/// the header function that the generated cell read of N15 shares.
+template <int Dim>
+struct CentroidSlopeKernel {
+  FieldView<Real, Dim> result{};
+  FieldView<const Real, Dim> value{};
+  StaticGeometryView<Dim> arrays{};
+
+  POPS_HD void operator()(const Index<Dim>& cell) const {
+    RealVector<Dim> differences{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = cell;
+      Index<Dim> upper = cell;
+      --lower[axis];
+      ++upper[axis];
+      differences[axis] = value(upper, 0) - value(lower, 0);
+    }
+    const RealVector<Dim> slope = centroid_slope(arrays, cell, differences);
+    for (int axis = 0; axis < Dim; ++axis)
+      result(cell, axis) = slope[axis];
   }
 };
 
@@ -1928,11 +1953,18 @@ class ProgramContext {
     require_scalar_stencil_(output, input, Dim, "Program gradient");
     boundary.fill(input);
     const Geometry<Dim> geom = boundary.geometry();
+    // On static geometry arrays the slope reads the centroids of the arrays, with the values of
+    // the same boundary session (N17 L2b-2); on the box, the uniform spacings.
+    const auto arrays = static_geometry();
     for (std::size_t local = 0; local < output.local_size(); ++local) {
       const FieldView<Real, Dim> result = output.fab(local).view();
       const FieldView<const Real, Dim> value = std::as_const(input).fab(local).view();
-      for_each_cell(output.box(local),
-                    program_context_detail::GradientKernel<Dim>{result, value, geom});
+      if (arrays)
+        for_each_cell(output.box(local), program_context_detail::CentroidSlopeKernel<Dim>{
+                                             result, value, arrays->view()});
+      else
+        for_each_cell(output.box(local),
+                      program_context_detail::GradientKernel<Dim>{result, value, geom});
     }
     count_kernel_();
   }
