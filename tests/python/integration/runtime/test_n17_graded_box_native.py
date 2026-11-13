@@ -8,6 +8,10 @@ written with the surface: a scalar diffused by ``two_point()`` on the periodic b
 differences of each axis, the cell measures and the face measures their products, bitwise; the run
 takes the steps of an independent NumPy assembly of the same two-point fluxes on the graded cells
 and keeps the inventory sum |K| u to rounding.
+
+N17 L2b-2 reads the centred slope of the same arrays in rank three, through the runtime-private
+seam of the System (design note N17, section 20): an affine field read at the neighbour centroids
+returns its slope in every cell, across the three seams, bitwise the quotient of its differences.
 """
 from __future__ import annotations
 
@@ -20,6 +24,9 @@ import pytest
 import pops.surface as surface
 from examples.api_v02.models_graded_spacing import (
     BOX_CELLS, BOX_DT, BOX_STEPS, BOX_Z_GRADING, CONDUCTIVITY, RING_GRADING, build_graded_box)
+from tests.python.support.static_geometry_arrays import (
+    affine_differences, centroid_rows, largest_value, layout_static_system, native, ranked,
+    rounding_floor)
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
@@ -124,3 +131,28 @@ def test_the_widths_and_the_diffusion_inventory_of_a_graded_box_of_rank_three(co
         > 1e3 * np.max(np.abs(final - expected))
     inventory = np.sum(measures * initial)
     assert abs(np.sum(measures * final) - inventory) <= 1e-13 * inventory
+
+
+def test_an_affine_field_at_the_neighbour_centroids_returns_its_slope_on_the_box(native_cxx,
+                                                                                  kokkos_root):
+    """N17 L2b-2 (DN38, DN39): read at the neighbour centroids that NumPy computes from the
+    snapshot alone, across the three translated seams of the box, an affine field returns its
+    slope through the seam of the System (``pops::centroid_slope``) in every cell. Delta X of node
+    positions is diagonal, its off-axis entries exact zeros, and the slope is the quotient of the
+    differences by its diagonal, bitwise."""
+    del native_cxx, kokkos_root
+    system = layout_static_system(build_graded_box()[0], dimension=3)
+    arrays = system._static_geometry_snapshot()
+    assert tuple(arrays["periodic"]) == (True, True, True)
+    assert np.array_equal(np.asarray(arrays["seam_translation"]), np.diag([1.0, 2.0, 2.0]))
+    rows = centroid_rows(arrays)
+    assert np.all(rows[..., ~np.eye(3, dtype=bool)] == 0.0)
+    offset, slope = 0.75, (-1.25, 0.5, 2.0)
+    differences = affine_differences(arrays, offset, slope)
+    slopes = np.asarray(system._static_geometry_centroid_slopes(ranked(differences)))
+    assert slopes.shape == (3,) + BOX_CELLS[::-1]
+    slopes = np.stack([native(component) for component in slopes])
+    floor = rounding_floor(rows, largest_value(arrays, offset, slope), slope)
+    for axis in range(3):
+        assert np.array_equal(slopes[axis], differences[axis] / rows[..., axis, axis]), axis
+        assert np.all(np.abs(slopes[axis] - slope[axis]) <= floor), axis
