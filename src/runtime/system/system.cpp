@@ -411,7 +411,12 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
           report.rejection_detail = rejected.detail();
           return finish(AdvanceRunStop::kTrialFailure);
         }
-        if (phase != runtime::program::kAssessmentRejectionPhase &&
+        // The face guard of a riemann.User face refuses in the native evaluation of the rate,
+        // with the faces' frequency (ROM-108): under a cells rule that refusal is the named stop
+        // below, whatever its phase; every other rejection of that phase leaves the run.
+        const bool face_refusal =
+            cells && rejected.typed_failure_schema() == runtime::program::kFaceStepFrequencySchema;
+        if (!face_refusal && phase != runtime::program::kAssessmentRejectionPhase &&
             phase != runtime::program::kTrialRejectionPhase)
           throw;
         ++report.rejections;
