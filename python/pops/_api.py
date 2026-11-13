@@ -9,8 +9,10 @@ from pops.runtime.run_report import RunReport
 def validate(case: Any) -> Any:
     """Validate and freeze a :class:`pops.Case` without importing native code."""
     from pops.codegen._phases import validate as phase
+    from pops.time._program.serialization import ir_identity_reuse
 
-    return phase(case)
+    with ir_identity_reuse("pops.validate"):
+        return phase(case)
 
 
 def resolve(
@@ -86,6 +88,17 @@ def bind(
 
     if type(artifact) is not CompiledSimulationArtifact:
         raise TypeError("pops.bind requires an exact CompiledSimulationArtifact")
+    from pops.time._program.serialization import ir_identity_reuse
+
+    with ir_identity_reuse("pops.bind"):
+        return _bind(artifact, initial_state=initial_state, params=params, aux=aux,
+                     resources=resources, initial_values=initial_values)
+
+
+def _bind(
+    artifact: Any, *, initial_state: Any, params: Any, aux: Any, resources: Any,
+    initial_values: Any,
+) -> Any:
     artifact.verify()
     from pops._native_selector import select_native_dimension
 

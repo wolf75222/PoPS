@@ -8,6 +8,7 @@ name.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 from pops.model.handles import Handle, StateHandle
@@ -227,6 +228,18 @@ def state_name(state: Any) -> str:
     return state.local_id
 
 
+# The Case registries that canonical_handle consults, recorded only while a Program's canonical
+# form is being built (time/_program/canonical_form.py), so that the form is kept only when they
+# are frozen and is dropped if one is not.
+_REGISTRY_READS: ContextVar[list[Any] | None] = ContextVar("pops_registry_reads", default=None)
+
+
+def _note_registry(registry: Any) -> None:
+    reads = _REGISTRY_READS.get()
+    if reads is not None:
+        reads.append(registry)
+
+
 def canonical_handle(handle: Any) -> Handle:
     """Return authenticated canonical identity for a handle already accepted by Program.
 
@@ -246,6 +259,7 @@ def canonical_handle(handle: Any) -> Handle:
             raise ValueError(
                 "qualified handle %s is detached from its authoritative case registry"
                 % handle.qualified_id)
+        _note_registry(registry)
         return registry.canonicalize(handle, block=block)
     from pops.problem.handles import BlockHandle
     if isinstance(handle, BlockHandle):
@@ -254,6 +268,7 @@ def canonical_handle(handle: Any) -> Handle:
             raise ValueError(
                 "block handle %s is detached from its authoritative case registry"
                 % handle.qualified_id)
+        _note_registry(registry)
         return registry.canonical_block(handle)
     from pops.problem.handles import FieldHandle
     if isinstance(handle, FieldHandle):
@@ -262,6 +277,7 @@ def canonical_handle(handle: Any) -> Handle:
             raise ValueError(
                 "field handle %s is detached from its authoritative case registry"
                 % handle.qualified_id)
+        _note_registry(registry)
         return registry.canonicalize(handle)
     return handle._resolved()
 

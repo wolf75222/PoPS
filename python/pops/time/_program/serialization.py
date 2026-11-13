@@ -69,8 +69,14 @@ def ir_identity_reuse(operation: str) -> Iterator[None]:
         reuse.identities.clear()
         _IR_IDENTITY_REUSE.reset(token)
         _forget_scope_graphs(program for program, _identity in observed)
+    from .canonical_form import has_form, projected_ir_hash
     for program, expected in observed:
         if program._ir_hash() != expected:
+            raise RuntimeError("Program IR identity changed during %s" % operation)
+        # A kept form answers the check above by its witness. pops.compile also projects each
+        # such Program once for real, so the artifact's own identity never rests on a witness.
+        if operation == "pops.compile" and has_form(program) \
+                and projected_ir_hash(program) != expected:
             raise RuntimeError("Program IR identity changed during %s" % operation)
 
 
@@ -277,10 +283,16 @@ class _ProgramSerialization(_ProgramBase):
             node["provenance"] = value.provenance.to_data()
         return node
 
-    @_definition_fingerprint_scope()
     def _serialize(self, *, include_provenance: bool = True) -> dict[str, Any]:
+        """The canonical form: kept once for a frozen authoring Program (``canonical_form``)."""
         if not isinstance(include_provenance, bool):
             raise TypeError("Program._serialize include_provenance must be bool")
+        from .canonical_form import serialize
+        return serialize(self, include_provenance)
+
+    @_definition_fingerprint_scope()
+    def _canonical_projection(self, *, include_provenance: bool = True) -> dict[str, Any]:
+        """Project the canonical form from the IR, the registries and the live definitions."""
         from .global_history_storage import validate_issuances
         validate_issuances(self)
         if type(self.max_exact_coefficient_bytes) is not int or not 8 <= self.max_exact_coefficient_bytes <= (1 << 63) - 1:
@@ -502,17 +514,18 @@ class _ProgramSerialization(_ProgramBase):
         return result
 
     def _ir_hash(self) -> str:
-        # No Program keeps an identity cache: authoring handles still resolve through live
-        # registries, and even an out-of-contract edit of a detached clone must change what a
-        # check reads. Only an ir_identity_reuse scope reuses a frozen Program's identity, and it
-        # projects every reused identity again when its operation succeeds.
+        # Only a frozen authoring Program keeps its canonical form (``canonical_form``), bound by
+        # a witness to the definitions, the sealed Case registries and the immutable objects it
+        # read; a mutable Program and a detached clone project on every read. Inside an
+        # ir_identity_reuse scope a frozen Program's identity is also reused, and the scope
+        # checks every reused identity again when its operation succeeds.
         reuse = _IR_IDENTITY_REUSE.get()
         if reuse is None or not reuse.applies() or getattr(self, "_frozen", False) is not True:
             reuse = None
         elif id(self) in reuse.identities:
             return reuse.identities[id(self)][1]
-        from pops._structural_data import canonical_json_sha256
-        identity = canonical_json_sha256(self._serialize(include_provenance=False))
+        from .canonical_form import ir_hash
+        identity = ir_hash(self)
         if reuse is not None:
             reuse.identities[id(self)] = (self, identity)
         return identity

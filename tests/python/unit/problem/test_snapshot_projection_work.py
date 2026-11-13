@@ -20,7 +20,7 @@ def legacy_time_value(program, *, artifact=False):
 
 def serialize_count(callback):
     count = 0
-    code = Program._serialize.__wrapped__.__code__
+    code = Program._canonical_projection.__wrapped__.__code__
     def profile(frame, event, arg):
         nonlocal count
         if event == "call" and frame.f_code is code:
