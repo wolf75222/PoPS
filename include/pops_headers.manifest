@@ -381,6 +381,7 @@ sdk-support pops/runtime/program/module_metadata.hpp
 sdk-support pops/runtime/program/profiler.hpp
 sdk-root pops/runtime/program/program_context.hpp
 sdk-support pops/runtime/program/field_exchange_expression.hpp
+sdk-support pops/runtime/program/cell_total_scale.hpp
 sdk-support pops/runtime/program/program_context_field_exchanges.inc
 sdk-support pops/runtime/program/program_value_authority.hpp
 sdk-support pops/runtime/program/program_context_value_authority.inc
