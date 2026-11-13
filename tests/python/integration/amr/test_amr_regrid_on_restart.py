@@ -181,7 +181,7 @@ def _resolved(native_cxx=None):
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(block_state) > case.value(threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(block_state)) > case.value(threshold)),
                 Buffer(cells=1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(HYSTERESIS_CYCLES, EqualityPolicy.HOLD),

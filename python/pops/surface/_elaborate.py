@@ -143,7 +143,7 @@ def elaborate_case(case: Any) -> Elaborated:
         raise refusal.traced_at(case.site) from None
 
 
-def elaborated_representation(quantity: Any, support: Box) -> Any:
+def elaborated_representation(quantity: Any, support: Box, definition: Any = None) -> Any:
     """The elaborated identity of a quantity's representation (G03 lot E, K4).
 
     b6's state carries neither the support nor the representation of the quantity it elaborates
@@ -151,9 +151,11 @@ def elaborated_representation(quantity: Any, support: Box) -> Any:
     under two representations, would be interchangeable once elaborated. The surface keeps, beside
     each state, ``Representation(space, definition)`` of contract @2 (G03 lot R): the space is the
     support's coordinates and the scalar value, never the quantity's name (P10), and the definition
-    is the one of ``pops.CellAverage()``, the representation that the surface elaborates today.
-    Nothing of it enters b6, so no identity or manifest of a case changes (N16 5.5). Published
-    arrays carry it, and ``bind`` reads it back (``surface/_run.py``)."""
+    is the one that ``represent=`` states, ``CellAverage()`` when none is (N16 5.5). Nothing of it
+    enters b6 beyond the row of ``plan.representations`` that a total, a sample or a stated rule
+    adds, so no identity or manifest of a case under ``CellAverage()`` changes. Published arrays
+    carry it, and ``bind`` reads it back (``surface/_run.py``): an array of totals is not the
+    datum of a quantity represented by averages."""
     from pops.model.spaces import Space
     from pops._ir.quantity import PhysicalSupport
     from pops.representations.definition import ElaboratedRepresentation, cell_average
@@ -161,7 +163,21 @@ def elaborated_representation(quantity: Any, support: Box) -> Any:
         (name, ("periodic[%r, %r)" if periodic else "[%r, %r]") % (float(lower), float(upper)))
         for name, (lower, upper, periodic) in zip(support._names, support.bounds(), strict=True))
     space = Space("scalar", components=("value",), support=PhysicalSupport(coordinates))
-    return ElaboratedRepresentation(space, cell_average(support.rank))
+    return ElaboratedRepresentation(
+        space, cell_average(support.rank) if definition is None else definition)
+
+
+# The owner of the projection of an initial value by the encode of its representation.
+_PROJECTION_BY_ENCODE = ("N16 lot 2 (the projection by encode: cell.integral, the sample, the Riesz "
+                         "map of a stated rule); until then the initial value is a datum, the "
+                         "coefficients bound at pops.bind")
+
+
+def _is_cell_average(definition: Any) -> bool:
+    """The definition identity of ``CellAverage()`` at its rank, matched whole (N16 5.5)."""
+    from ._representation import is_cell_average
+
+    return is_cell_average(definition)
 
 
 # b6 selects a term of a balance whose weight is 1 or -1 only (the partitions of a physical
@@ -655,11 +671,22 @@ class _Elaboration:
                     % (balance.name or balance.quantity.name, self.names[term],
                        scheme.describe()), choices))
         for quantity in states:
-            self.rows.append(Row("represent={%s: %r}" % (quantity, self.numerics
-                                                          .representation_of(quantity)),
-                                 "numerics", "the cell averages of %s, projected by "
-                                 "ConservativeCellAverage()" % quantity,
-                                 [Choice("representation", "pops.CellAverage()", "stated")]))
+            representation = self.numerics.representation_of(quantity)
+            definition = self.numerics.definition_of(quantity)
+            if _is_cell_average(definition):
+                lowered = ("the cell averages of %s, projected by ConservativeCellAverage()"
+                           % quantity)
+            else:
+                # A total, a sample or an average under a stated rule: the row of b6 that serves
+                # it (G03 lot R-b; N16 5.1, A1), matched by the whole identity (N16 5.5).
+                plan.representations.add(states[quantity], definition)
+                lowered = ("plan.representations.add(%s, the definition of kind %r%s, %s)"
+                           % (quantity.name, definition.kind,
+                              "" if definition.pairing is None else " with a stated rule",
+                              definition.identity[-12:]))
+            self.rows.append(Row("represent={%s: %r}" % (quantity, representation),
+                                 "numerics", lowered,
+                                 [Choice("representation", repr(representation), "stated")]))
         return plan, selections
 
     def _linear(self, scheme: Any, view: TermView, balance: Balance) -> Any:
@@ -904,6 +931,19 @@ class _Elaboration:
                     "the evolved quantity %s has no initial value" % quantity,
                     write='pops.Program(initial={%s: d}), d = model.data("d", %r)'
                           % (quantity, quantity.space), site=program.site)
+            definition = self.numerics.definition_of(quantity)
+            if not isinstance(value, Datum) and not _is_cell_average(definition):
+                # The analytic route of b6 projects cell averages; the projection by the encode
+                # of a total, a sample or a stated rule is N16 lot 2's, so their initial value
+                # is a datum, the coefficients supplied at bind (N16, the lot that lifts the
+                # table for the three words; review of #803, R1).
+                raise NotYetElaborated(
+                    "pops.Program(initial={%s: %s}) under represent={%s: %r}, the projection of "
+                    "an initial value by the encode of a representation other than CellAverage() "
+                    "(write pops.Program(initial={%s: d}), d = model.data(...))"
+                    % (quantity, text(value) if not isinstance(value, Projection) else repr(value),
+                       quantity, self.numerics.representation_of(quantity), quantity),
+                    _PROJECTION_BY_ENCODE, site=program.site)
             if isinstance(value, Datum):
                 provider, spelling = BindArray(), "BindArray()"
                 choices = [Choice("value", "the datum %s, supplied at bind" % value, "stated")]
@@ -1196,8 +1236,9 @@ class _Elaboration:
                           states=states, names=self.names, advance=advance,
                           rows=tuple(self.rows), params=dict(self.params),
                           outputs=self.lowered_outputs,
-                          representations={quantity: elaborated_representation(quantity, support)
-                                           for quantity in states})
+                          representations={quantity: elaborated_representation(
+                              quantity, support, self.numerics.definition_of(quantity))
+                              for quantity in states})
 
 
 def inspect_case(case: Any) -> Report:

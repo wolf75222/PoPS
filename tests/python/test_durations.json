@@ -6735,7 +6735,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1202,
+    "estimated_count": 1206,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7022,6 +7022,7 @@
       "tests/python/integration/runtime/test_multisupport_double_consume_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_parent_reject_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_stale_assessment_v14_native.py",
+      "tests/python/integration/runtime/test_n16_three_words_native.py",
       "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
       "tests/python/integration/runtime/test_n17_static_geometry_graphs.py",
       "tests/python/integration/runtime/test_native_amr12_state_carrier_failures.py",
@@ -7083,6 +7084,7 @@
       "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py",
       "tests/python/integration/runtime/test_surface_lot_e_project_native.py",
       "tests/python/integration/runtime/test_surface_lot_g_run_native.py",
+      "tests/python/integration/runtime/test_surface_n16_three_words_native.py",
       "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py",
       "tests/python/integration/runtime/test_symbolic_path_adversarial_runtime.py",
       "tests/python/integration/runtime/test_symbolic_path_four_state_runtime.py",
@@ -7538,6 +7540,7 @@
       "tests/python/unit/numerics/test_m18_entropy_reception_v02.py",
       "tests/python/unit/numerics/test_m23_ledger_stage_oracle.py",
       "tests/python/unit/numerics/test_m26_measured_independent_review.py",
+      "tests/python/unit/numerics/test_n16_three_words_rows.py",
       "tests/python/unit/numerics/test_nonnegative_diagonal_diffusion.py",
       "tests/python/unit/numerics/test_path_sampling_resolution.py",
       "tests/python/unit/numerics/test_principal_grouping_c11.py",
@@ -7756,6 +7759,7 @@
       "tests/python/unit/surface/test_n3_lot2_muscl.py",
       "tests/python/unit/surface/test_published_representation.py",
       "tests/python/unit/surface/test_quadrature.py",
+      "tests/python/unit/surface/test_representation_n16.py",
       "tests/python/unit/surface/test_solver_reference_n9.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
       "tests/python/unit/surface/test_su_t2_scheme_refusals.py",
@@ -8140,7 +8144,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1267,
+    "total_files": 1271,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9019,6 +9023,57 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_g03_cell_totals_native.py": "1e7f2bbbbce10ec464db42dcc7103826541f45c2bf9d1d53a0ba8e86e6e7e817",
         "tests/python/unit/numerics/test_cell_total_lowering.py": "4f910429a4f5d500aed764ffa1d3fca22f499fb00807a59b3dce9b6991a24e25"
+      }
+    },
+    "n16_20261112_lot1_representation_construct": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only unit module of N16 lot 1 (ROM-109): @pops.representation, pops.Coefficients, pops.Dual and the words of pops.lib.representations, their identities against contract @2 of G03 lot R-a (CF4), the refusals of the lot (SU-T2), and the L1 case of section 17.1 validated, resolved and emitted as C++ under three spellings of the cell average (SU-T3), with no compile and no native module. 15 s, the middle source-only tier of api_v02_20261013 (5/15/60 s): lighter than test_su_t3_parity.py (60 s), which resolves many more cases, heavier than test_quadrature.py (5 s). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_representation_n16.py": "tests/python/unit/surface/test_su_t3_parity.py"
+      },
+      "estimated_seconds": {
+        "tests/python/unit/surface/test_representation_n16.py": 15
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_representation_n16.py": {
+          "command": "PYTHONPATH=python pytest -q tests/python/unit/surface/test_representation_n16.py",
+          "passed": 58,
+          "seconds": 5.93
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_representation_n16.py": "7bd966620e17d60dc3b5663a14918cccf119428c29f2a999ff21e2b879ba32a4"
+      }
+    },
+    "n16_20261113_table_three_words": {
+      "basis": "Unmeasured CI scheduling estimates for the N16 lot that lifts the transitional table for CellTotal(), PointValue() and CellAverage(quadrature=Q) (ROM-109). The b6 native file compiles and runs nine 1-D Programs on a native build of rank one (Burgers on N17's 32 graded cells and on 16 uniform cells with a decay source, under a total, a sample and a stated rule, plus an average and a bare case): 900 s, the native tier of api_v02_20261013 for several cold compiles (300/600/900/1200 s), above its analogue test_g03_cell_totals_native.py (600 s, six Programs). The surface native file compiles four surface cases once in a module fixture: 300 s, the tier of one module of compiles. The unit file resolves about thirty b6 and surface cases and emits C++ without compiling: 60 s, the upper source-only tier. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.01 Serial, native module of rank one); they are not GitHub CI file wall times. Existing weights, shard count, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_n16_three_words_native.py": "tests/python/integration/runtime/test_g03_cell_totals_native.py",
+        "tests/python/integration/runtime/test_surface_n16_three_words_native.py": "tests/python/integration/runtime/test_surface_lot_g_run_native.py",
+        "tests/python/unit/numerics/test_n16_three_words_rows.py": "tests/python/unit/numerics/test_cell_total_lowering.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_n16_three_words_native.py": 900,
+        "tests/python/integration/runtime/test_surface_n16_three_words_native.py": 300,
+        "tests/python/unit/numerics/test_n16_three_words_rows.py": 60
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_n16_three_words_native.py": {
+          "pytest_seconds": 573.59,
+          "tests": 9
+        },
+        "tests/python/integration/runtime/test_surface_n16_three_words_native.py": {
+          "pytest_seconds": 145.76,
+          "tests": 4
+        },
+        "tests/python/unit/numerics/test_n16_three_words_rows.py": {
+          "pytest_seconds": 39.41,
+          "tests": 28
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_n16_three_words_native.py": "972d4ead9eb5012ef94f3d4fe5d6b6bc4c3913136588b4eb2c22d8e1b2a7f6fd",
+        "tests/python/integration/runtime/test_surface_n16_three_words_native.py": "7aaca54cd48d7a731f955a90524c6895152a262b03451ec1df599a31831aa159",
+        "tests/python/unit/numerics/test_n16_three_words_rows.py": "8f3b2c78bb98aa16ec69fd207b1cdc1f00a87a036cbf1540607186371a7181b8"
       }
     }
   },
@@ -10288,5 +10343,9 @@
   "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
   "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
   "tests/python/integration/runtime/test_g03_cell_totals_native.py": 600,
-  "tests/python/unit/numerics/test_cell_total_lowering.py": 15
+  "tests/python/unit/numerics/test_cell_total_lowering.py": 15,
+  "tests/python/unit/surface/test_representation_n16.py": 15,
+  "tests/python/integration/runtime/test_n16_three_words_native.py": 900,
+  "tests/python/integration/runtime/test_surface_n16_three_words_native.py": 300,
+  "tests/python/unit/numerics/test_n16_three_words_rows.py": 60
 }

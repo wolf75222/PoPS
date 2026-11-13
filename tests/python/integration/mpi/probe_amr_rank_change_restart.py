@@ -167,8 +167,8 @@ def _resolved(*, bit_identical: bool) -> Any:
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(block_state) > case.value(threshold)),
-                Coarsen(ValueExpr(block_state) < case.value(coarsen_threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(block_state)) > case.value(threshold)),
+                Coarsen(lambda cell: cell.value(ValueExpr(block_state)) < case.value(coarsen_threshold)),
                 Buffer(cells=1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(HYSTERESIS_CYCLES, EqualityPolicy.HOLD),
