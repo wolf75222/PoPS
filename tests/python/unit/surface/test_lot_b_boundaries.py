@@ -320,6 +320,18 @@ def test_a_policy_written_as_the_library_is_the_library_ghosts():
     _assert_same(_case(parts, boundary=mirror()), _hand_case(_four_sides))
 
 
+def test_the_package_re_exports_ghosts_as_the_gallery_imports_it():
+    """N3: ``from pops.lib.numerics import ghosts`` is the policy of its module, as
+    ``examples/surface/gallery/t02_advection.py`` imports it with the scheme words."""
+    import pops.lib.numerics as package
+    from pops.lib.numerics import ghosts as exported
+
+    assert exported is ghosts and "ghosts" in package.__all__
+    parts = _parts()
+    _inflow_outflow(parts)
+    _assert_same(_case(parts, boundary=exported()), _hand_case(_four_sides))
+
+
 def test_upwind_with_boundaries():
     parts = _parts()
     _inflow_outflow(parts)

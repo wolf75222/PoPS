@@ -286,6 +286,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3c, part 1): the tests and test fixtures that wrote AMR tagging as a ValueExpr
+  graph without testing the graph itself write regions of `cell` (66 files); a partial
+  per-layout case on the physical maps shows each of three layouts refining its own part of the
+  domain, with the same boxes on graph and region routes. The tests of the tag graph, of the VM
+  and of external Tagger components keep the graph; they leave with the VM (lot 3c, part 2).
 - ROM-95 (N12, lot 3b): a criterion written as regions of `cell` now compiles on a plan with
   several layouts. `pops.compile` generates each adaptive layout's criterion into that layout's
   Program slice, and the layout's AmrSystem installs the entry of its own slice; no native code

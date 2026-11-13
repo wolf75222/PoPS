@@ -160,7 +160,7 @@ def author_case(
         hierarchy=AMRHierarchy(max_levels=1, ratios=()),
         tagging=AMRTagging(
             rules=(
-                Tag(math.ValueExpr(right[density])["density"] > case.value(threshold)),
+                Tag(lambda cell: cell.value(math.ValueExpr(right[density])["density"]) > case.value(threshold)),
                 Buffer(cells=0, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
