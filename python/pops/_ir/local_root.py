@@ -34,10 +34,12 @@ class LocalRoot:
     """``LocalRoot(tolerance=, max_iterations=)``: the pointwise root of an accumulation law.
 
     The recovery stops at the first q of the admissible set with |Q(q) − U| <= tolerance·(1 + |U|),
-    and fails after ``max_iterations`` evaluations of the law (the bracket search included)."""
+    and fails after ``max_iterations`` evaluations of the law (the bracket search included). Both
+    are stated by the case, with no default: the tolerance changes the result (SU9), and a cap on
+    an iteration is the case's choice, never the core's (CF7)."""
 
-    tolerance: float = 1e-13
-    max_iterations: int = 200
+    tolerance: float
+    max_iterations: int
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
@@ -82,7 +84,12 @@ def derivative_interval(expr: Any, name: str, lower: float, upper: float) -> tup
     """An enclosure of ``expr`` for the bound variable in [lower, upper], by interval arithmetic.
 
     Raises ``ValueError`` when the enclosure is not defined (a division by an interval holding 0,
-    a root or a logarithm of a possibly negative interval, a node outside the elementary algebra)."""
+    a root or a logarithm of a possibly negative interval, a node outside the elementary algebra).
+
+    The ends are computed in binary64 and are not rounded outward, so the enclosure holds up to
+    rounding: a slope whose true minimum is a rounding amount below 0 may be read as >= 0. Rounding
+    outward would refuse every law whose slope is exactly 0 at an end of its set, such as the
+    witness Q = q + q² on q >= -1/2, which is still injective there."""
 
     def mul(a: tuple, b: tuple) -> tuple:
         products = [x*y for x in a for y in b if not ((x == 0 and math.isinf(y))
@@ -152,7 +159,11 @@ def derivative_interval(expr: Any, name: str, lower: float, upper: float) -> tup
 
 
 class PointwiseRoot(Expr):
-    """q(U): the root of ``law`` = U over [lower, upper] (``upper`` may be +inf, held as None)."""
+    """q(U): the root of ``law`` = U over [lower, upper] (``upper`` may be +inf, held as None).
+
+    Its derivative dq/dU = 1/Q'(q) is not defined at an end of the set where Q' vanishes, as at
+    q = -1/2 for the witness Q = q + q²: the host twin raises ``ZeroDivisionError`` there and the
+    native form gives inf. The recovery itself is defined there."""
 
     def __init__(self, law: Expr, bound: Var, target: Any, *, lower: float, upper: float,
                  recovery: LocalRoot, name: str) -> None:
