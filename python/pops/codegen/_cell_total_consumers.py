@@ -13,8 +13,9 @@ serves it (note §4.3, §13, §14; driver's rulings of 12/11 23:00 and 23:05):
 - a moving configuration: the volume member of G03 lots M1 and M2;
 - an initial value projected on the analytic route: the b6 ``ConservativeCellAverage`` gives
   averages; the projection by encode is N16 lot 2's (plan/routes_transitoires.md, line 4);
-- any Program operation other than the stored state, its linear combinations, the two rates
-  that read the decoded state (a stencil flux is refused until a case runs it under a total) and
+- any Program operation other than the stored state, its linear combinations, the rates that
+  read the decoded state (``rhs``, ``diffusive_rhs`` and, since N15 lot FC-1, a named ``source``;
+  a fused source, a pointwise solve or a local transform stays refused; a stencil flux is refused until a case runs it under a total) and
   the acceptance test ``finite()``, which reads the same on U as on ū (``finite_guard_values``);
 - a consumer of the case that reads the state: a diagnostic reduces the stored totals weighed by
   the cell measure, Σ μ(K) U_K, not the inventory Σ U_K (row D4 of note §4.3), and a field
@@ -27,8 +28,9 @@ from typing import Any
 from pops.time._program.traced_method import NotYetElaborated
 
 # The operations that a Program of a total may hold: the state, its combinations, and the rates
-# that read the decoded density (program_emit_totals.TOTAL_RATE_OPS).
-CELL_TOTAL_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs"})
+# that read the decoded density (program_emit_totals.TOTAL_RATE_OPS), a named source among them
+# (N15 FaceFlux/CellRate lot FC-1).
+CELL_TOTAL_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs", "source"})
 
 # The owner of the projection of an initial value by the encode of its representation.
 _PROJECTION_BY_ENCODE = ("N16 lot 2 (the projection of an initial value by the encode of its "

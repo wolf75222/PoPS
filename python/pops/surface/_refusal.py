@@ -202,6 +202,12 @@ class TermCountedTwice(SurfaceRefusal, ValueError):
     code = "term_counted_twice"
 
 
+class TermNotAdditive(SurfaceRefusal, ValueError):
+    rules = ("R7",)
+    phase = "tracing"
+    code = "term_not_additive"
+
+
 class UnknownName(SurfaceRefusal, NameError):
     rules = ("CC1",)
     phase = "validate"

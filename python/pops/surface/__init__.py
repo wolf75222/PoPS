@@ -37,7 +37,7 @@ from ._refusal import (
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
     MissingBoundaryRealization, NotAPopsOperation, NotDiffusive, NotYetElaborated, OutOfScope,
     RealizationMismatch, ReservedName, SupportMismatch, SurfaceRefusal,
-    SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, UnknownName,
+    SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, TermNotAdditive, UnknownName,
 )
 from ._refusal import AmbiguousSolvePath, UnknownSolvePath
 from ._refusal import SpellingRefusal as _SpellingRefusal
@@ -201,7 +201,8 @@ __all__ = [
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
-    "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
+    "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "TermNotAdditive",
+    "UnknownName",
     "AmbiguousSolvePath", "UnknownSolvePath",
     # the failures of a run (T39), lot G, which a solver also fails with (N9 lot 4)
     "BudgetExhausted", "RunFailed", "SolveFailed",

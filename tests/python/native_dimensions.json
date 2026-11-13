@@ -137,6 +137,7 @@
     "tests/python/integration/runtime/test_scientific_spatial_v14_native.py": 2,
     "tests/python/integration/runtime/test_stencil_flux_v02_native.py": 2,
     "tests/python/integration/runtime/test_surface_n16_three_words_native.py": 1,
+    "tests/python/integration/runtime/test_surface_n15_sources_native.py": 1,
     "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": 1,
     "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py": 3,
     "tests/python/unit/runtime/test_computed_frontier_clipping.py": 2,

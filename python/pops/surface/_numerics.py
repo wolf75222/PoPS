@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from ._expr import Call, walk
-from ._model import Balance, DiffusiveFlux, Flux, Quantity, Term
+from ._model import Balance, DiffusiveFlux, Flux, Quantity, Source, Term
 from ._refusal import (
     CoverageNotExact, LevelMismatch, NotYetElaborated, Site, SpellingRefusal, user_site,
 )
@@ -189,7 +189,7 @@ class Numerics:
         self.represent = self._table(represent, "represent", Quantity)
         for quantity, representation in self.represent:
             self._check_representation(quantity, representation)
-        self.schemes = self._table(schemes, "schemes", (Flux, DiffusiveFlux))
+        self.schemes = self._table(schemes, "schemes", (Flux, DiffusiveFlux, Source))
         for key, scheme in self.schemes:
             self._check_scheme(key, scheme)
 

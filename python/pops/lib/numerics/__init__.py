@@ -13,6 +13,9 @@ formula becomes the generated C++ (G2).
   ``examples/api_v02/b6_reconstructions.py``.
 * :mod:`.reconstructions` -- the b6 per-axis ``Reconstruct`` builder and ``weno5`` (N3), until
   lot 3 ports ``weno5``.
+* :mod:`.cell_rates` -- ``pointwise()``, the scheme of a source, ``CellRate`` of its law at the cell
+  value (2.6.9, N15 FaceFlux/CellRate lot FC-1), written with the surface; b6 realizes it by the
+  named source of the key, selected from its rate and evaluated at each cell.
 * :mod:`.boundaries` -- ``ghosts()``, the boundary policy of 2.6.9, written with the surface
   (N15 lot B): the ghost 2g - u_k of a value and u_1 of no data. The package re-exports it, so
   that a case writes ``from pops.lib.numerics import upwind, muscl, vanleer, ghosts`` as the
@@ -25,12 +28,13 @@ formula becomes the generated C++ (G2).
   the pilot's spelling (N3 lot 1, O2).
 """
 from .boundaries import ghosts
+from .cell_rates import pointwise
 from .fluxes import hll, rusanov, two_point, upwind
 from .limiters import mc, minmod, muscl, superbee, vanleer
 from .reconstructions import Reconstruct, weno5
 
 __all__ = [
-    "ghosts", "hll", "rusanov", "two_point", "upwind",
+    "ghosts", "hll", "pointwise", "rusanov", "two_point", "upwind",
     "Reconstruct", "muscl", "weno5", "mc", "minmod", "superbee", "vanleer",
 ]
 

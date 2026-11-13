@@ -87,7 +87,9 @@ def test_the_gallery_is_the_gallery_of_r12c():
 # guards of master in the library (P2).
 FLUX_WORDS = ("rusanov", "upwind", "hll", "two_point", "_differentiated")
 RECONSTRUCTION_WORDS = ("muscl",)
-LIBRARY_WORDS = FLUX_WORDS + RECONSTRUCTION_WORDS
+# N15 FaceFlux/CellRate lot FC-1 (ROM-98) extends it to the cell rate pointwise.
+CELL_RATE_WORDS = ("pointwise",)
+LIBRARY_WORDS = FLUX_WORDS + RECONSTRUCTION_WORDS + CELL_RATE_WORDS
 
 
 def _functions(path):
@@ -110,14 +112,17 @@ def _functions(path):
 
 def test_the_gallery_writes_the_scheme_words_of_the_library():
     """The bodies, the signatures, the decorators and the docstrings (up to their line breaks) of
-    upwind, rusanov, hll and two_point are those of python/pops/lib/numerics/fluxes.py, and the
-    ones of muscl that of python/pops/lib/numerics/limiters.py."""
+    upwind, rusanov, hll and two_point are those of python/pops/lib/numerics/fluxes.py, the ones
+    of muscl that of python/pops/lib/numerics/limiters.py, and the ones of pointwise that of
+    python/pops/lib/numerics/cell_rates.py."""
     gallery = _functions(GALLERY / "lib_schemes.py")
     fluxes = _functions(LIBRARY / "numerics" / "fluxes.py")
     reconstructions = _functions(LIBRARY / "numerics" / "limiters.py")
+    cell_rates = _functions(LIBRARY / "numerics" / "cell_rates.py")
     assert sorted(fluxes) == sorted(FLUX_WORDS)
     assert sorted(reconstructions) == sorted(RECONSTRUCTION_WORDS)
-    assert gallery == {**fluxes, **reconstructions}
+    assert sorted(cell_rates) == sorted(CELL_RATE_WORDS)
+    assert gallery == {**fluxes, **reconstructions, **cell_rates}
 
 
 def test_the_gallery_passes_the_lint(words):

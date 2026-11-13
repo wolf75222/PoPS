@@ -199,3 +199,95 @@ def test_an_analytic_initial_projection_of_a_total_is_refused():
 def test_the_graded_cases_resolve_under_a_total():
     for build in (build_graded_burgers, build_graded_diffusion_total):
         assert _resolved(build).blocks[0].numerics.cell_total_states()
+
+
+# --- N15 FaceFlux/CellRate lot FC-1 (ROM-98, note §3.4): the named source of a total ----------
+
+def _decaying_burgers(shape="split"):
+    """Burgers with the named source -2u on 16 periodic cells, under a total, on the split route:
+    the flux by a finite volume, the source selected and realized by ``StateStorage()``.
+    ``shape`` names how the Program evaluates the source: ``split`` beside the rate of the flux,
+    ``absorbed`` inside a pointwise rate, ``solved`` by the local solve of the source."""
+    from pops import math as pm
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian1D
+    from pops.initial import InitialCondition
+    from pops.layouts import Uniform
+    from pops.lib.initial import BindArray
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.numerics import StateStorage, reconstruction, riemann, variables
+    from pops.numerics.spatial import FiniteVolume
+    from pops.projection import ConservativeCellAverage
+    from pops.time import FixedDt
+
+    frame = CartesianDomain("n15_fc1_source", (0.0,), (3.0,)).frame(Cartesian1D())
+    (x,) = frame.axes
+    model = pops.Model("N15_FC1_decaying_burgers", frame=frame)
+    U = model.state("u", components=("u",))
+    (u,) = U
+    flux = model.flux("burgers_flux", state=U, frame=frame, components={x: (0.5 * u * u,)},
+                      waves={x: (u,)})
+    decay = model.source("decay", on=U, value=(-2.0 * u,))
+    rate = model.rate("burgers_decay", equation=pm.ddt(U) == -pm.div(flux) + decay)
+    transport, source = rate.select(flux), rate.select(decay)
+    case = pops.Case("N15_FC1_%s" % shape)
+    block = case.block("line", model)
+    plan = DiscretizationPlan()
+    plan.rates.add(transport, FiniteVolume(flux=flux, variables=variables.Conservative(U),
+                                           reconstruction=reconstruction.FirstOrder(),
+                                           riemann=riemann.Rusanov()))
+    plan.rates.add(source, StateStorage())
+    plan.representations.add(U, cell_total(1))
+    case.numerics(plan, block=block)
+    program = pops.Program("N15_FC1_%s_program" % shape)
+    q = program.state(block[U])
+    if shape == "solved":
+        relaxed = program.solve_implicit_source(q.n)
+        update = program.value("next", relaxed + program.dt * transport(relaxed), at=q.next.point)
+    else:
+        local = source(q.n)
+        if shape == "absorbed":
+            local = program.rate("absorbed", (2 * local[0],), of=q.n)
+        update = program.value("next", q.n + program.dt * (transport(q.n) + local),
+                               at=q.next.point)
+    program.commit(q.next, update)
+    program.step_strategy(FixedDt(0.01))
+    case.program(program)
+    case.initials.add(InitialCondition(state=block[U], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+    layout = Uniform(CartesianGrid(frame=frame, cells=(16,), periodic=PeriodicAxes((x,))))
+    return pops.resolve(pops.validate(case), layout=layout)
+
+
+def test_the_named_source_of_a_total_reads_the_density_and_encodes_its_rate():
+    """The split ``source`` operation reads ū = U/μ(K) from the decode and its rate is multiplied
+    by μ(K) after, as the rate of the flux (route line 6, extended by FC-1)."""
+    resolved = _decaying_burgers()
+    source = emit_cpp_program(resolved.time, model_graph=build_program_model_graph(resolved),
+                              target="system")
+    lines = [line.strip() for line in source.splitlines()]
+    assert source.count("ctx.decode_cell_total(") == 2  # the flux and the source
+    assert source.count("ctx.encode_cell_total_rate(") == 2
+    scope = next(number for number, line in enumerate(lines)
+                 if 'ProfileScope "node:decay' in line)
+    (decode,) = [number for number in range(scope - 2, scope)
+                 if lines[number].startswith("ctx.decode_cell_total(")]
+    density = lines[decode].split(",")[1].split(")")[0].strip()
+    kernel = next(number for number in range(scope, len(lines)) if "rhs_scratch(" in lines[number])
+    assert lines[kernel].endswith(", %s);" % density)
+    output = lines[kernel].split("&")[1].split("=")[0].strip()
+    encode = lines.index("ctx.encode_cell_total_rate(%s);  // G03 R-b: the rate of the total"
+                         % output)
+    assert encode > kernel
+
+
+@pytest.mark.parametrize("shape, operation", [("absorbed", "pointwise_expression"),
+                                              ("solved", "solve_implicit_source")])
+def test_a_source_evaluated_inside_another_operation_stays_refused_on_a_total(shape, operation):
+    """O1: the gate is an allowlist over every node of the Program, so a source that a pointwise
+    rate absorbs, or that a local solve holds in its residual, is refused by its outer operation,
+    and only the standalone ``source`` is served."""
+    with pytest.raises(CellTotalNotYetElaborated) as caught:
+        _decaying_burgers(shape)
+    assert caught.value.reason == "cell_total_operation"
+    assert operation in str(caught.value)

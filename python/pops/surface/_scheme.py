@@ -22,7 +22,11 @@ the builder when it is built (2.6.6, row of ``@pops.scheme``):
 * a ``Reconstruct``, the ``reconstruction=`` of a face flux, is a ``reconstruction.User`` body:
   ``cell.shift(axis, k).value(u)`` is the sample at offset k along the axis. Its
   ``formal_order`` is the bound that the stencil proves, the number of cells read along the axis,
-  not a claimed order (§6.9, C46; review N2 and Q1).
+  not a claimed order (§6.9, C46; review N2 and Q1);
+* a ``CellRate`` of a scheme over ``cell`` without ``axis``, under a ``Source`` key, is the value
+  of a b6 named source, read at the cell: ``cell.value(u)`` is the cell value (the decoded density
+  under a total), and the selection of the source is realized by ``StateStorage()`` (N15,
+  FaceFlux/CellRate lot FC-1, note §3.2 to §3.4).
 
 Every other read of 2.6.4 is importable and refused with ``NotYetElaborated``, which names its lot.
 """
@@ -36,7 +40,7 @@ from ._expr import Arith, Call, Expr, Predicate, Relation, is_number, text, walk
 from ._geometry import Coordinate, MathConstant
 from ._method import ENTITY_PARAMETERS
 from ._model import (
-    BoundaryRelation, DiffusiveFlux, Flux, ModelConstant, Parameter, Quantity, Term,
+    BoundaryRelation, DiffusiveFlux, Flux, ModelConstant, Parameter, Quantity, Source, Term,
 )
 from ._numerics import SchemeValue, TermView
 from ._refusal import (
@@ -63,6 +67,15 @@ _GEOMETRY = "a later lot of N15 with the geometry reads of §4.3 (D18)"
 _STENCIL = ("a later lot of N15 with the stencil faces of N7a (a face of this lot reads its two "
             "cells; a wider stencil is a Reconstruct)")
 _BUILDERS = "a later lot of N15 with the keys that this builder covers"
+# N16 lot 2 finds its seams by this name (handover point 8; the SU-T2 tests mark them `# <-`).
+_N16_LOT_2 = "N16 lot 2"
+_N16_REGION_FORM = ("N16 lot 2, with the region form of CellRate (a cell rate that reads a stencil "
+                    "is not a b6 source)")
+_N16_PER_SIDE = "N16 lot 2, with the per-side values of D6 (2.6.8)"
+_N16_VOLUME = "N16 lot 2, with the volume term of the weak form of div (D1b)"
+_N16_INTEGRALS = "N16 lot 2, with the integrals of 4.3 (a total)"
+_FC2 = ("the N15 lot of cell.load and of the coordinates read at the centre (FaceFlux/CellRate "
+        "lot FC-2)")
 
 # Refusal tables of the surface (CF2, §21.7): the reads of 2.6.4 that a later lot elaborates and
 # whose names the core does not otherwise spell, keyed by the read, with the sentence of their lot.
@@ -379,10 +392,13 @@ class FaceFlux(Builder):
     word = "FaceFlux"
 
     def __init__(self, value: Any, reconstruction: Any = None, speed: Any = None,
-                 left: Any = None, right: Any = None) -> None:
+                 left: Any = None, right: Any = None, volume: Any = None) -> None:
         if left is not None or right is not None:
             raise NotYetElaborated("FaceFlux(left=, right=), per-side contributions (2.6.8)",
-                                   _BUILDERS)
+                                   _N16_PER_SIDE)
+        if volume is not None:
+            raise NotYetElaborated("FaceFlux(volume=), the cell part of a weak divergence",
+                                   _N16_VOLUME)
         super().__init__(value)
         if speed is not None:
             _expression(speed, "FaceFlux(speed=)")
@@ -401,6 +417,13 @@ class Reconstruct(Builder):
     the negative side mirroring it (2.6.4)."""
 
     word = "Reconstruct"
+
+
+class CellRate(Builder):
+    """``CellRate(value)``: the rate of the key's quantity at the cell, a density read at the
+    centre under one constant mode (2.6.4; N16 4.3), or a load of ``cell.load`` (FC-2)."""
+
+    word = "CellRate"
 
 
 class Ghost(Builder):
@@ -736,6 +759,33 @@ class CellEntity(_Unread):
         return "cell" if self._offset == 0 else "cell.shift(%s, %d)" % (self._axis, self._offset)
 
 
+class RateCell(_Unread):
+    """``cell`` in a scheme over ``cell`` without ``axis``, which returns ``CellRate``: the cell
+    of the key, read at one place (note §3.2)."""
+
+    _entity = "cell"
+    _later_reads = _LATER_CELL
+    _later = {"width": _GEOMETRY, "center": _GEOMETRY, "lower": _GEOMETRY, "upper": _GEOMETRY,
+              "measure": _GEOMETRY, "displacement": _GEOMETRY,
+              "load": _FC2,
+              "integral": _N16_INTEGRALS,
+              "shift": _N16_REGION_FORM, "lower_face": _N16_REGION_FORM,
+              "upper_face": _N16_REGION_FORM,
+              "speed": _BUILDERS,
+              "parent": "a later lot of N15 with the hierarchies of N12",
+              "level": "a later lot of N15 with the hierarchies of N12"}
+
+    def __init__(self, key: Term) -> None:
+        self._key = key
+
+    def value(self, quantity: Any) -> Any:
+        quantity = _own_quantity(self._key, quantity, "cell.value")
+        return SchemeLeaf(("sample", 0), quantity, "cell.value(%s)" % quantity)
+
+    def __repr__(self) -> str:
+        return "cell"
+
+
 class TermEntity(_Unread):
     """``term`` in a scheme: the key that the scheme is placed under."""
 
@@ -795,6 +845,8 @@ class TermEntity(_Unread):
                 write="a scheme of the kind of the key", site=user_site(2))
         components = getattr(key, "components", (key.value,))
         if states is None:
+            if isinstance(key, Source):
+                return key.value
             return LawValue(key.value, None, components)
         if not isinstance(states, dict):
             raise TypeError("term.law(states={q: value}) takes a table keyed by quantities")
@@ -805,6 +857,9 @@ class TermEntity(_Unread):
                 raise TypeError("term.law(states={%s: v}) takes a value, got %r"
                                 % (quantity, value))
             table[quantity] = value
+        if isinstance(key, Source):
+            # The law of a source is a scalar of its quantity, not a vector of axes.
+            return substitute(key.value, table)
         side = None
         (trace,) = table.values() if len(table) == 1 else (None,)
         if isinstance(trace, SchemeLeaf) and trace.key[0] == "trace":
@@ -968,11 +1023,9 @@ class SurfaceScheme:
             raise TypeError("@pops.scheme: %s takes term, the key that the scheme is placed "
                             "under: def %s(face, term)" % (name, name))
         if ("face" in entities) == ("cell" in entities):
-            raise TypeError("@pops.scheme: %s takes face, for a scheme that returns FaceFlux, or "
-                            "cell and axis, for a scheme that returns Reconstruct (2.6.4)" % name)
-        if "cell" in entities and "axis" not in entities:
-            raise NotYetElaborated("a scheme over cell without axis, which returns CellValue, "
-                                   "CellRate or CellResidual", _BUILDERS)
+            raise TypeError("@pops.scheme: %s takes face, for a scheme that returns FaceFlux, "
+                            "cell and axis, for a scheme that returns Reconstruct, or cell, for "
+                            "a scheme that returns CellRate (2.6.4)" % name)
         if "depth" in entities and "face" not in entities:
             raise TypeError("@pops.scheme: %s takes depth, the depth of a ghost, with face, for "
                             "a boundary policy that returns Ghost: def %s(face, term, depth)"
@@ -989,7 +1042,13 @@ class SurfaceScheme:
 
     @property
     def is_cell(self) -> bool:
-        return "cell" in self.entities
+        """A scheme over ``cell`` and ``axis``, which returns ``Reconstruct``."""
+        return "cell" in self.entities and "axis" in self.entities
+
+    @property
+    def is_cell_rate(self) -> bool:
+        """A scheme over ``cell`` without ``axis``, which returns ``CellRate`` (note §3.2)."""
+        return "cell" in self.entities and "axis" not in self.entities
 
     @property
     def is_boundary(self) -> bool:
@@ -1125,7 +1184,10 @@ class UserScheme(SchemeValue):
     @property
     def kinds(self) -> tuple:  # type: ignore[override]
         # check_key refuses, with its own message, a cell scheme (which covers no key) and a face
-        # scheme under a diffusive flux (which a later lot elaborates).
+        # scheme under a diffusive flux (which a later lot elaborates). A scheme over cell without
+        # axis returns CellRate, which covers a source in this lot (note §3.2, Q10).
+        if self.scheme.is_cell_rate:
+            return ("Source",)
         return ("Flux", "DiffusiveFlux")
 
     def check_key(self, key: Term) -> None:
@@ -1177,7 +1239,8 @@ class UserScheme(SchemeValue):
         if isinstance(result, tuple):
             raise TypeError("the scheme %s returns a tuple; a scheme returns one builder of "
                             "pops.discrete (SU14)" % self.scheme.name)
-        expected = Reconstruct if self.scheme.is_cell else FaceFlux
+        expected = Reconstruct if self.scheme.is_cell else \
+            CellRate if self.scheme.is_cell_rate else FaceFlux
         if not isinstance(result, expected):
             raise RealizationMismatch(
                 "the scheme %s returns %r under %s, a %s, which %s covers"
@@ -1188,7 +1251,7 @@ class UserScheme(SchemeValue):
     def reads_speeds(self, key: Term) -> bool:
         """Whether the face of the key reads the face input ``speeds`` (the slowest and the
         fastest wave speeds of R9), which the model then declares (``Model.wave_speeds``)."""
-        if self.scheme.is_cell or isinstance(key, DiffusiveFlux):
+        if self.scheme.is_cell or self.scheme.is_cell_rate or isinstance(key, DiffusiveFlux):
             return False
         builder = self.traced(key).builder
         return reads_speed_pair(builder.value, builder.speed)
@@ -1200,6 +1263,10 @@ class UserScheme(SchemeValue):
             if known is key:
                 return traced
         axes = key.quantity.support.axes
+        if self.scheme.is_cell_rate:
+            traced = Traced(self._traced_rate(key), None)
+            self._traced.append((key, traced))
+            return traced
         if self.scheme.is_cell:
             builder = None
             for axis in axes:
@@ -1240,6 +1307,25 @@ class UserScheme(SchemeValue):
             traced = Traced(builder, None if recon is None else recon.traced(key))
         self._traced.append((key, traced))
         return traced
+
+    def _traced_rate(self, key: Term) -> CellRate:
+        """The ``CellRate`` of a scheme over ``cell`` under a source, run once (no axis): its value
+        reads ``cell.value`` of the key's quantity, numbers, constants and parameters (FC-1)."""
+        from ._geometry import Coordinate
+
+        ran = self._run({"cell": RateCell(key), "term": TermEntity(key)}, key)
+        for node in walk(ran.value):
+            if isinstance(node, Coordinate):
+                raise NotYetElaborated(
+                    "the scheme %s under %s, whose CellRate reads the coordinate %s at the "
+                    "centre of the cell" % (self, key, node), _FC2, site=self.site)
+            if isinstance(node, Call) and node.word == "grad":
+                raise NotYetElaborated(
+                    "the scheme %s under %s, whose CellRate reads %s" % (self, key, text(node)),
+                    "the lot of scheme gradients of N15 (GR), with pointwise(gradient=)",
+                    site=self.site)
+        _reads(ran.value, ("sample",), self, "cell")
+        return ran
 
     def _traced_diffusive(self, key: DiffusiveFlux, axes: tuple) -> Traced:
         """The face of a diffusive key, run once per axis: it reads the two traces and
@@ -1312,6 +1398,12 @@ class UserScheme(SchemeValue):
 
         if isinstance(view.term, DiffusiveFlux):
             return self._realize_diffusive(view)
+        if self.scheme.is_cell_rate:
+            # The value of the CellRate is the value of the b6 named source (note §3.4), which
+            # the elaborator declares; its selection of the rate is evaluated at the cell.
+            from pops.numerics import StateStorage
+
+            return StateStorage()
         traced = self.traced(view.term)
         builder = traced.builder
         lower = view.lower
@@ -1366,6 +1458,9 @@ class UserScheme(SchemeValue):
         """The b6 builder, for ``pops.inspect``; the options are in the repr of the value."""
         if self.scheme.is_cell:
             return "reconstruction.User(the Reconstruct of %s)" % self.scheme.name
+        if self.scheme.is_cell_rate:
+            return ("StateStorage(), the selection of the named source whose value is the "
+                    "CellRate of %s, evaluated at each cell" % self.scheme.name)
         first = self._traced[0][1] if self._traced else None
         if first is not None and first.frequency is not None:
             return ("StencilFlux(radius=1, body=the FaceFlux of %s, frequency=%s, derived), "

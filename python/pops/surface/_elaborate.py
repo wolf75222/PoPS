@@ -46,7 +46,7 @@ from ._geometry import FRAME_AXES, Box, Coordinate, MathConstant
 from ._method import MethodValue, _Trace, specialize, translate
 from ._model import (
     Balance, Datum, DiffusiveFlux, Flux, Model, ModelConstant, Parameter, Positive, Quantity,
-    Term, model_names,
+    Source, Term, model_names,
 )
 from ._model import _sign as _derived_sign
 from ._numerics import Numerics, SchemeValue, TermView
@@ -171,6 +171,23 @@ def elaborated_representation(quantity: Any, support: Box, definition: Any = Non
 _PROJECTION_BY_ENCODE = ("N16 lot 2 (the projection by encode: cell.integral, the sample, the Riesz "
                          "map of a stated rule); until then the initial value is a datum, the "
                          "coefficients bound at pops.bind")
+
+
+def _sampled(value: Any) -> Any:
+    """``value`` with each ``cell.value(q)`` written as ``q``, for the b6 row of a source."""
+    from ._scheme import SchemeLeaf
+
+    if isinstance(value, SchemeLeaf) and value.key == ("sample", 0):
+        return value.quantity
+    if isinstance(value, Arith):
+        return Arith(value.op, tuple(_sampled(arg) for arg in value.args))
+    if isinstance(value, Call):
+        return Call(value.word, tuple(_sampled(arg) for arg in value.args))
+    return value
+
+
+def _is_cell_total(definition: Any) -> bool:
+    return getattr(definition, "kind", None) == "total"
 
 
 def _is_cell_average(definition: Any) -> bool:
@@ -527,9 +544,38 @@ class _Elaboration:
             state = states[term.quantity]
             if isinstance(term, DiffusiveFlux):
                 elaborated[term] = self.diffusive(b6, term, name, origin, state)
+            elif isinstance(term, Source):
+                elaborated[term] = self.source(b6, term, name, origin, state)
             else:
                 elaborated[term] = self.flux(b6, frame, term, name, origin, state)
         return elaborated
+
+    def source(self, b6: Any, term: Source, name: str, origin: str, state: Any) -> Any:
+        """The b6 named source of a source, whose value is the value of the ``CellRate`` that its
+        scheme gives, read at the cell (N15 FaceFlux/CellRate FC-1, note §3.4, Q3): for
+        ``pointwise()`` it is the law of the source at the cell value."""
+        from ._builder_value import classify
+
+        scheme = self.numerics.scheme_of(term)
+        builder = scheme.traced(term).builder
+        typed = classify(builder.value, word="CellRate",
+                         definition=self.numerics.definition_of(term.quantity),
+                         site=getattr(scheme, "site", None))
+        value = self.lower(typed.value, {("sample", 0): self.values[term.quantity]})
+        handle = b6.source(name, on=state, value=(value,))
+        representation = self.numerics.representation_of(term.quantity)
+        self.rows.append(Row(
+            "model.source(of=%s, value=%s)" % (term.quantity, text(term.value)), "model",
+            "%s = model.source(%r, on=%s, value=(%s,))"
+            % (name, name, term.quantity.name, self.code(_sampled(typed.value))),
+            [Choice("name", name, origin),
+             Choice("scheme", scheme, "stated"),
+             Choice("kind of value", typed.kind, "derived"),
+             Choice("delivered", "the rate of %r: %s" % (
+                 representation, "μ(K) times the value read at the cell, the rate of a total "
+                 "(N16 5.1, A1)" if _is_cell_total(self.numerics.definition_of(term.quantity))
+                 else "the value read at the cell"), "derived")]))
+        return handle
 
     def flux(self, b6: Any, frame: Any, term: Flux, name: str, origin: str, state: Any) -> Any:
         axes = frame.axes
@@ -591,16 +637,22 @@ class _Elaboration:
         for term, coefficient in balance.occurrences:
             if coefficient not in (1, -1):
                 raise NotYetElaborated(
-                    "the weight %s of div(%s) in the balance of %s, a weight other than 1 or -1"
-                    % (coefficient, term, balance.quantity), _WEIGHTED, site=balance.site)
+                    "the weight %s of %s in the balance of %s, a weight other than 1 or -1"
+                    % (coefficient, term if isinstance(term, Source) else "div(%s)" % term,
+                       balance.quantity), _WEIGHTED, site=balance.site)
         stencils = []
         for term, coefficient in balance.occurrences:
             if isinstance(term, DiffusiveFlux):
                 stencils.append("%sthe StencilFlux of %s"
                                 % ("" if coefficient == -1 else "-", self.names[term]))
                 continue
-            piece = _pm.div(terms[term])
-            spelled = "div(%s)" % self.names[term]
+            if isinstance(term, Source):
+                # A source enters the rate as itself, with the sign of its occurrence.
+                piece = terms[term]
+                spelled = self.names[term]
+            else:
+                piece = _pm.div(terms[term])
+                spelled = "div(%s)" % self.names[term]
             if rhs is None:
                 rhs = piece if coefficient == 1 else -piece
                 parts.append(spelled if coefficient == 1 else "-" + spelled)
@@ -696,6 +748,14 @@ class _Elaboration:
         its face, so that a copy of ``two_point()`` written in a case is applied as the word."""
         weight = next(-coefficient if isinstance(term, DiffusiveFlux) else coefficient
                       for term, coefficient in balance.occurrences if term is view.term)
+
+        if isinstance(view.term, Source):
+            def refused() -> Any:
+                raise NotYetElaborated(
+                    "the linear map of the source %s, which a solve reads" % view.term,
+                    "a later lot of N15 with the implicit sources (the linear map of a "
+                    "CellRate)", site=view.term.site)
+            return refused
 
         def linear() -> Any:
             operator = next((solver.linear_operator for _, solver in self.program.solvers

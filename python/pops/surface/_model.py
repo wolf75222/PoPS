@@ -280,6 +280,24 @@ class DiffusiveFlux(Term):
     __slots__ = ("variables", "coefficient", "origin")
 
 
+class Source(Term):
+    """``model.source(of=u, value=e)``: a source of one quantity, one law in one balance (R4).
+
+    It enters its balance as ``+ S``, ``- S`` or scaled by an exact number (§3.7), and is covered by
+    a scheme over ``cell`` that returns ``CellRate`` (2.6.4), such as ``pointwise()`` (N15,
+    FaceFlux/CellRate lot FC-1)."""
+
+    __slots__ = ()
+
+
+_RECORD_STATES = "a later lot of N15 with the record states of N8"
+_NONLOCAL_SOURCES = "a later lot of N15 with the nonlocal sources of R4b"
+_SCHEME_GRADIENTS = ("the lot GR of N15, which reads grad(u) in a scheme; grad of an analytic "
+                     "definition comes with model.define (R16)")
+_ANONYMOUS_SOURCES = ("a later lot of N15 with the anonymous sources of §3.7, once their key under "
+                      "schemes= is spelled")
+
+
 class Balance:
     """``model.balance(ddt(u) == r)``: the balance of one quantity (§3.7).
 
@@ -574,6 +592,41 @@ class Model:
         self.terms.append(handle)
         return handle
 
+    def source(self, *, of: Any, value: Any, support: Any = None, name: Any = None) -> Source:
+        """``model.source(of=u, value=e)``: a source of the quantity u, which its balance adds (R4).
+
+        The value reads the quantity u, numbers, constants and parameters; a value that reads
+        another quantity, a gradient or a nonlocal support belongs to a later lot."""
+        quantity = self._term_quantity(of, "model.source")
+        _level_check(value, "the value of model.source")
+        site = user_site(2)
+        if support is not None:
+            raise NotYetElaborated("model.source(support=...), a source over a nonlocal support "
+                                   "(R4b, K1)", _NONLOCAL_SOURCES, site=site)
+        value = operand(value, "model.source(value=...)")
+        self._own(value, "model.source")
+        for node in walk(value):
+            if isinstance(node, Quantity) and node is not quantity:
+                raise NotYetElaborated(
+                    "the source of %s whose value %s reads the quantity %s"
+                    % (quantity, text(value), node), _RECORD_STATES, site=site)
+            if isinstance(node, Term):
+                raise TypeError("model.source(value=...) reads the term %s; a term enters a "
+                                "balance, not the value of another term" % node)
+            if isinstance(node, Call) and node.word == "grad":
+                raise NotYetElaborated("the source of %s whose value %s reads %s"
+                                       % (quantity, text(value), text(node)),
+                                       _SCHEME_GRADIENTS, site=site)
+            if isinstance(node, Call) and node.word == "vector":
+                raise SupportMismatch(
+                    "the source of %s, a scalar quantity, is %s, a vector" % (quantity,
+                                                                            text(value)),
+                    write="model.source(of=%s, value=e), e a scalar" % quantity, site=site)
+        handle = Source(self, "Source", quantity, value, self._term_name(name, "model.source"),
+                        site)
+        self.terms.append(handle)
+        return handle
+
     def balance(self, relation: Any, *, name: Any = None) -> Balance:
         """``model.balance(ddt(u) == r)``: the balance of the quantity under ``ddt``."""
         site = user_site(2)
@@ -628,10 +681,6 @@ class Model:
     @property
     def define(self) -> Any:
         return self._later("model.define, a definition (R16)")
-
-    @property
-    def source(self) -> Any:
-        return self._later("model.source, a source (R4)")
 
     @property
     def interaction(self) -> Any:
@@ -828,7 +877,11 @@ def _sign(value: Any) -> int | None:
 
 
 def _occurrences(rhs: Any, site: Site | None) -> tuple:
-    """The signed sum of div(term) of a balance: [(term, coefficient)], in the order written."""
+    """The signed sum of the terms of a balance: [(term, coefficient)], in the order written.
+
+    A term is ``div(F)`` of fluxes or a source, added, subtracted, or multiplied or divided by an
+    exact number (§3.7); a term under any other node is refused (``TermNotAdditive``), and a part
+    that holds no term, inline algebra, is a later lot (§3.7, its anonymous source)."""
     rows: list = []
 
     def add(node: Any, coefficient: Fraction) -> None:
@@ -844,12 +897,30 @@ def _occurrences(rhs: Any, site: Site | None) -> tuple:
             add(node.args[1], coefficient * Fraction(node.args[0]))
         elif isinstance(node, Arith) and node.op == "*" and is_number(node.args[1]):
             add(node.args[0], coefficient * Fraction(node.args[1]))
+        elif (isinstance(node, Arith) and node.op == "/" and is_number(node.args[1])
+              and node.args[1] != 0):
+            add(node.args[0], coefficient / Fraction(node.args[1]))
         elif isinstance(node, Call) and node.word == "div":
             flux(node.args[0], coefficient)
+        elif isinstance(node, Source):
+            rows.append((node, coefficient))
+        elif isinstance(node, (Flux, DiffusiveFlux)):
+            raise TypeError("the flux %s stands in a balance outside div; a flux enters its "
+                            "balance through its divergence, -div(%s)" % (node, node))
+        elif any(isinstance(inner, Term) for inner in walk(node)):
+            from ._refusal import TermNotAdditive
+
+            raise TermNotAdditive(
+                "the part %s of a balance holds a term under %s; each term of a balance is "
+                "added, subtracted, or multiplied or divided by an exact number (§3.7)"
+                % (text(node), _node_word(node)),
+                write="the term itself in the sum, and the rest of the expression in the value of "
+                      "a model.source", site=site)
         else:
             raise NotYetElaborated(
-                "the part %s of a balance, which is not the divergence of a flux" % text(node),
-                "a later lot of N15 with the sources of R4", site=site)
+                "the part %s of a balance, inline algebra, which holds no term (until then, write "
+                "model.source(of=u, value=...) and key it under schemes=)" % text(node),
+                _ANONYMOUS_SOURCES, site=site)
 
     def flux(node: Any, coefficient: Fraction) -> None:
         if isinstance(node, Arith) and node.op in ("+", "-"):
@@ -867,8 +938,16 @@ def _occurrences(rhs: Any, site: Site | None) -> tuple:
 
     add(rhs, Fraction(1))
     if not rows:
-        raise ValueError("a balance holds the divergence of at least one flux in this lot")
+        raise ValueError("a balance holds at least one term, the divergence of a flux or a source")
     return tuple(rows)
+
+
+def _node_word(node: Any) -> str:
+    if isinstance(node, Arith):
+        return "the operation %s" % node.op
+    if isinstance(node, Call):
+        return "the word %s" % node.word
+    return "a node other than +, - and a product or a quotient by an exact number"
 
 
 def model_names(model: Model) -> dict:
@@ -880,8 +959,9 @@ def model_names(model: Model) -> dict:
         if term.name is not None:
             names[term] = term.name
             continue
-        stem = "%s_%s" % ("flux" if isinstance(term, Flux) else "diffusive_flux",
-                          term.quantity.name)
+        kind = "flux" if isinstance(term, Flux) else \
+            "source" if isinstance(term, Source) else "diffusive_flux"
+        stem = "%s_%s" % (kind, term.quantity.name)
         counts[stem] = counts.get(stem, 0) + 1
         names[term] = stem if counts[stem] == 1 else "%s_%d" % (stem, counts[stem])
     taken = set(model._declared)
@@ -902,5 +982,5 @@ def reserved_component(name: str) -> None:
 
 
 __all__ = ["Model", "Scalar", "Vector", "Tensor", "Components", "Positive", "Quantity",
-           "ModelConstant", "Parameter", "Datum", "Flux", "DiffusiveFlux", "Balance",
+           "ModelConstant", "Parameter", "Datum", "Flux", "DiffusiveFlux", "Source", "Balance",
            "model_names", "SymbolNotInSurface"]

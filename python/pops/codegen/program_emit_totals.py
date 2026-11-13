@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from typing import Any
 
-# The rate operations that read the stored state and return its rate.
-TOTAL_RATE_OPS = frozenset({"rhs", "diffusive_rhs"})
+# The rate operations that read the stored state and return its rate; ``source`` is a named source
+# of the state, read at the centre of the cell (N15 FaceFlux/CellRate lot FC-1, note §3.4).
+TOTAL_RATE_OPS = frozenset({"rhs", "diffusive_rhs", "source"})
 # The scratch subslot of the decoded density; the operations above use 0 to 3 and the named
 # sources the following ones, so the decode takes a slot of the state scratch kind instead.
 _DECODE_SUBSLOT = 7
