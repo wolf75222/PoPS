@@ -8991,6 +8991,24 @@
         "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": "1b56bb0e19dbe393d54e9be407e8e94e3cce583763aee41db93f53cd409318b2",
         "tests/python/unit/surface/test_n3_lot2_muscl.py": "5e02066ad264d3d8bb12fe34e46cd8b506cbf0a8b7cd0c420672c29dc3b6969b"
       }
+    },
+    "ci_20261113_g04a_generated_ghosts": {
+      "basis": "Unmeasured CI scheduling estimate for the Dim2 native module of N15 lot B after G04-a (ROM-22, the ghost cells generated from the body of the boundary policy): it now compiles nine artifacts once per module (the surface advection and its hand-written b6 form at first order, under muscl(limiter=vanleer), with a periodic axis and with the linear extrapolation, and a surface case whose ghost is not finite) and refuses a tenth before C++, then runs eleven compiled runs of 50 steps on 16 x 8 cells; 1200 s on the api_v02_20261013 tiers, as the analogue test_candidate_guards_n8_native.py (1200 s, 792 s locally) and above test_field_requests_n8_native.py (900 s, 651 s locally). The source-only module keeps its 60 s (24 cases, one more level-1 C++ emission per case). The local receipts come from pytest on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial build of _pops, Dim2); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py": "tests/python/integration/runtime/test_candidate_guards_n8_native.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py": 1200
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py": {
+          "cases": 7,
+          "session_seconds": 412.83
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py": "fe715ad5745a0a297e3b15d27a519cb3aaaf110d4a0fd125fae580a5c6f5b2ae"
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
@@ -10231,7 +10249,7 @@
   "tests/python/integration/runtime/test_surface_lot_g_run_native.py": 900,
   "tests/python/unit/problem/test_identity_provenance_free.py": 15.0,
   "tests/python/integration/runtime/test_identity_provenance_free_native.py": 600.0,
-  "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py": 600,
+  "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py": 1200,
   "tests/python/unit/surface/test_lot_b_boundaries.py": 60,
   "tests/python/integration/runtime/test_surface_lot_e_project_native.py": 900,
   "tests/python/unit/surface/test_lot_e_project.py": 60,

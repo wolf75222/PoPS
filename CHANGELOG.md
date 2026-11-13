@@ -18,6 +18,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-22 (G04-a, « Générer les fantômes depuis la politique de bord »): the ghost cells of a
+  boundary relation of the surface are generated from the body of its policy (`ghosts()` or a
+  policy written in the case). The elaborator runs the policy at the depths 1..D of the halo of
+  the block (D from the methods of the plan) and gives each piece the b6 `SourceGhost` of
+  `pops.boundary.transport` (not exported); the model package compiles it into
+  `pops_generated::UserGhostPolicy`, which the prepared boundary calls on the device after the
+  native laws (`HyperbolicBoundaryLaw::SourceGhost`, token `source_ghost`), authenticated face by
+  face. A policy outside the two laws of master is now generated (a constant ghost, the linear
+  extrapolation under `muscl`); a ghost that reads `face.normal`, a coordinate or an inner cell
+  deeper than D is refused by its name. A source ghost face needs the generated face of its
+  package (`riemann.User`), and every fill without the policy (AMR, policy-less fills) refuses it.
+  The MG9 bridge `realize` (`pops.lib.numerics.ghost_laws`) is removed. Integer depths are a
+  transitional route (`plan/routes_transitoires.md`), removed by G04 in phase 2.
 - ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
   from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
   `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the

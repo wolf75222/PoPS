@@ -194,8 +194,14 @@ class CompiledBoundaryPlan:
         for face in data["faces"]:
             if not isinstance(face, dict) or face.get("type") not in {
                     "periodic", "foextrap", "dirichlet", "no_flux", "slip_wall",
-                    "external", "characteristic_no_inflow"}:
+                    "external", "characteristic_no_inflow", "source_ghost"}:
                 raise ValueError("compiled boundary face has no executable producer type")
+            source_identity = face.get("source_identity")
+            if (face["type"] == "source_ghost") != (source_identity is not None) or (
+                    source_identity is not None
+                    and (not isinstance(source_identity, str) or not source_identity)):
+                raise ValueError(
+                    "a compiled source ghost face carries exactly one non-empty source identity")
             prescribed_trace = face.get("prescribed_trace", False)
             if type(prescribed_trace) is not bool:
                 raise TypeError("compiled boundary face prescribed_trace must be a bool")
@@ -228,7 +234,7 @@ class CompiledBoundaryPlan:
                 raise ValueError(
                     "compiled primitive boundary face requires one exact fixed-state converter")
             if face["type"] in {
-                    "periodic", "foextrap", "no_flux", "slip_wall", "external"}:
+                    "periodic", "foextrap", "no_flux", "slip_wall", "external", "source_ghost"}:
                 if prescribed_trace:
                     raise ValueError(
                         "compiled boundary face prescribes an exterior trace without a fixed state")
@@ -299,6 +305,7 @@ class CompiledBoundaryPlan:
                 "analytic_programs": analytic_programs,
                 "analytic_clock": analytic_clock,
                 **({"prescribed_trace": True} if prescribed_trace else {}),
+                **({"source_identity": source_identity} if source_identity is not None else {}),
             })
         faces.sort(key=lambda row: row["ordinal"])
 

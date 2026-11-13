@@ -224,6 +224,11 @@ def model_hash(model: Any, params: Any = None) -> str:
     face_identity = user_face_source_identity(m)
     if face_identity is not None:
         parts.append("user_face=" + face_identity)
+    from pops.codegen.user_ghost_lowering import user_ghost_source_identity
+
+    ghost_identity = user_ghost_source_identity(m)
+    if ghost_identity is not None:
+        parts.append("user_ghost=" + ghost_identity)
     from pops.codegen.native_build import model_native_roots
     from pops._ir.native_call import native_functions
     native_roots = model_native_roots(m)
@@ -1058,6 +1063,16 @@ def emit_cpp_native_loader(
         getattr(getattr(m, "_m", m), "_user_face", None))
     user_face_captures = bool(user_face_descriptor is not None and
                               user_face_descriptor.options["runtime_captures"])
+    from pops.codegen.user_ghost_lowering import (
+        emit_user_ghost_policy, user_ghost_captures, user_ghost_source_identity)
+
+    user_ghost_identity = None if storage_only else user_ghost_source_identity(m)
+    if user_ghost_identity is not None and target != "system":
+        raise ValueError(
+            "emit_cpp_native_loader: a source ghost face is filled by the generated System block "
+            "only; the %s target has no ghost policy route (AMR is a later lot of G04)" % target)
+    user_ghost_source = "" if storage_only else emit_user_ghost_policy(m)
+    user_ghost_with_captures = user_ghost_identity is not None and user_ghost_captures(m)
     route_cpp = _native_route_cpp(
         native_route, None if storage_only else native_geometry)
     if route_cpp and not selects_catalogue_routes(m):
@@ -1466,10 +1481,16 @@ def emit_cpp_native_loader(
                if user_face_captures else
                "  auto user_face = UserFacePolicy{};\n"
                if user_face_identity is not None else "")
+            + ("  auto user_ghost = UserGhostPolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(request.model)};\n"
+               if user_ghost_with_captures else
+               "  auto user_ghost = UserGhostPolicy{};\n"
+               if user_ghost_identity is not None else "")
             + "  return pops::prepare_generated_system_block%s(std::move(request)%s);\n"
             % (("<%s>" % route_cpp) if route_cpp else "",
                (", user_reconstruction" if user_reconstruction_identity is not None else "") +
-               (", user_face" if user_face_identity is not None else ""))
+               (", user_face" if user_face_identity is not None else "") +
+               (", user_ghost" if user_ghost_identity is not None else ""))
             + "}\n"
             "}  // namespace pops_generated\n"
         )
@@ -1484,6 +1505,7 @@ def emit_cpp_native_loader(
         + bricks
         + user_reconstruction_source
         + user_face_source
+        + user_ghost_source
         + "\nnamespace pops_generated { using ProdModel = %s; }\n" % composite
         + package_preparer
         + key
