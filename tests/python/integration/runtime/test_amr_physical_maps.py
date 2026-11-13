@@ -208,73 +208,71 @@ def test_native_amr_moment_extension_and_restart(tmp_path):
     assert set(instance._executor.mapping_report().values()) == {2}
 
 
+MAPS = ("distribution", "moment", "extension")
+# Review A1 of lot 3b: one threshold per layout inside its range, from a non-uniform state.
+PROFILE = {"distribution": 1.25, "moment": 1.5, "extension": 1.75}
+
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
+@pytest.mark.parametrize("graph", (True, False), ids=("graph", "regions"))
 @pytest.mark.parametrize("refine", (-100., 100.))
-def test_native_amr_maps_regions_match_the_tag_graph(tmp_path, refine):
+def test_native_amr_maps_regions_match_the_recorded_tag_graph(tmp_path, refine, graph):
     """Each layout's region criterion is generated into its own Program slice (lot 3b): three
-    hierarchies refine, or stay coarse, exactly as the tag graph decides, and evolve the same."""
-    import numpy as np
-    from tests.python.support.native_execution_context import artifact_execution_context
-    from pops.mesh._amr import ResolvedRefinementCriterion, ResolvedTaggingGraph
+    hierarchies refine, or stay coarse, exactly as the tag graph decided, recorded before the VM
+    was removed (lot 3c-2b)."""
+    from pops.mesh._amr import ResolvedRefinementCriterion
+    from tests.python.support.amr_graph_oracles import assert_observations, layouts_trajectory
 
-    images, tagging = {}, {}
-    for graph in (True, False):
-        plan = resolve_amr_maps(tmp_path / ("graph" if graph else "regions"), graph=graph,
-                                refine=refine)
-        tagging[graph] = {type(row.authorities.bootstrap.tagging)
-                          for row in plan.layout_amr_authorities.values()}
-        artifact = pops.compile(plan)
-        instance = pops.bind(
-            artifact, resources={"execution_context": artifact_execution_context(artifact)})
-        before = _hierarchy_image(instance)
-        pops.run(instance, t_end=0.01, max_steps=1)
-        images[graph] = (before, _hierarchy_image(instance))
-    assert tagging == {True: {ResolvedTaggingGraph}, False: {ResolvedRefinementCriterion}}
-    for graph_image, region_image in zip(images[True], images[False], strict=True):
-        assert graph_image.keys() == region_image.keys()
-        for key, value in graph_image.items():
-            np.testing.assert_array_equal(region_image[key], value)
-
-
-def _fine_boxes(instance):
-    return {name: sorted((tuple(lower), tuple(upper))
-                         for level, lower, upper in
-                         instance._executor.executor_for_block(name)._s.patch_boxes() if level == 1)
-            for name in ("distribution", "moment", "extension")}
+    plan = resolve_amr_maps(tmp_path, graph=graph, refine=refine)
+    assert graph or {type(row.authorities.bootstrap.tagging)
+                     for row in plan.layout_amr_authorities.values()} == {
+        ResolvedRefinementCriterion}
+    observations, margins, _ = layouts_trajectory(plan, MAPS, dict.fromkeys(MAPS, refine))
+    assert_observations("physical_maps/refine=%g" % refine, observations, margins)
+    levels = {row["levels"] for observation in observations for row in observation.values()}
+    # Below every value, the threshold refines every hierarchy; above, none keeps a fine level.
+    assert levels == ({2} if refine < 0 else {1})
 
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-def test_native_amr_maps_each_layout_refines_its_own_region_as_the_tag_graph(tmp_path):
+@pytest.mark.parametrize("graph", (True, False), ids=("graph", "regions"))
+def test_native_amr_maps_each_layout_refines_its_own_region_as_the_tag_graph(tmp_path, graph):
     """Review A1 of lot 3b: from a non-uniform state, with one threshold per layout inside its
     range, each layout refines a different part of its domain; the regions generated into each
-    Program slice give the same boxes and states as the tag graph."""
+    Program slice give the boxes that the tag graph gave, recorded before the VM was removed."""
     import numpy as np
-    from tests.python.support.native_execution_context import artifact_execution_context
+    from tests.python.support.amr_graph_oracles import assert_observations, layouts_trajectory
 
     # Every block starts from 1 + position, position in (0, 1) along its 8-cell axis.
-    profile = {"distribution": 1.25, "moment": 1.5, "extension": 1.75}
-    boxes, images = {}, {}
-    for graph in (True, False):
-        plan = resolve_amr_maps(tmp_path / ("graph" if graph else "regions"), graph=graph,
-                                initial=1., profile=profile)
-        artifact = pops.compile(plan)
-        instance = pops.bind(
-            artifact, resources={"execution_context": artifact_execution_context(artifact)})
-        boxes[graph] = _fine_boxes(instance)
-        pops.run(instance, t_end=0.01, max_steps=1)
-        images[graph] = _hierarchy_image(instance)
-    assert boxes[True] == boxes[False]
-    # Every layout refines part of its domain, and no two layouts refine the same part.
+    plan = resolve_amr_maps(tmp_path, graph=graph, initial=1., profile=PROFILE)
+    observations, margins, _ = layouts_trajectory(plan, MAPS, PROFILE)
+    assert_observations("physical_maps/a1_profile", observations, margins)
+    boxes = {name: [row[1:] for row in observations[0][name]["boxes"] if row[0] == 1]
+             for name in MAPS}
+    # The recorded boxes of review A1, written out: each layout refines its own part.
+    assert boxes == {"distribution": [[[0, 4], [7, 15]]], "moment": [[[8, 0], [15, 0]]],
+                     "extension": [[[0, 12], [7, 15]]]}
     cells = {name: sum(int(np.prod(np.subtract(upper, lower) + 1)) for lower, upper in rows)
-             for name, rows in boxes[False].items()}
+             for name, rows in boxes.items()}
     full = {"distribution": 4 * 8 * 4, "moment": 8 * 1 * 2, "extension": 4 * 8 * 4}
     assert all(0 < cells[name] < full[name] for name in cells), cells
-    assert boxes[False]["distribution"] != boxes[False]["extension"]
-    assert images[True].keys() == images[False].keys()
-    for key, value in images[True].items():
-        np.testing.assert_array_equal(images[False][key], value)
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+@pytest.mark.parametrize("graph", (True, False), ids=("graph", "regions"))
+def test_native_amr_internal_maps_refine_as_the_recorded_tag_graph(tmp_path, graph):
+    """The three adaptive layouts of the internal maps refine as the tag graph decided (review R1
+    of lot 3c part 1): its boxes were recorded before the VM was removed."""
+    from tests.python.integration.runtime.test_interstage_physical_maps import resolve_interstage_maps
+    from tests.python.support.amr_graph_oracles import assert_observations, layouts_trajectory
+
+    stages = ("population", "integral", "extended")
+    plan = resolve_interstage_maps(tmp_path, adaptive=True, graph=graph)
+    observations, margins, _ = layouts_trajectory(plan, stages, dict.fromkeys(stages, -100.))
+    assert_observations("interstage/adaptive", observations, margins)
 
 
 @pytest.mark.compiler

@@ -1,0 +1,1681 @@
+{
+ "about": "Observations of the AMR tag-graph route, recorded before the VM was removed (N12 lot 3c-2b): per observation the levels, the boxes (level, lower, upper) and per parent level the keep, refine and coarsen request counts; per case the smallest relative margin of its comparisons off ties, and its tie count.",
+ "build": "gcc 13.3, Kokkos 4.4.01 Serial, Dim2, Release",
+ "cases": {
+  "advection/composite": {
+   "form": "recorded_marks",
+   "margin": 6.376208842859277e-05,
+   "observations": [
+    {
+     "boxes": [
+      [
+       1,
+       [
+        4,
+        8
+       ],
+       [
+        33,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       66,
+       62,
+       896
+      ]
+     ],
+     "regrids": 1
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        4,
+        8
+       ],
+       [
+        33,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       65,
+       61,
+       898
+      ]
+     ],
+     "regrids": 1
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        4
+       ],
+       [
+        37,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       67,
+       58,
+       899
+      ]
+     ],
+     "regrids": 2
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        4
+       ],
+       [
+        37,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       64,
+       63,
+       897
+      ]
+     ],
+     "regrids": 2
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        4
+       ],
+       [
+        39,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       64,
+       62,
+       898
+      ]
+     ],
+     "regrids": 3
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        4
+       ],
+       [
+        39,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       64,
+       64,
+       896
+      ]
+     ],
+     "regrids": 3
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        4,
+        4
+       ],
+       [
+        39,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       67,
+       60,
+       897
+      ]
+     ],
+     "regrids": 4
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        4,
+        4
+       ],
+       [
+        39,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       66,
+       60,
+       898
+      ]
+     ],
+     "regrids": 4
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        4,
+        4
+       ],
+       [
+        41,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       64,
+       63,
+       897
+      ]
+     ],
+     "regrids": 5
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        4,
+        4
+       ],
+       [
+        41,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       65,
+       63,
+       896
+      ]
+     ],
+     "regrids": 5
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        4,
+        4
+       ],
+       [
+        41,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       66,
+       61,
+       897
+      ]
+     ],
+     "regrids": 6
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        4,
+        4
+       ],
+       [
+        41,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       63,
+       60,
+       901
+      ]
+     ],
+     "regrids": 6
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        6,
+        6
+       ],
+       [
+        43,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       65,
+       60,
+       899
+      ]
+     ],
+     "regrids": 7
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        6,
+        6
+       ],
+       [
+        43,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       67,
+       60,
+       897
+      ]
+     ],
+     "regrids": 7
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        6,
+        6
+       ],
+       [
+        43,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       67,
+       58,
+       899
+      ]
+     ],
+     "regrids": 8
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        6,
+        6
+       ],
+       [
+        43,
+        41
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       64,
+       60,
+       900
+      ]
+     ],
+     "regrids": 8
+    }
+   ],
+   "ties": 0
+  },
+  "advection/gradient": {
+   "form": "recorded_marks",
+   "margin": 1.0692136471243674e-05,
+   "observations": [
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        2
+       ],
+       [
+        39,
+        43
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       29,
+       177,
+       818
+      ]
+     ],
+     "regrids": 1
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        2
+       ],
+       [
+        39,
+        43
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       28,
+       177,
+       819
+      ]
+     ],
+     "regrids": 1
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        0
+       ],
+       [
+        41,
+        43
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       27,
+       176,
+       821
+      ]
+     ],
+     "regrids": 2
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        0
+       ],
+       [
+        41,
+        43
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       26,
+       178,
+       820
+      ]
+     ],
+     "regrids": 2
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        0
+       ],
+       [
+        43,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       32,
+       177,
+       815
+      ]
+     ],
+     "regrids": 3
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        0
+       ],
+       [
+        43,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       28,
+       180,
+       816
+      ]
+     ],
+     "regrids": 3
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        0
+       ],
+       [
+        43,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       28,
+       176,
+       820
+      ]
+     ],
+     "regrids": 4
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        0
+       ],
+       [
+        43,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       29,
+       176,
+       819
+      ]
+     ],
+     "regrids": 4
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        0
+       ],
+       [
+        43,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       29,
+       179,
+       816
+      ]
+     ],
+     "regrids": 5
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        0,
+        0
+       ],
+       [
+        43,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       28,
+       180,
+       816
+      ]
+     ],
+     "regrids": 5
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        2
+       ],
+       [
+        45,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       28,
+       177,
+       819
+      ]
+     ],
+     "regrids": 6
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        2
+       ],
+       [
+        45,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       30,
+       177,
+       817
+      ]
+     ],
+     "regrids": 6
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        2
+       ],
+       [
+        45,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       29,
+       176,
+       819
+      ]
+     ],
+     "regrids": 7
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        2
+       ],
+       [
+        45,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       28,
+       176,
+       820
+      ]
+     ],
+     "regrids": 7
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        2
+       ],
+       [
+        47,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       29,
+       177,
+       818
+      ]
+     ],
+     "regrids": 8
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        2,
+        2
+       ],
+       [
+        47,
+        45
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       28,
+       177,
+       819
+      ]
+     ],
+     "regrids": 8
+    }
+   ],
+   "ties": 0
+  },
+  "advection/negation": {
+   "form": "numpy_evaluation",
+   "margin": 6.938893903907228e-18,
+   "observations": 16,
+   "ties": 4099
+  },
+  "advection/value": {
+   "form": "recorded_marks",
+   "margin": 0.00010239201011827403,
+   "observations": [
+    {
+     "boxes": [
+      [
+       1,
+       [
+        6,
+        10
+       ],
+       [
+        31,
+        35
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       14,
+       37,
+       973
+      ]
+     ],
+     "regrids": 1
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        6,
+        10
+       ],
+       [
+        31,
+        35
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       14,
+       36,
+       974
+      ]
+     ],
+     "regrids": 1
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        6,
+        8
+       ],
+       [
+        33,
+        35
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       14,
+       36,
+       974
+      ]
+     ],
+     "regrids": 2
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        6,
+        8
+       ],
+       [
+        33,
+        35
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       12,
+       38,
+       974
+      ]
+     ],
+     "regrids": 2
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        8,
+        8
+       ],
+       [
+        33,
+        35
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       9,
+       37,
+       978
+      ]
+     ],
+     "regrids": 3
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        8,
+        8
+       ],
+       [
+        33,
+        35
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       11,
+       37,
+       976
+      ]
+     ],
+     "regrids": 3
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        8,
+        10
+       ],
+       [
+        35,
+        35
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       12,
+       37,
+       975
+      ]
+     ],
+     "regrids": 4
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        8,
+        10
+       ],
+       [
+        35,
+        35
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       14,
+       37,
+       973
+      ]
+     ],
+     "regrids": 4
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        8,
+        10
+       ],
+       [
+        35,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       12,
+       37,
+       975
+      ]
+     ],
+     "regrids": 5
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        8,
+        10
+       ],
+       [
+        35,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       12,
+       38,
+       974
+      ]
+     ],
+     "regrids": 5
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        10,
+        10
+       ],
+       [
+        37,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       14,
+       36,
+       974
+      ]
+     ],
+     "regrids": 6
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        10,
+        10
+       ],
+       [
+        37,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       16,
+       35,
+       973
+      ]
+     ],
+     "regrids": 6
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        10,
+        10
+       ],
+       [
+        37,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       15,
+       35,
+       974
+      ]
+     ],
+     "regrids": 7
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        10,
+        10
+       ],
+       [
+        37,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       12,
+       37,
+       975
+      ]
+     ],
+     "regrids": 7
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        12,
+        10
+       ],
+       [
+        39,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       14,
+       36,
+       974
+      ]
+     ],
+     "regrids": 8
+    },
+    {
+     "boxes": [
+      [
+       1,
+       [
+        12,
+        10
+       ],
+       [
+        39,
+        37
+       ]
+      ]
+     ],
+     "levels": 2,
+     "marks": [
+      [
+       17,
+       34,
+       973
+      ]
+     ],
+     "regrids": 8
+    }
+   ],
+   "ties": 0
+  },
+  "interstage/adaptive": {
+   "form": "recorded_marks",
+   "margin": 1.02,
+   "observations": [
+    {
+     "extended": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        32,
+        0
+       ]
+      ]
+     },
+     "integral": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         15,
+         0
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        8,
+        0
+       ]
+      ]
+     },
+     "population": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        32,
+        0
+       ]
+      ]
+     }
+    },
+    {
+     "extended": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        32,
+        0
+       ]
+      ]
+     },
+     "integral": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         15,
+         0
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        8,
+        0
+       ]
+      ]
+     },
+     "population": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        32,
+        0
+       ]
+      ]
+     }
+    }
+   ],
+   "ties": 0
+  },
+  "physical_maps/a1_profile": {
+   "form": "recorded_marks",
+   "margin": 0.03571428571428559,
+   "observations": [
+    {
+     "distribution": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         4
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        8,
+        24,
+        0
+       ]
+      ]
+     },
+     "extension": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         12
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        24,
+        8,
+        0
+       ]
+      ]
+     },
+     "moment": {
+      "boxes": [
+       [
+        1,
+        [
+         8,
+         0
+        ],
+        [
+         15,
+         0
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        4,
+        4,
+        0
+       ]
+      ]
+     }
+    },
+    {
+     "distribution": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         4
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        8,
+        24,
+        0
+       ]
+      ]
+     },
+     "extension": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         12
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        32,
+        0
+       ]
+      ]
+     },
+     "moment": {
+      "boxes": [
+       [
+        1,
+        [
+         8,
+         0
+        ],
+        [
+         15,
+         0
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        8,
+        0
+       ]
+      ]
+     }
+    }
+   ],
+   "ties": 0
+  },
+  "physical_maps/refine=-100": {
+   "form": "recorded_marks",
+   "margin": 1.02,
+   "observations": [
+    {
+     "distribution": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        32,
+        0
+       ]
+      ]
+     },
+     "extension": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        32,
+        0
+       ]
+      ]
+     },
+     "moment": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         15,
+         0
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        8,
+        0
+       ]
+      ]
+     }
+    },
+    {
+     "distribution": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        32,
+        0
+       ]
+      ]
+     },
+     "extension": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         7,
+         15
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        32,
+        0
+       ]
+      ]
+     },
+     "moment": {
+      "boxes": [
+       [
+        1,
+        [
+         0,
+         0
+        ],
+        [
+         15,
+         0
+        ]
+       ]
+      ],
+      "levels": 2,
+      "marks": [
+       [
+        0,
+        8,
+        0
+       ]
+      ]
+     }
+    }
+   ],
+   "ties": 0
+  },
+  "physical_maps/refine=100": {
+   "form": "recorded_marks",
+   "margin": 0.88,
+   "observations": [
+    {
+     "distribution": {
+      "boxes": [],
+      "levels": 1,
+      "marks": []
+     },
+     "extension": {
+      "boxes": [],
+      "levels": 1,
+      "marks": []
+     },
+     "moment": {
+      "boxes": [],
+      "levels": 1,
+      "marks": []
+     }
+    },
+    {
+     "distribution": {
+      "boxes": [],
+      "levels": 1,
+      "marks": []
+     },
+     "extension": {
+      "boxes": [],
+      "levels": 1,
+      "marks": []
+     },
+     "moment": {
+      "boxes": [],
+      "levels": 1,
+      "marks": []
+     }
+    }
+   ],
+   "ties": 0
+  }
+ },
+ "command": "python3.12 -m tests.python.support.record_amr_graph_oracles <output.json> <commit>",
+ "commit": "b05cf0610, the base of N12 lot 3c-2b, with the recorder of its first commit",
+ "forms": {
+  "numpy_evaluation": "observations holds the number of observations only; at each one the level-0 requests must equal the NumPy evaluation of the criterion on the run's own state (tests/python/support/amr_graph_oracles.py), which equalled the graph route's requests at every observation when recorded; the recorded margin is below margin_bound by construction",
+  "recorded_marks": "the observations of the graph route; a run must give them and keep a relative margin of at least margin_bound off ties, with the recorded tie count"
+ },
+ "margin_bound": 1e-09,
+ "schema": "pops.amr-graph-oracles.v1"
+}
