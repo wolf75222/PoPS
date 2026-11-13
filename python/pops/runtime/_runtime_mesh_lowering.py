@@ -207,11 +207,14 @@ def flow_bootstrap_tagging(
     *,
     clock_identity: str,
     field_plans: Any = None,
+    program_routes: Any = None,
 ) -> None:
     """Compile one authenticated tagging graph to the native data-only VM.
 
     A criterion written as regions of ``cell`` is already generated into the compiled Program: its
-    field and parameter tables are installed in place of the bytecode.
+    field and parameter tables are installed in place of the bytecode. ``program_routes`` is the
+    pair (block routes, parameter routes) of the compiled Program, which locates each runtime
+    parameter of a model that the criterion reads in its block's RuntimeParams table.
     """
     if not isinstance(clock_identity, str) or not clock_identity:
         raise ValueError("pops.bind: AMR tagging requires one exact clock identity")
@@ -219,7 +222,8 @@ def flow_bootstrap_tagging(
 
     if type(bootstrap.tagging) is ResolvedRefinementCriterion:
         _flow_refinement_criterion(
-            sim, bootstrap.tagging, params, clock_identity=clock_identity)
+            sim, bootstrap.tagging, params, clock_identity=clock_identity,
+            program_routes=program_routes)
         return
     data = bootstrap.tagging.runtime_tagging_data(params)
     if (
@@ -460,10 +464,18 @@ def flow_bootstrap_tagging(
 
 
 def _flow_refinement_criterion(
-    sim: Any, criterion: Any, params: Any, *, clock_identity: str,
+    sim: Any, criterion: Any, params: Any, *, clock_identity: str, program_routes: Any = None,
 ) -> None:
     """Install the tables of a criterion generated into the compiled Program (DM13b)."""
     data = criterion.runtime_criterion_data(params)
+    routes: tuple[tuple[int, int], ...] = ()
+    if criterion.model_parameters:
+        from pops.mesh._amr.refinement_criterion import criterion_parameter_routes
+
+        if program_routes is None:
+            raise ValueError("pops.bind: a refinement criterion that reads a model parameter "
+                             "needs the parameter routes of its compiled Program")
+        routes = criterion_parameter_routes(criterion, *program_routes)
     if (
         type(data) is not dict
         or data.get("schema_version") != 1
@@ -489,6 +501,10 @@ def _flow_refinement_criterion(
         "criterion_identity": data["identity"],
         "fields": fields,
         "parameters": data["parameters"],
+        **({"model_parameters": [
+            {**row, "program_block": index, "slot": slot}
+            for row, (index, slot) in zip(data["model_parameters"], routes, strict=True)]}
+           if routes else {}),
         "minimum_cycles": min_cycles,
     }
     provider_identity = make_identity(
@@ -503,6 +519,8 @@ def _flow_refinement_criterion(
         [row["components"] for row in fields],
         [row["reach"] for row in fields],
         data["parameters"],
+        [index for index, _slot in routes],
+        [slot for _index, slot in routes],
         min_cycles,
         clock_identity,
         provider_identity,

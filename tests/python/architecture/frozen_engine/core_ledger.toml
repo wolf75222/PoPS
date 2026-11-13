@@ -283,3 +283,48 @@ paths = [
   "python/pops/model/stencil_expression.py",
   "python/pops/time/_program/stencil_flux.py",
 ]
+
+[[mechanism]]
+id = "refinement-region-reads-a-runtime-parameter-of-its-model"
+issue = "ROM-95"
+rule = "DM13b"
+pre_freeze = true
+what = """
+A refinement region (Tag or Coarsen written as a function of cell) may read model.value(p), a
+RuntimeParam of the model of a block whose state it reads, as the body of a StencilFlux does
+(stencil-body-reads-a-runtime-parameter-of-its-model): resolution lists it as a model parameter
+row of the criterion, compile routes it to its slot in the block's RuntimeParams table through
+program_param_entries, and the native tagging plan reads program.params(block).get(slot) when it
+is prepared, after the case parameters in the parameter table of the generated patch entry. The
+value is bind data: it enters neither the identity of the criterion nor the C++. A
+set_program_params on a table that the criterion reads drops the prepared tagging program, so the
+next tagging reads the table as it then stands, as the faces and stencils do. A criterion that reads no model parameter keeps its
+identity and its code. The when body of a Regrid and its indicators refuse a model parameter by its
+name and point to case.param (named follow-up of N12)."""
+structures = [
+  { case = "M05", builder = "build_m05", structure = "2-D compressible Navier-Stokes: a region on the cell Reynolds number reads the viscosity nu that the viscous face stencil reads" },
+  { case = "M23", builder = "build_m23", structure = "2-D Hall MHD: a region on the resolution of the ion inertial length reads the hall coefficient that the Hall face stencil reads" },
+]
+measurement = """
+On aa2064ce a region reads only case parameters: model.value(p) is refused ('RuntimeParamRef is
+none of them'), so a criterion on the cell Reynolds number of M05 or the ion inertial length of
+M23 must copy nu or the hall coefficient into a case parameter, two values that bind can set apart,
+whereas Q4 puts a value that a relation reads on the model. lot 3c part 1 met it in the initial
+Field/Ghost fixture, which read a model threshold through the tag graph. Measured by
+tests/python/unit/amr/test_refinement_criterion_model_parameters.py (two defaults give one
+identity; the parameter follows the case parameters in the patch table; refusals by name) and
+tests/python/integration/amr/test_refinement_criterion_model_parameters_native.py: a region on
+model.value(nu) bound to 0.3 (default 0.5) gives the same requests, boxes and state at every step
+to T_END as the same region on a case threshold of 0.3, and one artifact bound to 0.3 and 0.6
+marks exactly the cells above each value."""
+refusal_set = "removed: the refusal of a RuntimeParamRef in a refinement region ('RuntimeParamRef is none of them') for a RuntimeParam of the model of a block that the region reads, read by one of its formulas; added: a parameter without its declaring handle, a non-runtime parameter, a parameter of the model of no block that the region reads, one that no formula of the model reads (no slot, at compile and at bind), and a model parameter in a Regrid when body or indicator, each refused by its name"
+paths = [
+  "include/pops/runtime/amr_system.hpp",
+  "python/bindings/core/init/init_amr.cpp",
+  "python/pops/codegen/_compile_drivers.py",
+  "python/pops/codegen/program_emit_refinement_criterion.py",
+  "python/pops/mesh/_amr/refinement_criterion.py",
+  "python/pops/mesh/_amr/regrid_decision.py",
+  "python/pops/runtime/_runtime_mesh_lowering.py",
+  "src/runtime/amr/amr_system.cpp",
+]

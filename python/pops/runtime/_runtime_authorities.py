@@ -1328,6 +1328,8 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
             install_plan.params,
             clock_identity=install_plan.amr_providers["tagger"]["clock_identity"],
             field_plans=install_plan.artifact.plan.field_plans,
+            program_routes=(install_plan.artifact.program_block_routes,
+                            install_plan.artifact.program_param_routes or ()),
         )
 
 

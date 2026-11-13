@@ -291,6 +291,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3c-2a): a refinement region reads a runtime parameter of its model.
+  `Tag(lambda cell: cell.value(q) > model.value(nu))` reads `nu` from the RuntimeParams table of
+  the block whose state it reads, the table its faces and stencils read, when the tagging plan is
+  prepared; the value is bind data and enters neither the criterion identity nor the C++. A
+  parameter of another model, a non-runtime one, or one that no formula of the model reads (no
+  slot in the table, refused at compile) is refused by its name, and a threshold that no relation
+  reads stays a `case.param` (Q4). A Regrid `when` body and its indicators refuse a model parameter
+  by its name. Core ledger: `refinement-region-reads-a-runtime-parameter-of-its-model`.
 - ROM-95 (N12, lot 3c, part 1): the tests and test fixtures that wrote AMR tagging as a ValueExpr
   graph without testing the graph itself write regions of `cell` (66 files); a partial
   per-layout case on the physical maps shows each of three layouts refining its own part of the

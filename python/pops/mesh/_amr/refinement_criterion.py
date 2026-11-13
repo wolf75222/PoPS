@@ -4,7 +4,12 @@ The predicate of a ``Tag`` or ``Coarsen`` rule may be a function of ``cell``. Po
 with a :class:`CriterionCell` and keeps the Boolean expression that it returns: ``cell.value(q)``
 reads a block state at the cell, ``cell.shift(axis, k)`` is the cell ``k`` steps along an axis,
 read like ``cell``, and ``cell.width(axis)`` is the width of the cells of the level along an axis.
-A runtime parameter enters as ``case.value(param)`` and is bound at ``bind``.
+A runtime parameter enters as ``case.value(param)`` and is bound at ``bind``. A region may also read
+``model.value(param)``, a RuntimeParam of the model of a block whose state it reads that a formula
+of that model reads: as for the body of a ``StencilFlux`` (core commit 2f44e80f), its value is read
+from the block's RuntimeParams table, the table that the faces and stencils of the model read, when
+the native tagging plan is prepared. A threshold that no relation reads belongs to the case (spec
+0.3, Q4).
 
 A region decides as a rule of the tag graph does. The comparisons that ``~``, ``&`` and ``|`` join
 are a strict ``<`` or ``>``, and one at exact equality decides nothing (``EqualityPolicy.HOLD``);
@@ -34,6 +39,7 @@ from typing import Any
 from pops._ir.expr import BooleanAnd, BooleanNot, BooleanOr, Compare, Const, Expr, Var
 from pops._ir.handle_expr import ValueExpr
 from pops._ir.quantity import QuantityRef
+from pops._ir.values import RuntimeParamRef
 from pops._ir.visitors import _children, _key
 from pops.model import Handle, OwnerPath, ParamHandle
 
@@ -249,6 +255,24 @@ class RefinementCriterionField:
 
 
 @dataclass(frozen=True, slots=True)
+class RefinementCriterionModelParameter:
+    """A runtime parameter of the model of a block whose state the criterion reads (N12 lot 3c-2a).
+
+    ``parameter`` is the block instance of the declaration, ``block`` the block and ``name`` the
+    local name of the parameter, under which the compiled Program routes it into the block's
+    RuntimeParams table. The value is bind data and never enters the identity.
+    """
+
+    parameter: ParamHandle
+    block: str
+    name: str
+    __pops_ir_immutable__ = True
+
+    def canonical_identity(self) -> dict[str, Any]:
+        return {"parameter": self.parameter.qualified_id, "block": self.block, "name": self.name}
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedRefinementCriterion:
     """A refinement criterion resolved for one adaptive layout (DM13b)."""
 
@@ -259,6 +283,9 @@ class ResolvedRefinementCriterion:
     dimension: int
     fields: tuple[RefinementCriterionField, ...]
     parameters: tuple[ParamHandle, ...]
+    # The runtime parameters of a model that the regions read, after the case parameters in the
+    # parameter table of the generated entry.
+    model_parameters: tuple[RefinementCriterionModelParameter, ...] = ()
     # The decision to regrid written with the criterion in the Program, ``Regrid(criterion,
     # when)``; None when the adaptive layout keeps its regrid cadence.
     decision: Any = None
@@ -282,6 +309,10 @@ class ResolvedRefinementCriterion:
         if not self.fields or any(type(row) is not RefinementCriterionField
                                   for row in self.fields):
             raise TypeError("a refinement criterion reads at least one block state")
+        if any(type(row) is not RefinementCriterionModelParameter
+               for row in self.model_parameters):
+            raise TypeError("a refinement criterion lists its model parameters as "
+                            "RefinementCriterionModelParameter rows")
 
     def canonical_identity(self) -> dict[str, Any]:
         identity = self._criterion_identity()
@@ -301,6 +332,8 @@ class ResolvedRefinementCriterion:
             "dimension": self.dimension,
             "fields": [row.canonical_identity() for row in self.fields],
             "parameters": [handle.canonical_identity() for handle in self.parameters],
+            **({"model_parameters": [row.canonical_identity() for row in self.model_parameters]}
+               if self.model_parameters else {}),
             "lowerings": [_program_lowering()],
         }
 
@@ -339,6 +372,8 @@ class ResolvedRefinementCriterion:
                         "state": row.state.canonical_identity()["qualified_id"]}
                        for row in self.fields],
             "parameters": values,
+            **({"model_parameters": [row.canonical_identity() for row in self.model_parameters]}
+               if self.model_parameters else {}),
             "hysteresis": self.hysteresis.canonical_identity(),
         }
 
@@ -365,8 +400,9 @@ def _leaves(roots: tuple[Expr, ...]) -> list[Expr]:
 def criterion_inputs(roots: tuple[Expr, ...]) -> list[Expr]:
     """The cell reads, widths and runtime parameters of a criterion, in first-visit order.
 
-    A constant is compiled in. Any other leaf, a free variable or a handle read without
-    ``cell.value``, is refused: the region has no other way to read the level.
+    A constant is compiled in. A runtime parameter is ``case.value(p)`` or ``model.value(p)``. Any
+    other leaf, a free variable or a handle read without ``cell.value``, is refused: the region has
+    no other way to read the level.
     """
     inputs = []
     for leaf in _leaves(roots):
@@ -376,6 +412,9 @@ def criterion_inputs(roots: tuple[Expr, ...]) -> list[Expr]:
             inputs.append(leaf)
             continue
         if isinstance(leaf, ValueExpr) and isinstance(leaf.handle, ParamHandle):
+            inputs.append(leaf)
+            continue
+        if type(leaf) is RuntimeParamRef:
             inputs.append(leaf)
             continue
         if isinstance(leaf, Var):
@@ -411,6 +450,7 @@ def resolve_refinement_criterion(
     refine, coarsen = tuple(roots["refine"]), tuple(roots["coarsen"])
     reads: dict[str, dict[str, Any]] = {}
     parameters: dict[str, ParamHandle] = {}
+    model_reads: dict[str, RuntimeParamRef] = {}
     for leaf in criterion_inputs(refine + coarsen):
         if isinstance(leaf, CellWidth):
             if leaf.axis >= dimension:
@@ -423,6 +463,10 @@ def resolve_refinement_criterion(
                     or handle.param_kind != "runtime":
                 raise TypeError("a refinement region reads canonical runtime parameters")
             parameters.setdefault(handle.qualified_id, handle)
+            continue
+        if type(leaf) is RuntimeParamRef:
+            model_reads.setdefault(leaf.name if leaf.handle is None
+                                   else leaf.handle.qualified_id, leaf)
             continue
         if not isinstance(leaf, CellRead):
             raise TypeError("a refinement region reads the level through cell.value")
@@ -456,7 +500,67 @@ def resolve_refinement_criterion(
     return ResolvedRefinementCriterion(
         refine=refine, coarsen=coarsen, hysteresis=hysteresis, conflict_policy=conflict_policy,
         dimension=dimension, fields=tuple(fields), parameters=tuple(parameters.values()),
+        model_parameters=_model_parameters(model_reads.values(),
+                                           {row.block for row in fields}),
         decision=decision)
+
+
+def _model_parameters(reads: Any, blocks: set[str]) -> tuple[RefinementCriterionModelParameter, ...]:
+    """The rows of the runtime parameters of a model that a criterion reads (N12 lot 3c-2a).
+
+    As for the body of a ``StencilFlux`` (``time/_program/stencil_flux.py``), the parameter is a
+    RuntimeParam declared by the model of a block whose state the criterion reads, each other one
+    refused by its name. Whether a formula of that model reads it, and so whether the block's
+    RuntimeParams table has a slot for it, is checked against the routes of the compiled Program
+    (:func:`criterion_parameter_routes`).
+    """
+    rows = []
+    for read in reads:
+        handle = read.handle
+        if handle is None:
+            raise TypeError("a refinement region reads the runtime parameter %r without its "
+                            "declaring handle" % read.name)
+        if handle.param_kind != "runtime":
+            raise TypeError("a refinement region reads %r, a %s parameter; it reads a RuntimeParam"
+                            % (read.name, handle.param_kind))
+        block_ref = getattr(handle, "block_ref", None) if handle.is_instance else None
+        block = getattr(block_ref, "local_id", None)
+        if not handle.is_resolved or block not in blocks:
+            raise ValueError(
+                "a refinement region reads the runtime parameter %r, which the model of no block "
+                "whose state it reads declares; a region reads a parameter of the model of a "
+                "block that it reads, or a case parameter (case.value)" % read.name)
+        rows.append(RefinementCriterionModelParameter(handle, block, handle.local_id))
+    return tuple(rows)
+
+
+def criterion_parameter_routes(
+    criterion: ResolvedRefinementCriterion,
+    block_routes: Any,
+    parameter_routes: Any,
+) -> tuple[tuple[int, int], ...]:
+    """The Program block and the slot in its RuntimeParams table of each model parameter row.
+
+    ``block_routes`` are the ``(index, block name)`` rows of the compiled Program and
+    ``parameter_routes`` its ``(block index, name, slot, default)`` rows, the table that the bind
+    fills and that the faces and stencils of the model read. A parameter that has no slot there is
+    read by no formula that the Program evaluates, and is refused by its name.
+    """
+    blocks = {name: index for index, name in block_routes}
+    slots = {(index, name): slot for index, name, slot, _default in parameter_routes}
+    rows = []
+    for row in criterion.model_parameters:
+        index = blocks.get(row.block)
+        slot = None if index is None else slots.get((index, row.name))
+        if slot is None:
+            raise ValueError(
+                "a refinement region reads the runtime parameter %r of block %r, which has no "
+                "slot in that block's RuntimeParams table: no formula of its model that the "
+                "Program evaluates reads it. A threshold that no relation reads belongs to the "
+                "case: declare it with case.param(...) and read it with case.value(...) "
+                "(spec 0.3, Q4)" % (row.name, row.block))
+        rows.append((index, slot))
+    return tuple(rows)
 
 
 __all__ = [
@@ -464,9 +568,11 @@ __all__ = [
     "CellWidth",
     "CriterionCell",
     "RefinementCriterionField",
+    "RefinementCriterionModelParameter",
     "RefinementRegion",
     "ResolvedRefinementCriterion",
     "certainly",
     "criterion_inputs",
+    "criterion_parameter_routes",
     "resolve_refinement_criterion",
 ]

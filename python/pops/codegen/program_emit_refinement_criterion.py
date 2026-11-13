@@ -3,8 +3,11 @@
 The compiled Program of an adaptive layout exports the criterion as one entry that evaluates it on
 the valid cells of one patch. Each input of the criterion becomes a local of the cell kernel: a cell
 read is the field view of its state at the shifted index, a width is the cell size of the level
-along its axis, and a runtime parameter is its bound value. The regions go through the common CSE
-emitter with every operation materialized, so the kernel observes each value that it computes: a
+along its axis, and a runtime parameter is its value in the parameter table of the patch: the case
+parameters first, bound at ``bind``, then the runtime parameters of a model, which the tagging plan
+reads from their block's RuntimeParams table at the slot that ``program_param_entries`` gives them
+(N12 lot 3c-2a). No value enters the generated C++. The regions go through the common CSE emitter
+with every operation materialized, so the kernel observes each value that it computes: a
 non-finite one marks the cell, and the tagging plan then rejects the level as it does for the
 bytecode of the tag graph.
 
@@ -39,6 +42,7 @@ def _inputs(criterion: Any) -> tuple[dict[int, Any], dict[tuple[str, str], str],
     """The replacement of each input leaf, the C++ of each input local and the shifted indices."""
     from pops._ir.expr import Var
     from pops._ir.handle_expr import ValueExpr
+    from pops._ir.values import RuntimeParamRef
     from pops._ir.visitors import _key
     from pops.mesh._amr.refinement_criterion import CellRead, CellWidth, criterion_inputs
 
@@ -46,6 +50,8 @@ def _inputs(criterion: Any) -> tuple[dict[int, Any], dict[tuple[str, str], str],
     components = {row.state.qualified_id: dict(zip(row.variables, row.components, strict=True))
                   for row in criterion.fields}
     parameters = {handle.qualified_id: index for index, handle in enumerate(criterion.parameters)}
+    model_parameters = {row.parameter.qualified_id: len(parameters) + index
+                        for index, row in enumerate(criterion.model_parameters)}
     offsets: dict[tuple[tuple[int, int], ...], str] = {}
     names: dict[Any, str] = {}
     bindings: dict[tuple[str, str], str] = {}
@@ -66,6 +72,8 @@ def _inputs(criterion: Any) -> tuple[dict[int, Any], dict[tuple[str, str], str],
                 rendered = "spacing[%d]" % leaf.axis
             elif isinstance(leaf, ValueExpr):
                 rendered = "parameters[%d]" % parameters[leaf.handle.qualified_id]
+            elif type(leaf) is RuntimeParamRef and leaf.handle is not None:
+                rendered = "parameters[%d]" % model_parameters[leaf.handle.qualified_id]
             else:
                 raise TypeError("a refinement criterion input is a cell read, a width or a "
                                 "runtime parameter")
@@ -130,7 +138,7 @@ def emit_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
         return " || ".join("(%s != pops::Real(0))" % value for value in values) or "false"
 
     field_count = len(criterion.fields)
-    parameter_count = len(criterion.parameters)
+    parameter_count = len(criterion.parameters) + len(criterion.model_parameters)
     members = [
         "  pops::FieldView<const pops::Real, %s> fields[%d];" % (_DIM, field_count),
         "  pops::runtime::amr::GeneratedCriterionMarks<%s> marks;" % _DIM,
