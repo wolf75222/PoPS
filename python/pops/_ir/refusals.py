@@ -104,6 +104,24 @@ class HierarchyInstancesMixed(RegionRefusal):
         super().__init__(message, region=region, blocking=op)
 
 
+class LayoutMismatch(RegionRefusal, TypeError):
+    """DM3: an operation of one storage layout receives a finite value stored in another.
+
+    The replicated builder stores its sets ``Replicated`` and the distributed builder stores its
+    domains ``Contiguous`` (N10 lot 4, addendum §4). A value of one reaching an operation of the
+    other was a ``TypeError``; it is still one, and names both layouts.
+    """
+
+    rule = "DM3"
+    phase = "tracing"
+
+    def __init__(self, message, *, region, op, expected, found):
+        self.op = op
+        self.expected = expected
+        self.found = found
+        super().__init__(message, region=region, blocking=op)
+
+
 class CoverageNotExact(ValueError):
     """A term is covered twice or not at all on a success path (D5)."""
 
@@ -192,5 +210,5 @@ class TermNotAdditive(ValueError):
 
 __all__ = ["ClassNotReached", "ConservationNotStructural", "CoverageNotExact",
            "DeliveryNotStructural", "GeneralAccessOnPatches", "HierarchyInstancesMixed",
-           "PropertyNotDerived",
+           "LayoutMismatch", "PropertyNotDerived",
            "RegionRefusal", "ScheduleIllegal", "TermNotAdditive"]

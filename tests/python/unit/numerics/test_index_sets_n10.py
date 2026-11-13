@@ -456,7 +456,7 @@ def _general_accesses(module, builder):
 
     spec = getattr(importlib.import_module(module), builder)()
     report = data_layout_and_distribution(pops.resolve(pops.validate(spec.case), layout=spec.layout))
-    assert report["schema_version"] == 5
+    assert report["schema_version"] == 6
     return report["general_accesses"]
 
 
@@ -484,7 +484,7 @@ def _regrid_report(**kwargs):
 
     spec = build_continuation_regrid_amr(**kwargs)
     report = data_layout_and_distribution(pops.resolve(pops.validate(spec.case), layout=spec.layout))
-    assert report["schema_version"] == 5
+    assert report["schema_version"] == 6
     return report
 
 
@@ -529,7 +529,7 @@ def test_no_general_access_of_a_profile_reaches_patches():
     seen = set()
     for profile in ("M01", "M18", "T06", "T08"):
         report = data_layout_and_distribution(_plan(profile))
-        assert report["schema_version"] == 5, profile
+        assert report["schema_version"] == 6, profile
         for row in report["general_accesses"]:
             assert row["layout"] not in ("Patches", "LevelPatches"), (profile, row)
             seen.add(row["op"])

@@ -7,7 +7,7 @@ same native algebra with an explicit transport budget at collective boundaries.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 from collections.abc import Callable
 from pops._ir.data_model import is_field_leaf, is_finite_array, is_finite_index, value_kind
@@ -28,6 +28,26 @@ from pops.time._program.structured_control import (
 from pops.time._program.value_validation import require_owned, validate_input_regions
 
 
+_LAYOUT_OF = {"replicated": "Replicated", "contiguous_distributed": "Contiguous"}
+
+
+def require_one_layout(program, op, *values):
+    """DM3 (N10 lot 4, addendum §4): finite values of two storage layouts never meet in one op.
+
+    ``values`` are finite signatures. The refusal is a layout fact; it is a ``TypeError`` and a
+    ``ValueError``, as the family refusals it precedes.
+    """
+    found = sorted({_LAYOUT_OF.get(value.get("ownership"), str(value.get("ownership")))
+                    for value in values})
+    if len(found) > 1:
+        from pops._ir.refusals import LayoutMismatch
+
+        raise LayoutMismatch(
+            "%s mixes finite values stored %s; one operation reads one storage layout"
+            % (op, " and ".join(found)),
+            region=program._current_region(), op=op, expected=found[0], found=found[1])
+
+
 def strict_access(program, array, op):
     """DM5: refuse a table or CSR gather of a field leaf (an array on ``Patches``), typed."""
     if is_field_leaf(array):
@@ -42,13 +62,18 @@ def strict_access(program, array, op):
 class IndexFamily:
     """Authoring identity shared by distinct native domain instances."""
     capacity: int
-    ownership: str = "replicated"
+    # Unwritten (None), the plan chooses the storage (DM3); it then reads "replicated".
+    ownership: str | None = None
+    # Whether the case wrote ``ownership=`` (N10 lot 4): a written storage is a constraint.
+    _ownership_written: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self):
         if type(self.capacity) is not int or not 0 <= self.capacity <= (1 << 63)-1:
             raise ValueError("IndexFamily capacity requires a nonnegative exact Int64 constant")
-        if self.ownership != "replicated":
+        if self.ownership not in (None, "replicated"):
             raise ValueError("use Distributed for a distributed domain family")
+        object.__setattr__(self, "_ownership_written", self.ownership is not None)
+        object.__setattr__(self, "ownership", "replicated")
 
 
 def finite_signature(value) -> ValueSignature:
@@ -192,6 +217,9 @@ class _ProgramFiniteArrays(_ProgramBase):
     def range_set(self, cardinality, *, capacity=None, ownership=None, family=None):
         """Issue a fresh finite set instance with native size in [0, capacity]."""
         witness = None
+        # DM3 (N10 lot 4): an ownership the case writes is a checked constraint; without one the
+        # plan chooses the storage, Replicated for this builder, and the node records it.
+        stated = ownership is not None
         if isinstance(family, ProgramValue):
             require_owned(self, family, "range_set family witness", vtype="index_set")
             witness = family
@@ -206,6 +234,7 @@ class _ProgramFiniteArrays(_ProgramBase):
                 raise ValueError("range_set cannot change family capacity")
             if ownership is not None and ownership != family.ownership:
                 raise ValueError("range_set cannot change family ownership")
+            stated = stated or family._ownership_written
             capacity, ownership = family.capacity, family.ownership
             registry = self.__dict__.setdefault("_finite_families", {})
             if family not in registry:
@@ -217,22 +246,28 @@ class _ProgramFiniteArrays(_ProgramBase):
         else:
             family_id = self._next_finite_domain_identity
             self._next_finite_domain_identity += 1
+            ownership = "replicated" if ownership is None else ownership
         if ownership != "replicated":
-            raise NotImplementedError("finite array ownership currently requires explicit 'replicated'")
+            raise NotImplementedError(
+                "the replicated builder stores a finite set Replicated (DM3); use Distributed "
+                "for a distributed domain")
         if type(capacity) is not int or not 0 <= capacity <= (1 << 63)-1:
             raise ValueError("range_set capacity requires a nonnegative exact Int64-range constant")
         count = self.int64(cardinality)
         signature = {"vtype": "index_set", "family": family_id, "capacity": capacity,
                      "ownership": "replicated", "point": count.point}
         inputs = (count,) if witness is None else (count, witness)
-        return new_typed(self, signature, "finite_range_set", inputs,
-                         {"fresh_family": family is None or isinstance(family, IndexFamily)}, point=count.point)
+        attrs = {"fresh_family": family is None or isinstance(family, IndexFamily)}
+        if not stated and witness is None:
+            attrs["storage_origin"] = "plan"
+        return new_typed(self, signature, "finite_range_set", inputs, attrs, point=count.point)
 
     @atomic_authoring
     def same_domain(self, left, right):
         """Compare live instance identity, including empty domains; cardinality is insufficient."""
         for value in (left, right):
             require_owned(self, value, "same_domain", vtype="index_set")
+        require_one_layout(self, "same_domain", finite_signature(left), finite_signature(right))
         if not same_signature(finite_signature(left), finite_signature(right)):
             raise TypeError("same_domain requires the same static domain family")
         return new_typed(self, scalar_signature("bool"), "finite_same_domain", (left, right), {})
@@ -288,6 +323,7 @@ class _ProgramFiniteArrays(_ProgramBase):
         strict_access(self, array, "at")
         if not is_finite_array(array) or value_kind(index) != "index":
             raise TypeError("at requires an Array and a checked Index, never a naked Int64")
+        require_one_layout(self, "at", finite_signature(array), finite_signature(index))
         if finite_signature(array)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
             return Distributed(self).at_local(array, index)
@@ -379,6 +415,8 @@ class _ProgramFiniteArrays(_ProgramBase):
         if not is_finite_array(values) or not is_finite_array(indices) \
                 or value_kind(finite_signature(indices)["element"]) != "index":
             raise TypeError("gather requires values:Array(E,T), indices:Array(D,Index(E))")
+        require_one_layout(self, "gather", finite_signature(values),
+                           finite_signature(indices)["element"])
         if finite_signature(values)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
             return Distributed(self).import_values(values, indices, byte_capacity=byte_capacity)
@@ -409,6 +447,8 @@ class _ProgramFiniteArrays(_ProgramBase):
         strict_access(self, values, "scatter_reduce")
         if not is_finite_array(values) or not is_finite_array(indices) or value_kind(domain) != "index_set":
             raise TypeError("scatter_reduce requires arrays of values/indices and an IndexSet")
+        require_one_layout(self, "scatter_reduce", finite_signature(values),
+                           finite_signature(indices), finite_signature(domain))
         if finite_signature(values)["ownership"] != "replicated":
             from .distributed_arrays import Distributed
             return Distributed(self).scatter_reduce(values, indices, domain, initial, body,
