@@ -9087,7 +9087,7 @@
       }
     },
     "n17_20261113_chart_two_point": {
-      "basis": "Unmeasured CI scheduling estimates for the modules of N17 L2b-1 (ROM-110, the two-point face on a chart, DN35 and DN36). The native module compiles four Programs on a native build of rank two (the annulus with walls held at given values, written below the surface, and two_point() on the unit square turned, sheared and as a box, written with the surface) and binds and runs each: 1200 s, the top native tier of api_v02_20261013 (300/600/900/1200 s), one tier per cold compile, as the graded plane of N17 L1b. The surface unit file of the charted support, now 26 cases, keeps its 15 s, and the refusal file of the static reading, now 26 cases, keeps its 60 s; neither compiles. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, a native module of rank two, the native file on its isolated package cache, other native builds and pytest sessions running beside it); they are not GitHub CI file wall times. Existing weights, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the modules of N17 L2b-1 (ROM-110, the two-point face on a chart, DN35 and DN36). The native module compiles four Programs on a native build of rank two (the annulus with walls held at given values, written below the surface, and two_point() on the unit square turned, sheared and as a box, written with the surface) and binds and runs each: 1200 s, the top native tier of api_v02_20261013 (300/600/900/1200 s), one tier per cold compile, as the graded plane of N17 L1b. The surface unit file of the charted support, now 30 cases (with the four of the review of L2a), keeps its 15 s, and the refusal file of the static reading, now 26 cases, keeps its 60 s; neither compiles. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, a native module of rank two, the native file on its isolated package cache, other native builds and pytest sessions running beside it); they are not GitHub CI file wall times. Existing weights, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/integration/runtime/test_n17_chart_two_point_native.py": "tests/python/integration/runtime/test_n17_graded_plane_native.py",
         "tests/python/unit/surface/test_n17_chart.py": "tests/python/unit/surface/test_n17_graded.py",
@@ -9099,10 +9099,15 @@
         "tests/python/unit/mesh/test_static_geometry_reading.py": 60
       },
       "local_receipts": {
+        "tests/python/integration/runtime/test_n17_chart_two_point_native.py": {
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=2 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_chart_two_point_native.py",
+          "passed": 3,
+          "seconds": 116.64
+        },
         "tests/python/unit/surface/test_n17_chart.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/surface/test_n17_chart.py",
-          "passed": 26,
-          "seconds": 5.74
+          "passed": 30,
+          "seconds": 8.68
         },
         "tests/python/unit/mesh/test_static_geometry_reading.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/mesh/test_static_geometry_reading.py",
@@ -9112,7 +9117,7 @@
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_n17_chart_two_point_native.py": "f6af9f534d00c5b939fe09c200ce7eaca0738036301e4d1d64ec8cde6b31a3a3",
-        "tests/python/unit/surface/test_n17_chart.py": "1794899653d22948fba346ac0141ac5c53c233383b75a5b890fecc73617f0ae9",
+        "tests/python/unit/surface/test_n17_chart.py": "4f2b709fd174c445eb91e85403f001537e34148b29357277f6da242994c44659",
         "tests/python/unit/mesh/test_static_geometry_reading.py": "a7069d6a3c6c6320e95e8a57ce3e90cca3ec84910fc008b8849c4033b4393af9"
       }
     },
