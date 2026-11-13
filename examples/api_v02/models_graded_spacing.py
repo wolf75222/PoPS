@@ -16,6 +16,10 @@ surface).
 * ``build_graded_box``: the two-point diffusion of a scalar on the periodic box of rank three, x
   and z graded, y uniform, z on [-1, 1]: the test of rank three that the note asks of L1 (the
   widths and the diffusion inventory of a graded box);
+* ``build_box_parity``: two face words of N3 (rusanov() on a Burgers flux, upwind(speed=) reading
+  face.normal) on the periodic unit square, served by the static arrays of the same box (its nodes
+  the identity of s) or by the box route: on a box the physical unit normal that the arrays give a
+  source face is the axis normal (DN22, driver 13/11), so the two runs agree bit for bit;
 * ``build_wall_layer``: the case of probe 3 (section 6.3 of the note) on its graded layout, the
   nodes tanh(3 s) / tanh(3) of the wall at x = 1 written with exp (tanh is a word of N11), marched
   in time by SSPRK2 where the probe solves its steady layer once with gmres (N9). The case is
@@ -30,7 +34,7 @@ from __future__ import annotations
 
 import pops.surface as pops
 from pops.lib.numerics.boundaries import ghosts
-from pops.lib.numerics import rusanov, two_point
+from pops.lib.numerics import rusanov, two_point, upwind
 from pops.lib.quadrature import GaussLegendre
 from pops.lib.time.methods import ssprk2
 from pops.surface.discrete import FaceFlux
@@ -56,6 +60,13 @@ BOX_CELLS = (8, 6, 4)
 BOX_Z_GRADING = 0.5
 BOX_DT = 1.0e-2
 BOX_STEPS = 6
+
+# The box of the parity of the physical normal: spacings that are powers of two, so that the
+# measures of the arrays are the products of the box spacings exactly.
+PARITY_CELLS = (16, 8)
+PARITY_VELOCITY = (1.0, -0.5)
+PARITY_DT = 5.0e-3
+PARITY_STEPS = 8
 
 # Probe 3: the wall layer of width LAYER_WIDTH / WALL_SPEED at x = 1.
 WALL_CELLS = 32
@@ -138,6 +149,43 @@ def build_graded_box(cells=BOX_CELLS):
                          nodes={box.x: ring_nodes, box.z: box_z_nodes})
     case = pops.Case(model=model, numerics=numerics, program=program, layout={box: layout})
     return case, u, u0
+
+
+
+def identity_nodes(s):
+    """The uniform nodes of the unit interval, written as a node function."""
+    return s
+
+
+def build_box_parity(word="rusanov", graded=False):
+    """A scalar on the periodic unit square under a face word of N3: ``word="rusanov"``, a Burgers
+    flux (a q^2 / 2, b q^2 / 2) by rusanov(), whose normal flux and speed read the normal, the
+    speed through the derivative of R9; ``word="upwind"``, a drift at the velocity (a, b) by
+    upwind(speed=) reading face.normal. ``graded=True`` lays the box out with pops.Graded and the
+    identity nodes, so that the static arrays serve the same box; ``graded=False`` with
+    pops.Uniform."""
+    plane = pops.Box(x=pops.Periodic(0, 1), y=pops.Periodic(0, 1))
+    model = pops.Model("box_parity_" + word)
+    q = model.quantity("q", pops.Scalar(plane))
+    q0 = model.data("q0", pops.Scalar(plane))
+    a = model.constant("a", value=PARITY_VELOCITY[0])
+    b = model.constant("b", value=PARITY_VELOCITY[1])
+    velocity = vector(a, b)
+    if word == "rusanov":
+        flux = model.flux(of=q, value=vector(a * q * q / 2, b * q * q / 2))
+        scheme = rusanov()
+    else:
+        flux = model.flux(of=q, value=velocity * q)
+        scheme = upwind(speed=lambda face: dot(velocity, face.normal))
+    model.balance(ddt(q) == -div(flux))
+    numerics = pops.Numerics(represent={q: pops.CellAverage()}, schemes={flux: scheme})
+    program = pops.Program(advance=pops.Advance(ssprk2(rate=model), dt=PARITY_DT),
+                           initial={q: q0})
+    layout = pops.Uniform(cells=PARITY_CELLS)
+    if graded:
+        layout = pops.Graded(base=layout, nodes={plane.x: identity_nodes, plane.y: identity_nodes})
+    case = pops.Case(model=model, numerics=numerics, program=program, layout={plane: layout})
+    return case, q, q0
 
 
 @pops.scheme
