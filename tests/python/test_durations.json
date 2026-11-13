@@ -8858,7 +8858,7 @@
       }
     },
     "n17_20261112_graded_spacing": {
-      "basis": "Unmeasured CI scheduling estimates for the modules of N17 L1b (ROM-110, graded spacing at the surface, the static arrays of a graded box of rank three, and the words of pops.lib.numerics on the arrays after N3 lot 1). The graded ring compiles six surface Programs on a native build of rank one (the two-point diffusion and the Rusanov advection, and for each term two steps on either side of the bound of its stability guard) and reads the arrays of the layout at 32 to 256 cells without compiling: 1200 s, the top native tier of api_v02_20261013 (300/600/900/1200 s), one tier per cold compile capped there. The graphs of N17 L1a now compile the annulus twice (the catalogue face and the same face authored in source): 600 s, two tiers. The graded plane (rank two) and the graded box (rank three) compile one surface Program each: 300 s, as the graded file of N17 L1a. The surface unit file elaborates the graded cases and their refusals without compiling: 15 s, the source-only tier (5/15/60 s). The refusal file of the static reading, now 22 cases, keeps its 60 s. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, native modules of ranks one, two and three, each native file on its isolated package cache, other native builds and pytest sessions running beside them); they are not GitHub CI file wall times. Existing weights, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the modules of N17 L1b (ROM-110, graded spacing at the surface, the static arrays of a graded box of rank three, and the words of pops.lib.numerics on the arrays after N3 lot 1). The graded ring compiles six surface Programs on a native build of rank one (the two-point diffusion and the Rusanov advection, and for each term two steps on either side of the bound of its stability guard) and reads the arrays of the layout at 32 to 256 cells without compiling: 1200 s, the top native tier of api_v02_20261013 (300/600/900/1200 s), one tier per cold compile capped there. The graphs of N17 L1a now compile the annulus twice (the catalogue face and the same face authored in source): 600 s, two tiers. The graded plane (rank two) compiles five surface Programs (the graded plane, and the two face words of N3 that pin the axis normal of DN22, each on the box route and on the arrays of the same box): 1200 s, the top tier. The graded box (rank three) compiles one surface Program: 300 s, as the graded file of N17 L1a. The surface unit file elaborates the graded cases and their refusals without compiling: 15 s, the source-only tier (5/15/60 s). The refusal file of the static reading, now 22 cases, keeps its 60 s. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.1 Serial, native modules of ranks one, two and three, each native file on its isolated package cache, other native builds and pytest sessions running beside them); they are not GitHub CI file wall times. Existing weights, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/integration/runtime/test_n17_graded_ring_native.py": "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
         "tests/python/integration/runtime/test_n17_graded_plane_native.py": "tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
@@ -8869,7 +8869,7 @@
       },
       "estimates_seconds": {
         "tests/python/integration/runtime/test_n17_graded_box_native.py": 300,
-        "tests/python/integration/runtime/test_n17_graded_plane_native.py": 300,
+        "tests/python/integration/runtime/test_n17_graded_plane_native.py": 1200,
         "tests/python/integration/runtime/test_n17_graded_ring_native.py": 1200,
         "tests/python/integration/runtime/test_n17_static_geometry_graphs.py": 600,
         "tests/python/unit/mesh/test_static_geometry_reading.py": 60,
@@ -8883,8 +8883,8 @@
         },
         "tests/python/integration/runtime/test_n17_graded_plane_native.py": {
           "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=2 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_graded_plane_native.py",
-          "passed": 1,
-          "seconds": 47.37
+          "passed": 3,
+          "seconds": 319.15
         },
         "tests/python/integration/runtime/test_n17_graded_box_native.py": {
           "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=3 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_n17_graded_box_native.py",
@@ -8909,7 +8909,7 @@
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_n17_graded_ring_native.py": "a243cc311102080aff8b122a3c17eafd461055fc4c2a8203fad8595b7f0eecde",
-        "tests/python/integration/runtime/test_n17_graded_plane_native.py": "fb4f13b6121dfcda3f927fa9a23a4aa31b0e450f064ce1cefd749f31d3c69227",
+        "tests/python/integration/runtime/test_n17_graded_plane_native.py": "a618f03ef66a3af25137c1dce2958e2cb5857d93e771ba9a0ca3a5966834d92f",
         "tests/python/integration/runtime/test_n17_graded_box_native.py": "d555e3e9011e4138afd5d3590c9bfe7e0c3168e6b95474640ad72e8078d2f09a",
         "tests/python/unit/surface/test_n17_graded.py": "a383c07439b4d76181605ca0b4e76a64f3f705f998d665f8127d5d9575a58b61",
         "tests/python/unit/mesh/test_static_geometry_reading.py": "bba6eaeee4adcc960628d523046794ff9578861cddd127ccc1148830fba30cd6",
@@ -10322,7 +10322,7 @@
   "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
   "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
   "tests/python/integration/runtime/test_n17_graded_ring_native.py": 1200,
-  "tests/python/integration/runtime/test_n17_graded_plane_native.py": 300,
+  "tests/python/integration/runtime/test_n17_graded_plane_native.py": 1200,
   "tests/python/integration/runtime/test_n17_graded_box_native.py": 300,
   "tests/python/unit/surface/test_n17_graded.py": 15
 }
