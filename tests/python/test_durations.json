@@ -9008,7 +9008,7 @@
         }
       },
       "source_sha256": {
-        "tests/python/integration/surface/test_vertical_slice_t02.py": "67246ec42b43205e1e343e44e8b67760a665df633794f270b4998de5da3fcf78"
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "2cf9c9d7911d01fa626f846afe031456628b53a9dea35324b43bb3f8fd7d1234"
       }
     }
   },

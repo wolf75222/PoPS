@@ -85,9 +85,6 @@ def test_the_registry_follows_the_case_file():
     assert gate.check(ROOT) == []
 
 
-@pytest.mark.compiler
-@pytest.mark.kokkos
-@pytest.mark.native_loader
 def _probe():
     return None
 
@@ -129,6 +126,9 @@ def _count_python_calls(monkeypatch):
     return calls, runs
 
 
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
 def test_the_case_file_runs_to_its_end_or_to_the_first_piece(tmp_path, monkeypatch):
     calls, runs = _count_python_calls(monkeypatch)
     error = _run(tmp_path, monkeypatch)
