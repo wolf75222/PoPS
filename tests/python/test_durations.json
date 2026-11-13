@@ -6740,7 +6740,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1193,
+    "estimated_count": 1194,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7073,6 +7073,7 @@
       "tests/python/integration/runtime/test_rank_one_owned_amr_invalid.py",
       "tests/python/integration/runtime/test_rate_expression_closure_n11_native.py",
       "tests/python/integration/runtime/test_reference_cg_trace_n9.py",
+      "tests/python/integration/runtime/test_regrid_read_receipts_n10_native.py",
       "tests/python/integration/runtime/test_relations_v09_native.py",
       "tests/python/integration/runtime/test_reuse_across_stages_n8_native.py",
       "tests/python/integration/runtime/test_scientific_spatial_gmres_v14_native.py",
@@ -8136,7 +8137,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1258,
+    "total_files": 1259,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -8488,6 +8489,25 @@
       "source_sha256": {
         "tests/python/unit/numerics/test_layout_invariance_n10.py": "3cab6912ba781b5bd8f1e8735edd93658a9725d0785867d3e73489b6d97c640d",
         "tests/python/integration/runtime/test_unconstrained_storage_n10_native.py": "1f8d1829fa81622ac1d9a8185909e0560ae21882ae94c793ad28a02e35f4be8e"
+      }
+    },
+    "ci_20261113_n10_lot3b_followups": {
+      "basis": "Unmeasured CI scheduling estimate for the N10 lot 3b follow-up (ROM-85, review of #802, R1 and R4): one native module compiles continuation_regrid_amr three times (as written, and with the source level of its remap changed for each of the two regrid_read refusals) with cold caches and runs at most eight steps each: 900 s, from a local session of 372 s. The local receipt is a pytest session time on a 4-core container beside other local sessions; it is not a GitHub CI file wall time. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_regrid_read_receipts_n10_native.py": "tests/python/integration/runtime/test_api_v02_continuation_regrid_native.py"
+      },
+      "estimated_seconds": {
+        "tests/python/integration/runtime/test_regrid_read_receipts_n10_native.py": 900
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_regrid_read_receipts_n10_native.py": {
+          "command": "POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_regrid_read_receipts_n10_native.py (installed dim2 Kokkos OpenMP module)",
+          "passed": 3,
+          "seconds": 372
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_regrid_read_receipts_n10_native.py": "32bc6066584b0eadbeb05d8cb788e706b3feeea864f49f226cf1f19822e5381f"
       }
     },
     "n11_20261108_expression_closure": {
@@ -10182,5 +10202,6 @@
   "tests/python/unit/surface/test_n3_lot1_library_words.py": 60,
   "tests/python/integration/runtime/test_stencil_adaptive_cfl_native.py": 600,
   "tests/python/unit/numerics/test_layout_invariance_n10.py": 300,
-  "tests/python/integration/runtime/test_unconstrained_storage_n10_native.py": 1800
+  "tests/python/integration/runtime/test_unconstrained_storage_n10_native.py": 1800,
+  "tests/python/integration/runtime/test_regrid_read_receipts_n10_native.py": 900
 }
