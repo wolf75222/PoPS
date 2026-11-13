@@ -652,7 +652,7 @@ class _Elaboration:
         for name, expression, frame in self.auxiliaries:
             module.aux_provider(AnalyticAux(module.aux_handle(declared[name]), expression,
                                             frame=frame,
-                                            boundary=AuxiliaryBoundary(width=0, kind="foextrap")))
+                                            boundary=AuxiliaryBoundary(width=0)))
 
     def flux(self, b6: Any, frame: Any, term: Flux, name: str, origin: str, state: Any) -> Any:
         axes = frame.axes
