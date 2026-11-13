@@ -33,8 +33,10 @@ class CellAverage:
     def __init__(self, *, quadrature: Any = None) -> None:
         if quadrature is not None:
             raise NotYetElaborated("pops.CellAverage(quadrature=...) (D3)",
-                                   "G03 lot R-b, under CellAverage(quadrature=...) of "
-                                   "pops.lib.representations (N16 lot 1)")
+                                   "the N16 lot that retires the transitional table of "
+                                   "CellAverage() (the projection by encode), under "
+                                   "CellAverage(quadrature=...) of pops.lib.representations "
+                                   "(N16 lot 1)")
 
     def definition(self, rank: int) -> Any:
         """The definition of contract @2 that this spelling elaborates, the one of

@@ -15,9 +15,11 @@
   elaborates what it refuses. The statement that a refusal names ends with a marker comment,
   ``# <- name``, as in ``test_su_t2_refusals.py``.
 
-The oracle tests of ``CellTotal()``, ``PointValue()`` and ``CellAverage(quadrature=...)`` on a
-graded layout (5.1, A1) land with G03 lot R-b, which lowers their route; until then
-``pops.Numerics`` refuses them by name, which this file checks.
+The oracle tests on a graded layout (5.1, A1) land with the lots that serve these words at the
+surface: G03 lot M1 for ``CellTotal()``, and the N16 lot that retires the transitional table of
+``CellAverage()`` (the projection by encode) for ``PointValue()`` and
+``CellAverage(quadrature=...)``. Until then ``pops.Numerics`` refuses them by name, which this file
+checks (review of #800, R1).
 """
 import json
 import os
@@ -189,6 +191,7 @@ def test_a_representation_runs_once_per_rank_and_reads_its_cell():
     value.definition(2)
     value.definition(2)
     value.definition(1)
+    value.coefficients(2)                   # the body runs once per rank (review of #800, O1)
     assert seen == [(2, (0, 1), 4), (1, (0,), 2)]
 
 
@@ -277,31 +280,34 @@ def _quantity():
     return model.quantity("u", surface.Scalar(domain))
 
 
-def test_a_total_is_refused_until_g03_lot_r_b_lowers_its_route():
+def test_a_total_is_refused_until_g03_lot_m1_gives_its_surface_route():
     u = _quantity()
     representation = CellTotal()  # <- total
     with pytest.raises(surface.NotYetElaborated) as caught:
         surface.Numerics(represent={u: representation})  # <- total-numerics
     message = _refused(caught, surface.NotYetElaborated, "total", traced="total-numerics")
-    assert "G03 lot R-b" in message and "kind 'total'" in message
+    assert "G03 lot M1" in message and "kind 'total'" in message
+    assert "R-b" not in message
 
 
-def test_a_sample_is_refused_until_g03_lot_r_b_lowers_its_route():
+def test_a_sample_is_refused_until_the_n16_lot_that_retires_the_table():
     u = _quantity()
     representation = PointValue()  # <- sample
     with pytest.raises(surface.NotYetElaborated) as caught:
         surface.Numerics(represent={u: representation})
     message = _refused(caught, surface.NotYetElaborated, "sample")
-    assert "G03 lot R-b" in message and "kind 'sample'" in message
+    assert "the N16 lot that retires the transitional table" in message
+    assert "kind 'sample'" in message and "R-b" not in message
 
 
-def test_a_stated_rule_is_refused_until_g03_lot_r_b_lowers_its_route():
+def test_a_stated_rule_is_refused_until_the_n16_lot_that_retires_the_table():
     u = _quantity()
     representation = CellAverage(quadrature=GaussLegendre(3))  # <- rule
     with pytest.raises(surface.NotYetElaborated) as caught:
         surface.Numerics(represent={u: representation})
     message = _refused(caught, surface.NotYetElaborated, "rule")
-    assert "G03 lot R-b" in message and "with a stated rule" in message
+    assert "the N16 lot that retires the transitional table" in message
+    assert "with a stated rule" in message and "R-b" not in message
 
 
 def test_pops_cell_average_with_a_rule_names_the_library_word():
@@ -309,6 +315,7 @@ def test_pops_cell_average_with_a_rule_names_the_library_word():
         surface.CellAverage(quadrature=GaussLegendre(3))  # <- pops-rule
     message = _refused(caught, surface.NotYetElaborated, "pops-rule")
     assert "CellAverage(quadrature=...) of pops.lib.representations" in message
+    assert "the N16 lot that retires the transitional table" in message
 
 
 def test_loads_are_refused_until_n16_lot_2():

@@ -25,9 +25,10 @@ EdgeCirculation()         Edge, 1    lowest-order edge element    GaussLeg(2)  e
 ========================= ========== ============================ ============ ===================
 
 N16 lot 1 elaborates ``CellAverage()`` on the route of ``pops.CellAverage()`` (SU-T3); the other
-cell words are refused at ``pops.Numerics`` with the lot that elaborates them (G03 lot R-b for
-``CellTotal()``, ``PointValue()`` and a stated rule, N16 lot 2 for ``DualLoad``), and the face and
-edge words with G08, which fixes their meaning.
+cell words are refused at ``pops.Numerics`` with the lot that elaborates them (G03 lot M1 for
+``CellTotal()``, the N16 lot that retires the transitional table of ``CellAverage()`` for
+``PointValue()`` and a stated rule, N16 lot 2 for ``DualLoad``), and the face and edge words with
+G08, which fixes their meaning.
 """
 from __future__ import annotations
 

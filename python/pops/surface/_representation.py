@@ -16,8 +16,10 @@ This lot elaborates no form of its own. A definition equal to the one of ``CellA
 constant mode of scale 1 and no rule, takes the b6 route of ``pops.CellAverage()``
 (``ConservativeCellAverage()``): the transitional table of N16 5.5, which matches the whole
 definition identity, never a name. Every other definition is refused with the lot that elaborates
-it: the totals and samples of one constant mode and a stated rule by G03 lot R-b, a point-dependent
-decode and the loads by N16 lot 2, node carriers by N16 lot 3, face and edge carriers by G08.
+it: a total by G03 lot M1 (the surface route of a total, with the moving configuration), a sample and
+a stated rule by the N16 lot that retires the transitional table (the projection by encode), a
+point-dependent decode and the loads by N16 lot 2, node carriers by N16 lot 3, face and edge carriers
+by G08.
 """
 from __future__ import annotations
 
@@ -30,8 +32,10 @@ from ._refusal import (
     user_site,
 )
 
-_R_B = ("G03 lot R-b (the native lowering of one constant mode whose state is not an average, and "
-        "of a stated rule), with the oracle tests of N16 lot 1 on a graded layout")
+_M1 = ("G03 lot M1 (the surface route of a total, with the moving configuration), with the oracle "
+       "tests of a total on a graded layout")
+_TABLE = ("the N16 lot that retires the transitional table of CellAverage() (the projection by "
+          "encode, line 4 of plan/routes_transitoires.md), with the oracle tests on a graded layout")
 _LOT_2 = ("N16 lot 2 (point-dependent cell carriers: the current point, the Gram matrix of the "
           "stated rule and the Riesz map)")
 _LOT_2_LOADS = "N16 lot 2 (loads, cell.load and the Riesz map of D2)"
@@ -357,7 +361,7 @@ class RepresentationValue:
     ``definition(rank)`` runs the function at that rank and traces it into contract @2; it is
     computed once per rank."""
 
-    __slots__ = ("representation", "options", "stated", "site", "_definitions")
+    __slots__ = ("representation", "options", "stated", "site", "_definitions", "_returned")
 
     def __init__(self, representation: SurfaceRepresentation, options: dict, stated: tuple,
                  site: Site | None) -> None:
@@ -366,17 +370,22 @@ class RepresentationValue:
         self.stated = stated
         self.site = site
         self._definitions: dict = {}
+        self._returned: dict = {}
 
     @property
     def name(self) -> str:
         return self.representation.name
 
     def coefficients(self, rank: int) -> Any:
-        """What the function returns at a rank: ``pops.Coefficients`` or ``pops.Dual``."""
+        """What the function returns at a rank: ``pops.Coefficients`` or ``pops.Dual``. The body
+        runs once per rank (SU5)."""
+        if rank in self._returned:
+            return self._returned[rank]
         returned = self.representation.body(RepresentationCell(rank), **self.options)
         if not isinstance(returned, (Coefficients, Dual)):
             raise TypeError("%s: the representation %s returns pops.Coefficients(...) or "
                             "pops.Dual(R), got %r" % (self.site, self.name, returned))
+        self._returned[rank] = returned
         return returned
 
     def definition(self, rank: int) -> Any:
@@ -485,11 +494,15 @@ def elaborate(value: Any, quantity: Any) -> Any:
         return definition
     from pops.representations.definition import constant_mode_scale
 
-    if constant_mode_scale(definition) is not None:
+    scale = constant_mode_scale(definition)
+    if scale is not None:
+        # A total (c = 1 / cell.measure) is served by G03 lot M1; a sample or a stated rule differs
+        # from the table's average by its encode or its projection rule only, and is served by the
+        # lot that gives the projection by encode (review of #800, R1; driver 13/11 12:10).
         raise NotYetElaborated("represent={%s: %r}, one constant mode of kind %r%s"
                                % (quantity, value, definition.kind,
                                   "" if definition.pairing is None else " with a stated rule"),
-                               _R_B, site=value.site)
+                               _M1 if scale == "unit" else _TABLE, site=value.site)
     raise NotYetElaborated("represent={%s: %r}, whose constant mode is not 1 or 1/cell.measure"
                            % (quantity, value), _LOT_2, site=value.site)
 
