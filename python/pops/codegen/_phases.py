@@ -496,6 +496,8 @@ def resolve(
     validate_static_geometry_consumers(resolved_plan)
     from pops.codegen._cell_total_consumers import validate_cell_total_consumers
     validate_cell_total_consumers(resolved_plan)
+    from pops.codegen._moving_members_consumers import validate_moving_member_consumers
+    validate_moving_member_consumers(resolved_plan)
     return resolved_plan
 
 
