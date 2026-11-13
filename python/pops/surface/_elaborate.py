@@ -672,11 +672,11 @@ class _Elaboration:
                     % (balance.name or balance.quantity.name, self.names[term],
                        scheme.describe()), choices))
         for quantity in states:
-            self.rows.append(Row("represent={%s: %r}" % (quantity, self.numerics
-                                                          .representation_of(quantity)),
+            representation = self.numerics.representation_of(quantity)
+            self.rows.append(Row("represent={%s: %r}" % (quantity, representation),
                                  "numerics", "the cell averages of %s, projected by "
                                  "ConservativeCellAverage()" % quantity,
-                                 [Choice("representation", "pops.CellAverage()", "stated")]))
+                                 [Choice("representation", repr(representation), "stated")]))
         return plan, selections
 
     def _linear(self, scheme: Any, view: TermView, balance: Balance) -> Any:

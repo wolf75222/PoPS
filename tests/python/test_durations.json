@@ -2962,7 +2962,7 @@
         },
         "tests/python/integration/runtime/test_api_v02_continuum_native.py": {
           "declared_cases": 8,
-          "estimated_seconds": 600,
+          "estimated_seconds": 1470,
           "kind": "native_profile",
           "native_dimension": 2,
           "registration": "completion_20261015_existing"
@@ -3158,7 +3158,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 1,
-          "estimated_seconds": 520,
+          "estimated_seconds": 650,
           "ci_ranks": [
             1,
             2
@@ -4784,18 +4784,6 @@
         "tests/python/unit/time/test_fibre_representation.py": {
           "estimated_seconds": 15,
           "kind": "source_contract"
-        },
-        "tests/python/unit/time/test_field_representation_v02.py": {
-          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt.",
-          "estimated_seconds": 30,
-          "kind": "source_contract",
-          "registration": "completion_20261015"
-        },
-        "tests/python/unit/time/test_field_storage_topology_v02.py": {
-          "basis": "Unmeasured source-only scheduling weight, not a native execution receipt.",
-          "estimated_seconds": 30,
-          "kind": "source_contract",
-          "registration": "completion_20261015"
         },
         "tests/python/unit/time/test_finite_amr_regions.py": {
           "basis": "Unmeasured source-only scheduling weight, not a native execution receipt.",
@@ -7104,6 +7092,7 @@
       "tests/python/integration/runtime/test_user_numerical_bodies_runtime.py",
       "tests/python/integration/runtime/test_user_reconstruction_adversarial_runtime.py",
       "tests/python/integration/runtime/test_w11_child_trace_rollback.py",
+      "tests/python/integration/surface/test_vertical_slice_t02.py",
       "tests/python/unit/amr/test_accepted_halo_preparation.py",
       "tests/python/unit/amr/test_explicit_local_storage_authority.py",
       "tests/python/unit/amr/test_external_amr_providers.py",
@@ -7756,6 +7745,7 @@
       "tests/python/unit/surface/test_n3_lot3_weno5.py",
       "tests/python/unit/surface/test_published_representation.py",
       "tests/python/unit/surface/test_quadrature.py",
+      "tests/python/unit/surface/test_representation_n16.py",
       "tests/python/unit/surface/test_solver_reference_n9.py",
       "tests/python/unit/surface/test_su_t2_refusals.py",
       "tests/python/unit/surface/test_su_t2_scheme_refusals.py",
@@ -7810,11 +7800,9 @@
       "tests/python/unit/time/test_expression_derivatives_v02.py",
       "tests/python/unit/time/test_extension_closure_v14.py",
       "tests/python/unit/time/test_fibre_representation.py",
-      "tests/python/unit/time/test_field_representation_v02.py",
       "tests/python/unit/time/test_field_requests_n8.py",
       "tests/python/unit/time/test_field_sampling.py",
       "tests/python/unit/time/test_field_solve_outcome.py",
-      "tests/python/unit/time/test_field_storage_topology_v02.py",
       "tests/python/unit/time/test_finite_amr_regions.py",
       "tests/python/unit/time/test_finite_arrays_v02.py",
       "tests/python/unit/time/test_finite_contributions_v14.py",
@@ -8459,12 +8447,12 @@
       "local_receipts": {
         "tests/python/unit/numerics/test_index_sets_n10.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_index_sets_n10.py",
-          "passed": 32,
-          "seconds": 92.0
+          "passed": 34,
+          "seconds": 102.9
         }
       },
       "source_sha256": {
-        "tests/python/unit/numerics/test_index_sets_n10.py": "ffcd3a826daf486e6ae40765168b673707e5494be62179e720ae85554dfceaa2"
+        "tests/python/unit/numerics/test_index_sets_n10.py": "871a656e2bdfe5c5c3296a53a3f7e66f381ad8095c9d63e892dbe097e6c8d9cf"
       }
     },
     "n11_20261108_expression_closure": {
@@ -8994,6 +8982,60 @@
         "tests/python/unit/surface/test_n3_lot2_muscl.py": "5e02066ad264d3d8bb12fe34e46cd8b506cbf0a8b7cd0c420672c29dc3b6969b"
       }
     },
+    "b03_20261113_shard128_continuum_hall_weights": {
+      "basis": "CI pytest timestamps (collection end or previous PASSED to PASSED). In shard 128 of batch 43318819535 (1261299b, image 20261111.370.1, no module rebuild) test_api_v02_continuum_native.py took 1334 s for its 8 cases against a 600-second row, and the step reached its 45-minute limit 590 s into the single case of test_api_v02_hall_mhd_ct.py (520-second row). The same files took 799 s and 429 s in shard 127 of run 43297784672 (1f567778). Each planning weight rounds the larger observation up by about ten percent, as b03_f5_hyqmom15_final_example_weight does; for the hall file the larger observation is the stopped case, a lower bound. No deadline, test selection or assertion changes.",
+      "observed_seconds": {
+        "run 43318819535 job 131538183494 (1261299b, shard 128), test_api_v02_continuum_native.py, 8 cases": 1334,
+        "run 43318819535 job 131538183494 (1261299b, shard 128), test_api_v02_hall_mhd_ct.py, stopped at the 45-minute step limit (lower bound)": 590,
+        "run 43297784672 (1f567778, shard 127), test_api_v02_continuum_native.py, 8 cases": 799,
+        "run 43297784672 (1f567778, shard 127), test_api_v02_hall_mhd_ct.py, 1 case": 429
+      },
+      "previous_weight_seconds": {
+        "tests/python/integration/runtime/test_api_v02_continuum_native.py": 600,
+        "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 520
+      },
+      "weights_seconds": {
+        "tests/python/integration/runtime/test_api_v02_continuum_native.py": 1470,
+        "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 650
+      }
+    },
+    "ci_20261112_vertical_slice": {
+      "basis": "Unmeasured CI scheduling estimate for the test of the vertical slice of the exit of phase 1 (OD31: master's tutorial 02 written in the surface), on the api_v02_20261013 tiers. 300 s for test_vertical_slice_t02.py: since #799 its registry is empty, so besides the lint SU-T1 of the case file and the order of its registry it runs the file natively to its end, one compiled Dim2 artifact and 29 steps on 64 x 64 cells, a quarter of the four artifacts of the analogue test_surface_lot_e_project_native.py (900 s), rounded up. The local receipts come from pytest on a 4-core container (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "tests/python/integration/runtime/test_surface_lot_e_project_native.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": 300
+      },
+      "local_receipts": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": {
+          "cases": 3,
+          "session_seconds": 11.69
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "97c4be37f32ce838f1fce52abd87464343436b10d0728af1d171d831da0bdb5b"
+      }
+    },
+    "n16_20261112_lot1_representation_construct": {
+      "basis": "Unmeasured CI scheduling estimate for the source-only unit module of N16 lot 1 (ROM-109): @pops.representation, pops.Coefficients, pops.Dual and the words of pops.lib.representations, their identities against contract @2 of G03 lot R-a (CF4), the refusals of the lot (SU-T2), and the L1 case of section 17.1 validated, resolved and emitted as C++ under three spellings of the cell average (SU-T3), with no compile and no native module. 15 s, the middle source-only tier of api_v02_20261013 (5/15/60 s): lighter than test_su_t3_parity.py (60 s), which resolves many more cases, heavier than test_quadrature.py (5 s). The local receipt is a pytest session on a 4-core container (Python 3.12, source checkout, no native module); it is not a GitHub CI file wall time. Existing weights, shard count, native dimensions, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/unit/surface/test_representation_n16.py": "tests/python/unit/surface/test_su_t3_parity.py"
+      },
+      "estimated_seconds": {
+        "tests/python/unit/surface/test_representation_n16.py": 15
+      },
+      "local_receipts": {
+        "tests/python/unit/surface/test_representation_n16.py": {
+          "command": "PYTHONPATH=python pytest -q tests/python/unit/surface/test_representation_n16.py",
+          "passed": 58,
+          "seconds": 5.93
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/surface/test_representation_n16.py": "7bd966620e17d60dc3b5663a14918cccf119428c29f2a999ff21e2b879ba32a4"
+      }
+    },
     "n3_20261113_lot3_weno5": {
       "basis": "Unmeasured CI scheduling estimates for the two modules of N3 lot 3 (ROM-87), weno5 written with the surface, on the api_v02_20261013 tiers. 60 s for the source-only module, which elaborates, validates and resolves eight surface cases and their hand-written b6 forms, generates their C++ without compiling it, and compiles two small policy programs against the native pops::Weno5 over 14^5 stencils and 200000 profiles each, as the analogue test_n3_lot2_muscl.py. 900 s for the Dim2 native module, which compiles three artifacts once per module (the surface advection with upwind(reconstruction=weno5(epsilon=1e-6)), and its hand-written b6 form with master's WENO5 at epsilon 1e-6 and at the default, the last added by N3 lot 3-eps) and runs five compiled runs of 50 steps on 16 x 8 cells: the 600 s of the analogue test_surface_lot_b_boundaries_native.py (two artifacts) scaled by the third artifact. The local receipts come from pytest on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
@@ -9129,7 +9171,7 @@
   "tests/python/integration/runtime/test_api_v02_continuation_forest_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_continuation_history_native.py": 1200,
   "tests/python/integration/runtime/test_api_v02_continuation_regrid_native.py": 1200,
-  "tests/python/integration/runtime/test_api_v02_continuum_native.py": 600,
+  "tests/python/integration/runtime/test_api_v02_continuum_native.py": 1470,
   "tests/python/integration/runtime/test_api_v02_corrected_field_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py": 3315,
   "tests/python/integration/runtime/test_api_v02_distributed_kokkos_native.py": 900,
@@ -9143,7 +9185,7 @@
   "tests/python/integration/runtime/test_api_v02_flux_correction_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_graph_functions_native.py": 900,
   "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 5100,
-  "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 520,
+  "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 650,
   "tests/python/integration/runtime/test_api_v02_history_transfer_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
   "tests/python/integration/runtime/test_api_v02_implicit_derivatives_native.py": 1200,
@@ -10064,10 +10106,8 @@
   "tests/python/unit/time/test_extension_closure_v14.py": 60,
   "tests/python/unit/time/test_fibre_representation.py": 15,
   "tests/python/unit/time/test_field_context.py": 0.5,
-  "tests/python/unit/time/test_field_representation_v02.py": 30,
   "tests/python/unit/time/test_field_sampling.py": 5,
   "tests/python/unit/time/test_field_solve_outcome.py": 1.0,
-  "tests/python/unit/time/test_field_storage_topology_v02.py": 30,
   "tests/python/unit/time/test_finite_amr_regions.py": 30,
   "tests/python/unit/time/test_finite_arrays_v02.py": 15,
   "tests/python/unit/time/test_finite_contributions_v14.py": 60,
@@ -10285,6 +10325,8 @@
   "tests/python/unit/time/test_scientific_erasure_inventory.py": 5,
   "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py": 1200,
   "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
+  "tests/python/integration/surface/test_vertical_slice_t02.py": 300,
+  "tests/python/unit/surface/test_representation_n16.py": 15,
   "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 900,
   "tests/python/unit/surface/test_n3_lot3_weno5.py": 60
 }

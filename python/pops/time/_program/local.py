@@ -478,19 +478,11 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     # A ``matrix_free_op`` supplies an exact apply callback. Mathematical shape and hierarchy use
     # are validated by the selected prepared solver provider, not by this generic authoring core.
 
-    def scalar_field(self, name: Any = None, ncomp: Any = None, *, like: Any = None,
-                     topology: Any = None, initial: Any = None) -> Any:
+    def scalar_field(self, name: Any = None, ncomp: Any = None, *, like: Any = None) -> Any:
         """A fresh, zero-initialized scalar field: scratch the apply sub-block uses (e.g. the Laplacian
         output, or a 2-component gradient buffer). ``ncomp`` inherits the exact field prototype's
         width when omitted, or defaults to one without a prototype. An explicit incompatible width
-        is rejected. Lowered through the prototype's block-qualified allocation when present.
-        An explicit target topology instead allocates that target storage and requires an authored
-        Float64 initial value; it never copies or interpolates the prototype's values."""
-        if topology is not None:
-            from pops.time._program.field_representation import allocate_field_storage
-            return allocate_field_storage(self, like, topology, initial, ncomp=ncomp, name=name)
-        if initial is not None:
-            raise ValueError("scalar_field: initial requires an explicit target topology")
+        is rejected. Lowered through the prototype's block-qualified allocation when present."""
         if ncomp is None:
             ncomp = len(like.space.components) if (isinstance(like, ProgramValue)
                 and like.space is not None and field_role(like) == "field") else 1
