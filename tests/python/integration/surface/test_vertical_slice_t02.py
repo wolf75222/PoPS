@@ -66,20 +66,79 @@ def test_the_case_file_passes_the_lint_and_imports_only_the_surface():
             assert module == "pops" or module.startswith(ALLOWED), module
 
 
+def test_inspect_reports_the_scheme_and_the_method_written_in_the_case_file(monkeypatch):
+    """S1-b: pops.inspect(case) reports upwind and ssprk2 as written in the case file, at the
+    lines of their definitions (the decorator's); the case is built by the statements of the file before its compile (no native code)."""
+    source = CASE.read_text(encoding="utf-8")
+    head = source.split("\nartifact = pops.compile(")[0]
+    namespace = {"__name__": "s1b", "__file__": str(CASE)}
+    exec(compile(head, str(CASE), "exec"), namespace)
+    lines = source.splitlines()
+    expected = ["the case file, %s:%d" % (CASE.resolve(), lines.index(decorator) + 1)
+                for decorator in ("@pops.scheme", "@pops.method")]
+    report = namespace["pops"].inspect(namespace["case"])
+    assert [choice.value for choice in report.choices() if choice.name == "written in"] == \
+        expected
+
+
 def test_the_registry_follows_the_case_file():
     assert gate.check(ROOT) == []
+
+
+def _probe():
+    return None
+
+
+def _count_python_calls(monkeypatch):
+    """Each Python frame that starts inside the native run of the case (S2, CF9); a probe called
+    inside the counted window proves that the counter records Python calls.
+
+    The first NumPy array that the native module makes in a process runs pybind11's check of the
+    NumPy version, in Python, once. The state is read once before the window, so that this check
+    does not fall inside it.
+    """
+    from pops.runtime import _simulation as _n8
+
+    calls, runs = [], []
+    initialize = _n8.Simulation.__init__
+
+    def counted_init(self, *arguments, **options):
+        initialize(self, *arguments, **options)
+        self._runtime.state_global("scalar_advection")      # the block of the case's model
+        native = self._run_native
+
+        def run_native(*values):
+            def profile(frame, event, _):
+                if event == "call":
+                    calls.append(frame.f_code.co_name)
+            previous = sys.getprofile()
+            sys.setprofile(profile)
+            try:
+                report = native(*values)
+                _probe()
+            finally:
+                sys.setprofile(previous)
+            runs.append(report)
+            return report
+        self._run_native = run_native
+
+    monkeypatch.setattr(_n8.Simulation, "__init__", counted_init)
+    return calls, runs
 
 
 @pytest.mark.compiler
 @pytest.mark.kokkos
 @pytest.mark.native_loader
 def test_the_case_file_runs_to_its_end_or_to_the_first_piece(tmp_path, monkeypatch):
+    calls, runs = _count_python_calls(monkeypatch)
     error = _run(tmp_path, monkeypatch)
     pieces = REGISTRY["piece"]
     if not pieces:
-        # the exit of phase 1: the file runs to its end and writes master's two records
+        # the exit of phase 1: the file runs to its end and writes master's two records, and no
+        # Python runs inside the native run (S2, CF9)
         assert error is None, "".join(traceback.format_exception(error))
         assert (tmp_path / "results" / "02_openmp_explicit_ssprk2.npz").is_file()
+        assert runs and calls == ["_probe"] * len(runs), calls
         return
     first = pieces[0]
     assert error is not None, "the case file ran to its end: remove piece %s" % first["id"]

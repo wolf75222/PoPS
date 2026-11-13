@@ -9011,7 +9011,7 @@
       }
     },
     "ci_20261112_vertical_slice": {
-      "basis": "Unmeasured CI scheduling estimate for the test of the vertical slice of the exit of phase 1 (OD31: master's tutorial 02 written in the surface), on the api_v02_20261013 tiers. 300 s for test_vertical_slice_t02.py: since #799 its registry is empty, so besides the lint SU-T1 of the case file and the order of its registry it runs the file natively to its end, one compiled Dim2 artifact and 29 steps on 64 x 64 cells, a quarter of the four artifacts of the analogue test_surface_lot_e_project_native.py (900 s), rounded up. The local receipts come from pytest on a 4-core container (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimate for the test of the vertical slice of the exit of phase 1 (OD31: master's tutorial 02 written in the surface), on the api_v02_20261013 tiers. 300 s for test_vertical_slice_t02.py: since #799 its registry is empty, so besides the lint SU-T1 of the case file, the order of its registry and pops.inspect of the case (S1-b, without compiling) it runs the file natively to its end, one compiled Dim2 artifact and 29 steps on 64 x 64 cells with the Python calls inside the native run counted (S2, CF9), a quarter of the four artifacts of the analogue test_surface_lot_e_project_native.py (900 s), rounded up. The local receipts come from pytest on a 4-core container (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/integration/surface/test_vertical_slice_t02.py": "tests/python/integration/runtime/test_surface_lot_e_project_native.py"
       },
@@ -9020,12 +9020,12 @@
       },
       "local_receipts": {
         "tests/python/integration/surface/test_vertical_slice_t02.py": {
-          "cases": 3,
-          "session_seconds": 11.69
+          "cases": 4,
+          "session_seconds": 8.72
         }
       },
       "source_sha256": {
-        "tests/python/integration/surface/test_vertical_slice_t02.py": "97c4be37f32ce838f1fce52abd87464343436b10d0728af1d171d831da0bdb5b"
+        "tests/python/integration/surface/test_vertical_slice_t02.py": "2cf9c9d7911d01fa626f846afe031456628b53a9dea35324b43bb3f8fd7d1234"
       }
     }
   },

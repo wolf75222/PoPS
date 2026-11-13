@@ -271,6 +271,18 @@ def test_inspect_reports_a_default_option():
     assert ("option reconstruction", "None", "default") in choices
 
 
+def test_inspect_reports_where_the_scheme_and_the_method_are_written():
+    """S1-b of the vertical slice: a scheme written in the case file is reported with its file and
+    line; the method of pops.lib with its line in pops.lib."""
+    choices = [(choice.name, choice.value) for choice in
+               surface.inspect(_surface_burgers(lambda u: local_lax_friedrichs())).choices()
+               if choice.name == "written in"]
+    scheme_line = local_lax_friedrichs.body.__code__.co_firstlineno
+    method_line = ssprk2.body.__code__.co_firstlineno
+    assert choices == [("written in", "the case file, %s:%d" % (__file__, scheme_line)),
+                       ("written in", "pops.lib, pops/lib/time/methods.py:%d" % method_line)]
+
+
 @pytest.mark.parametrize("offsets, order", [((0,), 1), ((-1, 0), 2), ((-1, 0, 1), 3),
                                             ((-2, -1, 0, 1, 2), 5)])
 def test_the_formal_order_is_the_number_of_cells_read(offsets, order):

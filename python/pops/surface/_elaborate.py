@@ -21,6 +21,7 @@ origin of each choice, stated, derived or default (SU12).
 from __future__ import annotations
 
 import math as _math
+import os
 from decimal import Decimal
 from fractions import Fraction
 from collections.abc import Iterable, Sequence
@@ -52,7 +53,7 @@ from ._model import _sign as _derived_sign
 from ._numerics import Numerics, SchemeValue, TermView
 from ._refusal import (
     AmbiguousElaboration, CoverageNotExact, MissingBoundaryRealization, NotYetElaborated,
-    SurfaceRefusal, UnknownSolvePath,
+    SurfaceRefusal, UnknownSolvePath, _LIB_ROOT, _POPS_ROOT,
 )
 from ._scheme import StencilRealization
 
@@ -76,6 +77,17 @@ class Choice:
 
     def __str__(self) -> str:
         return "%s = %s (%s)" % (self.name, self.value, self.origin)
+
+
+def written_in(body: Any) -> str:
+    """Where the body of a scheme or a method is written, for ``pops.inspect``: ``pops.lib`` and
+    its line, or the case file and its line (S1-b of the vertical slice)."""
+    code = body.__code__
+    path = os.path.abspath(code.co_filename)
+    if path.startswith(_LIB_ROOT + os.sep):
+        return "pops.lib, %s:%d" % (os.path.relpath(path, os.path.dirname(_POPS_ROOT)),
+                                    code.co_firstlineno)
+    return "the case file, %s:%d" % (path, code.co_firstlineno)
 
 
 class Row:
@@ -642,6 +654,9 @@ class _Elaboration:
                     term, terms[term], states[term.quantity], slope=slope, unit_flux=speed,
                     lower=self.lower), balance)
                 choices = [Choice("scheme", scheme, "stated")]
+                if hasattr(scheme, "scheme"):       # a scheme written with @pops.scheme
+                    choices.append(Choice("written in", written_in(scheme.scheme.body),
+                                          "stated"))
                 choices.extend(Choice("option %s" % name, value, origin)
                                for name, value, origin in getattr(scheme, "option_choices",
                                                                   list)())
@@ -763,6 +778,7 @@ class _Elaboration:
                    "%r: %r" % item for item in realization.items())),
             [Choice("method", "%s, %d evaluations of its rates"
                     % (value.name, len(elaboration.trace.evaluations)), "stated"),
+             Choice("written in", written_in(value.method.body), "stated"),
              Choice("dt", advance.dt, "stated"),
              *([] if rule is None else [Choice(
                  "speeds", "the wave speeds dF/du of %s, recorded by b6 on each cell (R9, SD44); "

@@ -32,7 +32,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   differs from master only in the rounding of exp in the initial data, in the 12 recorded cells,
   each by 2 ulp at most, and by at most 1e-12 relative at t = 0.2 (cause C44, removed with G07);
   with master's initial array bound as data, it is bit for bit at t = 0 and t = 0.2. The bound only
-  shrinks (MG6). `benchmarks/slice/t02_pf10.py` measures PF10 (1) and (3) for the slice.
+  shrinks (MG6). `benchmarks/slice/t02_pf10.py` measures PF10 (1) and (3) for the slice, one
+  route per process when a pair does not fit in memory (`measure --route`, `merge`).
+  `pops.inspect(case)` reports where each scheme written with `@pops.scheme` and the method
+  are written, « the case file, <file>:<line> » or « pops.lib, <file>:<line> » (S1-b), and the
+  slice's native test counts no Python call inside the native run (S2, CF9).
 - ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
   from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
   `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the
