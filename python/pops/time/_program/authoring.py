@@ -758,7 +758,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         if condition.clock != true_result.clock:
             raise ValueError("branch: condition and result arms must share one clock")
         structured = ({"signature": true_result.attrs["signature"]}
-                      if (is_finite_index(true_result) or true_result.vtype in ("product", "variant", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology")) else
+                      if (is_finite_index(true_result) or true_result.vtype in ("product", "variant", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted")) else
                       {"success_signature": true_result.attrs["success_signature"]}
                       if true_result.vtype == "result" else {})
         return self._new(
@@ -774,7 +774,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
     def _require_branch_compatible(left: Any, right: Any) -> None:
         if left.vtype != right.vtype:
             raise ValueError("branch: both arms must return the same value type")
-        if is_finite_index(left) or left.vtype in ("product", "variant", "result", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
+        if is_finite_index(left) or left.vtype in ("product", "variant", "result", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
             from .structured_control import value_signature, same_signature
             if not same_signature(value_signature(left), value_signature(right)):
                 raise ValueError("branch: product arms must have identical structural types")

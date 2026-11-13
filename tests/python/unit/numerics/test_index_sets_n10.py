@@ -456,7 +456,7 @@ def _general_accesses(module, builder):
 
     spec = getattr(importlib.import_module(module), builder)()
     report = data_layout_and_distribution(pops.resolve(pops.validate(spec.case), layout=spec.layout))
-    assert report["schema_version"] == 4
+    assert report["schema_version"] == 5
     return report["general_accesses"]
 
 
@@ -465,9 +465,6 @@ def _general_accesses(module, builder):
      {"distributed_scatter_reduce", "distributed_import_csr"}, {"arithmetic"}),
     ("examples.api_v02.distributed_program_checks", "build_distributed_program",
      {"distributed_import", "distributed_import_csr"}, {"arithmetic"}),
-    # The bridge's injection reads tables built from the topology during the run.
-    ("examples.api_v02.continuation_regrid_amr", "build_continuation_regrid_amr",
-     {"finite_at", "distributed_import"}, {"computed"}),
 ])
 def test_the_plan_reports_every_general_access_and_none_reaches_patches(
         module, builder, ops, provenances):
@@ -478,13 +475,61 @@ def test_the_plan_reports_every_general_access_and_none_reaches_patches(
     assert all(type(row["node"]) is int and type(row["array"]) is int for row in rows)
 
 
+# -- Lot 3b: regrid_read, H' and the relayout (addendum of lot 3, §2, §4, §5) --------------------
+
+def _regrid_report(**kwargs):
+    import pops
+    from examples.api_v02.continuation_regrid_amr import build_continuation_regrid_amr
+    from pops._ir.data_model import data_layout_and_distribution
+
+    spec = build_continuation_regrid_amr(**kwargs)
+    report = data_layout_and_distribution(pops.resolve(pops.validate(spec.case), layout=spec.layout))
+    assert report["schema_version"] == 5
+    return report
+
+
+@pytest.mark.parametrize("independent", [False, True])
+def test_the_regrid_port_has_one_relayout_per_read_and_no_import(independent):
+    report = _regrid_report(independent_previous=independent)
+    # The port reads along Parent(r): the bridge's imports are gone (DM5). What is left is the
+    # case's own replicated `controls` array.
+    assert all(row["op"] == "finite_at" and row["layout"] == "Replicated"
+               for row in report["general_accesses"]), report["general_accesses"]
+    relayouts = report["relayouts"]
+    assert len(relayouts) == 2
+    records = {row["node"]: row for row in report["values"]}
+    for row in relayouts:
+        source, target = row["from"]["instance"], row["to"]["instance"]
+        assert source and target == source + "#regrid"
+        assert row["from"]["layout"] == row["to"]["layout"] == "LevelPatches"
+        assert row["map"] == "Parent(r)" and row["to"]["level"] == "child"
+        assert row["from"]["level"].startswith("node ")
+        # The read is typed over H'; nothing of the plan mixes the two instances.
+        assert records[row["node"]]["instance"] == target
+    instances = {row["instance"] for row in report["values"]}
+    assert "mixed" not in instances
+    assert {row["to"]["instance"] for row in relayouts} <= instances
+    assert {row["from"]["instance"] for row in relayouts} <= instances
+
+
+def test_a_mesh_profile_has_no_relayout_and_one_instance_per_hierarchy():
+    from pops._ir.data_model import data_layout_and_distribution
+
+    for profile in ("M01", "T06"):
+        report = data_layout_and_distribution(_plan(profile))
+        assert report["relayouts"] == [], profile
+        assert not any(str(row["instance"]).endswith("#regrid") for row in report["values"])
+        assert all(row["instance"] is None for row in report["values"]
+                   if row["layout"] != "LevelPatches"), profile
+
+
 def test_no_general_access_of_a_profile_reaches_patches():
     from pops._ir.data_model import data_layout_and_distribution
 
     seen = set()
     for profile in ("M01", "M18", "T06", "T08"):
         report = data_layout_and_distribution(_plan(profile))
-        assert report["schema_version"] == 4, profile
+        assert report["schema_version"] == 5, profile
         for row in report["general_accesses"]:
             assert row["layout"] not in ("Patches", "LevelPatches"), (profile, row)
             seen.add(row["op"])

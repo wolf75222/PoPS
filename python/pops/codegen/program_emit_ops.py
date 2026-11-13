@@ -430,11 +430,6 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     if v.op in STRUCTURED_OPS:
         emit_structured_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
         return
-    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
-    if v.op in FIELD_REPRESENTATION_OPS:
-        from .program_emit_field_representation import emit_field_representation
-        emit_field_representation(program, v, var, model, lines, prelude, block_idx, field_plans, target)
-        return
     from .program_emit_versioned import VERSIONED_OPS, emit_versioned_op
     if v.op in VERSIONED_OPS:
         emit_versioned_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)

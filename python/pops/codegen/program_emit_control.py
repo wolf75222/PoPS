@@ -1286,7 +1286,7 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
     """Lower two captured regions to a genuinely lazy C++ ``if``/``else`` value branch."""
     from pops.time._program.versioned_values import CAPABILITY_TYPES
 
-    if (is_finite_index(v) or v.vtype in ("product", "variant", "int64", "result", "field_topology")
+    if (is_finite_index(v) or v.vtype in ("product", "variant", "int64", "result")
             or v.vtype in CAPABILITY_TYPES
             or v.inputs[0].op == "variant_is" or var.get(("structured_control",), False)):
         from .program_emit_structured_control import emit_structured_branch

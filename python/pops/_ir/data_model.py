@@ -41,7 +41,6 @@ _FIELD_ROLES = {"state": "state", "rhs": "rhs", "scalar_field": "field", "vector
 _LATER = {
     "vector_field": ("no builder spells a value so: Local.vector_field returns a scalar_field of d "
                      "components, typed as a field leaf"),
-    "field_topology": "lot 3 of phase 1 types the hierarchy value of a topology (DM13)",
     "state_geometry": ("G03 types it: the swept geometry of a moving state, held by the runtime "
                        "and checked against its coordinate law (ALE: R26, D18, D21, probe M28)"),
     "csr": "lot 4 of phase 1 types it as a product of range-set arrays (DM4)",
@@ -51,7 +50,6 @@ _CONTINUATION = frozenset((
     "continuation_base", "continuation_candidate", "continuation_assessment",
     "continuation_accepted",
 ))
-_ON_TOPOLOGY = "pops.field-storage-topology@1"
 _NOT_DATA = frozenset((
     "operator", "matrix_free_op", "effect", "condensed_coeffs", "solve_outcome", "unit",
 ))
@@ -243,9 +241,6 @@ def ir_type(value: Any, placements: Placements, *, program: str = "program") -> 
     shape = value.logical_shape or {}
     count = shape.get("n_comp") if hasattr(shape, "get") else None
     attrs = getattr(value, "attrs", None) or {}
-    if hasattr(attrs, "get") and attrs.get("storage_allocation") == _ON_TOPOLOGY:
-        return A.Untyped("a field allocated on a topology lives on the levels of the hierarchy "
-                         "that the topology names (DM13, lot 3 of phase 1)")
     if count is None and hasattr(attrs, "get"):
         # A ``scalar_field()`` without a block carries its component count here (review T3).
         count = attrs.get("ncomp")
@@ -284,12 +279,13 @@ class LayoutRecord:
     distribution: str
     origin: str
     residency: str
+    instance: str | None = None
 
     def to_data(self) -> dict[str, Any]:
         return {"value": self.value, "node": self.node, "spelling": self.spelling,
                 "role": self.role,
                 "type": self.type, "layout": self.layout, "distribution": self.distribution,
-                "origin": self.origin, "residency": self.residency}
+                "origin": self.origin, "residency": self.residency, "instance": self.instance}
 
 
 def _coarse(plan: Any, layout_id: str) -> tuple[str, str]:
@@ -408,6 +404,50 @@ def _general_accesses(values: tuple[Any, ...], layouts: dict[int, str]) -> list[
     return rows
 
 
+def _hierarchy(value: Any, placements: Placements) -> str | None:
+    """The identity of the hierarchy H a field leaf of an adaptive block lives on."""
+    block = _block_name(value.block)
+    if block is None and len(placements.hierarchies) == 1:
+        block = next(iter(placements.hierarchies))
+    hierarchy = placements.hierarchies.get(block) if block is not None else None
+    return None if hierarchy is None else hierarchy.identity
+
+
+def _instance(value: Any, layout: str, placements: Placements, memo: dict[int, Any]) -> str | None:
+    """DM2 (N10 lot 3, addendum §5): H, or H' = H + "#regrid" on the target side of a regrid."""
+    if layout != "LevelPatches":
+        return None
+    from pops.time._program.continuation_regrid import (
+        MIXED_INSTANCES, TARGET_INSTANCE, hierarchy_instance)
+
+    identity = _hierarchy(value, placements)
+    if identity is None:
+        return None
+    side = hierarchy_instance(value, memo)
+    if side == TARGET_INSTANCE:
+        return identity + "#regrid"
+    return "mixed" if side == MIXED_INSTANCES else identity
+
+
+def _relayouts(values: tuple[Any, ...], placements: Placements) -> list[dict[str, Any]]:
+    """DM6: one row per relayout of the plan. Phase 1 has one, the copy inside ``regrid_read``."""
+    rows = []
+    for value in values:
+        if value.op != "continuation_regrid_read":
+            continue
+        identity = _hierarchy(value, placements)
+        rows.append({
+            "node": int(value.id),
+            "from": {"instance": identity, "level": "node %d" % int(value.inputs[1].id),
+                     "layout": "LevelPatches"},
+            "to": {"instance": None if identity is None else identity + "#regrid",
+                   "level": "child", "layout": "LevelPatches"},
+            "map": "Parent(r)",
+            "ratio": "bound per child: source level to child level, the identity when equal",
+        })
+    return rows
+
+
 def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
     """The manifest field ``data_layout_and_distribution`` (CC10) of a resolved plan."""
     try:
@@ -422,6 +462,7 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
     records = []
     # Every depth of the Program: the bodies of its control blocks hold field leaves too (T2).
     nodes = tuple(walk_program_nodes(plan.time._values))
+    instances: dict[int, Any] = {}
     for value in nodes:
         try:
             value_type = ir_type(value, placements, program=program)
@@ -429,22 +470,32 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001 - A1: reported, never refused
             value_type = A.Untyped("%s: %s" % (type(exc).__name__, exc))
             layout = distribution = origin = residency = "untyped"
+        try:
+            instance = _instance(value, layout, placements, instances)
+        except Exception as exc:  # noqa: BLE001 - A1: reported, never refused
+            instance = "untyped: %s: %s" % (type(exc).__name__, exc)
         records.append(LayoutRecord(
             value=str(value.name if getattr(value, "name", None) else value.id),
             node=int(value.id), spelling=value.vtype, role=_FIELD_ROLES.get(value.vtype), type=repr(value_type),
             layout=layout, distribution=distribution, origin=origin,
-            residency=residency).to_data())
+            residency=residency, instance=instance).to_data())
     try:
         accesses = _general_accesses(nodes, {row["node"]: row["layout"] for row in records})
     except Exception as exc:  # noqa: BLE001 - A1: reported, never refused
         accesses = [{"untyped": "%s: %s" % (type(exc).__name__, exc)}]
+    try:
+        relayouts = _relayouts(nodes, placements)
+    except Exception as exc:  # noqa: BLE001 - A1: reported, never refused
+        relayouts = [{"untyped": "%s: %s" % (type(exc).__name__, exc)}]
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "placements": {block: configuration.identity
                        for block, configuration in sorted(placements.configurations.items())},
         "values": records,
         # DM5: no row is on Patches or LevelPatches; the builder refuses a field leaf there.
         "general_accesses": accesses,
+        # DM6: the copy of regrid_read from level l_s of H onto the coarsening of the child of H'.
+        "relayouts": relayouts,
         "untyped": sum(1 for row in records if row["layout"] == "untyped"),
         "unplaced": unplaced,
     }
