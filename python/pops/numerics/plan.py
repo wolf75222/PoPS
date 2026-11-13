@@ -262,9 +262,11 @@ class _StateStorageFamily(_PairFamily):
 class _RepresentationFamily(_PairFamily):
     """The representation of an evolved state (G03 lot R-b, contract @2 of N16 5.5).
 
-    The lowering serves one constant mode on a cell carrier: an average (c = 1, the default that
-    every state has without a row) or a total (c = 1 / cell.measure). Any other definition is the
-    Gram path of N16 lot 2, refused by name."""
+    The lowering serves exactly two definitions: ``cell_average(rank)``, the default that every
+    state has without a row, and ``cell_total(rank)``. A decode outside one constant mode is the
+    Gram path of N16 lot 2; another definition of one constant mode (a sample, an average with a
+    stated rule) would be projected as an average, so it waits for the projection by encode of
+    N16's table (line 4 of plan/routes_transitoires.md). Both are refused by name."""
 
     def __init__(self) -> None:
         super().__init__("representations")
@@ -285,6 +287,16 @@ class _RepresentationFamily(_PairFamily):
                 "the representation %s of the state %s: the lowering of G03 lot R-b serves one "
                 "constant mode on a cell, an average (c = 1) or a total (c = 1/cell.measure); "
                 "N16 lot 2 gives the other decodes" % (method.identity[-12:], subject.local_id))
+        from pops.representations.definition import cell_average, cell_total
+        if method.identity not in (cell_average(method.rank).identity,
+                                   cell_total(method.rank).identity):
+            raise NotYetElaborated(
+                "the representation %s (kind %s) of the state %s: its constant mode is an "
+                "average's, but its initial value is not the cell average (a sample, or an "
+                "average under a stated rule), and b6 projects every initial value as an "
+                "average; the N16 lot that retires the transitional table of CellAverage() (the "
+                "projection by encode, line 4 of plan/routes_transitoires.md) gives it"
+                % (method.identity[-12:], method.kind, subject.local_id))
         return super().add(subject, method)
 
 
