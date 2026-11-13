@@ -16,6 +16,14 @@ from typing import Any
 MANIFEST_KEY = "pops_checkpoint_manifest"
 IDENTITY_KEY = "pops_restart_identity"
 
+# The exact key set of a canonical checkpoint manifest. A bound initial checkpoint adds "origin".
+# The offline integrity check, the collective envelope check and the manifest character budget
+# all read this set.
+CHECKPOINT_MANIFEST_KEYS = frozenset({
+    "schema_version", "runtime_kind", "semantic_identity", "artifact_identity",
+    "bind_identity", "program_id", "run_identity", "clock", "arrays", "restart_identity",
+})
+
 
 def _capacity(value: Any, *, where: str, positive: bool = False) -> int:
     if isinstance(value, bool) or not isinstance(value, int):

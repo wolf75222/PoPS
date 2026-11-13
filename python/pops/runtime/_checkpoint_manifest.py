@@ -11,7 +11,9 @@ from pops._manifest_protocol import strict_json_loads
 from pops._generated_release_contract import (
     CHECKPOINT_ENVELOPE_SCHEMA_VERSION as CHECKPOINT_SCHEMA_VERSION,
 )
-from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
+from pops.output._checkpoint_contract import (
+    CHECKPOINT_MANIFEST_KEYS, IDENTITY_KEY, MANIFEST_KEY,
+)
 
 from pops.identity.checkpoint_origin import (
     BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
@@ -324,10 +326,7 @@ def inspect_checkpoint_payload_integrity(
     if MANIFEST_KEY not in files or IDENTITY_KEY not in files:
         raise ValueError("checkpoint has no canonical manifest/restart identity; historical formats are refused")
     manifest = _strict_json(payload[MANIFEST_KEY])
-    expected_keys = {
-        "schema_version", "runtime_kind", "semantic_identity", "artifact_identity",
-        "bind_identity", "program_id", "run_identity", "clock", "arrays", "restart_identity",
-    }
+    expected_keys = set(CHECKPOINT_MANIFEST_KEYS)
     initial = manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION
     if initial:
         expected_keys.add("origin")

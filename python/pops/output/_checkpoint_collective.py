@@ -206,6 +206,12 @@ def _read_npy_array(archive: Any, plan: _NpyMemberPlan) -> Any:
 
 def _manifest_character_budget(names: tuple[str, ...]) -> int:
     """Derive the largest canonical manifest text from its exact member set and ND schema."""
+    maximal = _maximal_manifest(names)
+    return len(json.dumps(maximal, sort_keys=True, separators=(",", ":"), allow_nan=False))
+
+
+def _maximal_manifest(names: tuple[str, ...]) -> dict[str, Any]:
+    """The largest manifest of this member set: every key, each value at its widest spelling."""
     identity = {
         "domain": "semantic",
         "schema_version": sys.maxsize,
@@ -225,13 +231,14 @@ def _manifest_character_budget(names: tuple[str, ...]) -> int:
         "semantic_identity": identity,
         "artifact_identity": dict(identity, domain="artifact"),
         "bind_identity": dict(identity, domain="bind"),
+        "program_id": dict(identity, domain="program"),
         "run_identity": dict(identity, domain="run"),
         "origin": {"schema_version": 1, "kind": "bound_initial"},
         "clock": {"time": "-0x1.fffffffffffffp+1023", "macro_step": -sys.maxsize},
         "arrays": evidence,
         "restart_identity": dict(identity, domain="restart"),
     }
-    return len(json.dumps(maximal, sort_keys=True, separators=(",", ":"), allow_nan=False))
+    return maximal
 
 
 def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) -> None:
@@ -269,18 +276,9 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
             raise ValueError("checkpoint %s identity digest is not canonical" % field)
         return Identity(domain, value["schema_version"], "sha256", raw_digest)
 
-    expected_keys = {
-        "schema_version",
-        "runtime_kind",
-        "semantic_identity",
-        "artifact_identity",
-        "bind_identity",
-        "program_id",
-        "run_identity",
-        "clock",
-        "arrays",
-        "restart_identity",
-    }
+    from ._checkpoint_contract import CHECKPOINT_MANIFEST_KEYS
+
+    expected_keys = set(CHECKPOINT_MANIFEST_KEYS)
     initial = manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION
     if initial:
         expected_keys.add("origin")

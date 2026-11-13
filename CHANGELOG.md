@@ -242,9 +242,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   another program, target, toolchain, optimization flags or emitter is refused as such, before any
   member is read. A checkpoint of the same program under other owner names is still refused by
   name: its native images (state carriers, auxiliary state) spell the owner names, and the restart
-  across renamed owners comes with N11 lot 2c (name-free native images). A manifest without
-  `program_id` is a historical format and is refused; the Uniform v2 migration seals with the
-  `program_id` of its authority checkpoint.
+  across renamed owners comes with N11 lot 2c (name-free native images). The manifest keeps its
+  schema version: a manifest without `program_id` (written before this lot) is refused by its
+  exact key set. The Uniform v2 migration seals with the `program_id` of its authority checkpoint.
 - ROM-93 with ROM-25 (N11 lot 2b-i, G07): owner names leave the identities (spec 0.3 CC2, gap
   C47). The case, block, model definition and layout names are presentation names: a case renamed
   in every owner keeps its semantic identity, `snapshot.artifact_hash` and `plan_identity`, while

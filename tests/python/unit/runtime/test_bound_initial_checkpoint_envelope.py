@@ -12,7 +12,10 @@ import numpy as np
 import pytest
 
 from pops.identity import make_identity
-from pops.output._checkpoint_collective import _require_manifest_restart_identity, _manifest_character_budget
+from pops.output._checkpoint_collective import (
+    _manifest_character_budget, _maximal_manifest, _require_manifest_restart_identity,
+)
+from pops.output._checkpoint_contract import CHECKPOINT_MANIFEST_KEYS
 from pops.runtime._checkpoint_manifest import (
     IDENTITY_KEY, MANIFEST_KEY, _seal_checkpoint_payload_with_identities,
     CHECKPOINT_SCHEMA_VERSION, BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
@@ -95,6 +98,13 @@ def test_initial_wire_authenticates_bound_origin_and_restart_then_real_run(monke
     seal_checkpoint_payload(restored, after, runtime_kind=kind)
     assert json.loads(after[MANIFEST_KEY])["schema_version"] == 1
     assert "origin" not in json.loads(after[MANIFEST_KEY])
+
+
+def test_manifest_character_budget_covers_every_manifest_key():
+    # The budget is an upper bound only if its maximal manifest has every key that the integrity
+    # checks require, origin included (N11 lot 2b-ii added program_id).
+    assert set(_maximal_manifest(("state_u",))) == CHECKPOINT_MANIFEST_KEYS | {"origin"}
+    assert _maximal_manifest(("state_u",))["program_id"]["domain"] == "program"
 
 
 def test_legacy_run_envelope_and_identity_remain_exactly_unchanged():

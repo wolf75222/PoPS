@@ -20,6 +20,7 @@ from pops.runtime._bound_snapshot import (
 from pops.runtime._checkpoint_manifest import (
     IDENTITY_KEY,
     MANIFEST_KEY,
+    _identity_json,
     authenticate_checkpoint_payload,
     inspect_checkpoint_payload_integrity,
     seal_checkpoint_payload,
@@ -559,6 +560,25 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
     other._checkpoint_program_id = lambda: make_identity("program", {"test": "other flags"})
     with pytest.raises(ValueError, match=r"program identity \(program_id\) does not match"):
         authenticate_checkpoint_payload(other, PayloadView(), runtime_kind="uniform")
+
+    # A manifest without program_id (a 2b-i checkpoint) is refused even when its restart identity
+    # is resealed over the remaining keys.
+    older = dict(manifest)
+    del older["program_id"]
+    older_restart = make_identity(
+        "restart", {key: value for key, value in older.items() if key != "restart_identity"})
+    older["restart_identity"] = _identity_json(older_restart)
+    resealed = dict(payload, **{
+        MANIFEST_KEY: json.dumps(older, sort_keys=True, separators=(",", ":")),
+        IDENTITY_KEY: older_restart.token,
+    })
+
+    class OlderView(PayloadView):
+        def __getitem__(self, key):
+            return resealed[key]
+
+    with pytest.raises(ValueError, match=r"manifest keys must be exactly .*'program_id'"):
+        authenticate_checkpoint_payload(owner, OlderView(), runtime_kind="uniform")
 
     payload["state_tracer"] = np.arange(12, dtype=np.float64).reshape(3, 4) + 1.0
     with pytest.raises(ValueError, match="digest mismatch"):
