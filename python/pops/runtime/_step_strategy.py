@@ -14,6 +14,7 @@ from pops._bootstrap import StepAttemptRejected
 from pops.time.solve_outcome import SOLVE_STATUSES
 from pops.time._step.strategy import (
     AdaptiveCFL,
+    CellStepBound,
     ComputedDt,
     ErrorControlledDt,
     ExternalTimeGrid,
@@ -947,6 +948,65 @@ class ExternalTimeGridController(StepController[ExternalTimeGrid]):
     def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
         return _execute_prepared_attempts(
             self.prepare_attempts(engine, native, t_end=t_end))
+
+
+class CellStepBoundController(StepController[CellStepBound]):
+    """``pops.run`` of a cells rule (N8 « dt= as a function of cell », design note D4): each step is
+    the step bound that the Program generates, at the accepted state, capped at the final time,
+    run under the rule's Courant budget; a face refusal that carries the faces' frequency F is
+    retried once at fraction / F, as ``AdaptiveCFLController`` retries at cfl / F (ROM-108)."""
+
+    def prepare_attempts(
+        self, engine: Any, native: Any, *, t_end: float,
+    ) -> _PreparedStepAttempts:
+        remaining = t_end - float(native.time())
+        if not remaining > 0.0:
+            raise RuntimeError("CellStepBound has no positive interval left before the final time")
+        if native._step_bound_identity() != self.strategy.bound:
+            raise RuntimeError("CellStepBound names a step bound that the installed Program does "
+                               "not export")
+        # Collective: every rank takes the same bound (PF8); +infinity steps to the final time.
+        cap = [min(float(native._step_bound()), remaining)]
+        number = self.strategy.fraction
+
+        def attempt() -> None:
+            _native_attempt(engine, native,
+                            lambda: native._step_at_fraction(cap[0], number))
+
+        def retry(error: BaseException, _attempts: int) -> bool | str:
+            # One retry, whose step is the budget over the frequency that the refused attempt's
+            # faces recorded (2.6.9, ROM-108), as AdaptiveCFL's.
+            frequency = _face_step_frequency(error)
+            if frequency is None:
+                return ("only a face step refusal is retried, and this refusal carries no "
+                        "recorded face frequency (%s)" % FACE_STEP_FREQUENCY_SCHEMA)
+            bound = number / frequency
+            if not bound < cap[0]:
+                return "the step of the recorded face frequency does not shorten the refused step"
+            cap[0] = bound
+            return True
+
+        return _PreparedStepAttempts(
+            engine=engine,
+            controller=self,
+            attempt=attempt,
+            retry=retry,
+            retry_budget=1,
+        )
+
+    def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
+        return _execute_prepared_attempts(
+            self.prepare_attempts(engine, native, t_end=t_end))
+
+
+@register_step_controller_factory(CellStepBound)
+def _cell_step_bound_controller(
+    strategy: StepStrategy, controls: Mapping[str, Any] | None,
+) -> StepController[Any]:
+    del controls
+    if type(strategy) is not CellStepBound:
+        raise TypeError("CellStepBound controller factory received another strategy type")
+    return CellStepBoundController(strategy)
 
 
 @register_step_controller_factory(FixedDt)

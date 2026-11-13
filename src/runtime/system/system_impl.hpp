@@ -187,6 +187,8 @@ struct System<Dim>::Impl {
   NewtonReport last_newton_report_{};
   std::string poisson_solver_ = "cartesian_cg";
   bool explicit_default_poisson_requested_ = false;
+  // The same request, read by the plan guard of a cells rule (N8 « dt= as a function of cell »).
+  bool default_field_solve_requested_ = false;
   std::string poisson_bc_ = "auto";
   double poisson_abs_tol_ = 0.0;
   double poisson_rel_tol_ = static_cast<double>(kCartesianCGDefaultRelTol);

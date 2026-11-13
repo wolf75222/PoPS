@@ -51,13 +51,16 @@ from typing import Any
 
 from pops.time._program.control import AdvanceControl, memory_rings
 from pops.time._program.elaboration import Proposal, StepRule
+from pops.time._program.traced_method import NotYetElaborated
+from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA, CellStepBound
 from pops.time._program.memory import MemoryView
 from pops.time._program.outputs import EveryDt, OutputRegion, Product, landing
 
 DEFAULT_MAX_STEPS = 1_000_000
 """``max_steps`` when a run leaves it out: master's (``_runtime_instance.py:1598@bb9``), CC14."""
 
-_REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET, _TRIAL_FAILURE = 0, 1, 2, 3
+_REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET, _TRIAL_FAILURE, _FACE_FREQUENCY = 0, 1, 2, 3, 4
+_FACE_FREQUENCY_LOT = "the faces' frequency retry of the compiled run"
 _TRIAL_PHASES = ("trial", "trial_failure")
 
 
@@ -84,6 +87,22 @@ class SolveFailed(RunFailed):
 class NotAdmissible(RunFailed):
     """An admissibility guard of the trial failed (S5, IR4, T39): at a fixed failure site, which
     a retry cannot change, the step ends after its first attempt (T38)."""
+
+
+class FaceFrequencyStop(NotYetElaborated):
+    """A cells rule's attempt that the face guard refused with the faces' frequency (ROM-108):
+    the compiled run does not retry at that frequency yet, so it stops by name on every rank (N8
+    « dt= as a function of cell », design note D2, K1-c; review rev 3, P4). ``frequency`` is the
+    largest over the ranks; ``result`` is the ``RunResult`` at the accepted state of the step.
+    ``pops.run`` on the same artifact retries at fraction / frequency."""
+
+    def __init__(self, result: RunResult, frequency: float) -> None:
+        super().__init__(
+            "the face guard refused the attempt of the step from t=%r at the faces' frequency %r "
+            "(%s); the compiled run of a cells rule stops there: %s is a later lot of N8"
+            % (result.time, frequency, FACE_STEP_FREQUENCY_SCHEMA, _FACE_FREQUENCY_LOT))
+        self.result = result
+        self.frequency = frequency
 
 
 class Failure:
@@ -143,7 +162,7 @@ class Continuation:
 
     __slots__ = ("time", "macro_step", "proposal", "memory")
 
-    def __init__(self, time: float, macro_step: int, proposal: Proposal | StepRule,
+    def __init__(self, time: float, macro_step: int, proposal: Proposal | StepRule | CellStepBound,
                  memory: MemoryView | None = None) -> None:
         object.__setattr__(self, "time", time)
         object.__setattr__(self, "macro_step", macro_step)
@@ -154,7 +173,7 @@ class Continuation:
         raise AttributeError("Continuation is immutable")
 
     def __repr__(self) -> str:
-        if type(self.proposal) is StepRule:
+        if type(self.proposal) is not Proposal:
             return "Continuation(time=%r, macro_step=%d, proposal=%r)" % (
                 self.time, self.macro_step, self.proposal)
         return "Continuation(time=%r, macro_step=%d, proposal=Proposal(dt=%r))" % (
@@ -301,9 +320,12 @@ def _trial_variant(control: Any, site: str) -> type:
     return _VARIANTS[variants[site]]
 
 
-def _run_data(start: float, until: float, dt: float, rule: Any, max_steps: int) -> dict:
+def _run_data(start: float, until: float, dt: float, rule: Any, max_steps: int,
+              cells: Any = None) -> dict:
     data: dict[str, Any] = {"start": start.hex(), "until": until.hex()}
-    if rule is None:
+    if cells is not None:
+        data["cells"] = {"fraction": cells[0].hex(), "bound": cells[1]}
+    elif rule is None:
         data["proposal"] = dt.hex()
     else:
         data["rule"] = {"fraction": rule[0].hex(),
@@ -346,6 +368,10 @@ class Simulation:
         if native._advance_max_attempts() != control.max_attempts:
             raise RuntimeError("the installed Program does not export the attempt budget of its "
                                "compiled control")
+        if control.step_bound is not None and \
+                native._step_bound_identity() != control.step_bound[1]:
+            raise RuntimeError("the installed Program does not export the step bound of its "
+                               "compiled control")
         self._runtime = runtime
         self._control = control
         self._continuation: Continuation | None = None
@@ -372,9 +398,10 @@ class Simulation:
         runtime = self._runtime
         until = _binary64(until, "Simulation.run(until=...)")
         rule = self._control.step_rule
-        if rule is not None:
-            # The step rule chooses every proposal (N8 « Règle de pas compilée »); the native run
-            # does not read the proposal argument.
+        cells = self._control.step_bound
+        if rule is not None or cells is not None:
+            # The step rule chooses every proposal (N8 « Règle de pas compilée », « dt= as a
+            # function of cell »); the native run does not read the proposal argument.
             if proposal is not None:
                 raise TypeError("Simulation.run(proposal=...): the step rule of this Advance "
                                 "chooses every proposal")
@@ -406,13 +433,14 @@ class Simulation:
                              [item for _, kind, item in region.record if kind == "array"]))
         try:
             report = self._run_native(until, dt, max_steps, schedule, None if rule is None else (
-                rule[0], math.inf if rule[1] is None else rule[1]))
+                rule[0], math.inf if rule[1] is None else rule[1]), cells)
         finally:
             # A failure of a trial leaves the accepted state of its step; the next proposal is
             # the one of this run (T28, next=None).
             time, macro_step = runtime.time(), runtime.macro_step()
             self._continuation = Continuation(
-                time, macro_step, Proposal(dt) if rule is None else StepRule(*rule),
+                time, macro_step, CellStepBound(*cells) if cells is not None
+                else Proposal(dt) if rule is None else StepRule(*rule),
                 MemoryView(runtime, time, macro_step, memory_rings(self._control)))
         time = runtime.time()
         report = dict(report)
@@ -426,7 +454,13 @@ class Simulation:
                 Publication(sample["time"], sample["macro_step"], values))
         stop = report["stop"]
         failure = None
-        if stop == _STEP_BUDGET:
+        stopped = None
+        if stop == _FACE_FREQUENCY:
+            if cells is None:
+                raise RuntimeError("System::run_advance stopped on the faces' frequency without a "
+                                   "cells rule")
+            stopped = float(report["face_frequency"])
+        elif stop == _STEP_BUDGET:
             failure = Failure(BudgetExhausted, None, {
                 "budget": "max_steps", "max_steps": max_steps, "steps": report["steps"],
                 "time": time, "until": until})
@@ -457,7 +491,7 @@ class Simulation:
             steps=report["steps"], rejections=report["rejections"],
             diagnostics={
                 "control": self._control.to_data(),
-                "run": _run_data(start, until, dt, rule, max_steps),
+                "run": _run_data(start, until, dt, rule, max_steps, cells),
                 "native": report,
                 "outputs": [len(rows) for rows in published.values()],
             },
@@ -465,8 +499,11 @@ class Simulation:
             outputs={output: tuple(rows) for output, rows in published.items()})
         if failure is not None:
             raise failure.variant(result)
+        if stopped is not None:
+            raise FaceFrequencyStop(result, stopped)
         return result
 
 
-__all__ = ["BudgetExhausted", "Continuation", "DEFAULT_MAX_STEPS", "Failure", "Publication",
+__all__ = ["BudgetExhausted", "Continuation", "DEFAULT_MAX_STEPS", "FaceFrequencyStop", "Failure",
+           "Publication",
            "NotAdmissible", "RunFailed", "RunResult", "RunState", "Simulation", "SolveFailed"]

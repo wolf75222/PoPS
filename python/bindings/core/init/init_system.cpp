@@ -1293,7 +1293,8 @@ void bind_system_stepping(py::class_<System>& cls) {
               System& system, double until, double proposal, std::int64_t max_steps,
               const std::vector<
                   std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>& outputs,
-              const std::optional<std::pair<double, double>>& rule) {
+              const std::optional<std::pair<double, double>>& rule,
+              const std::optional<std::pair<double, std::string>>& cells) {
             std::vector<pops::runtime::program::AdvanceOutputSchedule> schedule;
             schedule.reserve(outputs.size());
             for (const auto& [every_steps, at, arrays] : outputs)
@@ -1301,9 +1302,16 @@ void bind_system_stepping(py::class_<System>& cls) {
             // rule = (fraction, max_dt): the step rule of the Advance, max_dt +inf when it has
             // none; its floor is step_cfl's default.
             std::optional<pops::runtime::program::AdvanceStepRule> step_rule;
+            if (rule && cells)
+              throw std::invalid_argument("_run_advance takes a stability rule or a cells rule");
             if (rule)
               step_rule =
                   pops::runtime::program::AdvanceStepRule{rule->first, rule->second, speed_floor};
+            // cells = (fraction, bound identity): the cells rule of dt= as a function of cell.
+            if (cells)
+              step_rule = pops::runtime::program::AdvanceStepRule{
+                  cells->first, std::numeric_limits<double>::infinity(), speed_floor,
+                  pops::runtime::program::AdvanceStepRuleKind::kCells, cells->second};
             const auto report = system.run_advance(until, proposal, max_steps, schedule,
                                                    step_rule ? &*step_rule : nullptr);
             py::list samples;
@@ -1332,6 +1340,7 @@ void bind_system_stepping(py::class_<System>& cls) {
             result["last_prepared_solve_iterations"] = report.last_prepared_solve_iterations;
             result["last_prepared_solve_residual"] = report.last_prepared_solve_residual;
             result["rejection_detail"] = report.rejection_detail;
+            result["face_frequency"] = report.face_frequency;
             result["segment_origin"] = report.segment.origin;
             result["segment_steps"] = report.segment.steps;
             result["outputs"] = samples;
@@ -1340,8 +1349,14 @@ void bind_system_stepping(py::class_<System>& cls) {
           py::arg("until"), py::arg("proposal"), py::arg("max_steps"),
           py::arg("outputs") = std::vector<
               std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>{},
-          py::arg("rule") = std::optional<std::pair<double, double>>{})
+          py::arg("rule") = std::optional<std::pair<double, double>>{},
+          py::arg("cells") = std::optional<std::pair<double, std::string>>{})
       .def("_advance_max_attempts", &System::advance_max_attempts)
+      // The step bound of a cells rule at the accepted state (N8 « dt= as a function of cell »):
+      // the proposal of pops.run's CellStepBound strategy. Collective.
+      .def("_step_bound", &System::step_bound)
+      .def("_step_bound_identity", &System::step_bound_identity)
+      .def("_step_at_fraction", &System::step_at_fraction, py::arg("dt"), py::arg("fraction"))
       .def_static(
           "_advance_attempt_duration",
           [](double time, double proposal, double frontier, double origin, std::int64_t steps) {

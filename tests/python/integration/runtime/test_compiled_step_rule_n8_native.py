@@ -220,8 +220,8 @@ def test_max_dt_binds_and_a_mutant_that_drops_it_is_caught(artifacts):
     simulation = Simulation(runtime)
     native = simulation._run_native
 
-    def mutant(until, proposal, max_steps, schedule, rule):
-        return native(until, proposal, max_steps, schedule, (rule[0], math.inf))
+    def mutant(until, proposal, max_steps, schedule, rule, cells):
+        return native(until, proposal, max_steps, schedule, (rule[0], math.inf), cells)
     simulation._run_native = mutant
     simulation.run(T_END)
     assert runtime.macro_step() < rule_rows[0][0]

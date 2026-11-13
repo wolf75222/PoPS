@@ -642,6 +642,11 @@ struct ProgramRuntimeState {
   /// the Program declares no Output. Read only by System::run_advance, between steps.
   std::vector<int> advance_output_scalar_counts_;
   std::function<void(int, Real*)> advance_output_scalars_;
+  /// The step bound of a cells rule (generated_step_bound.hpp): the generated entry that reduces
+  /// the bound over the cells of this rank in one mode, and the identity of that bound; empty when
+  /// the Program has no cells rule. Read only by System::run_advance and System::step_bound.
+  std::function<int(int, double, double*)> advance_step_bound_;
+  std::string advance_step_bound_identity_;
   /// GLOBAL macro-step cadence (ADC-411): substeps n partitions one representable accepted window;
   /// stride M runs the program once per M macro-steps (hold-then-catch-up). The accepted dt arguments
   /// are retained as reproducible left-folded provenance, while one prepared facade endpoint owns the
@@ -821,6 +826,8 @@ struct ProgramRuntimeState {
     AdvanceSegment advance_segment{};
     std::vector<int> advance_output_scalar_counts;
     std::function<void(int, Real*)> advance_output_scalars;
+    std::function<int(int, double, double*)> advance_step_bound;
+    std::string advance_step_bound_identity;
     std::uint64_t generation = 0;
     std::string installed_hash;
     std::vector<std::array<std::uint64_t, 4>> operator_authorities;
@@ -1015,6 +1022,8 @@ struct ProgramRuntimeState {
     advance_segment_ = {};
     advance_output_scalar_counts_.clear();
     advance_output_scalars_ = nullptr;
+    advance_step_bound_ = nullptr;
+    advance_step_bound_identity_.clear();
     installed_hash_.clear();
     operator_authorities_.clear();
     history_replay_authorities_.clear();
@@ -1050,6 +1059,8 @@ struct ProgramRuntimeState {
                                        advance_segment_,
                                        advance_output_scalar_counts_,
                                        advance_output_scalars_,
+                                       advance_step_bound_,
+                                       advance_step_bound_identity_,
                                        step_install_generation_,
                                        installed_hash_,
                                        operator_authorities_,
@@ -1106,6 +1117,8 @@ struct ProgramRuntimeState {
     advance_segment_ = snapshot.advance_segment;
     advance_output_scalar_counts_ = std::move(snapshot.advance_output_scalar_counts);
     advance_output_scalars_ = std::move(snapshot.advance_output_scalars);
+    advance_step_bound_ = std::move(snapshot.advance_step_bound);
+    advance_step_bound_identity_ = std::move(snapshot.advance_step_bound_identity);
     step_install_generation_ = snapshot.generation;
     installed_hash_ = std::move(snapshot.installed_hash);
     operator_authorities_ = std::move(snapshot.operator_authorities);

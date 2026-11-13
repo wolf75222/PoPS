@@ -843,6 +843,7 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   if (prepared.provider_components != 0)
     candidate.stability_consumer_qid = provider_consumer_qid;
   candidate.add_poisson_rhs = std::move(prepared.poisson_rhs);
+  candidate.elliptic_source = prepared.elliptic_source;
   candidate.cons_vars = std::move(prepared.conservative_variables);
   candidate.prim_vars = std::move(prepared.primitive_variables);
   candidate.prim_to_cons = std::move(prepared.primitive_to_conservative);
