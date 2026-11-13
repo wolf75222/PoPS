@@ -6,9 +6,13 @@ models renamed so that the alphabetical order of the blocks and of the models re
 compiles still write two shared objects. Another optimization flag, or another emitter
 (``codegen_source_authority``), gives another ``program_id``.
 
-A checkpoint written under the first names and restarted under the second is refused by name
-(the missing member, and lot 2b-ii that maps it), before any state changes: never bound to another
-block, never a raw ``KeyError``. Lot 2b-ii turns this refusal into a restart.
+A checkpoint is authenticated by ``program_id`` first (lot 2b-ii): a checkpoint written under
+another optimization flag is refused as another program, before any state changes (criterion (iv)).
+
+A checkpoint written under the first names and restarted under the second has the same
+``program_id``; it is refused by name (the missing member, and lot 2c whose name-free native images
+let it restart), before any state changes: never bound to another block, never a raw ``KeyError``.
+Lot 2c turns this refusal into a restart (``n11/lot2b_ii_design.md``, D5).
 """
 
 import os
@@ -34,18 +38,18 @@ def _bind(artifact):
                      resources={"execution_context": artifact_execution_context(artifact)})
 
 
-def _restart_across_renamed_owners_is_refused_by_name(first, renamed):
+def _restart_is_refused(source, target, blocks, message):
+    """Checkpoint ``source`` after one step, restart ``target``: refused, nothing changed."""
     with tempfile.TemporaryDirectory() as tmp:
-        sim = _bind(first)
+        sim = _bind(source)
         pops.run(sim, t_end=0.01, max_steps=1, output_dir=os.path.join(tmp, "run"),
                  console=False)
-        checkpoint = sim.checkpoint(os.path.join(tmp, "first"))
+        checkpoint = sim.checkpoint(os.path.join(tmp, "source"))
 
-        candidate = _bind(renamed)
-        before = {block: np.array(candidate.state_global(block), copy=True)
-                  for block in RENAMED["blocks"]}
+        candidate = _bind(target)
+        before = {block: np.array(candidate.state_global(block), copy=True) for block in blocks}
         clock = (candidate.time(), candidate.macro_step())
-        with pytest.raises(ValueError, match=r"no member state_eta, state_zeta.*2b-ii"):
+        with pytest.raises(ValueError, match=message):
             candidate.restart(checkpoint)
         for block, values in before.items():
             assert np.array_equal(candidate.state_global(block), values)
@@ -70,8 +74,11 @@ def test_native_renamed_owners_keep_the_program_id(
     assert first.so_path != renamed.so_path
     assert first.inspect().to_dict()["artifacts"]["program_id"] == first.program_id.token
 
-    # The driver's condition on lot 2b-i: a restart across the rename is refused by name.
-    _restart_across_renamed_owners_is_refused_by_name(first, renamed)
+    # The driver's condition on lot 2b-i: a restart across the rename is refused by name, after
+    # program_id matched; the native images still spell the names until lot 2c.
+    _restart_is_refused(first, renamed, RENAMED["blocks"],
+                        r"equal program_id.*no member state_eta, state_zeta.*native checkpoint "
+                        r"images.*lot 2c")
 
     # A kept name (a term name, gap C52) changes it.
     assert _compile(FIRST, rate_name="other_balance").program_id != first.program_id
@@ -86,6 +93,10 @@ def test_native_renamed_owners_keep_the_program_id(
     assert _compile(FIRST).program_id != first.program_id
     monkeypatch.undo()
 
-    # Another optimization flag changes it (criterion (iv): the toolchain axis this host varies).
+    # Another optimization flag changes it (criterion (iv): the toolchain axis this host varies),
+    # and a checkpoint of one is refused by the other as another program, before any member.
     monkeypatch.setenv("POPS_DSL_OPTFLAGS", "-O2")
-    assert _compile(FIRST).program_id != first.program_id
+    optimized = _compile(FIRST)
+    assert optimized.program_id != first.program_id
+    _restart_is_refused(optimized, first, FIRST["blocks"],
+                        r"program identity \(program_id\) does not match the bound runtime")

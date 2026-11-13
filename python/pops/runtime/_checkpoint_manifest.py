@@ -217,6 +217,18 @@ def _runtime_identities(owner: Any) -> tuple[Identity, Identity, Identity]:
     return tuple(checked)  # type: ignore[return-value]
 
 
+def _runtime_program_id(owner: Any) -> Identity:
+    """The compiled ``program_id`` of the bound runtime (N11 lot 2b, spec 0.3 CC2, CN9)."""
+    provider = getattr(owner, "_checkpoint_program_id", None)
+    if not callable(provider):
+        raise TypeError(
+            "checkpoint owner must implement the private program_id provider protocol")
+    value = provider()
+    if type(value) is not Identity or value.domain != "program":
+        raise RuntimeError("checkpoint requires the runtime's domain-'program' identity")
+    return Identity.from_data(value.to_data())
+
+
 def _seal_checkpoint_payload_with_identities(
     payload: dict[str, Any],
     *,
@@ -224,6 +236,7 @@ def _seal_checkpoint_payload_with_identities(
     semantic: Identity,
     artifact: Identity,
     bind: Identity,
+    program: Identity,
     run: Identity | None,
     origin: dict[str, Any] | None = None,
 ) -> Identity:
@@ -234,6 +247,7 @@ def _seal_checkpoint_payload_with_identities(
         (semantic, "semantic"),
         (artifact, "artifact"),
         (bind, "bind"),
+        (program, "program"),
     ):
         if type(value) is not Identity or value.domain != domain:
             raise TypeError("checkpoint requires an exact domain-%r identity" % domain)
@@ -252,6 +266,7 @@ def _seal_checkpoint_payload_with_identities(
         "semantic_identity": _identity_json(semantic),
         "artifact_identity": _identity_json(artifact),
         "bind_identity": _identity_json(bind),
+        "program_id": _identity_json(program),
         "run_identity": None if run is None else _identity_json(run),
         "clock": {
             "time": float(payload["t"]).hex(),
@@ -273,6 +288,7 @@ def _seal_checkpoint_payload_with_identities(
 def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind: str) -> Identity:
     """Add the canonical manifest and restart token to an in-memory NPZ payload."""
     semantic, artifact, bind = _runtime_identities(owner)
+    program = _runtime_program_id(owner)
     evidence = checkpoint_lifecycle_evidence(owner)
     run = getattr(owner, "last_run_identity", None)
     return _seal_checkpoint_payload_with_identities(
@@ -281,6 +297,7 @@ def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind
         semantic=semantic,
         artifact=artifact,
         bind=bind,
+        program=program,
         run=run,
         origin=evidence.get("origin"),
     )
@@ -309,7 +326,7 @@ def inspect_checkpoint_payload_integrity(
     manifest = _strict_json(payload[MANIFEST_KEY])
     expected_keys = {
         "schema_version", "runtime_kind", "semantic_identity", "artifact_identity",
-        "bind_identity", "run_identity", "clock", "arrays", "restart_identity",
+        "bind_identity", "program_id", "run_identity", "clock", "arrays", "restart_identity",
     }
     initial = manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION
     if initial:
@@ -333,6 +350,7 @@ def inspect_checkpoint_payload_integrity(
         ("semantic_identity", "semantic"),
         ("artifact_identity", "artifact"),
         ("bind_identity", "bind"),
+        ("program_id", "program"),
     ):
         recorded = _identity_from_json(manifest[field])
         if recorded.domain != domain:
@@ -373,7 +391,14 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
         runtime_kind=runtime_kind,
     )
     semantic, artifact, bind = _runtime_identities(owner)
-    _refuse_renamed_owners(owner, manifest, payload, semantic, artifact, runtime_kind=runtime_kind)
+    program = _runtime_program_id(owner)
+    # program_id first (N11 lot 2b): another target, toolchain, optimization flags or emitter is
+    # refused as such, before the owner-name and member checks can describe it otherwise.
+    if _identity_from_json(manifest["program_id"]).token != program.token:
+        raise ValueError(
+            "checkpoint program identity (program_id) does not match the bound runtime: it was "
+            "compiled for another program, target, toolchain, optimization flags or emitter")
+    _refuse_renamed_owners(owner, manifest, payload, artifact, runtime_kind=runtime_kind)
     for field, current, domain in (
         ("semantic_identity", semantic, "semantic"),
         ("artifact_identity", artifact, "artifact"),
@@ -389,19 +414,18 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
     return restart
 
 
-def _refuse_renamed_owners(owner: Any, manifest: Any, payload: Any, semantic: Identity,
-                           artifact: Identity, *, runtime_kind: str) -> None:
+def _refuse_renamed_owners(owner: Any, manifest: Any, payload: Any, artifact: Identity, *,
+                           runtime_kind: str) -> None:
     """Refuse, by name, a checkpoint of the same program under other owner names.
 
-    Since N11 lot 2b-i the semantic identity holds no case, block, model or layout name (CC2,
-    C47), while the artifact and bind identities still do, through the binary and the block
-    members. Such a checkpoint is refused here with its reason; a restart across renamed owners
-    maps the members through their positions, which is N11 lot 2b-ii. A member is never looked
-    up under another block's name.
+    Called once ``program_id`` matched. Since N11 lot 2b the program identity holds no case, block,
+    model or layout name (CC2, C47), while the artifact and bind identities still do, through the
+    binary and the block members, and the native checkpoint images (state carriers, auxiliary
+    state) spell owner names in their bytes. A restart across renamed owners reads those images
+    once they are name-free (N11 lot 2c); until then such a checkpoint is refused here with its
+    reason. A member is never looked up under another block's name.
     """
-    recorded_semantic = _identity_from_json(manifest["semantic_identity"])
-    recorded_artifact = _identity_from_json(manifest["artifact_identity"])
-    if recorded_semantic.token != semantic.token or recorded_artifact.token == artifact.token:
+    if _identity_from_json(manifest["artifact_identity"]).token == artifact.token:
         return
     files = _payload_files(payload)
     names: Any = getattr(owner, "block_names", None)
@@ -412,10 +436,10 @@ def _refuse_renamed_owners(owner: Any, manifest: Any, payload: Any, semantic: Id
         block_names: Any = names()
         missing = ["state_%s" % name for name in block_names if "state_%s" % name not in files]
     raise ValueError(
-        "checkpoint was written by the same program under other owner names (equal semantic "
-        "identity, another artifact identity)%s; a restart across renamed case, block, model or "
-        "layout names is not supported before N11 lot 2b-ii"
-        % (": no member %s" % ", ".join(missing) if missing else ""))
+        "checkpoint was written by the same program under other owner names (equal program_id, "
+        "another artifact identity)%s; its native checkpoint images still spell owner names, so a "
+        "restart across renamed case, block, model or layout names is not supported before N11 "
+        "lot 2c" % (": no member %s" % ", ".join(missing) if missing else ""))
 
 
 def checkpoint_run_identity(payload: Any) -> Identity | None:

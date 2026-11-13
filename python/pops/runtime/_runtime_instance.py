@@ -699,6 +699,9 @@ class RuntimeInstance:
             self._install_plan.bind_identity,
         )
 
+    def _checkpoint_program_id(self) -> Identity:
+        return self._install_plan.artifact.program_id
+
     # Public read-only runtime surface.  Each route is intentionally named here: there is no
     # generic delegation to the private System/AmrSystem engine.
     def time(self) -> float:

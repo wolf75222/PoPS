@@ -236,6 +236,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-93 with ROM-25 (N11 lot 2b-ii, G07): checkpoints are authenticated by `program_id` (spec 0.3
+  CN9, G07 criterion (iv)). The checkpoint manifest records the compiled `program_id` next to the
+  semantic, artifact and bind identities, and a restart checks it first: a checkpoint written by
+  another program, target, toolchain, optimization flags or emitter is refused as such, before any
+  member is read. A checkpoint of the same program under other owner names is still refused by
+  name: its native images (state carriers, auxiliary state) spell the owner names, and the restart
+  across renamed owners comes with N11 lot 2c (name-free native images). A manifest without
+  `program_id` is a historical format and is refused; the Uniform v2 migration seals with the
+  `program_id` of its authority checkpoint.
 - ROM-93 with ROM-25 (N11 lot 2b-i, G07): owner names leave the identities (spec 0.3 CC2, gap
   C47). The case, block, model definition and layout names are presentation names: a case renamed
   in every owner keeps its semantic identity, `snapshot.artifact_hash` and `plan_identity`, while
@@ -247,7 +256,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `codegen_source_authority()`), shown by `inspect()`, the runtime inspection and the run report.
   A module outside PoPS read by a callback is identified in the artifact projection by the values
   it supplies, not by its source digest. A checkpoint of the same program under other owner names
-  is refused by name until N11 lot 2b-ii. `ARTIFACT_SCHEMA_VERSION` is 8; semantic identities of
+  is refused by name (N11 lot 2b-ii, 2c). `ARTIFACT_SCHEMA_VERSION` is 8; semantic identities of
   every case change once.
 - ROM-85 (N10, phase 1, lot 3a): strict mode on `Patches` (spec 0.3 DM5). The layout record
   (`data_layout_and_distribution`, schema 4) lists every general access of the plan

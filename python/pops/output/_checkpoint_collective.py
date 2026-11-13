@@ -275,6 +275,7 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
         "semantic_identity",
         "artifact_identity",
         "bind_identity",
+        "program_id",
         "run_identity",
         "clock",
         "arrays",
@@ -312,6 +313,7 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
     identity("semantic_identity", "semantic")
     identity("artifact_identity", "artifact")
     identity("bind_identity", "bind")
+    identity("program_id", "program")
     if initial:
         if not _is_bound_initial_origin(manifest["origin"]) \
                 or manifest["run_identity"] is not None \
