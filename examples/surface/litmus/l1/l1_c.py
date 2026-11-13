@@ -10,7 +10,7 @@ import pops.surface as pops
 from pops.surface.math import *
 from pops.lib.numerics import two_point
 from pops.surface.discrete import FaceFlux
-from pops.lib.time.methods import ssprk2
+from pops.lib.time import ssprk2
 
 NX, A, NU, T_END, MAX_STEPS = 256, 1.0, 1e-2, 1.0, 10_000
 

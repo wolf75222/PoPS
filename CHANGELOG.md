@@ -46,7 +46,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   swap is farther from the exact cell averages than L1-a, and no Python runs inside the native run
   (CF9). The four files are the CF1 case `L1-swaps` (frozen engine unchanged). Until N8 elaborates
   `dt=` as a function of cell the step is a number, and `nu` is a constant while `cg()` is a
-  bridge.
+  bridge. `pops.lib.time` re-exports `ssprk2` and `imex_euler` of `pops.lib.time.methods` (the
+  same objects), so the files import them as 17.1 writes it, `from pops.lib.time import ssprk2`.
 - ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
   from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
   `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the

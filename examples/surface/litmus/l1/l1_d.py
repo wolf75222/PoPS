@@ -9,7 +9,7 @@ import numpy
 import pops.surface as pops
 from pops.surface.math import *
 from pops.lib.numerics import upwind, two_point
-from pops.lib.time.methods import imex_euler
+from pops.lib.time import imex_euler
 from pops.lib.solve import cg
 
 NX, A, NU, T_END, MAX_STEPS = 256, 1.0, 1e-2, 1.0, 10_000

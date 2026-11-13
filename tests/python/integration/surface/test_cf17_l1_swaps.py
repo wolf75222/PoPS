@@ -52,11 +52,11 @@ SWAPS = {
            "    return FaceFlux((left + right) / 2 - s * (face.right(q) - face.left(q)) / 2, "
            "speed=s)",
            ""]),
-    "d": (["from pops.lib.time.methods import ssprk2",
+    "d": (["from pops.lib.time import ssprk2",
            "DT = 1 / (abs(A) * NX + 2 * NU * NX**2)",
            "program = pops.Program(advance=pops.Advance(ssprk2(rate=model), dt=DT, attempts=2),",
            "                       initial={u: u0})"],
-          ["from pops.lib.time.methods import imex_euler",
+          ["from pops.lib.time import imex_euler",
            "from pops.lib.solve import cg",
            "DT = 1 / (abs(A) * NX)",
            "imex = imex_euler(explicit=advection, implicit=diffusion)",
@@ -92,6 +92,17 @@ def test_a_swap_changes_only_the_lines_of_the_swapped_function(variant):
         elif line.startswith("+ "):
             added.append(line[2:])
     assert (removed, added) == SWAPS[variant]
+
+
+def test_the_methods_import_from_pops_lib_time_as_17_1_writes_it():
+    """``pops.lib.time`` re-exports the methods of ``pops.lib.time.methods``: the same objects,
+    so the files import them as spec 17.1 does (driver 14:12)."""
+    import pops.lib.time as package
+    from pops.lib.time import imex_euler, ssprk2
+    from pops.lib.time import methods
+
+    assert ssprk2 is methods.ssprk2 and imex_euler is methods.imex_euler
+    assert {"ssprk2", "imex_euler"} <= set(package.__all__)
 
 
 def test_the_cases_pass_the_lint():

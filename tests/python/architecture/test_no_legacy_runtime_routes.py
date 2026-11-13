@@ -389,8 +389,12 @@ def test_program_has_one_runtime_branch_spelling() -> None:
 def test_time_presets_are_factories_for_ordinary_programs() -> None:
     from pops.lib import time
 
+    from pops.lib.time import methods
+    from pops.surface._method import SurfaceMethod
+
     assert callable(time.SSPRK2)
-    assert not hasattr(time, "ssprk2")
+    # the lowercase name is the surface's @pops.method, re-exported (driver 14:12), not a factory
+    assert time.ssprk2 is methods.ssprk2 and type(time.ssprk2) is SurfaceMethod
 
 
 def test_tracked_tests_never_consume_retired_root_engine_attributes() -> None:
