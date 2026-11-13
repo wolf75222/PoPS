@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 ACTION = ROOT / ".github/actions/native-module-for-runner/action.yml"
+MPI_ACTION = ROOT / ".github/actions/mpi-module-for-runner/action.yml"
 
 
 def _load():
@@ -136,6 +137,25 @@ def test_every_contract_difference_requests_rebuild(system, change):
     assert report["compiler_changed"] is (change == "compiler")
 
 
+def test_compiler_selector_must_still_resolve_to_the_built_binary(tmp_path):
+    first, second = tmp_path / "g++-13", tmp_path / "g++-14"
+    first.write_bytes(b"same compiler bytes")
+    second.write_bytes(b"same compiler bytes")
+    selector = tmp_path / "g++"
+    selector.symlink_to(first)
+    size, digest = tree.file_digest(str(first))
+    compiler = {"selector": str(selector), "path": str(first.resolve()), "size": size,
+                "sha256": digest}
+    built = {"compiler": compiler, "include_trees": []}
+    assert runner.compare(built, {"compiler": dict(compiler), "include_trees": []},
+                          snapshot=lambda root: {})["compiler_changed"] is False
+    selector.unlink()
+    selector.symlink_to(second)
+    # Same bytes, same recorded path on this runner: only the selector check sees it.
+    assert runner.compare(built, {"compiler": dict(compiler), "include_trees": []},
+                          snapshot=lambda root: {})["compiler_changed"] is True
+
+
 def test_record_must_describe_the_wheel_beside_it(system):
     (system["package"] / "pops-0.3.0-cp312-cp312-linux_x86_64.whl").write_bytes(b"other")
     with pytest.raises(ValueError, match="does not describe the wheel"):
@@ -233,7 +253,20 @@ def test_rebuild_replays_the_build_job_recipe_and_proves_the_contract():
             "${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}") in build
     assert ("key: ccache-${{ runner.os }}-python-build-dim${{ inputs.dimension }}-${{ github.ref }}-"
             "${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}") in action
+    # actions/cache versions an entry by its literal path: restore under the path the build job
+    # saved (its CCACHE_DIR), then hand it to the dimension's own directory.
+    assert "CCACHE_DIR: ${{ github.workspace }}/.ccache-py" in build
+    assert "key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}" in build
+    restore = action.split("- name: Restore Dim${{ inputs.dimension }} module build ccache", 1)[1]
+    restore = restore.split("\n    - name: ", 1)[0]
+    assert "path: ${{ github.workspace }}/.ccache-py\n" in restore
+    aside = action.split("- name: Set aside this job's ccache", 1)[1].split("\n    - name: ", 1)[0]
+    assert 'mv "${{ github.workspace }}/.ccache-py" "$aside"' in aside
+    assert action.index("- name: Set aside this job's ccache") < action.index(
+        "- name: Restore Dim${{ inputs.dimension }} module build ccache")
     rebuild = action.split("- name: Rebuild Dim${{ inputs.dimension }} module on this runner", 1)[1]
+    assert rebuild.index('mv .ccache-py "$CCACHE_DIR"') < rebuild.index('mv "$aside" .ccache-py') \
+        < rebuild.index("cmake --preset ci-kokkos-python")
     rebuild, proof = rebuild.split(
         "- name: Prove the rebuilt Dim${{ inputs.dimension }} module contract holds here", 1)
     for command in ("scripts/verify_installed_native.py --expect-dim \"$dim\" --expect-serial",
@@ -248,7 +281,7 @@ def test_rebuild_replays_the_build_job_recipe_and_proves_the_contract():
     # Nothing in the route may relax or bypass the include contract.
     for forbidden in ("POPS_SKIP", "include_contract = None", "--no-verify", "continue-on-error"):
         assert forbidden not in action
-    for step in ("Check", "Restore", "Rebuild", "Prove"):
+    for step in ("Check", "Set aside", "Restore", "Rebuild", "Prove"):
         assert f"- name: {step} " in action
 
 
@@ -261,3 +294,80 @@ def test_new_runner_check_inputs_force_a_full_python_selection():
     spec.loader.exec_module(selector)
     assert "scripts/ci_native_build_runner.py" in selector.PYTHON_BROAD_FILES
     assert ".github/actions/native-module-for-runner/" in selector.PYTHON_BROAD_PREFIXES
+    assert ".github/actions/mpi-module-for-runner/" in selector.PYTHON_BROAD_PREFIXES
+
+
+def test_every_mpi_group_checks_the_contract_on_its_own_runner_before_authentication():
+    group = _job(WORKFLOW.read_text(), "mpi-python")
+    steps = _steps(group)
+    download = next(i for i, step in enumerate(steps)
+                    if step.startswith("name: Download the unique authenticated MPI Dim2 wheel"))
+    check = steps[download + 1]
+    assert check.startswith("name: MPI Dim2 native module for this runner")
+    assert "uses: ./.github/actions/mpi-module-for-runner" in check
+    assert "package-dir: ${{ runner.temp }}/pops-mpi-python-wheel" in check
+    # The job authenticates (installs and proves) whichever wheel the check leaves in place.
+    assert steps[download + 2].startswith("name: Authenticate fresh MPI wheel installation")
+    assert '--wheel-directory "$RUNNER_TEMP/pops-mpi-python-wheel"' in steps[download + 2]
+    # The identity receipt the check reads is written by setup-kokkos, after apt.
+    assert group.index("uses: ./.github/actions/setup-kokkos") < group.index(
+        "uses: ./.github/actions/mpi-module-for-runner")
+    assert WORKFLOW.read_text().count("uses: ./.github/actions/mpi-module-for-runner") == 1
+
+
+def test_mpi_job_records_its_runner_inside_the_uploaded_wheel_directory():
+    producer = _job(WORKFLOW.read_text(), "mpi")
+    assemble = producer.split("- name: Assemble and authenticate the unique MPI Dim2 wheel", 1)[1]
+    assemble = assemble.split("- name: Publish authenticated MPI Python wheel", 1)[0]
+    assert assemble.index("scripts/ci_python_mpi.py authenticate") < assemble.index(
+        "scripts/ci_native_build_runner.py record")
+    assert 'PYTHONPATH="$PWD/build-mpi/python"' in assemble
+    assert '--wheel-dir "$wheel_directory"' in assemble
+    assert '--output "$wheel_directory/native-build-runner.json"' in assemble
+    assert 'wheel_directory="$RUNNER_TEMP/pops-mpi-python-wheel"' in assemble
+
+
+def test_mpi_rebuild_replays_the_mpi_job_recipe_and_proves_the_contract():
+    producer = _job(WORKFLOW.read_text(), "mpi")
+    action = MPI_ACTION.read_text()
+    configure = re.search(r"cmake --preset ci-mpi \\\n(.*?)\n\s*mapfile", producer, re.S)
+    assert configure is not None
+    rebuild = action.split("- name: Rebuild MPI Dim2 module on this runner", 1)[1]
+    rebuild, proof = rebuild.split("- name: Prove the rebuilt MPI Dim2 module contract holds here", 1)
+    replay = rebuild.split("cmake --preset ci-mpi", 1)[1].split("export NINJA_STATUS", 1)[0]
+    # Same configure options as the mpi job; only the module TU pool (a Ninja job pool) is added.
+    assert re.findall(r"-D[A-Za-z0-9_]+=\S+", configure.group(1)) == [
+        flag for flag in re.findall(r"-D[A-Za-z0-9_]+=\S+", replay)
+        if not flag.startswith("-DPOPS_HEAVY_MODULE_TU_POOL=")]
+    assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in replay
+    assert "-DPython_EXECUTABLE=/usr/bin/python3" in configure.group(1)
+    assert "-DPOPS_USE_HDF5=ON" in configure.group(1)
+    assert '"${mpi_cmake_args[@]}"' in configure.group(1) and '"${mpi_cmake_args[@]}"' in replay
+    assert 'mpi_cmake_args+=("-DMPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1")' in producer
+    assert 'mpi_cmake_args+=("-DMPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1")' in rebuild
+    # The ccache restore follows the mpi job's attempt-qualified save key, under its literal path.
+    assert ("CCACHE_CACHE_KEY: mpi-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-"
+            "${{ github.run_attempt }}") in producer
+    assert "CCACHE_DIR: ${{ github.workspace }}/.ccache\n" in producer
+    assert "key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}" in producer
+    restore = action.split("- name: Restore MPI module build ccache", 1)[1].split("\n    - name: ", 1)[0]
+    assert "path: ${{ github.workspace }}/.ccache\n" in restore
+    assert ("key: ccache-${{ runner.os }}-mpi-${{ github.ref }}-${{ github.sha }}-"
+            "${{ github.run_id }}-${{ github.run_attempt }}") in restore
+    assert "CCACHE_DIR: ${{ github.workspace }}/.ccache\n" in rebuild
+    for command in ('run_with_heartbeat "MPI module rebuild for this runner" '
+                    '"${{ inputs.rebuild-minutes }}m"',
+                    "cmake --build --preset ci-mpi --parallel 4 --target _pops",
+                    "--dimension 2 --backend mpi",
+                    'cp "$package_dir/python-mpi-groups.json" "$rebuilt/python-mpi-groups.json"',
+                    "scripts/ci_native_build_runner.py record",
+                    'rm -rf build-mpi "$CCACHE_DIR"\n'):
+        assert command in rebuild
+    assert rebuild.index("scripts/ci_assemble_installed_wheel.py") < rebuild.index(
+        "python-mpi-groups.json") < rebuild.index("ci_native_build_runner.py record") < rebuild.index(
+        'mv "$package_dir" "$replaced"')
+    assert "check --require-match" in proof and "--dimension 2" in proof
+    for forbidden in ("POPS_SKIP", "include_contract = None", "--no-verify", "continue-on-error"):
+        assert forbidden not in action
+    for step in ("Check", "Restore", "Rebuild", "Prove"):
+        assert f"- name: {step} " in action
