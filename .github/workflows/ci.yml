@@ -2032,6 +2032,8 @@ jobs:
     name: ubuntu-24.04 / MPI Python ${{ matrix.group }}
     runs-on: ubuntu-24.04
     # 15m cold dependencies + 8m wheel authentication + unchanged 35m tests + 2m receipts.
+    # A module rebuild for another runner image (12m watchdog) uses the measured slack: in batch
+    # 43318819535 setup took at most 3m, authentication 0.2m and a group's tests 18.9m.
     timeout-minutes: 60
     needs: [set-mode, mpi]
     if: needs.set-mode.outputs.mpi_required == 'true'
