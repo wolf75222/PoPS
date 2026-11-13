@@ -83,7 +83,9 @@ def installed_packages() -> dict[str, str] | None:
 def package_files(package: str) -> list[str]:
     result = subprocess.run(["dpkg-query", "-L", package], capture_output=True, text=True,
                             check=False, env={**os.environ, "LC_ALL": "C"})
-    return [line for line in result.stdout.splitlines() if line.startswith("/")]
+    # dpkg lists the package's directories too; only files can explain a tree difference.
+    return [line for line in result.stdout.splitlines()
+            if line.startswith("/") and not os.path.isdir(line)]
 
 
 def module_contract(dimension: int) -> dict:
@@ -166,8 +168,12 @@ def compare(built: dict, local: dict,
         else:
             differing.append({"root": root, "built": tree, "here": here})
     compiler_keys = ("path", "size", "sha256")
-    compiler_changed = any(built["compiler"].get(key) != local["compiler"].get(key)
-                           for key in compiler_keys)
+    selector = built["compiler"].get("selector")
+    # As the runtime verify does: the baked selector must still resolve to the baked binary.
+    compiler_changed = (any(built["compiler"].get(key) != local["compiler"].get(key)
+                            for key in compiler_keys)
+                        or type(selector) is not str
+                        or os.path.realpath(selector) != built["compiler"].get("path"))
     return {"compiler_changed": compiler_changed, "differing_roots": differing,
             "matching_roots": matching}
 

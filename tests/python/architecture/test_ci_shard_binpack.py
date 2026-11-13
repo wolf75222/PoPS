@@ -93,10 +93,14 @@ def test_full_manifest_pack_stays_within_python_shard_test_budget():
         for index, shard in enumerate(shards):
             minutes = timing.selected_budget(shard, durations)
             assert minutes + 5 <= timing.job_budget(index), (index, minutes, shard)
-            if sum(durations[path] for path in shard) > timing.ORDINARY_BUDGET_SECONDS:
+            load = sum(durations[path] for path in shard)
+            if load > timing.ORDINARY_BUDGET_SECONDS:
                 assert index < 6 and len(shard) == 1
             else:
                 assert minutes == 45
+            # Packing keeps a ten percent margin; only one indivisible file may exceed it.
+            if len(shard) > 1:
+                assert load <= timing.ORDINARY_MARGIN_SECONDS, (index, load, shard)
 
 
 def test_python_watchdog_rejects_oversubscribed_multi_file_shards():
