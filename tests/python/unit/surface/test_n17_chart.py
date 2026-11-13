@@ -11,14 +11,21 @@ since L1a. A chart of rank one, or one that only moves the nodes along each axis
 naming ``pops.Graded`` (DN1, DN27); a piece on which the chart does not depend on the other
 coordinate is degenerate and leaves the boundary, and a case on that support waits for lot L2c
 with ``identify`` of G09 (DN28); a coordinate read on a charted support waits for lot L2b, which
-reads it at the centre of the cell and at the centroid of the face (DN7, DN30). The run is the
-native test test_n17_chart_annulus_native.py.
+reads it at the centre of the cell and at the centroid of the face (DN7, DN30), and so do a value
+relation, whose ghost is the reflection of a cell across a face of the chart, and a reconstruction
+above the cell values (DN30), refused where the case is built. On the physical normal of a chart
+the face input s of rusanov() is the bound sum_k |n_k| rho(A_k) of b6, which pops.inspect names as a
+transitional route (DN31), and an array that a run published on another support is not a datum
+of the chart (DN34). The run is the native test test_n17_chart_annulus_native.py.
 
 At the base a support had no reading ``chart`` and ``pops.Uniform`` no keyword ``geometry``;
 every test below fails there (CF15).
 """
 from __future__ import annotations
 
+import types
+
+import numpy
 import pytest
 
 import pops.surface as surface
@@ -31,6 +38,7 @@ from pops.lib.numerics.boundaries import ghosts
 from pops.lib.quadrature import GaussLegendre
 from pops.lib.time.methods import ssprk2
 from pops.mesh import MovingControlVolumes
+from pops.surface import _run
 from pops.surface._refusal import (
     AmbiguousElaboration, NotYetElaborated, ReservedName, SupportMismatch,
 )
@@ -46,19 +54,23 @@ def _annulus():
     return ring, ring.chart(x=ring.r * cos(ring.theta), y=ring.r * sin(ring.theta))
 
 
-def _case(support, layout=None, value=None):
+def _case(support, layout=None, value=None, reconstruction=None, inflow=None):
     """A scalar advected by rusanov() on ``support``, laid out by ``layout``, ``outflow`` on each
-    piece of its boundary; building the case elaborates it, so a refusal is raised here."""
+    piece of its boundary, or ``u == inflow`` on its first piece; building the case elaborates it,
+    so a refusal is raised here."""
     model = surface.Model("charted")
     u = model.quantity("u", surface.Scalar(support))
     u0 = model.data("u0", surface.Scalar(support))
     advection = model.flux(of=u, value=vector(1.0, 0.5) * u if value is None else value(u))
     model.balance(ddt(u) == -div(advection))
     pieces = [getattr(support.boundary, name) for name in support.piece_names()]
-    if pieces:
-        model.on(pieces, outflow(u))
+    if inflow is not None:
+        model.on([pieces[0]], u == inflow)
+    if pieces[1 if inflow is not None else 0:]:
+        model.on(pieces[1 if inflow is not None else 0:], outflow(u))
+    face = rusanov() if reconstruction is None else rusanov(reconstruction=reconstruction)
     numerics = surface.Numerics(represent={u: surface.CellAverage()},
-                                schemes={advection: rusanov()},
+                                schemes={advection: face},
                                 boundary=ghosts() if pieces else None)
     program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-2),
                               initial={u: u0})
@@ -281,6 +293,93 @@ def test_a_coordinate_read_on_a_charted_support_waits_for_lot_l2b():
         _case(annulus, value=lambda u: vector(-annulus.y, annulus.x) * u)
     with pytest.raises(NotYetElaborated, match="L2b"):
         _case(annulus, value=lambda u: vector(annulus.r, 1.0) * u)
+
+
+def test_a_value_relation_on_a_chart_waits_for_lot_l2b():
+    """DN30: a value relation is refused where the case is built, naming the relation, its piece
+    and lot L2b, whose reflected ghost serves it; outflow(u), which extends the cell, is served."""
+    _, annulus = _annulus()
+    with pytest.raises(NotYetElaborated, match="L2b") as caught:
+        _case(annulus, inflow=0.1)
+    message = str(caught.value)
+    assert "the value relation model.on(r_min, u == 0.1) of the charted support" in message
+    assert "reflects the ghost of a value relation across the face of a chart" in message
+
+
+def test_a_reconstruction_above_the_cell_values_on_a_chart_waits_for_lot_l2b():
+    """DN30: the traces of a face on a chart are the cell values; muscl, whose slopes read the
+    logical stencil of a cell, is refused where the case is built, naming the scheme and lot L2b."""
+    from pops.lib.numerics import muscl
+    from pops.lib.numerics.limiters import vanleer
+
+    _, annulus = _annulus()
+    with pytest.raises(NotYetElaborated, match="L2b") as caught:
+        _case(annulus, reconstruction=muscl(limiter=vanleer))
+    message = str(caught.value)
+    assert "rusanov(reconstruction=muscl(" in message
+    assert "reconstructed to the formal order 3 from the logical stencil of a cell" in message
+
+
+def test_rusanov_on_a_chart_states_that_its_speed_is_the_bound_of_its_face():
+    """DN31: on a physical normal the face input s is b6's bound sum_k |n_k| rho(A_k), not the
+    exact radius of spectral_radius; pops.inspect names it on the row of the scheme as a
+    transitional route, and the same scheme on a box states nothing of it."""
+    case, _, _ = build_chart_annulus()
+    report = surface.inspect(case)
+    (row,) = [row for row in report.rows if row.construct.startswith("schemes={")]
+    choices = {choice.name: choice for choice in row.choices}
+    assert choices["speed on the chart"].origin == "derived"
+    value = choices["speed on the chart"].value
+    assert "the bound sum_k |n_k| rho(A_k)" in value and "not the exact radius" in value
+    assert "lot L2d of N17 (DN31)" in value
+    box = surface.Box(x=surface.Periodic(0, 1), y=surface.Periodic(0, 1))
+    (row,) = [row for row in surface.inspect(_case(box, layout=surface.Uniform(cells=(8, 8))))
+              .rows if row.construct.startswith("schemes={")]
+    assert "speed on the chart" not in [choice.name for choice in row.choices]
+
+
+# --- the representation of a charted quantity (DN34) ---------------------------------------------
+
+def _artifact(case):
+    """What bind reads before it calls the native bind (as test_published_representation.py)."""
+    bindings = (types.SimpleNamespace(subject="u"),)
+    compiled = types.SimpleNamespace(plan=types.SimpleNamespace(
+        initial_condition_plan=types.SimpleNamespace(bindings=bindings)))
+    return _run.Artifact(case, compiled, surface.OpenMP())
+
+
+def _published_on(case):
+    """An array of 8 x 16 cells as a run of ``case`` publishes it in result.state[u]."""
+    (representation,) = case.elaborated.representations.values()
+    return _run.publish(numpy.zeros((16, 8)), representation)
+
+
+def test_an_array_published_on_another_support_is_not_a_datum_of_the_annulus():
+    """DN34: the representation of a quantity on a charted support carries its logical coordinates
+    and the components of its chart. An array of the same 8 x 16 cells that a run published on the
+    box [1, 2] x [0, 2 pi), or on the same logical ring under another chart, is refused by
+    pops.bind as the datum of the annulus, before the native bind, naming both supports; the array
+    that a run of the annulus published is read back under its identity."""
+    _, annulus = _annulus()
+    on_annulus = _case(annulus)
+    (u0,) = on_annulus.model.data_fields
+    on_box = _case(surface.Box(x=(1, 2), y=surface.Periodic(0, 2 * pi)),
+                   layout=surface.Uniform(cells=(8, 16)))
+    ring = surface.Box(r=(1, 2), theta=surface.Periodic(0, 2 * pi))
+    on_ellipse = _case(ring.chart(x=ring.r * cos(ring.theta), y=2 * ring.r * sin(ring.theta)))
+    chart = "x in chart r * cos(theta) x y in chart r * sin(theta)"
+    for other, written in ((on_box, "x in [1.0, 2.0] x y in periodic[0.0, 6.283185307179586)"),
+                           (on_ellipse, "x in chart r * cos(theta) x y in chart 2 * r * sin(theta)")):
+        with pytest.raises(SupportMismatch, match="equal shapes do not make supports "
+                                                  "interchangeable") as caught:
+            surface.bind(_artifact(on_annulus), data={u0: _published_on(other)})
+        message = str(caught.value)
+        assert "a run published on the support %s" % written in message.replace(
+            "r in [1.0, 2.0] x theta in periodic[0.0, 6.283185307179586) x ", "")
+        assert ("as the datum of a quantity on the support r in [1.0, 2.0] x theta in "
+                "periodic[0.0, 6.283185307179586) x %s" % chart) in message
+    (representation,) = on_annulus.elaborated.representations.values()
+    _run.require_published_under(_published_on(on_annulus), representation, "pops.bind")
 
 
 def test_the_annulus_bounds_and_cells_are_logical():
