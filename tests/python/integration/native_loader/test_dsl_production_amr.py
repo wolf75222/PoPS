@@ -167,7 +167,7 @@ def _public_euler_poisson_plan(n, dt):
     threshold = case.param(RuntimeParam("density_refinement", default=1.2))
     layout = AMR(grid=CartesianGrid(frame=FRAME, cells=(n, n), periodic=PeriodicAxes(FRAME.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["rho"] > case.value(threshold)),
+        tagging=AMRTagging(rules=(Tag(lambda cell: cell.value(ValueExpr(block[state])["rho"]) > case.value(threshold)),
                                  Buffer(cells=1)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(4, clock=program.clock)), transfer=transfer,
