@@ -21,7 +21,9 @@ import ci_python_test_units  # noqa: E402
 ORDINARY_BUDGET_SECONDS = 35 * 60
 # The complete 2026-10-16 catalog retains the 35-minute ordinary budget.
 # 148 bins retain35min for complete inventories and measured CI47b2 costs (N3, N8, N9, N15, N17).
-SHARD_TOTAL = 148
+# 164 bins keep the files recalibrated from shard 128 of batch 43318819535 at least ten percent
+# under that budget (b03_20261113_shard128_continuum_hall_weights).
+SHARD_TOTAL = 164
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
