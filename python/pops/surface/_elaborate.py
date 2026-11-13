@@ -21,7 +21,6 @@ origin of each choice, stated, derived or default (SU12).
 from __future__ import annotations
 
 import math as _math
-import os
 from decimal import Decimal
 from fractions import Fraction
 from collections.abc import Iterable, Sequence
@@ -53,7 +52,7 @@ from ._model import _sign as _derived_sign
 from ._numerics import Numerics, SchemeValue, TermView
 from ._refusal import (
     AmbiguousElaboration, CoverageNotExact, MissingBoundaryRealization, NotYetElaborated,
-    SurfaceRefusal, UnknownSolvePath, _LIB_ROOT, _POPS_ROOT,
+    SurfaceRefusal, UnknownSolvePath,
 )
 from ._scheme import StencilRealization
 
@@ -82,12 +81,9 @@ class Choice:
 def written_in(body: Any) -> str:
     """Where the body of a scheme or a method is written, for ``pops.inspect``: ``pops.lib`` and
     its line, or the case file and its line (S1-b of the vertical slice)."""
-    code = body.__code__
-    path = os.path.abspath(code.co_filename)
-    if path.startswith(_LIB_ROOT + os.sep):
-        return "pops.lib, %s:%d" % (os.path.relpath(path, os.path.dirname(_POPS_ROOT)),
-                                    code.co_firstlineno)
-    return "the case file, %s:%d" % (path, code.co_firstlineno)
+    from pops._source_origin import code_origin, origin_text
+
+    return origin_text(code_origin(body))
 
 
 class Row:
