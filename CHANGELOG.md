@@ -776,6 +776,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-87 (N3 lot 3-eps): a uniform native run now reads the regulariser of
+  `reconstruction.WENO5(epsilon=)`. Before the fix the uniform route silently ignored it and ran the
+  default 1e-40 (only an external Riemann brick and the AMR route received it). The host hands it to
+  the package through the block installer capability, as the reconstruction's smoothness epsilon;
+  the capability's layout changes, so the native System package ABI goes from 8 to 9 and every
+  compiled artifact is rebuilt once.
 - ROM-17 (B02): `scripts/setup_env.sh` works again on a fresh macOS env. Its Darwin SDK capture loads
   `_native_toolchain.py` with `PYTHONPATH` unset, and that module imports `pops` since 6603aec4, so a
   first setup stopped on `ModuleNotFoundError` reported as an invalid SDKROOT. The capture now puts the

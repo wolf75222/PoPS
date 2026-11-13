@@ -5,20 +5,20 @@ The advection of tutorial 02 of ``scalar_advection`` (the case of S1-c of the ve
 the box [0, 1] x [0, 1] with no periodic axis, ``ddt(u) == -div(vector(1, 1/4) * u)``, inflow on
 x_min and y_min (``u == g``) and outflow on x_max and y_max, realized by ``ghosts()``, and the
 SSPRK2 of ``pops.lib.time.methods``, on 16 x 8 cells for 50 steps of dt = 1e-3. The face is
-``upwind(reconstruction=weno5())``. ``pops.compile``, ``pops.bind`` and ``simulation.run`` give,
-bit for bit, the state that the same case written by hand for b6 and N8 reaches with master's
-native ``reconstruction.WENO5()`` and ``riemann.Rusanov()``, the form of ``upwind()`` (D1): E2 of
-the lot note. The case is the one of ``test_surface_n3_lot2_muscl_native.py``; the inflow ghosts
-three cells deep feed the stencil.
+``upwind(reconstruction=weno5(epsilon=1e-6))``. ``pops.compile``, ``pops.bind`` and
+``simulation.run`` give, bit for bit, the state that the same case written by hand for b6 and N8
+reaches with master's native ``reconstruction.WENO5(epsilon=1e-6)`` and ``riemann.Rusanov()``, the
+form of ``upwind()`` (D1): E2 of the lot note. The case is the one of
+``test_surface_n3_lot2_muscl_native.py``; the inflow ghosts three cells deep feed the stencil.
 
-The regulariser is compared on the policy, not on a run: the uniform native route drops the
-``epsilon=`` of ``reconstruction.WENO5`` (``System.add_equation`` passes ``weno_epsilon`` to an
-external Riemann brick only, ``python/pops/runtime/_system_install.py``, and the generated block
-builds ``configured_reconstruction<Weno5>()`` with the default,
-``include/pops/runtime/builders/compiled/generated_system_block.hpp``), so with ``epsilon=1e-6``
-the hand case runs master's default 1e-40 while the word runs 1e-6. The generated policy of
-``weno5(epsilon=1e-6)`` is the native ``pops::Weno5`` with that regulariser bit for bit
-(``tests/python/unit/surface/test_n3_lot3_weno5.py``).
+Both cases set the regulariser to 1e-6, far from master's default 1e-40, so that the run reads
+it. Before N3 lot 3-eps the uniform native route dropped ``reconstruction.WENO5(epsilon=)``
+(``System.add_equation`` passed ``weno_epsilon`` to an external Riemann brick only and the
+generated block built ``configured_reconstruction<Weno5>()`` with the default), so the hand case
+ran 1e-40 while the word, whose regulariser is a literal of the compiled policy, ran 1e-6.
+``test_the_uniform_route_reads_the_weno5_regulariser`` pins the fix on master's descriptor: the
+hand case with 1e-6 leaves its run with the default and reaches, bit for bit, the state of the
+policy compiled with 1e-6.
 """
 from pathlib import Path
 
@@ -54,7 +54,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 CELLS = (16, 8)
 G = 0.05                        # the value of the inflow
 UNTIL = 0.05                    # 50 steps of dt = 1e-3
-EPSILONS = {"default": None}
+EPSILON = 1e-6                  # far from the default 1e-40, so that the run reads it
 
 
 def _surface_case(epsilon):
@@ -142,24 +142,25 @@ def _bitwise(left, right):
     assert left.tobytes() == right.tobytes()
 
 
-@pytest.fixture(scope="module", params=tuple(EPSILONS))
-def compiled(request, tmp_path_factory, native_cxx, kokkos_root):
+@pytest.fixture(scope="module")
+def compiled(tmp_path_factory, native_cxx, kokkos_root):
     del native_cxx, kokkos_root
-    epsilon = EPSILONS[request.param]
     cache = tmp_path_factory.mktemp("pops-native-cache")
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
         patch.chdir(REPO_ROOT)
-        case, u, u0 = _surface_case(epsilon)
+        case, u, u0 = _surface_case(EPSILON)
         artifact = surface.compile(case, target=surface.OpenMP())
-        hand_case, layout = _hand_case(epsilon)
-        hand = pops.compile(pops.resolve(pops.validate(hand_case), layout=layout))
+        hand = {}
+        for epsilon in (EPSILON, None):
+            hand_case, layout = _hand_case(epsilon)
+            hand[epsilon] = pops.compile(pops.resolve(pops.validate(hand_case), layout=layout))
         yield {"u": u, "u0": u0, "artifact": artifact, "hand": hand}
 
 
-def _hand_state(compiled):
-    hand = compiled["hand"]
+def _hand_state(compiled, epsilon=EPSILON):
+    hand = compiled["hand"][epsilon]
     (binding,) = tuple(hand.plan.initial_condition_plan.bindings)
     initial = np.ascontiguousarray(np.transpose(_initial())[np.newaxis, ...])
     runtime = pops.bind(hand, initial_values={binding.subject: initial})
@@ -168,14 +169,28 @@ def _hand_state(compiled):
     return np.transpose(np.asarray(result.state["advection"])[0])
 
 
-def test_weno5_runs_as_master_s_native_weno5(compiled, tmp_path):
-    u = compiled["u"]
+def _surface_state(compiled, directory):
     simulation = surface.bind(compiled["artifact"], data={compiled["u0"]: _initial()},
-                              directory=tmp_path)
+                              directory=directory)
     result = simulation.run(until=UNTIL)
     assert result.failure is None and result.time == UNTIL and result.steps == 50
-    final = result.state[u]
+    final = result.state[compiled["u"]]
     assert final.shape == CELLS
+    return final
+
+
+def test_weno5_runs_as_master_s_native_weno5(compiled, tmp_path):
+    final = _surface_state(compiled, tmp_path)
     _bitwise(final, _hand_state(compiled))
     # the inflow brings g into the corner cell (x_0, y_0), where u0 is about 1e-7
     assert 0.3 * G < final[0, 0] < G
+
+
+def test_the_uniform_route_reads_the_weno5_regulariser(compiled, tmp_path):
+    """``reconstruction.WENO5(epsilon=1e-6)`` on the uniform native route runs with 1e-6."""
+    tuned = _hand_state(compiled)
+    default = _hand_state(compiled, None)
+    assert np.isfinite(tuned).all() and np.isfinite(default).all()
+    # red before lot 3-eps: the route ran the default whatever the descriptor said
+    assert tuned.tobytes() != default.tobytes()
+    _bitwise(tuned, _surface_state(compiled, tmp_path))

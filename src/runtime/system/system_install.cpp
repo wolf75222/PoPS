@@ -1834,12 +1834,13 @@ void System<Dim>::register_native_package(
     const std::string& expected_binary_identity, const std::string& limiter,
     const std::string& riemann, const std::string& recon, const std::string& time, double gamma,
     int substeps, bool evolve, int stride, const std::vector<double>& params,
-    double positivity_floor, NewtonOptions newton, bool newton_diagnostics) {
+    double positivity_floor, NewtonOptions newton, bool newton_diagnostics,
+    std::optional<double> smoothness_epsilon) {
   require_assembling(p_->lifecycle_, "register_native_package");
-  native_loader::register_native_package<Dim>(this, name, so_path, expected_model_identity,
-                                              expected_binary_identity, limiter, riemann, recon,
-                                              time, gamma, substeps, evolve, stride, params,
-                                              positivity_floor, newton, newton_diagnostics);
+  native_loader::register_native_package<Dim>(
+      this, name, so_path, expected_model_identity, expected_binary_identity, limiter, riemann,
+      recon, time, gamma, substeps, evolve, stride, params, positivity_floor, newton,
+      newton_diagnostics, smoothness_epsilon);
 }
 
 template <int Dim>
@@ -2971,7 +2972,7 @@ template std::string System<kNativeDimension>::last_dt_bound() const;
 template void System<kNativeDimension>::register_native_package(
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, const std::string&, const std::string&, const std::string&, double, int,
-    bool, int, const std::vector<double>&, double, NewtonOptions, bool);
+    bool, int, const std::vector<double>&, double, NewtonOptions, bool, std::optional<double>);
 template void System<kNativeDimension>::register_external_riemann_package(
     const std::string&, const std::string&, const std::string&, const std::string&, int, int,
     const std::string&, const std::string&, const std::string&, const std::string&,

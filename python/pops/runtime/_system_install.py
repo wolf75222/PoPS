@@ -280,7 +280,7 @@ class _SystemInstall(_System):
             where="System.add_equation.positivity_floor",
         )
         weno_epsilon = getattr(spatial, "weno_epsilon", None)
-        weno_epsilon = (
+        smoothness_epsilon = (
             float(numerical_defaults_report()["weno"]["epsilon"])
             if weno_epsilon is None
             else native_real(weno_epsilon, where="System.add_equation.weno_epsilon")
@@ -358,7 +358,7 @@ class _SystemInstall(_System):
                 evolve,
                 nstride,
                 positivity_floor,
-                weno_epsilon,
+                smoothness_epsilon,
             )
             self._pending_native_packages += 1
         else:
@@ -378,6 +378,7 @@ class _SystemInstall(_System):
                 bind_values,
                 positivity_floor,
                 **_compiled_newton_kwargs(time),
+                smoothness_epsilon=smoothness_epsilon,
             )
             self._pending_native_packages += 1
         self._coupling_block_contracts = contract_candidate

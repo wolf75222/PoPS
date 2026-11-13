@@ -1595,9 +1595,11 @@ PreparedSystemBlock<Dim> select_reconstruction(Request request) {
       return select_riemann<Dim, Variables, Routes>(std::move(request), Minmod{});
     case LimiterRouteId::kVanLeer:
       return select_riemann<Dim, Variables, Routes>(std::move(request), VanLeer{});
-    case LimiterRouteId::kWeno5:
+    case LimiterRouteId::kWeno5: {
+      const auto epsilon = request.routes.smoothness_epsilon;
       return select_riemann<Dim, Variables, Routes>(std::move(request),
-                                                    configured_reconstruction<Weno5>());
+                                                    configured_reconstruction<Weno5>(epsilon));
+    }
     case LimiterRouteId::kMc:
       return select_riemann<Dim, Variables, Routes>(std::move(request), MC{});
     case LimiterRouteId::kSuperbee:
@@ -1619,9 +1621,11 @@ PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numeri
     case LimiterRouteId::kVanLeer:
       return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(std::move(request),
                                                                           VanLeer{}, numerical);
-    case LimiterRouteId::kWeno5:
+    case LimiterRouteId::kWeno5: {
+      const auto epsilon = request.routes.smoothness_epsilon;
       return materialize_block<Dim, Model, Weno5, Numerical, Variables>(
-          std::move(request), configured_reconstruction<Weno5>(), numerical);
+          std::move(request), configured_reconstruction<Weno5>(epsilon), numerical);
+    }
     case LimiterRouteId::kMc:
       return materialize_block<Dim, Model, MC, Numerical, Variables>(std::move(request), MC{},
                                                                      numerical);
