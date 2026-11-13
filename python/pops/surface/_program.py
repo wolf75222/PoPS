@@ -9,7 +9,9 @@ evolved quantity, a datum being supplied at bind under the representation of its
 traced when it is built: its model, numerics and program are elaborated into a b6 case, and its
 methods are traced once (SU5). ``pops.inspect(case)`` runs ``validate`` and ``resolve`` and
 reports without compiling (SU12). ``pops.Graded(base=pops.Uniform(cells=c), nodes={Ω.x: f})``
-grades the nodes of a uniform layout along an axis (D0b, design note N17, DN3).
+grades the nodes of a uniform layout along an axis (D0b, design note N17, DN3), and
+``pops.Uniform(cells=c, geometry=rule)`` states the quadrature rule of the measures of a charted
+support (D0b, DN29).
 
 ``tolerance=pops.Tolerance(rtol=, atol=)`` is the request of the solves of the method (SV3), and
 ``pops.Program(solvers={imex: cg()})`` their solvers, keyed by the method or ``method.name``.
@@ -24,7 +26,7 @@ import math as _math
 from typing import Any
 
 from ._expr import is_number
-from ._geometry import Box, Coordinate
+from ._geometry import Coordinate, FrameCoordinate, Support
 from ._method import MethodValue, SurfaceMethod
 from ._model import Datum, Model, Quantity
 from ._numerics import Numerics, SchemeValue
@@ -170,7 +172,7 @@ def _initial_value(quantity: Quantity, value: Any, site: Any) -> Any:
     """The initial value of ``quantity`` (CN12, Q3, lot D-E): a datum, ``pops.project(e, ...)``,
     or a value that reads no coordinate, whose cell average is exact."""
     from ._expr import Arith, Call, Expr, is_number, text, walk
-    from ._geometry import Coordinate, MathConstant
+    from ._geometry import CHART_POINT_READS, Charted, MathConstant
     from ._model import ModelConstant, Parameter
     from ._project import Projection
     from ._refusal import AmbiguousElaboration, SupportMismatch
@@ -185,13 +187,18 @@ def _initial_value(quantity: Quantity, value: Any, site: Any) -> Any:
     if not (is_number(expression) or isinstance(expression, Expr)):
         raise TypeError("pops.Program(initial={%s: ...}) takes a datum, pops.project(e, ...) or "
                         "a value, got %r" % (quantity, value))
+    support = quantity.space.support
     for node in walk(expression):
-        if isinstance(node, Coordinate):
-            if node.support is not quantity.space.support:
+        if isinstance(node, (Coordinate, FrameCoordinate)):
+            if node.support is not support and node.support is not support._box:
                 raise SupportMismatch(
                     "the initial value of %s reads the coordinate %s of another support"
                     % (quantity, node.name), write="the coordinates of the support of %s"
                                                    % quantity)
+            if isinstance(support, Charted):
+                raise NotYetElaborated(
+                    "the initial value of %s, which reads the coordinate %s of the charted "
+                    "support %r" % (quantity, node.name, support), CHART_POINT_READS)
             if not isinstance(value, Projection):
                 raise AmbiguousElaboration(
                     "the initial value %s of %s reads a coordinate, and its cell average is a "
@@ -252,22 +259,40 @@ class Program:
 
 
 class Uniform:
-    """``pops.Uniform(cells=c)``: a uniform layout of a support, one size per axis."""
+    """``pops.Uniform(cells=c)``: a uniform layout of a support, one size per axis.
 
-    __slots__ = ("cells", "site")
+    ``geometry=`` is the quadrature rule of the measures (D0, a ``pops.Quadrature`` or a rule of
+    ``pops.lib.quadrature``), applied on every logical axis: required on a charted support, whose
+    measures, centroids and normals are generated with it, and refused on a box and on node
+    positions, whose geometry is exact (D0b; design note N17, DN29).
+    """
 
-    def __init__(self, *, cells: Any) -> None:
+    __slots__ = ("cells", "geometry", "site")
+
+    def __init__(self, *, cells: Any, geometry: Any = None) -> None:
         cells = (cells,) if isinstance(cells, int) and not isinstance(cells, bool) else cells
         if isinstance(cells, list) or not isinstance(cells, tuple) or not cells or any(
                 isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in cells):
             raise TypeError("pops.Uniform(cells=c) takes a number of cells, or one per axis "
                             "(64, 64), got %r" % (cells,))
+        if geometry is not None:
+            if not isinstance(geometry, Quadrature):
+                raise TypeError("pops.Uniform(geometry=...) takes a quadrature rule, "
+                                "pops.Quadrature(nodes=, weights=, interval=) or a rule of "
+                                "pops.lib.quadrature, got %r" % (geometry,))
+            if not all(_math.isfinite(end) for end in geometry.interval):
+                raise ValueError("pops.Uniform(geometry=...) takes a rule on a bounded interval, "
+                                 "which maps onto each logical axis of a cell; %r is not one"
+                                 % (geometry.interval,))
         self.cells = tuple(cells)
+        self.geometry = geometry
         self.site = user_site(2)
 
     def __repr__(self) -> str:
         cells = self.cells[0] if len(self.cells) == 1 else self.cells
-        return "pops.Uniform(cells=%r)" % (cells,)
+        if self.geometry is None:
+            return "pops.Uniform(cells=%r)" % (cells,)
+        return "pops.Uniform(cells=%r, geometry=%r)" % (cells, self.geometry)
 
 
 class Graded:
@@ -296,6 +321,12 @@ class Graded:
                             "pops.Uniform(cells=c)" % (nodes,))
         rows = []
         for axis, function in nodes.items():
+            if isinstance(axis, FrameCoordinate):
+                raise SupportMismatch(
+                    "pops.Graded(nodes={%s: ...}) grades the frame axis %s of a charted support; "
+                    "its nodes move along a logical axis, %s (S6, D0b)"
+                    % (axis.name, axis.name, ", ".join(axis.support._names)),
+                    write="nodes={Ω.%s: f}, keyed by a logical axis" % axis.support._names[0])
             if not isinstance(axis, Coordinate):
                 raise TypeError("pops.Graded(nodes=...) is keyed by the axes of the support, "
                                 "nodes={Ω.x: f}, got %r" % (axis,))
@@ -388,7 +419,7 @@ class Case:
                             "layout={Ω: pops.Uniform(cells=c)}, got %r" % (layout,))
         rows = []
         for support, value in layout.items():
-            if not isinstance(support, Box):
+            if not isinstance(support, Support):
                 raise TypeError("pops.Case(layout=...) is keyed by supports, got %r" % (support,))
             if isinstance(value, Quadrature):
                 raise NotYetElaborated("pops.Case(layout={%r: pops.Quadrature(...)}), a quadrature "
@@ -400,7 +431,7 @@ class Case:
                                 % (support, value))
             if isinstance(value, Graded):
                 for axis, _ in value.nodes:
-                    if axis.support is not support:
+                    if axis.support is not support._box:
                         raise SupportMismatch(
                             "pops.Graded(nodes={%s: ...}) grades an axis of %r, and the layout "
                             "is that of %r" % (axis.name, axis.support, support),
@@ -419,7 +450,7 @@ class Case:
 
         self.elaborated = elaborate_case(self)
 
-    def layout_of(self, support: Box) -> Any:
+    def layout_of(self, support: Support) -> Any:
         for key, value in self.layout:
             if key is support:
                 return value

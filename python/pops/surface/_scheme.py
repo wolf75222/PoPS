@@ -1195,11 +1195,12 @@ class UserScheme(SchemeValue):
 
     def traced(self, key: Term) -> Traced:
         """The builder that the scheme gives under ``key``, run once per key (SU5), and for a face
-        scheme once per axis of the support, ``face.axis`` being Python data."""
+        scheme once per logical axis of the support (S6: the axes of a box, the logical axes of
+        a charted support), ``face.axis`` being Python data."""
         for known, traced in self._traced:
             if known is key:
                 return traced
-        axes = key.quantity.support.axes
+        axes = key.quantity.support._logical_axes
         if self.scheme.is_cell:
             builder = None
             for axis in axes:
@@ -1497,7 +1498,7 @@ def face_function(function: Any, view: TermView, where: str, reconstructed: bool
     check_plain_function(function, where)
     key = view.term
     value = None
-    for axis in key.quantity.support.axes:
+    for axis in key.quantity.support._logical_axes:
         ran = function(FaceEntity(key, axis))
         _expression(ran, "the value of %s" % where)
         _reads(ran, ("trace", "normal", "cell"), where, "face", site=user_site(2))

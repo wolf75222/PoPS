@@ -42,7 +42,10 @@ from pops.time._program import elaboration as _n8
 from pops.time._program import relations as _relations
 
 from ._expr import Arith, Call, Expr, Predicate, is_number, text
-from ._geometry import FRAME_AXES, Box, Coordinate, LogicalCoordinate, MathConstant
+from ._geometry import (
+    CHART_POINT_READS, FRAME_AXES, MAP_WORDS, Charted, Coordinate, FrameCoordinate,
+    LogicalCoordinate, MathConstant, Support,
+)
 from ._method import MethodValue, _Trace, specialize, translate
 from ._model import (
     Balance, Datum, DiffusiveFlux, Flux, Model, ModelConstant, Parameter, Positive, Quantity,
@@ -59,10 +62,9 @@ from ._scheme import StencilRealization
 _LATER = "a later lot of N15"
 # The words of pops.math that b6's analytic expressions have (pops.analytic), for initial values.
 _ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs")
-# The words of a node function of pops.Graded: those of the analytic programs that generate the
-# static geometry arrays at bind, without erf and erfc, which pops.math keeps to initial values.
-_NODE_WORDS = {"exp": _math.exp, "log": _math.log, "sqrt": _math.sqrt, "sin": _math.sin,
-               "cos": _math.cos, "abs": abs}
+# The words of a node function of pops.Graded and of a chart (``MAP_WORDS``): those of the analytic
+# programs that generate the static geometry arrays at bind, without erf and erfc.
+_NODE_WORDS = MAP_WORDS
 # The tolerance of the ends of a graded axis, in ulp of the largest bound (DN3).
 _GRADED_END_ULP = 4
 _FRAMES = {1: Cartesian1D, 2: Cartesian2D, 3: Cartesian3D}
@@ -149,7 +151,7 @@ def elaborate_case(case: Any) -> Elaborated:
         raise refusal.traced_at(case.site) from None
 
 
-def elaborated_representation(quantity: Any, support: Box) -> Any:
+def elaborated_representation(quantity: Any, support: Support) -> Any:
     """The elaborated identity of a quantity's representation (G03 lot E, K4).
 
     b6's state carries neither the support nor the representation of the quantity it elaborates
@@ -166,6 +168,10 @@ def elaborated_representation(quantity: Any, support: Box) -> Any:
     coordinates = tuple(
         (name, ("periodic[%r, %r)" if periodic else "[%r, %r]") % (float(lower), float(upper)))
         for name, (lower, upper, periodic) in zip(support._names, support.bounds(), strict=True))
+    if isinstance(support, Charted):
+        # the image of the chart: equal logical boxes under two charts are two supports (D0b)
+        coordinates += tuple((name, "chart %s" % text(component)) for name, component
+                             in zip(support._frame_names, support._components, strict=True))
     space = Space("scalar", components=("value",), support=PhysicalSupport(coordinates))
     return ElaboratedRepresentation(space, cell_average(support.rank))
 
@@ -323,10 +329,11 @@ class _Elaboration:
         self.params: dict = {}
         self.lowered_outputs: tuple = ()
         self.rule: Any = None
+        self.charted = False
 
     # The support and its frame.
 
-    def support(self) -> Box:
+    def support(self) -> Support:
         model = self.model
         spaces = [q.space for q in model.quantities] + [d.space for d in model.data_fields]
         if not spaces:
@@ -339,6 +346,16 @@ class _Elaboration:
                 raise NotYetElaborated("a model whose quantities live on several supports",
                                        "a later lot of N15 with the product supports of G09",
                                        site=space.site)
+        if isinstance(support, Charted):
+            # DN28: a degenerate piece needs the identification of the piece with itself.
+            if support._degenerate:
+                raise NotYetElaborated(
+                    "a case on the charted support %r, whose piece %s is degenerate: the chart "
+                    "does not depend on the other coordinate there, so its faces have zero "
+                    "measure and a read across it needs pole = Ω.identify(...) before the chart"
+                    % (support, support._degenerate[0]),
+                    "lot L2c of N17 (ROM-110), with identify of G09", site=support.site)
+            return support
         names = support._names
         if names != FRAME_AXES[:len(names)]:
             raise NotYetElaborated(
@@ -347,17 +364,25 @@ class _Elaboration:
                 "a later lot of N15 with the supports of G03", site=support.site)
         return support
 
-    def frame(self, support: Box) -> Any:
+    def frame(self, support: Support) -> Any:
+        """The frame of the box; on a charted support, the frame of its reference box, whose axes
+        are its logical axes by position: the domain is the image of the box by the chart, which
+        the layout states (A1 of the design note N17, DN26)."""
         lower = tuple(float(lo) for lo, _, _ in support.bounds())
         upper = tuple(float(hi) for _, hi, _ in support.bounds())
         frame = CartesianDomain("box", lower=lower, upper=upper).frame(_FRAMES[support.rank]())
         periodic = [name for name, (_, _, flag)
                     in zip(support._names, support.bounds(), strict=True) if flag]
+        choices = [Choice("periodic axes", ", ".join(periodic) or "none", "stated")]
+        if isinstance(support, Charted):
+            choices += [
+                Choice("logical axes", ", ".join(support._names), "stated"),
+                Choice("frame axes", "%s, the components of a flux and of a vector"
+                       % ", ".join(support._frame_names), "stated")]
         self.rows.append(Row(
             repr(support), "model",
             'CartesianDomain("box", lower=%r, upper=%r).frame(%s())'
-            % (lower, upper, _FRAMES[support.rank].__name__),
-            [Choice("periodic axes", ", ".join(periodic) or "none", "stated")]))
+            % (lower, upper, _FRAMES[support.rank].__name__), choices))
         return frame
 
     # The model.
@@ -381,7 +406,10 @@ class _Elaboration:
             raise NotYetElaborated("the datum %s read in a value of the model (Q3)" % value,
                                    "a later lot of N15 with the data fields of Q3",
                                    site=value.site)
-        if isinstance(value, Coordinate):
+        if isinstance(value, (Coordinate, FrameCoordinate)):
+            if self.charted or isinstance(value.support, Charted):
+                raise NotYetElaborated("the coordinate %s of a charted support read in a value "
+                                       "of the model" % value, CHART_POINT_READS)
             raise NotYetElaborated("the coordinate %s read in a value of the model" % value,
                                    "a later lot of N15 with the coordinate fields of G03")
         if isinstance(value, Arith):
@@ -923,6 +951,12 @@ class _Elaboration:
                 choices = [Choice("value", "the datum %s, supplied at bind" % value, "stated")]
                 stated = str(value)
             elif isinstance(value, Projection):
+                if self.charted:
+                    raise NotYetElaborated(
+                        "pops.project(...) on the charted support %r, the average over a mapped "
+                        "cell" % (quantity.space.support,),
+                        "lot L2b of N17 (ROM-110), with the reads at the points of a chart (DN25)",
+                        site=value.site)
                 provider, spelling, choices = self.projection(value, quantity, frame)
                 stated = repr(value)
             else:
@@ -1057,7 +1091,10 @@ class _Elaboration:
         raise NotYetElaborated("%s in an initial value" % text(value),
                                "N11 (expression closure, C1)")
 
-    def layout(self, support: Box, frame: Any) -> Any:
+    def layout(self, support: Support, frame: Any) -> Any:
+        """The b6 layout of the support: ``Uniform`` of a grid of its box; graded nodes and a chart
+        are the clock-free coordinate map of ``MovingControlVolumes``, which the static geometry
+        arrays serve (N17, C1), a chart with the rule that ``geometry=`` states (D0b, DN29)."""
         from ._program import Graded
 
         case = self.case
@@ -1070,6 +1107,23 @@ class _Elaboration:
                 raise ValueError("pops.Case(layout=...) names the support %r, on which no "
                                  "quantity of the model lives" % (key,))
         uniform = stated.base if isinstance(stated, Graded) else stated
+        rule = uniform.geometry
+        charted = isinstance(support, Charted)
+        if charted and rule is None:
+            raise AmbiguousElaboration(
+                "the charted support %r states no quadrature rule for its measures, centroids "
+                "and normals, which the geometry arrays generate with it (D0b, DN29)" % (support,),
+                write="layout={Ω: pops.Uniform(cells=%r, geometry=GaussLegendre(n))}, "
+                      "GaussLegendre of pops.lib.quadrature" % (uniform.cells,), site=uniform.site)
+        if not charted and rule is not None:
+            raise SupportMismatch(
+                "pops.Uniform(geometry=...) states a quadrature rule for %r, whose geometry is "
+                "exact (D0b, DN29): %s" % (support, (
+                    "its graded nodes are node positions, its measures the node differences"
+                    if isinstance(stated, Graded) else
+                    "the measures of a box are the products of its spacings")),
+                write="pops.Uniform(cells=%r) without geometry=, which a charted support states"
+                      % (uniform.cells,), site=uniform.site)
         periodic = tuple(axis for axis, (_, _, flag)
                          in zip(frame.axes, support.bounds(), strict=True) if flag)
         layout = _Uniform(CartesianGrid(frame=frame, cells=uniform.cells,
@@ -1079,7 +1133,10 @@ class _Elaboration:
                           "%s," % axis for axis in support._names if support.periodic(axis))
                          if periodic else None))
         choices = [Choice("cells", uniform.cells, "stated")]
-        if isinstance(stated, Graded):
+        if charted:
+            layout, elaborated, charts = self.chart(stated, support, frame, layout, elaborated)
+            choices += charts
+        elif isinstance(stated, Graded):
             components, spelled, graded = self.graded(stated, support, frame)
             layout = MovingControlVolumes(layout, evolution=GeometryEvolution(components))
             elaborated = ("MovingControlVolumes(%s, evolution=GeometryEvolution((%s,)))"
@@ -1088,20 +1145,60 @@ class _Elaboration:
         self.rows.append(Row("layout={%r: %r}" % (support, stated), "case", elaborated, choices))
         return layout
 
-    def graded(self, graded: Any, support: Box, frame: Any) -> tuple:
+    def chart(self, stated: Any, support: Charted, frame: Any, layout: Any,
+              elaborated: str) -> tuple:
+        """The chart of a charted support as the coordinate map of ``MovingControlVolumes`` with
+        its rule (D0b, DN25, DN29): component a is the chart's component a, its coordinates read
+        as the logical coordinates of the reference box by position, a graded logical coordinate
+        as its node map, X(f(s), g(t)). The map reads no clock, so the static geometry arrays
+        serve it as a chart of rank two (N17, C1, A1)."""
+        from pops.analytic import coordinate
+
+        from ._program import Graded
+
+        rule = stated.base.geometry if isinstance(stated, Graded) else stated.geometry
+        values = tuple(coordinate(frame, axis) for axis in frame.axes)
+        choices: list = []
+        where = ""
+        if isinstance(stated, Graded):
+            values, spelled, choices = self.graded(stated, support, frame, charted=True)
+            where = " where %s" % "; ".join(
+                "%s = %s" % (name, spelled[index]) for index, name in enumerate(support._names)
+                if stated.function_of(support._coordinates[index]) is not None)
+        components = tuple(self._node_map(component, lambda node: values[node.index])
+                           for component in support._components)
+        layout = MovingControlVolumes(layout, evolution=GeometryEvolution(components),
+                                      geometry=rule)
+        elaborated = ("MovingControlVolumes(%s, evolution=GeometryEvolution((%s)), geometry=rule)%s"
+                      % (elaborated, ", ".join(text(component) for component in support._components),
+                         where))
+        choices += [
+            Choice("chart", ", ".join(
+                "%s = %s" % (name, text(component))
+                for name, component in zip(support._frame_names, support._components, strict=True)),
+                "stated"),
+            Choice("geometry", "a rule of %d nodes on %r, mapped onto each logical axis"
+                   % (rule.n, rule.interval), "stated"),
+            Choice("degenerate pieces", "none", "derived"),
+            Choice("geometry arrays", "a chart of rank 2: measures and centroids by the rule, "
+                   "chord area vectors and normals (N17, C1)", "derived")]
+        return layout, elaborated, choices
+
+    def graded(self, graded: Any, support: Support, frame: Any, charted: bool = False) -> tuple:
         """The coordinate map of ``pops.Graded`` (D0b, DN3): component a is f(s) on a graded axis,
         s = (ξ - lower) / (upper - lower) the logical coordinate of the axis in [0, 1], and ξ on
         any other axis, ξ the logical coordinate of the box. The map reads no clock, and component
         a reads coordinate a alone, so the static geometry arrays serve it as node positions
         (N17, C1). Each function is called once (SU5); its ends and its increase are checked here
-        at the nodes s = k / c that the arrays generate, s the correctly rounded quotient."""
+        at the nodes s = k / c that the arrays generate, s the correctly rounded quotient. On a
+        charted support the components are the logical coordinates that the chart reads (DN29)."""
         from pops.analytic import coordinate
 
         components, spelled, choices = [], [], []
         for index, (name, (lower, upper, _)) in enumerate(
                 zip(support._names, support.bounds(), strict=True)):
             xi = coordinate(frame, frame.axes[index])
-            axis = support.axes[index]
+            axis = support._logical_axes[index]
             function = graded.function_of(axis)
             if function is None:
                 components.append(xi)
@@ -1122,15 +1219,17 @@ class _Elaboration:
             nodes = self._graded_nodes(expression, low, high, cells, where, graded.site)
             s = xi if low == 0.0 else xi - low
             s = s if high - low == 1.0 else s / (high - low)
-            components.append(self._node_map(expression, s))
+            components.append(self._node_map(expression, lambda _, s=s: s))
             spelled.append("%s with s = %s" % (text(expression), _logical_text(name, low, high)))
             choices += [
                 Choice("nodes of %s" % name, "%s(s) = %s" % (
                     getattr(function, "__name__", "f"), text(expression)), "stated"),
                 Choice("ends of %s" % name, "f(0) = %r, f(1) = %r, set to the bounds %r and %r"
-                       % (nodes[0], nodes[-1], low, high), "derived"),
-                Choice("geometry of %s" % name, "static arrays of node positions, the widths "
-                       "being the node differences (N17, C1)", "derived")]
+                       % (nodes[0], nodes[-1], low, high), "derived")]
+            if not charted:
+                choices.append(Choice("geometry of %s" % name, "static arrays of node positions, "
+                                      "the widths being the node differences (N17, C1)",
+                                      "derived"))
         return tuple(components), spelled, choices
 
     def _node_reads(self, value: Any, axis: Any, where: str, site: Any) -> None:
@@ -1229,18 +1328,20 @@ class _Elaboration:
                     write="a function of s that increases strictly on [0, 1]", site=site)
         return nodes
 
-    def _node_map(self, value: Any, s: Any) -> Any:
-        """The analytic expression of a node function, its logical coordinate read as ``s``."""
+    def _node_map(self, value: Any, leaf: Any) -> Any:
+        """The analytic expression of a coordinate map of the layout, ``leaf`` giving the analytic
+        value of each coordinate that it reads: the logical coordinate s of a node function, a
+        logical coordinate of the box of a chart."""
         from pops import analytic as an
 
         if is_number(value):
             return an.constant(float(_number(value)))
         if isinstance(value, (MathConstant, ModelConstant)):
             return an.constant(float(value.value))
-        if isinstance(value, LogicalCoordinate):
-            return s
+        if isinstance(value, (LogicalCoordinate, Coordinate)):
+            return leaf(value)
         if isinstance(value, Arith):
-            args = [self._node_map(argument, s) for argument in value.args]
+            args = [self._node_map(argument, leaf) for argument in value.args]
             if value.op == "neg":
                 return -args[0]
             left, right = args
@@ -1248,9 +1349,10 @@ class _Elaboration:
                 return left ** float(_number(value.args[1]))
             return {"+": lambda: left + right, "-": lambda: left - right,
                     "*": lambda: left * right, "/": lambda: left / right}[value.op]()
-        return getattr(an, value.word)(*(self._node_map(argument, s) for argument in value.args))
+        return getattr(an, value.word)(*(self._node_map(argument, leaf)
+                                         for argument in value.args))
 
-    def boundaries(self, support: Box) -> list:
+    def boundaries(self, support: Support) -> list:
         """The relations of ``model.on`` that close each boundary piece of the support (2.6.2,
         D9): each piece that a flux crosses takes one relation of the quantity, and the relations
         take the boundary policy of the numerics (``MissingBoundaryRealization`` otherwise)."""
@@ -1300,7 +1402,7 @@ class _Elaboration:
                 else self.lower(relation.data)
                 for relation in relations if relation.form == "Value"}
 
-    def boundary_conditions(self, support: Box, frame: Any, block: Any, plan: Any,
+    def boundary_conditions(self, support: Support, frame: Any, block: Any, plan: Any,
                             states: dict, relations: list, data: dict) -> None:
         """Run the boundary policy under each relation, check that the ghost it gives is a
         ghost law of b6, and add the transport boundaries of the block to the plan (T5): the
@@ -1334,7 +1436,9 @@ class _Elaboration:
                 relation.form, state, data.get(relation), "block[%s]" % quantity.name,
                 self.code(relation.data) if relation.form == "Value" else "")
             for piece in relation.pieces:
-                laws[getattr(frame.boundaries, piece.name)] = law
+                # the piece of a logical axis is the piece of the frame axis at its position
+                axis = frame.axes[support._names.index(piece.axis)]
+                laws[getattr(frame.boundaries, "%s_%s" % (axis.name, piece.side))] = law
             self.rows.append(Row(
                 repr(relation), "numerics",
                 "%s on %s" % (spelling, ", ".join(piece.name for piece in relation.pieces)),
@@ -1356,10 +1460,11 @@ class _Elaboration:
                 "a model of several evolved quantities, whose state is a record (SD42)",
                 "a later lot of N15 with the record states of N8", site=model.balances[1].site)
         support = self.support()
+        self.charted = isinstance(support, Charted)
         relations = self.boundaries(support)
         self.rule = self.step_rule(self.program.advance.dt)
         frame = self.frame(support)
-        self.layout_facts = {"uniform": True, "cartesian": True,
+        self.layout_facts = {"uniform": not self.charted, "cartesian": not self.charted,
                              "periodic": all(support.periodic(axis) for axis in support._names)}
         b6 = _Model(model.name, frame=frame)
         self.rows.insert(0, Row("pops.Model(%r)" % model.name, "model",
@@ -1420,9 +1525,10 @@ def inspect_value(value: Any) -> Report:
                                                 "model", "a term of %r" % value.model, choices)])
     if isinstance(value, (Quantity, ModelConstant, Parameter, Datum)):
         return Report(str(value), "model", [Row(str(value), "model", type(value).__name__)])
-    if isinstance(value, Box):
-        return Report(repr(value), "model", [Row(repr(value), "model", "a support of rank %d"
-                                                 % value.rank)])
+    if isinstance(value, Support):
+        return Report(repr(value), "model", [Row(repr(value), "model", "a %ssupport of rank %d"
+                                                 % ("charted " if isinstance(value, Charted)
+                                                    else "", value.rank))])
     if isinstance(value, (Numerics, SchemeValue)):
         return Report(repr(value), "numerics", [Row(repr(value), "numerics",
                                                     value.describe() if isinstance(
