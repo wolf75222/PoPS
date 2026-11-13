@@ -54,13 +54,6 @@ owner = "N8, which elaborates dt= as a function of cell (the step rules of 5.11 
 refusal = "tests/python/unit/surface/test_lot_d_step_rule.py::test_a_function_of_cell_is_still_a_later_step_rule"
 exit_test = "the slice's case with dt= a function of cell written with the surface, against the steps of cfl_limit(advection, cfl=0.45, max_dt=1e-2) under Simulation.run"
 
-# N3 lot 2: muscl and the four limiters are written with the surface in pops.lib.numerics.limiters;
-# the b6 Reconstruct and weno5 stay until lot 3.
-[[earlier]]
-modules = ["pops.lib.numerics.reconstructions"]
-words = ["Reconstruct", "weno5"]
-owner = "N3 (ROM-87), lot 3 (weno5)"
-
 [[earlier]]
 modules = ["pops.lib.numerics.face_flux"]
 words = ["FaceFlux", "RealizedFaceFlux", "realize_face_flux"]
