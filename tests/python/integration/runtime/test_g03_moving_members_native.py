@@ -3,7 +3,7 @@
 The corner copies (x_left, x_right) and the volume V of each cell are the state of a block of their
 own, advanced by SSP-RK3 with the rates X' = w(X, t) and V' = w(x_right, t) - w(x_left, t); the
 stage time reaches the rates through an analytic auxiliary of the Program's clock (note §7.2). The
-oracle is an independent NumPy run of the same members (``ssprk3_oracle``), and, for a velocity
+oracle is an independent NumPy run of the same members (``ssprk3_oracle``), and, for a node rate
 derived from a map, the map itself.
 """
 from __future__ import annotations
@@ -53,12 +53,12 @@ def _check_members(members, steps):
     assert np.all(volume > 0)
 
 
-def test_the_members_of_a_velocity_read_at_the_copies_on_graded_cells(
+def test_the_members_of_a_node_rate_read_at_the_copies_on_graded_cells(
         isolated_native_cache, native_cxx, kokkos_root, record_property):
     """Form 1, w(x, t) = A sin(2 pi x) cos(2 pi t) at each copy's own position."""
     del isolated_native_cache, native_cxx, kokkos_root
     world, _, report, members, configuration = _run(
-        "G03 lot M1a members, velocity at the copies", base="graded")
+        "G03 lot M1a members, node rate at the copies", base="graded")
     oracle = ssprk3_oracle(configuration, STEPS, DT)
     gcl = float(np.max(np.abs(members[2] - (members[1] - members[0]))))
     with collective_check(world):

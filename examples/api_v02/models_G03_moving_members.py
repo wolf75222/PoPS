@@ -5,11 +5,11 @@ block of their own, advanced by the step's own method, here SSP-RK3:
 
     x_left' = w(x_left, t),   x_right' = w(x_right, t),   V' = w(x_right, t) - w(x_left, t).
 
-The velocity takes the two forms of §7.4 on [0, 1]:
+The node rate takes the two forms of §7.4 on [0, 1]:
 
 - ``expression``: w(x, t) = A sin(2 pi x) cos(2 pi t), read at each copy's own position;
 - ``map``: the coordinate map Φ(ξ, t) = ξ + A sin(2 pi ξ) sin(2 pi t) / (2 pi) of b6, whose
-  velocity ∂ₜΦ(ξ, t) = A sin(2 pi ξ) cos(2 pi t) is derived symbolically and read at the reference
+  node rate ∂ₜΦ(ξ, t) = A sin(2 pi ξ) cos(2 pi t) is derived symbolically and read at the reference
   coordinate of each node; the nodes then follow the map to the order of the method.
 
 The base is 32 uniform cells, or N17's graded segment (``base="graded"``).
@@ -36,7 +36,7 @@ DT = 1.0/40
 STEPS = 10
 
 
-def velocity(frame, clock, form):
+def node_rate(frame, clock, form):
     """w of form ``expression``, or the map Φ of form ``map``, on ``frame`` and ``clock``."""
     x, t = coordinate(frame, frame.axes[0]), time(clock)
     if form == "expression":
@@ -61,7 +61,7 @@ def build_members(*, form="expression", base="uniform", dt=DT, strategy=None, re
     case = pops.Case("G03_M1a_members_%s_%s" % (form, base))
     name = "G03_M1a_SSPRK3"
     program = pops.Program(name)
-    configuration = MovingConfiguration(reference, velocity=velocity(frame, program.clock, form))
+    configuration = MovingConfiguration(reference, node_rate=node_rate(frame, program.clock, form))
     members = configuration.members(case)
     if members is None:
         return case, configuration.layout, {}, configuration
@@ -97,8 +97,8 @@ def ssprk3_oracle(configuration, steps, dt):
     volume = right - left
 
     def rates(left, right, t):
-        wl = configuration.node_velocity(left, reference[:-1], t)
-        wr = configuration.node_velocity(right, reference[1:], t)
+        wl = configuration.node_rate_at(left, reference[:-1], t)
+        wr = configuration.node_rate_at(right, reference[1:], t)
         return np.stack((wl, wr, wr - wl))
 
     state = np.stack((left, right, volume))

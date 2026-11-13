@@ -1,8 +1,8 @@
 """G03 lot M1a (ROM-21): the members X and V of a moving configuration, source-only checks.
 
-Note §7.2, §7.4, §7.6, §7.7, §7.9: the velocity of form 1 and of form 2 (∂ₜΦ, derived
-symbolically), the members' block and its rates, zero velocity normalized to the base (K13), and
-the refusals of a step rule (lot T), a hierarchy (G11) and a velocity that reads a field (R26).
+Note §7.2, §7.4, §7.6, §7.7, §7.9: the node rate of form 1 and of form 2 (∂ₜΦ, derived
+symbolically), the members' block and its rates, zero node rate normalized to the base (K13), and
+the refusals of a step rule (lot T), a hierarchy (G11) and a node rate that reads a field (R26).
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def _grid(frame, cells=CELLS):
     return Uniform(CartesianGrid(frame=frame, cells=(cells,)))
 
 
-def test_the_velocity_of_a_map_is_its_time_derivative_at_the_reference_coordinate():
+def test_the_node_rate_of_a_map_is_its_time_derivative_at_the_reference_coordinate():
     """Form 2: w = ∂ₜΦ(ξ, t), derived symbolically; checked against a centred difference."""
     frame, clock = _frame(), pops.Program("g03_m1a_clock").clock
     x, t = coordinate(frame, frame.axes[0]), time(clock)
@@ -76,16 +76,16 @@ def test_a_graded_base_gives_the_members_its_nodes_and_resolves_on_its_logical_g
     pops.resolve(pops.validate(case), layout=layout)
 
 
-@pytest.mark.parametrize("velocity", ["zero", "analytic zero", "map without a clock"])
-def test_zero_velocity_normalizes_to_the_base(velocity):
+@pytest.mark.parametrize("spelling", ["zero", "analytic zero", "map without a clock"])
+def test_a_zero_node_rate_normalizes_to_the_base(spelling):
     """K13: the same layout object, no member, and the same resolved plan identity as the base."""
     first = build_graded_diffusion()
     case, base = first[0], first[1]
     frame = base.layout.mesh.frame
     x = coordinate(frame, frame.axes[0])
     value = {"zero": 0, "analytic zero": 0*x*cos(2*math.pi*time(pops.Program("g03_m1a_rest").clock)),
-             "map without a clock": GeometryEvolution((x*x,))}[velocity]
-    configuration = MovingConfiguration(base, velocity=value)
+             "map without a clock": GeometryEvolution((x*x,))}[spelling]
+    configuration = MovingConfiguration(base, node_rate=value)
     assert configuration.at_rest and configuration.layout is base
     assert configuration.members(case) is None
     moving = pops.resolve(pops.validate(case), layout=configuration.layout)
@@ -94,12 +94,12 @@ def test_zero_velocity_normalizes_to_the_base(velocity):
     assert not any(members_of(block.model) for block in moving.blocks)
 
 
-def test_zero_velocity_normalizes_a_base_of_rank_two():
+def test_a_zero_node_rate_normalizes_a_base_of_rank_two():
     frame = Rectangle("g03_m1a_rest_2d", (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
     base = Uniform(CartesianGrid(frame=frame, cells=(4, 4)))
-    assert MovingConfiguration(base, velocity=0).layout is base
+    assert MovingConfiguration(base, node_rate=0).layout is base
     with pytest.raises(NotYetElaborated, match="G03 lot M2"):
-        MovingConfiguration(base, velocity=coordinate(frame, frame.axes[0]))
+        MovingConfiguration(base, node_rate=coordinate(frame, frame.axes[0]))
 
 
 def test_a_step_rule_is_refused_naming_lot_t_and_a_fixed_step():
@@ -139,15 +139,15 @@ def test_a_hierarchy_and_its_regrid_are_refused_naming_g11():
     assert refused.value.reason == "moving_regrid"
 
 
-def test_a_velocity_that_reads_a_field_is_refused_naming_r26():
+def test_a_node_rate_that_reads_a_field_is_refused_naming_r26():
     frame = _frame()
     model = pops.Model("g03_m1a_field_reader", frame=frame)
     U = model.state("U", components=("u",))
     with pytest.raises(NotYetElaborated, match="R26"):
-        MovingConfiguration(_grid(frame), velocity=0.1*U[0])
+        MovingConfiguration(_grid(frame), node_rate=0.1*U[0])
     lower = CellBounds(frame).lower(frame.axes[0])
     with pytest.raises(NotYetElaborated, match="R26"):
-        MovingConfiguration(_grid(frame), velocity=lower*1.0)
+        MovingConfiguration(_grid(frame), node_rate=lower*1.0)
 
 
 def test_a_periodic_base_in_motion_waits_for_the_certificate_of_the_seam():
@@ -155,4 +155,4 @@ def test_a_periodic_base_in_motion_waits_for_the_certificate_of_the_seam():
     frame = _frame()
     grid = Uniform(CartesianGrid(frame=frame, cells=(8,), periodic=PeriodicAxes(frame.axes)))
     with pytest.raises(NotYetElaborated, match="M1c"):
-        MovingConfiguration(grid, velocity=0.1*coordinate(frame, frame.axes[0]))
+        MovingConfiguration(grid, node_rate=0.1*coordinate(frame, frame.axes[0]))

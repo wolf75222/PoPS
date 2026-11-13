@@ -12,7 +12,7 @@ the last being σ, the swept rate of rank 1. The stage time reaches the source t
 auxiliary that reads the Program's clock, ``AnalyticAux(..., time(clock))``, which the native
 provider evaluates at the physical time of each stage. The route needs no native change.
 
-The velocity w takes two forms (§7.4):
+The node rate w takes two forms (§7.4):
 
 1. an analytic expression (``pops.analytic``) of the frame's coordinate and of ``time(clock)``,
    evaluated at each copy's own position;
@@ -23,8 +23,8 @@ The velocity w takes two forms (§7.4):
 Why the copies of one node stay equal: both copies of a node start from one base node and receive
 the same rate, computed by the same expression from the same inputs, so they stay bitwise equal.
 
-A velocity whose normal form is zero normalizes the configuration to its base before any member is
-created (K13). A velocity that reads a field is refused (R26), as is a parameter, until a later lot
+A node rate whose normal form is zero normalizes the configuration to its base before any member is
+created (K13). A node rate that reads a field is refused (R26), as is a parameter, until a later lot
 gives the quantities of a ``Finite`` support. Rank 2 is lot M2.
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _refuse(what: str, lot: str) -> None:
     raise NotYetElaborated(what, lot)
 
 
-# --- the analytic velocity ----------------------------------------------------------------------
+# --- the analytic node rate ----------------------------------------------------------------------
 
 def _is_zero(expr: Any) -> bool:
     """Whether ``expr`` is an exact zero of the analytic algebra (the normal form of K13)."""
@@ -92,7 +92,7 @@ def time_derivative(expr: Any) -> Any:
 
     The elementary operations of the analytic algebra are differentiated; a subtree that reads no
     clock has a zero derivative whatever its operation. Any other operation that reads the clock is
-    refused, naming the velocity of form 1 as what to write instead.
+    refused, naming the node rate of form 1 as what to write instead.
     """
     if not expr.time_clocks():
         return None
@@ -118,7 +118,7 @@ def time_derivative(expr: Any) -> Any:
         a, b = arguments
         if b.time_clocks():
             _refuse("the time derivative of a power whose exponent reads the clock",
-                    "a later lot of G03; state the velocity, velocity=w(x, t)")
+                    "a later lot of G03; state the node rate, node_rate=w(x, t)")
         return _scale(b*a**(b - 1), time_derivative(a))
     derivative = time_derivative(arguments[0]) if len(arguments) == 1 else None
     if op == "sin":
@@ -132,7 +132,7 @@ def time_derivative(expr: Any) -> Any:
     if op == "sqrt":
         return None if derivative is None else derivative/(2*_sqrt(arguments[0]))
     _refuse("the time derivative of the analytic operation %r of a coordinate map" % op,
-            "a later lot of G03; state the velocity, velocity=w(x, t)")
+            "a later lot of G03; state the node rate, node_rate=w(x, t)")
     return None  # unreachable
 
 
@@ -152,7 +152,7 @@ _NUMPY = {"sin": np.sin, "cos": np.cos, "exp": np.exp, "log": np.log, "sqrt": np
 
 
 def evaluate(expr: ScalarExpr, x: Any, t: float = 0.0) -> np.ndarray:
-    """A NumPy reading of a velocity or a map at coordinates ``x`` and time ``t`` (oracles only)."""
+    """A NumPy reading of a node rate or a map at coordinates ``x`` and time ``t`` (oracles only)."""
     def value(node: Any) -> Any:
         op = node._op
         if op == "constant":
@@ -180,45 +180,45 @@ def _check_leaves(expr: ScalarExpr, frame: Any, what: str) -> None:
         raise ValueError("the %s reads more than one clock" % what)
 
 
-def _at_rest_value(velocity: Any) -> bool:
-    """A velocity whose normal form is zero on a base of any rank: 0, an analytic zero, or a map
+def _at_rest_value(node_rate: Any) -> bool:
+    """A node rate whose normal form is zero on a base of any rank: 0, an analytic zero, or a map
     that reads no clock (K13)."""
-    if isinstance(velocity, (int, float)) and not isinstance(velocity, bool):
-        return float(velocity) == 0.0
-    if type(velocity) is ScalarExpr:
-        return _is_zero(velocity)
-    if type(velocity) is GeometryEvolution:
-        return not any(item.time_clocks() for item in velocity.coordinate_map)
+    if isinstance(node_rate, (int, float)) and not isinstance(node_rate, bool):
+        return float(node_rate) == 0.0
+    if type(node_rate) is ScalarExpr:
+        return _is_zero(node_rate)
+    if type(node_rate) is GeometryEvolution:
+        return not any(item.time_clocks() for item in node_rate.coordinate_map)
     return False
 
 
-def _velocity_form(velocity: Any, frame: Any) -> tuple[str, ScalarExpr | None]:
+def _rate_form(node_rate: Any, frame: Any) -> tuple[str, ScalarExpr | None]:
     """(form, w): ``"expression"`` with w(x, t), or ``"map"`` with ∂ₜΦ(ξ, t); w is ``None`` at rest."""
     from pops._ir.expr import Expr
-    if isinstance(velocity, (int, float)) and not isinstance(velocity, bool):
-        velocity = _constant(float(velocity))
-    if type(velocity) is GeometryEvolution:
-        if len(velocity.coordinate_map) != 1:
-            _refuse("a coordinate map of rank %d" % len(velocity.coordinate_map), "G03 lot M2")
-        (law,) = velocity.coordinate_map
+    if isinstance(node_rate, (int, float)) and not isinstance(node_rate, bool):
+        node_rate = _constant(float(node_rate))
+    if type(node_rate) is GeometryEvolution:
+        if len(node_rate.coordinate_map) != 1:
+            _refuse("a coordinate map of rank %d" % len(node_rate.coordinate_map), "G03 lot M2")
+        (law,) = node_rate.coordinate_map
         _check_leaves(law, frame, "coordinate map")
         derivative = time_derivative(law)
         return "map", None if _is_zero(derivative) else derivative
-    if type(velocity) is ScalarExpr:
-        _check_leaves(velocity, frame, "velocity")
-        return "expression", None if _is_zero(velocity) else velocity
-    if isinstance(velocity, Expr):
+    if type(node_rate) is ScalarExpr:
+        _check_leaves(node_rate, frame, "node_rate")
+        return "expression", None if _is_zero(node_rate) else node_rate
+    if isinstance(node_rate, Expr):
         from pops._ir.visitors import _children
         from pops._ir.expr import Var
-        pending, read = [velocity], []
+        pending, read = [node_rate], []
         while pending:
             node = pending.pop()
             if isinstance(node, Var):
                 read.append(node.name)
             pending.extend(_children(node))
-        _refuse("a velocity that reads %s on the moving support"
+        _refuse("a node rate that reads %s on the moving support"
                 % (", ".join(sorted(set(read))) or "a symbol of a model"), _R26)
-    raise TypeError("MovingConfiguration(velocity=) takes a pops.analytic expression of the "
+    raise TypeError("MovingConfiguration(node_rate=) takes a pops.analytic expression of the "
                     "coordinate and of time(clock), or a GeometryEvolution")
 
 
@@ -233,7 +233,7 @@ def _base_frame_and_cells(base: Any) -> tuple[Any, tuple[int, ...], Any, Any]:
     evolution = getattr(base, "evolution", None)
     if evolution is not None and any(item.time_clocks() for item in evolution.coordinate_map):
         raise ValueError("MovingConfiguration(base=) is the configuration at rest; a map that "
-                         "reads the clock is the velocity, velocity=GeometryEvolution(...)")
+                         "reads the clock is the node rate, node_rate=GeometryEvolution(...)")
     return layout.mesh.frame, tuple(layout.mesh.cells), evolution, layout
 
 
@@ -248,10 +248,10 @@ def _require_motion_served(grid: Any, cells: tuple[int, ...]) -> None:
 
 
 class MovingConfiguration:
-    """A base configuration κ moved by a velocity w, rank 1 (note §7.2, §7.4).
+    """A base configuration κ moved by the rate w of its nodes, rank 1 (note §7.2, §7.4).
 
     ``base`` is a ``Uniform`` layout, or the ``MovingControlVolumes`` of one whose map reads no
-    clock (a graded segment, N17). ``velocity`` is a ``pops.analytic`` expression of the frame's
+    clock (a graded segment, N17). ``node_rate`` is a ``pops.analytic`` expression of the frame's
     coordinate and of ``time(program.clock)`` (form 1), or a ``GeometryEvolution`` (form 2).
 
     ``layout`` is what ``pops.resolve`` takes. In motion it is the logical grid of the base: the
@@ -261,20 +261,20 @@ class MovingConfiguration:
     nothing, so the case is the base's own (K13).
     """
 
-    def __init__(self, base: Any, *, velocity: Any) -> None:
+    def __init__(self, base: Any, *, node_rate: Any) -> None:
         self.base = base
         self.declared: MovingMembers | None = None
         self.frame, cells, self._map, self._grid = _base_frame_and_cells(base)
-        if _at_rest_value(velocity):
-            self.form, self.velocity, self.cells = "rest", None, cells[0]
+        if _at_rest_value(node_rate):
+            self.form, self.node_rate, self.cells = "rest", None, cells[0]
             return
         _require_motion_served(self._grid, cells)
         self.cells = cells[0]
-        self.form, self.velocity = _velocity_form(velocity, self.frame)
+        self.form, self.node_rate = _rate_form(node_rate, self.frame)
 
     @property
     def at_rest(self) -> bool:
-        return self.velocity is None
+        return self.node_rate is None
 
     @property
     def layout(self) -> Any:
@@ -299,11 +299,11 @@ class MovingConfiguration:
         nodes = self.base_nodes()
         return np.ascontiguousarray(np.stack((nodes[:-1], nodes[1:], nodes[1:] - nodes[:-1])))
 
-    def node_velocity(self, positions: Any, reference: Any, t: float) -> np.ndarray:
-        """w at the nodes, by the NumPy reading of the velocity (oracles only)."""
-        if self.velocity is None:
+    def node_rate_at(self, positions: Any, reference: Any, t: float) -> np.ndarray:
+        """w at the nodes, by the NumPy reading of the node rate (oracles only)."""
+        if self.node_rate is None:
             return np.zeros(np.shape(positions))
-        return evaluate(self.velocity, positions if self.form == "expression" else reference, t)
+        return evaluate(self.node_rate, positions if self.form == "expression" else reference, t)
 
     def members(self, case: Any, name: str = "configuration") -> MovingMembers | None:
         """Declare the members X and V as the state of a block ``name`` of ``case``.
@@ -331,29 +331,29 @@ class MovingMembers:
         frame = configuration.frame
         model = pops.Model("%s_moving_members" % name, frame=frame)
         state = model.state(name, components=MEMBER_COMPONENTS)
-        velocity = configuration.velocity
-        if velocity is None:
+        node_rate = configuration.node_rate
+        if node_rate is None:
             raise ValueError("a configuration at rest has no members (K13)")
         providers = []
         if configuration.form == "expression":
-            clocks = velocity.time_clocks()
+            clocks = node_rate.time_clocks()
             clock = (model.auxiliary("stage_clock", frame=frame.canonical_id, unit="1")
                      if clocks else None)
             if clocks:
                 providers.append(("stage_clock", analytic_time(clocks[0])))
 
             def rate_at(position: Any) -> Any:
-                return _board(velocity, position, clock)
+                return _board(node_rate, position, clock)
             left, right = rate_at(state[0]), rate_at(state[1])
         else:
             bounds = CellBounds(frame)
             axis = frame.axes[0]
-            left = model.auxiliary("velocity_left", frame=frame.canonical_id, unit="1")
-            right = model.auxiliary("velocity_right", frame=frame.canonical_id, unit="1")
-            for label, bound in (("velocity_left", bounds.lower(axis)),
-                                 ("velocity_right", bounds.upper(axis))):
+            left = model.auxiliary("rate_left", frame=frame.canonical_id, unit="1")
+            right = model.auxiliary("rate_right", frame=frame.canonical_id, unit="1")
+            for label, bound in (("rate_left", bounds.lower(axis)),
+                                 ("rate_right", bounds.upper(axis))):
                 providers.append((label, _rebuild(
-                    velocity, lambda node, bound=bound: bound if node._op == "coordinate" else node)))
+                    node_rate, lambda node, bound=bound: bound if node._op == "coordinate" else node)))
         model.source(MOTION_SOURCE, on=state, value=(left, right, right - left))
         for label, expression in providers:
             model.module.aux_provider(AnalyticAux(
@@ -373,7 +373,7 @@ class MovingMembers:
 
 
 def _board(expr: Any, position: Any, clock: Any) -> Any:
-    """The board expression of an analytic velocity, its coordinate read at ``position`` and its
+    """The board expression of an analytic node rate, its coordinate read at ``position`` and its
     clock at the stage-clock auxiliary."""
     from pops import math as pm
     from pops._ir.expr import Const
@@ -398,23 +398,24 @@ def _board(expr: Any, position: Any, clock: Any) -> Any:
                     "div": lambda: a/b, "pow": lambda: a**b,
                     "minimum": lambda: pm.minimum(a, b),
                     "maximum": lambda: pm.maximum(a, b)}[op]()
-        _refuse("a velocity with the analytic operation %r" % op, "a later lot of G03")
+        _refuse("a node rate with the analytic operation %r" % op, "a later lot of G03")
         return None  # unreachable
     return lower(expr)
 
 
-# The members' models, so that resolution finds the blocks that hold a configuration.
-_MEMBERS: dict[int, tuple[Any, MovingMembers]] = {}
+# The mark that a members model carries, so that resolution finds the blocks of members: an
+# attribute of the model itself, with no global registry.
+MEMBERS_MARK = "_pops_moving_members"
 
 
 def _register(model: Any, members: MovingMembers) -> None:
-    _MEMBERS[id(model)] = (model, members)
+    object.__setattr__(model, MEMBERS_MARK, members)
 
 
 def members_of(model: Any) -> MovingMembers | None:
     """The members whose model is ``model``, or ``None``."""
-    row = _MEMBERS.get(id(model))
-    return row[1] if row is not None and row[0] is model else None
+    members = getattr(model, MEMBERS_MARK, None)
+    return members if isinstance(members, MovingMembers) else None
 
 
 __all__ = ["MEMBER_COMPONENTS", "MOTION_SOURCE", "MovingConfiguration", "MovingMembers",

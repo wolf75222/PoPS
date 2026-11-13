@@ -45,7 +45,12 @@ def validate_moving_member_consumers(plan: Any) -> None:
             "moving_regrid",
             "block %r holds a moving configuration; a hierarchy of levels and its regrid are not "
             "served on one: the transfer of a geometry under regrid is G11's" % name)
-    strategy = None if plan.time is None else getattr(plan.time, "_step_strategy", None)
+    if plan.time is None:
+        raise MovingMembersNotYetElaborated(
+            "moving_step_rule",
+            "block %r holds a moving configuration, and the case has no Program; a moving "
+            "configuration needs a Program with dt= a fixed step until G03 lot T" % name)
+    strategy = getattr(plan.time, "_step_strategy", None)
     if type(strategy) is not FixedDt:
         raise MovingMembersNotYetElaborated(
             "moving_step_rule",
