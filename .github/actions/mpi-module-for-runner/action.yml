@@ -1,0 +1,143 @@
+name: 'MPI native Python module for this runner'
+description: >
+  Pendant MPI de native-module-for-runner pour les groupes mpi-python. Verifie, avant
+  l'authentification de la roue et tout test, que le contrat d'en-tetes du module MPI Dim2
+  telecharge (compilateur et arbres d'include implicites, pops.native-compiler-includes) tient sur
+  CE runner. Pendant un deploiement d'image GitHub, le job mpi (producteur) et un groupe peuvent
+  tourner sur deux images differentes : le contrat refuse alors toute compilation native, comme il
+  le doit. Au lieu de groupes rouges, cette action nomme les deux images et les paquets Debian en
+  cause, reconstruit le module MPI sur ce runner (meme preset ci-mpi et memes options que le job
+  mpi, ccache du job mpi), l'assemble avec le plan de groupes telecharge, et prouve que le contrat du
+  module reconstruit tient ici. L'etape d'authentification du job authentifie ensuite la roue
+  reconstruite comme elle le fait pour celle du producteur. Le contrat lui-meme n'est jamais relache.
+  Prerequis : setup-kokkos (recu d'identite des en-tetes, Kokkos Serial PIC, ccache, ninja) avec
+  les paquets MPI, HDF5 parallele et pybind11 du job.
+
+inputs:
+  package-dir:
+    description: >
+      Repertoire de l'artefact gate-mpi-python-wheel telecharge (une roue pops-*.whl,
+      assembly-receipt.json, python-mpi-groups.json et native-build-runner.json), hors du checkout.
+    required: true
+  rebuild-minutes:
+    description: >
+      Garde-fou de la compilation du module. Le build MPI a froid prend environ 5 minutes avec
+      quatre compilateurs ; un depassement echoue avec une erreur nommee au lieu d'entamer le budget
+      des tests du groupe.
+    default: '12'
+
+outputs:
+  rebuilt:
+    description: "'true' si le module MPI a ete reconstruit sur ce runner"
+    value: ${{ steps.check.outputs.rebuild }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check MPI Dim2 module include contract on this runner
+      id: check
+      shell: bash
+      run: >-
+        /usr/bin/python3 scripts/ci_native_build_runner.py check
+        --dimension 2
+        --package-dir "${{ inputs.package-dir }}"
+        --identity "$RUNNER_TEMP/pops-ci-compiler-include-identity.json"
+        --github-output "$GITHUB_OUTPUT"
+        --summary "$GITHUB_STEP_SUMMARY"
+        --receipt "$RUNNER_TEMP/pops-ci-native-runner-check-mpi-dim2.json"
+
+    # actions/cache ne retrouve une entree que sous le meme chemin litteral que sa sauvegarde : le
+    # job mpi sauve ${{ env.CCACHE_DIR }} = ${{ github.workspace }}/.ccache sous la cle
+    # ccache-<os>-mpi-<ref>-<sha>-<run>-<tentative>. Les groupes mpi-python n'ont pas d'autre ccache.
+    # Meme run d'abord, puis la branche, puis master. Chaque hit est adresse par le contenu exact des
+    # en-tetes lus : un en-tete systeme change donne un miss, jamais un objet perime.
+    - name: Restore MPI module build ccache
+      if: steps.check.outputs.rebuild == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ github.workspace }}/.ccache
+        key: ccache-${{ runner.os }}-mpi-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ccache-${{ runner.os }}-mpi-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-
+          ccache-${{ runner.os }}-mpi-${{ github.ref }}-
+          ccache-${{ runner.os }}-mpi-refs/heads/master-
+
+    - name: Rebuild MPI Dim2 module on this runner
+      if: steps.check.outputs.rebuild == 'true'
+      shell: bash
+      env:
+        # Same compiler-cache settings and Kokkos install as the mpi job.
+        CCACHE_DIR: ${{ github.workspace }}/.ccache
+        CCACHE_MAXSIZE: 2G
+        CCACHE_BASEDIR: ${{ github.workspace }}
+        CCACHE_NOHASHDIR: "true"
+        CCACHE_SLOPPINESS: locale
+        KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+        POPS_NATIVE_DIM: "2"
+      run: |
+        set -euo pipefail
+        source scripts/ci_heartbeat.sh
+        package_dir="${{ inputs.package-dir }}"
+        mkdir -p "$CCACHE_DIR"
+        ccache --zero-stats
+        # Same configure line as the mpi job (preset ci-mpi, Dim2, Python, HDF5, test TU pool,
+        # system Python, Open MPI preflags). Only the module's own heavy TU pool differs: the mpi
+        # job compiles _pops one TU at a time from its prewarmed objects; here a cold module
+        # compiles four at a time (no test target is built in this job).
+        mpi_cmake_args=()
+        if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
+          mpi_cmake_args+=("-DMPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1")
+        fi
+        rm -rf build-mpi
+        cmake --preset ci-mpi \
+          -DPOPS_NATIVE_DIM="$POPS_NATIVE_DIM" \
+          -DPOPS_BUILD_PYTHON=ON \
+          -DPOPS_USE_HDF5=ON \
+          -DPOPS_HEAVY_TEST_TU_POOL=2 \
+          -DPOPS_HEAVY_MODULE_TU_POOL=4 \
+          -DPython_EXECUTABLE=/usr/bin/python3 \
+          "${mpi_cmake_args[@]}"
+        export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+        set +e
+        run_with_heartbeat "MPI module rebuild for this runner" "${{ inputs.rebuild-minutes }}m" \
+          cmake --build --preset ci-mpi --parallel 4 --target _pops
+        build_status=$?
+        set -e
+        ccache -s | grep -iE 'hits|misses' || true
+        if [[ $build_status -ne 0 ]]; then
+          if [[ $build_status -eq 124 ]]; then
+            echo "::error title=Native module rebuild for this runner image::MPI Dim2 rebuild exceeded ${{ inputs.rebuild-minutes }} minutes; the module artifact was built on another runner image. Re-run the whole workflow once the image rollout is complete."
+          else
+            echo "::error title=Native module rebuild for this runner image::MPI Dim2 rebuild failed (status ${build_status}); the module artifact was built on another runner image."
+          fi
+          exit "$build_status"
+        fi
+        rebuilt="$RUNNER_TEMP/pops-ci-rebuilt-mpi-dim2"
+        rm -rf "$rebuilt"
+        /usr/bin/python3 scripts/ci_assemble_installed_wheel.py \
+          --package build-mpi/python --output-dir "$rebuilt" \
+          --dimension 2 --backend mpi
+        # The group plan is the producer's, unchanged: the run step validates it against the
+        # current manifest and revision.
+        cp "$package_dir/python-mpi-groups.json" "$rebuilt/python-mpi-groups.json"
+        PYTHONPATH="$PWD/build-mpi/python" PYTHONNOUSERSITE=1 \
+          /usr/bin/python3 scripts/ci_native_build_runner.py record \
+          --dimension 2 --wheel-dir "$rebuilt" --output "$rebuilt/native-build-runner.json"
+        # Keep the downloaded artifact beside, outside the checkout; the job authenticates and
+        # installs only the new wheel.
+        replaced="$RUNNER_TEMP/pops-ci-replaced-mpi-dim2"
+        rm -rf "$replaced"
+        mv "$package_dir" "$replaced"
+        mkdir -p "$(dirname "$package_dir")"
+        cp -a "$rebuilt" "$package_dir"
+        # No build tree or compiler cache stays in the checkout: groups test installed wheels only.
+        rm -rf build-mpi "$CCACHE_DIR"
+
+    - name: Prove the rebuilt MPI Dim2 module contract holds here
+      if: steps.check.outputs.rebuild == 'true'
+      shell: bash
+      run: >-
+        /usr/bin/python3 scripts/ci_native_build_runner.py check --require-match
+        --dimension 2
+        --package-dir "${{ inputs.package-dir }}"
+        --identity "$RUNNER_TEMP/pops-ci-compiler-include-identity.json"
