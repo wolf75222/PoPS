@@ -251,9 +251,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-85 (N10, phase 1, lot 4): the plan's storage choices (spec 0.3 DM3, DM4; addendum of lot
+  4, revision 2.1). `range_set` without `ownership=` is admitted and the plan stores it
+  `Replicated`; `IndexFamily(capacity)` is the same unwritten form. The layout record
+  (`data_layout_and_distribution`, schema 6) says for each finite array whether the plan chose its
+  storage or the case wrote it (`ownership=`, offsets), read per set instance on the value graph,
+  with a `constraints` count; `balanced_domain` is the plan's partition. A replicated and a
+  distributed value meeting in one operation raise `LayoutMismatch` (rule DM3), which is a
+  `TypeError` and a `ValueError` as before. `csr` is typed `Product(offsets, indices)` as the
+  runtime stores it, and an array over a product set is recorded `ProductLayout(Patches, Local)`.
+  A sample of six cases built without their constraints types alike and, natively, runs alike.
+  The generated C++ of every written case is unchanged.
 - ROM-85 (N10, phase 1, lot 3b): the regrid port (spec 0.3 DM2, DM6, addendum of lot 3). A
   regrid reads the field of the previous hierarchy at the parent of each target cell with
-  `p.regrid_read(field, source_level)` and measures it with `p.regrid_integral(field[c])`; the
+  `p.regrid_read(field)` (the source level is the one the regrid child binds) and measures it with `p.regrid_integral(field[c])`; the
   halo reads the periodic parent, a finer source level or a valid cell without parent is refused.
   The relayout is one region transport per read, listed in the layout record (schema 5,
   `relayouts`) and counted by `pops_relayout_byte_count` in the generated program. A value that

@@ -1217,6 +1217,12 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_unconstrained_distributed_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_api_v14_actions_mpi2.py",
             "nproc": 2,
             "native_dimension": 2,
@@ -1845,6 +1851,7 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_api_v02_temporal_hierarchy_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_terminal_failure_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_transport_oracles_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_unconstrained_distributed_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v14_actions_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v14_array_derivatives_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v14_bundle_remap_mpi2.py",
@@ -1923,8 +1930,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "133"
-    assert outputs["python_mpi_entrypoint_count"] == "102"
+    assert outputs["python_mpi_count"] == "134"
+    assert outputs["python_mpi_entrypoint_count"] == "103"
     assert outputs["python_mpi_orchestrator_count"] == "31"
 
 
@@ -2767,7 +2774,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
-    assert 'SHARD_TOTAL: "165"' in python_shards_block
+    assert 'SHARD_TOTAL: "166"' in python_shards_block
     assert "strategy.job-total" not in python_shards_block
     for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
         assert "name: ci-plan" in block

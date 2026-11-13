@@ -43,7 +43,6 @@ _LATER = {
                      "components, typed as a field leaf"),
     "state_geometry": ("G03 types it: the swept geometry of a moving state, held by the runtime "
                        "and checked against its coordinate law (ALE: R26, D18, D21, probe M28)"),
-    "csr": "lot 4 of phase 1 types it as a product of range-set arrays (DM4)",
     "mask": "phase 2 types it as an array of Bool with the one codec (DM4, CN11)",
 }
 _CONTINUATION = frozenset((
@@ -202,6 +201,8 @@ def _signature_type(signature: Any, placements: Placements, program: str,
         if element is None:
             return A.Untyped("an array without an element signature")
         return A.Array(domain, _signature_type(element, placements, program))
+    if kind == "csr":
+        return _csr_type(signature, placements, program)
     if kind == "result":
         success = signature.get("success")
         if success is None:
@@ -213,6 +214,27 @@ def _signature_type(signature: Any, placements: Placements, program: str,
     if kind in _LATER:
         return A.Untyped("value type %r: %s" % (kind, _LATER[kind]))
     return A.Untyped("value type %r is in no row of the §3.1 table" % (kind,))
+
+
+def _csr_type(signature: Any, placements: Placements, program: str) -> Any:
+    """DM4 (N10 lot 4, addendum §5): ``Product(offsets, indices)``, as the runtime stores it."""
+    rows, columns = signature.get("rows"), signature.get("columns")
+    if not hasattr(rows, "get") or not hasattr(columns, "get"):
+        return A.Untyped("a csr without the signatures of its rows and columns")
+    row_family = rows.get("family")
+    if type(row_family) is not int:
+        return A.Untyped("a csr whose rows have no family identity")
+    element = columns.get("element")
+    target = _signature_type(element, placements, program) if element is not None else None
+    if not isinstance(target, A.Index):
+        return A.Untyped("a csr whose columns are no typed index")
+    # offsets: on each rank, the local rows plus one, from 0 (distributed_array.hpp, CSR); a
+    # finite set of its own, stored Local. indices: the requests array the csr was built from.
+    offsets = A.Array(S.range_set("%s/family:%d/local_rows+1" % (program, row_family)), A.Int64)
+    indices = _signature_type(columns, placements, program)
+    if not isinstance(indices, A.Array):
+        return A.Untyped("a csr whose requests are no typed array")
+    return A.Product(("offsets", offsets), ("indices", indices))
 
 
 def _published_fields(value: Any, placements: Placements, program: str) -> Any:
@@ -254,7 +276,8 @@ def ir_type(value: Any, placements: Placements, *, program: str = "program") -> 
     try:
         from pops.time.value_signatures import value_signature
 
-        signature = value_signature(value)
+        # A csr carries its signature in its attributes, as the distributed builder reads it.
+        signature = attrs["signature"] if kind == "csr" else value_signature(value)
     except Exception:  # noqa: BLE001 - A1: what has no signature is reported, not refused
         signature = {"vtype": kind, "block": value.block, "space": value.space}
     value_type = _signature_type(signature, placements, program, count)
@@ -319,10 +342,110 @@ def _finite_residency(signature: Any) -> str:
     return "host: structural cells"
 
 
-def _layout(value: Any, value_type: Any, placements: Placements, plan: Any) -> tuple[str, ...]:
+# DM3 (N10 lot 4, addendum §1): who chose the storage of a finite family, and how it is spread.
+_REPLICATED = "every rank"
+_ISSUERS = {
+    "distributed_domain": ("constraint", "partitioned by the offsets the case wrote"),
+    "distributed_balanced_domain": ("plan", "balanced over the execution lane"),
+}
+
+
+_ISSUING = frozenset(("finite_range_set", *_ISSUERS))
+
+
+def _family_of(value: Any) -> Any:
+    attrs: Any = getattr(value, "attrs", None) or {}
+    signature: Any = attrs.get("signature")
+    family = signature.get("family") if hasattr(signature, "get") else None
+    return family if type(family) is int else None
+
+
+class _Origins:
+    """Who chose the storage of each finite set instance, read on the value graph (A3).
+
+    A set is issued by ``range_set``, ``Distributed.domain`` or ``Distributed.balanced_domain``.
+    Its origin is the case's (« constraint ») when the case wrote ``ownership=`` or offsets, the
+    plan's otherwise; a set issued from a witness has the origin of the witness. A value reaches
+    the issuing nodes of its family through its inputs; its origin is that of the instances it
+    reaches, « constraint » when they differ. A value that reaches none falls back on every
+    instance of its family in the plan, by the same rule.
+    """
+
+    def __init__(self, nodes: Any):
+        self._reach: dict[int, frozenset[tuple[int, str, str]]] = {}
+        self._issuers: dict[int, tuple[str, str]] = {}
+        self._family: dict[int, set[tuple[str, str]]] = {}
+        for value in nodes:
+            if getattr(value, "op", None) in _ISSUING:
+                row = self._issued(value)
+                family = _family_of(value)
+                if family is not None:
+                    self._family.setdefault(family, set()).add(row)
+
+    def _issued(self, value: Any) -> tuple[str, str]:
+        key = id(value)
+        if key in self._issuers:
+            return self._issuers[key]
+        op, attrs = value.op, getattr(value, "attrs", None) or {}
+        inputs = tuple(getattr(value, "inputs", ()) or ())
+        if op in _ISSUERS:
+            row = _ISSUERS[op]
+        elif not attrs.get("fresh_family") and len(inputs) == 2:
+            witness = self.of(inputs[1], _family_of(inputs[1]))
+            row = witness if witness is not None else ("constraint", _REPLICATED)
+        else:
+            row = ("plan" if attrs.get("storage_origin") == "plan" else "constraint", _REPLICATED)
+        self._issuers[key] = row
+        return row
+
+    def _reached(self, value: Any) -> frozenset[tuple[int, str, str]]:
+        stack = [(value, False)]
+        while stack:
+            node, ready = stack.pop()
+            key = id(node)
+            if key in self._reach:
+                continue
+            inputs = tuple(getattr(node, "inputs", ()) or ())
+            issuing = getattr(node, "op", None) in _ISSUING
+            if issuing:
+                family = _family_of(node)
+                origin, distribution = self._issued(node)
+                self._reach[key] = frozenset(
+                    () if family is None else ((family, origin, distribution),))
+                continue
+            if not ready:
+                stack.append((node, True))
+                stack.extend((item, False) for item in inputs if id(item) not in self._reach)
+                continue
+            rows: set[tuple[int, str, str]] = set()
+            for item in inputs:
+                rows |= self._reach.get(id(item), frozenset())
+            self._reach[key] = frozenset(rows)
+        return self._reach[id(value)]
+
+    def of(self, value: Any, family: Any) -> tuple[str, str] | None:
+        if type(family) is not int:
+            return None
+        rows = {(origin, distribution) for found, origin, distribution in self._reached(value)
+                if found == family}
+        if not rows:
+            rows = self._family.get(family, set())
+        if not rows:
+            return None
+        origins = {origin for origin, _ in rows}
+        return ("constraint" if "constraint" in origins else "plan",
+                "; ".join(sorted({distribution for _, distribution in rows})))
+
+
+def _layout(value: Any, value_type: Any, placements: Placements, plan: Any,
+            origins: Any = None) -> tuple[str, ...]:
     """Layout, distribution, origin and residency of one value."""
     if isinstance(value_type, A.NotData):
         return "none", "none", "none", "none"
+    if isinstance(value_type, A.Array) and isinstance(value_type.domain, S.ProductIndexSet):
+        # DM4: phase space is stored with the base on the plan's boxes and the fibre local.
+        return ("ProductLayout(Patches, Local)", "plan box decomposition of the base, the fibre "
+                "on every rank", "plan", _FIELD_RESIDENCY)
     if isinstance(value_type, A.Array) and isinstance(value_type.domain, (S.Entities, S.Union,
                                                                           S.Level)):
         block = _block_name(value.block)
@@ -342,13 +465,31 @@ def _layout(value: Any, value_type: Any, placements: Placements, plan: Any) -> t
         except Exception as exc:  # noqa: BLE001 - A1
             ownership = "replicated"
             residency = "untyped: %s: %s" % (type(exc).__name__, exc)
+        family = signature.get("family") if hasattr(signature, "get") else None
+        found = origins.of(value, family) if origins is not None else None
+        if found is None:
+            unknown = "untyped: no node of the plan issues family %r" % (family,)
+            found = (unknown, _REPLICATED if ownership == "replicated" else unknown)
         if ownership == "replicated":
-            return "Replicated", "every rank", "constraint", residency
-        return ("Contiguous", "partitioned by the offsets the case wrote", "constraint",
-                residency)
+            return "Replicated", found[1], found[0], residency
+        return "Contiguous", found[1], found[0], residency
     if isinstance(value_type, A.Untyped):
         return "untyped", "untyped", "untyped", "untyped"
     unstated = "untyped: G13 states the residency of arrays only"
+    if getattr(value, "vtype", None) == "csr" and isinstance(value_type, A.Product):
+        # DM4 (addendum §5): offsets and indices are Contiguous, spread like the rows.
+        signature = (getattr(value, "attrs", None) or {}).get("signature") or {}
+        inputs = tuple(getattr(value, "inputs", ()) or ())
+        found = [origins.of(item, (signature.get(part) or {}).get("family"))
+                 if origins is not None else None
+                 for item, part in zip(inputs[:2], ("rows", "columns"), strict=False)]
+        if len(found) < 2 or None in found:
+            origin = "untyped: no node of the plan issues the rows or the requests"
+        else:
+            origins = {row[0] for row in found if row is not None}
+            origin = "constraint" if "constraint" in origins else "plan"
+        return ("members", "offsets Local, the local rows plus one on each rank; indices "
+                "Contiguous, as the requests", origin, "per member")
     if isinstance(value_type, (A.Product, A.Variant, A.Result, A.Iteration)):
         return "members", "per member", "plan", "per member"
     return "Local", "every rank", "plan", unstated
@@ -463,10 +604,15 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
     # Every depth of the Program: the bodies of its control blocks hold field leaves too (T2).
     nodes = tuple(walk_program_nodes(plan.time._values))
     instances: dict[int, Any] = {}
+    try:
+        origins: Any = _Origins(nodes)
+    except Exception:  # noqa: BLE001 - A1: each row then says it found no issuer
+        origins = None
     for value in nodes:
         try:
             value_type = ir_type(value, placements, program=program)
-            layout, distribution, origin, residency = _layout(value, value_type, placements, plan)
+            layout, distribution, origin, residency = _layout(value, value_type, placements, plan,
+                                                              origins)
         except Exception as exc:  # noqa: BLE001 - A1: reported, never refused
             value_type = A.Untyped("%s: %s" % (type(exc).__name__, exc))
             layout = distribution = origin = residency = "untyped"
@@ -488,7 +634,7 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - A1: reported, never refused
         relayouts = [{"untyped": "%s: %s" % (type(exc).__name__, exc)}]
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "placements": {block: configuration.identity
                        for block, configuration in sorted(placements.configurations.items())},
         "values": records,
@@ -497,6 +643,8 @@ def data_layout_and_distribution(plan: Any) -> dict[str, Any]:
         # DM6: the copy of regrid_read from level l_s of H onto the coarsening of the child of H'.
         "relayouts": relayouts,
         "untyped": sum(1 for row in records if row["layout"] == "untyped"),
+        # DM3, CF16: the storage choices a case wrote, which the plan checks.
+        "constraints": sum(1 for row in records if row["origin"] == "constraint"),
         "unplaced": unplaced,
     }
 
