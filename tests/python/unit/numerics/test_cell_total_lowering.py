@@ -17,6 +17,7 @@ from pops.codegen.program_codegen import emit_cpp_program
 from pops.numerics import DiscretizationPlan
 from pops.representations.definition import (
     RepresentationDefinition, cell_average, cell_total, coefficients, point, point_value)
+from pops.lib.quadrature import GaussLegendre
 from pops.time import AdaptiveCFL
 from pops.time._program.traced_method import NotYetElaborated
 
@@ -63,14 +64,79 @@ def test_a_representation_row_takes_a_state_and_a_definition_of_contract_2():
 
 
 def test_a_decode_outside_one_constant_mode_names_n16_lot_2():
-    """A modal decode of two coefficients is the Gram path of N16 lot 2; a sample (c = 1, kind
-    sample) is lowered as an average, since its constant mode is the average's."""
+    """A modal decode of two coefficients is the Gram path of N16 lot 2."""
     modal = RepresentationDefinition(
         decode=coefficients[0] + coefficients[1]*point.reference[0], rank=1, size=2,
         kind="coefficient")
     with pytest.raises(NotYetElaborated, match="N16 lot 2"):
         DiscretizationPlan().representations.add(_state(), modal)
-    DiscretizationPlan().representations.add(_state(), point_value(1))
+
+
+@pytest.mark.parametrize("definition", [point_value(1), cell_average(1, GaussLegendre(3))],
+                         ids=["sample", "stated-rule"])
+def test_a_sample_or_a_stated_rule_waits_for_the_projection_by_encode(definition):
+    """R1 of the review of #803: a sample and an average under a stated rule have the average's
+    constant mode, but b6 would project their initial value as a cell average (N16 5.5, A6). Only
+    cell_average(rank) and cell_total(rank) are accepted; the others name the N16 lot of line 4."""
+    with pytest.raises(NotYetElaborated, match="transitional table of CellAverage"):
+        DiscretizationPlan().representations.add(_state(), definition)
+    plan = DiscretizationPlan()
+    plan.representations.add(_state("G03_Rb_unit_average"), cell_average(1))
+    plan.representations.add(_state("G03_Rb_unit_total"), cell_total(1))
+
+
+def _with_consumers(*, integral, field):
+    """Periodic Burgers as a total, with an Integral under a ConservationCheck or a field output
+    (the reviewer's probe probe_rb_consumers.py)."""
+    import math
+
+    import numpy as np
+    from pops.diagnostics import ConservationCheck, Integral
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian1D
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.output import ConsumerGraph, ParaView, ScientificOutput
+    from pops.output._consumer_contracts import ParallelMode
+    from pops.time import every
+
+    import examples.api_v02.models_G03_totals as m
+
+    frame = CartesianDomain("g03_rb_consumers", (0.0,), (1.0,)).frame(Cartesian1D())
+    model, U, flux, rate = m._burgers_model("G03_Rb_consumers", frame)
+    case = pops.Case("G03_Rb_consumers_%s_%s" % (integral, field))
+    block = case.block("line", model)
+    plan = DiscretizationPlan()
+    plan.rates.add(rate, m._finite_volume(flux, U))
+    m._represent(plan, U, "total")
+    case.numerics(plan, block=block)
+    program = m._ssprk2(case, block, U, rate, m.BURGERS_DT, "G03_Rb_consumers_SSPRK2")
+    layout = Uniform(CartesianGrid(frame=frame, cells=(m.BURGERS_CELLS,),
+                                   periodic=PeriodicAxes((frame.axes[0],))))
+    averages = (1.0 + 0.5*np.sin(2*math.pi*m.burgers_centres()))[None]
+    m._bound(case, block[U], averages, np.full(m.BURGERS_CELLS, 1/m.BURGERS_CELLS), "total")
+    schedule = every(1, clock=program.clock)
+    diagnostics = ((ConservationCheck(Integral(block=block, cadence=schedule), tolerance=1e-10),)
+                   if integral else ())
+    case.consumers(ConsumerGraph.from_consumers((
+        ScientificOutput(format=ParaView(mode=ParallelMode.SERIAL), schedule=schedule,
+                         fields=(block[U],) if field else (), diagnostics=diagnostics,
+                         target="g03/rb"),)))
+    return pops.resolve(pops.validate(case), layout=layout)
+
+
+def test_a_diagnostic_of_a_total_is_refused():
+    """R2 of the review of #803: an Integral weighs the stored totals by the cell measure, h·ΣU on
+    periodic Burgers instead of ΣU; on graded cells it would flag a conserving run."""
+    with pytest.raises(CellTotalNotYetElaborated, match="inventory") as refusal:
+        _with_consumers(integral=True, field=False)
+    assert refusal.value.reason == "cell_total_diagnostic"
+
+
+def test_a_field_output_of_a_total_is_refused():
+    with pytest.raises(CellTotalNotYetElaborated, match="under the name of the state") as refusal:
+        _with_consumers(integral=False, field=True)
+    assert refusal.value.reason == "cell_total_output"
 
 
 def test_the_resolved_plan_carries_the_row_and_keeps_its_identity_without_one():

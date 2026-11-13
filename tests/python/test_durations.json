@@ -9006,19 +9006,19 @@
       },
       "local_receipts": {
         "tests/python/integration/runtime/test_g03_cell_totals_native.py": {
-          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=1 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_g03_cell_totals_native.py tests/python/integration/runtime/test_n17_static_geometry_graded_native.py",
-          "passed": 5,
-          "seconds": 292.33
+          "command": "PYTHONPATH=<build>/python:. POPS_NATIVE_DIM=1 POPS_REQUIRE_NATIVE_TESTS=1 pytest -q tests/python/integration/runtime/test_g03_cell_totals_native.py",
+          "passed": 6,
+          "seconds": 399.91
         },
         "tests/python/unit/numerics/test_cell_total_lowering.py": {
           "command": "PYTHONPATH=python:. pytest -q tests/python/unit/numerics/test_cell_total_lowering.py",
-          "passed": 9,
-          "seconds": 16.47
+          "passed": 13,
+          "seconds": 18.65
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_g03_cell_totals_native.py": "1ea0ec8bafea1f76c658a799020dde5b1758e0d39341bb08cfc35cb3b84ed3eb",
-        "tests/python/unit/numerics/test_cell_total_lowering.py": "1227cf78522a045fbd9ab4ff9dc3dc9389c3167818ca33182225115df0036bf4"
+        "tests/python/integration/runtime/test_g03_cell_totals_native.py": "1e7f2bbbbce10ec464db42dcc7103826541f45c2bf9d1d53a0ba8e86e6e7e817",
+        "tests/python/unit/numerics/test_cell_total_lowering.py": "4f910429a4f5d500aed764ffa1d3fca22f499fb00807a59b3dce9b6991a24e25"
       }
     }
   },

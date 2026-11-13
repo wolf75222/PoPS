@@ -13,8 +13,11 @@ serves it (note §4.3, §13, §14; driver's rulings of 12/11 23:00 and 23:05):
 - a moving configuration: the volume member of G03 lots M1 and M2;
 - an initial value projected on the analytic route: the b6 ``ConservativeCellAverage`` gives
   averages; the encode of a projection waits for N16's table (plan/routes_transitoires.md, line 4);
-- any Program operation other than the stored state, its linear combinations and the three rates
-  that read the decoded state.
+- any Program operation other than the stored state, its linear combinations and the two rates
+  that read the decoded state (a stencil flux is refused until a case runs it under a total);
+- a consumer of the case that reads the state: a diagnostic reduces the stored totals weighed by
+  the cell measure, Σ μ(K) U_K, not the inventory Σ U_K (row D4 of note §4.3), and a field
+  output would write the totals U_K under the name of the state (obligation 1 of the record).
 """
 from __future__ import annotations
 
@@ -24,8 +27,7 @@ from pops.time._program.traced_method import NotYetElaborated
 
 # The operations that a Program of a total may hold: the state, its combinations, and the rates
 # that read the decoded density (program_emit_totals.TOTAL_RATE_OPS).
-CELL_TOTAL_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs",
-                                    "stencil_flux_divergence"})
+CELL_TOTAL_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs"})
 
 
 class CellTotalNotYetElaborated(NotYetElaborated):
@@ -90,6 +92,20 @@ def validate_cell_total_consumers(plan: Any) -> None:
                 "the step strategy %s: the native step selection reads the stored totals, not "
                 "their density, so a total takes dt= a fixed step" % type(strategy).__name__,
                 "G03 lot T")
+    totals = {state for block in blocks for state in block.numerics.cell_total_states()}
+    graph = getattr(plan, "consumer_graph", None)
+    for node in () if graph is None else graph.nodes:
+        if any(quantity.reference in totals for quantity in node.diagnostic_quantities):
+            _refuse("cell_total_diagnostic", name,
+                    "the diagnostic of consumer %r, which reduces the stored totals weighed by the "
+                    "cell measure (the sum of mu(K) U_K, not the inventory, the sum of U_K: row D4 "
+                    "of note 4.3)" % (node.qualified_id,),
+                    "G03 lot M1, which reads the inventory of D4")
+        if any(quantity.reference in totals for quantity in node.quantities):
+            _refuse("cell_total_output", name,
+                    "the output of consumer %r, which would write the totals U_K under the name of "
+                    "the state" % (node.qualified_id,),
+                    "G03 lot M1, which writes a total under its elaborated identity")
     initial = plan.initial_condition_plan
     for binding in () if initial is None else initial.bindings:
         route = binding.source.options.to_data().get("native_route")
