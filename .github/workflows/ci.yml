@@ -1005,7 +1005,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 164-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 165-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -1018,7 +1018,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "164"
+      SHARD_TOTAL: "165"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1977,6 +1977,12 @@ jobs:
             --wheel-directory "$wheel_directory" \
             --install-root "$RUNNER_TEMP/pops-mpi-producer-installed" \
             --receipt-dir "$wheel_directory/producer-proof"
+          # The runner and include contract that built this module: an mpi-python group on another
+          # runner image rebuilds the module there instead of failing every native test.
+          PYTHONPATH="$PWD/build-mpi/python" PYTHONNOUSERSITE=1 \
+            /usr/bin/python3 scripts/ci_native_build_runner.py record \
+            --dimension 2 --wheel-dir "$wheel_directory" \
+            --output "$wheel_directory/native-build-runner.json"
 
       - name: Publish authenticated MPI Python wheel and exact group plan
         uses: actions/upload-artifact@v7
@@ -2032,6 +2038,8 @@ jobs:
     name: ubuntu-24.04 / MPI Python ${{ matrix.group }}
     runs-on: ubuntu-24.04
     # 15m cold dependencies + 8m wheel authentication + unchanged 35m tests + 2m receipts.
+    # A module rebuild for another runner image (12m watchdog) uses the measured slack: in batch
+    # 43318819535 setup took at most 3m, authentication 0.2m and a group's tests 18.9m.
     timeout-minutes: 60
     needs: [set-mode, mpi]
     if: needs.set-mode.outputs.mpi_required == 'true'
@@ -2064,6 +2072,12 @@ jobs:
         with:
           name: gate-mpi-python-wheel
           path: ${{ runner.temp }}/pops-mpi-python-wheel
+      # During a GitHub image rollout the mpi job and this group can run on two images; the
+      # module's include contract then refuses every native compile. Rebuild it here first.
+      - name: MPI Dim2 native module for this runner
+        uses: ./.github/actions/mpi-module-for-runner
+        with:
+          package-dir: ${{ runner.temp }}/pops-mpi-python-wheel
       - name: Authenticate fresh MPI wheel installation
         timeout-minutes: 8
         run: |
