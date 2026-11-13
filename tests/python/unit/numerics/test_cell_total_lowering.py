@@ -74,13 +74,13 @@ def test_a_decode_outside_one_constant_mode_names_n16_lot_2():
 
 @pytest.mark.parametrize("definition", [point_value(1), cell_average(1, GaussLegendre(3))],
                          ids=["sample", "stated-rule"])
-def test_a_sample_or_a_stated_rule_waits_for_the_projection_by_encode(definition):
-    """R1 of the review of #803: a sample and an average under a stated rule have the average's
-    constant mode, but b6 would project their initial value as a cell average (N16 5.5, A6). Only
-    cell_average(rank) and cell_total(rank) are accepted; the others name the N16 lot of line 4."""
-    with pytest.raises(NotYetElaborated, match="transitional table of CellAverage"):
-        DiscretizationPlan().representations.add(_state(), definition)
+def test_a_sample_or_a_stated_rule_is_served_bound_as_data(definition):
+    """R1 of the review of #803, as N16 lifts the table for three words: a sample and an average
+    under a stated rule have the average's constant mode and rate, so the row serves them; their
+    initial value is bound as data, the analytic route refused with N16 lot 2
+    (test_n16_three_words_rows.py)."""
     plan = DiscretizationPlan()
+    plan.representations.add(_state(), definition)
     plan.representations.add(_state("G03_Rb_unit_average"), cell_average(1))
     plan.representations.add(_state("G03_Rb_unit_total"), cell_total(1))
 

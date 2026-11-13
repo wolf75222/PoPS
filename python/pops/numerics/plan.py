@@ -259,20 +259,49 @@ class _StateStorageFamily(_PairFamily):
         return super().add(subject, method)
 
 
+def served_representation(method: Any) -> Any:
+    """The definition of contract @2 that the lowering serves for ``method``, written as the
+    contract writes it, or None: one of the four identities of one constant mode on a cell,
+    matched whole, never by a name (N16 5.5, A6). Two spellings of one identity give one row, so
+    one artifact."""
+    from pops.representations import definition as contract
+
+    if method.carrier != "cell" or method.size != 1 or method.dual_of is not None:
+        return None
+    rank = method.rank
+    served = [contract.cell_average(rank), contract.cell_total(rank), contract.point_value(rank)]
+    if method.pairing is not None:
+        nodes, weights, interval = method.pairing
+        served.append(contract.cell_average(rank, quadrature=_StatedRule(
+            nodes=nodes, weights=weights, interval=interval)))
+    return next((row for row in served if method.identity == row.identity), None)
+
+
+@dataclass(frozen=True)
+class _StatedRule:
+    """The stated rule of a definition, as its data (``nodes``, ``weights``, ``interval``)."""
+
+    nodes: tuple
+    weights: tuple
+    interval: tuple
+
+
 class _RepresentationFamily(_PairFamily):
     """The representation of an evolved state (G03 lot R-b, contract @2 of N16 5.5).
 
-    The lowering serves exactly two definitions: ``cell_average(rank)``, the default that every
-    state has without a row, and ``cell_total(rank)``. A decode outside one constant mode is the
-    Gram path of N16 lot 2; another definition of one constant mode (a sample, an average with a
-    stated rule) would be projected as an average, so it waits for the projection by encode of
-    N16's table (line 4 of plan/routes_transitoires.md). Both are refused by name."""
+    The lowering serves one constant mode on a cell carrier, under four identities, matched whole
+    and never by a name (N16 5.5, A6): ``cell_average(rank)``, the default that every state has
+    without a row; ``cell_total(rank)`` (c = 1/cell.measure), decoded and encoded by R-b; and
+    ``point_value(rank)`` and ``cell_average(rank, quadrature=Q)``, whose rate is the average's
+    (c = 1, N16 5.1) and which differ from it by the projection of their initial value only, so
+    they are served bound as data (N16, the lot that lifts the table for the three words). Any
+    other definition is the Gram path of N16 lot 2, refused by name."""
 
     def __init__(self) -> None:
         super().__init__("representations")
 
     def add(self, subject: Any, method: Any) -> None:
-        from pops.representations.definition import RepresentationDefinition, constant_mode_scale
+        from pops.representations.definition import RepresentationDefinition
         from pops.time._program.traced_method import NotYetElaborated
 
         subject = getattr(subject, "handle", subject)
@@ -281,23 +310,14 @@ class _RepresentationFamily(_PairFamily):
         if type(method) is not RepresentationDefinition:
             raise TypeError("representations.add takes a RepresentationDefinition of contract @2, "
                             "such as pops.representations.definition.cell_total(rank)")
-        if method.carrier != "cell" or method.size != 1 or method.dual_of is not None \
-                or constant_mode_scale(method) is None:
+        served = served_representation(method)
+        if served is None:
             raise NotYetElaborated(
-                "the representation %s of the state %s: the lowering of G03 lot R-b serves one "
-                "constant mode on a cell, an average (c = 1) or a total (c = 1/cell.measure); "
-                "N16 lot 2 gives the other decodes" % (method.identity[-12:], subject.local_id))
-        from pops.representations.definition import cell_average, cell_total
-        if method.identity not in (cell_average(method.rank).identity,
-                                   cell_total(method.rank).identity):
-            raise NotYetElaborated(
-                "the representation %s (kind %s) of the state %s: its constant mode is an "
-                "average's, but its initial value is not the cell average (a sample, or an "
-                "average under a stated rule), and b6 projects every initial value as an "
-                "average; the N16 lot that retires the transitional table of CellAverage() (the "
-                "projection by encode, line 4 of plan/routes_transitoires.md) gives it"
-                % (method.identity[-12:], method.kind, subject.local_id))
-        return super().add(subject, method)
+                "the representation %s of the state %s: the lowering serves one constant mode "
+                "on a cell, as cell_average(rank), cell_total(rank), point_value(rank) or "
+                "cell_average(rank, quadrature=Q); N16 lot 2 gives the other decodes and encodes"
+                % (method.identity[-12:], subject.local_id))
+        return super().add(subject, served)
 
 
 class _ValueFamily:

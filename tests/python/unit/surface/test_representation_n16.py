@@ -15,11 +15,13 @@
   elaborates what it refuses. The statement that a refusal names ends with a marker comment,
   ``# <- name``, as in ``test_su_t2_refusals.py``.
 
-The oracle tests on a graded layout (5.1, A1) land with the lots that serve these words at the
-surface: G03 lot M1 for ``CellTotal()``, and the N16 lot that retires the transitional table of
-``CellAverage()`` (the projection by encode) for ``PointValue()`` and
-``CellAverage(quadrature=...)``. Until then ``pops.Numerics`` refuses them by name, which this file
-checks (review of #800, R1).
+- The table lifted for three words (N16 5.1, A1): ``CellTotal()``, ``PointValue()`` and
+  ``CellAverage(quadrature=GaussLegendre(3))``, of the library or written in the case, take the row
+  of b6 that serves them (``plan.representations.add``); a sample and a stated rule emit the program
+  and the C++ of the average, a total emits R-b's decode and encode, and an initial value other than
+  a datum waits for N16 lot 2 (the projection by encode). The oracle tests on a graded layout run
+  natively in ``tests/python/integration/runtime/test_n16_three_words_native.py``, and the surface
+  case in ``test_surface_n16_three_words_native.py``.
 """
 import json
 import os
@@ -208,7 +210,9 @@ def test_the_words_and_their_construct_are_exported():
 
 # --- SU-T3: the L1 case under each spelling of the cell average ----------------------------------
 
-def _l1(representation):
+def _l1(representation, diffusion=True):
+    """L1 of §17.1; ``diffusion=False`` keeps its advection only, the case that a total runs (R-b
+    refuses the StencilFlux of two_point() under a total until a case runs it)."""
     domain = surface.Box(x=surface.Periodic(0, 1))
     model = surface.Model("advection_diffusion")
     u = model.quantity("u", surface.Scalar(domain))
@@ -216,10 +220,14 @@ def _l1(representation):
     nu = model.parameter("nu", default=1e-2, admissible=surface.Positive())
     u0 = model.data("u0", surface.Scalar(domain))
     advection = model.flux(of=u, value=a * u)
-    diffusion = model.diffusive_flux(of=u, value=-nu * grad(u))
-    model.balance(ddt(u) == -div(advection + diffusion))
-    numerics = surface.Numerics(represent={u: representation},
-                                schemes={advection: upwind(), diffusion: two_point()})
+    schemes = {advection: upwind()}
+    if diffusion:
+        diffusive = model.diffusive_flux(of=u, value=-nu * grad(u))
+        model.balance(ddt(u) == -div(advection + diffusive))
+        schemes[diffusive] = two_point()
+    else:
+        model.balance(ddt(u) == -div(advection))
+    numerics = surface.Numerics(represent={u: representation}, schemes=schemes)
     program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3, attempts=2),
                               initial={u: u0})
     return surface.Case(model=model, numerics=numerics, program=program,
@@ -280,42 +288,121 @@ def _quantity():
     return model.quantity("u", surface.Scalar(domain))
 
 
-def test_a_total_is_refused_until_g03_lot_m1_gives_its_surface_route():
-    u = _quantity()
-    representation = CellTotal()  # <- total
-    with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.Numerics(represent={u: representation})  # <- total-numerics
-    message = _refused(caught, surface.NotYetElaborated, "total", traced="total-numerics")
-    assert "G03 lot M1" in message and "kind 'total'" in message
-    assert "R-b" not in message
-
-
-def test_a_sample_is_refused_until_the_n16_lot_that_retires_the_table():
-    u = _quantity()
-    representation = PointValue()  # <- sample
-    with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.Numerics(represent={u: representation})
-    message = _refused(caught, surface.NotYetElaborated, "sample")
-    assert "the N16 lot that retires the transitional table" in message
-    assert "kind 'sample'" in message and "R-b" not in message
-
-
-def test_a_stated_rule_is_refused_until_the_n16_lot_that_retires_the_table():
-    u = _quantity()
-    representation = CellAverage(quadrature=GaussLegendre(3))  # <- rule
-    with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.Numerics(represent={u: representation})
-    message = _refused(caught, surface.NotYetElaborated, "rule")
-    assert "the N16 lot that retires the transitional table" in message
-    assert "with a stated rule" in message and "R-b" not in message
-
-
 def test_pops_cell_average_with_a_rule_names_the_library_word():
     with pytest.raises(surface.NotYetElaborated) as caught:
         surface.CellAverage(quadrature=GaussLegendre(3))  # <- pops-rule
     message = _refused(caught, surface.NotYetElaborated, "pops-rule")
     assert "CellAverage(quadrature=...) of pops.lib.representations" in message
-    assert "the N16 lot that retires the transitional table" in message
+    assert "R-b" not in message and "retires the transitional table" not in message
+
+
+# --- the table lifted for three words (N16 5.1, A1; the lot that lifts the table) ---------------
+
+_THREE = {
+    "total": (CellTotal, case_total, contract.cell_total),
+    "sample": (PointValue, case_sample, contract.point_value),
+    "rule": (lambda: CellAverage(quadrature=GaussLegendre(3)),
+             lambda: case_average_with_rule(rule=GaussLegendre(3)),
+             lambda rank: contract.cell_average(rank, quadrature=GaussLegendre(3))),
+}
+
+
+@pytest.fixture(scope="module")
+def three_forms():
+    return {(word, spelling): _forms(_l1(_THREE[word][0 if spelling == "library" else 1](),
+                                         diffusion=word != "total"))
+            for word in _THREE for spelling in ("library", "case")}
+
+
+@pytest.fixture(scope="module")
+def advection_forms():
+    return _forms(_l1(surface.CellAverage(), diffusion=False))
+
+
+@pytest.mark.parametrize("spelling", ["library", "case"])
+@pytest.mark.parametrize("word", sorted(_THREE))
+def test_a_word_of_one_constant_mode_takes_its_row_of_b6(word, spelling):
+    """CellTotal(), PointValue() and CellAverage(quadrature=GaussLegendre(3)), of the library or
+    written in the case, elaborate to the row plan.representations.add(state, definition) of b6,
+    matched by the whole identity (N16 5.5); the published arrays carry that identity (K4)."""
+    library, written, oracle = _THREE[word]
+    case = _l1(library() if spelling == "library" else written(), diffusion=word != "total")
+    elaborated = case.elaborated
+    (quantity,) = tuple(elaborated.states)
+    resolved = pops.resolve(pops.validate(elaborated.case), layout=elaborated.layout)
+    numerics = resolved.blocks[0].numerics
+    (row,) = numerics.representations
+    assert row.subject.local_id == quantity.name
+    assert numerics.representation_of(row.subject) == row.method == oracle(1)
+    assert elaborated.representations[quantity].definition == oracle(1)
+    assert numerics.cell_total_states() == (() if word != "total" else
+                                            (numerics.representations[0].subject,))
+
+
+@pytest.mark.parametrize("word", ["sample", "rule"])
+def test_a_sample_and_a_stated_rule_emit_the_program_and_cpp_of_the_average(word, three_forms,
+                                                                           b6_forms):
+    """MG1: a sample and a stated rule have the rate of an average (N16 5.1), so the program IR
+    and the generated C++ are those of pops.CellAverage(); the artifact and the semantic identity
+    carry the row, so they differ."""
+    for spelling in ("library", "case"):
+        forms = three_forms[(word, spelling)]
+        assert forms["program"] == b6_forms["program"]
+        assert forms["cpp"] == b6_forms["cpp"]
+        assert forms["semantic_identity"] != b6_forms["semantic_identity"]
+    assert three_forms[(word, "library")] == three_forms[(word, "case")]
+
+
+def test_a_total_emits_its_decode_and_encode(three_forms, advection_forms):
+    """A total is lowered by R-b's decode ū = U/μ(K) and encode μ(K) R; the word and the same
+    written in the case give the same forms."""
+    forms = three_forms[("total", "library")]
+    assert forms == three_forms[("total", "case")]
+    assert forms["program"] == advection_forms["program"]
+    assert forms["cpp"] != advection_forms["cpp"]
+    assert "decode_cell_total" in forms["cpp"] and "encode_cell_total_rate" in forms["cpp"]
+    assert "decode_cell_total" not in advection_forms["cpp"]
+
+
+def test_a_total_under_the_stencil_flux_of_two_point_is_refused_by_r_b():
+    """The StencilFlux of two_point() is not among the rates that read the decoded density under
+    a total (G03 lot R-b), so L1 with its diffusion resolves to that refusal, before any C++."""
+    from pops.codegen._cell_total_consumers import CellTotalNotYetElaborated
+
+    elaborated = _l1(CellTotal()).elaborated
+    with pytest.raises(CellTotalNotYetElaborated) as caught:
+        pops.resolve(pops.validate(elaborated.case), layout=elaborated.layout)
+    assert caught.value.reason == "cell_total_operation"
+    assert "stencil_flux_divergence" in str(caught.value)
+
+
+def test_inspect_reports_the_row_of_the_word():
+    rows = [row for row in surface.inspect(_l1(CellTotal(), diffusion=False)).rows
+            if row.construct.startswith("represent=")]
+    assert len(rows) == 1 and "plan.representations.add(u, the definition of kind 'total'" \
+        in rows[0].elaborated
+
+
+@pytest.mark.parametrize("word", sorted(_THREE))
+def test_an_initial_value_projected_under_a_word_waits_for_n16_lot_2(word):
+    """The analytic route of b6 projects cell averages; the projection by the encode of a total,
+    a sample or a stated rule is N16 lot 2's, so a value other than a datum is refused at the
+    Program, and a datum (the coefficients, at bind) is the route."""
+    domain = surface.Box(x=surface.Periodic(0, 1))
+    model = surface.Model("m")
+    u = model.quantity("u", surface.Scalar(domain))
+    advection = model.flux(of=u, value=1.0 * u)
+    model.balance(ddt(u) == -div(advection))
+    numerics = surface.Numerics(represent={u: _THREE[word][0]()}, schemes={advection: upwind()})
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),  # <- initial
+                              initial={u: 1.0})
+    with pytest.raises(surface.NotYetElaborated) as caught:
+        surface.Case(model=model, numerics=numerics, program=program,  # <- initial-case
+                     layout={domain: surface.Uniform(cells=8)})
+    message = _refused(caught, surface.NotYetElaborated, "initial", traced="initial-case")
+    assert "N16 lot 2 (the projection by encode" in message
+    assert "pops.Program(initial={u: d}), d = model.data(...)" in message
+    assert "the coefficients bound at pops.bind" in message
 
 
 def test_loads_are_refused_until_n16_lot_2():

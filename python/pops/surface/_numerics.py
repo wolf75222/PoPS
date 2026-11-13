@@ -33,10 +33,9 @@ class CellAverage:
     def __init__(self, *, quadrature: Any = None) -> None:
         if quadrature is not None:
             raise NotYetElaborated("pops.CellAverage(quadrature=...) (D3)",
-                                   "the N16 lot that retires the transitional table of "
-                                   "CellAverage() (the projection by encode), under "
                                    "CellAverage(quadrature=...) of pops.lib.representations "
-                                   "(N16 lot 1)")
+                                   "(N16 lot 1), which the surface elaborates with its initial "
+                                   "value bound as data")
 
     def definition(self, rank: int) -> Any:
         """The definition of contract @2 that this spelling elaborates, the one of
@@ -315,6 +314,15 @@ class Numerics:
             if key is quantity:
                 return representation
         return None
+
+    def definition_of(self, quantity: Quantity) -> Any:
+        """The definition of contract @2 of the representation of ``quantity``, at the rank of its
+        support: the one of ``CellAverage()`` when none is stated (N16 5.5)."""
+        from pops.representations.definition import cell_average
+
+        representation = self.representation_of(quantity)
+        rank = quantity.support.rank
+        return cell_average(rank) if representation is None else representation.definition(rank)
 
     def of(self, subject: Any) -> _Realization:
         """``numerics.of(x)``: the realization of a balance or of a term."""

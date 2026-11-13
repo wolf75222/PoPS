@@ -67,9 +67,10 @@ _LATER = {
     "Scientific": _RUN, "Bitwise": _RUN, "Reproducible": _RUN, "Cache": _RUN,
     "Regrid": _HIERARCHY, "Level": _HIERARCHY, "invalidate": _HIERARCHY, "remap": _HIERARCHY,
     "restrict_onto": _HIERARCHY, "replace_contribution": _HIERARCHY,
-    "CellTotal": _LIB_REPRESENTATION % ("CellTotal", "G03 lot M1 gives the surface route"),
-    "PointValue": _LIB_REPRESENTATION % ("PointValue", "the N16 lot that retires the transitional "
-                                         "table of CellAverage() gives the projection by encode"),
+    "CellTotal": _LIB_REPRESENTATION % ("CellTotal", "the surface elaborates a total on a "
+                                        "static configuration"),
+    "PointValue": _LIB_REPRESENTATION % ("PointValue", "the surface elaborates a sample bound as "
+                                         "data"),
     "FaceNormalIntegral": _LIB_REPRESENTATION % ("FaceNormalIntegral", "G08 elaborates its "
                                                  "carrier"),
     "EdgeCirculation": _LIB_REPRESENTATION % ("EdgeCirculation", "G08 elaborates its carrier"),
