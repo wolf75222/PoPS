@@ -1,6 +1,7 @@
 /// Closed source-authored Cartesian face algebra on native MultiFab storage.
 #pragma once
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/static_geometry.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/spatial/nd/face_field.hpp>
 #include <pops/numerics/elliptic/nd/general_field_operator.hpp>
@@ -23,7 +24,15 @@ struct StencilFaceResult {
 
 /// Stored face INTEGRALS feed both divergence and the accepted flux ledger.
 /// Geometry, halo exchange and failure consensus are independent of the model.
-template <int Dim, int Components>
+///
+/// With @p StaticArrays the faces read the static geometry arrays of node positions (N17, C1):
+/// the face of axis a is the face of a uniform box whose spacing along a is the distance across
+/// it, which the generated body reads as its spacing (static_arrays()), and its integral and the
+/// divergence take the face and cell measures of the arrays. The incident frequency f of a face
+/// bounds |dF/du| / h on that box, so f d is a face conductance, and each incident cell K reads
+/// f d |S| / |K|. A chart, whose faces need not be orthogonal to the line of the centroids, is
+/// refused at construction.
+template <int Dim, int Components, bool StaticArrays = false>
 class PreparedStencilFlux {
   using Field = MultiFab<Dim>;
   Geometry<Dim> geometry_;
@@ -34,6 +43,9 @@ class PreparedStencilFlux {
   std::vector<nd::FaceField<Dim>> faces_, frequencies_;
   Real frequency_ = Real(0);
   bool evaluated_ = false;
+  // The static geometry arrays that the faces read, with their owner (StaticArrays only).
+  std::shared_ptr<const StaticGeometry<Dim>> static_geometry_;
+  StaticGeometryView<Dim> arrays_{};
 
   void consensus_(std::exception_ptr error, const char* operation) const {
     if (all_reduce_max(error ? 1L : 0L, *lane_)) {
@@ -72,6 +84,27 @@ class PreparedStencilFlux {
       error = std::current_exception();
     }
     consensus_(error, "stencil flux boundary preparation failed collectively");
+    if constexpr (StaticArrays) {
+      error = nullptr;
+      try {
+        static_geometry_ = ctx.static_geometry();
+        if (!static_geometry_ || static_geometry_->kind() != StaticGeometryKind::nodes ||
+            static_geometry_->domain() != geometry_.domain())
+          throw std::invalid_argument(
+              "stencil flux on static geometry arrays requires the node positions of its layout");
+        arrays_ = static_geometry_->view();
+      } catch (...) {
+        error = std::current_exception();
+      }
+      consensus_(error, "stencil flux static geometry preparation failed collectively");
+    }
+  }
+
+  /// The arrays that a generated face of a mapped layout reads: the distance across the face of
+  /// axis a is its spacing along a.
+  const StaticGeometryView<Dim>& static_arrays() const {
+    static_assert(StaticArrays, "a stencil flux of the logical box reads its uniform spacings");
+    return arrays_;
   }
 
   bool matches_preparation(const Geometry<Dim>& geometry, const ExecutionLane& lane,
@@ -122,6 +155,11 @@ class PreparedStencilFlux {
         const auto evaluate = factory(local);
         const auto faces = faces_[local].view();
         const auto frequencies = frequencies_[local].view();
+        if constexpr (StaticArrays) {  // the measures of the arrays, below the uniform box
+          apply_static_(input.box(local), output.fab(local).view(), status_.fab(local).view(),
+                        evaluate, faces, frequencies);
+          continue;
+        }
         for (int axis = 0; axis < Dim; ++axis) {
           Real area = Real(1);
           for (int d = 0; d < Dim; ++d)
@@ -194,6 +232,58 @@ class PreparedStencilFlux {
     return frequency_;
   }
   const auto& faces() const { return faces_; }
+
+ private:
+  /// The faces and the balance of one patch on the arrays: the integral |S| F of each face, the
+  /// face conductance f d |S| of its incident frequency, and in each cell the net integral and
+  /// the sum of the conductances of its faces, both over |K|.
+  template <class Evaluate, class FaceView, class ResultView, class StatusView>
+  void apply_static_(const Box<Dim>& cells, ResultView result, StatusView status,
+                     const Evaluate& evaluate, const FaceView& faces,
+                     const FaceView& frequencies) const {
+    const auto arrays = arrays_;
+    for (int axis = 0; axis < Dim; ++axis) {
+      const auto flux = faces.axes[axis];
+      const auto bound = frequencies.axes[axis];
+      for_each_cell(nd::face_box(cells, axis), [=] POPS_HD(const Index<Dim>& face) {
+        const auto evaluated = evaluate(face, axis);
+        const Real area = arrays.face_measure_at(axis, face);
+        const Real conductance = evaluated.frequency * arrays.distance_at(axis, face) * area;
+        bool valid = evaluated.valid && Kokkos::isfinite(evaluated.frequency) &&
+                     evaluated.frequency >= Real(0) && Kokkos::isfinite(conductance);
+        for (int component = 0; component < Components; ++component) {
+          const Real integral = area * evaluated.flux[component];
+          valid = valid && Kokkos::isfinite(integral);
+          flux(face, component) = integral;
+        }
+        bound(face, 0) = valid ? conductance : std::numeric_limits<Real>::infinity();
+      });
+    }
+    for_each_cell(cells, [=] POPS_HD(const Index<Dim>& cell) {
+      const Real volume = arrays.measure(cell);
+      Real conductance = 0;
+      for (int axis = 0; axis < Dim; ++axis) {
+        Index<Dim> upper = cell;
+        ++upper[axis];
+        conductance += frequencies.axes[axis](cell, 0) + frequencies.axes[axis](upper, 0);
+      }
+      Real frequency = conductance / volume;
+      for (int component = 0; component < Components; ++component) {
+        Real net = 0;
+        for (int axis = 0; axis < Dim; ++axis) {
+          Index<Dim> upper = cell;
+          ++upper[axis];
+          net += faces.axes[axis](cell, component) - faces.axes[axis](upper, component);
+        }
+        result(cell, component) = net / volume;
+        if (!Kokkos::isfinite(net / volume))
+          frequency = std::numeric_limits<Real>::infinity();
+      }
+      status(cell, 0) = Kokkos::isfinite(frequency) && frequency >= Real(0)
+                            ? frequency
+                            : std::numeric_limits<Real>::infinity();
+    });
+  }
 };
 
 /// A typed field sample gets an explicitly prepared boundary extension. InputIndex

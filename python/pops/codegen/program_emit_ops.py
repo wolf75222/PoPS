@@ -1159,8 +1159,10 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         from .program_emit_stencil_flux import emit_stencil_flux
         from .program_value_authority import delegated_output_boundaries
         from .program_models import model_for_node
+        from pops.codegen.program_emit_diffusion import program_reads_static_geometry
         publication = emit_stencil_flux(v, var, lines, block=bidx, target=target,
-                                        model=None if model is None else model_for_node(model, v))
+                                        model=None if model is None else model_for_node(model, v),
+                                        static_geometry=program_reads_static_geometry(model))
         output_setup_end, delegated_before_write = delegated_output_boundaries(
             v, var, lines, _profile_start, bidx, publication)
     elif v.op == "diffusive_rhs":

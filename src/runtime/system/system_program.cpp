@@ -5,6 +5,7 @@
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/numerics/spatial/nd/face_frequency.hpp>
+#include <pops/numerics/spatial/nd/static_geometry_face_frequency.hpp>
 #include <pops/parallel/execution_lane.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
@@ -41,6 +42,9 @@ struct ObservedFirstComponentMaximum {
   nd::FaceFieldView<const Real, Dim> speeds{};
   std::array<Real, static_cast<std::size_t>(Dim)> inverse_spacing{};
   nd::FaceFrequencyRule rule = nd::FaceFrequencyRule::incident_sum;
+  // The measures of a layout served by static geometry arrays (N17, C1), read instead of the
+  // spacings when its cell measures are present.
+  StaticGeometryView<Dim> arrays{};
 
   POPS_HD void init(value_type& value) const {
     value.norm = std::numeric_limits<Real>::lowest();
@@ -58,7 +62,9 @@ struct ObservedFirstComponentMaximum {
     const Index<Dim> cell = detail::cell_index_from_ordinal(lower, extent, ordinal);
     join(accumulator,
          value_type{mf_arith_detail::NormInfKernel<Dim>{values, 0}(cell),
-                    nd::incident_face_frequency_at(speeds, cell, inverse_spacing, rule)});
+                    arrays.cell_measure != nullptr
+                        ? nd::incident_face_frequency_at(speeds, cell, arrays, rule)
+                        : nd::incident_face_frequency_at(speeds, cell, inverse_spacing, rule)});
   }
 };
 
@@ -137,9 +143,12 @@ template <int Dim>
 Real prepared_boundary_local_norm_inf_observing(const MultiFab<Dim>& field,
                                                 const std::vector<nd::FaceField<Dim>>& speeds,
                                                 const Geometry<Dim>& geometry,
-                                                nd::FaceFrequencyRule rule, Real& frequency) {
+                                                nd::FaceFrequencyRule rule, Real& frequency,
+                                                const StaticGeometry<Dim>* arrays = nullptr) {
   if (field.ncomp() < 1) {
-    frequency = nd::maximum_incident_face_frequency(field, speeds, geometry, rule);
+    frequency = arrays != nullptr
+                    ? nd::maximum_incident_face_frequency(field, speeds, arrays->view(), rule)
+                    : nd::maximum_incident_face_frequency(field, speeds, geometry, rule);
     return prepared_boundary_local_norm_inf(field);
   }
   if (speeds.size() != field.local_size())
@@ -171,7 +180,8 @@ Real prepared_boundary_local_norm_inf_observing(const MultiFab<Dim>& field,
         Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::IndexType<std::int64_t>>(
             Kokkos::DefaultExecutionSpace{}, 0, box.numPts()),
         Reduction{box.lo, box.extent(), field.fab(local).view(), speeds[local].view(),
-                  inverse_spacing, rule},
+                  inverse_spacing, rule,
+                  arrays != nullptr ? arrays->view() : StaticGeometryView<Dim>{}},
         patch);
     local_norm = std::max(local_norm, patch.norm);
     observed = std::max(observed, patch.frequency);
@@ -249,7 +259,8 @@ void invoke_prepared_boundary_transaction(
     MultiFab<Dim>& state, MultiFab<Dim>& result, const ExecutionLane& lane, const char* operation,
     const runtime::program::PreparedScalarBoundarySession<Dim>& transport, Invoke&& invoke,
     Real* observed_frequency = nullptr, const Geometry<Dim>* observed_geometry = nullptr,
-    nd::FaceFrequencyRule observed_rule = nd::FaceFrequencyRule::incident_sum) {
+    nd::FaceFrequencyRule observed_rule = nd::FaceFrequencyRule::incident_sum,
+    const StaticGeometry<Dim>* observed_arrays = nullptr) {
   transport.with_boundary_scratch(state, [&](auto& scratch) {
     MultiFab<Dim>& state_snapshot = scratch.transaction_state_snapshot;
     MultiFab<Dim>& result_snapshot = scratch.transaction_result_snapshot;
@@ -299,11 +310,12 @@ void invoke_prepared_boundary_transaction(
     local_error = nullptr;
     try {
       // An observed frequency rides on the validation pass, while the recorded speeds are locked.
-      local_norm = observed_frequency == nullptr
-                       ? prepared_boundary_local_norm_inf(candidate)
-                       : prepared_boundary_local_norm_inf_observing(
-                             candidate, scratch.cartesian_operator.face_speeds(),
-                             *observed_geometry, observed_rule, *observed_frequency);
+      local_norm =
+          observed_frequency == nullptr
+              ? prepared_boundary_local_norm_inf(candidate)
+              : prepared_boundary_local_norm_inf_observing(
+                    candidate, scratch.cartesian_operator.face_speeds(), *observed_geometry,
+                    observed_rule, *observed_frequency, observed_arrays);
     } catch (...) {
       local_error = std::current_exception();
     }
@@ -673,7 +685,7 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
           },
           // The frequency of the speeds this evaluation recorded is read by its validation pass.
           retained_frequencies.empty() ? nullptr : retained_frequencies[block], &owner->geom,
-          owner->observed_face_frequency_rule_);
+          owner->observed_face_frequency_rule_, owner->static_geometry_.get());
     }
   };
   typename SystemInterfaceProvider<Dim>::CoreEvaluator evaluator;

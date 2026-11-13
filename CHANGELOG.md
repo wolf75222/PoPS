@@ -82,6 +82,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
   until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
   case written by hand for b6 and N8 (program IR, artifact, identity, C++).
+- ROM-110 (N17, L1b): graded spacing at the surface, and the static geometry arrays of a graded
+  box of rank three. `pops.Graded(base=pops.Uniform(cells=c), nodes={box.x: f})` places node k of
+  an axis at f(s), s = k / c correctly rounded, f a plain function that PoPS calls once with the
+  logical coordinate s (D0b; DN3 of the design note). It elaborates to the static case of the
+  geometry-evolution contract, which the static arrays serve as node positions at ranks one to
+  three: the widths are the node differences, and the face and cell measures their products,
+  bitwise. f(0) and f(1) lie within 4 ulp of the bounds of the axis and are set to them, and f
+  increases strictly at the nodes, or the case is refused with `SupportMismatch`; a node function
+  reads s, numbers, `pi` and the constants of the model with `exp`, `log`, `sqrt`, `sin`, `cos`
+  and `abs`, and `tanh`, `expm1`, `erf` or a power whose exponent is not a number wait for N11.
+  The logical nodes are lower + (upper - lower) (k / c), so graded nodes nest bitwise across
+  resolutions, and the two copies of a seam face share their distance. The two-point diffusion of
+  the arrays serves node positions of every rank; a chart stays of rank two. The words of
+  `pops.lib.numerics` (N3 lot 1) are served on the arrays: a face authored in source
+  (`riemann.User`, `rusanov()`, `upwind()`) reads the cell values as traces and the physical unit
+  normal as `n`, on node positions and on a chart, and its step guard (503) weighs each face bound
+  by the measure of the face over the measure of the cell; a `StencilFlux` (`two_point()`) on
+  node positions reads the distance across each face as its spacing, the face and cell measures
+  of the arrays, and the conductance f d |S| / |K| as its frequency. A stencil that reads a
+  farther cell, another spacing or a field, or a stencil on a chart, is refused at resolution
+  (`static_geometry_stencil_unavailable`). The cases are
+  `examples/api_v02/models_graded_spacing.py`: a graded ring, a plane, a box of rank three and
+  the wall layout of probe 3, refused when it is built until G04 elaborates the relations of its
+  walls under a diffusion.
 - ROM-110 (N17, L1a): static geometry arrays of a structured configuration (C1). A layout whose
   coordinate map reads neither the clock nor a discrete input (`MovingControlVolumes` over a
   logical `Uniform` grid with a clock-free `GeometryEvolution`) is read at resolution as static

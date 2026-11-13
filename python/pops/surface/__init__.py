@@ -6,7 +6,8 @@ imports it as ``import pops.surface as pops`` and ``from pops.surface.math impor
 of the library that it elaborates are ``pops.lib.numerics`` (``upwind``, ``rusanov``, ``hll``,
 ``two_point``, written with ``@pops.scheme``, N3 lot 1) and ``pops.lib.time.methods`` (``forward_euler``, ``ssprk2``, ``ssprk3``, ``rk4``).
 Building ``pops.Case(...)`` traces the case into a b6 case (2.6.6, ``_elaborate``), and
-``pops.inspect(case)`` validates and resolves it without compiling (SU12).
+``pops.inspect(case)`` validates and resolves it without compiling (SU12). ``pops.Graded`` grades
+the nodes of a uniform layout (lot L1 of N17, D0b), which the static geometry arrays serve.
 
 Every other construct of 2.6.2, 2.6.4 and 2.6.8 is importable and refuses its use with
 ``NotYetElaborated``, which names the lot that elaborates it; a name of an earlier text is refused
@@ -23,8 +24,8 @@ from ._model import Components, Model, Positive, Scalar, Tensor, Vector
 from ._numerics import CellAverage, Numerics, SchemeValue, TermView
 from ._scheme import check_plain_function, scheme
 from ._program import (
-    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Tolerance, Uniform, bind, claim, compile,
-    inspect,
+    AMR, CUDA, Advance, Case, Graded, OpenMP, Program, Resources, Tolerance, Uniform, bind, claim,
+    compile, inspect,
 )
 from ._project import project
 from . import _solver
@@ -176,7 +177,7 @@ def __getattr__(name: str) -> _Any:
 
 
 __all__ = [
-    "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
+    "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components", "Graded",
     "Model", "Numerics", "OpenMP", "Output", "Periodic", "Positive", "Program", "Quadrature",
     "Resources", "Scalar", "Tensor", "Tolerance", "Uniform", "Vector", "bind", "claim", "compile",
     "every", "inspect", "project", "record", "discrete", "math", "method", "scheme", "solve",

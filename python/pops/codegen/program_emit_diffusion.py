@@ -171,7 +171,7 @@ def program_reads_static_geometry(model_graph):
 
 def _prepared_diffusion_type(selected, static_geometry=False):
     if static_geometry:
-        # Resolution serves the scalar diagonal law of node positions of rank one only.
+        # Resolution serves the scalar diagonal law of node positions (a graded box) only.
         if selected.get("coupled") or selected.get("tensor") or len(selected["variables"]) != 1:
             raise ValueError("static geometry arrays serve scalar diagonal diffusion only")
         return ("pops::runtime::program::PreparedDiffusion<"

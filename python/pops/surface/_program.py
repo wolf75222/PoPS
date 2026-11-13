@@ -8,7 +8,8 @@ evolved quantity, a datum being supplied at bind under the representation of its
 ``pops.Case(model=, numerics=, program=, layout={Ω: pops.Uniform(cells=256)})`` holds them, and is
 traced when it is built: its model, numerics and program are elaborated into a b6 case, and its
 methods are traced once (SU5). ``pops.inspect(case)`` runs ``validate`` and ``resolve`` and
-reports without compiling (SU12).
+reports without compiling (SU12). ``pops.Graded(base=pops.Uniform(cells=c), nodes={Ω.x: f})``
+grades the nodes of a uniform layout along an axis (D0b, design note N17, DN3).
 
 ``tolerance=pops.Tolerance(rtol=, atol=)`` is the request of the solves of the method (SV3), and
 ``pops.Program(solvers={imex: cg()})`` their solvers, keyed by the method or ``method.name``.
@@ -23,14 +24,14 @@ import math as _math
 from typing import Any
 
 from ._expr import is_number
-from ._geometry import Box
+from ._geometry import Box, Coordinate
 from ._method import MethodValue, SurfaceMethod
 from ._model import Datum, Model, Quantity
 from ._numerics import Numerics, SchemeValue
 from ._quadrature import Quadrature
 from ._refusal import (
-    AmbiguousElaboration, LevelMismatch, NotYetElaborated, SpellingRefusal, surface_entry,
-    user_site,
+    AmbiguousElaboration, LevelMismatch, NotYetElaborated, SpellingRefusal, SupportMismatch,
+    surface_entry, user_site,
 )
 
 _N8_STEP = "a later lot of N8 (the step rules of 5.11, PF8)"
@@ -269,6 +270,64 @@ class Uniform:
         return "pops.Uniform(cells=%r)" % (cells,)
 
 
+class Graded:
+    """``pops.Graded(base=pops.Uniform(cells=c), nodes={Ω.x: f})``: graded spacing (D0b, DN3).
+
+    The nodes of a graded axis are f(s) at the logical coordinates s = k / c of the uniform base,
+    s the correctly rounded quotient of two integers. ``f`` is a plain function, passed uncalled:
+    PoPS calls it once with the logical coordinate s in [0, 1] of its axis, an expression, and it
+    returns an expression of s (SU5, as section 13 of the design note N17 states it). The support
+    stays a box and the spacing a choice of the layout (SU3, SU6): f(0) and f(1) are the bounds of
+    the axis within 4 ulp, then set to them, and f increases strictly at the nodes, which the
+    elaboration checks (``SupportMismatch`` naming the first pair that does not increase). A
+    periodic axis keeps its identification. The base ``pops.AMR``, whose child measures are
+    renormalized at regrid, is lot L4 of N17.
+    """
+
+    __slots__ = ("base", "nodes", "site")
+
+    def __init__(self, *, base: Any, nodes: Any) -> None:
+        if not isinstance(base, Uniform):
+            raise TypeError("pops.Graded(base=...) takes pops.Uniform(cells=c), got %r; a graded "
+                            "adaptive layout is lot L4 of N17" % (base,))
+        if not isinstance(nodes, dict) or not nodes:
+            raise TypeError("pops.Graded(nodes=...) takes a dictionary keyed by the axes of the "
+                            "support, nodes={Ω.x: f}, got %r; a layout that grades no axis is "
+                            "pops.Uniform(cells=c)" % (nodes,))
+        rows = []
+        for axis, function in nodes.items():
+            if not isinstance(axis, Coordinate):
+                raise TypeError("pops.Graded(nodes=...) is keyed by the axes of the support, "
+                                "nodes={Ω.x: f}, got %r" % (axis,))
+            if not callable(function) or isinstance(function, type):
+                raise TypeError("pops.Graded(nodes={%s: f}) takes a plain function of the logical "
+                                "coordinate s, def f(s): ..., passed uncalled, got %r"
+                                % (axis.name, function))
+            rows.append((axis, function))
+        if len({id(axis.support) for axis, _ in rows}) != 1:
+            raise SupportMismatch("pops.Graded(nodes=...) grades the axes of several supports, "
+                                  "%s" % ", ".join(repr(axis.support) for axis, _ in rows),
+                                  write="one pops.Graded per support, in layout={Ω: ...}")
+        self.base = base
+        self.nodes = tuple(sorted(rows, key=lambda row: row[0].index))
+        self.site = user_site(2)
+
+    @property
+    def cells(self) -> tuple:
+        return self.base.cells
+
+    def function_of(self, axis: Coordinate) -> Any:
+        for key, function in self.nodes:
+            if key is axis:
+                return function
+        return None
+
+    def __repr__(self) -> str:
+        return "pops.Graded(base=%r, nodes={%s})" % (self.base, ", ".join(
+            "%s: %s" % (axis.name, getattr(function, "__name__", function))
+            for axis, function in self.nodes))
+
+
 def _later_layout(name: str, owner: str) -> Any:
     def layout(*args: Any, **kwargs: Any) -> Any:
         raise NotYetElaborated("pops.%s, a layout" % name, owner).with_traceback(None)
@@ -335,9 +394,18 @@ class Case:
                 raise NotYetElaborated("pops.Case(layout={%r: pops.Quadrature(...)}), a quadrature "
                                        "rule as the layout of a support (D0)" % (support,),
                                        "a later lot of N15 with the supports of G03")
-            if not isinstance(value, Uniform):
-                raise TypeError("pops.Case(layout={%r: ...}) takes pops.Uniform(cells=c), got %r"
+            if not isinstance(value, (Uniform, Graded)):
+                raise TypeError("pops.Case(layout={%r: ...}) takes pops.Uniform(cells=c) or "
+                                "pops.Graded(base=pops.Uniform(cells=c), nodes={Ω.x: f}), got %r"
                                 % (support, value))
+            if isinstance(value, Graded):
+                for axis, _ in value.nodes:
+                    if axis.support is not support:
+                        raise SupportMismatch(
+                            "pops.Graded(nodes={%s: ...}) grades an axis of %r, and the layout "
+                            "is that of %r" % (axis.name, axis.support, support),
+                            write="nodes={Ω.%s: f} with the axes of the support of the layout"
+                                  % axis.name, site=value.site)
             if len(value.cells) != support.rank:
                 raise ValueError("pops.Uniform(cells=%r) gives %d sizes to a support of rank %d"
                                  % (value.cells, len(value.cells), support.rank))

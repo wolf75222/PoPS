@@ -175,6 +175,7 @@ api pops/numerics/spatial/nd/finite_volume.hpp
 api pops/numerics/spatial/nd/reconstruction.hpp
 api pops/numerics/spatial/nd/state_conversion.hpp
 api pops/numerics/spatial/nd/state_schema.hpp
+api pops/numerics/spatial/nd/static_geometry_face_frequency.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp
 sdk-support pops/numerics/spatial/operators/masked_operator.hpp
 sdk-support pops/numerics/spatial/operators/polar_operator.hpp

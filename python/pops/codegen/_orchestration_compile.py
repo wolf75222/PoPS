@@ -157,6 +157,7 @@ def compile_install_model(
     from pops.codegen._compiled_model_identity import authenticate_compiled_model
     from pops.codegen._resolved_operation_ownership import require_block_plan_owner
     from pops.codegen._compile_emit import (normalize_native_geometry, normalize_native_route,
+                                            reads_static_geometry_by_source_face,
                                             selects_catalogue_routes)
 
     require_block_plan_owner(
@@ -229,8 +230,10 @@ def compile_install_model(
         # A Program state-storage or source-authored package has no catalogue route to specialize.
         native_route = None
     if native_geometry is not None and native_route is None \
-            and not getattr(getattr(model, "_m", model), "_program_only_storage_axes", ()):
-        # Resolution refuses source-authored numerics on a mapped layout; this is its fence.
+            and not getattr(getattr(model, "_m", model), "_program_only_storage_axes", ()) \
+            and not reads_static_geometry_by_source_face(model):
+        # Resolution refuses a trace authored in source on a mapped layout; this is its fence. A
+        # face authored in source reads the arrays through the package that holds it (N3 lot 1).
         raise ValueError("block %r on static geometry arrays has no resolved native route" % name)
     compile_model = getattr(model, "compile", None)
     if not callable(compile_model):

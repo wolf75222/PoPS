@@ -31,7 +31,7 @@ from pops.domain import CartesianDomain
 from pops.frames import Cartesian1D, Cartesian2D, Cartesian3D
 from pops.initial import InitialCondition
 from pops.layouts import Uniform as _Uniform
-from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.mesh import CartesianGrid, GeometryEvolution, MovingControlVolumes, PeriodicAxes
 from pops.numerics import DiscretizationPlan, StateStorage
 from pops.params import ConstParam, RuntimeParam
 from pops.params import Positive as _Positive
@@ -41,8 +41,8 @@ from pops.projection import ConservativeCellAverage
 from pops.time._program import elaboration as _n8
 from pops.time._program import relations as _relations
 
-from ._expr import Arith, Call, Predicate, is_number, text
-from ._geometry import FRAME_AXES, Box, Coordinate, MathConstant
+from ._expr import Arith, Call, Expr, Predicate, is_number, text
+from ._geometry import FRAME_AXES, Box, Coordinate, LogicalCoordinate, MathConstant
 from ._method import MethodValue, _Trace, specialize, translate
 from ._model import (
     Balance, Datum, DiffusiveFlux, Flux, Model, ModelConstant, Parameter, Positive, Quantity,
@@ -52,13 +52,19 @@ from ._model import _sign as _derived_sign
 from ._numerics import Numerics, SchemeValue, TermView
 from ._refusal import (
     AmbiguousElaboration, CoverageNotExact, MissingBoundaryRealization, NotYetElaborated,
-    SurfaceRefusal, UnknownSolvePath,
+    SupportMismatch, SurfaceRefusal, UnknownSolvePath,
 )
 from ._scheme import StencilRealization
 
 _LATER = "a later lot of N15"
 # The words of pops.math that b6's analytic expressions have (pops.analytic), for initial values.
 _ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs")
+# The words of a node function of pops.Graded: those of the analytic programs that generate the
+# static geometry arrays at bind, without erf and erfc, which pops.math keeps to initial values.
+_NODE_WORDS = {"exp": _math.exp, "log": _math.log, "sqrt": _math.sqrt, "sin": _math.sin,
+               "cos": _math.cos, "abs": abs}
+# The tolerance of the ends of a graded axis, in ulp of the largest bound (DN3).
+_GRADED_END_ULP = 4
 _FRAMES = {1: Cartesian1D, 2: Cartesian2D, 3: Cartesian3D}
 
 
@@ -215,6 +221,14 @@ def _number(value: Any) -> Any:
     if isinstance(value, (Fraction, Decimal)):
         return float(value)
     return value
+
+
+def _logical_text(name: str, low: float, high: float) -> str:
+    """The logical coordinate s of an axis on [low, high], as the arrays compute it."""
+    shifted = name if low == 0.0 else "%s %s %r" % (name, "-" if low > 0 else "+", abs(low))
+    if high - low == 1.0:
+        return shifted
+    return "%s / %r" % (shifted if low == 0.0 else "(%s)" % shifted, high - low)
 
 
 class _RateSum:
@@ -1044,27 +1058,197 @@ class _Elaboration:
                                "N11 (expression closure, C1)")
 
     def layout(self, support: Box, frame: Any) -> Any:
+        from ._program import Graded
+
         case = self.case
-        uniform = case.layout_of(support)
-        if uniform is None:
+        stated = case.layout_of(support)
+        if stated is None:
             raise AmbiguousElaboration("the support %r has no layout" % (support,),
                                        write="layout={Ω: pops.Uniform(cells=c)}", site=case.site)
         for key, _ in case.layout:
             if key is not support:
                 raise ValueError("pops.Case(layout=...) names the support %r, on which no "
                                  "quantity of the model lives" % (key,))
+        uniform = stated.base if isinstance(stated, Graded) else stated
         periodic = tuple(axis for axis, (_, _, flag)
                          in zip(frame.axes, support.bounds(), strict=True) if flag)
         layout = _Uniform(CartesianGrid(frame=frame, cells=uniform.cells,
                                         periodic=PeriodicAxes(periodic) if periodic else None))
-        self.rows.append(Row(
-            "layout={%r: %r}" % (support, uniform), "case",
-            "Uniform(CartesianGrid(frame=frame, cells=%r, periodic=%s))"
-            % (uniform.cells, "PeriodicAxes((%s))" % "".join(
-                "%s," % axis for axis in support._names if support.periodic(axis))
-               if periodic else None),
-            [Choice("cells", uniform.cells, "stated")]))
+        elaborated = ("Uniform(CartesianGrid(frame=frame, cells=%r, periodic=%s))"
+                      % (uniform.cells, "PeriodicAxes((%s))" % "".join(
+                          "%s," % axis for axis in support._names if support.periodic(axis))
+                         if periodic else None))
+        choices = [Choice("cells", uniform.cells, "stated")]
+        if isinstance(stated, Graded):
+            components, spelled, graded = self.graded(stated, support, frame)
+            layout = MovingControlVolumes(layout, evolution=GeometryEvolution(components))
+            elaborated = ("MovingControlVolumes(%s, evolution=GeometryEvolution((%s,)))"
+                          % (elaborated, ", ".join(spelled)))
+            choices += graded
+        self.rows.append(Row("layout={%r: %r}" % (support, stated), "case", elaborated, choices))
         return layout
+
+    def graded(self, graded: Any, support: Box, frame: Any) -> tuple:
+        """The coordinate map of ``pops.Graded`` (D0b, DN3): component a is f(s) on a graded axis,
+        s = (ξ - lower) / (upper - lower) the logical coordinate of the axis in [0, 1], and ξ on
+        any other axis, ξ the logical coordinate of the box. The map reads no clock, and component
+        a reads coordinate a alone, so the static geometry arrays serve it as node positions
+        (N17, C1). Each function is called once (SU5); its ends and its increase are checked here
+        at the nodes s = k / c that the arrays generate, s the correctly rounded quotient."""
+        from pops.analytic import coordinate
+
+        components, spelled, choices = [], [], []
+        for index, (name, (lower, upper, _)) in enumerate(
+                zip(support._names, support.bounds(), strict=True)):
+            xi = coordinate(frame, frame.axes[index])
+            axis = support.axes[index]
+            function = graded.function_of(axis)
+            if function is None:
+                components.append(xi)
+                spelled.append(name)
+                continue
+            low, high = float(lower), float(upper)
+            where = "the node function %s of the axis %s" % (
+                getattr(function, "__name__", function), name)
+            expression = function(LogicalCoordinate(axis))
+            if not (is_number(expression) or isinstance(expression, Expr)):
+                raise SupportMismatch(
+                    "%s returns %r; it returns an expression of the logical coordinate s that "
+                    "PoPS passes" % (where, expression),
+                    write="def f(s): an expression of s, for nodes={Ω.%s: f}" % name,
+                    site=graded.site)
+            self._node_reads(expression, axis, where, graded.site)
+            cells = graded.cells[index]
+            nodes = self._graded_nodes(expression, low, high, cells, where, graded.site)
+            s = xi if low == 0.0 else xi - low
+            s = s if high - low == 1.0 else s / (high - low)
+            components.append(self._node_map(expression, s))
+            spelled.append("%s with s = %s" % (text(expression), _logical_text(name, low, high)))
+            choices += [
+                Choice("nodes of %s" % name, "%s(s) = %s" % (
+                    getattr(function, "__name__", "f"), text(expression)), "stated"),
+                Choice("ends of %s" % name, "f(0) = %r, f(1) = %r, set to the bounds %r and %r"
+                       % (nodes[0], nodes[-1], low, high), "derived"),
+                Choice("geometry of %s" % name, "static arrays of node positions, the widths "
+                       "being the node differences (N17, C1)", "derived")]
+        return tuple(components), spelled, choices
+
+    def _node_reads(self, value: Any, axis: Any, where: str, site: Any) -> None:
+        """A node function reads its logical coordinate, numbers, pi and the constants of the
+        model (SU5), which enter the identity of the artifact (design note N17, 3.8)."""
+        if is_number(value) or isinstance(value, ModelConstant):
+            return
+        if isinstance(value, MathConstant):
+            if not _math.isfinite(value.value):
+                raise SupportMismatch("%s reads %s" % (where, value.name), site=site)
+            return
+        if isinstance(value, LogicalCoordinate):
+            if value.axis is not axis:
+                raise SupportMismatch("%s reads the logical coordinate of the axis %s"
+                                      % (where, value.axis.name), site=site)
+            return
+        if isinstance(value, Arith):
+            if value.op == "**" and not is_number(value.args[1]):
+                raise NotYetElaborated("%s, a power whose exponent is not a number, in %s"
+                                       % (text(value), where), "N11 (expression closure, C1)",
+                                       site=site)
+            for argument in value.args:
+                self._node_reads(argument, axis, where, site)
+            return
+        if isinstance(value, Call):
+            if value.word not in _NODE_WORDS:
+                raise NotYetElaborated("%s in %s" % (text(value), where),
+                                       "N11 (expression closure, C1)", site=site)
+            for argument in value.args:
+                self._node_reads(argument, axis, where, site)
+            return
+        raise SupportMismatch(
+            "%s reads %s; a node function returns an expression of the logical coordinate s that "
+            "PoPS passes, of numbers, pi and the constants of the model, which enter the identity "
+            "of the artifact (design note N17, 3.8)" % (where, text(value)),
+            write="def f(s): an expression of s, for nodes={Ω.%s: f}" % axis.name, site=site)
+
+    def _node_value(self, value: Any, s: float) -> float:
+        """The binary64 value of a node function at s, operation by operation as the analytic
+        program of bind computes it."""
+        if is_number(value):
+            return float(_number(value))
+        if isinstance(value, (MathConstant, ModelConstant)):
+            return float(value.value)
+        if isinstance(value, LogicalCoordinate):
+            return s
+        if isinstance(value, Arith):
+            args = [self._node_value(argument, s) for argument in value.args]
+            if value.op == "neg":
+                return -args[0]
+            left, right = args
+            if value.op == "+":
+                return left + right
+            if value.op == "-":
+                return left - right
+            if value.op == "*":
+                return left * right
+            if value.op == "/":
+                return left / right
+            return _math.pow(left, right)
+        return float(_NODE_WORDS[value.word](*(self._node_value(argument, s)
+                                               for argument in value.args)))
+
+    def _graded_nodes(self, expression: Any, low: float, high: float, cells: int, where: str,
+                      site: Any) -> list:
+        """The nodes f(s_k), s_k from the logical node k of the arrays: low + (high - low) (k /
+        cells), the last one high itself; the ends within 4 ulp of the bounds, then set to them;
+        strictly increasing (DN3, SupportMismatch naming the first pair that does not increase)."""
+        nodes = []
+        for node in range(cells + 1):
+            xi = high if node == cells else low + (high - low) * (node / cells)
+            s = (xi - low) / (high - low)
+            try:
+                value = self._node_value(expression, s)
+            except (ArithmeticError, ValueError):
+                value = _math.nan
+            if not _math.isfinite(value):
+                raise SupportMismatch("%s is not finite at the node %d of %d (s = %r)"
+                                      % (where, node, cells, s), site=site)
+            nodes.append(value)
+        tolerance = _GRADED_END_ULP * _math.ulp(max(abs(low), abs(high)))
+        if not (abs(nodes[0] - low) <= tolerance and abs(nodes[-1] - high) <= tolerance):
+            raise SupportMismatch(
+                "%s sends s = 0 and s = 1 to %r and %r, not to the bounds %r and %r of the axis "
+                "within %d ulp: graded nodes move inside the box, and the box stays the support"
+                % (where, nodes[0], nodes[-1], low, high, _GRADED_END_ULP),
+                write="a function with f(0) = %r and f(1) = %r" % (low, high), site=site)
+        ends = list(nodes)
+        ends[0], ends[-1] = low, high
+        for node in range(cells):
+            if not ends[node + 1] > ends[node]:
+                raise SupportMismatch(
+                    "%s does not increase strictly at the nodes of %d cells: node %d is at %r and "
+                    "node %d at %r, the first pair that does not increase"
+                    % (where, cells, node, ends[node], node + 1, ends[node + 1]),
+                    write="a function of s that increases strictly on [0, 1]", site=site)
+        return nodes
+
+    def _node_map(self, value: Any, s: Any) -> Any:
+        """The analytic expression of a node function, its logical coordinate read as ``s``."""
+        from pops import analytic as an
+
+        if is_number(value):
+            return an.constant(float(_number(value)))
+        if isinstance(value, (MathConstant, ModelConstant)):
+            return an.constant(float(value.value))
+        if isinstance(value, LogicalCoordinate):
+            return s
+        if isinstance(value, Arith):
+            args = [self._node_map(argument, s) for argument in value.args]
+            if value.op == "neg":
+                return -args[0]
+            left, right = args
+            if value.op == "**":
+                return left ** float(_number(value.args[1]))
+            return {"+": lambda: left + right, "-": lambda: left - right,
+                    "*": lambda: left * right, "/": lambda: left / right}[value.op]()
+        return getattr(an, value.word)(*(self._node_map(argument, s) for argument in value.args))
 
     def boundaries(self, support: Box) -> list:
         """The relations of ``model.on`` that close each boundary piece of the support (2.6.2,
