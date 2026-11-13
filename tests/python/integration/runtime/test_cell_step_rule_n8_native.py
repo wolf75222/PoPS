@@ -22,8 +22,15 @@ outflow, SSPRK2 and ``rusanov()`` at first order, under ``dt=`` a function of ``
 
 The module runs in the Dim=2 process; L1 on the interval is a Dim=1 case of its own.
 
-The slice to ``T_END`` and to three frontiers, bit for bit against #788's compiled stability rule
-and master's ``AdaptiveCFL``, is ``test_surface_lot_d_step_rule_native.py``.
+5. the slice itself, ``upwind(reconstruction=muscl(limiter=vanleer))`` (N3 lot 2), under
+   ``dt=cfl_limit(advection, cfl=0.45)``: on the compiled route and on ``pops.run``, bit for bit
+   the steps and state of master's tutorial 02 written by hand for b6 (native ``MUSCL(VanLeer())``
+   and Rusanov) under ``AdaptiveCFL(0.45)``, with 0 attempts lost; with ROM-108's guarded face at
+   MUSCL, ``pops.run`` takes the same steps, retries and state as ``AdaptiveCFL(0.45)`` on the
+   same face, and the compiled run stops by name.
+
+The slice at first order to ``T_END`` and to three frontiers, bit for bit against #788's compiled
+stability rule and master's ``AdaptiveCFL``, is ``test_surface_lot_d_step_rule_native.py``.
 """
 from fractions import Fraction
 import math
@@ -33,7 +40,7 @@ import pytest
 
 import pops
 import pops.surface as surface
-from pops.lib.numerics import rusanov, two_point, upwind
+from pops.lib.numerics import muscl, rusanov, two_point, upwind, vanleer
 from pops.lib.numerics.boundaries import ghosts
 from pops.lib.time import cfl_limit
 from pops.lib.time.methods import ssprk2
@@ -304,32 +311,210 @@ def test_a_negative_zero_divisor_fails_by_name(tmp_path, native_cxx, kokkos_root
     assert "at the cell (0, 0)" in str(caught.value)
 
 
-def test_a_poisson_source_is_refused_by_name(monkeypatch, isolated_native_cache, native_cxx,
-                                             kokkos_root):
-    """Ruling 13/11, 2 (C3): a block whose elliptic brick is a real Poisson source (M08, a fluid
-    with its charge density) is refused by name by the run of a cells rule; the zero brick of the
-    slice and of L1 is admitted (the tests above)."""
-    del isolated_native_cache, native_cxx, kokkos_root
-    import examples.api_v02.models_M01_M14 as early
+def test_a_poisson_source_is_refused_by_name(tmp_path, native_cxx, kokkos_root, monkeypatch):
+    """Ruling 13/11, 2 (C3): a block whose elliptic brick is a real Poisson source is refused by
+    name by the run of a cells rule; the zero brick that codegen gives every other generated block
+    (the slice, L1, Burgers above) is admitted.
+
+    No 0.3 authoring route puts a default Poisson source on a Program block (a field solve of the
+    Program, M08's, is a field problem whose consumers the guard refuses as an auxiliary refreshed
+    before the stability selection), so the test gives the slice's model, written by hand, the
+    charge density ``u`` through its formula emitter: the generated ``Ell`` brick carries a
+    provider identity that is neither ``NoElliptic`` nor the codegen zero brick."""
+    del native_cxx, kokkos_root
+    monkeypatch.setenv("POPS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("POPS_NATIVE_CACHE_DIR", str(tmp_path / "cache"))
     from pops.mesh._amr.refinement_criterion import CellWidth
     from pops.runtime._simulation import Simulation
-    from pops.time._program.elaboration import Advance, Retry, elaborate
     from pops.time._step.bound import StepBound
 
-    def route(case, block, state, flow, dt, *, name, memory, record, b6):
-        del b6, dt
-        return elaborate(Advance(early.recorded_ssprk2(memory, record)(flow=flow),
-                                 retry=Retry(max_attempts=1)),
-                         case=case, state=block[state], proposal=StepBound(CellWidth(0), 2),
-                         name=name)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(early, "_traced_recorded_ssprk2", route)
-        spec = early.build_m08()
-    artifact = pops.compile(pops.resolve(pops.validate(spec.case), layout=spec.layout))
-    runtime = pops.bind(artifact, initial_values={
-        subject: value.copy() for subject, value in spec.initial_values.items()},
-        resources={"execution_context": artifact_execution_context(artifact)})
+    artifact = _hand_muscl(proposal=StepBound(CellWidth(0), 2), poisson_source=True)
     with pytest.raises(RuntimeError, match=r"refuses a default Poisson solve \(the Poisson source "
                                            r"of an evolving block\)"):
-        Simulation(runtime).run(0.01)
+        Simulation(_bound(artifact)).run(T_END)
+
+
+# --- the slice at MUSCL (D6; ruling 13/11, 3) ------------------------------------------------------
+
+def _muscl(advection):
+    return upwind(reconstruction=muscl(limiter=vanleer))
+
+
+def _guarded_muscl(advection):
+    return upwind(speed=lambda face: 2 * dot(vector(AX, AY), face.normal),
+                  reconstruction=muscl(limiter=vanleer))
+
+
+def _tutorial(domain, advection):
+    return cfl_limit(advection, cfl=CFL)
+
+
+def _master(scheme):
+    """The surface's case under a fixed step, its Program then run by master's AdaptiveCFL(0.45):
+    the reference of pops.run on the same face."""
+    from pops.time import AdaptiveCFL
+
+    domain = surface.Box(x=(0.0, 1.0), y=(0.0, 1.0))
+    sides = domain.boundary
+    model = surface.Model("scalar_advection")
+    u = model.quantity("u", surface.Scalar(domain))
+    u0 = model.data("u0", surface.Scalar(domain))
+    advection = model.flux(of=u, value=vector(AX, AY) * u)
+    model.balance(ddt(u) == -div(advection))
+    model.on([sides.x_min, sides.y_min], u == FAR_FIELD)
+    model.on([sides.x_max, sides.y_max], outflow(u))
+    numerics = surface.Numerics(represent={u: surface.CellAverage()},
+                                schemes={advection: scheme(advection)}, boundary=ghosts())
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
+                              initial={u: u0})
+    case = surface.Case(model=model, numerics=numerics, program=program,
+                        layout={domain: surface.Uniform(cells=CELLS)})
+    elaborated = case.elaborated
+    elaborated.case._time.step_strategy(AdaptiveCFL(CFL))
+    return pops.compile(pops.resolve(pops.validate(elaborated.case), layout=elaborated.layout))
+
+
+def _hand_muscl(*, proposal=None, poisson_source=False):
+    """Master's tutorial 02 written by hand for b6 and N8: native MUSCL(VanLeer()) and Rusanov,
+    N8's compiled stability rule paired with AdaptiveCFL(0.45)."""
+    from pops import math as pm
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Inflow, Outflow
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian2D
+    from pops.initial import InitialCondition
+    from pops.layouts import Uniform
+    from pops.lib.initial import BindArray
+    from pops.mesh import CartesianGrid
+    from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+    from pops.numerics.reconstruction import limiters
+    from pops.numerics.spatial import FiniteVolume
+    from pops.projection import ConservativeCellAverage
+    from pops.time import AdaptiveCFL
+    from pops.time._program.elaboration import Advance, StepRule, elaborate
+    from pops.time._program.traced_method import Candidate, method
+
+    @method
+    def n8_ssprk2(B, p, rate):
+        u, t, h = B.state, B.time, p.dt
+        first = u + h * rate(u, t)
+        return Candidate((u + first + h * rate(first, t + h)) / 2, t + h)
+
+    frame = CartesianDomain("box", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    x, y = frame.axes
+    model = pops.Model("scalar_advection", frame=frame)
+    u = model.state("u", components=("u",))
+    if poisson_source:
+        # the charge density u on the formula emitter: a real elliptic brick (C3)
+        model._dsl.elliptic_rhs(model._dsl._m.cons_from[0])
+    flux_u = model.flux("flux_u", state=u, frame=frame,
+                        components={x: (AX * u[0],), y: (AY * u[0],)}, waves={x: (AX,), y: (AY,)})
+    rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u))
+    plan = DiscretizationPlan()
+    selection = rate.select(flux_u)
+    plan.rates.add(selection, FiniteVolume(
+        flux=flux_u, variables=variables.Conservative(u),
+        reconstruction=reconstruction.MUSCL(limiters.VanLeer()), riemann=riemann.Rusanov()))
+    case = pops.Case("scalar_advection")
+    block = case.block("scalar_advection", model)
+    boundaries = frame.boundaries
+    plan.boundaries.add(TransportBoundarySet({
+        boundaries.x_min: Inflow(state=block[u], value=FAR_FIELD),
+        boundaries.y_min: Inflow(state=block[u], value=FAR_FIELD),
+        boundaries.x_max: Outflow(state=block[u]),
+        boundaries.y_max: Outflow(state=block[u])}))
+    case.numerics(plan, block=block)
+    case.initials.add(InitialCondition(state=block[u], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+    elaborate(Advance(n8_ssprk2(rate=lambda state: selection(state))), case=case,
+              state=block[u],
+              proposal=proposal or StepRule(CFL, None, strategy=AdaptiveCFL(CFL)))
+    layout = Uniform(CartesianGrid(frame=frame, cells=CELLS))
+    return pops.compile(pops.resolve(pops.validate(case), layout=layout))
+
+
+def _bound(artifact):
+    """``artifact`` (a native artifact) bound to the slice's initial state, for pops.run."""
+    (binding,) = tuple(artifact.plan.initial_condition_plan.bindings)
+    initial = np.ascontiguousarray(np.transpose(_initial())[np.newaxis, ...])
+    return pops.bind(artifact, initial_values={binding.subject: initial},
+                     resources={"execution_context": artifact_execution_context(artifact)})
+
+
+def _state(runtime):
+    return np.transpose(np.asarray(runtime.state_global("scalar_advection"))[0]).copy()
+
+
+@pytest.fixture(scope="module")
+def muscl_slices(tmp_path_factory, native_cxx, kokkos_root):
+    del native_cxx, kokkos_root
+    cache = tmp_path_factory.mktemp("pops-native-cache")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("POPS_CACHE_DIR", str(cache))
+        patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
+        yield {"slice": _slice(_tutorial, _muscl), "hand": _hand_muscl(),
+               "guarded": _slice(_tutorial, _guarded_muscl),
+               "guarded_master": _master(_guarded_muscl)}
+
+
+def test_the_muscl_slice_runs_as_masters_tutorial(muscl_slices, tmp_path):
+    from pops.runtime._simulation import Simulation
+
+    compiled = muscl_slices["slice"]
+    result = _simulation(compiled, tmp_path).run(until=T_END)
+    assert result.failure is None and result.time == T_END and result.rejections == 0
+    final = np.asarray(result.state[compiled[1]])
+
+    hand = Simulation(_bound(muscl_slices["hand"])).run(T_END)
+    assert hand.failure is None and hand.time == T_END and hand.steps == result.steps
+    _bitwise(final, np.transpose(np.asarray(hand.state["scalar_advection"])[0]))
+
+    master = _bound(muscl_slices["hand"])
+    pops.run(master, t_end=T_END, max_steps=10_000, console=False)
+    assert float(master.time()) == T_END and int(master.macro_step()) == result.steps
+    _bitwise(final, _state(master))
+
+    own = _bound(compiled[0].compiled)
+    report = pops.run(own, t_end=T_END, max_steps=10_000, console=False)
+    assert float(own.time()) == T_END and int(own.macro_step()) == result.steps
+    assert report.rejected_steps == 0
+    _bitwise(final, _state(own))
+
+
+def test_the_guarded_muscl_face_retries_as_master_and_stops_the_compiled_run(muscl_slices,
+                                                                            tmp_path):
+    with pytest.raises(FaceFrequencyStop) as caught:
+        _simulation(muscl_slices["guarded"], tmp_path).run(until=T_END)
+    assert caught.value.result.steps == 0
+
+    ruled = _bound(muscl_slices["guarded"][0].compiled)
+    ruled_report = pops.run(ruled, t_end=T_END, max_steps=10_000, console=False)
+    master = _bound(muscl_slices["guarded_master"])
+    master_report = pops.run(master, t_end=T_END, max_steps=10_000, console=False)
+    assert float(ruled.time()) == float(master.time()) == T_END
+    assert int(ruled.macro_step()) == int(master.macro_step())
+    assert ruled_report.accepted_steps == master_report.accepted_steps
+    assert ruled_report.rejected_steps == master_report.rejected_steps > 0
+    _bitwise(_state(ruled), _state(master))
+
+
+def test_the_first_step_is_the_smallest_bound_at_the_initial_state(burgers, tmp_path):
+    """2.6.2: the first proposal is the smallest value of E over the cells at the initial state
+    (PF8), on the compiled route and on pops.run: (cfl * h) / s at the fastest cell."""
+    artifact, u0 = burgers[None]
+    x = (np.arange(REST_CELLS[0]) + 0.5) / REST_CELLS[0]
+    profile = np.repeat((0.5 + 0.4 * np.sin(2 * np.pi * x))[:, None], REST_CELLS[1], axis=1)
+    expected = (CFL * (1.0 / REST_CELLS[0])) / float(np.max(np.abs(profile)))
+    with pytest.raises(surface.BudgetExhausted) as caught:
+        surface.bind(artifact, data={u0: profile}, directory=tmp_path).run(
+            until=REST_END, max_steps=1)
+    one = caught.value.result
+    assert one.steps == 1 and one.time == expected and one.rejections == 0
+    hand = artifact.compiled
+    (binding,) = tuple(hand.plan.initial_condition_plan.bindings)
+    runtime = pops.bind(hand, initial_values={
+        binding.subject: np.ascontiguousarray(np.transpose(profile)[np.newaxis, ...])},
+        resources={"execution_context": artifact_execution_context(hand)})
+    report = pops.step(runtime, t_bound=REST_END, console=False)
+    assert (report.accepted_steps, report.rejected_steps) == (1, 0)
+    assert float(runtime.time()) == expected
