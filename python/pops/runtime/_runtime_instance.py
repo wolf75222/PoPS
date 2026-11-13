@@ -1017,6 +1017,7 @@ class RuntimeInstance:
             instance={
                 "bind_identity": self.bind_identity.to_data(),
                 "artifact_identity": self._install_plan.artifact.artifact_identity.to_data(),
+                "program_id": self._install_plan.artifact.program_id.to_data(),
                 "plan_identity": self._install_plan.artifact.plan.plan_identity.to_data(),
                 "layout_plan": self._layout_plan.inspect(),
                 "resolved_dimension": self._install_plan.artifact.resolved_dimension,
@@ -1928,6 +1929,7 @@ class RuntimeInstance:
             bind_identity=self.bind_identity,
             execution_identity=self._execution_context.identity,
             artifact_identity=self._install_plan.artifact.artifact_identity,
+            program_id=self._install_plan.artifact.program_id,
             field_providers=_field_provider_evidence(
                 self._install_plan, self._layout_plan, self._executor
             ),

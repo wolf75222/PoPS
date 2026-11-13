@@ -19,14 +19,25 @@ def module_dependency_projection(
     artifact: bool,
     canonical: Any,
 ) -> dict[str, Any]:
-    """Project observed module attributes and authenticate every traversed module."""
+    """Project observed module attributes and authenticate every traversed module.
+
+    The artifact projection (``artifact=True``) authenticates a module outside PoPS by the values
+    the callback reads, not by the bytes of its source file: a comment or a line shift in a user
+    module is provenance, not artifact identity (spec 0.3 CC2, criterion (i) of G07; N11 lot 2b).
+    The full snapshot keeps the source digest. A PoPS module keeps it in both, as engine identity.
+    """
+    def fingerprint(name: str) -> dict[str, Any]:
+        if artifact and name != "pops" and not name.startswith("pops."):
+            return {"module": name, "authority": "observed-values"}
+        return module_implementation_fingerprint(name, path=path)
+
     dependencies = []
     for parts in sorted(set(attribute_paths)):
         current: Any = module
         module_chain = []
         for part in parts:
             if isinstance(current, types.ModuleType):
-                module_chain.append(module_implementation_fingerprint(current.__name__, path=path))
+                module_chain.append(fingerprint(current.__name__))
             if not hasattr(current, part):
                 raise AttributeError("AuthoringSnapshot module dependency %s has no attribute %s"
                                      % (".".join(parts), part))
@@ -40,7 +51,7 @@ def module_dependency_projection(
         })
     full = {
         "module": module.__name__,
-        "implementation": module_implementation_fingerprint(module.__name__, path=path),
+        "implementation": fingerprint(module.__name__),
         "dependencies": dependencies,
     }
     encoded = json.dumps(full, sort_keys=False, separators=(",", ":"), allow_nan=False)

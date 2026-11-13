@@ -317,6 +317,10 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
                  "header_signature": _abi_token(abi_key, "headers") or "unknown",
                  "cache_key": _short(cache_key),
                  "cache_keys": cache_keys}
+    # The name-free program identity (spec 0.3 CC2, CN9): one for every name variant of a case.
+    program_id = getattr(artifact, "program_id", None)
+    if program_id is not None:
+        artifacts["program_id"] = program_id.token
     artifacts["program_source_maps"] = {
         owner: {"source_sha256": data["source_sha256"], "map_sha256": data["map_sha256"],
                 "operation_emissions": len(data["operations"]),
