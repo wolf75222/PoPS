@@ -309,6 +309,9 @@ class _Elaboration:
         self.params: dict = {}
         self.lowered_outputs: tuple = ()
         self.rule: Any = None
+        # N3 lot 3 (P4): the b6 expression of each node of the body of a scheme, by identity, for
+        # the inputs of the body lowered last; a shared node is lowered once, as b6 built it.
+        self._lowered: tuple = (None, {})
 
     # The support and its frame.
 
@@ -351,6 +354,20 @@ class _Elaboration:
     def lower(self, value: Any, inputs: dict | None = None) -> Any:
         """The b6 expression of a value of the model; ``inputs`` gives the b6 expressions of the
         reads of the entities of a scheme, inside the body of a scheme (lot 2)."""
+        if inputs is not None:
+            known, lowered = self._lowered
+            if known is not inputs:
+                known, lowered = inputs, {}
+                self._lowered = (known, lowered)
+            seen = lowered.get(id(value))
+            if seen is not None and seen[0] is value:
+                return seen[1]
+            result = self._lower(value, inputs)
+            lowered[id(value)] = (value, result)
+            return result
+        return self._lower(value, None)
+
+    def _lower(self, value: Any, inputs: dict | None) -> Any:
         if inputs is not None:
             scheme = self._scheme_value(value, inputs)
             if scheme is not None:
@@ -655,11 +672,11 @@ class _Elaboration:
                     % (balance.name or balance.quantity.name, self.names[term],
                        scheme.describe()), choices))
         for quantity in states:
-            self.rows.append(Row("represent={%s: %r}" % (quantity, self.numerics
-                                                          .representation_of(quantity)),
+            representation = self.numerics.representation_of(quantity)
+            self.rows.append(Row("represent={%s: %r}" % (quantity, representation),
                                  "numerics", "the cell averages of %s, projected by "
                                  "ConservativeCellAverage()" % quantity,
-                                 [Choice("representation", "pops.CellAverage()", "stated")]))
+                                 [Choice("representation", repr(representation), "stated")]))
         return plan, selections
 
     def _linear(self, scheme: Any, view: TermView, balance: Balance) -> Any:

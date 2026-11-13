@@ -94,7 +94,7 @@ def _data_layout(plan: Any) -> dict[str, Any]:
 
         return data_layout_and_distribution(plan)
     except Exception as exc:  # noqa: BLE001 - A1: a report never refuses a compiled plan
-        return {"schema_version": 3, "unreported": "%s: %s" % (type(exc).__name__, exc)}
+        return {"schema_version": 5, "unreported": "%s: %s" % (type(exc).__name__, exc)}
 
 
 @dataclass(frozen=True, slots=True)

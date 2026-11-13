@@ -33,7 +33,17 @@ class CellAverage:
     def __init__(self, *, quadrature: Any = None) -> None:
         if quadrature is not None:
             raise NotYetElaborated("pops.CellAverage(quadrature=...) (D3)",
-                                   "a later lot of N15 with the quadratures of G03")
+                                   "the N16 lot that retires the transitional table of "
+                                   "CellAverage() (the projection by encode), under "
+                                   "CellAverage(quadrature=...) of pops.lib.representations "
+                                   "(N16 lot 1)")
+
+    def definition(self, rank: int) -> Any:
+        """The definition of contract @2 that this spelling elaborates, the one of
+        ``CellAverage()`` of ``pops.lib.representations`` (N16 5.5, SU-T3)."""
+        from pops.representations.definition import cell_average
+
+        return cell_average(rank)
 
     def __repr__(self) -> str:
         return "pops.CellAverage()"
@@ -178,13 +188,33 @@ class Numerics:
         self.site = user_site(2)
         self.boundary = self._boundary(boundary)
         self.represent = self._table(represent, "represent", Quantity)
-        for _, representation in self.represent:
-            if not isinstance(representation, CellAverage):
-                raise NotYetElaborated("the representation %r" % (representation,),
-                                       "a later lot of N15 with the representations of G03")
+        for quantity, representation in self.represent:
+            self._check_representation(quantity, representation)
         self.schemes = self._table(schemes, "schemes", (Flux, DiffusiveFlux))
         for key, scheme in self.schemes:
             self._check_scheme(key, scheme)
+
+    def _check_representation(self, quantity: Quantity, representation: Any) -> None:
+        """A word of ``pops.lib.representations`` or a ``@pops.representation`` of the case runs
+        here, at the rank of the key (SU5, N16 3.1). This lot elaborates the definition of
+        ``CellAverage()`` on the route of ``pops.CellAverage()`` and refuses every other with the lot
+        that elaborates it (N16 5.5, the transitional table)."""
+        if isinstance(representation, CellAverage):
+            return
+        from ._representation import (
+            Coefficients, Dual, RepresentationValue, SurfaceRepresentation, check,
+        )
+
+        if isinstance(representation, (RepresentationValue, SurfaceRepresentation)):
+            check(representation, quantity, self.site)
+            return
+        if isinstance(representation, (Coefficients, Dual)):
+            raise TypeError("represent={%s: %r}: pops.Coefficients and pops.Dual are what a "
+                            "@pops.representation returns; write the representation called with "
+                            "its options" % (quantity, representation))
+        raise TypeError("represent={%s: ...} takes a representation called with its options, "
+                        "such as CellAverage() of pops.lib.representations or a "
+                        "@pops.representation of the case, got %r" % (quantity, representation))
 
     def _boundary(self, policy: Any) -> Any:
         """``boundary=ghosts()``: a boundary policy, a scheme over ``face`` that returns
