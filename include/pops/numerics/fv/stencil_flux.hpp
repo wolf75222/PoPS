@@ -25,13 +25,16 @@ struct StencilFaceResult {
 /// Stored face INTEGRALS feed both divergence and the accepted flux ledger.
 /// Geometry, halo exchange and failure consensus are independent of the model.
 ///
-/// With @p StaticArrays the faces read the static geometry arrays of node positions (N17, C1):
+/// With @p StaticArrays the faces read the static geometry arrays of a mapped layout (N17, C1):
 /// the face of axis a is the face of a uniform box whose spacing along a is the distance across
 /// it, which the generated body reads as its spacing (static_arrays()), and its integral and the
 /// divergence take the face and cell measures of the arrays. The incident frequency f of a face
 /// bounds |dF/du| / h on that box, so f d is a face conductance, and each incident cell K reads
-/// f d |S| / |K|. A chart, whose faces need not be orthogonal to the line of the centroids, is
-/// refused at construction.
+/// f d |S| / |K|. The faces of node positions are orthogonal to the line of the centroids; on a
+/// chart a face takes that line for its normal (K-orthogonality, which the arrays measure,
+/// DN36), and the resolution serves only rows that are one law on every logical axis, which read
+/// the normal through n.n = 1, so that the row of the axis normal is the flux density along the
+/// physical normal (DN35).
 template <int Dim, int Components, bool StaticArrays = false>
 class PreparedStencilFlux {
   using Field = MultiFab<Dim>;
@@ -88,10 +91,9 @@ class PreparedStencilFlux {
       error = nullptr;
       try {
         static_geometry_ = ctx.static_geometry();
-        if (!static_geometry_ || static_geometry_->kind() != StaticGeometryKind::nodes ||
-            static_geometry_->domain() != geometry_.domain())
+        if (!static_geometry_ || static_geometry_->domain() != geometry_.domain())
           throw std::invalid_argument(
-              "stencil flux on static geometry arrays requires the node positions of its layout");
+              "stencil flux on static geometry arrays requires the arrays of its layout");
         arrays_ = static_geometry_->view();
       } catch (...) {
         error = std::current_exception();

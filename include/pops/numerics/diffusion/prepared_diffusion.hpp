@@ -346,13 +346,16 @@ struct Divergence {
   }
 };
 
-/// The two-point flux of a scalar diagonal law on the static geometry arrays of node positions
-/// (N17, C1), a graded box of rank one to three. It is the Cartesian kernel with the logical
-/// spacing h replaced by the distance that the arrays state across the face: between the centroids
-/// of its cells, and at a physical end the mirrored distance 2 |m_f - c_K|, so that the centroid
-/// lies half of it from the face. The faces of node positions are orthogonal to the line of the
-/// centroids that they separate, so the two-point flux stays consistent. The end coefficient is
-/// the linear extrapolation in that distance (1.5 a_K - 0.5 a_in on a uniform box).
+/// The two-point flux of a scalar diagonal law on the static geometry arrays (N17, C1): node
+/// positions of rank one to three (a graded box), or a chart of rank two. It is the Cartesian
+/// kernel with the logical spacing h replaced by the distance that the arrays state across the
+/// face: between the centroids of its cells, and at a physical end the mirrored distance
+/// 2 |m_f - c_K|, so that the centroid lies half of it from the face. The faces of node positions
+/// are orthogonal to the line of the centroids that they separate; a face of a chart takes that
+/// line for its normal (K-orthogonality, which the arrays measure, DN36), and the resolution
+/// serves it one coefficient on every logical axis, whose normal flux reads the normal through
+/// n.n = 1 (DN35). The end coefficient is the linear extrapolation in that distance
+/// (1.5 a_K - 0.5 a_in on a uniform box).
 template <int Dim>
 struct StaticFaceFlux {
   FieldView<const Real, Dim> q, w, a;
@@ -456,8 +459,8 @@ struct StaticCellBalance {
 /// With @p StaticArrays the faces read the static geometry arrays of a mapped layout (N17, C1)
 /// instead of the uniform spacings of the logical box: distances, face measures and cell measures.
 /// The arrays serve the scalar diagonal law of node positions (a graded box of rank one to three),
-/// whose faces are orthogonal to the line of the centroids, so the two-point flux stays
-/// consistent; a chart, whose faces need not be, is refused at construction.
+/// whose faces are orthogonal to the line of the centroids, and of a chart of rank two with one
+/// coefficient on every logical axis, whose faces take that line for their normal (DN35, DN36).
 template <int Dim, int Components = 1, bool Tensor = false, bool Coupled = false,
           bool StaticArrays = false>
 class PreparedDiffusion {
@@ -465,7 +468,7 @@ class PreparedDiffusion {
   static_assert(Components > 0, "diffusion requires at least one accumulated component");
   static_assert(!Coupled || Tensor, "coupled gradients require the full component Jacobian");
   static_assert(!StaticArrays || (Components == 1 && !Tensor && !Coupled),
-                "static geometry arrays serve the scalar diagonal diffusion of node positions");
+                "static geometry arrays serve the scalar diagonal diffusion");
   using Field = MultiFab<Dim>;
   using Boundary = PreparedScalarBoundarySession<Dim>;
   Geometry<Dim> geometry_;
@@ -555,10 +558,9 @@ class PreparedDiffusion {
         tensor_flux_boundary_ = ctx.prepare_mesh_boundary_session(tensor_flux_, *lane_);
       if constexpr (StaticArrays) {
         static_geometry_ = ctx.static_geometry();
-        if (!static_geometry_ || static_geometry_->kind() != StaticGeometryKind::nodes ||
-            static_geometry_->domain() != geometry_.domain())
+        if (!static_geometry_ || static_geometry_->domain() != geometry_.domain())
           throw std::invalid_argument(
-              "diffusion on static geometry arrays requires the node positions of its layout");
+              "diffusion on static geometry arrays requires the arrays of its layout");
         arrays_ = static_geometry_->view();
         for (const auto& boundary : physical_)
           for (const Real slope : boundary.slope)

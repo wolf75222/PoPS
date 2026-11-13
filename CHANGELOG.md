@@ -67,6 +67,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
   until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
   case written by hand for b6 and N8 (program IR, artifact, identity, C++).
+- ROM-110 (N17, L2b-1): the two-point face on a chart (DN35 and DN36 of the design note). At a
+  physical end the static arrays of a chart now state the mirrored distance 2 |m_f - c_K|, as
+  node positions do, under the same certificate (the centroid of an end cell on the inner side of
+  its end face), where they stated NaN since L1a. The arrays measure their K-orthogonality and do
+  not require it: they publish the largest sine between the normal of a face and the line of the
+  two centroids that it separates (at a wall, of the cell centroid and the face centroid), 0 to
+  rounding on node positions. A `StencilFlux` (`two_point()`) on a chart is served when its rows
+  are one law on every logical axis (the row of an axis, its two cells and its spacing renamed,
+  is the row of every other), as for `-k grad(u)` with a scalar k: such a row reads the normal of
+  a face through n.n = 1 alone, so the row of the axis normal is the flux density along the
+  physical normal, across the distance of the centroids. The prepared diffusion of a Program is
+  served on a chart with one coefficient on every logical axis. Rows that differ by axis, and a
+  coefficient diag(k_x, k_y) on a chart, whose normal flux is (k_x n_x^2 + k_y n_y^2) du/dn, are
+  refused at resolution (`static_geometry_stencil_unavailable`,
+  `static_geometry_diffusion_unavailable`). `pops.inspect` of a charted case with a diffusive flux
+  states that its faces take the line of the centroids for their normal and that the arrays bound
+  at `pops.bind` report the largest sine. The cases are the annulus with its walls held at given
+  values (`build_annulus_diffusion`) and the doubly periodic unit square turned by pi / 6 and
+  sheared (`build_chart_diffusion`).
 - ROM-110 (N17, L2a): the charted support at the surface (D0b; DN25 to DN34 of the design note).
   `σ.chart(x=e_x, y=e_y)` states the chart of a support of rank two, one expression of the
   coordinates of σ per axis of the Cartesian frame. The keywords name the frame axes, which key the
