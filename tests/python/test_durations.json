@@ -2962,7 +2962,7 @@
         },
         "tests/python/integration/runtime/test_api_v02_continuum_native.py": {
           "declared_cases": 8,
-          "estimated_seconds": 600,
+          "estimated_seconds": 1470,
           "kind": "native_profile",
           "native_dimension": 2,
           "registration": "completion_20261015_existing"
@@ -3158,7 +3158,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 1,
-          "estimated_seconds": 520,
+          "estimated_seconds": 650,
           "ci_ranks": [
             1,
             2
