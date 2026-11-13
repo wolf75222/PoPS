@@ -18,6 +18,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-90 (N9, « La référence sous les solves de relation »): the relation solve of a traced
+  method runs the reference conjugate gradient of `pops.lib.solve` (lot 4) instead of b6's native
+  CG. A reference solve is one `solve_linear` node realized by its solver's region (SV12, IR 34),
+  with the native's outcome, consumption and evidence; its candidate passes the SV8 gate, measured
+  in the region through the same apply and decided by the native's
+  `apply_measured_original_residual_gate`. One table of solve failures gives both realizations
+  their actions, and a trial site reports the variant of its status (T39): an iteration limit is
+  `BudgetExhausted` (`max_iterations`), any other rejected status `SolveFailed`, in the rows of
+  `pops.advance-control@5` (IR 35). A `matrix_free_operator` of domain and range `state` records
+  its apply on a State operand (`set_apply(operator, body, operand=)`, IR26), so the operator of a
+  relation is the component's own rate at the State, such as the two-point StencilFlux with the
+  runtime parameters it reads; core ledger entry `state-operand-of-a-matrix-free-operator`. The
+  claims of the rates stay (IR16): `LinearClaims.homogeneous`, and a rate not stated linear and
+  homogeneous is refused by name. A coefficient that is a `model.parameter` is claimed from its
+  admissible set: L1-d with `nu = model.parameter("nu", admissible=pops.Positive())` compiles once
+  and runs with each bound value, equal to the case with `nu` a constant within the request of the
+  solve. A reference solve is a barrier of the field caches of #781. The Trace witness of the
+  relation route (L1-d against the same IMEX step written on b6 with the native CG) is in
+  `test_relation_solve_reference_n9_native.py`.
 - OD31 (vertical slice of the exit of phase 1): master's tutorial 02 written in the surface,
   `examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py`, with its upwind
   flux (in master's arithmetic) and its SSPRK2 written in the case file. The pieces that PoPS does
@@ -262,6 +281,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `regrid_topology`, `scalar_field(topology=, initial=)`, the `field_topology` value type and the
   native bundle and allocation fragments. The three regrid cases ran bit for bit equal to the
   bridge on every cell, halo included, before the deletion.
+- ROM-90 (N9, « La référence sous les solves de relation »): `cg()` of `pops.lib.solve` is no
+  longer a bridge of MG9 on b6's native CG. `cg().linear_solver(request=)` returns the reference
+  with the request's tolerances, `SolverDefinition.declare_relation(requires=, description=)`
+  replaces `bind_relation_native`, and the linear maps of N15 (`linear_apply`, the apply of
+  `two_point()`) are removed: the operator is the discrete operator that the explicit route
+  evaluates. `pops.lib.solve` is a package (`claims`, `refused`). A fixed failure site under a
+  reference realization is refused at elaboration (§3.7), and a b6 rate op that a region does not
+  run is refused by name. `tests/gates/mg9_bridges.toml` loses its `cg` entry. Cost (reported,
+  not gated, driver's ruling of 13/11): the relation solves under `cg()` are about 470 times
+  slower than before this lot at 64² and about 2600 times at 256². On L1-d a step takes 2.47 s
+  at 64² and 259 s at 256² (11 GB resident), against 5.3 ms and 99 ms for the same step on b6's
+  native CG. The region recorded the face expressions of every iterate; the follow-up « Le coût
+  de la région d'un solveur » removes them.
 - ROM-85 (N10, phase 1, lot 3a): strict mode on `Patches` (spec 0.3 DM5). The layout record
   (`data_layout_and_distribution`, schema 4) lists every general access of the plan
   (`general_accesses`: node, op, array, layout and IR8 provenance of the index) for `at` and the

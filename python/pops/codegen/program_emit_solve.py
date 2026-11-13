@@ -228,12 +228,22 @@ def _append_solve_report_guard(
         "(void)%s.consume(pops::SolveConsumption::kAccept);" % outcome)
 
 
+_SOLVE_ACTION_CPP = {"reject_attempt": "pops::SolveAction::kRejectAttempt",
+                     "fail_run": "pops::SolveAction::kFailRun"}
+
+
+def solve_failure_action_cpp(program: Any, solve: Any, source: str, status: str) -> str:
+    """The C++ action of a failure of ``solve`` (``source``, ``status``): the table of solve
+    failures (``solve_failure_disposition``) under the action of its unique consumer."""
+    from pops.time.solve_outcome import solve_failure_disposition
+
+    kind, statuses = _consumed_solve_action(program, solve)
+    return _SOLVE_ACTION_CPP[solve_failure_disposition(source, status).resolve(kind, statuses)]
+
+
 def gate_refusal_action_cpp(program: Any, solve: Any) -> str:
     """The action of an SV8 gate refusal: the consumer's own choice for ``safeguard_failure``."""
-    kind, statuses = _consumed_solve_action(program, solve)
-    if kind == "reject_attempt" and "safeguard_failure" in statuses:
-        return "pops::SolveAction::kRejectAttempt"
-    return "pops::SolveAction::kFailRun"
+    return solve_failure_action_cpp(program, solve, "gate", "safeguard_failure")
 
 
 def _append_original_residual_gate(
@@ -273,13 +283,10 @@ def _krylov_failure_actions_cpp(program: Any, solve: Any) -> str:
     Only recurrence failures have a caller-selected disposition. Native evaluation,
     authentication, and report-validity failures retain their own terminal authority.
     """
-    kind, statuses = _consumed_solve_action(program, solve)
-    actions = (
-        "pops::SolveAction::kRejectAttempt"
-        if kind == "reject_attempt" and status in statuses
-        else "pops::SolveAction::kFailRun"
-        for status in ("singular", "breakdown", "iteration_limit")
-    )
+    from pops.time.solve_outcome import FILTERED_SOLVE_STATUSES
+
+    actions = (solve_failure_action_cpp(program, solve, "body", status)
+               for status in FILTERED_SOLVE_STATUSES)
     return "pops::KrylovFailureActions{%s}" % ", ".join(actions)
 
 
@@ -1455,6 +1462,92 @@ def _require_system_matrix_free_stencil(
         % (indices[owner], json.dumps("matrix_free_stencil")))
 
 
+def emit_reference_solve(program: Any, v: Any, var: Any, model: Any, lines: list[str],
+                         prelude: list[str], block_idx: Any, field_plans: Any,
+                         target: Any = "system") -> None:
+    """Lower a ``solve_linear`` whose realization is a reference (SV12; N9 lot « La référence
+    sous les solves de relation », §3.2): its region, then b6's report and outcome, then the
+    evidence and the guard of the native route.
+
+    The region (the solver's body, lot 4) is a captured Result whose success holds the solution,
+    the count and the norm of the last true residual. The report is built from it on every rank:
+    the region already reached consensus (IR7), so every rank builds the same report. A failure
+    takes its status, action and reason from the table of solve failures, as on the native route.
+    """
+    if target != "system":
+        raise ValueError("a reference solve (SV12) lowers on a uniform Program, target 'system'; "
+                         "got %r" % (target,))
+    from pops.codegen.program_emit_structured_control import _emit_region
+
+    operator = v.inputs[0]
+    stencil = operator.attrs.get("stencil_access")
+    ghosts = int(getattr(stencil, "required_ghost_depth", 0))
+    components = int(v.attrs["ncomp"])
+    if components != int(operator.attrs["ncomp"]):
+        raise ValueError("reference solve_linear component count disagrees with its operator")
+    solution = "sf_sol%d" % v.id
+    prelude.append(
+        "auto %s = std::make_shared<pops::MultiFab<pops::kNativeDimension>>("
+        "ctx.alloc_scalar_field(%d, %d));" % (solution, components, ghosts))
+    region = dict(var)
+    _emit_region(program, v.attrs["body_block"], region, model, lines, prelude, block_idx,
+                 field_plans, target)
+    captured = region[v.attrs["body"].id]
+    status, origin, output = captured["code"], captured["origin"], captured["value"]
+    outcome = "kr%d" % v.id
+    report = "%s_region_report" % outcome
+    lines.append("pops::SolveReport %s{};" % report)
+    lines.append("if (%s == 0) {" % status)
+    lines.append("  pops::PureFieldAlgebra::copy(*%s, %s);" % (solution, output["solution"]))
+    lines.append("  %s.iters = static_cast<int>(%s);" % (report, output["iterations"]))
+    lines.append("  %s.residual_norm = static_cast<pops::Real>(%s);"
+                 % (report, output["residual_norm"]))
+    lines.append("  %s.mark_solved();" % report)
+    for index, (code, failure, reason) in enumerate(v.attrs["realization"]["failures"]):
+        lines.append("} else if (%s == 1 && %s == %d) {" % (origin, status, int(code)))
+        lines.append("  %s.mark_failed(%s, %s, %s);" % (
+            report, _SOLVE_STATUS_CPP[failure],
+            solve_failure_action_cpp(program, v, "body", failure), json.dumps(reason)))
+    # A value that the region rejected at runtime (origin 2: a value that is not finite, code 3).
+    lines.append("} else if (%s == 2) {" % origin)
+    lines.append(
+        "  %s.mark_failed(%s, %s, std::string(\"invalid evaluation; origin=2; code=\") + "
+        "std::to_string(%s));" % (
+            report, _SOLVE_STATUS_CPP["invalid_evaluation"],
+            solve_failure_action_cpp(program, v, "body", "invalid_evaluation"), status))
+    lines.append("} else {")
+    lines.append(
+        "  throw std::logic_error(std::string(%s) + std::to_string(%s) + \"; code=\" + "
+        "std::to_string(%s));" % (
+            json.dumps("reference solve %s: a failure that the table of solve failures does not "
+                       "list, origin=" % v.name), origin, status))
+    lines.append("}")
+    lines.append(
+        "pops::SolveOutcome %s = pops::SolveOutcome::collective_lane(std::move(%s), "
+        "ctx.prepared_execution_lane());" % (outcome, report))
+    var[v.id] = "(*%s)" % solution
+    # SV8 (§3.3): the region measured ||R(u)|| and ||R(0)|| of a solved candidate in the request's
+    # norm; the decision is the native's own, and a measurement that failed refuses the candidate
+    # as an invalid evaluation with the refusal action, as on the native route.
+    realization = v.attrs["realization"]
+    lines.append(
+        "(void)pops::runtime::program::apply_measured_original_residual_gate(%s, [&]() {"
+        % outcome)
+    lines.append(
+        "  if (%s != 0) throw std::runtime_error(std::string(\"its region rejected a value; "
+        "code=\") + std::to_string(%s));" % (output["gate_code"], output["gate_code"]))
+    lines.append(
+        "  return pops::runtime::program::OriginalResidualGate{static_cast<pops::Real>(%s), "
+        "static_cast<pops::Real>(%r), static_cast<pops::Real>(%r), static_cast<pops::Real>(%s)};"
+        % (output["gate_norm"], float.fromhex(realization["atol"]),
+           float.fromhex(realization["rtol"]), output["gate_scale"]))
+    lines.append("}, %s, \"solve_linear\");" % gate_refusal_action_cpp(program, v))
+    if _solve_evidence_requested(program, v):
+        # SV5: the evidence is the report, copied before its consumption, as on the native.
+        lines.append("const pops::SolveReport %s_evidence = %s.report();" % (outcome, outcome))
+    _append_solve_report_guard(program, v, outcome, lines, label="solve_linear", phase="solve")
+
+
 def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                        lines: Any, target: Any = "system") -> None:
     """Lower solve_linear to a call into the runtime's matrix-free Krylov loop. The solution field
@@ -1470,6 +1563,9 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     Uniform and level-scoped AMR solves use the generic context seam. A prepared hierarchy provider
     owns the refined native emission and declares its exact flat Krylov fallback contract."""
     from pops.codegen.program_field_reuse import publish_field_solve, reuse_field_solve
+    from pops.time.solve_outcome import native_realization
+
+    native_realization(v)
     if reuse_field_solve(v, var, lines, target=target):
         return
     op_value = v.inputs[0]

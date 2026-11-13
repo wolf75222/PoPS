@@ -379,6 +379,7 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
           report.rejection = rejected.what();
           report.rejection_phase = phase;
           report.rejection_detail = rejected.detail();
+          report.rejection_status = solve_status_name(rejected.status());
           return finish(AdvanceRunStop::kTrialFailure);
         }
         if (phase != runtime::program::kAssessmentRejectionPhase &&
@@ -388,6 +389,7 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
         report.rejection = rejected.what();
         report.rejection_phase = phase;
         report.rejection_detail = rejected.detail();
+        report.rejection_status = solve_status_name(rejected.status());
         if (attempt >= max_attempts) {
           report.attempts = attempt;
           return finish(AdvanceRunStop::kAttemptBudget);

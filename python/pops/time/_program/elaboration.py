@@ -198,25 +198,33 @@ def _lower_memory(program: Any, method: Any, trace: MethodTrace) -> tuple:
 def _trial_failures(program: Any, trace: MethodTrace) -> tuple:
     """The failure sites of the trace (T38): for each field request its solve, classified, and the
     field_evaluation guards of its load, coefficients and reads, listed unclassified; then each
-    admissibility guard of the body (IR4), classified."""
+    admissibility guard of the body (IR4), classified.
+
+    ``variant`` lists the variants of T39 that the site can report (N9 « La référence sous les
+    solves de relation » §3.6): a solve site ``BudgetExhausted`` or ``SolveFailed``, which the run
+    chooses from the rejected status through the table of solve failures; an admissibility guard
+    ``NotAdmissible``; an unclassified site none."""
+    from pops.time.solve_outcome import SOLVE_SITE_VARIANTS
+
     rows = []
     for request in trace.requests:
         retry = not request.fixed
         for guard in ("load", "coefficients"):
             rows.append({"site": "%s/%s" % (request.site, guard), "guard": "field_evaluation",
-                         "variant": None, "retry_can_change": retry, "classified": False,
+                         "variant": [], "retry_can_change": retry, "classified": False,
                          "lot": _GUARD_LOT})
-        rows.append({"site": request.site + "/solve", "guard": "solve", "variant": "SolveFailed",
-                     "retry_can_change": retry, "classified": True, "lot": None})
+        rows.append({"site": request.site + "/solve", "guard": "solve",
+                     "variant": list(SOLVE_SITE_VARIANTS), "retry_can_change": retry,
+                     "classified": True, "lot": None})
         for _, unknown in request.reads:
             rows.append({"site": "%s/read:%s" % (request.site, unknown.name),
-                         "guard": "field_evaluation", "variant": None, "retry_can_change": retry,
+                         "guard": "field_evaluation", "variant": [], "retry_can_change": retry,
                          "classified": False, "lot": _GUARD_LOT})
     for site in trace.solves:
-        rows.append({"site": site.site, "guard": "solve", "variant": "SolveFailed",
+        rows.append({"site": site.site, "guard": "solve", "variant": list(SOLVE_SITE_VARIANTS),
                      "retry_can_change": not site.fixed, "classified": True, "lot": None})
     for guard in trace.guards:
-        rows.append({"site": guard.site, "guard": "admissibility", "variant": "NotAdmissible",
+        rows.append({"site": guard.site, "guard": "admissibility", "variant": ["NotAdmissible"],
                      "retry_can_change": not guard.fixed, "classified": True, "lot": None})
     return tuple(rows)
 

@@ -53,6 +53,7 @@ from pops.time._program.control import AdvanceControl, memory_rings
 from pops.time._program.elaboration import Proposal, StepRule
 from pops.time._program.memory import MemoryView
 from pops.time._program.outputs import EveryDt, OutputRegion, Product, landing
+from pops.time.solve_outcome import solve_status_variant
 
 DEFAULT_MAX_STEPS = 1_000_000
 """``max_steps`` when a run leaves it out: master's (``_runtime_instance.py:1598@bb9``), CC14."""
@@ -117,6 +118,16 @@ class Failure:
             return ("%s: max_steps=%d accepted steps ended the run at t=%r before until=%r"
                     % (self.variant.__name__, payload["max_steps"], payload["time"],
                        payload["until"]))
+        if self.variant is BudgetExhausted and payload["budget"] == "max_iterations":
+            # A solve of a failure site reached its iteration limit (SV10, N9 relation solves
+            # §3.6): the budget is the solve's, not the step's.
+            if "attempts" not in payload:
+                return "%s at the trial site %s: its solve reached max_iterations: %s" % (
+                    self.variant.__name__, payload["site"], payload["reason"])
+            return ("%s: the solve of the fixed failure site %s reached max_iterations and ended "
+                    "the step from t=%r after %d attempt(s), which a retry cannot change (T38): %s"
+                    % (self.variant.__name__, payload["site"], payload["time"],
+                       payload["attempts"], payload["reason"]))
         if self.variant in (SolveFailed, NotAdmissible):
             if "attempts" not in payload:
                 return "%s at the trial site %s: %s" % (
@@ -289,16 +300,44 @@ def _trial_site(report: Mapping[str, Any]) -> dict:
     return {"site": site, "reason": reason}
 
 
-_VARIANTS = {"SolveFailed": SolveFailed, "NotAdmissible": NotAdmissible}
+_VARIANTS = {"BudgetExhausted": BudgetExhausted, "SolveFailed": SolveFailed,
+             "NotAdmissible": NotAdmissible}
 
 
-def _trial_variant(control: Any, site: str) -> type:
-    """The T39 variant of the failure site ``site``, from its row of the compiled control."""
-    variants = {row["site"]: row["variant"] for row in control.to_data().get("trial_failures", ())}
-    if variants.get(site) not in _VARIANTS:
+def _trial_variant(control: Any, site: str, status: str) -> type:
+    """The T39 variant of the failure site ``site`` rejected with the solve status ``status``.
+
+    The row of the compiled control lists what the site can report (N9 « La référence sous les
+    solves de relation » §3.6). A solve site maps the status through the table of solve failures:
+    ``iteration_limit`` gives ``BudgetExhausted``, every other rejected status ``SolveFailed``. An
+    admissibility guard rejects with ``invalid_evaluation`` and gives ``NotAdmissible``. A status
+    that the row does not allow is an error, never a guess."""
+    rows = {row["site"]: row for row in control.to_data().get("trial_failures", ())}
+    row = rows.get(site)
+    if row is None or not row["classified"]:
         raise RuntimeError("the failure site %r has no classified row in the compiled control"
                            % site)
-    return _VARIANTS[variants[site]]
+    if row["guard"] == "solve":
+        variant = solve_status_variant(status)
+    elif row["guard"] == "admissibility" and status == "invalid_evaluation":
+        variant = "NotAdmissible"
+    else:
+        variant = None
+    if variant is None or variant not in row["variant"]:
+        raise RuntimeError("the failure site %r was rejected with the status %r, which its row "
+                           "(%s) does not list" % (site, status, ", ".join(row["variant"])))
+    return _VARIANTS[variant]
+
+
+def _trial_failure(control: Any, report: Mapping[str, Any], **extra: Any) -> Failure:
+    """The Failure of the trial rejection of ``report`` at its site, with ``extra`` in its payload.
+    A solve that reached its iteration limit names its budget, ``max_iterations``."""
+    site = _trial_site(report)
+    variant = _trial_variant(control, site["site"], report["rejection_status"])
+    payload = dict(site, **extra)
+    if variant is BudgetExhausted:
+        payload["budget"] = "max_iterations"
+    return Failure(variant, "trial", payload)
 
 
 def _run_data(start: float, until: float, dt: float, rule: Any, max_steps: int) -> dict:
@@ -436,9 +475,7 @@ class Simulation:
                        "attempts": report["attempts"], "time": time,
                        "rejection": report["rejection"]}
             if phase == "trial":
-                site = _trial_site(report)
-                payload["cause"] = Failure(_trial_variant(self._control, site["site"]), "trial",
-                                           site)
+                payload["cause"] = _trial_failure(self._control, report)
             elif phase != "assessment":
                 raise RuntimeError("System::run_advance spent an attempt budget on a rejection "
                                    "of phase %r" % phase)
@@ -447,9 +484,8 @@ class Simulation:
             if report["rejection_phase"] != "trial_failure":
                 raise RuntimeError("System::run_advance ended a step at a fixed failure site "
                                    "without its phase")
-            site = _trial_site(report)
-            failure = Failure(_trial_variant(self._control, site["site"]), "trial", dict(
-                site, time=time, attempts=report["attempts"]))
+            failure = _trial_failure(self._control, report, time=time,
+                                     attempts=report["attempts"])
         elif stop != _REACHED or time != until:
             raise RuntimeError("System::run_advance returned without reaching its frontier")
         result = RunResult(

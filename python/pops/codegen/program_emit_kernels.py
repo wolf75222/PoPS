@@ -397,6 +397,12 @@ def _prepared_native_components(program: Any, *, target: str = "system") -> tupl
             continue
         if value.op != "solve_linear":
             continue
+        from pops.time.solve_outcome import native_realization, solve_realization_kind
+
+        if solve_realization_kind(value) == "reference":
+            # A reference solve (SV12) is its region: it needs no native solver component.
+            continue
+        native_realization(value)
         providers: list[PreparedNullspaceProvider | PreparedKrylovMethodProvider
                         | PreparedPreconditionerProvider | PreparedHierarchySolverProvider] = [
             prepared_nullspace_provider_from_attrs(value.attrs)
