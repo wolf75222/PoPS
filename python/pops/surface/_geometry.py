@@ -224,6 +224,11 @@ class Support:
         return Boundary(self)
 
     @property
+    def _box(self) -> Box:
+        """The box of the logical coordinates: the box itself, or the box that a chart maps."""
+        raise NotImplementedError("a support states the box of its logical coordinates")
+
+    @property
     def _logical_axes(self) -> list:
         """The logical axes, which name the mesh axes: ``cells=`` in their order, ``face.axis``
         and the node functions of ``pops.Graded`` (S6); on a box, its axes."""
@@ -336,7 +341,7 @@ class Charted(Support):
 
     def __init__(self, box: Box, frame: dict) -> None:
         names, components, degenerate = _chart(box, frame)
-        self._box = box
+        self._reference = box
         self._names = box._names
         self._bounds = box._bounds
         self._coordinates = box._coordinates
@@ -347,6 +352,11 @@ class Charted(Support):
                                         in enumerate(zip(names, components, strict=True)))
         self._degenerate = degenerate
         self.site = user_site(2)
+
+    @property
+    def _box(self) -> Box:
+        """The box of the logical coordinates: the box that the chart maps."""
+        return self._reference
 
     @property
     def axes(self) -> list:

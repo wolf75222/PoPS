@@ -1,7 +1,7 @@
 """N17 L2a on a native build of rank two: a scalar advected on the charted annulus (ROM-110, C2).
 
 The annulus of L1a is written with the surface (examples/api_v02/models_charted_supports.py):
-``ring = pops.Box(r=(1, 2), theta=pops.Periodic(0, 2 * pi))`` and
+``ring = Box(r=(1, 2), theta=Periodic(0, 2 * pi))`` of ``pops.surface`` and
 ``annulus = ring.chart(x=ring.r * cos(ring.theta), y=ring.r * sin(ring.theta))``, a scalar advected
 at the Cartesian velocity (1, 1/2) by ``rusanov()``, ``outflow`` at both walls, the SSPRK2 of
 ``pops.lib.time.methods``, 8 x 16 cells laid out with ``geometry=GaussLegendre(2)``; it is

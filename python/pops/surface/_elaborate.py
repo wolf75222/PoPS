@@ -1157,6 +1157,7 @@ class _Elaboration:
         from ._program import Graded
 
         rule = stated.base.geometry if isinstance(stated, Graded) else stated.geometry
+        assert rule is not None  # the layout refuses a chart without its rule (DN29)
         values = tuple(coordinate(frame, axis) for axis in frame.axes)
         choices: list = []
         where = ""
