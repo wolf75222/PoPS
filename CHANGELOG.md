@@ -18,6 +18,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- OD31 (vertical slice of the exit of phase 1): master's tutorial 02 written in the surface,
+  `examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py`, with its upwind
+  flux (in master's arithmetic) and its SSPRK2 written in the case file. The pieces that PoPS does
+  not run yet were listed in `tests/gates/vertical_slice.toml` in the order of the file (statement,
+  refusal, owner); `muscl(limiter=vanleer)` left the list with N3 lot 2 (#795) and the import of
+  `ghosts` from `pops.lib.numerics` with #799, so the list is empty and
+  `tests/python/integration/surface/test_vertical_slice_t02.py` runs the file natively to its end;
+  the list only shrinks (`scripts/vertical_slice.py check --check-base`, a step of the
+  architecture job). The case is the CF1 case `T02-slice` (frozen engine unchanged) and its
+  directory is a case path of CF8. The MG8 job runs the file against master's tutorial 02
+  (`scripts/run_mg8_rewritten.py`, contract `tests/gates/mg8_rewritten.toml`): the file as written
+  differs from master only in the rounding of exp in the initial data, in the 12 recorded cells,
+  each by 2 ulp at most, and by at most 1e-12 relative at t = 0.2 (cause C44, removed with G07);
+  with master's initial array bound as data, it is bit for bit at t = 0 and t = 0.2. The bound only
+  shrinks (MG6). `benchmarks/slice/t02_pf10.py` measures PF10 (1) and (3) for the slice.
 - ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
   from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
   `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the
@@ -105,8 +120,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   on which the chart does not depend on the other coordinate is degenerate: it leaves `σ.boundary`,
   and a case on that support waits for lot L2c with `identify` of G09. A coordinate read on a
   charted support, in a value of the model or an initial value, and `pops.project` there wait for
-  lot L2b, which reads them at the points of the chart; `σ.weighted` waits for lot L3. The case is
-  `examples/api_v02/models_charted_supports.py`, a scalar advected by `rusanov()` on the annulus.
+  lot L2b, which reads them at the points of the chart, and so do a value relation (its ghost is
+  the reflection of a cell across a face of the chart) and a reconstruction above the cell values,
+  refused where the case is built (`NotYetElaborated`); `σ.weighted` waits for lot L3. On the
+  physical normal of a chart the face input s of a face authored in source, which `rusanov()`
+  reads as its spectral radius, is b6's bound sum_k |n_k| rho(A_k), not the exact radius of
+  `spectral_radius`: equal on an axis normal, larger off it and without bound near a face tangent
+  to the flow. It is a transitional route until lot L2d of N17, which generates the exact radius;
+  `pops.inspect` names it on the row of the scheme. An array that a run published on another
+  support, the box of the chart or the same box under another chart, is refused as a datum of the
+  chart (`SupportMismatch`). The case is `examples/api_v02/models_charted_supports.py`, a scalar
+  advected by `rusanov()` on the annulus.
 - ROM-110 (N17, L1b): graded spacing at the surface, and the static geometry arrays of a graded
   box of rank three. `pops.Graded(base=pops.Uniform(cells=c), nodes={box.x: f})` places node k of
   an axis at f(s), s = k / c correctly rounded, f a plain function that PoPS calls once with the
@@ -340,6 +364,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3c, part 1): the tests and test fixtures that wrote AMR tagging as a ValueExpr
+  graph without testing the graph itself write regions of `cell` (66 files); a partial
+  per-layout case on the physical maps shows each of three layouts refining its own part of the
+  domain, with the same boxes on graph and region routes. The tests of the tag graph, of the VM
+  and of external Tagger components keep the graph; they leave with the VM (lot 3c, part 2).
 - ROM-95 (N12, lot 3b): a criterion written as regions of `cell` now compiles on a plan with
   several layouts. `pops.compile` generates each adaptive layout's criterion into that layout's
   Program slice, and the layout's AmrSystem installs the entry of its own slice; no native code

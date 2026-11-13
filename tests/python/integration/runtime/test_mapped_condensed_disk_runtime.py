@@ -104,10 +104,10 @@ def _case(n, levels, *, warm_start=True, regrid_every=100, grow_by_momentum=Fals
     threshold = case.param(RuntimeParam("refine_marker", default=.75))
     transfer = AMRTransfer()
     transfer.state(block[state], StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
-    tags = (Tag(ValueExpr(block[state])["marker"] > case.value(threshold)),)
+    tags = (Tag(lambda cell: cell.value(ValueExpr(block[state])["marker"]) > case.value(threshold)),)
     if grow_by_momentum:
         momentum_threshold = case.param(RuntimeParam("refine_momentum", default=1.))
-        tags += (Tag(ValueExpr(block[state])["mx"] > case.value(momentum_threshold)),)
+        tags += (Tag(lambda cell: cell.value(ValueExpr(block[state])["mx"]) > case.value(momentum_threshold)),)
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(n, 4*n), periodic=PeriodicAxes((angular,))),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,)*(levels-1)),
         tagging=AMRTagging(rules=(*tags, Buffer(cells=1, selection="refine-requests")),
