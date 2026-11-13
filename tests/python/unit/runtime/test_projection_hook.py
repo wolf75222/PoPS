@@ -174,7 +174,7 @@ def _projection_case() -> tuple[pops.Case, AMR]:
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(state_instance) > case.value(threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(state_instance)) > case.value(threshold)),
                 Buffer(cells=1),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

@@ -28,6 +28,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
   sliver step at a frontier, when a CFL step ends within four ulp short of it or when
   `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-89 (N8, « Ancrage des calendriers au départ du run », spec §5.2): a schedule counts from
+  the start of each run. `every(time=h)` publishes at `t0 + k h`, computed exactly from the run's
+  start `t0` and rounded once, and `every(steps=k)` counts the accepted steps of the run, for an
+  Output as for `Regrid(criterion, every(k))` (the AMR hierarchy keeps the step its run started
+  at; `pops.run` starts a run, `pops.step` continues the current one). A lattice time within four
+  ulp of `until`, below or above, is published at `until`; this also applies to a first run,
+  where a lattice time a few ulp above `until` used to be dropped (lists keep the one-sided rule,
+  four ulp below). A later run
+  of the surface off the lattice of the first one is no longer refused, and no publication is
+  repeated at the time and step where the previous run ended. Rows and identities are unchanged.
+- ROM-98 (N15, lot D-E, part D): `dt=cfl_limit(flux, cfl=, max_dt=None)` (spec 0.3, 2.6.2,
+  2.6.9, SD44, SD70; OD31). `from pops.lib.time import cfl_limit`;
+  `pops.Advance(method, dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2))` elaborates onto N8's
+  compiled step rule, `StepRule(cfl, max_dt, strategy=AdaptiveCFL(cfl, max_dt))`: each step is
+  b6's CFL selection on the wave speeds of the model, capped by `max_dt`, and the run lands on
+  its frontiers; `pops.run` on the artifact takes master's `AdaptiveCFL`. The core knows a
+  library step rule as `pops.StepRuleValue` (its fluxes and its realization), not by its name
+  (CF2). A rule that leaves out a transport flux of the model, a model with a diffusive flux and
+  a flux without derived waves refuse with their lot. A 64 x 64 advection with inflow and
+  outflow runs bit for bit as the same case written by hand, and as master's `AdaptiveCFL`.
+  A compiled run with the rule refuses every global step bound (`add_dt_bound`), even one added
+  before `bind`, which the `step_cfl` route admits: a case with such a bound cannot yet take
+  `cfl_limit` in a compiled run (review R2 of #782). `cfl_limit` is a bridge of MG9
+  (`tests/gates/mg9_bridges.toml`, owner N8): `scripts/mg9_bridges.py` finds a subclass of
+  `StepRuleValue` as it finds a `SchemeValue`, and the entry leaves before the exit of phase 1,
+  when N8 elaborates `dt=` as a function of `cell`.
 - ROM-98 (N15, lot « solves »): `pops.unknown`, `pops.solve`, `pops.Tolerance`,
   `Advance(tolerance=)` and `Program(solvers=)` of spec 0.3, 2.6.7, `cg()` in `pops.lib.solve`
   (a bridge of MG9 on b6's native conjugate gradients) and `imex_euler` in
@@ -210,6 +236,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- ROM-85 (N10, phase 1, lot 3a): strict mode on `Patches` (spec 0.3 DM5). The layout record
+  (`data_layout_and_distribution`, schema 4) lists every general access of the plan
+  (`general_accesses`: node, op, array, layout and IR8 provenance of the index) for `at` and the
+  local access with an index that is not the map's argument, the imports by requests or CSR and
+  the scatters; none reaches `Patches` or `LevelPatches`. A field leaf given to one of them
+  (or to `gather`, `scatter_reduce`) raises `GeneralAccessOnPatches` (rule DM5), which is a
+  `TypeError` as before and a `ValueError` like the other typed refusals. `state_geometry` is
+  left to G03 (ALE) instead of lot 3. The native type name of a field in the versioned lowering
+  is decided by `is_field_leaf` (review of #777, R1), and the inventory script names the forms it
+  does not see (R2). The generated C++ is unchanged.
 - ROM-85 (N10, phase 1, lot 1b): one function tells a field leaf from a finite array. Every line of
   `python/pops` that compared a `vtype` spelling to ask « field » or « finite array » now asks
   `pops._ir.data_model` (`value_kind`, `is_field_leaf`, `is_finite_array`, `is_finite_index`,
@@ -248,6 +284,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   slot in the table, refused at compile) is refused by its name, and a threshold that no relation
   reads stays a `case.param` (Q4). A Regrid `when` body and its indicators refuse a model parameter
   by its name. Core ledger: `refinement-region-reads-a-runtime-parameter-of-its-model`.
+- ROM-95 (N12, lot 3c, part 1): the tests and test fixtures that wrote AMR tagging as a ValueExpr
+  graph without testing the graph itself write regions of `cell` (66 files); a partial
+  per-layout case on the physical maps shows each of three layouts refining its own part of the
+  domain, with the same boxes on graph and region routes. The tests of the tag graph, of the VM
+  and of external Tagger components keep the graph; they leave with the VM (lot 3c, part 2).
 - ROM-95 (N12, lot 3b): a criterion written as regions of `cell` now compiles on a plan with
   several layouts. `pops.compile` generates each adaptive layout's criterion into that layout's
   Program slice, and the layout's AmrSystem installs the entry of its own slice; no native code

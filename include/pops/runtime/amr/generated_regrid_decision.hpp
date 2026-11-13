@@ -39,8 +39,10 @@ struct GeneratedIndicatorPatch {
   std::uint8_t* non_finite = nullptr;
 };
 
-/// The reduced inputs of the decision: the accepted step count and time after the step, and one
-/// value per indicator, already reduced over every level and rank. The entry writes 1 to `regrid`
+/// The reduced inputs of the decision: the accepted step count of the run and the time after the
+/// step, and one value per indicator, already reduced over every level and rank. `steps` counts
+/// the accepted steps from the start of the run (AmrSystem::run_start_step; spec 5.2), not from the
+/// start of the simulation. The entry writes 1 to `regrid`
 /// when the body is true and 0 otherwise.
 struct GeneratedRegridDecisionRequest {
   std::int64_t steps = 0;
