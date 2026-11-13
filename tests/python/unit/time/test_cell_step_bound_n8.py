@@ -199,3 +199,29 @@ def test_the_runtime_knows_the_zero_elliptic_brick_by_its_codegen_identity():
     source = Path(module_codegen.__file__).read_text()
     assert '"zero-elliptic-rhs",' in source
     assert '"pops.codegen.zero-elliptic-rhs-brick"' in header
+
+
+def test_a_cell_width_is_positive_by_the_geometry():
+    """Ruling 13/11 (a): cfl_limit's (cfl * w) / s at a cell at rest is w / +0 = +infinity only
+    because w > 0, which the geometry guarantees: the surface and the b6 layouts refuse an empty
+    extent or no cell, and the native Geometry, which the kernel's ``spacing`` reads, refuses a
+    spacing that is not finite and positive."""
+    from pathlib import Path
+
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian2D
+    from pops.mesh import CartesianGrid
+
+    with pytest.raises(ValueError, match="lower < upper"):
+        surface.Box(x=(1.0, 1.0))
+    with pytest.raises(TypeError, match="takes a number of cells"):
+        surface.Uniform(cells=(4, 0))
+    with pytest.raises(ValueError, match="upper must exceed lower"):
+        CartesianDomain("box", lower=(0.0, 0.0), upper=(0.0, 1.0))
+    frame = CartesianDomain("box", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    with pytest.raises(ValueError, match="must be >= 1"):
+        CartesianGrid(frame=frame, cells=(0, 4))
+    root = Path(__file__).resolve().parents[4]
+    geometry = (root / "include/pops/mesh/geometry/geometry.hpp").read_text()
+    assert "!(cell_spacing > Real(0)))" in geometry
+    assert "Geometry physical extents must produce finite positive cell spacing" in geometry

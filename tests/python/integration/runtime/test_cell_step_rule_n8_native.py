@@ -283,3 +283,53 @@ def test_a_speed_that_is_not_a_number_fails_by_name(burgers, tmp_path):
     with pytest.raises(Exception, match="step_bound_nonfinite") as caught:
         surface.bind(artifact, data={u0: initial}, directory=tmp_path).run(until=REST_END)
     assert "at the cell (7, 2)" in str(caught.value)
+
+
+def test_a_negative_zero_divisor_fails_by_name(tmp_path, native_cxx, kokkos_root, monkeypatch):
+    """Ruling 13/11 (b): E = w / -0 is -infinity, a typed failure (step_bound_nonfinite), never a
+    step; only w / +0 = +infinity is admitted, at the root."""
+    del native_cxx, kokkos_root
+    monkeypatch.setenv("POPS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("POPS_NATIVE_CACHE_DIR", str(tmp_path / "cache"))
+
+    def negative_zero(domain, advection):
+        def limit(cell):
+            w = cell.width(domain.x)
+            return w / -(0 * w)
+        return limit
+
+    compiled = _slice(negative_zero)
+    with pytest.raises(Exception, match="step_bound_nonfinite") as caught:
+        _simulation(compiled, tmp_path).run(until=T_END)
+    assert "at the cell (0, 0)" in str(caught.value)
+
+
+def test_a_poisson_source_is_refused_by_name(monkeypatch, isolated_native_cache, native_cxx,
+                                             kokkos_root):
+    """Ruling 13/11, 2 (C3): a block whose elliptic brick is a real Poisson source (M08, a fluid
+    with its charge density) is refused by name by the run of a cells rule; the zero brick of the
+    slice and of L1 is admitted (the tests above)."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    import examples.api_v02.models_M01_M14 as early
+    from pops.mesh._amr.refinement_criterion import CellWidth
+    from pops.runtime._simulation import Simulation
+    from pops.time._program.elaboration import Advance, Retry, elaborate
+    from pops.time._step.bound import StepBound
+
+    def route(case, block, state, flow, dt, *, name, memory, record, b6):
+        del b6, dt
+        return elaborate(Advance(early.recorded_ssprk2(memory, record)(flow=flow),
+                                 retry=Retry(max_attempts=1)),
+                         case=case, state=block[state], proposal=StepBound(CellWidth(0), 2),
+                         name=name)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(early, "_traced_recorded_ssprk2", route)
+        spec = early.build_m08()
+    artifact = pops.compile(pops.resolve(pops.validate(spec.case), layout=spec.layout))
+    runtime = pops.bind(artifact, initial_values={
+        subject: value.copy() for subject, value in spec.initial_values.items()},
+        resources={"execution_context": artifact_execution_context(artifact)})
+    with pytest.raises(RuntimeError, match=r"refuses a default Poisson solve \(the Poisson source "
+                                           r"of an evolving block\)"):
+        Simulation(runtime).run(0.01)

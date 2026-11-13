@@ -45,8 +45,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
     or `smallest([where(s > 0, (cfl * w) / s, max_dt), max_dt])` with a cap. It has no speed
     floor, unlike b6's `max(s, 1e-30)`: a state at rest everywhere without `max_dt` takes one
     step to the frontier where b6 proposes `cfl * h / 1e-30`. A cell at rest bounds nothing
-    (+infinity, 2.6.9), written as the IEEE quotient because a constant of an expression is
-    finite. `cfl_limit(..., cfl=1.5)` is refused by name: the Courant number of a step rule is
+    (+infinity, 2.6.9): without `max_dt` it is the IEEE quotient `w / +0` (w > 0 by the
+    geometry), not the `where(s > 0, ..., +infinity)` of the design note, because a constant of
+    an expression is finite; the division raises the `FE_DIVBYZERO` flag, which no build traps.
+    A divisor of -0 gives -infinity, a typed failure. `cfl_limit(..., cfl=1.5)` is refused by name: the Courant number of a step rule is
     in (0, 1]; #788's bridge accepted any positive finite `cfl`, as master's `AdaptiveCFL`.
     #788's refusals (a transport flux left out, a diffusive flux, waves not derived) stay in
     `cfl_limit`'s body. `pops.StepRuleValue` and the MG9 entry of `cfl_limit` are removed.
