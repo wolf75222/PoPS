@@ -1,8 +1,9 @@
 """Each adaptive layout of the physical maps refines its own region (review A1 of N12 lot 3b).
 
-This test was in ``test_amr_physical_maps.py``. It runs nine minutes, so it has its own file and
-its own weight in ``tests/python/test_durations.json``: in the same file it put the file out of the
-shard that the catalog planned for it (CI batch 43421613714, shard 86).
+This test was in ``test_amr_physical_maps.py``. It ran nine minutes there on the graph and region
+routes, so it has its own file and its own weight in ``tests/python/test_durations.json``: in the
+same file it put the file out of the shard that the catalog planned for it (CI batch 43421613714,
+shard 86). Since lot 3c-2b it runs the region route once and compares with the recorded oracle.
 """
 import pytest
 

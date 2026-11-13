@@ -129,7 +129,7 @@ def test_amr_maps_keep_exact_distinct_hierarchy_authorities(tmp_path):
         assert row.authorities.hierarchy.plan.level_count == 2
         assert row.authorities.transfer.layout_plan_id == row.layout_plan.qualified_id
         with pytest.raises(TypeError):
-            row.authorities.providers["tagger"]["layout_identity"] = "other"
+            row.authorities.providers["clustering"]["layout_identity"] = "other"
     first, second, third = plan.layout_amr_authorities.values()
     swapped = dict(plan.layout_amr_authorities)
     swapped[first.layout_id] = second

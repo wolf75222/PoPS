@@ -9071,6 +9071,14 @@
       "weights_seconds": {
         "tests/python/integration/runtime/test_amr_physical_maps.py": 1960,
         "tests/python/integration/runtime/test_amr_physical_maps_layout_regions.py": 590
+      },
+      "after_lot_3c2b_local": {
+        "basis": "N12 lot 3c-2b runs each case on the region route only and compares with tests/python/data/amr_graph_oracles.json; the maps file gains the internal-maps oracle test. Local receipts on one 4-core cloud container beside a unit-suite run, gcc 13.3, Kokkos 4.4.01 Serial, Dim2, cold isolated native cache; not CI wall times, so the weights stay as planned until a batch measures them.",
+        "local_seconds": {
+          "tests/python/integration/runtime/test_amr_physical_maps.py": 1263,
+          "tests/python/integration/runtime/test_amr_physical_maps_layout_regions.py": 306,
+          "tests/python/integration/amr/test_refinement_criterion_parity.py": 389
+        }
       }
     },
     "n12_20261113_model_parameters": {
