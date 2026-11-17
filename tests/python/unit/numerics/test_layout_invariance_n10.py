@@ -165,25 +165,28 @@ def _mixed():
     return p, d, replicated, values, distributed
 
 
-def _mismatch(call):
+def _mismatch(call, *, expected, found):
     with pytest.raises(LayoutMismatch) as caught:
         call()
     refusal = caught.value
     assert isinstance(refusal, TypeError) and isinstance(refusal, ValueError)
     assert isinstance(refusal, RegionRefusal) and refusal.rule == "DM3"
-    assert {refusal.expected, refusal.found} == {"Contiguous", "Replicated"}
+    assert (refusal.expected, refusal.found) == (expected, found)
     assert "Replicated" in str(refusal) and "Contiguous" in str(refusal)
 
 
 def test_the_distributed_gate_refuses_a_replicated_value_as_a_layout_mismatch():
     _, d, replicated, values, _ = _mixed()
-    _mismatch(lambda: d.size(replicated))
-    _mismatch(lambda: d.domain_of(values))
+    _mismatch(lambda: d.size(replicated), expected="Contiguous", found="Replicated")
+    _mismatch(lambda: d.domain_of(values), expected="Contiguous", found="Replicated")
 
 
 def test_same_domain_of_two_layouts_is_a_layout_mismatch():
     p, _, replicated, _, distributed = _mixed()
-    _mismatch(lambda: p.same_domain(replicated, distributed))
+    _mismatch(lambda: p.same_domain(replicated, distributed),
+              expected="Replicated", found="Contiguous")
+    _mismatch(lambda: p.same_domain(distributed, replicated),
+              expected="Contiguous", found="Replicated")
 
 
 def test_at_of_a_replicated_array_with_a_distributed_index_is_a_layout_mismatch():
@@ -191,15 +194,33 @@ def test_at_of_a_replicated_array_with_a_distributed_index_is_a_layout_mismatch(
 
     def body(b, index):
         return b.capture(lambda q: q.at(values, index))
-    _mismatch(lambda: d.local_map(distributed, body, byte_capacity=64))
+    _mismatch(lambda: d.local_map(distributed, body, byte_capacity=64),
+              expected="Replicated", found="Contiguous")
+
+
+def test_at_of_a_distributed_array_with_a_replicated_index_is_a_layout_mismatch():
+    p, d, replicated, _, distributed = _mixed()
+    values = p.require_success(d.local_map(
+        distributed, lambda b, i: b.success(b.float64(1.)), byte_capacity=64))
+    index = p.index(replicated, 0)
+    _mismatch(lambda: p.at(values, index), expected="Contiguous", found="Replicated")
 
 
 def test_gather_and_scatter_across_layouts_are_layout_mismatches():
     p, d, replicated, values, distributed = _mixed()
     requests = d.requests(distributed, distributed, lambda b, i: i)
-    _mismatch(lambda: p.gather(values, requests))
-    _mismatch(lambda: p.scatter_reduce(values, p.map(replicated, lambda b, i: i), distributed,
-                                       b_initial(p), lambda b, x, y: x, order="ascending"))
+    indices = p.map(replicated, lambda b, i: i)
+    _mismatch(lambda: p.gather(values, requests), expected="Replicated", found="Contiguous")
+    _mismatch(lambda: p.scatter_reduce(values, indices, distributed,
+                                       b_initial(p), lambda b, x, y: x, order="ascending"),
+              expected="Replicated", found="Contiguous")
+
+    local_values = p.require_success(d.local_map(
+        distributed, lambda b, i: b.success(b.float64(1.)), byte_capacity=64))
+    _mismatch(lambda: p.gather(local_values, indices), expected="Contiguous", found="Replicated")
+    _mismatch(lambda: p.scatter_reduce(local_values, requests, replicated,
+                                       b_initial(p), lambda b, x, y: x, order="ascending"),
+              expected="Contiguous", found="Replicated")
 
 
 def b_initial(p):
