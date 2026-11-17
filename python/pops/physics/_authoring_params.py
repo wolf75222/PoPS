@@ -70,6 +70,11 @@ class _RuntimeParamsMixin(_HyperbolicModel):
         authored_face = getattr(self, "_user_face", None)
         if authored_face is not None:
             out.extend(authored_face.expression)
+        # The generated ghosts of a boundary policy (G04-a) read the same RuntimeParams carrier.
+        generated_ghost = getattr(self, "_user_ghost", None)
+        if generated_ghost is not None:
+            out.extend(value for ghost in generated_ghost["faces"].values()
+                       for row in ghost.ghosts for value in row)
         if self.cons_from is not None:
             out += list(self.cons_from)
         if self._elliptic is not None:

@@ -395,15 +395,17 @@ void bind_system_assembly(py::class_<System>& cls) {
              const std::vector<std::vector<std::string>>& face_analytic_opcodes,
              const std::vector<std::vector<double>>& face_analytic_literals,
              const std::vector<std::string>& face_analytic_clocks,
-             const std::vector<int>& prescribed_trace_faces) {
+             const std::vector<int>& prescribed_trace_faces,
+             const std::vector<std::string>& face_source_identities) {
             reject_unqualified_periodic_identifications<pops::kNativeDimension>(
                 periodic_identifications, "ranked Cartesian boundary authority");
-            auto boundary = pops::prepare_hyperbolic_boundary<pops::kNativeDimension>(
-                                face_types, face_values, face_identities, component_roles, false,
-                                face_representations, face_converter_identities,
-                                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks)
-                                .with_omitted_interface_faces(omitted_interface_faces)
-                                .with_prescribed_trace_faces(prescribed_trace_faces);
+            auto boundary =
+                pops::prepare_hyperbolic_boundary<pops::kNativeDimension>(
+                    face_types, face_values, face_identities, component_roles, false,
+                    face_representations, face_converter_identities, face_analytic_opcodes,
+                    face_analytic_literals, face_analytic_clocks, face_source_identities)
+                    .with_omitted_interface_faces(omitted_interface_faces)
+                    .with_prescribed_trace_faces(prescribed_trace_faces);
             system.install_prepared_hyperbolic_boundary(
                 name, identity, required_depth, state_identity,
                 std::make_shared<pops::PreparedHyperbolicBoundary<pops::kNativeDimension>>(
@@ -420,6 +422,7 @@ void bind_system_assembly(py::class_<System>& cls) {
           py::arg("face_analytic_literals") = std::vector<std::vector<double>>{},
           py::arg("face_analytic_clocks") = std::vector<std::string>{},
           py::arg("prescribed_trace_faces") = std::vector<int>{},
+          py::arg("face_source_identities") = std::vector<std::string>{},
           "Install one resolved per-block ghost-production plan before block construction.")
       .def("_install_block_state_route", &System::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),

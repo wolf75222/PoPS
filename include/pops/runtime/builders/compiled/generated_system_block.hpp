@@ -82,6 +82,11 @@ inline constexpr bool route_reads_static_geometry = [] {
 
 namespace generated_system_detail {
 
+/// No ghost policy, or the generated ghost policy of the package (G04-a).
+template <class Ghost, int Dim>
+concept GhostPolicyOrNone = std::same_as<Ghost, hyperbolic_boundary_detail::NoSourceGhostPolicy> ||
+                            hyperbolic_boundary_detail::SourceGhostPolicyFor<Ghost, Dim>;
+
 /// The metric of a generated block: the uniform logical box, or the static geometry arrays.
 struct CartesianBlockGeometry {};
 struct StaticArraysBlockGeometry {};
@@ -732,9 +737,9 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
 
 template <int Dim, class Model, class Reconstruction, class Numerical,
           nd::ReconstructionVariables Variables, class BlockGeometry = CartesianBlockGeometry,
-          class Request>
+          class Request, class Ghost = hyperbolic_boundary_detail::NoSourceGhostPolicy>
 PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction reconstruction,
-                                           Numerical numerical) {
+                                           Numerical numerical, Ghost ghost = Ghost{}) {
   static_assert(Model::dimension == Dim);
   constexpr bool static_arrays = std::is_same_v<BlockGeometry, StaticArraysBlockGeometry>;
   if constexpr (static_arrays) {
@@ -771,6 +776,15 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     }
     return Reconstruction::n_ghost;
   }();
+  if constexpr (Ghost::present) {
+    // The generated ghost policy fills the depths 1..depth that the plan derives; a block that
+    // stores deeper ghost cells would leave them to no law (G04-a).
+    if constexpr (storage_ghost_depth > Ghost::depth)
+      throw std::invalid_argument(
+          "the generated ghost policy of the package fills the ghost depths 1.." +
+          std::to_string(Ghost::depth) + ", but the generated System block stores " +
+          std::to_string(storage_ghost_depth) + " ghost cells");
+  }
   Extent<Dim> ghosts{};
   for (int axis = 0; axis < Dim; ++axis)
     ghosts[axis] = storage_ghost_depth;
@@ -797,7 +811,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   const BoundaryTopology<Dim> topology = request.topology;
 
   auto prepare_state = [model, provider_storage_owner, provider_plan_owner, provider_storage,
-                        provider_plan, geometry, topology, ghosts](
+                        provider_plan, geometry, topology, ghosts, ghost](
                            MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary) {
     if (boundary != nullptr) {
       boundary->template require_model_qualified_characteristic_provider<Model>();
@@ -812,15 +826,20 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
           state, provider_storage, provider_plan, "generated flux providers");
     }
-    if (boundary != nullptr)
-      boundary->fill_physical_model_qualified(state, geometry, model);
+    if (boundary != nullptr) {
+      if constexpr (Ghost::present)
+        boundary->fill_physical_model_qualified(state, geometry, model, ghost);
+      else
+        boundary->fill_physical_model_qualified(state, geometry, model);
+    }
   };
 
   auto prepare_state_with_transport =
       [model, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan,
-       geometry](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
-                 const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
-                 const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+       geometry, ghost](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                        MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
+                        const ExecutionLane& lane,
+                        const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         prepared_boundary_collective_phase(
             lane,
             [&] {
@@ -846,8 +865,13 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
               lane,
               [&] {
                 transport.with_characteristic_candidate(state, [&](MultiFab<Dim>& candidate) {
-                  boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
-                                                          static_cast<Real>(point.physical_time));
+                  if constexpr (Ghost::present)
+                    boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
+                                                            ghost,
+                                                            static_cast<Real>(point.physical_time));
+                  else
+                    boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
+                                                            static_cast<Real>(point.physical_time));
                 });
               },
               "generated prepared physical boundary fill failed collectively");
@@ -1606,28 +1630,30 @@ PreparedSystemBlock<Dim> select_reconstruction(Request request) {
   throw std::logic_error("generated limiter route escaped its exhaustive selector");
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request, class Numerical>
-PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numerical numerical) {
+template <int Dim, nd::ReconstructionVariables Variables, class Request, class Numerical,
+          class Ghost = hyperbolic_boundary_detail::NoSourceGhostPolicy>
+PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numerical numerical,
+                                                         Ghost ghost = Ghost{}) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   switch (parse_limiter_route(request.routes.limiter, "generated System face block")) {
     case LimiterRouteId::kNone:
-      return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(std::move(request),
-                                                                          NoSlope{}, numerical);
+      return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(
+          std::move(request), NoSlope{}, numerical, ghost);
     case LimiterRouteId::kMinmod:
-      return materialize_block<Dim, Model, Minmod, Numerical, Variables>(std::move(request),
-                                                                         Minmod{}, numerical);
+      return materialize_block<Dim, Model, Minmod, Numerical, Variables>(
+          std::move(request), Minmod{}, numerical, ghost);
     case LimiterRouteId::kVanLeer:
-      return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(std::move(request),
-                                                                          VanLeer{}, numerical);
+      return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(
+          std::move(request), VanLeer{}, numerical, ghost);
     case LimiterRouteId::kWeno5:
       return materialize_block<Dim, Model, Weno5, Numerical, Variables>(
-          std::move(request), configured_reconstruction<Weno5>(), numerical);
+          std::move(request), configured_reconstruction<Weno5>(), numerical, ghost);
     case LimiterRouteId::kMc:
       return materialize_block<Dim, Model, MC, Numerical, Variables>(std::move(request), MC{},
-                                                                     numerical);
+                                                                     numerical, ghost);
     case LimiterRouteId::kSuperbee:
-      return materialize_block<Dim, Model, Superbee, Numerical, Variables>(std::move(request),
-                                                                           Superbee{}, numerical);
+      return materialize_block<Dim, Model, Superbee, Numerical, Variables>(
+          std::move(request), Superbee{}, numerical, ghost);
   }
   throw std::logic_error("generated face limiter route escaped its exhaustive selector");
 }
@@ -1824,10 +1850,14 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
 }
 
 /// A source-authored face body is instantiated only by its owning package and
-/// still flows through the ordinary shared conservative face operator.
-template <class Request, class Numerical>
-  requires requires { Numerical::source_identity; } && (!ReconstructionPolicy<Numerical>)
-auto prepare_generated_system_block(Request request, Numerical numerical)
+/// still flows through the ordinary shared conservative face operator. With the generated ghost
+/// policy of the same package (G04-a), the policy fills the SourceGhost faces of the installed
+/// boundary, which it authenticates face by face at each fill.
+template <class Request, class Numerical,
+          class Ghost = hyperbolic_boundary_detail::NoSourceGhostPolicy>
+  requires requires { Numerical::source_identity; } && (!ReconstructionPolicy<Numerical>) &&
+           generated_system_detail::GhostPolicyOrNone<Ghost, Request::dimension>
+auto prepare_generated_system_block(Request request, Numerical numerical, Ghost ghost = Ghost{})
     -> PreparedSystemBlock<Request::dimension> {
   constexpr int Dim = Request::dimension;
   using Model = std::remove_cvref_t<decltype(request.model)>;
@@ -1839,19 +1869,21 @@ auto prepare_generated_system_block(Request request, Numerical numerical)
     switch (parse_recon_route(request.routes.reconstruction, "generated System face block")) {
       case ReconRouteId::kConservative:
         return generated_system_detail::select_reconstruction_with_face<
-            Dim, nd::ReconstructionVariables::Conservative>(std::move(request), numerical);
+            Dim, nd::ReconstructionVariables::Conservative>(std::move(request), numerical, ghost);
       case ReconRouteId::kPrimitive:
         return generated_system_detail::select_reconstruction_with_face<
-            Dim, nd::ReconstructionVariables::Primitive>(std::move(request), numerical);
+            Dim, nd::ReconstructionVariables::Primitive>(std::move(request), numerical, ghost);
     }
     throw std::logic_error("generated face reconstruction route escaped its exhaustive selector");
   }
 }
 
-template <class Request, class Reconstruction, class Numerical>
-  requires ReconstructionPolicy<Reconstruction> && requires { Numerical::source_identity; }
+template <class Request, class Reconstruction, class Numerical,
+          class Ghost = hyperbolic_boundary_detail::NoSourceGhostPolicy>
+  requires ReconstructionPolicy<Reconstruction> && requires { Numerical::source_identity; } &&
+           generated_system_detail::GhostPolicyOrNone<Ghost, Request::dimension>
 auto prepare_generated_system_block(Request request, Reconstruction reconstruction,
-                                    Numerical numerical)
+                                    Numerical numerical, Ghost ghost = Ghost{})
     -> PreparedSystemBlock<Request::dimension> {
   constexpr int Dim = Request::dimension;
   using Model = std::remove_cvref_t<decltype(request.model)>;
@@ -1867,11 +1899,11 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
       case ReconRouteId::kConservative:
         return generated_system_detail::materialize_block<
             Dim, Model, Reconstruction, Numerical, nd::ReconstructionVariables::Conservative>(
-            std::move(request), reconstruction, numerical);
+            std::move(request), reconstruction, numerical, ghost);
       case ReconRouteId::kPrimitive:
         return generated_system_detail::materialize_block<Dim, Model, Reconstruction, Numerical,
                                                           nd::ReconstructionVariables::Primitive>(
-            std::move(request), reconstruction, numerical);
+            std::move(request), reconstruction, numerical, ghost);
     }
     throw std::logic_error("generated source reconstruction route escaped its exhaustive selector");
   }

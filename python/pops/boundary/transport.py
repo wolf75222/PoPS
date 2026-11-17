@@ -301,14 +301,21 @@ class ResolvedTransportCondition:
     requirement: BoundaryStencilRequirement
     provider: Any
     prescribed_trace: bool = False
+    source_ghost: Any = None
 
     def __post_init__(self) -> None:
         from pops.mesh.boundaries import BoundaryProvider, BoundaryProviderKind, ClosureMode
 
         if not isinstance(self.geometry, DomainBoundary):
             raise TypeError("ResolvedTransportCondition.geometry must be a DomainBoundary")
-        if self.condition_type not in {"inflow", "outflow", "no_flux", "slip_wall"}:
+        if self.condition_type not in {"inflow", "outflow", "no_flux", "slip_wall",
+                                       "source_ghost"}:
             raise ValueError("unsupported built-in transport condition type")
+        if (self.condition_type == "source_ghost") != (self.source_ghost is not None) or (
+                self.source_ghost is not None
+                and (type(self.source_ghost) is not SourceGhost or self.values)):
+            raise TypeError(
+                "a source_ghost condition carries exactly its SourceGhost and no values")
         _state(self.state, where="ResolvedTransportCondition.state")
         if not self.state.is_resolved:
             raise TypeError("ResolvedTransportCondition.state must be canonical")
@@ -330,6 +337,7 @@ class ResolvedTransportCondition:
             )),
             "no_flux": frozenset((BoundaryProviderKind.NO_FLUX,)),
             "slip_wall": frozenset((BoundaryProviderKind.GHOST_FORMULA,)),
+            "source_ghost": frozenset((BoundaryProviderKind.GHOST_FORMULA,)),
         }[self.condition_type]
         if self.provider.kind not in allowed_kinds:
             raise ValueError(
@@ -357,6 +365,8 @@ class ResolvedTransportCondition:
             "stencil": self.requirement.canonical_identity(),
             "provider": self.provider.canonical_identity(),
             **({"prescribed_trace": True} if self.prescribed_trace else {}),
+            **({"source_ghost": self.source_ghost.identity_data()}
+               if self.source_ghost is not None else {}),
         }
 
     inspect = canonical_identity
@@ -445,7 +455,7 @@ def _resolved_condition(
                 outputs=outputs,
                 dependencies=dependencies,
             )
-        elif condition_type == "slip_wall":
+        elif condition_type in ("slip_wall", "source_ghost"):
             provider = GhostFormula(
                 handle=handle,
                 outputs=outputs,
@@ -461,6 +471,7 @@ def _resolved_condition(
         requirement=requirement,
         provider=provider,
         prescribed_trace=getattr(condition, "trace", None) == "prescribed",
+        source_ghost=condition if condition_type == "source_ghost" else None,
     )
 
 
@@ -814,6 +825,212 @@ class SlipWall:
         )
 
 
+# The inner cells that a generated ghost reads: u_j is the j-th cell inward from its face (D9).
+_GHOST_INPUT = "ghost_input"
+
+
+def _ghost_inner_name(j: int, component: int) -> str:
+    return "pops_ghost_inner_%d_%d" % (j, component)
+
+
+def _ghost_inner(width: int, depth: int) -> Any:
+    """``inner(j)``: the ``VectorExpr`` of the j-th cell inward, for 1 <= j <= depth."""
+    from pops._ir.expr import Var
+    from pops._ir.vector_expr import VectorExpr
+
+    def inner(j: Any) -> Any:
+        if isinstance(j, bool) or not isinstance(j, int) or j < 1:
+            raise TypeError("SourceGhost: inner(j) takes an integer j >= 1, got %r" % (j,))
+        if j > depth:
+            raise ValueError(
+                "SourceGhost: the body reads the inner cell %d, deeper than the depth %d of its "
+                "ghost cells" % (j, depth))
+        return VectorExpr(Var(_ghost_inner_name(j, component), _GHOST_INPUT)
+                          for component in range(width))
+
+    return inner
+
+
+def _ghost_row(result: Any, *, width: int, k: int) -> tuple[Expr, ...]:
+    from pops._ir.vector_expr import VectorExpr
+
+    if isinstance(result, VectorExpr):
+        result = tuple(result)
+    if not isinstance(result, (tuple, list)) or len(result) != width:
+        raise TypeError(
+            "SourceGhost: the body must return one value per state component (%d) at depth %d"
+            % (width, k))
+    return tuple(_expression(item, where="SourceGhost ghost[%d] at depth %d" % (index, k))
+                 for index, item in enumerate(result))
+
+
+def _ghost_reads(ghosts: tuple[tuple[Expr, ...], ...], *, width: int,
+                 depth: int) -> tuple[int, tuple[tuple[str, str], ...]]:
+    """(the deepest inner cell read, the runtime captures) of generated ghost expressions.
+
+    A ghost reads the inner cells up to its depth, numbers and the runtime parameters of the
+    model, nothing else: a coordinate, the time or another state has no route in the generated
+    ghost of this lot (G04, C44)."""
+    from pops._ir.expr import Var
+    from pops._ir.native_call import NativeCall
+    from pops._ir.values import RuntimeParamRef
+    from pops._ir.visitors import _children
+
+    names = {_ghost_inner_name(j, component): j
+             for j in range(1, depth + 1) for component in range(width)}
+    captures: dict[str, str] = {}
+    reads = 0
+    pending: list[Any] = [root for row in ghosts for root in row]
+    seen: set[int] = set()
+    while pending:
+        node = pending.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, NativeCall):
+            raise NotImplementedError(
+                "SourceGhost: a native call in a generated ghost needs a declared fallible status "
+                "contract")
+        if isinstance(node, RuntimeParamRef):
+            handle = node.handle
+            if not isinstance(handle, ParamHandle) or handle.param_kind != "runtime":
+                raise TypeError(
+                    "SourceGhost: a runtime read needs model.value(RuntimeParam handle)")
+            if captures.setdefault(node.name, handle.qualified_id) != handle.qualified_id:
+                raise ValueError("SourceGhost: colliding runtime parameter names")
+            continue
+        if isinstance(node, Var):
+            if node.kind != _GHOST_INPUT or node.name not in names:
+                raise ValueError(
+                    "SourceGhost: the ghost reads %s (%s), which a generated ghost does not "
+                    "receive; it reads the inner cells, numbers and runtime parameters"
+                    % (node.name, node.kind))
+            reads = max(reads, names[node.name])
+            continue
+        children = _children(node)
+        if not children and not isinstance(node, Const):
+            raise ValueError("SourceGhost: the ghost has an unsupported scalar leaf %r" % (node,))
+        pending.extend(children)
+    return reads, tuple(sorted(captures.items()))
+
+
+@dataclass(frozen=True, slots=True, eq=False, init=False)
+class SourceGhost:
+    """The ghost cells of one face, generated from the body of a boundary policy (G04-a).
+
+    ``body(inner, k)`` gives the ghost at depth ``k`` (1 to ``depth``), one value per state
+    component, from ``inner(j)``, the ``VectorExpr`` of the j-th cell inward from the face.
+    Python runs the body once per depth; the expressions, not the body, are kept. The model
+    package compiles them into ``pops_generated::UserGhostPolicy``, which the prepared boundary
+    calls on the device after the halo exchange. ``source_identity`` is the canonical fingerprint
+    of the expressions; it names the face in the package and on the installed boundary.
+    """
+
+    condition_type: ClassVar[str] = "source_ghost"
+    state: Handle
+    values: tuple[Expr, ...]
+    representation: Representation | None
+    converter: Handle | None
+    depth: int
+    width: int
+    reads: int
+    ghosts: tuple[tuple[Expr, ...], ...]
+    runtime_captures: tuple[tuple[str, str], ...]
+    source_identity: str
+
+    def __init__(self, *, state: Any, body: Any, depth: Any) -> None:
+        checked = _state(state, where="SourceGhost.state")
+        width = len(_state_components(checked, where="SourceGhost"))
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
+            raise ValueError("SourceGhost.depth must be an integer >= 1, got %r" % (depth,))
+        if not callable(body):
+            raise TypeError("SourceGhost.body must be a callable body(inner, k)")
+        inner = _ghost_inner(width, depth)
+        ghosts = tuple(_ghost_row(body(inner, k), width=width, k=k)
+                       for k in range(1, depth + 1))
+        self._freeze(checked, ghosts, depth)
+
+    @classmethod
+    def _from_ghosts(cls, *, state: Any, ghosts: Any, depth: int) -> SourceGhost:
+        value = object.__new__(cls)
+        value._freeze(_state(state, where="SourceGhost.state"), ghosts, depth)
+        return value
+
+    def _freeze(self, state: Handle, ghosts: tuple[tuple[Expr, ...], ...], depth: int) -> None:
+        from pops.model.hash_data import canonical_hash_data
+
+        width = len(_state_components(state, where="SourceGhost"))
+        if len(ghosts) != depth or any(len(row) != width for row in ghosts):
+            raise ValueError("SourceGhost ghosts must give one row per depth and component")
+        reads, captures = _ghost_reads(ghosts, width=width, depth=depth)
+        # The identity names the runtime parameters that a ghost reads, as its expressions do
+        # (``rparam`` by name): the qualified id of their handle carries the authoring order of
+        # the model, which differs between two equal declarations. The package checks each
+        # capture against its model registry (``user_ghost_lowering``).
+        data = {"schema_version": 1, "kind": self.condition_type,
+                "ghosts": canonical_hash_data(ghosts, where="generated ghost"),
+                "width": width, "depth": depth, "reads": reads,
+                "runtime_captures": [name for name, _ in captures]}
+        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
+                             allow_nan=False).encode("utf-8")
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "values", ())
+        object.__setattr__(self, "representation", None)
+        object.__setattr__(self, "converter", None)
+        object.__setattr__(self, "depth", depth)
+        object.__setattr__(self, "width", width)
+        object.__setattr__(self, "reads", reads)
+        object.__setattr__(self, "ghosts", ghosts)
+        object.__setattr__(self, "runtime_captures", captures)
+        object.__setattr__(self, "source_identity", hashlib.sha256(encoded).hexdigest())
+
+    def identity_data(self) -> dict[str, Any]:
+        return {"source_identity": self.source_identity, "width": self.width,
+                "depth": self.depth, "reads": self.reads}
+
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return (self.state,)
+
+    def resolve_references(self, resolver: Any) -> SourceGhost:
+        if not callable(resolver):
+            raise TypeError("SourceGhost.resolve_references requires a callable resolver")
+        return type(self)._from_ghosts(state=resolver(self.state), ghosts=self.ghosts,
+                                       depth=self.depth)
+
+    def inspect(self) -> dict[str, Any]:
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "condition_type": self.condition_type,
+            "state": self.state.inspect(),
+            **self.identity_data(),
+        }
+
+    def __repr__(self) -> str:
+        return "SourceGhost(state=%s, depth=%d, reads=%d)" % (
+            getattr(self.state, "qualified_id", self.state), self.depth, self.reads)
+
+    def resolve_condition(
+        self,
+        *,
+        geometry: DomainBoundary,
+        boundary: Any,
+        requirement: BoundaryStencilRequirement,
+    ) -> ResolvedTransportCondition:
+        if requirement.ghost_depth > self.depth:
+            raise ValueError(
+                "SourceGhost on %s generates the ghost cells of depths 1..%d, but the stencils "
+                "of state %s read %d ghost cells" % (
+                    geometry.name, self.depth, self.state.qualified_id, requirement.ghost_depth))
+        return _resolved_condition(
+            self,
+            condition_type=self.condition_type,
+            geometry=geometry,
+            boundary=boundary,
+            requirement=requirement,
+            include_state_dependency=True,
+        )
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class ResolvedTransportBoundarySet:
     domain_geometry_id: str
@@ -1153,8 +1370,11 @@ class ResolvedTransportBoundarySet:
                         "inflow": "dirichlet",
                         "no_flux": "no_flux",
                         "slip_wall": "slip_wall",
+                        "source_ghost": "source_ghost",
                         }[row.condition_type]
                     ),
+                    **({"source_identity": row.source_ghost.source_identity}
+                       if row.source_ghost is not None else {}),
                     "representation": self._native_representation_contract(
                         row, state)[0],
                     "converter": self._native_representation_contract(
@@ -1211,7 +1431,13 @@ class ResolvedTransportBoundarySet:
         for condition in conditions:
             geometry = condition.geometry
             face = 2 * geometry.axis.index + (0 if geometry.side.value == "lower" else 1)
-            if condition.condition_type in {"no_flux", "outflow", "slip_wall"}:
+            if condition.source_ghost is not None:
+                # The generated ghost policy of the model package fills this face on the device.
+                values = [0.0] * ncomp
+                face_type = "source_ghost"
+                analytic_programs = []
+                clock_id = None
+            elif condition.condition_type in {"no_flux", "outflow", "slip_wall"}:
                 values = [0.0] * ncomp
                 face_type = {
                     "no_flux": "no_flux",
@@ -1281,6 +1507,8 @@ class ResolvedTransportBoundarySet:
                 "analytic_programs": analytic_programs,
                 "analytic_clock": clock_id,
                 **({"prescribed_trace": True} if condition.prescribed_trace else {}),
+                **({"source_identity": condition.source_ghost.source_identity}
+                   if condition.source_ghost is not None else {}),
             }
         rows = tuple(row for row in face_rows if row is not None)
         evidence = {
@@ -1309,6 +1537,10 @@ class ResolvedTransportBoundarySet:
 
         if isinstance(dimension, bool) or dimension not in (1, 2, 3):
             raise ValueError("AMR boundary dimension must be 1, 2, or 3")
+        if any(row.source_ghost is not None for row in self.conditions):
+            raise NotImplementedError(
+                "a source ghost face needs the generated ghost policy of its package, which no "
+                "AMR route carries yet (G04, phase 2, with the AMR transfers)")
         depth = max(row.requirement.ghost_depth for row in self.conditions)
         lookahead = max(
             max(row.requirement.formal_orders) - 1 for row in self.conditions
@@ -1547,5 +1779,6 @@ __all__ = [
     "ResolvedTransportBoundarySet",
     "ResolvedTransportCondition",
     "SlipWall",
+    "SourceGhost",
     "TransportBoundarySet",
 ]

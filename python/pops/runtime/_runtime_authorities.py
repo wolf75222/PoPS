@@ -269,6 +269,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                 "slip_wall",
                 "external",
                 "characteristic_no_inflow",
+                "source_ghost",
             }
             for value in types
         ):
@@ -320,6 +321,19 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             raise TypeError(
                 "prepared boundary faces require non-empty owner-qualified producer identities"
             )
+        # A source ghost face is filled by the generated ghost policy of the model package, which
+        # the native block authenticates face by face against these identities.
+        face_source_identities = [row.get("source_identity") or "" for row in faces]
+        for face, (face_type, source_identity) in enumerate(
+            zip(types, face_source_identities, strict=True)
+        ):
+            if (face_type == "source_ghost") != bool(source_identity) or not isinstance(
+                source_identity, str
+            ):
+                raise ValueError(
+                    "prepared boundary face %d carries a source identity exactly when it is a "
+                    "source ghost face" % face
+                )
         component_roles = getattr(component, "cons_roles", None)
         if (
             not isinstance(component_roles, (list, tuple))
@@ -427,6 +441,7 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             analytic_literals,
             analytic_clocks,
             prescribed_trace_faces,
+            *([face_source_identities] if any(face_source_identities) else []),
         )
         component_rows = first.get("component_regions", [])
         if not isinstance(component_rows, list):
