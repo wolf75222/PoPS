@@ -19,14 +19,18 @@ library, each block is also split per kernel, for PF10 (2).
 ``verdict`` reads the measurements and states PF10 (1), the median throughput of the slice at
 least 0.9 of master's at each size and thread count (OD9), and PF10 (3), the time per step of
 each route growing at most 1.25 times the ratio of the cells when they quadruple (OD24; the step
-is linear in the cells). The script asserts no other threshold.
+is linear in the cells). Both comparisons use the raw samples. Split-process receipts must
+follow ABBA and hold the same comparison context. Historical receipts remain readable and
+report which provenance was outside their recording protocol.
 """
 
 from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import json
+import math
 import os
 import platform
 import resource
@@ -43,6 +47,9 @@ ROUTES = ("master", "slice")
 SCHEMA = "pops.slice.t02_pf10.v1"
 PF10_1 = 0.9            # OD9
 PF10_3 = 1.25           # OD24: the measured growth exceeds the stated complexity by at most 25 %
+_CONTEXT = ("host", "processor", "cpus", "source", "omp_proc_bind")
+_OPTIONAL_CONTEXT = ("omp_places", "omp_num_threads", "cpu_affinity",
+                     "input_sources", "native_build", "kernel_timer")
 
 
 def _once(source: str, old: str, new: str, where: Path) -> str:
@@ -91,14 +98,51 @@ def _source_revision():
     try:
         sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], check=True,
                              capture_output=True, text=True).stdout.strip()
-        dirty = bool(subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain"],
+        dirty = bool(subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain",
+                                     "--untracked-files=no"],
                                     check=True, capture_output=True, text=True).stdout.strip())
     except (OSError, subprocess.CalledProcessError):
         return {"sha": "unknown", "dirty": None}
     return {"sha": sha, "dirty": dirty}
 
 
+def _file_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _measurement_context(native, runtime):
+    data = {
+        "host": platform.node(), "processor": platform.processor() or platform.machine(),
+        "cpus": os.cpu_count(), "source": _source_revision(),
+        "omp_proc_bind": os.environ.get("OMP_PROC_BIND"),
+        "omp_places": os.environ.get("OMP_PLACES"),
+        "omp_num_threads": os.environ.get("OMP_NUM_THREADS"),
+        "input_sources": {str(path.relative_to(ROOT)): _file_digest(path)
+                          for path in (Path(__file__).resolve(), MASTER, SLICE)},
+    }
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if get_affinity is not None:
+        data["cpu_affinity"] = sorted(get_affinity(0))
+    module = getattr(native, "__file__", None)
+    if module is not None and Path(module).is_file():
+        data["native_build"] = {
+            "module_sha256": _file_digest(module),
+            **{key: runtime[key] for key in ("dimension", "precision", "kokkos_backend")},
+            "compile_environment": {key: os.environ.get(key) for key in
+                                    ("POPS_CXX", "POPS_KOKKOS_CXX", "POPS_DSL_OPTFLAGS")},
+        }
+    tools = os.environ.get("KOKKOS_TOOLS_LIBS")
+    data["kernel_timer"] = _file_digest(tools) if tools else None
+    return data
+
+
 def measure(args) -> int:
+    if min(args.cells, args.threads, args.steps, args.blocks) < 1 or args.warmup < 0:
+        raise ValueError("cells, threads, steps and blocks must be positive; warmup is nonnegative")
     import numpy as np
 
     import pops as b6
@@ -133,12 +177,13 @@ def measure(args) -> int:
     from pops.runtime import _threading
 
     native = _threading._selected_native_module()
-    concurrency = int(native.runtime_environment_report()["kokkos_concurrency"]) \
-        if native is not None else None
+    runtime_report = native.runtime_environment_report() if native is not None else {}
+    concurrency = runtime_report.get("kokkos_concurrency")
     if concurrency != args.threads:
         raise RuntimeError("Kokkos runs %r threads, the bench asked %d" % (concurrency,
                                                                           args.threads))
     threads = dict(threads, running=concurrency, kokkos_concurrency=concurrency)
+    context = _measurement_context(native, runtime_report)
     blocks = {"slice": "scalar_advection", "master": "tracer"}   # the model's and master's
 
     def advance(route, steps):
@@ -176,12 +221,13 @@ def measure(args) -> int:
               for route in routes}
     result = {"schema": SCHEMA, "cells": [args.cells, args.cells], "routes": list(routes),
               "steps_per_block": args.steps, "blocks": args.blocks, "warmup": args.warmup,
-              "threads": threads, "omp_proc_bind": os.environ.get("OMP_PROC_BIND"),
-              "host": platform.node(), "processor": platform.processor() or platform.machine(),
-              "cpus": os.cpu_count(), "source": _source_revision(),
+              "threads": threads, **context,
               "compile_seconds": compile_seconds, "clocks": clocks,
               "max_rss_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
               "samples": samples, "kernels": kernels}
+    _check_receipt(result, args.out)
+    for route in routes:
+        _check_samples(samples[route], 2 * args.blocks, args.out)
     if len(routes) == 1:
         # one route per process: merge pairs the processes and compares their final states
         np.save(args.out.with_suffix(".state.npy"), states[routes[0]])
@@ -198,6 +244,85 @@ def measure(args) -> int:
                                          if key != "samples"}
                                  for route, row in timing.items()}}, indent=1))
     return 0
+
+
+def _check_receipt(run, path):
+    if not isinstance(run, dict) or run.get("schema") != SCHEMA:
+        raise ValueError("%s is not a measurement of this bench" % path)
+    cells = run.get("cells")
+    if (not isinstance(cells, list) or len(cells) != 2 or cells[0] != cells[1]
+            or any(type(size) is not int or size < 1 for size in cells)):
+        raise ValueError("%s must have a positive square grid" % path)
+    if any(type(run.get(key)) is not int or run[key] < minimum
+           for key, minimum in (("steps_per_block", 1), ("blocks", 1), ("warmup", 0))):
+        raise ValueError("%s has an invalid timed protocol" % path)
+    threads = run.get("threads")
+    if (not isinstance(threads, dict) or type(threads.get("running")) is not int
+            or threads["running"] < 1
+            or any(type(threads.get(key)) is not int or threads[key] != threads["running"]
+                   for key in ("asked", "kokkos_concurrency"))):
+        raise ValueError("%s reports incompatible requested and active threads" % path)
+    if any(key not in run for key in _CONTEXT):
+        raise ValueError("%s is missing the comparison context" % path)
+    steps = run["warmup"] + 2 * run["blocks"] * run["steps_per_block"]
+    routes = run.get("routes")
+    if (not isinstance(routes, list) or not routes or any(route not in ROUTES for route in routes)
+            or len(routes) != len(set(routes))):
+        raise ValueError("%s has an invalid route inventory" % path)
+    clocks = run.get("clocks")
+    if not isinstance(clocks, dict) or set(clocks) != set(routes):
+        raise ValueError("%s has an invalid clock inventory" % path)
+    for clock in clocks.values():
+        if (not isinstance(clock, (list, tuple)) or len(clock) != 2
+                or type(clock[0]) is not int or clock[0] != steps
+                or type(clock[1]) not in (int, float) or not math.isfinite(clock[1])
+                or clock[1] <= 0):
+            raise ValueError("%s has an invalid final clock for %d accepted steps" % (path, steps))
+
+
+def _check_samples(samples, expected, path):
+    if (not isinstance(samples, list) or len(samples) != expected
+            or any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+                   for value in samples)):
+        raise ValueError("%s must contain %d positive finite timing samples per route"
+                         % (path, expected))
+
+
+def _check_abba(order):
+    if not isinstance(order, list) or len(order) < 4 or len(order) % 4:
+        raise ValueError("split-process measurements require complete ABBA repetitions")
+    abba = (ROUTES + ROUTES[::-1], ROUTES[::-1] + ROUTES)
+    if any(tuple(order[index:index+4]) not in abba for index in range(0, len(order), 4)):
+        raise ValueError("split-process measurements must follow ABBA")
+
+
+def _instrumented(run):
+    if "kernel_timer" in run:
+        return run["kernel_timer"] is not None
+    if "timing_instrumented" in run:
+        return run["timing_instrumented"]
+    if "processes" in run:
+        # Older merged receipts discarded the component kernel reports.
+        return None
+    return any(run.get("kernels", {}).values())
+
+
+def _require_same_context(first, other, path):
+    for key in (*_CONTEXT, *_OPTIONAL_CONTEXT, "steps_per_block", "blocks", "warmup"):
+        if (key in first) != (key in other) or first.get(key) != other.get(key):
+            raise ValueError("%s has a different comparison context: %s" % (path, key))
+    if _instrumented(first) != _instrumented(other):
+        raise ValueError("%s has different timing instrumentation" % path)
+
+
+def _missing_provenance(run):
+    missing = [key for key in _OPTIONAL_CONTEXT if key not in run]
+    source = run["source"]
+    if not isinstance(source, dict) or not source.get("sha") or source["sha"] == "unknown":
+        missing.append("source_revision")
+    if not isinstance(source, dict) or source.get("dirty") is not False:
+        missing.append("clean_source_tree")
+    return missing
 
 
 def _finish(result: dict, states: dict) -> dict:
@@ -223,6 +348,7 @@ def _finish(result: dict, states: dict) -> dict:
                                                  / timing[route]["median_s_per_step"])
     result["timing"] = timing
     result["routes"] = list(ROUTES)
+    result["missing_provenance"] = _missing_provenance(result)
     return result
 
 
@@ -231,14 +357,29 @@ def merge(paths, out: Path) -> dict:
     the order A B B A across processes; their final states are compared as in one process."""
     import numpy as np
 
-    runs = [(Path(path), json.loads(Path(path).read_text(encoding="utf-8"))) for path in paths]
-    keys = {(tuple(run["cells"]), run["threads"]["running"], run["steps_per_block"],
-             run["blocks"], run["warmup"]) for _, run in runs}
-    if len(keys) != 1 or any(len(run["routes"]) != 1 for _, run in runs):
-        raise SystemExit("merge takes one-route measurements of one size, threads and protocol")
+    paths = [Path(path) for path in paths]
+    if len({path.resolve() for path in paths}) != len(paths):
+        raise ValueError("merge requires distinct component receipt paths")
+    runs = [(path, json.loads(path.read_text(encoding="utf-8"))) for path in paths]
+    for path, run in runs:
+        _check_receipt(run, path)
+        if len(run["routes"]) != 1 or any(key in run for key in ("timing", "order", "processes")):
+            raise ValueError("%s is not a raw one-route measurement" % path)
+    _check_abba([run["routes"][0] for _, run in runs])
+    if len({json.dumps(run, sort_keys=True) for _, run in runs}) != len(runs):
+        raise ValueError("merge requires distinct component measurements")
+    first = runs[0][1]
+    for path, run in runs:
+        if run["cells"] != first["cells"] or run["threads"]["running"] != first["threads"]["running"]:
+            raise ValueError("%s has a different size or thread count" % path)
+        _require_same_context(first, run, path)
+        route = run["routes"][0]
+        if not isinstance(run.get("samples"), dict) or set(run["samples"]) != {route}:
+            raise ValueError("%s has an invalid timing sample inventory" % path)
+        _check_samples(run["samples"][route], 2 * run["blocks"], path)
     merged = dict(runs[0][1], processes=[str(path) for path, _ in runs],
                   order=[run["routes"][0] for _, run in runs], samples={}, clocks={},
-                  kernels={}, compile_seconds={})
+                  timing_instrumented=_instrumented(first), kernels={}, compile_seconds={})
     states = {}
     for path, run in runs:
         (route,) = run["routes"]
@@ -247,12 +388,12 @@ def merge(paths, out: Path) -> dict:
         if merged["clocks"].setdefault(route, clock) != clock:
             raise RuntimeError("two processes of %s stopped at different clocks" % route)
         merged["compile_seconds"].setdefault(route, []).append(run["compile_seconds"][route])
-        state = np.load(path.with_suffix(".state.npy"))
-        if route in states and not np.array_equal(states[route], state):
+        state = np.load(path.with_suffix(".state.npy"), allow_pickle=False)
+        if state.shape != tuple(run["cells"]) or state.dtype != np.float64 or not np.isfinite(state).all():
+            raise ValueError("%s has an invalid final state shape, dtype or value" % path)
+        if route in states and not np.array_equal(states[route].view(np.uint64), state.view(np.uint64)):
             raise RuntimeError("two processes of %s end in different states" % route)
         states[route] = state
-    if set(states) != set(ROUTES):
-        raise SystemExit("merge needs processes of both routes")
     result = _finish(merged, states)
     out.write_text(json.dumps(result, indent=1))
     return result
@@ -260,34 +401,65 @@ def merge(paths, out: Path) -> dict:
 
 def verdict(paths) -> dict:
     """PF10 (1) per measurement, PF10 (3) per route and thread count over the sizes."""
-    runs = [json.loads(Path(path).read_text(encoding="utf-8")) for path in paths]
-    for run, path in zip(runs, paths):
-        if run.get("schema") != SCHEMA:
-            raise SystemExit("%s is not a measurement of this bench" % path)
-    first = []
-    for run in runs:
-        ratio = run["timing"]["slice"]["throughput_vs_master"]
-        first.append({"cells": run["cells"], "threads": run["threads"]["running"],
-                      "throughput_vs_master": ratio, "holds": ratio >= PF10_1})
-    third = []
+    first, third, keys = [], [], set()
     by_threads: dict = {}
-    for run in runs:
-        by_threads.setdefault(run["threads"]["running"], []).append(run)
+    for path in paths:
+        run = json.loads(Path(path).read_text(encoding="utf-8"))
+        _check_receipt(run, path)
+        if set(run["routes"]) != set(ROUTES) or run["clocks"]["master"] != run["clocks"]["slice"]:
+            raise ValueError("%s must compare both routes at the same final clock" % path)
+        threads = run["threads"]["running"]
+        key = (threads, tuple(run["cells"]))
+        if key in keys:
+            raise ValueError("%s duplicates a size and thread count" % path)
+        keys.add(key)
+        expected = 2 * run["blocks"]
+        if "order" in run or "processes" in run:
+            order, processes = run.get("order"), run.get("processes")
+            _check_abba(order)
+            if (not isinstance(processes, list) or len(processes) != len(order)
+                    or any(not isinstance(process, str) or not process for process in processes)
+                    or len(set(processes)) != len(processes)):
+                raise ValueError("%s has an invalid split-process inventory" % path)
+            expected *= len(order) // 2
+        if not isinstance(run.get("timing"), dict) or set(run["timing"]) != set(ROUTES):
+            raise ValueError("%s has an invalid route timing inventory" % path)
+        medians = {}
+        for route in ROUTES:
+            row = run["timing"][route]
+            samples = row.get("samples") if isinstance(row, dict) else None
+            _check_samples(samples, expected, path)
+            medians[route] = statistics.median(samples)
+        ratio = medians["master"] / medians["slice"]
+        first.append({"cells": run["cells"], "threads": threads,
+                      "throughput_vs_master": ratio, "holds": ratio >= PF10_1,
+                      "missing_provenance": _missing_provenance(run)})
+        by_threads.setdefault(threads, []).append((path, run, medians, expected))
+    missing_scaling_threads = []
     for threads, group in sorted(by_threads.items()):
-        group.sort(key=lambda run: run["cells"][0]*run["cells"][1])
-        for small, large in zip(group, group[1:]):
+        group.sort(key=lambda row: row[1]["cells"][0])
+        _, reference, _, count = group[0]
+        for path, run, _, expected in group[1:]:
+            _require_same_context(reference, run, path)
+            if count != expected or ("order" in reference) != ("order" in run):
+                raise ValueError("%s has a different sampling protocol for scaling" % path)
+        start = len(third)
+        for (_, small, small_medians, _), (_, large, large_medians, _) in zip(group, group[1:]):
             cells_ratio = (large["cells"][0]*large["cells"][1])/(small["cells"][0]*small["cells"][1])
             if cells_ratio < 4:
                 continue
             for route in ROUTES:
-                growth = (large["timing"][route]["median_s_per_step"]
-                          / small["timing"][route]["median_s_per_step"])
+                growth = large_medians[route] / small_medians[route]
                 third.append({"route": route, "threads": threads, "cells": [small["cells"],
                                                                            large["cells"]],
                               "growth": growth, "bound": PF10_3*cells_ratio,
                               "holds": growth <= PF10_3*cells_ratio})
+        if len(third) == start:
+            missing_scaling_threads.append(threads)
     return {"pf10_1": first, "pf10_3": third,
-            "holds": all(row["holds"] for row in first + third) and bool(third)}
+            "missing_scaling_threads": missing_scaling_threads,
+            "holds": bool(third) and not missing_scaling_threads
+            and all(row["holds"] for row in first + third)}
 
 
 def _arguments():
