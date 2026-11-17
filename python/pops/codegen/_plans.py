@@ -733,9 +733,11 @@ class ResolvedSimulationPlan:
         if presentation is None:
             return payload
         from pops.problem._snapshot_presentation import (
-            DERIVED, PLAN_VALUES, REFERENCES, REFERENCE_KEYS, SETS,
+            DERIVED, PLAN_VALUES, REFERENCES, REFERENCE_KEYS, SETS, project_retained_auxiliaries,
         )
 
+        project_retained_auxiliaries(payload["continuation_transitions"]["objects"], self.blocks,
+                                     presentation)
         return presentation.project(
             payload, values=PLAN_VALUES, sets=SETS, derived=DERIVED,
             references=REFERENCES, reference_keys=REFERENCE_KEYS)

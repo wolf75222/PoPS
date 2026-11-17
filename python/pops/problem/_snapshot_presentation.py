@@ -44,6 +44,7 @@ SETS = (
     ("lowering_coverage", "value", "source_to_targets", "*"),
     ("lowering_coverage", "value", "target_to_sources", "*"),
     ("...", "providers", "[]", "sources"),
+    ("layout", "value", "providers"),
     ("continuation_transitions", "objects"),
     ("initial_condition_plan", "value", "bindings"),
 )
@@ -90,6 +91,7 @@ REFERENCES = (
     # Manifest and resolved operation records.
     ("...", "state_spaces", "*", "qid"),
     ("...", "field_spaces", "*", "qid"),
+    ("...", "model", "manifest", "aux", "*", "qid"),
     ("...", "operators", "[]", "qid"),
     ("...", "operator_bindings", "[]", "subject_qid"),
     ("...", "operator_bindings", "[]", "target_qid"),
@@ -113,6 +115,7 @@ REFERENCES = (
     ("...", "native_spatial_layout", "$object", "projections", "fields", "layout_id"),
     ("native_layouts", "*", "value", "layout_id"),
     ("layout_amr_authorities", "*", "value", "layout_id"),
+    ("layout", "value", "layout_plan"),
     ("...", "quantities", "[]", "layout_id"),
     ("...", "diagnostic_quantities", "[]", "layout_id"),
     *((plan, "value", "layout_plan_id")
@@ -137,6 +140,24 @@ REFERENCES = (
     ("...", "method_provider", "resolution", "evidence", "[]", "targets", "[]"),
     *(path + ("*", "[]") for path in REFERENCE_KEYS if path[-1].endswith(("_sources", "_targets"))),
 )
+
+
+def project_retained_auxiliaries(
+    rows: list[dict[str, Any]], blocks: Any, names: PresentationMap,
+) -> None:
+    """Rebuild auxiliary identifiers from the projected owners in a copied transition plan."""
+    from pops.runtime._continuation_transitions import retained_auxiliary_component_identity
+
+    owners = {block.name: block.instance_owner_qid for block in blocks}
+    for row in rows:
+        if row["kind"] != "auxiliary":
+            continue
+        owner = owners[row["name"]]
+        component = row["validity"]
+        if row["identity"] != retained_auxiliary_component_identity(owner, component):
+            raise ValueError("auxiliary continuation identity differs from its block and component")
+        row["identity"] = retained_auxiliary_component_identity(
+            names.project_owner_string(owner), names.project(component))
 
 
 def presentation_map(problem: Any, *, layout: Any = None) -> PresentationMap:
@@ -250,5 +271,5 @@ def _layout_names(layout: Any, blocks: tuple[str, ...]) -> tuple[str, ...]:
 __all__ = [
     "ARTIFACT_KEYS", "ARTIFACT_VALUES", "DERIVED", "PLAN_VALUES", "REFERENCES", "REFERENCE_KEYS",
     "SEMANTIC_KEYS", "SEMANTIC_VALUES", "SETS",
-    "presentation_map",
+    "presentation_map", "project_retained_auxiliaries",
 ]

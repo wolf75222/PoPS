@@ -18,7 +18,7 @@ from pops.identity.presentation import (
     PresentationMap, PresentationProjectionError, ReservedOwnerNameError,
 )
 from pops.problem._snapshot import AuthoringSnapshot
-from tests.python.support.presentation_case import FIRST, RENAMED, resolve_named_case
+from tests.python.support.presentation_case import FIRST, RENAMED, build_named_case, resolve_named_case
 
 
 def _identities(resolved):
@@ -74,6 +74,50 @@ def test_literal_quantity_names_are_opaque_to_owner_projection(first, name):
     manifest_blocks = named.snapshot.artifact_to_dict()["payload"]["blocks"]
     for row in manifest_blocks.values():
         assert name in row["model"]["manifest"]["state_spaces"]
+
+
+def test_retained_auxiliary_keeps_owner_renames_and_distinguishes_its_expression():
+    first = resolve_named_case(FIRST, auxiliary_offset=2)
+    renamed = resolve_named_case(RENAMED, auxiliary_offset=2)
+    changed = resolve_named_case(FIRST, auxiliary_offset=3)
+    renamed.verify()
+    assert _identities(first) == _identities(renamed)
+    for key, identity in _identities(first).items():
+        assert _identities(changed)[key] != identity, key
+
+    def retained(plan, *, projected):
+        data = plan._payload() if projected else plan._named_payload()
+        return {row["identity"] for row in data["continuation_transitions"]["objects"]
+                if row["kind"] == "auxiliary"}
+
+    assert len(retained(first, projected=True)) == 2
+    assert retained(first, projected=True) == retained(renamed, projected=True)
+    assert retained(first, projected=True).isdisjoint(retained(changed, projected=True))
+    assert retained(first, projected=False).isdisjoint(retained(renamed, projected=False))
+
+
+def test_explicit_layout_names_are_presentation():
+    from pops.mesh import LayoutPlanBuilder
+
+    def explicit_layouts(names, layout_names):
+        case, layout = build_named_case(names)
+        validated = pops.validate(case)
+        subjects = validated.layout_subjects()
+        builder = LayoutPlanBuilder(validated.owner_path.canonical())
+        handles = dict(zip(names["blocks"], (builder.layout(name, layout) for name in layout_names),
+                           strict=True))
+        for block in subjects.blocks:
+            builder.assign_block(block, handles[block.local_id])
+        for state in subjects.states:
+            builder.assign_state(state, handles[state.block_ref.local_id])
+        plan = builder.resolve(**subjects.to_dict())
+        return pops.resolve(validated, layout=plan, layout_providers=dict.fromkeys(
+            handles.values(), layout))
+
+    first = explicit_layouts(FIRST, ("one", "two"))
+    layout_only = explicit_layouts(FIRST, ("three", "zero"))
+    all_owners = explicit_layouts(RENAMED, ("Z/~?", "A:payload"))
+    assert _identities(first) == _identities(layout_only) == _identities(all_owners)
 
 
 def _owner_names(text):
