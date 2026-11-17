@@ -267,7 +267,7 @@ def test_guards_of_the_accepted_state_are_fixed_sites(profile, monkeypatch):
     elaborated = _spec(build, monkeypatch).case._time
     control = elaborated._advance_control
     rows = control.to_data()["trial_failures"]
-    assert rows == [{"site": site, "guard": "admissibility", "variant": "NotAdmissible",
+    assert rows == [{"site": site, "guard": "admissibility", "variant": ["NotAdmissible"],
                      "retry_can_change": not _fixed(site), "classified": True, "lot": None}
                     for site in sites]
     assert AdvanceControl.from_data(control.to_data()) == control

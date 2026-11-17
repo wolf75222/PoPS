@@ -53,6 +53,7 @@ from pops.codegen.program_emit_solve import (
     _emit_solve_linear,
 )
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
+from pops.codegen.program_solver_region import emit_axpy, emit_lincomb
 from pops.codegen.program_emit_field_routes import field_point_cpp, resolved_field_route
 from pops.identity import make_identity
 from pops._ir.data_model import field_role, is_field_leaf
@@ -1274,8 +1275,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                                  % (source, int(v.id), var[state_in.id]))
                     lines.append("ctx.source_default_into(%d, %s, %s%s);"
                                  % (bidx, var[state_in.id], source, trace_suffix))
-                    lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);"
-                                 % (var[v.id], source))
+                    lines.append(emit_axpy(var, var[v.id], "static_cast<pops::Real>(1)", source))
             elif want_default_source:
                 # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
                 # bidx), the historical path: sources is None (legacy) or "default" is requested.
@@ -1359,7 +1359,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 provider_plans=provider_plans, consumer_qid=consumer_qid,
                 plan_exprs=plan_exprs,
             )
-            lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
+            lines.append(emit_axpy(var, var[v.id], "static_cast<pops::Real>(1)", ssrc))
         if want_flux:
             from pops.codegen.program_partition_stability import emit_transport_frequency
             emit_transport_frequency(v, var, lines, model=node_model, block_index=bidx,
@@ -1380,9 +1380,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
         output_setup_end = len(lines)
-        lines.append(
-            "ctx.lincomb(%s, static_cast<pops::Real>(1), %s, static_cast<pops::Real>(0), %s);"
-            % (var[v.id], var[state_in.id], var[state_in.id]))
+        lines.append(emit_lincomb(var, var[v.id], "static_cast<pops::Real>(1)", var[state_in.id],
+                                  "static_cast<pops::Real>(0)", var[state_in.id]))
         outcome = "implicit_source_outcome_%d" % v.id
         report = "implicit_source_report_%d" % v.id
         lines.append(
@@ -1643,6 +1642,25 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             ),
             target=target,
         )
+    elif v.op == "matrix_free_operator" and v.attrs.get("apply_operand") == "state":
+        # A State-operand operator (IR26): its apply block is a declaration that the passes read;
+        # a reference realization applies it inside its own region, and a native solve of it is
+        # refused naming G10 (native_realization). No C++ lambda is emitted from it, and the
+        # source map records each node of the declaration with no statement.
+        from pops.codegen.program_source_map import operation
+        from pops.time._program.traversal import _STRUCTURED_BLOCK_KEYS
+
+        lines.append("// %s: the apply of a State-operand operator is a declaration (IR26)"
+                     % v.name)
+        pending = list(reversed(v.attrs["apply_block"]))
+        while pending:
+            node = pending.pop()
+            with operation(node, lines, channel="operator_declaration"):
+                pass
+            for key in reversed(_STRUCTURED_BLOCK_KEYS):
+                nested = node.attrs.get(key)
+                if isinstance(nested, (list, tuple)):
+                    pending.extend(reversed(nested))
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch
         # (the scalar_field ops of the apply sub-block) are shared_ptr fields, captured by value so
@@ -1677,7 +1695,16 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         emit_spatial_solve(program, v, base, var, model, lines, prelude, block_idx,
                            field_plans, target, emit_residual)
     elif v.op == "solve_linear":
-        _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
+        from pops.time.solve_outcome import solve_realization_kind
+
+        if solve_realization_kind(v) == "reference":
+            # SV12: the same solve, realized by its region (N9 lot « La référence sous les
+            # solves de relation », §3.2).
+            from .program_emit_solve import emit_reference_solve
+            emit_reference_solve(program, v, var, model, lines, prelude, block_idx, field_plans,
+                                 target)
+        else:
+            _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
     elif v.op == "solve_evidence":
         # SV5: a read of the evidence of a consumed solve, a copy of its report (program_emit_solve).
         from .program_emit_solve import solve_evidence_cpp
@@ -2014,9 +2041,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                             if field_role(v) == "field" else ""))
             output_setup_end = len(lines)
             for inp, coeff in terms:
-                lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
-                             % (var[v.id], _coeff_cpp(coeff), var[inp.id],
-                                _coeff_metadata_cpp(coeff)))
+                lines.append(emit_axpy(var, var[v.id], _coeff_cpp(coeff), var[inp.id],
+                                       _coeff_metadata_cpp(coeff)))
             if "cell_field_projection" in v.attrs:
                 from pops.codegen.program_emit_stencil_inputs import emit_cell_sample_extension
                 emit_cell_sample_extension(v,var,lines,block=bidx,target=target)

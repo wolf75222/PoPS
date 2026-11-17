@@ -1332,6 +1332,7 @@ void bind_system_stepping(py::class_<System>& cls) {
             result["last_prepared_solve_iterations"] = report.last_prepared_solve_iterations;
             result["last_prepared_solve_residual"] = report.last_prepared_solve_residual;
             result["rejection_detail"] = report.rejection_detail;
+            result["rejection_status"] = report.rejection_status;
             result["segment_origin"] = report.segment.origin;
             result["segment_steps"] = report.segment.steps;
             result["outputs"] = samples;

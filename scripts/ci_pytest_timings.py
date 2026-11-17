@@ -24,10 +24,11 @@ ORDINARY_BUDGET_SECONDS = 35 * 60
 # Every shard of more than one file stays at least ten percent under that budget
 # (ORDINARY_MARGIN_SECONDS, pinned by test_ci_shard_binpack.py); a lot that crosses it raises
 # SHARD_TOTAL. 165 bins since the shard 128 recalibration of batch 43318819535
-# (b03_20261113_shard128_continuum_hall_weights) merged with #797 and #798; 166 since the rows of
-# N12 lot 3c-2a (refinement-criterion model parameters) joined them in lot 3c-2b.
+# (b03_20261113_shard128_continuum_hall_weights) merged with #797 and #798; 167 with the native
+# modules of the N9 relation solves (n9_20261112_*) and #823 merged first;
+# 168 with the shard 131 recalibration of batch 43469038506.
 ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
-SHARD_TOTAL = 166
+SHARD_TOTAL = 168
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:

@@ -352,6 +352,10 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             elif v.op == "branch":
                 self._validate_block(v.attrs["true_block"], seen)
                 self._validate_block(v.attrs["false_block"], seen)
+            elif v.op == "solve_linear" and v.attrs.get("body_block"):
+                # The region of a reference realization reads the solve's inputs and the values
+                # before it, as a capture does (SV12).
+                self._validate_block(v.attrs["body_block"], seen)
             elif v.op == "matrix_free_operator" and v.attrs.get("apply_block"):
                 # The apply sub-block is self-contained (its in/out placeholders + scratch are defined
                 # inside it); it reads nothing from the enclosing scope.

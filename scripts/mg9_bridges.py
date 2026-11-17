@@ -205,7 +205,8 @@ def bridges_of(source: str, module: str) -> set:
                     found.add((node.name, where, route))
                     found.discard((word, where, route))
     # a private builder that the module hands to a public word at import is that word's bridge
-    # (cg.bind_relation_native(_native_cg, ...) in pops.lib.solve)
+    # (cg.bind_relation_native(_native_cg, ...) of N9 lot 4 in pops.lib.solve, until the N9 lot
+    # « La référence sous les solves de relation »)
     for node in tree.body:
         call = node.value if isinstance(node, ast.Expr) else None
         if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute) \
