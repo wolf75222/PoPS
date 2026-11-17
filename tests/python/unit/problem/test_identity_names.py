@@ -46,6 +46,36 @@ def test_renamed_owners_keep_every_identity(first):
         assert name in authored
 
 
+@pytest.mark.parametrize("block_name", (
+    "blocks", "payload", "[]", "accepted Program exchange mailbox", "left/right:100%",
+))
+def test_block_names_may_match_schema_keys_and_continuation_labels(first, block_name):
+    renamed = resolve_named_case(dict(FIRST, blocks=("alpha", block_name)))
+    renamed.verify()
+    assert _identities(renamed) == _identities(first)
+    manifest_blocks = renamed.snapshot.artifact_to_dict()["payload"]["blocks"]
+    assert [row["model"]["manifest"]["name"] for row in manifest_blocks.values()] == [
+        "$model0", "$model1",
+    ]
+    rows = renamed._payload()["continuation_transitions"]["objects"]
+    mailbox = next(row for row in rows if row["kind"] == "accepted_exchanges")
+    assert mailbox["name"] == "accepted Program exchange mailbox"
+
+
+@pytest.mark.parametrize("name", (
+    "case:user", "case:advection", "pops.handle.v1::case:advection::state::U",
+))
+def test_literal_quantity_names_are_opaque_to_owner_projection(first, name):
+    named = resolve_named_case(FIRST, state_name=name)
+    renamed = resolve_named_case(RENAMED, state_name=name)
+    assert _identities(named) == _identities(renamed)
+    for key, identity in _identities(first).items():
+        assert _identities(named)[key] != identity, key
+    manifest_blocks = named.snapshot.artifact_to_dict()["payload"]["blocks"]
+    for row in manifest_blocks.values():
+        assert name in row["model"]["manifest"]["state_spaces"]
+
+
 def _owner_names(text):
     """The owner names a string spells in a qualified id or an owner path, as ``kind:name``."""
     found = set()

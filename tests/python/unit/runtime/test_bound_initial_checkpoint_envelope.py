@@ -57,6 +57,28 @@ def _wire(payload):
     return stream.getvalue()
 
 
+def test_uniform_checkpoint_artifact_refusal_reports_only_observed_member_mismatch(monkeypatch):
+    original = _Owner()
+    original._bound_snapshot.block_names = lambda: ("tracer",)
+    payload = _payload(original)
+    payload["state_tracer"] = payload.pop("state")
+    restart = seal_checkpoint_payload(original, payload, runtime_kind="uniform")
+    descriptors = ModuleType("pops.runtime._engine_descriptors")
+    descriptors.abi_key = lambda: "unit-abi"
+    monkeypatch.setitem(sys.modules, descriptors.__name__, descriptors)
+    assert authenticate_checkpoint_payload(original, payload, runtime_kind="uniform") == restart
+
+    alternate = _Owner()
+    alternate._bound_snapshot.artifact_identity = make_identity("artifact", {"optflags": "-O2"})
+    alternate._bound_snapshot.block_names = lambda: ("tracer",)
+    with pytest.raises(ValueError, match=r"^checkpoint artifact_identity does not match the bound runtime$"):
+        authenticate_checkpoint_payload(alternate, payload, runtime_kind="uniform")
+
+    alternate._bound_snapshot.block_names = lambda: ("renamed",)
+    with pytest.raises(ValueError, match=r"no member state_renamed; .*N11 lot 2c-ii"):
+        authenticate_checkpoint_payload(alternate, payload, runtime_kind="uniform")
+
+
 @pytest.mark.parametrize("kind", ("uniform", "amr"))
 def test_initial_wire_authenticates_bound_origin_and_restart_then_real_run(monkeypatch, kind):
     owner = _Owner()

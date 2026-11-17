@@ -732,9 +732,13 @@ class ResolvedSimulationPlan:
         presentation = self.snapshot.presentation
         if presentation is None:
             return payload
-        from pops.problem._snapshot_presentation import DERIVED, PLAN_VALUES, SETS
+        from pops.problem._snapshot_presentation import (
+            DERIVED, PLAN_VALUES, REFERENCES, REFERENCE_KEYS, SETS,
+        )
 
-        return presentation.project(payload, values=PLAN_VALUES, sets=SETS, derived=DERIVED)
+        return presentation.project(
+            payload, values=PLAN_VALUES, sets=SETS, derived=DERIVED,
+            references=REFERENCES, reference_keys=REFERENCE_KEYS)
 
     def _named_payload(self) -> dict[str, Any]:
         return {

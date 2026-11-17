@@ -45,7 +45,7 @@ def _restart_across_renamed_owners_is_refused_by_name(first, renamed):
         before = {block: np.array(candidate.state_global(block), copy=True)
                   for block in RENAMED["blocks"]}
         clock = (candidate.time(), candidate.macro_step())
-        with pytest.raises(ValueError, match=r"no member state_eta, state_zeta.*2b-ii"):
+        with pytest.raises(ValueError, match=r"no member state_eta, state_zeta.*2c-ii"):
             candidate.restart(checkpoint)
         for block, values in before.items():
             assert np.array_equal(candidate.state_global(block), values)

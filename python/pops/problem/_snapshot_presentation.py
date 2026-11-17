@@ -64,8 +64,79 @@ DERIVED = (
 # The resolved plan names each block, and its continuation rows name a state by its block.
 PLAN_VALUES = {
     ("blocks", "[]", "name"): "block",
-    ("continuation_transitions", "objects", "[]", "name"): "block_if_listed",
+    ("continuation_transitions", "objects", "[]", "name"): "continuation_name",
+    ("continuation_transitions", "objects", "[]", "identity"): "continuation_identity",
 }
+
+# String references from serialized contracts. Owner and handle records carry their own
+# types. The flattened fields below are named by their enclosing schema, so an author name
+# in a Space, an IR literal, or a user dictionary is never interpreted as a reference.
+REFERENCE_KEYS = (
+    ("layout_targets",), ("native_layouts",), ("layout_amr_authorities",),
+    *(("...", "coverage", index) for index in ("source_to_targets", "target_to_sources")),
+    *(("lowering_coverage", "value", index)
+      for index in ("source_to_targets", "target_to_sources")),
+)
+REFERENCES = (
+    # Provider and block ownership.
+    ("...", "guarantees", "block_instance"),
+    ("blocks", "[]", "instance_owner_qid"),
+    ("...", "native_provider_instance", "definition_owner_qid"),
+    ("...", "native_provider_instance", "instance_owner_qid"),
+    ("blocks", "[]", "state_identities", "[]"),
+    ("...", "entries", "[]", "provider", "producer"),
+    ("...", "consumer_plans", "*", "[]", "provider", "producer"),
+    ("...", "output_route", "owner_identity"),
+    # Manifest and resolved operation records.
+    ("...", "state_spaces", "*", "qid"),
+    ("...", "field_spaces", "*", "qid"),
+    ("...", "operators", "[]", "qid"),
+    ("...", "operator_bindings", "[]", "subject_qid"),
+    ("...", "operator_bindings", "[]", "target_qid"),
+    ("...", "operations", "[]", "identity"),
+    ("...", "operations", "[]", "evaluation"),
+    *(("...", "operations", "[]", field, "[]") for field in (
+        "consumes", "dependencies", "materialized_inputs", "communication")),
+    ("...", "operations", "[]", "inputs", "[]", "reference"),
+    ("...", "guarantees", "declaration_operation"),
+    ("...", "evaluations", "[]", "identity"),
+    ("...", "occurrences", "[]", "identity"),
+    ("...", "occurrences", "[]", "operator"),
+    ("...", "occurrences", "[]", "target"),
+    ("...", "exchanges", "[]", "occurrence"),
+    ("...", "exchanges", "[]", "target"),
+    ("...", "conditions", "[]", "stencil", "rates", "[]"),
+    ("...", "resolved_operations", "value", "execution_order", "[]"),
+    # Layout and its named digest, initial condition and its derived provider handle.
+    ("...", "native_spatial_layout", "layout_id"),
+    ("...", "native_spatial_layout", "$object", "projections", "to_data", "layout_id"),
+    ("...", "native_spatial_layout", "$object", "projections", "fields", "layout_id"),
+    ("native_layouts", "*", "value", "layout_id"),
+    ("layout_amr_authorities", "*", "value", "layout_id"),
+    ("...", "quantities", "[]", "layout_id"),
+    ("...", "diagnostic_quantities", "[]", "layout_id"),
+    *((plan, "value", "layout_plan_id")
+      for plan in ("initial_condition_plan", "bootstrap_plan", "amr_transfer")),
+    ("...", "authorities", "initial_conditions", "layout_plan_id"),
+    ("...", "authorities", "bootstrap", "layout_plan_id"),
+    ("...", "authorities", "transfer", "layout_plan_id"),
+    ("...", "layout_plan", "value", "canonical_id"),
+    ("...", "layout_plan", "value", "qualified_id"),
+    ("...", "layout", "$object", "projections", "fields", "canonical_id"),
+    ("...", "component_digests", "module"),
+    ("...", "model", "module_hash"),
+    ("...", "model", "scientific_hash"),
+    ("...", "resolved_operations", "value", "source_module_hash"),
+    # Coverage report relations and capability providers.
+    ("...", "coverage", "rows", "[]", "source"),
+    ("...", "coverage", "rows", "[]", "targets", "[]"),
+    ("lowering_coverage", "value", "rows", "[]", "source"),
+    ("lowering_coverage", "value", "rows", "[]", "targets", "[]"),
+    ("capabilities", "resolution", "providers", "[]", "sources", "[]"),
+    ("...", "method_provider", "resolution", "evidence", "[]", "source"),
+    ("...", "method_provider", "resolution", "evidence", "[]", "targets", "[]"),
+    *(path + ("*", "[]") for path in REFERENCE_KEYS if path[-1].endswith(("_sources", "_targets"))),
+)
 
 
 def presentation_map(problem: Any, *, layout: Any = None) -> PresentationMap:
@@ -134,7 +205,7 @@ def _named_digests(problem: Any, layout: Any, names: PresentationMap) -> tuple[t
         data = plan_payload(layout.owner, layout.layouts, layout.assignments, layout.mappings)
         projected = names.project(
             json.loads(json.dumps(data)), sets=tuple(("...", name) for name in _LAYOUT_SETS),
-            derived=DERIVED)
+            derived=DERIVED, references=REFERENCES, reference_keys=REFERENCE_KEYS)
         rows.append((layout.canonical_id, _sha256_json(projected)))
     return tuple(dict(rows).items())
 
@@ -177,6 +248,7 @@ def _layout_names(layout: Any, blocks: tuple[str, ...]) -> tuple[str, ...]:
 
 
 __all__ = [
-    "ARTIFACT_KEYS", "ARTIFACT_VALUES", "DERIVED", "PLAN_VALUES", "SEMANTIC_KEYS", "SEMANTIC_VALUES", "SETS",
+    "ARTIFACT_KEYS", "ARTIFACT_VALUES", "DERIVED", "PLAN_VALUES", "REFERENCES", "REFERENCE_KEYS",
+    "SEMANTIC_KEYS", "SEMANTIC_VALUES", "SETS",
     "presentation_map",
 ]

@@ -415,7 +415,8 @@ def build_authoring_snapshot(
 def _project_presentation(presentation: Any, data: Any, *, artifact: bool) -> Any:
     """Replace the owner names of one canonical identity preimage by their positions."""
     from pops.problem._snapshot_presentation import (
-        ARTIFACT_KEYS, ARTIFACT_VALUES, DERIVED, SEMANTIC_KEYS, SEMANTIC_VALUES, SETS,
+        ARTIFACT_KEYS, ARTIFACT_VALUES, DERIVED, REFERENCES, REFERENCE_KEYS,
+        SEMANTIC_KEYS, SEMANTIC_VALUES, SETS,
     )
 
     return presentation.project(
@@ -424,6 +425,8 @@ def _project_presentation(presentation: Any, data: Any, *, artifact: bool) -> An
         values=ARTIFACT_VALUES if artifact else SEMANTIC_VALUES,
         sets=SETS,
         derived=DERIVED,
+        references=REFERENCES,
+        reference_keys=REFERENCE_KEYS,
     )
 
 
