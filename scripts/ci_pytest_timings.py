@@ -26,9 +26,9 @@ ORDINARY_BUDGET_SECONDS = 35 * 60
 # SHARD_TOTAL. 165 bins since the shard 128 recalibration of batch 43318819535
 # (b03_20261113_shard128_continuum_hall_weights) merged with #797 and #798; 167 with the native
 # modules of the N9 relation solves (n9_20261112_*) and #823 merged first;
-# 168 with the shard 131 recalibration of batch 43469038506.
+# 168 with the shard 131 recalibration of batch 43469038506, then 169 with G03 accumulation.
 ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
-SHARD_TOTAL = 168
+SHARD_TOTAL = 169
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:

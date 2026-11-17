@@ -111,6 +111,7 @@
     "tests/python/integration/runtime/test_finite_iteration_ad_v14_native.py": 2,
     "tests/python/integration/runtime/test_finite_structural_depth_native.py": 2,
     "tests/python/integration/runtime/test_g03_cell_totals_native.py": 1,
+    "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": 1,
     "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": 2,
     "tests/python/integration/runtime/test_implicit_arrays_v14_native.py": 2,
     "tests/python/integration/runtime/test_implicit_domain_v14_native.py": 2,
