@@ -33,10 +33,10 @@ BOUND_KIND = "local_root"
 class LocalRoot:
     """``LocalRoot(tolerance=, max_iterations=)``: the pointwise root of an accumulation law.
 
-    The recovery stops at the first q of the admissible set with |Q(q) − U| <= tolerance·(1 + |U|),
-    and fails after ``max_iterations`` evaluations of the law (the bracket search included). Both
-    are stated by the case, with no default: the tolerance changes the result (SU9), and a cap on
-    an iteration is the case's choice, never the core's (CF7)."""
+    Once U has been shown to lie in the image of the admissible set, the recovery accepts the
+    first explored q with |Q(q) − U| <= tolerance·(1 + |U|). Endpoint and bracket search
+    evaluations count in ``max_iterations``. Both choices are stated by the case, with no default:
+    the tolerance changes the result (SU9), and the iteration cap belongs to the case (CF7)."""
 
     tolerance: float
     max_iterations: int
@@ -53,8 +53,9 @@ class LocalRoot:
                 "max_iterations": self.max_iterations}
 
 
-def substitute(expr: Any, name: str, replacement: Expr, *, kind: str = BOUND_KIND) -> Expr:
-    """``expr`` with the variable ``name`` of ``kind`` replaced, over the elementary algebra only."""
+def substitute(expr: Any, name: str, replacement: Expr, *, kind: str = BOUND_KIND,
+               only_variable: Var | None = None) -> Expr:
+    """Replace a variable in the elementary algebra, optionally checking an exact binder."""
     memo: dict[int, Expr] = {}
 
     def go(node: Any) -> Expr:
@@ -62,6 +63,10 @@ def substitute(expr: Any, name: str, replacement: Expr, *, kind: str = BOUND_KIN
         if cached is not None:
             return cached
         if isinstance(node, Var):
+            if only_variable is not None and node is not only_variable:
+                raise ValueError(
+                    "the accumulation law reads %r (%s) outside its coordinate declaration %r"
+                    % (node.name, node.kind, only_variable.name))
             result = replacement if (node.kind == kind and node.name == name) else node
         elif isinstance(node, Const):
             result = node
@@ -159,7 +164,9 @@ def derivative_interval(expr: Any, name: str, lower: float, upper: float) -> tup
 
 
 class PointwiseRoot(Expr):
-    """q(U): the root of ``law`` = U over [lower, upper] (``upper`` may be +inf, held as None).
+    """q(U): the root of an increasing ``law`` = U over [lower, upper).
+
+    An unbounded upper end is stored as None.
 
     Its derivative dq/dU = 1/Q'(q) is not defined at an end of the set where Q' vanishes, as at
     q = -1/2 for the witness Q = q + q²: the host twin raises ``ZeroDivisionError`` there and the
@@ -174,7 +181,7 @@ class PointwiseRoot(Expr):
             raise TypeError("PointwiseRoot takes its realization as a LocalRoot")
         if not (math.isfinite(lower) and lower < upper):
             raise ValueError("the admissible set of a recovery is [lower, upper), lower finite")
-        self.law = substitute(law, bound.name, bound)
+        self.law = substitute(law, bound.name, bound, only_variable=bound)
         self.slope = diff(self.law, bound)
         self.bound = bound
         self.target = _wrap(target)
@@ -209,33 +216,56 @@ class PointwiseRoot(Expr):
 
     def solve(self, value: float) -> float:
         """The host twin of the native iteration, step for step."""
-        tolerance = self.recovery.tolerance*(1.0 + abs(value))
-
-        def law(q: float) -> tuple[float, float]:
-            env = {self.bound.name: q}
-            return float(self.law.eval(env)) - value, float(self.slope.eval(env))
+        def law(q: float) -> float:
+            try:
+                return float(self.law.eval({self.bound.name: q}))
+            except (ArithmeticError, ValueError):
+                return math.nan
 
         if not math.isfinite(value):
             return math.nan
+        tolerance = self.recovery.tolerance*(1.0 + abs(value))
         a, b = self.lower, math.inf if self.upper is None else self.upper
-        have_b = math.isfinite(b)
-        q, step, first = self.lower, max(1.0, abs(self.lower)), True
-        for _ in range(self.recovery.max_iterations):
-            f, df = law(q)
-            if not math.isfinite(f):
+        have_b = False
+        q, step = a, max(1.0, abs(a))
+        candidate = math.nan
+        remaining = self.recovery.max_iterations
+        first = True
+        while remaining:
+            if not math.isfinite(q):
                 return math.nan
-            if abs(f) <= tolerance:
-                return q
-            if f < 0:
-                a = q
-            else:
-                if first:
+            y = law(q)
+            remaining -= 1
+            if not math.isfinite(y):
+                return math.nan
+            if first:
+                if y > value:
                     return math.nan
-                b, have_b = q, True
-            first = False
-            if not have_b:
+                if y == value:
+                    return q
+                if self.upper is not None:
+                    if not remaining or not value < law(b):
+                        return math.nan
+                    remaining -= 1
+                    have_b = True
+                first = False
+
+            f = y - value
+            if not have_b and y <= value:
+                # With no finite upper end, require a strict upper image before using tolerance.
+                if math.isnan(candidate) and abs(f) <= tolerance:
+                    candidate = q
                 q, step = self.lower + step, 2*step
                 continue
+            if math.isfinite(candidate):
+                return candidate
+            if abs(f) <= tolerance:
+                return q
+            if y < value:
+                a = q
+            else:
+                b, have_b = q, True
+            df = float(self.slope.eval({self.bound.name: q}))
             following = q - f/df if df > 0 else math.nan
             if not (a < following < b):
                 following = a + (b - a)/2
@@ -255,29 +285,45 @@ class PointwiseRoot(Expr):
         upper = ("Kokkos::Experimental::infinity<pops::Real>::value" if self.upper is None
                  else repr(self.upper))
         nan = "Kokkos::Experimental::quiet_NaN<pops::Real>::value"
+        budget = self.recovery.max_iterations
+        # The excluded endpoint supplies only an image bound. Its law evaluation uses the budget.
+        upper_check = "" if self.upper is None else (
+            "   if (1 == %dLL || !(pops_root_u < pops_root_law(pops_root_b))) return %s;"
+            "   ++pops_root_it; pops_root_bracketed = true;" % (budget, nan))
         return "".join((
             "([&](pops::Real pops_root_u) -> pops::Real {",
             " if (!Kokkos::isfinite(pops_root_u)) return %s;" % nan,
+            " const auto pops_root_law = [](pops::Real pops_root_x) -> pops::Real { return %s; };"
+            % law,
             " const pops::Real pops_root_tolerance = %r * (pops::Real(1) + Kokkos::fabs(pops_root_u));"
             % self.recovery.tolerance,
             " const pops::Real pops_root_lower = %r;" % self.lower,
             " pops::Real pops_root_a = pops_root_lower, pops_root_b = %s;" % upper,
-            " bool pops_root_bracketed = Kokkos::isfinite(pops_root_b), pops_root_first = true;",
+            " bool pops_root_bracketed = false;",
             " pops::Real pops_root_x = pops_root_lower,"
             " pops_root_step = Kokkos::fmax(pops::Real(1), Kokkos::fabs(pops_root_lower));",
-            " for (std::int64_t pops_root_it = 0; pops_root_it < %dLL; ++pops_root_it) {"
-            % self.recovery.max_iterations,
-            "  const pops::Real pops_root_f = (%s) - pops_root_u;" % law,
-            "  const pops::Real pops_root_df = %s;" % slope,
-            "  if (!Kokkos::isfinite(pops_root_f)) return %s;" % nan,
+            " pops::Real pops_root_candidate = %s;" % nan,
+            " for (std::int64_t pops_root_it = 0; pops_root_it < %dLL; ++pops_root_it) {" % budget,
+            "  if (!Kokkos::isfinite(pops_root_x)) return %s;" % nan,
+            "  const pops::Real pops_root_y = pops_root_law(pops_root_x);",
+            "  if (!Kokkos::isfinite(pops_root_y)) return %s;" % nan,
+            "  if (pops_root_it == 0) {",
+            "   if (pops_root_y > pops_root_u) return %s;" % nan,
+            "   if (pops_root_y == pops_root_u) return pops_root_x;",
+            upper_check,
+            "  }",
+            "  const pops::Real pops_root_f = pops_root_y - pops_root_u;",
+            "  if (!pops_root_bracketed && pops_root_y <= pops_root_u) {",
+            "   if (!Kokkos::isfinite(pops_root_candidate) && Kokkos::fabs(pops_root_f)"
+            " <= pops_root_tolerance) pops_root_candidate = pops_root_x;",
+            "   pops_root_x = pops_root_lower + pops_root_step; pops_root_step *= pops::Real(2);",
+            "   continue;",
+            "  }",
+            "  if (Kokkos::isfinite(pops_root_candidate)) return pops_root_candidate;",
             "  if (Kokkos::fabs(pops_root_f) <= pops_root_tolerance) return pops_root_x;",
-            "  if (pops_root_f < pops::Real(0)) pops_root_a = pops_root_x;",
-            "  else { if (pops_root_first) return %s;" % nan,
-            " pops_root_b = pops_root_x; pops_root_bracketed = true; }",
-            "  pops_root_first = false;",
-            "  if (!pops_root_bracketed) {",
-            " pops_root_x = pops_root_lower + pops_root_step; pops_root_step = pops::Real(2) * pops_root_step;"
-            " continue; }",
+            "  if (pops_root_y < pops_root_u) pops_root_a = pops_root_x;",
+            "  else { pops_root_b = pops_root_x; pops_root_bracketed = true; }",
+            "  const pops::Real pops_root_df = %s;" % slope,
             "  pops::Real pops_root_next = pops_root_df > pops::Real(0)"
             " ? pops_root_x - pops_root_f / pops_root_df : %s;" % nan,
             "  if (!(pops_root_a < pops_root_next && pops_root_next < pops_root_b))",
