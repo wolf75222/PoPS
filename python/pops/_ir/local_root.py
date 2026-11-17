@@ -45,8 +45,8 @@ class LocalRoot:
     def __post_init__(self) -> None:
         if type(self.tolerance) is not float or not (0.0 < self.tolerance < 1.0):
             raise ValueError("LocalRoot(tolerance=) is a binary64 number in (0, 1)")
-        if type(self.max_iterations) is not int or not 1 <= self.max_iterations <= 10000:
-            raise ValueError("LocalRoot(max_iterations=) is an integer in [1, 10000]")
+        if type(self.max_iterations) is not int or not 1 <= self.max_iterations <= (1 << 63) - 1:
+            raise ValueError("LocalRoot(max_iterations=) is an integer in [1, INT64_MAX]")
 
     def to_data(self) -> dict[str, Any]:
         return {"kind": "local_root", "tolerance": self.tolerance.hex(),
@@ -246,15 +246,17 @@ class PointwiseRoot(Expr):
 
     def emit_cpp(self, target_cpp: str) -> str:
         """The native iteration as one immediately invoked lambda; ``target_cpp`` is U."""
-        from pops.codegen.cpp_writer import _cpp_expand
-        q = self.bound.name
-        law, slope = _cpp_expand(self.law, {}), _cpp_expand(self.slope, {})
+        from pops.codegen.cpp_writer import _cpp_cse
+        from .visitors import _key
+
+        # The bound variable denotes the current iterate, irrespective of its source spelling.
+        bindings = {_key(self.bound): "pops_root_x"}
+        law, slope = _cpp_cse(self.law, bindings), _cpp_cse(self.slope, bindings)
         upper = ("Kokkos::Experimental::infinity<pops::Real>::value" if self.upper is None
                  else repr(self.upper))
         nan = "Kokkos::Experimental::quiet_NaN<pops::Real>::value"
         return "".join((
-            "([&]() -> pops::Real {",
-            " const pops::Real pops_root_u = %s;" % target_cpp,
+            "([&](pops::Real pops_root_u) -> pops::Real {",
             " if (!Kokkos::isfinite(pops_root_u)) return %s;" % nan,
             " const pops::Real pops_root_tolerance = %r * (pops::Real(1) + Kokkos::fabs(pops_root_u));"
             % self.recovery.tolerance,
@@ -263,9 +265,8 @@ class PointwiseRoot(Expr):
             " bool pops_root_bracketed = Kokkos::isfinite(pops_root_b), pops_root_first = true;",
             " pops::Real pops_root_x = pops_root_lower,"
             " pops_root_step = Kokkos::fmax(pops::Real(1), Kokkos::fabs(pops_root_lower));",
-            " for (int pops_root_it = 0; pops_root_it < %d; ++pops_root_it) {"
+            " for (std::int64_t pops_root_it = 0; pops_root_it < %dLL; ++pops_root_it) {"
             % self.recovery.max_iterations,
-            "  const pops::Real %s = pops_root_x;" % q,
             "  const pops::Real pops_root_f = (%s) - pops_root_u;" % law,
             "  const pops::Real pops_root_df = %s;" % slope,
             "  if (!Kokkos::isfinite(pops_root_f)) return %s;" % nan,
@@ -285,7 +286,7 @@ class PointwiseRoot(Expr):
             "  pops_root_x = pops_root_next;",
             " }",
             " return %s;" % nan,
-            "}())",
+            "}(%s))" % target_cpp,
         ))
 
     def to_cpp(self) -> str:

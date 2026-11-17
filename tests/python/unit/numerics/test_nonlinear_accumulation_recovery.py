@@ -1,12 +1,14 @@
 """G03 lot A (ROM-21): a nonlinear accumulation with its coordinates recovered on each point.
 
-Source-only checks of note §6: the recovery q(U) (its host twin, its derivative, its native form),
+Checks of note §6: the recovery q(U) (its host twin, its derivative, its native form),
 the declaration ``model.accumulation`` and its refusals, the initial projection encode(Q(e)), and
 the explicit route that reads q like a definition over U.
 """
 from __future__ import annotations
 
 import math
+from pathlib import Path
+import subprocess
 
 import numpy as np
 import pytest
@@ -61,9 +63,96 @@ def test_the_native_recovery_is_one_bracketed_iteration_shared_by_its_readers():
     root, _ = _root()
     lines, values = _cse_emit([root, diff(root, Var("e", "cons"))], "pops::Real", "  ")
     native = "\n".join(lines)
-    assert native.count("for (int pops_root_it = 0; pops_root_it < 200;") == 1
+    assert native.count("for (std::int64_t pops_root_it = 0; pops_root_it < 200LL;") == 1
     assert "quiet_NaN" in native and "pops_root_tolerance = 1e-13" in native
     assert values[1].startswith("(pops::Real(1) / ")
+
+
+@pytest.mark.compiler
+@pytest.mark.parametrize(("coordinate", "component", "budget"), (
+    ("x", "e", 200),
+    ("f", "e", 200),
+    ("u", "e", 200),
+    ("T", "pops_root_u", 200),
+    ("x", "e", 10001),
+    ("u", "e", (1 << 63) - 1),
+    ("x", "e", 2),
+))
+def test_the_compiled_recovery_and_its_derivative_use_the_declared_coordinate(
+        coordinate, component, budget, native_cxx, tmp_path):
+    from pops._ir.application import substitute_quantities
+    from pops.codegen.cpp_writer import _cse_emit
+    from pops.lib.quadrature import GaussLegendre
+    from pops.representations.definition import cell_average
+
+    model = pops.Model("recovery_binding", frame=pops.domain.CartesianDomain(
+        "recovery_binding", (0.0,), (1.0,)).frame(pops.frames.Cartesian1D()))
+    state = model.state("stored", components=(component,))
+    q = model.coordinate(coordinate)
+    root = model.accumulation(
+        state, coordinates=q, law=q + q*q, admissible=(LOWER, None),
+        representation=cell_average(1, GaussLegendre(2)),
+        recovery=LocalRoot(tolerance=1e-13, max_iterations=budget),
+    ).recovery
+    stored = state[0]
+    target = Var(component, "cons")
+    root = substitute_quantities(root, {(stored.handle, stored.index): target})
+    derivative = diff(root, target)
+    declarations, values = _cse_emit([root, derivative], "pops::Real", "  ")
+
+    # This standalone compiler fixture supplies the scalar math that the Kokkos backend uses.
+    source = tmp_path / "recover.cpp"
+    source.write_text("\n".join((
+        "#include <pops/core/foundation/types.hpp>",
+        "#include <cmath>",
+        "#include <cstdio>",
+        "#include <cstdlib>",
+        "#include <limits>",
+        "namespace Kokkos {",
+        "using std::fabs;",
+        "using std::fmax;",
+        "using std::isfinite;",
+        "namespace Experimental {",
+        "template<class T> struct infinity { static constexpr T value = std::numeric_limits<T>::infinity(); };",
+        "template<class T> struct quiet_NaN { static constexpr T value = std::numeric_limits<T>::quiet_NaN(); };",
+        "}",
+        "}",
+        "void recover(pops::Real %s) {" % component,
+        *declarations,
+        f'  std::printf("%.17g %.17g\\n", {values[0]}, {values[1]});',
+        "}",
+        "int main(int argc, char** argv) {",
+        "  for (int arg = 1; arg < argc; ++arg) recover(std::strtod(argv[arg], nullptr));",
+        "}",
+    )), encoding="utf-8")
+    include = Path(__file__).resolve().parents[4] / "include"
+    executable = tmp_path / "recover"
+    compiled = subprocess.run(
+        [native_cxx, "-std=c++20", "-O2", "-fno-fast-math", "-ffp-contract=off",
+         "-I" + str(include), str(source), "-o", str(executable)],
+        capture_output=True, text=True,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    targets = (5.0,) if budget == 2 else (0.1, 0.75, 3.0)
+    executed = subprocess.run([str(executable), *map(str, targets)],
+                              capture_output=True, text=True, check=True)
+    for target, line in zip(targets, executed.stdout.splitlines(), strict=True):
+        recovered, slope = map(float, line.split())
+        host = root.solve(target)
+        expected = (math.sqrt(1 + 4*target) - 1)/2
+        if budget == 2:
+            assert math.isnan(host) and math.isnan(recovered) and math.isnan(slope)
+        else:
+            assert recovered == pytest.approx(expected, rel=1e-12)
+            assert recovered == pytest.approx(host, rel=1e-12)
+            assert slope == pytest.approx(1/(1 + 2*expected), rel=1e-12)
+            assert slope == pytest.approx(float(derivative.eval({component: target})), rel=1e-12)
+
+
+@pytest.mark.parametrize("budget", [False, 0, -1, 1.0, 1 << 63])
+def test_the_local_root_budget_is_a_positive_signed_64_bit_integer(budget):
+    with pytest.raises(ValueError, match="max_iterations"):
+        LocalRoot(tolerance=1e-13, max_iterations=budget)
 
 
 def test_the_enclosure_of_the_slope_decides_monotonicity():
