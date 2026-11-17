@@ -9,6 +9,9 @@ Program operation outside the rates that read the decoded state.
 """
 from __future__ import annotations
 
+import re
+from types import SimpleNamespace
+
 import pops
 import pytest
 from pops.codegen._cell_total_consumers import CellTotalNotYetElaborated
@@ -173,6 +176,135 @@ def test_a_total_emits_the_decode_and_the_encode_and_an_average_emits_todays_cod
     diffusion = _source(build_graded_diffusion_total)
     assert diffusion.count("ctx.decode_cell_total(") == 2
     assert diffusion.count("ctx.encode_cell_total_rate(") == 2
+
+
+@pytest.mark.parametrize("representations", (
+    ("average", "average"), ("average", "total"), ("total", "total"),
+))
+def test_a_group_reads_and_encodes_each_blocks_representation(tmp_path, representations):
+    from tests.python.integration.runtime.test_shared_interface_runtime import (
+        _flux_source_component, _resolve_static_cell_total_interface,
+    )
+
+    component = _flux_source_component(tmp_path / "component")
+
+    def emit(representations):
+        *_, plan = _resolve_static_cell_total_interface(tmp_path, component, representations)
+        return emit_cpp_program(plan.time, target="system", model_graph=build_program_model_graph(plan))
+
+    source = emit(representations)
+    expected_conversions = 2 * representations.count("total")
+    assert source.count("ctx.decode_cell_total(") == expected_conversions
+    assert source.count("ctx.encode_cell_total_rate(") == expected_conversions
+    groups = list(re.finditer(r"ctx\.rhs_group\(\d+, [^\n]+", source))
+    assert len(groups) == 2
+    for group in groups:
+        requests = re.findall(r"\{(\d+), &(\w+), &(r(\d+)), \d+, 1\}", group[0])
+        assert [index for index, _, _, _ in requests] == ["0", "1"]
+        for index, stage_input, rate, rate_id in requests:
+            if representations[int(index)] == "total":
+                assert stage_input == f"cell_density_{rate_id}"
+                assert re.search(rf"ctx\.decode_cell_total\(\w+, {stage_input}\);", source[:group.start()])
+                encode = f"ctx.encode_cell_total_rate({rate});"
+                write = re.search(rf"ctx\.axpy\([^\n]+\b{rate}\b", source[group.end():])
+                assert write is not None
+                assert encode in source[group.end():group.end() + write.start()]
+            else:
+                assert not stage_input.startswith("cell_density_")
+                assert f"ctx.encode_cell_total_rate({rate});" not in source
+    if not expected_conversions:
+        assert source == emit((None, None))
+
+
+def test_a_remote_prepared_boundary_cannot_read_undecoded_total_storage():
+    from pops.codegen._cell_total_consumers import validate_cell_total_consumers
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+
+    total = SimpleNamespace(
+        name="total", state_identities=("total-state",),
+        numerics=SimpleNamespace(
+            representations=("total-representation",),
+            cell_total_states=lambda: ("total-state",), boundaries=(),
+        ),
+    )
+    neighbour = SimpleNamespace(
+        name="neighbour", state_identities=("neighbour-state",),
+        numerics=SimpleNamespace(
+            cell_total_states=tuple,
+            boundaries=(CompiledBoundaryPlan({
+                "schema_version": 1, "authority_type": "prepared_boundary_plan_compile",
+                "ghost_plan_identity": "test-prepared-boundary", "faces": [],
+                "component_region_templates": [{"states": ["total-state"]}],
+            }),),
+        ),
+    )
+    plan = SimpleNamespace(blocks=(total, neighbour), layout_targets={"static": "system"})
+    with pytest.raises(CellTotalNotYetElaborated, match="block 'neighbour'") as error:
+        validate_cell_total_consumers(plan)
+    assert error.value.reason == "cell_total_boundary_dependency"
+    assert "block 'total'" in str(error.value)
+
+
+@pytest.mark.parametrize("total_port", ("source_port", "target_port"))
+def test_a_cell_average_mapping_cannot_consume_or_install_totals(total_port):
+    from pops.codegen._cell_total_consumers import _validate_external_storage_consumers
+
+    total = SimpleNamespace(name="total", state_identities=("total-state",), numerics=None)
+    ports = {
+        name: SimpleNamespace(subject=SimpleNamespace(
+            qualified_id="total-state" if name == total_port else "average-state",
+        ))
+        for name in ("source_port", "target_port")
+    }
+    requirement = SimpleNamespace(qualified_id="average-mapping", **ports)
+    plan = SimpleNamespace(
+        blocks=(total,),
+        layout_plan=SimpleNamespace(mappings=(SimpleNamespace(requirement=requirement),)),
+    )
+    with pytest.raises(CellTotalNotYetElaborated, match="average-mapping") as error:
+        _validate_external_storage_consumers(plan, (total,))
+    assert error.value.reason == "cell_total_layout_mapping"
+
+
+def test_a_cut_cell_total_requires_the_fluid_volume():
+    from pops.layouts import Uniform
+    from tests.python.unit.runtime.test_public_embedded_boundary_lowering import _ranked_embedded_boundary
+
+    def resolve(representation):
+        case, layout, _, _ = build_burgers(represent=representation, periodic=False)
+        grid = layout.mesh
+        layout = Uniform(grid, embedded_boundary=_ranked_embedded_boundary(grid))
+        return pops.resolve(pops.validate(case), layout=layout)
+
+    average = resolve("average")
+    assert average.layout_plan.layouts[0].options["embedded_boundary"]["transport"]["mode"] == "cutcell"
+    with pytest.raises(CellTotalNotYetElaborated, match="fluid volume") as error:
+        resolve("total")
+    assert error.value.reason == "cell_total_cut_cell_measure"
+
+
+def test_the_cut_cell_refusal_follows_the_total_blocks_layout_assignment():
+    from pops.codegen._cell_total_consumers import _validate_volume_authority
+    from pops.layouts import Uniform
+    from pops.mesh import LayoutPlanBuilder
+    from pops.model import Handle, OwnerPath
+    from tests.python.unit.runtime.test_public_embedded_boundary_lowering import _ranked_embedded_boundary
+
+    _, regular, _, _ = build_burgers(represent="average", periodic=False)
+    owner = OwnerPath.case("independent-layouts")
+    builder = LayoutPlanBuilder(owner)
+    regular_handle = builder.layout("regular-layout", regular)
+    cut_handle = builder.layout("cut-layout", Uniform(
+        regular.mesh, embedded_boundary=_ranked_embedded_boundary(regular.mesh),
+    ))
+    regular_block = Handle("regular", owner=owner, kind="block")
+    cut_block = Handle("cut", owner=owner, kind="block")
+    builder.assign_block(regular_block, regular_handle)
+    builder.assign_block(cut_block, cut_handle)
+    plan = SimpleNamespace(layout_plan=builder.resolve(blocks=(regular_block, cut_block)))
+    _validate_volume_authority(plan, (SimpleNamespace(name="regular"),))
+    with pytest.raises(CellTotalNotYetElaborated, match="block 'cut'"):
+        _validate_volume_authority(plan, (SimpleNamespace(name="cut"),))
 
 
 def test_a_step_rule_on_a_total_is_refused_naming_lot_t():

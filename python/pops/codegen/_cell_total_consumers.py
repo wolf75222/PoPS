@@ -11,10 +11,15 @@ serves it (note §4.3, §13, §14; driver's rulings of 12/11 23:00 and 23:05):
 - a hierarchy: restriction of a total is a sum and prolongation gives each child μ(child)·ū of
   its parent, so today's transfer is wrong on U (C1, G11);
 - a moving configuration: the volume member of G03 lots M1 and M2;
+- a cut cell: the scale kernel has the full grid cell measure, while the cut-cell update uses
+  the embedded fluid volume;
 - an initial value projected on the analytic route: the b6 ``ConservativeCellAverage`` gives
   averages; the encode of a projection waits for N16's table (plan/routes_transitoires.md, line 4);
 - any Program operation other than the stored state, its linear combinations and the two rates
   that read the decoded state (a stencil flux is refused until a case runs it under a total);
+- a prepared boundary component of another block that reads a total through its bound state
+  route, which is outside the shared-interface scheduler and still reads accepted storage;
+- a layout mapping that reads or overwrites total storage through a cell-average port;
 - a consumer of the case that reads the state: a diagnostic reduces the stored totals weighed by
   the cell measure, Σ μ(K) U_K, not the inventory Σ U_K (row D4 of note §4.3), and a field
   output would write the totals U_K under the name of the state (obligation 1 of the record).
@@ -54,6 +59,58 @@ def total_blocks(plan: Any) -> tuple[Any, ...]:
     return tuple(rows)
 
 
+def _validate_external_storage_consumers(plan: Any, blocks: tuple[Any, ...]) -> None:
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+
+    owners = {identity: block.name for block in blocks for identity in block.state_identities}
+    for block in plan.blocks:
+        if block.numerics is None:
+            continue
+        for boundary in block.numerics.boundaries:
+            data = (boundary.compile_data if type(boundary) is CompiledBoundaryPlan
+                    else boundary.compile_boundary_data())
+            for row in data["component_region_templates"]:
+                for identity in row["states"]:
+                    owner = owners.get(identity)
+                    if owner is not None and owner != block.name:
+                        _refuse(
+                            "cell_total_boundary_dependency", owner,
+                            "the prepared boundary component of block %r that reads another "
+                            "block's accepted storage without its stage density" % block.name,
+                            "a later G03 lot with the decoded boundary state dependencies of N16",
+                        )
+    for mapping in plan.layout_plan.mappings:
+        requirement = mapping.requirement
+        for port in (requirement.source_port, requirement.target_port):
+            owner = owners.get(port.subject.qualified_id)
+            if owner is not None:
+                _refuse(
+                    "cell_total_layout_mapping", owner,
+                    "the layout mapping %r with a state port that assumes cell averages"
+                    % requirement.qualified_id,
+                    "a later G03 lot with a representation-aware layout transfer",
+                )
+
+
+def _validate_volume_authority(plan: Any, blocks: tuple[Any, ...]) -> None:
+    cut_layouts = {
+        row.handle for row in plan.layout_plan.layouts
+        if (row.options.get("embedded_boundary") or {}).get("transport", {}).get("mode") == "cutcell"
+    }
+    if not cut_layouts:
+        return
+    names = {block.name for block in blocks}
+    for assignment in plan.layout_plan.assignments:
+        if assignment.subject_kind == "block" and assignment.subject.local_id in names \
+                and assignment.layout in cut_layouts:
+            _refuse(
+                "cell_total_cut_cell_measure", assignment.subject.local_id,
+                "the cut-cell measure on layout %r: the scale kernel uses the full grid cell "
+                "measure and requires the fluid volume instead" % assignment.layout.local_id,
+                "a later G03 lot with the cut-cell measures of §4.3",
+            )
+
+
 def validate_cell_total_consumers(plan: Any) -> None:
     """Refuse, before any C++, every consumer of a cell total that its lowering does not serve."""
     from pops.codegen.program_lowerability import all_ops
@@ -73,6 +130,8 @@ def validate_cell_total_consumers(plan: Any) -> None:
         _refuse("cell_total_hierarchy", name,
                 "a hierarchy of levels, whose restriction of a total is a sum and whose "
                 "prolongation gives each child mu(child) times the density of its parent", "G11")
+    _validate_external_storage_consumers(plan, blocks)
+    _validate_volume_authority(plan, blocks)
     if plan.time is None:
         _refuse("cell_total_program", name, "a case without a Program", "the Program of the case")
     ops = sorted({value.op for value in all_ops(plan.time)} - CELL_TOTAL_PROGRAM_OPS)
