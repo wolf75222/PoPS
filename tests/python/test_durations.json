@@ -9004,6 +9004,35 @@
         "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 650
       }
     },
+    "b03_20261113_shard131_fan_li_face_diffusion_weights": {
+      "basis": "Complete setup, call and teardown phase sums from dim2/timings.json in gate-python-timings-shard131. The phase log and JUnit agree that all 37 cases passed. Pytest exited 0 after 2684.36 s; the enclosing step reached its 45-minute limit. Phase sums exclude collection and runner overhead. The scheduling weights add ten percent and round up to the next ten seconds.",
+      "run_id": 43469038506,
+      "run_attempt": 1,
+      "job_id": 132054536605,
+      "artifact_id": 14071220153,
+      "source_commit": "c5fb26fa6819c42e528d9142fc95402f9990936a",
+      "runner_image": "20261111.370.1",
+      "completed_cases": {
+        "tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py": 2,
+        "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 6,
+        "tests/python/unit/codegen/test_collective_diffusion_constraint.py": 6
+      },
+      "reported_phase_seconds": {
+        "tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py": 1327.334,
+        "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 938.740,
+        "tests/python/unit/codegen/test_collective_diffusion_constraint.py": 337.047
+      },
+      "previous_weight_seconds": {
+        "tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py": 600,
+        "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 780,
+        "tests/python/unit/codegen/test_collective_diffusion_constraint.py": 300
+      },
+      "weights_seconds": {
+        "tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py": 1470,
+        "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 1040,
+        "tests/python/unit/codegen/test_collective_diffusion_constraint.py": 380
+      }
+    },
     "ci_20261112_vertical_slice": {
       "basis": "Unmeasured CI scheduling estimate for the test of the vertical slice of the exit of phase 1 (OD31: master's tutorial 02 written in the surface), on the api_v02_20261013 tiers. 300 s for test_vertical_slice_t02.py: since #799 its registry is empty, so besides the lint SU-T1 of the case file and the order of its registry it runs the file natively to its end, one compiled Dim2 artifact and 29 steps on 64 x 64 cells, a quarter of the four artifacts of the analogue test_surface_lot_e_project_native.py (900 s), rounded up. The local receipts come from pytest on a 4-core container (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Replace only from complete CI per-file receipts.",
       "analogues": {
@@ -9363,7 +9392,7 @@
   "tests/python/integration/runtime/test_exact_analytic_initial.py": 2400.0,
   "tests/python/integration/runtime/test_extension_closure_v14_native.py": 600,
   "tests/python/integration/runtime/test_external_grid_frontier_runtime.py": 600,
-  "tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py": 600,
+  "tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py": 1470,
   "tests/python/integration/runtime/test_fan_li15_full_eight_storage_runtime.py": 600,
   "tests/python/integration/runtime/test_fan_li15_public_composition_runtime.py": 600,
   "tests/python/integration/runtime/test_field_publication_instances_runtime.py": 600,
@@ -9539,7 +9568,7 @@
   "tests/python/unit/codegen/test_cell_local_time_codegen.py": 5,
   "tests/python/unit/codegen/test_checkpoint_migration.py": 240,
   "tests/python/unit/codegen/test_codegen_dead_prims.py": 10,
-  "tests/python/unit/codegen/test_collective_diffusion_constraint.py": 300.0,
+  "tests/python/unit/codegen/test_collective_diffusion_constraint.py": 380,
   "tests/python/unit/codegen/test_compile_cache_lock.py": 1.2,
   "tests/python/unit/codegen/test_compile_link_flags.py": 2.0,
   "tests/python/unit/codegen/test_compile_provenance.py": 60.0,
@@ -10374,7 +10403,7 @@
   "tests/python/unit/codegen/test_program_code_volume_f7.py": 15,
   "tests/python/integration/runtime/test_advance_outputs_n8_native.py": 600,
   "tests/python/unit/time/test_advance_outputs_n8.py": 30,
-  "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 780,
+  "tests/python/integration/runtime/test_lib_face_body_swap_native.py": 1040,
   "tests/python/unit/amr/test_regrid_decision.py": 60,
   "tests/python/integration/amr/test_regrid_decision_native.py": 900,
   "tests/python/unit/surface/test_su_t2_refusals.py": 15,
