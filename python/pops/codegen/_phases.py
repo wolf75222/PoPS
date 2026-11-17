@@ -245,6 +245,7 @@ def resolve(
             numerics=numerics,
         ))
     blocks = tuple(resolved_blocks)
+    snapshot_numerics = {block.name: block.numerics for block in blocks if block.numerics is not None}
     resolved_hierarchy = None
     amr_transfer = None
     initial_condition_plan = None
@@ -394,7 +395,7 @@ def resolve(
         from .program_emit_moving import check_moving_program
         check_moving_program(resolved_time, ProgramModelGraph.from_resolved_blocks(blocks), target)
     snapshot = prepare_problem_snapshot(
-        problem, resolved_time, layout=layout_plan, libraries=())
+        problem, resolved_time, layout=layout_plan, libraries=(), numerics=snapshot_numerics)
     from pops.codegen._resolution import resolve_capability_evidence
 
     amr_program_context = None

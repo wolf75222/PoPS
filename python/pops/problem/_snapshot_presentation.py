@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from typing import Any
 
 from pops.identity.presentation import PresentationMap, projected_fingerprint
@@ -67,6 +68,11 @@ PLAN_VALUES = {
     ("blocks", "[]", "name"): "block",
     ("continuation_transitions", "objects", "[]", "name"): "continuation_name",
     ("continuation_transitions", "objects", "[]", "identity"): "continuation_identity",
+    ("field_plans", "*", "value", "native_options", "provider_pack", "[]", "owner_block"): "block",
+    ("field_plans", "*", "value", "native_options", "provider_identity",
+     "contributions", "[]", "owner_block"): "block",
+    ("...", "output_route", "owner_block"): "block",
+    ("...", "output_route", "publication", "block"): "block",
 }
 
 # String references from serialized contracts. Owner and handle records carry their own
@@ -160,7 +166,131 @@ def project_retained_auxiliaries(
             names.project_owner_string(owner), names.project(component))
 
 
-def presentation_map(problem: Any, *, layout: Any = None) -> PresentationMap:
+def ghost_presentation_map(names: PresentationMap, blocks: Any, layout_plan: Any) -> PresentationMap:
+    """Extend owner projection with identifiers made by exact ghost composers."""
+    from pops.identity import make_identity
+    from pops.identity.semantic import semantic_identity
+    from pops.mesh.boundaries.composition import GhostPresentationOrigins
+    from pops.mesh.boundaries.ghost_plan import GhostProducerPlan
+
+    rows = []
+    layout_digests = dict(names.digests)
+    for block in blocks:
+        if block.numerics is None:
+            continue
+        for boundary in block.numerics.boundaries:
+            if type(boundary) is not GhostProducerPlan:
+                continue
+            origins = boundary._presentation_origins
+            if type(origins) is not GhostPresentationOrigins:
+                continue
+            if str(origins.numerics.block.instance_owner_path) != block.instance_owner_qid \
+                    or origins.layout_plan.canonical_id != layout_plan.canonical_id:
+                raise ValueError("ghost composition evidence belongs to another block or layout plan")
+            numeric = origins.numerics._payload()
+            if semantic_identity(numeric) != origins.numerics.identity:
+                raise ValueError("uncomposed numerical plan differs from its ghost authority")
+            projected_numeric = semantic_identity(names.project(
+                numeric, sets=SETS, derived=DERIVED, references=REFERENCES,
+                reference_keys=REFERENCE_KEYS)).to_data()
+            named_numeric = origins.numerics.identity.to_data()
+            layout_id = origins.layout_plan.canonical_id
+            named_transfer = projected_transfer = None
+            if origins.amr_transfer is not None:
+                transfer = origins.amr_transfer
+                data = transfer.canonical_identity()
+                if make_identity("amr-transfer", data) != transfer.identity:
+                    raise ValueError("AMR ghost transfer evidence differs from its authority")
+                named_transfer = transfer.identity.to_data()
+                projected_transfer = make_identity("amr-transfer", names.project(
+                    data, references=(*REFERENCES, ("layout_plan_id",)))).to_data()
+            for origin in origins.handles:
+                if origin.handle.owner_path != boundary.topology.owner:
+                    raise ValueError("ghost handle belongs to another boundary owner")
+                evidence = origin.named_evidence()
+                if evidence == named_numeric:
+                    projected = projected_numeric
+                elif evidence == named_transfer:
+                    projected = projected_transfer
+                else:
+                    projected = names.project(
+                        evidence, sets=SETS, derived=DERIVED, references=REFERENCES,
+                        reference_keys=REFERENCE_KEYS)
+                    if isinstance(evidence, dict) and evidence.get("numerics") == named_numeric:
+                        projected["numerics"] = projected_numeric
+                    if isinstance(evidence, dict) and evidence.get("plan") == layout_id:
+                        projected["plan"] = layout_digests[layout_id]
+                    if isinstance(evidence, dict) and "transfer" in evidence:
+                        if evidence["transfer"] != named_transfer:
+                            raise ValueError("ghost handle references another AMR transfer")
+                        projected["transfer"] = projected_transfer
+                rows.append((origin.handle.qualified_id, origin.projected_local_id(projected)))
+    return names.with_derived_handles(rows)
+
+
+def project_field_install_references(
+    names: PresentationMap, payload: dict[str, Any], field_plans: Any,
+) -> PresentationMap:
+    """Authenticate and reproject identities carried by resolved field installation rows."""
+    from pops.codegen.field_install import field_provider_target
+    from pops.codegen.field_install_plan import field_output_target
+    from pops.fields._identity import field_identity, strict_field_data
+    from pops.identity import canonical_bytes
+
+    slots: dict[str, str] = {}
+    labels = {}
+    for name, plan in field_plans.items():
+        data = payload["field_plans"][name]["value"]
+        identity = field_identity("resolved-field-install",
+                                  {key: val for key, val in data.items() if key != "identity"})
+        if identity != plan.identity or data["identity"] != identity.token:
+            raise ValueError("field installation projection lost its named authority")
+        # The full authority remains in the projected record.
+        data["identity"] = None
+        options = data["native_options"]
+        provider = options["provider_identity"]
+        slot = options["provider_slot"]
+        if slot != field_identity("qualified-field-provider", provider).token or \
+                options["provider_identity_text"] != canonical_bytes(strict_field_data(provider)).hex():
+            raise ValueError("field provider slot differs from its declared contributions")
+        projected = names.project(provider, references=REFERENCES, values={
+            ("contributions", "[]", "owner_block"): "block",
+        })
+        projected_slot = field_identity("qualified-field-provider", projected).token
+        if slots.setdefault(slot, projected_slot) != projected_slot:
+            raise ValueError("conflicting projected field provider identities")
+        labels[field_provider_target(name, slot)] = field_provider_target(name, projected_slot)
+        options["provider_slot"] = projected_slot
+        options["provider_identity_text"] = canonical_bytes(strict_field_data(projected)).hex()
+
+        method = options["method_provider"]
+        if method["identity"] != field_identity(
+            "prepared-field-lowering-binding",
+            {key: val for key, val in method.items() if key != "identity"},
+        ).token:
+            raise ValueError("field method projection lost its named authority")
+        method["identity"] = None
+        resolved_options = method["resolution"]["native_options"]
+        output = resolved_options["output_route"]
+        block_name = output["owner_block"]
+        unknown = plan.operator.unknown.qualified_id
+        named_output = field_output_target(name, block_name, unknown)
+        if any(named_output in row["targets"] for row in method["resolution"]["evidence"]):
+            labels[named_output] = field_output_target(
+                name, names.block_label(block_name), names.project_qualified_id(unknown))
+        if "rhs_identity" in resolved_options:
+            rhs = {"rhs": strict_field_data(plan.operator.equation.rhs)}
+            named = field_identity("field-rhs", rhs).token
+            if resolved_options["rhs_identity"] != named or options["rhs_identity"] != named:
+                raise ValueError("field RHS identity differs from the authored expression")
+            projected_rhs = field_identity(
+                "field-rhs", names.project(rhs, references=REFERENCES)).token
+            resolved_options["rhs_identity"] = options["rhs_identity"] = projected_rhs
+
+    return replace(names, field_slots=tuple(slots.items()), field_coverage=tuple(labels.items()))
+
+
+def presentation_map(problem: Any, *, layout: Any = None, numerics: Any = None) -> PresentationMap:
     """Return the owner-name positions of ``problem`` (and of the compile ``layout``)."""
     from pops.model.ownership import OwnerKind
     from pops.problem._snapshot_payload import _stabilize_problem_models
@@ -194,10 +324,21 @@ def presentation_map(problem: Any, *, layout: Any = None) -> PresentationMap:
         # numbered yet; the resolved snapshot numbers it.
         layouts_open=layout is None,
     )
-    return PresentationMap(
+    names = PresentationMap(
         case=names.case, blocks=names.blocks, models=names.models,
         block_models=names.block_models, layouts=names.layouts, layouts_open=names.layouts_open,
         digests=_named_digests(problem, layout, names),
+    )
+    if numerics is None:
+        return names
+    from pops.boundary.transport import ResolvedTransportBoundarySet
+
+    return names.with_derived_handles(
+        row for numerical in numerics.values()
+        for authority in numerical.boundaries
+        if type(authority) is ResolvedTransportBoundarySet
+        for condition in authority.conditions
+        for row in condition.presentation_handles(names)
     )
 
 

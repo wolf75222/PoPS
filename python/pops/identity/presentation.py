@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import quote, unquote
 
@@ -38,6 +40,12 @@ _OWNER_KINDS = frozenset(
     ("case", "model_definition", "block", "layout", "descriptor", "consumer", "shared"))
 _OWNER_RECORD_KEYS = frozenset(("schema_version", "nodes", "definition_fingerprint"))
 _COMPONENT_KEY_FIELDS = frozenset(("owner_qid", "space_kind", "space_name", "component"))
+_BOUNDARY_PROVIDER_FIELDS = frozenset(("schema_version", "plan_type", "topology", "needs", "bindings"))
+_GHOST_PLAN_SETS = ("regions", "productions", "corner_policies", "interfaces",
+                    "residual_contributions", "linearization_contributions", "component_bindings")
+_GHOST_PLAN_FIELDS = frozenset((
+    "schema_version", "plan_type", "topology", "coverage", "execution_authority", *_GHOST_PLAN_SETS,
+))
 _HANDLE_PREFIX = "pops.handle.v"
 _AUTHORING = "#authoring="
 # pops.model.registry._operator_registry_fingerprint: the content of a standalone registry, no name.
@@ -89,8 +97,14 @@ class PresentationMap:
     layouts: tuple[str, ...] = ()
     digests: tuple[tuple[str, str], ...] = ()
     layouts_open: bool = False
+    derived_handle_locals: tuple[tuple[str, str], ...] = ()
+    _derived_handle_index: Mapping[str, str] = field(init=False, repr=False, compare=False)
+    field_slots: tuple[tuple[str, str], ...] = ()
+    field_coverage: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "_derived_handle_index",
+                           MappingProxyType(dict(self.derived_handle_locals)))
         for kind, names in (("block", self.blocks), ("layout", self.layouts)):
             if len(set(names)) != len(names):
                 raise ValueError("PresentationMap %s names must be distinct" % kind)
@@ -157,6 +171,15 @@ class PresentationMap:
 
     def block_model_label(self, block: str) -> str:
         return "$model%d" % self.block_models[self.blocks.index(block)]
+
+    def with_derived_handles(self, rows: Any) -> PresentationMap:
+        """Extend the projection with producer-verified handle/local-id pairs."""
+        handles = dict(self.derived_handle_locals)
+        for qualified_id, local_id in rows:
+            if handles.setdefault(qualified_id, local_id) != local_id:
+                raise PresentationProjectionError(
+                    "conflicting derived identities for handle %r" % qualified_id)
+        return replace(self, derived_handle_locals=tuple(handles.items()))
 
     def projected_fingerprint(self, fingerprint: str | None) -> str | None:
         if fingerprint is None:
@@ -248,12 +271,18 @@ class PresentationMap:
         kind = unquote(parts[2])
         owner = self.project_owner_string(parts[1])
         local = parts[3]
-        if kind in ("block", "layout"):
+        derived = self.derived_local_id(text)
+        if derived is not None:
+            local = quote(derived, safe="")
+        elif kind in ("block", "layout"):
             # The local id is quoted: a raw ``:`` starts a suffix of the label that holds the
             # qualified id (``<layout>:amr-bootstrap:<digest>`` in an AMR lowering coverage row).
             local, separator, suffix = local.partition(":")
             local = quote(self._node_name(kind, unquote(local), None), safe="") + separator + suffix
         return "::".join((parts[0], owner, parts[2], local, *parts[4:]))
+
+    def derived_local_id(self, qualified_id: str) -> str | None:
+        return self._derived_handle_index.get(qualified_id)
 
     def project_string(self, text: str, digests: Any = None) -> str:
         """Project a qualified id, an owner string or a label holding them; else keep ``text``.
@@ -340,7 +369,7 @@ class PresentationMap:
 
 class _Projection:
     __slots__ = ("map", "keys", "values", "sets", "derived", "digests",
-                 "references", "reference_keys")
+                 "references", "reference_keys", "field_slots", "field_coverage")
 
     def __init__(self, presentation: PresentationMap, keys: Any, values: Any, sets: Any,
                  derived: Any, references: Any, reference_keys: Any) -> None:
@@ -354,6 +383,8 @@ class _Projection:
         for pattern in references:
             self.references.setdefault(pattern[-1], []).append(pattern)
         self.reference_keys = reference_keys
+        self.field_slots = dict(presentation.field_slots)
+        self.field_coverage = dict(presentation.field_coverage)
 
     def walk(self, value: Any, path: tuple[Any, ...], block: str | None = None, *,
              expression: bool = False) -> Any:
@@ -378,8 +409,12 @@ class _Projection:
             if path and any(_matches(pattern, path)
                             for pattern in self.references.get(
                                 "[]" if path[-1] is _LIST_ITEM else path[-1], ())):
-                return self.map.project_string(value, self.digests)
+                return self._reference(value)
         return value
+
+    def _reference(self, value: str) -> str:
+        target = self.field_coverage.get(value)
+        return self.map.project_string(value, self.digests) if target is None else target
 
     def _bare(self, value: str, kind: str, block: str | None, record: dict[str, Any]) -> str:
         if kind == "case":
@@ -387,9 +422,19 @@ class _Projection:
         if kind == "block":
             return self.map.block_label(value)
         if kind == "continuation_name":
-            return self.map.block_label(value) if record["kind"] in ("state", "auxiliary") else value
+            if record["kind"] in ("state", "auxiliary"):
+                return self.map.block_label(value)
+            if record["kind"] in ("field_value", "field_observation", "solver_cache"):
+                return self.field_slots.get(value, value)
+            return value
         if kind == "continuation_identity":
-            return self.map.project_qualified_id(value) if record["kind"] == "state" else value
+            if record["kind"] == "state":
+                return self.map.project_qualified_id(value)
+            if record["kind"] in ("field_value", "field_observation", "solver_cache"):
+                slot = self.field_slots.get(record["name"])
+                if slot is not None:
+                    return record["kind"] + ":" + slot
+            return value
         if kind == "model_of_block":
             if block is None:
                 raise PresentationProjectionError("model name has no enclosing block record")
@@ -410,7 +455,7 @@ class _Projection:
         for key, item in value.items():
             item_path = path + (key,)
             projected_key = (self.map.block_label(key) if keyed
-                             else self.map.project_string(key, self.digests)
+                             else self._reference(key)
                              if referenced and isinstance(key, str) else key)
             if projected_key in result:
                 raise PresentationProjectionError("projection merged two keys at %r" % (path,))
@@ -426,6 +471,9 @@ class _Projection:
                 result[projected_key] = self.map._node_name(value["kind"], item, None)
             elif handle and key == "local_id" and value["kind"] == "initial_condition_provider":
                 result[projected_key] = _replace_digests(item, self.digests)
+            elif handle and key == "local_id":
+                derived = self.map.derived_local_id(value["qualified_id"])
+                result[projected_key] = item if derived is None else derived
             else:
                 result[projected_key] = self.walk(
                     item, item_path, key if keyed else block, expression=expression)
@@ -434,6 +482,15 @@ class _Projection:
                 and isinstance(value.get("name"), str):
             # The Program names a block state after its block (a derived label, SU8).
             result["name"] = self.map.block_label(value["name"])
+        if value.keys() == _BOUNDARY_PROVIDER_FIELDS and value["plan_type"] == "boundary_providers":
+            result["needs"].sort(key=_order_key)
+            result["bindings"].sort(key=lambda row: _order_key(row["need"]))
+        if value.keys() == _GHOST_PLAN_FIELDS and value["plan_type"] == "ghost_producers":
+            # This plan sorts these collections by generated region/handle identity. The
+            # dependency order itself is carried by each producer's edges.
+            for name in _GHOST_PLAN_SETS:
+                result[name].sort(key=_order_key)
+            result["coverage"]["regions"].sort(key=_order_key)
         if keyed:
             result = dict(sorted(result.items(), key=lambda row: _label_order(row[0])))
         return result

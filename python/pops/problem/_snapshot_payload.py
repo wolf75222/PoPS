@@ -12,22 +12,24 @@ from collections.abc import Mapping
 from typing import Any
 
 
-def problem_snapshot_payload(problem: Any) -> dict[str, Any]:
+def problem_snapshot_payload(problem: Any, *, numerics: Any = None) -> dict[str, Any]:
     """Return all cache-relevant Case declarations without display-name reduction."""
-    return _problem_snapshot_payload(problem, artifact=False)
+    return _problem_snapshot_payload(problem, artifact=False, numerics=numerics)
 
 
-def problem_snapshot_artifact_payload(problem: Any) -> dict[str, Any]:
+def problem_snapshot_artifact_payload(problem: Any, *, numerics: Any = None) -> dict[str, Any]:
     """Return the compile-relevant projection of one Case.
 
     Parameter declarations are projected through their authoritative ``artifact_data()`` methods.
     This is intentionally a second construction from typed registries, not a recursive deletion of
     keys from :func:`problem_snapshot_payload`.
     """
-    return _problem_snapshot_payload(problem, artifact=True)
+    return _problem_snapshot_payload(problem, artifact=True, numerics=numerics)
 
 
-def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[str, Any]:
+def problem_semantic_payload(
+    problem: Any, *, layout: Any, time: Any, numerics: Any = None,
+) -> dict[str, Any]:
     """Return the closed scientific projection used by ``semantic_identity``.
 
     Presentation/report policies, runtime values, lowering routes and platform facts never enter
@@ -37,6 +39,7 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
     from pops.identity.semantic import model_semantic_data, program_semantic_data, semantic_value
 
     _stabilize_problem_models(problem)
+    choices = snapshot_numerics(problem) if numerics is None else numerics
     blocks = {}
     for name, spec in sorted(problem._block_registry.items()):
         block = problem._block_registry.canonical_block(problem._block_registry.handle(name))
@@ -49,8 +52,7 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
             ],
             "spatial": _spatial_semantic_data(spec["spatial"]),
             "numerics": (
-                None if name not in problem._numerics_assignments
-                else problem._resolved_numerics_for(name).to_data()
+                None if name not in choices else choices[name].to_data()
             ),
         }
         if spec["time"] is not None:
@@ -103,8 +105,16 @@ def _stabilize_problem_models(problem: Any) -> None:
         stabilize_model_definition(model)
 
 
-def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]:
+def snapshot_numerics(problem: Any) -> dict[str, Any]:
+    """Resolve the named numerical authorities once for a snapshot's three views."""
     _stabilize_problem_models(problem)
+    return {name: problem._resolved_numerics_for(name)
+            for name in sorted(problem._numerics_assignments)}
+
+
+def _problem_snapshot_payload(problem: Any, *, artifact: bool, numerics: Any) -> dict[str, Any]:
+    _stabilize_problem_models(problem)
+    choices = snapshot_numerics(problem) if numerics is None else numerics
     blocks = {
         name: {
             "handle": problem._block_registry.canonical_block(
@@ -138,8 +148,8 @@ def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]
             else problem._consumer_graph.authoring_data(problem.resolve)
         ),
         "numerics": {
-            name: problem._resolved_numerics_for(name).to_data()
-            for name in sorted(problem._numerics_assignments)
+            name: choices[name].to_data()
+            for name in sorted(choices)
         },
         "time": _time_snapshot_value(problem._time_registry.program, artifact=artifact),
         "handles": {

@@ -339,20 +339,22 @@ def build_problem_snapshot(problem: Any) -> Any:
         problem_semantic_payload,
         problem_snapshot_artifact_payload,
         problem_snapshot_payload,
+        snapshot_numerics,
     )
 
     from pops.problem._snapshot_presentation import presentation_map
 
-    payload = problem_snapshot_payload(problem)
-    artifact_payload = problem_snapshot_artifact_payload(problem)
+    numerics = snapshot_numerics(problem)
+    payload = problem_snapshot_payload(problem, numerics=numerics)
+    artifact_payload = problem_snapshot_artifact_payload(problem, numerics=numerics)
     semantic_payload = problem_semantic_payload(
-        problem, layout=None, time=problem._time_registry.program)
+        problem, layout=None, time=problem._time_registry.program, numerics=numerics)
     return AuthoringSnapshot(
         payload,
         handle_resolver=problem.resolve,
         artifact_payload=artifact_payload,
         semantic_payload=semantic_payload,
-        presentation=presentation_map(problem),
+        presentation=presentation_map(problem, numerics=numerics),
     )
 
 
@@ -363,6 +365,7 @@ def build_authoring_snapshot(
     layout: Any,
     time: Any,
     libraries: Any = (),
+    numerics: Any = None,
 ) -> AuthoringSnapshot:
     """Capture every effective input selected by :func:`pops.compile`.
 
@@ -376,11 +379,13 @@ def build_authoring_snapshot(
         problem_semantic_payload,
         problem_snapshot_artifact_payload,
         problem_snapshot_payload,
+        snapshot_numerics,
     )
 
-    full = problem_snapshot_payload(problem)
-    artifact = problem_snapshot_artifact_payload(problem)
-    semantic = problem_semantic_payload(problem, layout=layout, time=time)
+    choices = snapshot_numerics(problem) if numerics is None else numerics
+    full = problem_snapshot_payload(problem, numerics=choices)
+    artifact = problem_snapshot_artifact_payload(problem, numerics=choices)
+    semantic = problem_semantic_payload(problem, layout=layout, time=time, numerics=choices)
     context = {
         "layout": layout,
         "time": _compile_time_snapshot_value(time),
@@ -408,7 +413,7 @@ def build_authoring_snapshot(
         handle_resolver=resolve_compile_handle,
         artifact_payload=artifact,
         semantic_payload=semantic,
-        presentation=presentation_map(problem, layout=layout),
+        presentation=presentation_map(problem, layout=layout, numerics=choices),
     )
 
 
@@ -512,6 +517,7 @@ def prepare_compile_snapshot(
     *,
     layout: Any,
     libraries: Any = (),
+    numerics: Any = None,
 ) -> AuthoringSnapshot:
     """Freeze authoring, then capture the complete effective compile transaction."""
     freeze = getattr(problem, "freeze", None)
@@ -522,7 +528,7 @@ def prepare_compile_snapshot(
     if callable(time_freeze):
         time_freeze()
     snapshot = build_authoring_snapshot(
-        problem, layout=layout, time=time, libraries=libraries)
+        problem, layout=layout, time=time, libraries=libraries, numerics=numerics)
     validate_problem_snapshot(snapshot)
     return snapshot
 

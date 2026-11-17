@@ -370,6 +370,8 @@ def _resolve(
     request: PreparedFieldLoweringRequest,
     where: str,
 ) -> PreparedFieldLoweringResolution:
+    from pops.codegen.field_install_plan import field_output_target
+
     if options:
         raise TypeError("%s cell-centred second-order method accepts no options" % where)
     if not isinstance(request.operator, FieldOperator):
@@ -578,8 +580,8 @@ def _resolve(
             "field:%s:output" % name,
             "lowered",
             (
-                "field-install:%s:output:%s:%s"
-                % (name, output_route["owner_block"], request.operator.unknown.qualified_id),
+                field_output_target(
+                    name, output_route["owner_block"], request.operator.unknown.qualified_id),
             ),
         )
     )

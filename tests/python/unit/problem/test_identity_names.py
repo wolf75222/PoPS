@@ -120,6 +120,137 @@ def test_explicit_layout_names_are_presentation():
     assert _identities(first) == _identities(layout_only) == _identities(all_owners)
 
 
+def _resolve_m14(case_name, *, block_name="fluid", layout_name=None, inlet=None, brick_name=None):
+    from types import FunctionType
+    from examples.api_v02 import models_M14
+    from pops.mesh import LayoutPlanBuilder
+
+    class ModuleWithOverride:
+        def __init__(self, module, **overrides):
+            self.module, self.overrides = module, overrides
+
+        def __getattr__(self, name):
+            return self.overrides[name] if name in self.overrides else getattr(self.module, name)
+
+    def make_case(_):
+        case = pops.Case(case_name)
+        block = case.block
+        case.block = lambda name, model, **options: block(block_name, model, **options)
+        return case
+
+    base = models_M14.build_m14
+    namespace = dict(base.__globals__)
+    namespace["pops"] = ModuleWithOverride(pops, Case=make_case)
+    if inlet is not None:
+        namespace["RESERVOIR"] = inlet
+    if brick_name is not None:
+        riemann = namespace["riemann"]
+        namespace["riemann"] = ModuleWithOverride(
+            riemann, User=lambda **options: riemann.User(name=brick_name, **options))
+    build = FunctionType(base.__code__, namespace, base.__name__, base.__defaults__, base.__closure__)
+    build.__kwdefaults__ = base.__kwdefaults__
+    spec = build(cells=(4, 1))
+    case = pops.validate(spec.case)
+    if layout_name is None:
+        return pops.resolve(case, layout=spec.layout)
+    subjects = case.layout_subjects()
+    builder = LayoutPlanBuilder(case.owner_path.canonical())
+    layout = builder.layout(layout_name, spec.layout)
+    for subject in subjects.blocks:
+        builder.assign_block(subject, layout)
+    for subject in subjects.states:
+        builder.assign_state(subject, layout)
+    for subject in subjects.fields:
+        builder.assign_field(subject, layout)
+    return pops.resolve(case, layout=builder.resolve(**subjects.to_dict()),
+                        layout_providers={layout: spec.layout})
+
+
+def test_m14_case_rename_keeps_derived_identities_in_parallel(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from dataclasses import replace
+    from pops.boundary.transport import ResolvedTransportCondition
+    from pops.problem._snapshot_presentation import ghost_presentation_map
+
+    nested = []
+    original = ResolvedTransportCondition.presentation_handles
+
+    def resolve_inside_projection(condition, names):
+        if names.case == "sheath" and not nested:
+            nested.append(_resolve_m14("nested_sheath"))
+        return original(condition, names)
+
+    monkeypatch.setattr(ResolvedTransportCondition, "presentation_handles", resolve_inside_projection)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, renamed = pool.map(_resolve_m14, ("sheath", "renamed_sheath"))
+    assert _identities(first) == _identities(renamed) == _identities(nested[0])
+    for plan in (renamed, first):
+        plan.verify()
+        ghost, = plan.blocks[0].numerics.boundaries
+        producers = [row.producer for row in ghost.execution_order()]
+        ordered = [producer.handle for producer in producers]
+        assert any(producer.dependencies for producer in producers)
+        for producer in producers:
+            for dependency in producer.dependencies:
+                if dependency in ordered:
+                    assert ordered.index(dependency) < ordered.index(producer.handle)
+
+    def named_authorities(plan):
+        ghost, = plan.blocks[0].numerics.boundaries
+        field, = plan.field_plans.values()
+        return ghost.coverage.layout_manifest.qualified_id, field.native_install_data()["provider_slot"]
+
+    first_ids, second_ids = named_authorities(first), named_authorities(renamed)
+    assert all(left != right for left, right in zip(first_ids, second_ids, strict=True))
+    block = first.blocks[0]
+    ghost, = block.numerics.boundaries
+    foreign, = renamed.blocks[0].numerics.boundaries
+    origins = ghost._presentation_origins
+    with pytest.raises(ValueError, match="composition evidence"):
+        replace(origins.handles[0], evidence={}).named_evidence()
+    altered = replace(ghost, _presentation_origins=replace(
+        origins, handles=(foreign._presentation_origins.handles[0],)))
+    altered_block = replace(block, numerics=replace(block.numerics, boundaries=(altered,)))
+    with pytest.raises(ValueError, match="another boundary owner"):
+        ghost_presentation_map(first.snapshot.presentation, (altered_block,), first.layout_plan)
+
+
+def test_m14_tracks_layout_and_block_roles_and_keeps_boundary_data_and_brick_names():
+    first = _resolve_m14("sheath", layout_name="old_layout")
+    layout_renamed = _resolve_m14("sheath", layout_name="another/layout")
+    block_renamed = _resolve_m14("sheath", block_name="new_fluid", layout_name="old_layout")
+    assert _identities(first) == _identities(layout_renamed) == _identities(block_renamed)
+    changed_inlet = _resolve_m14("sheath", layout_name="old_layout", inlet=(1.2, 2., 1., 3.))
+    ghost, = first.blocks[0].numerics.boundaries
+    literal = ghost.coverage.layout_manifest.qualified_id
+    changed_brick = _resolve_m14("sheath", layout_name="old_layout", brick_name=literal)
+    for changed in (changed_inlet, changed_brick):
+        for key, identity in _identities(first).items():
+            assert _identities(changed)[key] != identity, key
+    assert literal in set(_strings(changed_brick.snapshot.artifact_to_dict()))
+
+
+def test_field_provider_identity_keeps_the_order_of_two_rhs_contributions():
+    from pops.fields._identity import field_identity
+    from tests.python.unit.codegen.test_uniform_field_roles import uniform_multiphysics
+
+    plan = uniform_multiphysics.__wrapped__()
+    named, = plan.field_plans.values()
+    projected, = plan._payload()["field_plans"].values()
+    options = projected["value"]["native_options"]
+    named_rows = named.native_install_data()["provider_identity"]["contributions"]
+    evidence = options["provider_identity"]
+    projected_rows = evidence["contributions"]
+    assert len(named_rows) == len(projected_rows) == 2
+    for before, after in zip(named_rows, projected_rows, strict=True):
+        assert after["owner_block"] == plan.snapshot.presentation.block_label(before["owner_block"])
+        assert after["coefficient"] == {"binary64": before["coefficient"].hex()}
+    assert options["provider_slot"] == field_identity("qualified-field-provider", evidence).token
+    assert options["provider_slot"] != field_identity("qualified-field-provider", {
+        **evidence, "contributions": projected_rows[::-1],
+    }).token
+
+
 def _owner_names(text):
     """The owner names a string spells in a qualified id or an owner path, as ``kind:name``."""
     found = set()
