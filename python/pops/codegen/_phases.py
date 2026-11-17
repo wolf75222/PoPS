@@ -494,6 +494,8 @@ def resolve(
         layout_amr_authorities=layout_amr_authorities)
     from pops.codegen._static_geometry_consumers import validate_static_geometry_consumers
     validate_static_geometry_consumers(resolved_plan)
+    from pops.codegen._cell_total_consumers import validate_cell_total_consumers
+    validate_cell_total_consumers(resolved_plan)
     return resolved_plan
 
 

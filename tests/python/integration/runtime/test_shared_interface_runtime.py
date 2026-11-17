@@ -937,6 +937,113 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     )
 
 
+def _resolve_static_cell_total_interface(tmp_path, component, representations):
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Inflow, Outflow
+    from pops.initial import InitialCondition
+    from pops.layouts import Uniform
+    from pops.lib.initial import BindArray
+    from pops.projection import ConservativeCellAverage
+    from pops.representations.definition import cell_average, cell_total
+
+    example = _load_example()
+    core = example.build_authoring(output_root=tmp_path / "unused")
+    right = core.case.block("right", model=core.model)
+    right_state = right[core.state]
+    boundaries = core.frame.boundaries
+    finite_volume = FiniteVolume(
+        flux=core.flux, variables=variables.Conservative(core.state),
+        reconstruction=reconstruction.FirstOrder(),
+        riemann=riemann.ScalarUpwind(velocity=core.velocity),
+    )
+
+    def numerics(state, representation):
+        plan = DiscretizationPlan()
+        plan.rates.add(core.rate, finite_volume)
+        if representation is not None:
+            definition = cell_total if representation == "total" else cell_average
+            plan.representations.add(core.state, definition(2))
+        plan.boundaries.add(TransportBoundarySet({
+            boundaries.x_min: Inflow(state=state, value=core.inlet_x_value),
+            boundaries.x_max: Outflow(state=state),
+            boundaries.y_min: Inflow(state=state, value=core.inlet_y_value),
+            boundaries.y_max: Outflow(state=state),
+        }))
+        core.case.initials.add(InitialCondition(
+            state=state, value=BindArray(), projection=ConservativeCellAverage(),
+        ))
+        return plan
+
+    left_plan = numerics(core.tracer_state, representations[0])
+    right_plan = numerics(right_state, representations[1])
+    ConservativeInterface(
+        "tracer_to_right",
+        left=BlockInterfaceSide(core.tracer_state, boundaries.x_max),
+        right=BlockInterfaceSide(right_state, boundaries.x_min),
+        numerical_flux=component, permutation=(0,), right_normal_translation=1.0,
+    ).attach(left_plan, right_plan)
+    core.case.numerics(left_plan, block=core.tracer)
+    core.case.numerics(right_plan, block=right)
+    core.case.program(_ssprk2_program(core.tracer_state, right_state, core.rate))
+    plan = pops.resolve(
+        pops.validate(core.case),
+        layout=Uniform(CartesianGrid(frame=core.frame, cells=(8, 8))),
+        components=(component,), compile_options={"include": INCLUDE},
+    )
+    return example, core, right, right_state, plan
+
+
+def test_static_interface_uses_density_in_both_stages_for_cell_totals(tmp_path):
+    component = _flux_component(tmp_path / "component")
+    cell_measure = 1.0 / 64
+    densities = (
+        np.linspace(0.8, 2.0, 64).reshape(1, 8, 8),
+        np.linspace(2.1, 3.1, 64).reshape(1, 8, 8),
+    )
+
+    def run(representations):
+        example, core, right, right_state, plan = _resolve_static_cell_total_interface(
+            tmp_path, component, representations,
+        )
+        scales = tuple(
+            cell_measure if representation == "total" else 1.0
+            for representation in representations
+        )
+        params = {
+            core.case.resolve(handle, block=block): value
+            for block in (core.tracer, right)
+            for handle, value in (
+                (core.velocity_x_param, 1.0),
+                (core.velocity_y_param, 0.25),
+                (core.inlet_x_param, 0.7),
+                (core.inlet_y_param, 0.9),
+            )
+        }
+        params[core.case.resolve(core.refine_threshold)] = 0.10
+        params[core.case.resolve(core.coarsen_threshold)] = 0.04
+        artifact = pops.compile(plan)
+        runtime = example._bind_artifact(
+            artifact, params=params,
+            initial_values={
+                core.tracer_state: densities[0] * scales[0],
+                right_state: densities[1] * scales[1],
+            },
+        )
+        report = pops.run(runtime, t_end=1.0e-3, max_steps=1)
+        assert report.accepted_steps == 1
+        interface = plan.blocks[0].numerics.boundaries[0].interfaces[0]
+        assert runtime._executor._s._interface_evaluation_count(interface.qualified_id, 0) == 2
+        return tuple(
+            np.asarray(runtime.get_state(block.name)) / scale
+            for block, scale in zip((core.tracer, right), scales, strict=True)
+        )
+
+    averages = run(("average", "average"))
+    for representations in (("total", "average"), ("total", "total")):
+        for actual, expected in zip(run(representations), averages, strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=0.0)
+
+
 def _shared_interface_amr_authoring(
     tmp_path,
     *,
