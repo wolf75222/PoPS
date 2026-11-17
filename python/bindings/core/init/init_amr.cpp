@@ -622,7 +622,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_set_generated_tagging", &AmrSystem::set_generated_tagging, py::arg("identity"),
            py::arg("field_identities"), py::arg("field_blocks"), py::arg("field_variables"),
            py::arg("field_components"), py::arg("field_reach"), py::arg("parameters"),
-           py::arg("min_cycles"), py::arg("clock_identity"), py::arg("provider_identity"))
+           py::arg("parameter_blocks"), py::arg("parameter_slots"), py::arg("min_cycles"),
+           py::arg("clock_identity"), py::arg("provider_identity"))
       .def("_set_generated_regrid_decision", &AmrSystem::set_generated_regrid_decision,
            py::arg("identity"), py::arg("field_identities"), py::arg("field_blocks"),
            py::arg("field_variables"), py::arg("field_components"), py::arg("parameters"),

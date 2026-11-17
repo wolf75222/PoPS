@@ -713,6 +713,17 @@ def _compile_problem_impl(
     from pops.codegen.program_emit_params import program_param_entries
 
     program_param_routes = tuple(program_param_entries(time, compile_authority))
+    if refinement_criterion is not None and refinement_criterion.model_parameters:
+        # A region reads a model parameter from its block's RuntimeParams table, as the faces
+        # and stencils of the model do: it needs a slot there (N12 lot 3c-2a).
+        from pops.mesh._amr.refinement_criterion import criterion_parameter_routes
+        from pops.time.references import block_name
+
+        criterion_parameter_routes(
+            refinement_criterion,
+            tuple((index, block_name(reference))
+                  for reference, index in time._block_indices().items()),
+            program_param_routes)
 
     def _compiled_handle(binary, artifact, *, compile_command=None, generated_source=None):
         compiled = CompiledProblem(

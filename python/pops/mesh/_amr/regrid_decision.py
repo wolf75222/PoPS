@@ -38,6 +38,7 @@ from typing import Any
 
 from pops._ir.expr import BooleanAnd, BooleanNot, BooleanOr, Compare, Const, Expr, Var
 from pops._ir.handle_expr import ValueExpr
+from pops._ir.values import RuntimeParamRef
 from pops._ir.visitors import _children, _key
 from pops.model import Handle, ParamHandle
 
@@ -263,6 +264,14 @@ def _leaves(roots: tuple[Expr, ...]) -> list[Expr]:
     return found
 
 
+def _refuse_model_parameter(leaf: RuntimeParamRef, where: str) -> None:
+    raise RegridBodyError(
+        "%s reads the runtime parameter %r of a model; a when body and its indicators read the "
+        "parameters of the case in this lot: declare the threshold with case.param and read it "
+        "with case.value (Q4). Reading a model parameter there is a named follow-up of N12 "
+        "(model parameter in a Regrid when body)" % (where, leaf.name))
+
+
 def _check_body_leaves(expression: Expr) -> None:
     for leaf in _leaves((expression,)):
         if isinstance(leaf, (Const, EveryAcceptedSteps, AcceptedTime)):
@@ -272,6 +281,8 @@ def _check_body_leaves(expression: Expr) -> None:
             continue
         if isinstance(leaf, ValueExpr) and isinstance(leaf.handle, ParamHandle):
             continue
+        if type(leaf) is RuntimeParamRef:
+            _refuse_model_parameter(leaf, "a when body")
         if isinstance(leaf, (CellRead, CellWidth)):
             raise RegridBodyError(
                 "a when body reads cells through largest_cells(f) or smallest_cells(f) only")
@@ -296,6 +307,8 @@ def _check_indicator_leaves(indicator: CellIndicator) -> None:
             continue
         if isinstance(leaf, ValueExpr) and isinstance(leaf.handle, ParamHandle):
             continue
+        if type(leaf) is RuntimeParamRef:
+            _refuse_model_parameter(leaf, "the indicator %s_cells(f)" % indicator.kind)
         if isinstance(leaf, (EveryAcceptedSteps, AcceptedTime, CellIndicator)):
             raise RegridBodyError("an indicator is a function of cell; it reads neither B nor "
                                   "another indicator")
