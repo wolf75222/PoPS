@@ -6737,7 +6737,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1229,
+    "estimated_count": 1230,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7564,6 +7564,7 @@
       "tests/python/unit/numerics/test_principal_grouping_c11.py",
       "tests/python/unit/numerics/test_principal_grouping_contract.py",
       "tests/python/unit/numerics/test_principal_storage_route.py",
+      "tests/python/unit/numerics/test_product_read_footprints_g09.py",
       "tests/python/unit/numerics/test_region_facts_n7.py",
       "tests/python/unit/numerics/test_region_reads_g02.py",
       "tests/python/unit/numerics/test_representation_definition_v2.py",
@@ -8169,7 +8170,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1296,
+    "total_files": 1297,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9656,6 +9657,22 @@
         "tests/python/unit/time/test_recursive_graph_function_ir6.py": "d15e95ed2aa39475f0f0212407e661c2bcd666fe8b68c93ed86f369ce83a2b87"
       }
     },
+    "g09_20261118_f1_product_reads": {
+      "basis": "Three isolated pytest processes on Apple arm64, CPython 3.12, source checkout, 10 cases each. Complete phase receipts from ci_pytest_timings accompany these file-level wall measurements. No native build. Reserve 5 seconds, the existing lowest source-only tier, pending complete CI timing evidence.",
+      "estimates_seconds": {
+        "tests/python/unit/numerics/test_product_read_footprints_g09.py": 5
+      },
+      "local_receipts": {
+        "tests/python/unit/numerics/test_product_read_footprints_g09.py": {
+          "cases": 10,
+          "wall_seconds": [0.513963, 0.460122, 0.483065],
+          "phase_seconds": [0.008816, 0.007354, 0.008165]
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/numerics/test_product_read_footprints_g09.py": "17cd3a8f1b9d4a3c199935f266498ef83a69f508908df060b8267e15fd6a8389"
+      }
+    },
     "ci_20261118_rom112_l1_dim1": {
       "basis": "ROM-112 Dim1 native test. One interval case and two variants of its compiled cell step bound, each built in a cold pytest module cache, with a full SSPRK2 trajectory, its independently replayed final step and two guard controls. Local installed Darwin arm64, binary64 Kokkos OpenMP host and two threads: 90.62 s observed. Reserve the 300 s native tier for the cold Linux runner; refresh from a complete CI timing artifact.",
       "analogues": {
@@ -10971,5 +10988,6 @@
   "tests/python/unit/numerics/test_region_reads_g02.py": 5,
   "tests/python/unit/time/test_effect_table_ir5.py": 5,
   "tests/python/unit/time/test_recursive_graph_function_ir6.py": 5,
-  "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": 300
+  "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": 300,
+  "tests/python/unit/numerics/test_product_read_footprints_g09.py": 5
 }
