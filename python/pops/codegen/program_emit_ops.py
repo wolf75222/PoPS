@@ -1900,20 +1900,40 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 raise ValueError("a trial guard of a traced method rejects the attempt")
             phase = "trial" if site["retry_can_change"] else "trial_failure"
             message = "%s failed: %s" % (site["site"], site["variant"])
-        from pops.codegen.program_emit_structured_control import _uniform_int
         from pops.codegen.program_source_map import emission_program_hash
         from pops.time._program.guard_failure_sites import SCHEMA, guard_failure_site
 
         site = guard_failure_site(program, v, emission_program_hash(program))
         token = var[condition.id]
         payload_args = ""
-        if site is not None:
+        if target == "system" and condition.vtype != "bool":
+            raise TypeError("acceptance_guard requires a scalar Bool condition")
+        if site is not None or target == "system":
             observed = "guard_observed_%d" % v.id
             lines.append("const bool %s = %s;" % (observed, token))
             token = observed
+        if site is not None:
             payload_args = ", %s, std::string(%s) + (%s ? '1' : '0')" % (
                 json.dumps(SCHEMA), json.dumps(site.payload_prefix()), token)
-        _uniform_int(token, lines, "acceptance guard differs across execution lane")
+        disagreement = "acceptance guard differs across execution lane"
+        if target == "system":
+            # ProgramContext includes ConsensusWords. Preserve both Bool extrema
+            # on the same lane and reuse the observed value after agreement.
+            lines.extend([
+                "{",
+                "  pops::ConsensusWords<2> guard_consensus;",
+                "  const auto slot = guard_consensus.agreement(static_cast<int>(%s));" % token,
+                "  guard_consensus.reduce(ctx.prepared_execution_lane());",
+                "  if (guard_consensus.differs(slot))",
+                "    throw pops::runtime::program::StepAttemptRejected("
+                "pops::SolveStatus::kInvalidEvaluation, \"structured_control\", %s);"
+                % json.dumps(disagreement),
+                "}",
+            ])
+        else:
+            from pops.codegen.program_emit_structured_control import _uniform_int
+
+            _uniform_int(token, lines, disagreement)
         lines.append("if (!(%s)) {" % token)
         if type(action) is RejectAttempt:
             lines.append(
