@@ -1,10 +1,10 @@
 {
   "_meta": {
     "rom106_face_coordinates": {
-      "basis": "Local cold Mac Kokkos native runs took 36.61 s each; the source test took 0.97 s. Rounded up to 45 s each and 2 s until the next complete CI receipt.",
+      "basis": "Matched cold serial Dim1 and Dim2 runs on ROMEO c022 with source fc800abf took 55.37 s (film, job 829229) and 53.86 s (rotation, job 829265). Initial cold Mac Kokkos runs took 36.61 s each; the later 151.39 s Dim1 replay overlapped several native SDK builds. Each weight uses the larger controlled cold observation plus ten percent, rounded up to ten seconds. The source test took 0.97 s and keeps its 2 s estimate. Refresh from a complete CI receipt.",
       "weights_seconds": {
-        "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py": 45,
-        "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py": 45,
+        "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py": 70,
+        "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py": 60,
         "tests/python/unit/surface/test_n15_face_coordinates.py": 2
       }
     },
@@ -10992,7 +10992,7 @@
   "tests/python/unit/time/test_effect_table_ir5.py": 5,
   "tests/python/unit/time/test_recursive_graph_function_ir6.py": 5,
   "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": 300,
-  "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py": 45,
-  "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py": 45,
+  "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py": 70,
+  "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py": 60,
   "tests/python/unit/surface/test_n15_face_coordinates.py": 2
 }
