@@ -20,7 +20,7 @@ from pops.numerics.reconstruction import MUSCL
 from pops.numerics.reconstruction.limiters import VanLeer
 from pops.numerics.riemann import ScalarUpwind
 from pops.numerics.variables import Conservative
-from pops.params import ConstParam
+from pops.params import ConstParam, RuntimeParam
 from pops.projection import ConservativeCellAverage
 
 
@@ -30,7 +30,8 @@ RENAMED = {"case": "transport_pair", "blocks": ("zeta", "eta"), "models": ("zeta
 
 
 def _transport_model(name, frame, *, speed, loss, state_name="U", rate_name="balance",
-                     auxiliary_offset=None, speed_parameter=None):
+                     auxiliary_offset=None, speed_parameter=None, supplied_auxiliary=False,
+                     runtime_loss_default=None):
     model = pops.Model(name, frame=frame)
     state = model.state(state_name, components=("q",))
     (q,) = state
@@ -40,23 +41,28 @@ def _transport_model(name, frame, *, speed, loss, state_name="U", rate_name="bal
                       components={frame.x: (speed * q,), frame.y: (0 * q,)},
                       waves={frame.x: (speed,), frame.y: (0,)})
     velocity = model.vector("a", frame=frame, components={frame.x: speed, frame.y: 0})
+    if runtime_loss_default is not None:
+        loss = model.value(model.param(RuntimeParam("loss", default=runtime_loss_default)))
     sink = loss * q ** 2
-    if auxiliary_offset is not None:
+    if auxiliary_offset is not None or supplied_auxiliary:
         coefficient = model.auxiliary("coefficient", frame=frame.canonical_id, unit="1")
         sink = loss * coefficient * q ** 2
     rate = model.rate(rate_name, equation=ddt(state) == -div(flux) - sink)
-    if auxiliary_offset is not None:
+    if auxiliary_offset is not None or supplied_auxiliary:
         from pops.analytic import x
-        from pops.fields import AnalyticAux
+        from pops.fields import AnalyticAux, InputAux
 
         module = model.module
         handle = module.aux_handle(module.aux()["coefficient"])
-        module.aux_provider(AnalyticAux(handle, auxiliary_offset + x(frame), frame=frame))
+        provider = (InputAux(handle) if supplied_auxiliary else
+                    AnalyticAux(handle, auxiliary_offset + x(frame), frame=frame))
+        module.aux_provider(provider)
     return model, state, flux, velocity, rate
 
 
 def build_named_case(names=FIRST, *, state_name="U", rate_name="balance", cells=(8, 8),
-                     speeds=(1, 2), auxiliary_offset=None, speed_parameter=None):
+                     speeds=(1, 2), auxiliary_offset=None, speed_parameter=None,
+                     supplied_auxiliary=False, runtime_loss_default=None):
     """Return ``(case, layout)`` for the two-block transport case under ``names``.
 
     Block ``k`` advects at ``speeds[k]`` with the loss ``0.5 / speeds[k]``.
@@ -69,7 +75,8 @@ def build_named_case(names=FIRST, *, state_name="U", rate_name="balance", cells=
         model, state, flux, velocity, rate = _transport_model(
             model_name, frame, speed=speeds[index], loss=0.5 / speeds[index],
             state_name=state_name, rate_name=rate_name, auxiliary_offset=offset,
-            speed_parameter=speed_parameter)
+            speed_parameter=speed_parameter, supplied_auxiliary=supplied_auxiliary,
+            runtime_loss_default=runtime_loss_default)
         block = case.block(block_name, model)
         plan = DiscretizationPlan()
         plan.rates.add(rate, FiniteVolume(flux=flux, variables=Conservative(state),

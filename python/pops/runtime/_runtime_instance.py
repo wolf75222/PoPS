@@ -2451,6 +2451,10 @@ class RuntimeInstance:
         if not isinstance(runtime_kind, str) or not runtime_kind:
             raise ValueError("checkpoint manifest lacks its runtime kind")
         authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
+        return self._inspect_checkpoint_consumer_state(stored)
+
+    def _inspect_checkpoint_consumer_state(self, stored: Any) -> ConsumerCursorSet:
+        """Check the consumer continuation in an already authenticated archive."""
         required = {
             "runtime_consumer_graph",
             "runtime_consumer_cursors",

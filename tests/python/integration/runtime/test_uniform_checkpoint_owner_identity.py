@@ -3,6 +3,7 @@
 from pathlib import Path
 from struct import unpack_from
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -12,6 +13,7 @@ from examples.api_v02 import models_M14
 from pops.codegen.provider_instances import require_instance_contract, runtime_key
 from pops.model.provider_pack import ProviderPack
 from pops.runtime._checkpoint_manifest import IDENTITY_KEY, MANIFEST_KEY, seal_checkpoint_payload
+from pops.runtime._uniform_checkpoint_projection import inspect_uniform_checkpoint
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.presentation_case import FIRST, resolve_named_case
 
@@ -92,7 +94,7 @@ def test_transport_checkpoint_follows_logical_block_order(
     # The native exact registry orders packed keys by their length-prefixed frames.
     renamed = {"case": "translated", "blocks": ("z", "earlier_name"),
                "models": ("m", "another_model")}
-    images, programs, columns = [], [], []
+    images, programs, columns, projections, receivers, checkpoints = [], [], [], [], [], []
     mesh = np.arange(64, dtype=np.float64).reshape(1, 8, 8) / 512
     for index, names in enumerate((FIRST, renamed)):
         artifact = pops.compile(resolve_named_case(names, auxiliary_offset=(0.25, 0.75)))
@@ -119,12 +121,37 @@ def test_transport_checkpoint_follows_logical_block_order(
             np.testing.assert_array_equal(fields[1] - fields[0], np.full(fields[0].shape, 0.5))
             return tuple(field.tobytes() for field in fields)
 
-        def witness_columns(continuous, resumed, _):
+        def witness_columns(continuous, resumed, path):
             native = continuous._executor._s
             locations = tuple(native.auxiliary_address(*key)[1] for key in keys)
             assert tuple(resumed._executor._s.auxiliary_address(*key)[1]
                          for key in keys) == locations
             columns.append(locations)
+            archive = path.read_bytes()
+            before = resumed.observe_accepted_state_storage().complete
+            with patch.object(resumed._executor, "_begin_checkpoint_restart",
+                              side_effect=AssertionError("O3 opened a restart transaction")):
+                inventory = inspect_uniform_checkpoint(resumed, archive)
+                if not projections:
+                    with np.load(path, allow_pickle=False) as stored:
+                        permuted = {name: stored[name] for name in stored.files
+                                    if name not in (MANIFEST_KEY, IDENTITY_KEY)}
+                    permuted["blocks"] = permuted["blocks"][::-1]
+                    seal_checkpoint_payload(continuous, permuted, runtime_kind="uniform")
+                    invalid = path.parent / "permuted-blocks.npz"
+                    np.savez_compressed(invalid, **permuted)
+                    with pytest.raises(ValueError, match="current composition"):
+                        inspect_uniform_checkpoint(resumed, invalid.read_bytes())
+            assert resumed.observe_accepted_state_storage().complete == before
+            assert path.read_bytes() == archive
+            with np.load(path, allow_pickle=False) as payload:
+                assert {member.physical_name for member in inventory.members} == set(payload.files)
+                for member in inventory.members:
+                    array = payload[member.physical_name]
+                    assert (member.dtype, member.shape) == (array.dtype.str, array.shape)
+            projections.append(inventory)
+            receivers.append(resumed)
+            checkpoints.append(path)
 
         programs.append(artifact.program_id)
         images.append(_replay(artifact, blocks, initial, 0.01, tmp_path / ("transport-%d" % index),
@@ -135,6 +162,69 @@ def test_transport_checkpoint_follows_logical_block_order(
     assert images[0][1:] == images[1][1:]
     assert images[0][0][0] == images[1][0][0], "carrier depends on the presentation owners"
     assert images[0][0][1] == images[1][0][1], "auxiliary depends on the presentation owners"
+    a, b = projections
+    assert a.binding.owner != b.binding.owner
+    assert a.binding.identity == b.binding.identity
+    assert [row.name for row in a.binding.blocks] == list(FIRST["blocks"])
+    assert [row.name for row in b.binding.blocks] == list(renamed["blocks"])
+    assert [(row.path, row.kind) for row in a.members] == [(row.path, row.kind) for row in b.members]
+    for inventory, names in ((a, FIRST), (b, renamed)):
+        assert [(row.path, row.physical_name) for row in inventory.members if row.path[0] == "state"
+                and row.path[-1] == "values"] == [
+                    (("state", index, "U", "values"), "state_" + name)
+                    for index, name in enumerate(names["blocks"])]
+    before = receivers[1].observe_accepted_state_storage().complete
+    with patch.object(receivers[1]._executor, "_begin_checkpoint_restart",
+                      side_effect=AssertionError("different named bind reached restart")):
+        with pytest.raises(ValueError, match="artifact_identity"):
+            receivers[1].restart(checkpoints[0])
+        with pytest.raises(ValueError, match="artifact_identity"):
+            inspect_uniform_checkpoint(receivers[1], checkpoints[0].read_bytes())
+    assert receivers[1].observe_accepted_state_storage().complete == before
+
+
+def test_projected_checkpoint_binding_covers_defaults_inputs_and_resources(
+        isolated_native_cache, native_cxx, kokkos_root):
+    del isolated_native_cache, native_cxx, kokkos_root
+
+    def compile_with(default):
+        return pops.compile(resolve_named_case(
+            FIRST, supplied_auxiliary=True, runtime_loss_default=default))
+
+    artifact = compile_with(0.5)
+    changed_default = compile_with(0.75)
+    assert artifact.program_id == changed_default.program_id
+
+    def bind(compiled, *, initial_delta=0., auxiliary_delta=0., override=None, capacity=None):
+        initial = {row.subject: np.full((1, 8, 8), 1. + initial_delta)
+                   for row in compiled.plan.initial_condition_plan.bindings}
+        auxiliary = {}
+        for block in compiled.plan.blocks:
+            operations = block.resolved_operations
+            pack = ProviderPack.from_data(operations.to_data()["provider_evidence"]["auxiliary"])
+            instance = require_instance_contract(operations, owner_qid=block.instance_owner_qid)
+            (key,) = pack
+            auxiliary[runtime_key(key, instance)] = np.full((8, 8), 2. + auxiliary_delta)
+        resources = {"execution_context": artifact_execution_context(compiled)}
+        if capacity is not None:
+            resources["runtime_parameter_byte_capacity"] = capacity
+        return pops.bind(compiled, initial_values=initial, aux=auxiliary, resources=resources,
+                         params=override)
+
+    owner = bind(artifact)
+    capacity = owner._install_plan.runtime_parameter_storage["byte_capacity"]
+    slots = artifact.bind_schema.runtime_slots
+    assert len(slots) == 2
+    variants = (
+        bind(changed_default),
+        bind(artifact, initial_delta=.25),
+        bind(artifact, auxiliary_delta=.25),
+        bind(artifact, override={slots[0].handle: .5}),
+        bind(artifact, capacity=capacity + 64),
+    )
+    identities = [value.bound_snapshot._uniform_checkpoint_projection.identity
+                  for value in (owner, *variants)]
+    assert len(set(identities)) == 6
 
 
 def test_m14_checkpoint_preserves_field_and_integral_authority(
@@ -155,6 +245,9 @@ def test_m14_checkpoint_preserves_field_and_integral_authority(
     monkeypatch.setattr(System, "install_program", install_and_witness, raising=False)
 
     def verify_inner_and_legacy(continuous, resumed, checkpoint):
+        # The owner can read this CP9, but the still-named exchange declaration has no O3 role.
+        with pytest.raises(ValueError, match="program_exchange_state"):
+            inspect_uniform_checkpoint(resumed, checkpoint.read_bytes())
         # The historical readers use the same live registry and preserve its accepted payload.
         native = continuous._executor._s
         legacy_carrier = native.checkpoint_state_carriers()
