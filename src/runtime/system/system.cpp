@@ -456,8 +456,8 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
       step_proposal = select_step_(rule->fraction, rule->speed_floor, rule->max_dt, 0.0);
       segment = {step_proposal, p_->t, 0, p_->t, static_cast<std::int64_t>(p_->macro_step_)};
     }
-    const auto duration = runtime::program::advance_attempt_duration(p_->t, step_proposal, frontier,
-                                                                     segment.origin, segment.steps);
+    auto duration = runtime::program::advance_attempt_duration(p_->t, step_proposal, frontier,
+                                                               segment.origin, segment.steps);
     if (rule != nullptr && (duration.lands || duration.dt != step_proposal))
       p_->last_dt_reason_ = "frontier";  // cut or landed by the frontier (review P1)
     // The attempts of a rule run at its fraction, as step_cfl's execution does: a path rhs checks
@@ -469,6 +469,7 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     // when an earlier attempt opened it, so an attempt rejected before its begin_step never
     // lends a later one the epoch of the previous accepted step (review of the code, O1).
     const std::uint64_t epoch_before_step = p_->attempt_epoch_;
+    bool retried_at_face_frequency = false;
     for (std::int64_t attempt = 1;; ++attempt) {
       // A retry computes the same accepted step: its solves whose dependency set excludes the
       // proposal keep their solution (T7 across attempts). The mark is taken by the first
@@ -502,11 +503,10 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
           report.typed_failure_payload = rejected.typed_failure_payload();
           return finish(AdvanceRunStop::kTrialFailure);
         }
-        // The face guard of a riemann.User face refuses in the native evaluation of the rate,
-        // with the faces' frequency (ROM-108): under a cells rule that refusal is the named stop
-        // below, whatever its phase; every other rejection of that phase leaves the run.
+        // The face guard supplies its observed frequency independently of the rejection phase.
+        // A compiled rule supplies the Courant budget for the one correction allowed by ROM-108.
         const bool face_refusal =
-            cells && rejected.typed_failure_schema() == runtime::program::kFaceStepFrequencySchema;
+            rule && rejected.typed_failure_schema() == runtime::program::kFaceStepFrequencySchema;
         if (!face_refusal && phase != runtime::program::kAssessmentRejectionPhase &&
             phase != runtime::program::kTrialRejectionPhase)
           throw;
@@ -518,8 +518,27 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
         if (face_refusal) {
           // The guard already used globally reduced frequencies, and step() agreed the
           // rejection envelope before rollback. All ranks can read its payload directly.
-          report.face_frequency = face_step_frequency(rejected.typed_failure_payload());
+          const double frequency = face_step_frequency(rejected.typed_failure_payload());
+          if (attempt < max_attempts && !retried_at_face_frequency) {
+            const double bound = rule->fraction / frequency;
+            if (bound > 0.0 && bound < duration.dt && p_->t + bound > p_->t) {
+              const auto shorter =
+                  runtime::program::advance_attempt_duration(p_->t, bound, frontier, p_->t, 0);
+              if (shorter.dt < duration.dt) {
+                duration = shorter;
+                retried_at_face_frequency = true;
+                p_->last_dt_reason_ =
+                    shorter.lands || shorter.dt != bound ? "frontier" : "faces:step_bound";
+                continue;
+              }
+            }
+          }
           report.attempts = attempt;
+          report.face_frequency = frequency;
+          report.typed_failure_schema = rejected.typed_failure_schema();
+          report.typed_failure_payload = rejected.typed_failure_payload();
+          if (attempt >= max_attempts)
+            return finish(AdvanceRunStop::kAttemptBudget);
           return finish(AdvanceRunStop::kFaceFrequency);
         }
         if (attempt >= max_attempts) {

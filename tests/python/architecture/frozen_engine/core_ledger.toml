@@ -615,3 +615,32 @@ paths = [
   "src/runtime/system/system.cpp",
   "src/runtime/system/system_aux.cpp",
 ]
+
+[[mechanism]]
+id = "compiled-face-frequency-retry"
+issue = "ROM-113"
+rule = "IR26"
+pre_freeze = true
+what = """
+Retry one correctable face rejection within the compiled Uniform Advance attempt budget. The
+collective step rejection provides the measured frequency. A finite and strictly shorter
+Courant correction is checked again against the output or run frontier before the next trial.
+Rollback, retry epochs and publication retain their existing ownership."""
+structures = [
+  { case = "T02", builder = "tests/python/integration/runtime/test_cell_step_rule_n8_native.py::_master", structure = "two-dimensional bounded linear transport with a MUSCL reconstruction and a face-written wave speed" },
+  { case = "L1", builder = "tests/python/integration/runtime/test_l1_program_a_dim1_native.py::_compile", structure = "periodic advection and diffusion on an interval with two diffusive faces and a shared Courant guard" },
+]
+measurement = """
+Native failure witnesses at c04f6d9a run the two authored structures through the installed
+Dim2 and Dim1 SDKs. The legacy step controller rejects once and accepts a corrected step for
+each. The compiled transport reports the recorded frequency 64 and publishes zero steps
+under both cells and stability; the compiled interval reports 1566.72 and publishes zero
+steps. The same fixtures require one rejected attempt followed by one published attempt at
+the measured Courant correction, with exact reference state. The interval keeps its
+zero-rejection trajectory and distinguishes a one-attempt budget that preserves accepted state."""
+refusal_set = "correction requires the recorded face schema and a compiled step rule, a strictly shorter duration after frontier handling, and a remaining attempt; fixed failures and exhausted method budgets keep their typed origin"
+paths = [
+  "include/pops/runtime/program/advance_run.hpp",
+  "python/pops/runtime/_simulation.py",
+  "src/runtime/system/system.cpp",
+]

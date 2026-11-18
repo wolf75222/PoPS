@@ -9682,6 +9682,24 @@
       "source_sha256": {
         "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": "fbae7a0b61e4bc1ab22d40cd67f6cce6ca357379819c3cd4ba8cf9424c6c8735"
       }
+    },
+    "ci_20261118_rom113_face_retry": {
+      "basis": "ROM-113 adds a guard-budget variant of the L1 Dim1 case and a compiled stability variant of the guarded MUSCL Dim2 case. The local installed Dim1 four-case module took 161.29 s on Mac, including the four cold model compilations, while other native modules ran concurrently. Keep the 300 s Dim1 and 1200 s Dim2 cold CI scheduling estimates pending complete CI timing artifacts.",
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": 300,
+        "tests/python/integration/runtime/test_cell_step_rule_n8_native.py": 1200
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": {
+          "cases": 4,
+          "phase_seconds": 160.26,
+          "session_seconds": 161.29
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": "351c6399bd52292b205615415955864a2e3a07298180b1085f1b235a6372c252",
+        "tests/python/integration/runtime/test_cell_step_rule_n8_native.py": "cd46abbae3a5d32133d006ece50b20722bfba715e158d69890dcde01bedbaf3c"
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,

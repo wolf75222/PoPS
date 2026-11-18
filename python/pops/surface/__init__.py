@@ -33,7 +33,7 @@ from ._project import project
 from . import _solver
 from ._quadrature import Quadrature
 from ._representation import Coefficients, Dual, representation
-from ._run import BudgetExhausted, Output, RunFailed, SolveFailed, every
+from ._run import BudgetExhausted, FaceFrequencyStop, Output, RunFailed, SolveFailed, every
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
@@ -206,6 +206,6 @@ __all__ = [
     "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
     "AmbiguousSolvePath", "UnknownSolvePath",
     # the failures of a run (T39), lot G, which a solver also fails with (N9 lot 4)
-    "BudgetExhausted", "RunFailed", "SolveFailed",
+    "BudgetExhausted", "FaceFrequencyStop", "RunFailed", "SolveFailed",
     "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]

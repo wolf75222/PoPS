@@ -40,6 +40,8 @@ from typing import Any
 
 import numpy as _np
 
+from pops.time._program.control import FaceFrequencyStop as _NativeFaceFrequencyStop
+
 from ._model import Datum, Model, Parameter, Quantity
 from ._refusal import (
     AmbiguousElaboration, NotYetElaborated, SupportMismatch, surface_entry, user_site,
@@ -523,6 +525,15 @@ class SolveFailed(RunFailed):
     """A solve of the trial failed at a fixed failure site (T39)."""
 
 
+class FaceFrequencyStop(RunFailed, _NativeFaceFrequencyStop):
+    """A compiled step rule has no further correction at the frequency the faces recorded."""
+
+    def __init__(self, result: RunResult, message: str, frequency: float) -> None:
+        RuntimeError.__init__(self, message)
+        self.result = result
+        self.frequency = frequency
+
+
 _VARIANTS = {"BudgetExhausted": BudgetExhausted, "SolveFailed": SolveFailed}
 
 
@@ -628,11 +639,14 @@ class Simulation:
         failure_error = None
         try:
             result = self._simulation.run(until, max_steps=steps)
-        except _n8.RunFailed as error:
+        except (_n8.RunFailed, _n8.FaceFrequencyStop) as error:
             failure_error = error
             result = error.result
         surface = self._result(result, start, until)
         self._write()
+        if isinstance(failure_error, _n8.FaceFrequencyStop):
+            raise FaceFrequencyStop(surface, str(failure_error),
+                                    failure_error.frequency).with_traceback(None) from failure_error
         if failure_error is not None:
             variant = _VARIANTS.get(type(failure_error).__name__, RunFailed)
             raise variant(surface, str(failure_error)).with_traceback(None) from failure_error

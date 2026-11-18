@@ -49,9 +49,8 @@ from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Any
 
-from pops.time._program.control import AdvanceControl, memory_rings
+from pops.time._program.control import AdvanceControl, FaceFrequencyStop, memory_rings
 from pops.time._program.elaboration import Proposal, StepRule
-from pops.time._program.traced_method import NotYetElaborated
 from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA, CellStepBound
 from pops.time._program.memory import MemoryView
 from pops.time._program.outputs import EveryDt, OutputRegion, Product, landing
@@ -63,7 +62,6 @@ DEFAULT_MAX_STEPS = 1_000_000
 _REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET, _TRIAL_FAILURE, _FACE_FREQUENCY, _TERMINAL_FAILURE = (
     0, 1, 2, 3, 4, 5,
 )
-_FACE_FREQUENCY_LOT = "the faces' frequency retry of the compiled run"
 _TRIAL_PHASES = ("trial", "trial_failure")
 
 
@@ -91,22 +89,6 @@ class SolveFailed(RunFailed):
 class NotAdmissible(RunFailed):
     """An admissibility guard of the trial failed (S5, IR4, T39): at a fixed failure site, which
     a retry cannot change, the step ends after its first attempt (T38)."""
-
-
-class FaceFrequencyStop(NotYetElaborated):
-    """A cells rule's attempt that the face guard refused with the faces' frequency (ROM-108):
-    the compiled run does not retry at that frequency yet, so it stops by name on every rank (N8
-    « dt= as a function of cell », design note D2, K1-c; review rev 3, P4). ``frequency`` is the
-    largest over the ranks; ``result`` is the ``RunResult`` at the accepted state of the step.
-    ``pops.run`` on the same artifact retries at fraction / frequency."""
-
-    def __init__(self, result: RunResult, frequency: float) -> None:
-        super().__init__(
-            "the face guard refused the attempt of the step from t=%r at the faces' frequency %r "
-            "(%s); the compiled run of a cells rule stops there: %s is a later lot of N8"
-            % (result.time, frequency, FACE_STEP_FREQUENCY_SCHEMA, _FACE_FREQUENCY_LOT))
-        self.result = result
-        self.frequency = frequency
 
 
 class Failure:
@@ -145,6 +127,16 @@ class Failure:
             return ("%s: max_steps=%d accepted steps ended the run at t=%r before until=%r"
                     % (self.variant.__name__, payload["max_steps"], payload["time"],
                        payload["until"]))
+        if self.variant is NotAdmissible and "face_frequency" in payload:
+            return ("%s: the face guard (%s) ended the step from t=%r after %d attempt(s) "
+                    "at frequency %r; last: %s"
+                    % (self.variant.__name__, payload["face_schema"], payload["time"],
+                       payload["attempts"], payload["face_frequency"], payload["rejection"]))
+        if self.variant is BudgetExhausted and "face_frequency" in payload:
+            return ("%s: the face guard (%s) rejected the last of %d attempt(s) from t=%r "
+                    "at frequency %r; last: %s"
+                    % (self.variant.__name__, payload["face_schema"], payload["attempts"],
+                       payload["time"], payload["face_frequency"], payload["rejection"]))
         if self.variant is BudgetExhausted and payload["budget"] == "max_iterations":
             # A solve of a failure site reached its iteration limit (SV10, N9 relation solves
             # §3.6): the budget is the solve's, not the step's.
@@ -523,10 +515,15 @@ class Simulation:
         guard = None
         stopped = None
         if stop == _FACE_FREQUENCY:
-            if cells is None:
-                raise RuntimeError("System::run_advance stopped on the faces' frequency without a "
-                                   "cells rule")
+            if report.get("typed_failure_schema") != FACE_STEP_FREQUENCY_SCHEMA:
+                raise RuntimeError("System::run_advance stopped on the faces' frequency without "
+                                   "its typed rejection")
             stopped = float(report["face_frequency"])
+            failure = Failure(NotAdmissible, "trial", {
+                "attempts": report["attempts"], "time": time, "rejection": report["rejection"],
+                "face_schema": FACE_STEP_FREQUENCY_SCHEMA, "face_frequency": stopped,
+                "face_site": report["rejection_detail"],
+            })
         elif stop == _STEP_BUDGET:
             failure = Failure(BudgetExhausted, None, {
                 "budget": "max_steps", "max_steps": max_steps, "steps": report["steps"],
@@ -536,7 +533,13 @@ class Simulation:
             payload = {"budget": "max_attempts", "max_attempts": self._control.max_attempts,
                        "attempts": report["attempts"], "time": time,
                        "rejection": report["rejection"]}
-            if phase == "trial":
+            if report.get("typed_failure_schema") == FACE_STEP_FREQUENCY_SCHEMA:
+                phase = "trial"
+                payload["face_schema"] = report.pop("typed_failure_schema")
+                report.pop("typed_failure_payload")
+                payload["face_frequency"] = float(report["face_frequency"])
+                payload["face_site"] = report["rejection_detail"]
+            elif phase == "trial":
                 guard = _trial_failure(self._control, report,
                                        catalog=runtime._guard_failure_catalog)
                 payload["cause"] = guard
@@ -576,10 +579,10 @@ class Simulation:
             },
             continuation=self._continuation, failure=failure,
             outputs={output: tuple(rows) for output, rows in published.items()})
-        if failure is not None:
-            raise failure.variant(result)
         if stopped is not None:
             raise FaceFrequencyStop(result, stopped)
+        if failure is not None:
+            raise failure.variant(result)
         return result
 
 
