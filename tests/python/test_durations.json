@@ -9575,6 +9575,37 @@
         "tests/python/unit/numerics/test_moving_configuration_members.py": "c9da0a88b0ceb83d61f6f915ec0bcbfd83cf8c6ba328ce6b8faaa5c4f7010486"
       }
     },
+    "g03_20261118_moving_members_receipts": {
+      "basis": "The historical receipt above is retained. These observations use the current test files byte for byte. Retain the 480 s native and 15 s source scheduling estimates, above both the native 274.89 s complete run and the source 14.04 s complete run. Refresh from complete CI per-file timing artifacts.",
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_g03_moving_members_native.py": 480,
+        "tests/python/unit/numerics/test_moving_configuration_members.py": 15
+      },
+      "receipts": {
+        "tests/python/integration/runtime/test_g03_moving_members_native.py": {
+          "job_id": 829097,
+          "host": "romeo-c022",
+          "source_commit": "af2146c50d5ad3081b9dc8705e87981c7bd9cb17",
+          "native_dimension": 1,
+          "passed": 7,
+          "session_seconds": 274.89
+        },
+        "tests/python/unit/numerics/test_moving_configuration_members.py": {
+          "job_id": 829065,
+          "host": "romeo-c025",
+          "source_commit": "dc399819fc038b63226e8cb2e62191a0ad81b966",
+          "matching_passed_cases": 29,
+          "matching_case_seconds_sum": 11.572,
+          "mac_source_commit": "32654991cbecce11a8b3d47d362dd5a5eed66720",
+          "mac_passed": 29,
+          "mac_session_seconds": 14.04
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_g03_moving_members_native.py": "6f0eb2a669849823534747ce4fcd6d906a6188c150ce34b4a16e2b5e82601851",
+        "tests/python/unit/numerics/test_moving_configuration_members.py": "585d93785c740afe74d01fcdfed4b95be9f9287aabdb67580e4af4fd94fa24fc"
+      }
+    },
     "ci_20261113_cf17_l1": {
       "basis": "Unmeasured CI scheduling estimate for CF17 of L1 at the exit of phase 1 (OD31), on the api_v02_20261013 tiers: 600 s for test_cf17_l1_swaps.py, which reads the diff of the four L1 files and lints them (source-only), then compiles four Dim1 artifacts (L1-a, its rusanov(), case-written face and IMEX Euler with cg() swaps) and runs each natively to t = 1 on 256 cells (1567 SSPRK2 steps or 256 IMEX steps), as the four artifacts of the analogue test_surface_lot_e_project_native.py (900 s) on cells of one axis. The local receipt comes from pytest on a 4-core container with a cold artifact cache (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim1); it is not GitHub CI file wall time. Replace only from complete CI per-file receipts.",
       "analogues": {
