@@ -232,8 +232,14 @@ def _guard_lines(lines, sites, fixed, program, *, traced_route):
         assert start >= 0
         saved = observation.fullmatch(out[start])
         assert saved is not None and saved[1] == observed
-        assert [row.strip() for row in out[start + 1:]] == expected
         condition = saved[2]
+        if condition == f"owned_guard_condition_{node.id}":
+            active = f"owned_guard_active_{node.id}"
+            assert any(row.strip() == f"if ({active}) {{" for row in out[:start])
+            assert any(row.strip() == f"{condition} = owned_guard_status_{node.id} == pops::Real(0);"
+                       for row in out[:start])
+            expected[0] = f"if (!{active}) {{"
+        assert [row.strip() for row in out[start + 1:]] == expected
         out[start:] = [row.replace(observed, condition) for row in out[start + 1:]]
         out.append(indent + "<guard %d>" % seen)
         seen += 1
@@ -246,7 +252,7 @@ def _guard_lines(lines, sites, fixed, program, *, traced_route):
 
 @pytest.mark.parametrize("profile", sorted(PROFILES))
 def test_guarded_profile_generates_the_b6_cpp(profile, monkeypatch):
-    """The generated C++ of each profile is b6's, line for line, once the guard throws, lot 2's
+    """The general lowering of each profile is b6's, line for line, once the guard throws, lot 2's
     finite() and the control lines are set aside. M15 builds its candidate componentwise in b6
     and as a linear combination on the traced route (the IR test checks that both compute the
     same sum): the source-map span of that one node is set aside in both (review of the note,
@@ -274,8 +280,14 @@ def test_guarded_profile_generates_the_b6_cpp(profile, monkeypatch):
     b6_names = _presentation_names(b6, new)
     b6_names.update({guard.name: "<guard %d>" % k for k, guard in
                      enumerate(b6._acceptance_guards)})
-    b6_lines = _named(_source(b6_spec), b6_names).splitlines()
-    traced_lines = _named(_source(traced_spec), names).splitlines()
+    from pops.codegen import program_owned_guard_fold
+
+    # The cell fold is a separate optimization. Compare the unchanged underlying
+    # lowering on both source Programs, including all original guard transport.
+    with monkeypatch.context() as patch:
+        patch.setattr(program_owned_guard_fold, "owned_guard_folds", lambda *_: {})
+        b6_lines = _named(_source(b6_spec), b6_names).splitlines()
+        traced_lines = _named(_source(traced_spec), names).splitlines()
     traced_lines, dropped = _spans(traced_lines, tail_ids)
     assert any('"assessment", "Advance assessment \'finite\' rejected the candidate"' in line
                for line in dropped)

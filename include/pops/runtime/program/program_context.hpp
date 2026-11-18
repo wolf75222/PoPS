@@ -1370,6 +1370,8 @@ class ProgramContext {
     return local.mask;
   }
 
+#include <pops/runtime/program/program_context_owned_guard_fold.inc>
+
   /// Uniform faces have no coarse coverage to exclude. Accepted-exchange producers
   /// query this separately from the embedded-boundary mask so the AMR route can
   /// enforce both physical activity and finest-owner coverage.

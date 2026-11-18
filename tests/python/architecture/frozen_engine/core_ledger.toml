@@ -728,3 +728,43 @@ paths = [
   "python/pops/fields/aux.py",
   "python/pops/surface/_elaborate.py",
 ]
+
+[[mechanism]]
+id = "owned-cell-fold-for-exclusive-acceptance-guards"
+issue = "ROM-20"
+rule = "IR26"
+pre_freeze = true
+what = """
+Lower a contiguous exclusive guard cut on one exact State and evaluation point to a single
+owned-cell fold. Eligible consumers test a strict positive component minimum with either
+all-component finiteness or the status of a checked closed expression. Every row and active
+intermediate of the latter still uses the original checked expression lowering. The maximum
+of exact small status codes carries cell invalidity, while route, lane, layout and representation
+failures keep their own words and priorities. The original guard consumes the result within the
+same invocation, retaining the failure action, site and envelope. The runtime uses the installed
+Uniform owner tiling, one local traversal per owner box and one collective on the prepared lane.
+The unmasked host route is admitted cold. Active or inactive installed embedded geometry,
+non-host execution, alternate readers and unmatched guard shapes retain their existing lowering."""
+structures = [
+  { case = "M1a-heun-moving-members", builder = "tests/python/integration/runtime/test_g03_moving_members_native.py::_inverting_trial", structure = "Dim1 moving-member geometry advanced by Heun, finite geometry and positive member volume required before its interstage rate" },
+  { case = "M17", builder = "tests/python/integration/runtime/test_fan_li15_public_composition_runtime.py::test_installed_fan_li15_public_composition", structure = "Dim2 nonconservative Fan–Li15 path flux with SSPRK2, all checked expression intermediates and a strict positive SPD margin required at its guard" },
+]
+measurement = """
+With F2 and moving members assembled at af2146c5, ROMEO jobs 829097 (Heun) and 829098 (M17)
+run the actual Programs with the existing state, rollback, failure action and source-site oracles.
+Both controls perform seven Allreduces per guard in MPI2 and MPI3, including the rank without an
+owner box. Heun traverses the owned box four times. M17 traverses it five times in steady state
+and uses two additional scratch initializations at first evaluation. The private witness was
+recorded before product at 33527d1a0. The PF8 witness requires one Allreduce per guard and one
+traversal per owner box, with no intermediate Field materialization."""
+refusal_set = "Existing scientific guards and checked-expression refusals remain, including their order and transaction; ineligible support, backend, additional readers and expression/effect shapes retain the general lowering"
+paths = [
+  "include/pops/runtime/program/program_context.hpp",
+  "include/pops/runtime/program/program_context_owned_guard_fold.inc",
+  "include/pops/runtime/system.hpp",
+  "include/pops_headers.manifest",
+  "python/pops/codegen/program_emit_control.py",
+  "python/pops/codegen/program_emit_ops.py",
+  "python/pops/codegen/program_owned_guard_fold.py",
+  "src/runtime/system/system_embedded_boundary.cpp",
+]
