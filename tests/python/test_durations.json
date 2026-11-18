@@ -6729,7 +6729,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1223,
+    "estimated_count": 1224,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6990,6 +6990,7 @@
       "tests/python/integration/runtime/test_isothermal_vacuum_boundary_rollback.py",
       "tests/python/integration/runtime/test_isothermal_vacuum_floor_inactive.py",
       "tests/python/integration/runtime/test_isothermal_vacuum_floor_system.py",
+      "tests/python/integration/runtime/test_l1_program_a_dim1_native.py",
       "tests/python/integration/runtime/test_lib_face_body_swap_native.py",
       "tests/python/integration/runtime/test_lib_numerics_reconstructions_native.py",
       "tests/python/integration/runtime/test_local_product_operators_runtime.py",
@@ -8155,7 +8156,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1290,
+    "total_files": 1291,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9517,6 +9518,25 @@
         "tests/python/unit/time/test_effect_table_ir5.py": "0b02e635996b361190bee41158e925ce078a1afe38fe4dacbe7c61e6147baed0",
         "tests/python/unit/time/test_recursive_graph_function_ir6.py": "d15e95ed2aa39475f0f0212407e661c2bcd666fe8b68c93ed86f369ce83a2b87"
       }
+    },
+    "ci_20261118_rom112_l1_dim1": {
+      "basis": "ROM-112 Dim1 native test. One interval case and two variants of its compiled cell step bound, each built in a cold pytest module cache, with one full SSPRK2 trajectory and two single-attempt controls. Local Darwin arm64, binary64 Kokkos OpenMP host and two threads: 94.89 s observed. Reserve the 300 s native tier for the cold Linux runner; refresh from a complete CI timing artifact.",
+      "analogues": {
+        "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": "tests/python/integration/runtime/test_candidate_guards_n8_dim1_native.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": 300
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": {
+          "cases": 3,
+          "phase_seconds": 87.0,
+          "session_seconds": 94.89
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": "335a32fef532ab35919ad402e8479a034eb64cc0187c619b3b89a140f09ff9ad"
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
@@ -10808,5 +10828,6 @@
   "tests/python/unit/surface/test_cell_step_rule.py": 15,
   "tests/python/unit/numerics/test_region_reads_g02.py": 5,
   "tests/python/unit/time/test_effect_table_ir5.py": 5,
-  "tests/python/unit/time/test_recursive_graph_function_ir6.py": 5
+  "tests/python/unit/time/test_recursive_graph_function_ir6.py": 5,
+  "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": 300
 }
