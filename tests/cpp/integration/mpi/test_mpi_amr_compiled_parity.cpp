@@ -39,6 +39,7 @@
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -243,7 +244,10 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
             std::string("test-forward-euler-amr/") + test::compiled_parity.identity);
 
   const auto served = sys.density("gas");
-  EXPECT_EQ(served, rho);
+  EXPECT_TRUE(std::equal(served.begin(), served.end(), rho.begin(), rho.end(),
+                         [](double stored, double initial) {
+                           return stored == static_cast<double>(static_cast<Real>(initial));
+                         }));
   const auto tags = sys.execute_prepared_tagging(0);
   EXPECT_EQ(
       test::expect_fixture_tag_mask(
