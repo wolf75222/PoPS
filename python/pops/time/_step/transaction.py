@@ -4,13 +4,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
+from pops.provenance import SourceSpan
 from pops.time.solve_outcome import FailRun, RejectAttempt, SolveAction
 from pops.time._step.strategy import StepStrategy
-
-if TYPE_CHECKING:
-    from pops.time._program.guard_failure_sites import GuardFailureSite
 
 
 class ProvisionalStore(str, Enum):
@@ -109,6 +107,27 @@ _PHASES = frozenset((
     "prepare", "stage", "solve", "synchronize", "guard", "effect", "commit",
 ))
 _STATUSES = frozenset(("accepted", "rejected", "failed"))
+
+
+@dataclass(frozen=True, slots=True)
+class GuardFailureSite:
+    token: str
+    name: str
+    predicate: int
+    action: str
+    retry_can_change: bool
+    python_origin: SourceSpan
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "token": self.token, "name": self.name, "variants": ["NotAdmissible"],
+            "origin": "trial", "action": self.action, "retry_can_change": self.retry_can_change,
+            "payload": {"predicate": "Index", "value": "Bool"},
+            "predicate": self.predicate,
+        }
+
+    def payload_prefix(self) -> str:
+        return self.token + format(self.predicate, "016x")
 
 
 class _FailureObservation(Protocol):

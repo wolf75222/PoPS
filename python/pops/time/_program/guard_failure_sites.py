@@ -1,12 +1,10 @@
 """Identity and source projection of compiled, already-global admissibility guards (T39)."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from pops._structural_data import canonical_json_sha256
-from pops.provenance import SourceSpan
-from pops.time._step.transaction import GuardRole
+from pops.time._step.transaction import GuardFailureSite, GuardRole
 from pops.time.solve_outcome import FailRun, RejectAttempt
 
 SCHEMA = "pops.global-guard-failure@1"
@@ -14,27 +12,6 @@ _ACCEPTED_PREDICATE_OPS = frozenset({
     "compare", "reduce", "pointwise_expression", "scalar_isfinite",
     "bool_and", "bool_or", "bool_not", "const_scalar",
 })
-
-
-@dataclass(frozen=True, slots=True)
-class GuardFailureSite:
-    token: str
-    name: str
-    predicate: int
-    action: str
-    retry_can_change: bool
-    python_origin: SourceSpan
-
-    def to_data(self) -> dict[str, Any]:
-        return {
-            "token": self.token, "name": self.name, "variants": ["NotAdmissible"],
-            "origin": "trial", "action": self.action, "retry_can_change": self.retry_can_change,
-            "payload": {"predicate": "Index", "value": "Bool"},
-            "predicate": self.predicate,
-        }
-
-    def payload_prefix(self) -> str:
-        return self.token + format(self.predicate, "016x")
 
 
 def _predicate_of_accepted_state(state: Any, predicate: Any) -> bool:
