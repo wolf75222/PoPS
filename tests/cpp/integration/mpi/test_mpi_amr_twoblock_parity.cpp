@@ -3,7 +3,7 @@
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"
-#include "amr_tagging_test_authority.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
@@ -169,13 +169,16 @@ RefinedRunResult<Dim> run_refined_distributed_mode() {
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system,
                                             "tests.mpi-amr-twoblock-parity/refined-runtime@1");
-  system.install_block_state_route("tracer", "state/tracer");
+  const pops::test::StandaloneFixtureCriterion criterion{
+      pops::test::standalone_distributed_tracer, POPS_TEST_standalone_distributed_tracer_DSO,
+      POPS_TEST_standalone_distributed_tracer_RECEIPT};
+  system.install_block_state_route("tracer", criterion.criterion.state);
   pops::add_compiled_model<Dim>(
       system, "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit",
       static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
       static_cast<double>(pops::kWenoEpsilon), false, physical_flux_consumer_qid("tracer"));
   system.set_conservative_state("tracer", gaussian(config.shape));
-  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.2}});
+  criterion.install(system);
 
   RefinedRunResult<Dim> result;
   result.patches = system.patch_boxes();
@@ -219,13 +222,16 @@ bool parent_level_mismatch_is_collectively_refused() {
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(
       system, "tests.mpi-amr-twoblock-parity/parent-level-mismatch-runtime@1");
-  system.install_block_state_route("tracer", "state/tracer");
+  const pops::test::StandaloneFixtureCriterion criterion{
+      pops::test::standalone_positive_tracer, POPS_TEST_standalone_positive_tracer_DSO,
+      POPS_TEST_standalone_positive_tracer_RECEIPT};
+  system.install_block_state_route("tracer", criterion.criterion.state);
   pops::add_compiled_model<Dim>(
       system, "tracer", advection_model<Dim>(), "minmod", "rusanov", "conservative", "explicit",
       static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
       static_cast<double>(pops::kWenoEpsilon), false, physical_flux_consumer_qid("tracer"));
   system.set_conservative_state("tracer", gaussian(config.shape));
-  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.0}});
+  criterion.install(system);
   if (system.n_levels() != 3)
     throw std::runtime_error("parent-level consensus fixture did not build three AMR levels");
   const std::vector<pops::AmrPatch<Dim>> before = system.patch_boxes();

@@ -7,7 +7,7 @@
 
 #include <gtest/gtest.h>
 
-#include "amr_tagging_test_authority.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
@@ -976,7 +976,10 @@ int run_multiblock_field_solve(int argc, char** argv) {
     pops::AmrSystem<Dim> system(config);
     pops::test::install_amr_runtime_authority(system, "tests.mpi.multiblock-field/runtime");
     system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
-    system.install_block_state_route("b", "tests.mpi.multiblock-field/state/b");
+    const pops::test::StandaloneFixtureCriterion criterion{
+        pops::test::standalone_secondary_block, POPS_TEST_standalone_secondary_block_DSO,
+        POPS_TEST_standalone_secondary_block_RECEIPT};
+    system.install_block_state_route("b", criterion.criterion.state);
     install_block_boundary(system, "a");
     install_block_boundary(system, "b");
     install_block(system, "a");
@@ -993,8 +996,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
                                     AmrProviderFault::candidate_validation_throw_once_on_rank_one,
                                     true);
     install_consensus_provider_plan(system, "field/reject", AmrProviderFault::reject_attempt);
-    pops::test::install_prepared_threshold_union(system, {{"b", "u", 0.5}},
-                                                 "tests.mpi.multiblock-field/tagger-b@1");
+    criterion.install(system);
     int rhs_calls = 0;
     bool fail_rhs_on_rank_one = false;
     const auto install_slot_rhs = [&](const std::string& slot) {

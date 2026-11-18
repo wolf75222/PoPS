@@ -417,8 +417,11 @@ TEST(test_amr_seed_no_refine, RegridRetainsEvolvedFineCellsAndLinearlyProlongsNe
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 16;
   config.regrid_every = 1;
-  auto system = make_system(config, affine_state(config.shape));
-  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.0}});
+  const pops::test::StandaloneFixtureCriterion criterion{
+      pops::test::standalone_positive_tracer, POPS_TEST_standalone_positive_tracer_DSO,
+      POPS_TEST_standalone_positive_tracer_RECEIPT};
+  auto system = make_system(config, affine_state(config.shape), {}, criterion.criterion.state);
+  criterion.install(system);
 
   ASSERT_EQ(system.n_levels(), 2);
   const pops::Extent<Dim> fine_shape = [&] {
@@ -467,16 +470,16 @@ TEST(test_amr_seed_no_refine, RegridRetainsEvolvedFineCellsAndLinearlyProlongsNe
     }
   EXPECT_GT(retained, 0u);
 
-  auto injected = make_system(config, affine_state(config.shape));
+  auto injected = make_system(config, affine_state(config.shape), {}, criterion.criterion.state);
   pops::Extent<Dim> no_ghost{};
   pops::Extent<Dim> ratio{};
   for (int axis = 0; axis < Dim; ++axis)
     ratio[axis] = 2;
-  injected.register_bootstrap_transfer_route("test::explicit-injection-route", {"state/tracer"},
-                                             "test::explicit-injection-provider@1", "cell", "cell",
-                                             "conservative", "dense", "prolongation",
-                                             "conservative_injection", 1, no_ghost, ratio);
-  pops::test::install_prepared_threshold_union(injected, {{"tracer", "u", 0.0}});
+  injected.register_bootstrap_transfer_route(
+      "test::explicit-injection-route", {criterion.criterion.state},
+      "test::explicit-injection-provider@1", "cell", "cell", "conservative", "dense",
+      "prolongation", "conservative_injection", 1, no_ghost, ratio);
+  criterion.install(injected);
   ASSERT_EQ(injected.n_levels(), 2);
   const std::vector<double> injected_fine = injected.block_level_state_global("tracer", 1);
   EXPECT_DOUBLE_EQ(injected_fine[flatten(first_child, fine_shape)],
@@ -508,15 +511,18 @@ TEST(test_amr_seed_no_refine,
 
   std::array<bool, Dim> every_axis{};
   every_axis.fill(true);
+  const pops::test::StandaloneFixtureCriterion criterion{
+      pops::test::standalone_positive_tracer, POPS_TEST_standalone_positive_tracer_DSO,
+      POPS_TEST_standalone_positive_tracer_RECEIPT};
   for (const bool one_sided : {false, true}) {
     SCOPED_TRACE(one_sided ? "one-sided axes" : "no one-sided axis");
-    auto system = make_system(config, coarse, "foextrap");
+    auto system = make_system(config, coarse, "foextrap", criterion.criterion.state);
     if (one_sided)
       system.register_bootstrap_transfer_route(
-          "test::one-sided-linear-route", {"state/tracer"}, "test::one-sided-linear-provider@1",
-          "cell", "cell", "conservative", "dense", "prolongation", "conservative_linear", 2,
-          one_ghost, ratio, every_axis);
-    pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.0}});
+          "test::one-sided-linear-route", {criterion.criterion.state},
+          "test::one-sided-linear-provider@1", "cell", "cell", "conservative", "dense",
+          "prolongation", "conservative_linear", 2, one_ghost, ratio, every_axis);
+    criterion.install(system);
     ASSERT_EQ(system.n_levels(), 2);
     const std::vector<double> fine = system.block_level_state_global("tracer", 1);
     ASSERT_EQ(fine.size(), cell_count(fine_shape));
