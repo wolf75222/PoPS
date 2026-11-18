@@ -458,7 +458,12 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             lines.extend("  ctx.require_program_field_access(%s);" % var[item.id] for item in reads)
             lines.append("}); // Program numerical Field input authority")
     from .program_emit_transform_obligation import emit_physical_input_guards
-    lines += emit_physical_input_guards(v, var)
+    physical_input_guards = emit_physical_input_guards(v, var)
+    owned_guard_result = var.get(("owned_guard_result", v.id))
+    if owned_guard_result and physical_input_guards:
+        lines += ["if (!%s) {" % owned_guard_result, *physical_input_guards, "}"]
+    else:
+        lines += physical_input_guards
     bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
             if v.block is not None else None)
     if v.id in var.get(("moving_deferred_rates",), ()):
@@ -1920,7 +1925,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             # ProgramContext includes ConsensusWords. Preserve both Bool extrema
             # on the same lane and reuse the observed value after agreement.
             lines.extend([
-                "{",
+                ("if (!%s) {" % owned_guard_result) if owned_guard_result else "{",
                 "  pops::ConsensusWords<2> guard_consensus;",
                 "  const auto slot = guard_consensus.agreement(static_cast<int>(%s));" % token,
                 "  guard_consensus.reduce(ctx.prepared_execution_lane());",

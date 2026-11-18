@@ -701,6 +701,13 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     rhs_plan = plan_rhs_coherence(program, values, model=model)
     rhs_schedule = rhs_plan.schedule
     rhs_grouped = rhs_plan.grouped_ids
+    from .program_owned_guard_fold import emit_owned_guard_fold, owned_guard_folds
+    guard_folds = {
+        start: fold for start, fold in owned_guard_folds(program, values, var).items()
+        if not any(position in rhs_schedule for position in range(start + 1, start + len(fold.prefix) + 1))
+    } if target == "system" else {}
+    if guard_folds:
+        prelude.insert(0, "const bool owned_guard_host_lane = ctx.prepare_owned_guard_host_lane();")
     # Top-level operation boundaries where the step body may continue in a new native function.
     chunk_boundaries = []
     while index < len(values):
@@ -721,6 +728,11 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         if v.id in rhs_grouped or v.op == "post_synchronization":
             index += 1
             continue
+        if index in guard_folds:
+            fold = guard_folds[index]
+            emit_owned_guard_fold(fold, program, var, model, lines, block_idx)
+            index += len(fold.prefix)
+            v = fold.guard
         if target == "amr_system" and v.op in ("branch", "structured_fold", "capture_result", "structured_iterate") and has_suspension(v):
             from .program_source_map import operation
             with operation(v, lines, prelude, environment=var):

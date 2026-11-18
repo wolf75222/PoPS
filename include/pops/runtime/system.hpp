@@ -1688,6 +1688,7 @@ class System {
   [[nodiscard]] POPS_EXPORT runtime::system::PreparedActiveMaskLocal<MultiFab<Dim>>
   prepared_program_block_active_mask_local_(int runtime_block, const MultiFab<Dim>& field,
                                             const ExecutionLane& lane) const;
+  [[nodiscard]] POPS_EXPORT bool owned_guard_unmasked_() const noexcept;
   [[nodiscard]] POPS_EXPORT const MultiFab<Dim>* prepared_program_block_volume_fraction_(
       int runtime_block, const MultiFab<Dim>& field, const ExecutionLane& lane) const;
   /// Immediate provider calls are an exported implementation seam for generated ProgramContext
