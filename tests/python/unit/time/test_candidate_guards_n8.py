@@ -172,7 +172,7 @@ def test_m16_stays_on_its_b6_program():
 # --- the C++ parity rule -----------------------------------------------------------------------
 
 def _guard_lines(lines, sites, fixed, program, *, traced_route):
-    """Verify each guard and remove only its control transport from the parity comparison."""
+    """Verify each guard before normalizing its observed Bool and disposition."""
     (inventory,) = [line[len(INVENTORY):] for line in lines if line.startswith(INVENTORY)]
     program_hash = json.loads(inventory)["program_hash"]
     guards = [value for value in program._values
@@ -181,13 +181,8 @@ def _guard_lines(lines, sites, fixed, program, *, traced_route):
     observation = re.compile(r"\s*const bool (guard_observed_\d+) = (.+);$")
     envelope = (r', "pops\.global-guard-failure@1", std::string\("([0-9a-f]{80})"\)'
                 r" \+ \((guard_observed_\d+) \? '1' : '0'\)\);$")
-    out, seen, aliases = [], 0, {}
+    out, seen = [], 0
     for line in lines:
-        saved = observation.fullmatch(line)
-        if saved:
-            assert saved[1] not in aliases
-            aliases[saved[1]] = saved[2]
-            continue
         ordinary = re.fullmatch(r'(\s*)throw std::runtime_error\("acceptance guard \'[^\']+\' failed"\);',
                                 line)
         terminal = re.fullmatch(r'(\s*)throw pops::runtime::program::StepTerminalFailure\('
@@ -199,14 +194,15 @@ def _guard_lines(lines, sites, fixed, program, *, traced_route):
             out.append(line)
             continue
         node = guards[seen]
+        observed = f"guard_observed_{node.id}"
         if traced_route:
             assert trial is not None
-            indent, phase, site, prefix, observed = trial.groups()
+            indent, phase, site, prefix, payload_observed = trial.groups()
             assert site == sites[seen]
             assert phase == ("trial_failure" if fixed[seen] else "trial")
         elif seen == 0:
             assert terminal is not None
-            indent, site, prefix, observed = terminal.groups()
+            indent, site, prefix, payload_observed = terminal.groups()
             assert site == sites[seen]
         else:
             assert ordinary is not None
@@ -218,14 +214,31 @@ def _guard_lines(lines, sites, fixed, program, *, traced_route):
                 "site": node.id, "predicate": predicate,
             })
             assert prefix == token + format(predicate, "016x")
-            assert observed == f"guard_observed_{node.id}"
-            condition = aliases.pop(observed)
-            # The exact tested Bool is the same value used in both votes and the branch.
-            assert sum(row.count(observed) for row in out) == 3
-            out = [row.replace(observed, condition) for row in out]
+            assert payload_observed == observed
+        # The prepared lane gets both extrema of one observed Bool, before the branch and
+        # its typed payload. Keep the transport and the exact condition in the body comparison.
+        expected = [
+            "{",
+            "pops::ConsensusWords<2> guard_consensus;",
+            f"const auto slot = guard_consensus.agreement(static_cast<int>({observed}));",
+            "guard_consensus.reduce(ctx.prepared_execution_lane());",
+            "if (guard_consensus.differs(slot))",
+            'throw pops::runtime::program::StepAttemptRejected(pops::SolveStatus::kInvalidEvaluation, '
+            '"structured_control", "acceptance guard differs across execution lane");',
+            "}",
+            f"if (!({observed})) {{",
+        ]
+        start = len(out) - len(expected) - 1
+        assert start >= 0
+        saved = observation.fullmatch(out[start])
+        assert saved is not None and saved[1] == observed
+        assert [row.strip() for row in out[start + 1:]] == expected
+        condition = saved[2]
+        out[start:] = [row.replace(observed, condition) for row in out[start + 1:]]
         out.append(indent + "<guard %d>" % seen)
         seen += 1
-    assert seen == len(sites) and not aliases
+    assert seen == len(sites)
+    assert not any(re.search(r"\bguard_observed_\d+\b", row) for row in out)
     return out
 
 
