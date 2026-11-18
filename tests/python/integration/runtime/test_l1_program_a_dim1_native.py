@@ -6,11 +6,11 @@ import math
 import numpy as np
 import pytest
 
+import pops
 import pops.surface as surface
 from pops._native_selector import select_native_dimension
 from pops.lib.numerics import two_point, upwind
 from pops.lib.time.methods import ssprk2
-from pops.runtime._simulation import FaceFrequencyStop
 from pops.surface.math import ddt, div, grad
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
@@ -26,7 +26,7 @@ ONE_STEP_ATOL = 8 * EPS
 FINAL_ATOL = 64 * EPS
 
 
-def _compile(factor):
+def _compile(factor, *, attempts=2):
     domain = surface.Box(x=surface.Periodic(0, 1))
     model = surface.Model("advection_diffusion")
     u = model.quantity("u", surface.Scalar(domain))
@@ -44,7 +44,7 @@ def _compile(factor):
         return factor * (1 / (abs(a) / h + 2 * nu / h**2))
 
     program = surface.Program(
-        advance=surface.Advance(ssprk2(rate=model), dt=combined_limit, attempts=2),
+        advance=surface.Advance(ssprk2(rate=model), dt=combined_limit, attempts=attempts),
         initial={u: u0})
     case = surface.Case(model=model, numerics=numerics, program=program,
                         layout={domain: surface.Uniform(cells=CELLS)})
@@ -62,7 +62,8 @@ def variants(tmp_path_factory, native_cxx, kokkos_root):
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
-        yield tuple(_compile(1 + margin * EPS) for margin in (0, 16, 64))
+        yield (*(_compile(1 + margin * EPS) for margin in (0, 16, 64)),
+               _compile(1 + 64 * EPS, attempts=1))
 
 
 def _initial():
@@ -115,7 +116,7 @@ def _one_accepted_step(simulation, u, dt, initial):
 
 
 def test_l1_program_a_loses_no_attempt_on_the_interval(variants, tmp_path, record_property):
-    nominal, _, _ = variants
+    nominal, _, _, _ = variants
     _, u, _, _ = nominal
     initial = _initial()
 
@@ -165,7 +166,7 @@ def test_l1_program_a_loses_no_attempt_on_the_interval(variants, tmp_path, recor
 
 
 def test_l1_guard_admits_the_trial_inside_its_roundoff_margin(variants, tmp_path, record_property):
-    _, admitted, _ = variants
+    _, admitted, _, _ = variants
     _, u, _, _ = admitted
     initial = _initial()
     simulation = _bind(admitted, tmp_path, initial)
@@ -177,25 +178,50 @@ def test_l1_guard_admits_the_trial_inside_its_roundoff_margin(variants, tmp_path
 
 
 def test_l1_guard_refuses_the_trial_beyond_its_roundoff_margin(variants, tmp_path, record_property):
-    _, _, refused = variants
+    _, _, _, refused = variants
+    _, u, _, _ = refused
     initial = _initial()
     simulation = _bind(refused, tmp_path, initial)
     dt = _attempt_duration(simulation)
     margin = _margin(dt)
     assert 32 < margin < 96
 
-    with pytest.raises(FaceFrequencyStop, match="pops.face-step-frequency@1") as caught:
+    with pytest.raises(surface.BudgetExhausted, match="pops.face-step-frequency@1") as caught:
         simulation.run(until=END)
     failure = caught.value
     result = failure.result
     assert result.steps == 0 and result.time == 0.0 and result.rejections == 1
     assert result.continuation.macro_step == 0
     assert result.diagnostics["native"]["attempts"] == 1
-    assert abs(failure.frequency - float(FREQUENCY)) <= 8 * EPS * float(FREQUENCY)
-    block, = result.state
-    accepted = np.asarray(result.state[block])
-    assert accepted.dtype == np.float64 and accepted.size == CELLS
+    assert result.failure.origin == "trial"
+    assert result.failure.payload["budget"] == "max_attempts"
+    assert result.failure.payload["face_schema"] == "pops.face-step-frequency@1"
+    assert "user_face_numerical_stability" in result.failure.payload["face_site"]
+    frequency = result.failure.payload["face_frequency"]
+    assert abs(frequency - float(FREQUENCY)) <= 8 * EPS * float(FREQUENCY)
+    accepted = np.asarray(result.state[u])
+    assert accepted.dtype == np.float64 and accepted.shape == (CELLS,)
     assert accepted.tobytes() == initial.tobytes()
     record_property("refused_dt", dt.hex())
     record_property("dt_frequency_margin_eps", margin)
-    record_property("guard_frequency", failure.frequency.hex())
+    record_property("guard_frequency", frequency.hex())
+
+
+def test_l1_retries_the_same_guard_once_at_the_recorded_frequency(variants, tmp_path):
+    _, _, corrected, _ = variants
+    _, u, _, _ = corrected
+    initial = _initial()
+    compiled = _bind(corrected, tmp_path / "compiled", initial)
+    assert _margin(_attempt_duration(compiled)) > 32
+    with pytest.raises(surface.BudgetExhausted) as caught:
+        compiled.run(until=END, max_steps=1)
+    result = caught.value.result
+    assert result.failure.payload["budget"] == "max_steps"
+    assert (result.steps, result.rejections, result.time) == (1, 1, DT)
+    _check_state(result.state[u], _ssprk2(initial, DT), atol=ONE_STEP_ATOL)
+
+    reference = _bind(corrected, tmp_path / "reference", initial)._simulation._runtime
+    report = pops.step(reference, t_bound=END, console=False)
+    block, = reference.block_names()
+    assert (report.accepted_steps, report.rejected_steps, reference.time()) == (1, 1, DT)
+    assert np.asarray(reference.state_global(block)).tobytes() == np.asarray(result.state[u]).tobytes()

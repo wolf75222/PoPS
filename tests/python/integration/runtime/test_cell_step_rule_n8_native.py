@@ -8,9 +8,8 @@ outflow, SSPRK2 and ``rusanov()`` at first order, under ``dt=`` a function of ``
    for bit, as ``cfl_limit`` (the bound and its identity are the same; only the declared budget
    differs, which the face guards read and these steps do not reach);
 2. a function twice too large, and ``cfl_limit`` beside a face that records twice the wave speed
-   (``upwind(speed=2 a.n)``, ROM-108): the compiled run stops by name at the first refused attempt
-   (``FaceFrequencyStop``, ``kFaceFrequency``) with the faces' frequency F; ``pops.run`` on the same
-   artifact retries once at fraction / F, the step that master's ``AdaptiveCFL`` retries at;
+   (``upwind(speed=2 a.n)``, ROM-108): the compiled run and ``pops.run`` both retry once at
+   fraction / F, the step that master's ``AdaptiveCFL`` retries at (ROM-113);
 3. L1's program A (spec 17.1: advection-diffusion, ``upwind()`` and ``two_point()``,
    ``dt=combined_limit``) on the square, as N3 lot 1 elaborates L1 in two dimensions
    (``test_stencil_adaptive_cfl_native.py``): 0 attempts lost on the compiled route, and the
@@ -27,7 +26,7 @@ The module runs in the Dim=2 process; L1 on the interval is a Dim=1 case of its 
    the steps and state of master's tutorial 02 written by hand for b6 (native ``MUSCL(VanLeer())``
    and Rusanov) under ``AdaptiveCFL(0.45)``, with 0 attempts lost; with ROM-108's guarded face at
    MUSCL, ``pops.run`` takes the same steps, retries and state as ``AdaptiveCFL(0.45)`` on the
-   same face, and the compiled run stops by name.
+   same face, and both compiled rules accept a first step at the recorded frequency.
 
 The slice at first order to ``T_END`` and to three frontiers, bit for bit against #788's compiled
 stability rule and master's ``AdaptiveCFL``, is ``test_surface_lot_d_step_rule_native.py``.
@@ -44,7 +43,6 @@ from pops.lib.numerics import muscl, rusanov, two_point, upwind, vanleer
 from pops.lib.numerics.boundaries import ghosts
 from pops.lib.time import cfl_limit
 from pops.lib.time.methods import ssprk2
-from pops.runtime._simulation import FaceFrequencyStop
 from pops.surface.math import ddt, div, dot, grad, largest, outflow, smallest, vector, where
 from tests.python.support.native_execution_context import artifact_execution_context
 
@@ -57,7 +55,7 @@ CFL, MAX_DT, T_END = 0.45, 1.0e-2, 0.10
 EPS = 2.0 ** -52
 
 
-def _slice(dt, scheme=None):
+def _slice(dt, scheme=None, *, attempts=None, output_time=None):
     """The slice's case at first order with ``dt``; ``scheme`` takes the flux."""
     domain = surface.Box(x=(0.0, 1.0), y=(0.0, 1.0))
     sides = domain.boundary
@@ -73,10 +71,12 @@ def _slice(dt, scheme=None):
         schemes={advection: rusanov() if scheme is None else scheme(advection)},
         boundary=ghosts())
     rule = dt(domain, advection)
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=rule),
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=rule, attempts=attempts),
                               initial={u: u0})
+    outputs = ([] if output_time is None else
+               [surface.Output(surface.record(u=u), when=output_time)])
     case = surface.Case(model=model, numerics=numerics, program=program,
-                        layout={domain: surface.Uniform(cells=CELLS)})
+                        layout={domain: surface.Uniform(cells=CELLS)}, outputs=outputs)
     return surface.compile(case, target=surface.OpenMP()), u, u0
 
 
@@ -127,7 +127,8 @@ def slices(tmp_path_factory, native_cxx, kokkos_root):
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
         yield {"cfl_limit": _slice(_cfl_limit), "by_hand": _slice(_by_hand),
-               "twice": _slice(_twice), "guarded": _slice(_cfl_limit, _guarded)}
+               "twice": _slice(_twice, attempts=2),
+               "guarded": _slice(_cfl_limit, _guarded, attempts=2, output_time=MAX_DT)}
 
 
 def _simulation(compiled, tmp_path):
@@ -156,22 +157,32 @@ def test_a_function_written_by_hand_runs_as_cfl_limit(slices, tmp_path):
 
 
 @pytest.mark.parametrize("name, fraction", [("twice", 1.0), ("guarded", CFL)])
-def test_a_refused_face_stops_the_compiled_run_and_pops_run_retries(slices, tmp_path, name,
-                                                                   fraction):
-    """K1-c and C1: the compiled run stops by name at the first refused attempt, with the faces'
-    frequency F; pops.run retries once at fraction / F, as master's AdaptiveCFL retries at
-    cfl / F (ROM-108), and lands on its frontier."""
-    with pytest.raises(FaceFrequencyStop) as caught:
-        _simulation(slices[name], tmp_path).run(until=T_END)
-    stop = caught.value
-    assert stop.result.steps == 0 and stop.result.time == 0.0
-    assert math.isfinite(stop.frequency) and stop.frequency > 0.0
-    assert "pops.face-step-frequency@1" in str(stop)
+def test_a_refused_face_retries_on_both_run_routes(slices, tmp_path, name, fraction):
+    """Both routes accept the second attempt at the faces' frequency (ROM-113)."""
+    frequency = abs(AX) * CELLS[0] * (2 if name == "guarded" else 1)
+    compiled = _simulation(slices[name], tmp_path)
+    with pytest.raises(surface.BudgetExhausted) as caught:
+        compiled.run(until=T_END, max_steps=1)
+    result = caught.value.result
+    assert result.failure.payload["budget"] == "max_steps"
+    assert (result.steps, result.rejections, result.time) == (1, 1, fraction / frequency)
 
     runtime = _runtime(slices[name])
     report = pops.step(runtime, t_bound=T_END, console=False)
     assert (report.accepted_steps, report.rejected_steps) == (1, 1)
-    assert float(runtime.time()) == fraction / stop.frequency
+    assert float(runtime.time()) == result.time
+    _bitwise(result.state[slices[name][1]], _state(runtime))
+
+    if name == "guarded":
+        output, = slices[name][0].case.outputs
+        assert result.outputs[output] == ()
+        landed = compiled.run(until=MAX_DT)
+        assert (landed.steps, landed.rejections, landed.time) == (1, 0, MAX_DT)
+        publication, = landed.outputs[output]
+        assert publication.time == MAX_DT and publication.step == 2
+        reference = pops.step(runtime, t_bound=MAX_DT, console=False)
+        assert (reference.accepted_steps, reference.rejected_steps) == (1, 0)
+        _bitwise(publication["u"], _state(runtime))
 
     runtime = _runtime(slices[name])
     pops.run(runtime, t_end=T_END, max_steps=10_000, console=False)
@@ -364,7 +375,7 @@ def _tutorial(domain, advection):
     return cfl_limit(advection, cfl=CFL)
 
 
-def _master(scheme):
+def _master(scheme, *, compiled_stability=False):
     """The surface's case under a fixed step, its Program then run by master's AdaptiveCFL(0.45):
     the reference of pops.run on the same face."""
     from pops.time import AdaptiveCFL
@@ -380,11 +391,24 @@ def _master(scheme):
     model.on([sides.x_max, sides.y_max], outflow(u))
     numerics = surface.Numerics(represent={u: surface.CellAverage()},
                                 schemes={advection: scheme(advection)}, boundary=ghosts())
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3, attempts=2),
                               initial={u: u0})
     case = surface.Case(model=model, numerics=numerics, program=program,
                         layout={domain: surface.Uniform(cells=CELLS)})
-    elaborated = case.elaborated
+    if compiled_stability:
+        from pops.time._program import elaboration as lowering
+
+        elaborate = lowering.elaborate
+
+        def stability(advance, **kwargs):
+            kwargs["proposal"] = lowering.StepRule(CFL, None, strategy=AdaptiveCFL(CFL))
+            return elaborate(advance, **kwargs)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(lowering, "elaborate", stability)
+            elaborated = case.elaborated
+    else:
+        elaborated = case.elaborated
     elaborated.case._time.step_strategy(AdaptiveCFL(CFL))
     return pops.compile(pops.resolve(pops.validate(elaborated.case), layout=elaborated.layout))
 
@@ -468,8 +492,9 @@ def muscl_slices(tmp_path_factory, native_cxx, kokkos_root):
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
         yield {"slice": _slice(_tutorial, _muscl), "hand": _hand_muscl(),
-               "guarded": _slice(_tutorial, _guarded_muscl),
-               "guarded_master": _master(_guarded_muscl)}
+               "guarded": _slice(_tutorial, _guarded_muscl, attempts=2),
+               "guarded_master": _master(_guarded_muscl),
+               "guarded_stability": _master(_guarded_muscl, compiled_stability=True)}
 
 
 def test_the_muscl_slice_runs_as_masters_tutorial(muscl_slices, tmp_path):
@@ -496,11 +521,22 @@ def test_the_muscl_slice_runs_as_masters_tutorial(muscl_slices, tmp_path):
     _bitwise(final, _state(own))
 
 
-def test_the_guarded_muscl_face_retries_as_master_and_stops_the_compiled_run(muscl_slices,
-                                                                            tmp_path):
-    with pytest.raises(FaceFrequencyStop) as caught:
-        _simulation(muscl_slices["guarded"], tmp_path).run(until=T_END)
-    assert caught.value.result.steps == 0
+def test_the_guarded_muscl_face_retries_as_master_on_both_compiled_rules(muscl_slices):
+    from pops.runtime._simulation import BudgetExhausted, Simulation
+
+    expected = CFL / (2 * abs(AX) * CELLS[0])
+    artifacts = (muscl_slices["guarded"][0].compiled, muscl_slices["guarded_stability"])
+    for artifact in artifacts:
+        compiled = _bound(artifact)
+        with pytest.raises(BudgetExhausted) as caught:
+            Simulation(compiled).run(T_END, max_steps=1)
+        result = caught.value.result
+        assert result.failure.payload["budget"] == "max_steps"
+        assert (result.steps, result.rejections, result.time) == (1, 1, expected)
+        reference = _bound(artifact)
+        first = pops.step(reference, t_bound=T_END, console=False)
+        assert (first.accepted_steps, first.rejected_steps, reference.time()) == (1, 1, expected)
+        _bitwise(_state(compiled), _state(reference))
 
     ruled = _bound(muscl_slices["guarded"][0].compiled)
     ruled_report = pops.run(ruled, t_end=T_END, max_steps=10_000, console=False)

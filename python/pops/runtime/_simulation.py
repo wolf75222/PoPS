@@ -63,7 +63,6 @@ DEFAULT_MAX_STEPS = 1_000_000
 _REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET, _TRIAL_FAILURE, _FACE_FREQUENCY, _TERMINAL_FAILURE = (
     0, 1, 2, 3, 4, 5,
 )
-_FACE_FREQUENCY_LOT = "the faces' frequency retry of the compiled run"
 _TRIAL_PHASES = ("trial", "trial_failure")
 
 
@@ -94,17 +93,16 @@ class NotAdmissible(RunFailed):
 
 
 class FaceFrequencyStop(NotYetElaborated):
-    """A cells rule's attempt that the face guard refused with the faces' frequency (ROM-108):
-    the compiled run does not retry at that frequency yet, so it stops by name on every rank (N8
-    « dt= as a function of cell », design note D2, K1-c; review rev 3, P4). ``frequency`` is the
-    largest over the ranks; ``result`` is the ``RunResult`` at the accepted state of the step.
-    ``pops.run`` on the same artifact retries at fraction / frequency."""
+    """The face guard refused a cells rule with no shorter correction available.
+
+    ``frequency`` is the largest over the ranks. ``result`` holds the last accepted state.
+    """
 
     def __init__(self, result: RunResult, frequency: float) -> None:
         super().__init__(
             "the face guard refused the attempt of the step from t=%r at the faces' frequency %r "
-            "(%s); the compiled run of a cells rule stops there: %s is a later lot of N8"
-            % (result.time, frequency, FACE_STEP_FREQUENCY_SCHEMA, _FACE_FREQUENCY_LOT))
+            "(%s); the compiled cells rule has no further frequency correction"
+            % (result.time, frequency, FACE_STEP_FREQUENCY_SCHEMA))
         self.result = result
         self.frequency = frequency
 
@@ -145,6 +143,11 @@ class Failure:
             return ("%s: max_steps=%d accepted steps ended the run at t=%r before until=%r"
                     % (self.variant.__name__, payload["max_steps"], payload["time"],
                        payload["until"]))
+        if self.variant is BudgetExhausted and "face_frequency" in payload:
+            return ("%s: the face guard (%s) rejected the last of %d attempt(s) from t=%r "
+                    "at frequency %r; last: %s"
+                    % (self.variant.__name__, payload["face_schema"], payload["attempts"],
+                       payload["time"], payload["face_frequency"], payload["rejection"]))
         if self.variant is BudgetExhausted and payload["budget"] == "max_iterations":
             # A solve of a failure site reached its iteration limit (SV10, N9 relation solves
             # §3.6): the budget is the solve's, not the step's.
@@ -536,7 +539,13 @@ class Simulation:
             payload = {"budget": "max_attempts", "max_attempts": self._control.max_attempts,
                        "attempts": report["attempts"], "time": time,
                        "rejection": report["rejection"]}
-            if phase == "trial":
+            if report.get("typed_failure_schema") == FACE_STEP_FREQUENCY_SCHEMA:
+                phase = "trial"
+                payload["face_schema"] = report.pop("typed_failure_schema")
+                report.pop("typed_failure_payload")
+                payload["face_frequency"] = float(report["face_frequency"])
+                payload["face_site"] = report["rejection_detail"]
+            elif phase == "trial":
                 guard = _trial_failure(self._control, report,
                                        catalog=runtime._guard_failure_catalog)
                 payload["cause"] = guard
