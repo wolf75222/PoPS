@@ -161,12 +161,21 @@ def _precision_rules(operation, threshold):
     return rules
 
 
+@pytest.fixture(scope="module")
+def precision_native_cache(tmp_path_factory):
+    root = tmp_path_factory.mktemp("criterion-precision")
+    with pytest.MonkeyPatch.context() as env:
+        env.setenv("POPS_CACHE_DIR", str(root))
+        env.setenv("POPS_NATIVE_CACHE_DIR", str(root))
+        yield root
+
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
 @pytest.mark.parametrize(("operation", "threshold"), (
     ("value", 1.2), ("value", 2.4), ("gradient", 2.4), ("bound_gradient", 2.4),
 ))
-def test_criterion_keeps_the_native_threshold(operation, threshold, isolated_native_cache):
+def test_criterion_keeps_the_native_threshold(operation, threshold, precision_native_cache):
     real = _real()
     cutoff = real(threshold)
     triplet = np.array([np.nextafter(cutoff, real(0)), cutoff,
@@ -209,7 +218,7 @@ def test_criterion_keeps_the_native_threshold(operation, threshold, isolated_nat
 
 @pytest.mark.compiler
 @pytest.mark.native_loader
-def test_criterion_rejects_an_active_out_of_range_literal(isolated_native_cache):
+def test_criterion_rejects_an_active_out_of_range_literal(precision_native_cache):
     def rules(u, q, axis, bound):
         def active(cell):
             return where(cell.value(q) < 1.0e100, lambda: 2.0, lambda: 0.0)
