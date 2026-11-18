@@ -32,6 +32,10 @@ A row is a set of words:
 ``host-region``
     a control operation whose nested blocks run where it runs; on the host route of a device map,
     the host executes them.
+``accepted-state-inputs``
+    this operation's changing numerical inputs are its SSA operands. The global guard's fixed
+    site proof checks their transitive dependence on the exact accepted State and the same point.
+    An unmarked operation has no such proof for this use.
 
 A row without words records an emitted operation for which lot L grants none of the checked
 capabilities. It makes no claim about the operation's runtime purity or placement.
@@ -46,7 +50,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 _WORDS = frozenset(("graph", "fails", "algorithm", "rendezvous", "region", "device", "ordered",
-                    "host-region"))
+                    "host-region", "accepted-state-inputs"))
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,7 @@ class Effect:
     region: bool
     device: str | None
     host_region: bool
+    accepted_state_inputs: bool = False
 
 
 def _row(words: str) -> Effect:
@@ -71,7 +76,8 @@ def _row(words: str) -> Effect:
     collective = next((word for word in ("algorithm", "rendezvous") if word in tokens), None)
     device = next((word for word in ("device", "ordered") if word in tokens), None)
     return Effect(graph="graph" in tokens, fails="fails" in tokens, collective=collective,
-                  region="region" in tokens, device=device, host_region="host-region" in tokens)
+                  region="region" in tokens, device=device, host_region="host-region" in tokens,
+                  accepted_state_inputs="accepted-state-inputs" in tokens)
 
 
 # The spatial operations already refused after synchronization. Their operation names and effect
@@ -94,15 +100,15 @@ _ROWS = {
     "apply_in":                            'graph fails algorithm region',
     "apply_out":                           'graph fails algorithm region',
     "attempt_start":                        '',
-    "bool_constant":                       'graph region device',
-    "bool_op":                             'graph region device',
+    "bool_constant":                       'graph region device accepted-state-inputs',
+    "bool_op":                             'graph region device accepted-state-inputs',
     "branch":                              'graph fails rendezvous region device host-region',
     "bundle_remap_validate":               'graph fails rendezvous region',
     "bundle_validate":                     'graph fails rendezvous region',
     "capture_result":                      'graph region host-region',
     "cell_compare":                        'graph region',
     "cfl":                                 'region',
-    "compare":                             'graph region device',
+    "compare":                             'graph region device accepted-state-inputs',
     "composite_integral":                   '',
     "composite_pair":                       '',
     "condensed_coeffs":                     '',
@@ -220,7 +226,7 @@ _ROWS = {
     "logical_and":                          '',
     "matrix_free_operator":                'graph fails algorithm region',
     "max_wave_speed":                       '',
-    "pointwise_expression":                'graph fails region',
+    "pointwise_expression":                'graph fails region accepted-state-inputs',
     "post_synchronization":                 '',
     "principal_rate":                       '',
     "product":                             'graph region device',
@@ -231,7 +237,7 @@ _ROWS = {
     "reached_duration":                     '',
     "record_balance_term":                  '',
     "record_scalar":                        '',
-    "reduce":                              'graph algorithm region',
+    "reduce":                              'graph algorithm region accepted-state-inputs',
     "region_argument":                     'graph region ordered',
     "region_index":                        'graph region ordered',
     "requested_dt":                        'region',
@@ -246,7 +252,7 @@ _ROWS = {
     "rhs_jacvec":                           '',
     "scalar_expression":                   'graph fails rendezvous region device',
     "scalar_field":                        'region',
-    "scalar_isfinite":                     'graph region device',
+    "scalar_isfinite":                     'graph region device accepted-state-inputs',
     "scalar_op":                           'graph fails rendezvous region device',
     "solve_coupled_implicit":               '',
     "solve_evidence":                       '',

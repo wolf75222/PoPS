@@ -438,6 +438,7 @@ class RuntimeInstance:
 
     __slots__ = (
         "_install_plan",
+        "_guard_failure_catalog",
         "_layout_plan",
         "_execution_context",
         "_installed_components",
@@ -467,6 +468,9 @@ class RuntimeInstance:
         publisher: Any = None,
     ) -> None:
         plan = require_install_plan(install_plan)
+        from pops.runtime._guard_failure import bound_guard_failure_catalog
+
+        guard_failure_catalog = bound_guard_failure_catalog(plan.artifact)
         manifests = (
             component_manifests_for_install(plan)
             if component_manifests is None
@@ -483,6 +487,7 @@ class RuntimeInstance:
         if native is None:
             raise TypeError("RuntimeInstance executor cannot be None")
         self._install_plan = plan
+        self._guard_failure_catalog = guard_failure_catalog
         self._layout_plan = plan.artifact.layout_plan
         self._execution_context = plan.execution_context
         self._installed_components = plan.components
@@ -1640,6 +1645,14 @@ class RuntimeInstance:
                     ),
                     diagnostics=(str(error),),
                 )
+            if cleanup_error is None and phase == "solve":
+                from pops.runtime._guard_failure import attach_guard_failure
+
+                guard_failure = attach_guard_failure(error, self._guard_failure_catalog)
+                if guard_failure is not None:
+                    if not isinstance(failure_report, StepTransactionReport):
+                        raise RuntimeError("global guard lost its rollback report") from error
+                    failure_report = replace(failure_report, failure=guard_failure)
             if failure_report is not None and hasattr(native, "_last_step_transaction_report"):
                 native._last_step_transaction_report = failure_report
             if cleanup_error is not None:

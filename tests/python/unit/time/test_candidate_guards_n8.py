@@ -21,15 +21,17 @@ equal. M16 adds the Lorentz source of the profile to the transport rate: its can
 affine combination ``U + dt*K + dt*S``, which b6 writes ``U + dt*(K + S)``, and the source is not
 a rate that a component returns: M16 keeps its b6 Program (pilot ruling Q1, 11/11).
 """
+import ast
 import json
 import re
+from pathlib import Path
 
 import pytest
 
 import pops
 import examples.api_v02.models_M15_M18 as moments
 import examples.api_v02.models_M15_orders as orders
-from pops._structural_data import canonical_json
+from pops._structural_data import canonical_json, canonical_json_sha256
 from pops.runtime._simulation import NotAdmissible, SolveFailed
 from pops.time import FailRun
 from pops.time._program.control import AdvanceControl
@@ -169,26 +171,61 @@ def test_m16_stays_on_its_b6_program():
 
 # --- the C++ parity rule -----------------------------------------------------------------------
 
-def _guard_lines(lines, sites, fixed):
-    """Set aside the throw of each guard: b6's ``FailRun`` error, the traced rejection of the
-    attempt with the phase and the site of the guard (A2)."""
-    out, seen = [], 0
+def _guard_lines(lines, sites, fixed, program, *, traced_route):
+    """Verify each guard and remove only its control transport from the parity comparison."""
+    (inventory,) = [line[len(INVENTORY):] for line in lines if line.startswith(INVENTORY)]
+    program_hash = json.loads(inventory)["program_hash"]
+    guards = [value for value in program._values
+              if value.op == "acceptance_guard" and "assessment" not in value.attrs]
+    assert len(guards) == len(sites)
+    observation = re.compile(r"\s*const bool (guard_observed_\d+) = (.+);$")
+    envelope = (r', "pops\.global-guard-failure@1", std::string\("([0-9a-f]{80})"\)'
+                r" \+ \((guard_observed_\d+) \? '1' : '0'\)\);$")
+    out, seen, aliases = [], 0, {}
     for line in lines:
-        b6 = re.match(r'(\s*)throw std::runtime_error\("acceptance guard \'[^\']+\' failed"\);$',
-                      line)
-        traced = re.match(r'(\s*)throw pops::runtime::program::StepAttemptRejected\(pops::'
-                          r'SolveStatus::kInvalidEvaluation, "(trial|trial_failure)", '
-                          r'"([^"]+) failed: NotAdmissible"\);$', line)
-        if b6 or traced:
-            if traced:
-                indent, phase, site = traced.groups()
-                assert site == sites[seen]
-                assert phase == ("trial_failure" if fixed[seen] else "trial")
-            out.append((b6 or traced).group(1) + "<guard %d>" % seen)
-            seen += 1
+        saved = observation.fullmatch(line)
+        if saved:
+            assert saved[1] not in aliases
+            aliases[saved[1]] = saved[2]
             continue
-        out.append(line)
-    assert seen == len(sites)
+        ordinary = re.fullmatch(r'(\s*)throw std::runtime_error\("acceptance guard \'[^\']+\' failed"\);',
+                                line)
+        terminal = re.fullmatch(r'(\s*)throw pops::runtime::program::StepTerminalFailure\('
+                                r'"acceptance guard \'([^\']+)\' failed"' + envelope, line)
+        trial = re.fullmatch(r'(\s*)throw pops::runtime::program::StepAttemptRejected\(pops::'
+                             r'SolveStatus::kInvalidEvaluation, "(trial|trial_failure)", '
+                             r'"([^"]+) failed: NotAdmissible"' + envelope, line)
+        if not (ordinary or terminal or trial):
+            out.append(line)
+            continue
+        node = guards[seen]
+        if traced_route:
+            assert trial is not None
+            indent, phase, site, prefix, observed = trial.groups()
+            assert site == sites[seen]
+            assert phase == ("trial_failure" if fixed[seen] else "trial")
+        elif seen == 0:
+            assert terminal is not None
+            indent, site, prefix, observed = terminal.groups()
+            assert site == sites[seen]
+        else:
+            assert ordinary is not None
+            (indent,) = ordinary.groups()
+        if trial or terminal:
+            predicate = node.inputs[1].id
+            token = canonical_json_sha256({
+                "schema": "pops.global-guard-failure@1", "program": program_hash,
+                "site": node.id, "predicate": predicate,
+            })
+            assert prefix == token + format(predicate, "016x")
+            assert observed == f"guard_observed_{node.id}"
+            condition = aliases.pop(observed)
+            # The exact tested Bool is the same value used in both votes and the branch.
+            assert sum(row.count(observed) for row in out) == 3
+            out = [row.replace(observed, condition) for row in out]
+        out.append(indent + "<guard %d>" % seen)
+        seen += 1
+    assert seen == len(sites) and not aliases
     return out
 
 
@@ -243,8 +280,8 @@ def test_guarded_profile_generates_the_b6_cpp(profile, monkeypatch):
     del traced_lines[start:start + 3]
     renamed = ["<guard %d>" % k for k in range(len(sites))]
     fixed = [_fixed(site) for site in sites]
-    b6_lines = _guard_lines(b6_lines, renamed, fixed)
-    traced_lines = _guard_lines(traced_lines, renamed, fixed)
+    b6_lines = _guard_lines(b6_lines, renamed, fixed, b6, traced_route=False)
+    traced_lines = _guard_lines(traced_lines, renamed, fixed, traced, traced_route=True)
     assert _digests("\n".join(b6_lines)).splitlines() == _digests(
         "\n".join(traced_lines)).splitlines()
 
@@ -275,14 +312,49 @@ def test_guards_of_the_accepted_state_are_fixed_sites(profile, monkeypatch):
 
 
 def test_the_generated_guard_names_its_site_and_phase(monkeypatch):
+    from pops.time._program.guard_failure_sites import guard_failure_sites
+
     spec = _spec(orders.build_m15_orders, monkeypatch)
-    source = _source(spec)
-    assert ('throw pops::runtime::program::StepAttemptRejected(pops::SolveStatus::'
-            'kInvalidEvaluation, "trial_failure", "admissible_euler/body#0/domain failed: '
-            'NotAdmissible");') in source
-    assert ('throw pops::runtime::program::StepAttemptRejected(pops::SolveStatus::'
-            'kInvalidEvaluation, "trial", "admissible_euler/body#1/domain failed: '
-            'NotAdmissible");') in source
+    program = spec.case._time
+    source = _named(_source(spec), {}).splitlines()
+    sites = [f"admissible_euler/body#{index}/domain" for index in range(2)]
+    _guard_lines(source, sites, [True, False], program, traced_route=True)
+
+    definition = Path(orders.__file__).resolve()
+    tree = ast.parse(definition.read_text())
+    body = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "admissible_euler")
+    lines = sorted(node.lineno for node in ast.walk(body)
+                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                   and node.func.id == "cond")
+    records = guard_failure_sites(program, program._ir_hash())
+    assert [site.name for site in records] == sites
+    assert [site.python_origin.line for site in records] == lines
+    assert all(Path(site.python_origin.file) == definition for site in records)
+
+    from pops.runtime._simulation import _trial_failure
+
+    catalog = {site.token: site for site in records}
+    for site, phase in zip(records, ("trial_failure", "trial"), strict=True):
+        report = {
+            "rejection_phase": phase,
+            "rejection_status": "invalid_evaluation",
+            "rejection_detail": "presentation text is independent of the wire",
+            "typed_failure_schema": "pops.global-guard-failure@1",
+            "typed_failure_payload": (site.payload_prefix() + "0").encode("ascii"),
+        }
+        failure = _trial_failure(program._advance_control, report, catalog=catalog, attempts=1)
+        assert failure.site is site and failure.origin == "trial"
+        assert failure.variant is NotAdmissible
+        assert failure.payload == {
+            "site": site.name, "reason": "NotAdmissible", "attempts": 1,
+            "predicate": site.predicate, "value": False,
+        }
+        with pytest.raises(RuntimeError, match="bound site"):
+            _trial_failure(program._advance_control, report, catalog=catalog, action="fail_run")
+        corrupted = dict(report, typed_failure_payload=report["typed_failure_payload"][:-1] + b"1")
+        with pytest.raises(RuntimeError, match="invalid T39 record"):
+            _trial_failure(program._advance_control, corrupted, catalog=catalog)
 
 
 # --- the elaborated forms and their refusals ----------------------------------------------------

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
-from pops._bootstrap import StepAttemptRejected
+from pops._bootstrap import StepAttemptRejected, StepTerminalFailure
 from pops.time.solve_outcome import SOLVE_STATUSES
 from pops.time._step.strategy import (
     AdaptiveCFL,
@@ -154,6 +154,7 @@ def _attempt_world(engine: Any, *, preparing: bool = False) -> Any:
 
 def _attempt_error_record(error: BaseException) -> dict[str, Any]:
     rejected = isinstance(error, StepAttemptRejected)
+    typed_native = rejected or type(error) is StepTerminalFailure
 
     def attribute(name: str, default: Any) -> Any:
         try:
@@ -183,8 +184,8 @@ def _attempt_error_record(error: BaseException) -> dict[str, Any]:
     except (TypeError, ValueError, OverflowError):
         reason_code = 0
 
-    schema = attribute("typed_failure_schema", "") if rejected else ""
-    payload = attribute("typed_failure_payload", b"") if rejected else b""
+    schema = attribute("typed_failure_schema", "") if typed_native else ""
+    payload = attribute("typed_failure_payload", b"") if typed_native else b""
     valid = type(schema) is str and type(payload) is bytes and bool(schema) == bool(payload)
     return {
         "kind": "reject" if rejected else "fail",
@@ -290,8 +291,15 @@ def _select_collective_attempt_error(rows, typed_schema, typed_payload, typed_ag
     # already restored its attempt-local state.  A mixed success/rejection is escalated to FailRun;
     # the enclosing RuntimeInstance transaction then rolls every rank back before publication.
     if fatal or rank_divergent or rejection_divergent:
-        return RuntimeError(
-            "collective step attempt failed during %s: %s" % (phase, diagnostics))
+        message = "collective step attempt failed during %s: %s" % (phase, diagnostics)
+        if len(fatal) == len(rows) and typed_agreement and typed_schema and all(
+                error["type"] == StepTerminalFailure.__name__ and error["typed_failure_present"]
+                for _, error in fatal):
+            failure = StepTerminalFailure(message)
+            failure.typed_failure_schema = typed_schema
+            failure.typed_failure_payload = typed_payload
+            return failure
+        return RuntimeError(message)
 
     status = selected["status"]
     disposition = selected["disposition"]

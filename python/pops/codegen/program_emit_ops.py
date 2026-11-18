@@ -1901,15 +1901,31 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             phase = "trial" if site["retry_can_change"] else "trial_failure"
             message = "%s failed: %s" % (site["site"], site["variant"])
         from pops.codegen.program_emit_structured_control import _uniform_int
-        _uniform_int(var[condition.id], lines, "acceptance guard differs across execution lane")
-        lines.append("if (!(%s)) {" % var[condition.id])
+        from pops.codegen.program_source_map import emission_program_hash
+        from pops.time._program.guard_failure_sites import SCHEMA, guard_failure_site
+
+        site = guard_failure_site(program, v, emission_program_hash(program))
+        token = var[condition.id]
+        payload_args = ""
+        if site is not None:
+            observed = "guard_observed_%d" % v.id
+            lines.append("const bool %s = %s;" % (observed, token))
+            token = observed
+            payload_args = ", %s, std::string(%s) + (%s ? '1' : '0')" % (
+                json.dumps(SCHEMA), json.dumps(site.payload_prefix()), token)
+        _uniform_int(token, lines, "acceptance guard differs across execution lane")
+        lines.append("if (!(%s)) {" % token)
         if type(action) is RejectAttempt:
             lines.append(
                 "  throw pops::runtime::program::StepAttemptRejected("
-                "pops::SolveStatus::kInvalidEvaluation, %s, %s);"
-                % (json.dumps(phase), json.dumps(message)))
+                "pops::SolveStatus::kInvalidEvaluation, %s, %s%s);"
+                % (json.dumps(phase), json.dumps(message), payload_args))
         elif type(action) is FailRun:
-            lines.append("  throw std::runtime_error(%s);" % json.dumps(message))
+            if site is None:
+                lines.append("  throw std::runtime_error(%s);" % json.dumps(message))
+            else:
+                lines.append("  throw pops::runtime::program::StepTerminalFailure(%s%s);"
+                             % (json.dumps(message), payload_args))
         else:  # guarded by Program.guard; defense in depth for a forged IR
             raise TypeError("acceptance_guard has an unsupported terminal action")
         lines.append("}")

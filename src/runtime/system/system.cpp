@@ -481,6 +481,12 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
       try {
         step(duration.dt);
         break;
+      } catch (const runtime::program::StepTerminalFailure& failure) {
+        report.attempts = attempt;
+        report.rejection = failure.what();
+        report.typed_failure_schema = failure.typed_failure_schema();
+        report.typed_failure_payload = failure.typed_failure_payload();
+        return finish(AdvanceRunStop::kTerminalFailure);
       } catch (const runtime::program::StepAttemptRejected& rejected) {
         // step() restored the accepted state on every rank before the rejection left it.
         const std::string& phase = rejected.phase();
@@ -492,6 +498,8 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
           report.rejection_phase = phase;
           report.rejection_detail = rejected.detail();
           report.rejection_status = solve_status_name(rejected.status());
+          report.typed_failure_schema = rejected.typed_failure_schema();
+          report.typed_failure_payload = rejected.typed_failure_payload();
           return finish(AdvanceRunStop::kTrialFailure);
         }
         // The face guard of a riemann.User face refuses in the native evaluation of the rate,
@@ -516,6 +524,10 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
         }
         if (attempt >= max_attempts) {
           report.attempts = attempt;
+          if (phase == runtime::program::kTrialRejectionPhase) {
+            report.typed_failure_schema = rejected.typed_failure_schema();
+            report.typed_failure_payload = rejected.typed_failure_payload();
+          }
           return finish(AdvanceRunStop::kAttemptBudget);
         }
       }
