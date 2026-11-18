@@ -117,6 +117,7 @@
     "tests/python/integration/runtime/test_implicit_domain_v14_native.py": 2,
     "tests/python/integration/runtime/test_inventory_derivative_v15_native.py": 2,
     "tests/python/integration/runtime/test_inventory_publication_v15_native.py": 2,
+    "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": 1,
     "tests/python/integration/runtime/test_localized_event_v14_native.py": 2,
     "tests/python/integration/runtime/test_m07_coordinated_hydrostatic_runtime.py": 1,
     "tests/python/integration/runtime/test_m10_self_consistent_sg.py": 1,
