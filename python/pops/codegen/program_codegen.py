@@ -307,7 +307,7 @@ def _emit_cpp_program_impl(
                                          instance_contracts=graph_instance_contracts(authority))
     from pops.codegen.program_value_authority import prepare_program_value_authority
     value_authority = prepare_program_value_authority(program, authority, field_plans or {}, target=target)
-    prelude, body, post_synchronization, operator_authorities = _emit_body(
+    prelude, body, post_synchronization, operator_authorities, exchange_incidence = _emit_body(
         program,
         authority,
         target=target,
@@ -407,7 +407,9 @@ def _emit_cpp_program_impl(
             'extern "C" std::uint64_t pops_relayout_byte_count() {\n'
             "  return pops::runtime::program::relayout_bytes().load(std::memory_order_relaxed);\n"
             "}\n")
-    return _PROGRAM_CPP_TEMPLATE.format(**parts)
+    from .program_integral_transfers import emit_uniform_exchange_incidence
+    return _PROGRAM_CPP_TEMPLATE.format(**parts) + emit_uniform_exchange_incidence(
+        program, exchange_incidence)
 
 
 def _emit_uniform_clock_manifest(program: Any) -> str:

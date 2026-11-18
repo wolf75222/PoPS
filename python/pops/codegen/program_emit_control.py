@@ -541,7 +541,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns
-    ``(prelude, body, post_synchronization, authorities)``:
+    ``(prelude, body, post_synchronization, authorities, incidence)``:
 
       - ``prelude``: INSTALL-TIME C++ (before ``ctx.install``) -- persistent scratch fields (held
         via ``std::shared_ptr`` so they outlive the install call and are reused across every step
@@ -826,8 +826,9 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     lines.extend(emit_accepted_stencil_exchanges(program, var, block_idx, target=target))
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
     lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model, target=target))
-    from .program_integral_transfers import emit_integral_transfers
-    integral_transfers = emit_integral_transfers(program, var, model_authority=model)
+    from .program_integral_transfers import integral_transfers
+    transfer_rows = integral_transfers(program, var, model_authority=model)
+    integral_transfers = [row.cpp(program) for row in transfer_rows]
     if target == "system":
         lines.extend(integral_transfers)
     # Continuation mode publishes its complete native image and generated carrier projections.
@@ -872,7 +873,13 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     post_sync_src = "\n".join("        " + ln for ln in post_sync_lines)
     authorities = tuple(dict.fromkeys(
         var.get(("compiled_program_operator_authorities",), ())))
-    return prelude_src, body_src, post_sync_src, authorities
+    # A root table cannot describe repeated or deferred consumption in a nested region.
+    incidence = transfer_rows if (
+        target == "system" and not continuation_closers and not legacy_path_prefix
+        and len(transfer_rows) == len(program._integral_transfers)
+        and "subcycle" not in all_ops(program)
+    ) else None
+    return prelude_src, body_src, post_sync_src, authorities, incidence
 
 def _emit_post_synchronization_phase(
     program: Any,
