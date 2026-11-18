@@ -877,7 +877,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     incidence = transfer_rows if (
         target == "system" and not continuation_closers and not legacy_path_prefix
         and len(transfer_rows) == len(program._integral_transfers)
-        and "subcycle" not in all_ops(program)
+        and not any(value.op == "subcycle" for value in all_ops(program))
     ) else None
     return prelude_src, body_src, post_sync_src, authorities, incidence
 
