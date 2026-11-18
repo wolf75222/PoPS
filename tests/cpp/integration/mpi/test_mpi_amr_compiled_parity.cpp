@@ -34,7 +34,8 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
 
-#include "amr_tagging_test_authority.hpp"
+#include "euler_amr_fixture_criteria.hpp"
+#include "amr_fixture_tag_mask_oracle.hpp"
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
 #include <array>
@@ -92,7 +93,6 @@ template <int Dim>
 using Model = CompositeModel<EulerND<Dim>, NoSource, NoElliptic>;
 
 constexpr double kGamma = 1.4;
-constexpr const char* kStateRoute = "tests.mpi-amr-compiled-parity/gas/state@1";
 constexpr const char* kConsumerQid = "tests.mpi-amr-compiled-parity/gas/physical-flux@1";
 template <int Dim>
 Model<Dim> transport_model() {
@@ -229,14 +229,26 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   AmrSystem<Dim> sys(cfg);
   test::install_amr_runtime_authority(sys, "test.mpi-amr-compiled-parity.runtime");
   sys.set_temporal_relations({2}, {1}, {"integral_only"});
-  sys.install_block_state_route("gas", kStateRoute);
+  sys.install_block_state_route("gas", test::compiled_parity.state_for("gas"));
   add_compiled_model<Dim>(sys, "gas", transport_model<Dim>(), "minmod", "rusanov", "conservative",
                           "explicit", kGamma, 1, 1, {}, {}, 0.0, static_cast<double>(kWenoEpsilon),
                           false, kConsumerQid);
-  test::install_prepared_threshold_union(
-      sys, {{"gas", "rho", 1.2, test::PreparedThresholdRelation::Above, kStateRoute}});
+  test::compiled_parity.install<Dim>(sys);
   sys.set_conservative_state("gas", initial_state);
-  test::install_forward_euler_program(sys, false);
+  EXPECT_FALSE(sys.uses_runtime_engine());
+  sys.install_program(POPS_TEST_MPI_EULER_PROGRAM_SO);
+  sys.mark_bound();
+  EXPECT_TRUE(sys.uses_runtime_engine());
+  EXPECT_EQ(sys.installed_program_hash(),
+            std::string("test-forward-euler-amr/") + test::compiled_parity.identity);
+
+  const auto served = sys.density("gas");
+  EXPECT_EQ(served, rho);
+  const auto tags = sys.execute_prepared_tagging(0);
+  EXPECT_EQ(
+      test::expect_fixture_tag_mask(
+          tags.refine, cfg.shape, [&](std::size_t cell) { return Real(served[cell]) > Real(1.2); }),
+      served.size());
 
   const double m0 = sys.mass("gas");  // declenche le build paresseux (regrid initial distribue)
   const int np0 = sys.n_patches();
