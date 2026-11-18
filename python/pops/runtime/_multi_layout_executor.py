@@ -1153,7 +1153,7 @@ class _MultiLayoutUniformExecutor:
             program_hash=program_hash,
             step_transaction=(
                 transaction_plan.to_data()
-                if getattr(transaction_plan, "guards", ()) else _common_exact(
+                if transaction_plan is not None and getattr(transaction_plan, "guards", ()) else _common_exact(
                     (report.step_transaction for _row, _blocks, report in children),
                     where="multi-layout Program transaction report",
                 )
