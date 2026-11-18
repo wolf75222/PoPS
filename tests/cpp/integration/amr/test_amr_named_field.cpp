@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "amr_tagging_test_authority.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 #include "explicit_amr_program.hpp"
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/numerics/elliptic/linear/solve_outcome.hpp>
@@ -198,13 +198,15 @@ void verifies_auxiliary_publication_rolls_back_every_sparse_level() {
                {{key, contract, shape}},
                {},
                typename Provider::launcher_type(FineLevelFailingAuxiliaryLaunch<Dim>{})});
-  system.install_block_state_route("tracer", "state/tracer");
+  const pops::test::StandaloneFixtureCriterion criterion{pops::test::standalone_named_field,
+                                                         POPS_TEST_standalone_named_field_DSO,
+                                                         POPS_TEST_standalone_named_field_RECEIPT};
+  system.install_block_state_route("tracer", criterion.criterion.state);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   std::vector<double> initial(cell_count(config.shape), 0.0);
   initial[initial.size() / 2] = 1.0;
   system.set_conservative_state("tracer", initial);
-  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}},
-                                               "test.amr.auxiliary.sparse-bootstrap@1");
+  criterion.install(system);
   system.set_program_block_map({0});
 
   system.refresh_auxiliary(

@@ -699,8 +699,14 @@ pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES 
 # tagged fixture targets require this interpreter and its NumPy dependency.
 set(_amr_criteria_dir "${CMAKE_CURRENT_BINARY_DIR}/amr-fixture-criteria")
 set(_amr_criteria_outputs "${_amr_criteria_dir}/amr_fixture_criteria_generated.hpp")
+set(_standalone_amr_criteria
+  standalone_tracer standalone_energy standalone_density
+  standalone_history_budget standalone_named_field standalone_field_publication
+  standalone_positive_tracer standalone_bootstrap_sync standalone_distributed_tracer
+  standalone_secondary_block standalone_sparse_parent standalone_helmholtz
+  standalone_constant standalone_cell_integral standalone_gaussian)
 foreach(_criterion synthetic_history synthetic_interface synthetic_attempt field_rhs_value field_rhs_incidence
-    standalone_tracer standalone_energy standalone_density)
+    ${_standalone_amr_criteria})
   list(APPEND _amr_criteria_outputs "${_amr_criteria_dir}/${_criterion}.cpp")
 endforeach()
 file(GLOB_RECURSE _pops_criterion_python_sources CONFIGURE_DEPENDS
@@ -732,10 +738,10 @@ pops_use_amr_fixture_criteria(test_prepared_field_rhs_inputs)
 pops_use_amr_fixture_criteria(test_amr_seed_no_refine)
 pops_use_amr_fixture_criteria(test_amr_regrid_variable)
 
-function(pops_use_standalone_amr_criterion target variant)
+function(pops_add_standalone_amr_criterion variant)
   set(_module "pops_amr_${variant}")
   set(_library "${_amr_criteria_dir}/${variant}.cpp")
-  add_library(${_module} SHARED "${_library}")
+  add_library(${_module} SHARED EXCLUDE_FROM_ALL "${_library}")
   target_link_libraries(${_module} PRIVATE pops::pops)
   target_compile_definitions(${_module} PRIVATE POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")
   target_compile_options(${_module} PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fno-gnu-unique>)
@@ -750,13 +756,28 @@ function(pops_use_standalone_amr_criterion target variant)
     DEPENDS ${_module} cpp/support/generate_amr_fixture_criteria.py ${_pops_criterion_python_sources}
     VERBATIM)
   add_custom_target(${_module}_receipt DEPENDS "${_receipt}")
-  add_dependencies(${target} ${_module}_receipt)
-  target_compile_definitions(${target} PRIVATE
-    POPS_TEST_${variant}_DSO="$<TARGET_FILE:${_module}>" POPS_TEST_${variant}_RECEIPT="${_receipt}")
 endfunction()
+
+function(pops_use_standalone_amr_criterion target)
+  target_include_directories(${target} PRIVATE "${_amr_criteria_dir}")
+  foreach(variant IN LISTS ARGN)
+    set(_module "pops_amr_${variant}")
+    set(_receipt "${_amr_criteria_dir}/${variant}-$<CONFIG>.binary-id")
+    add_dependencies(${target} ${_module}_receipt)
+    target_compile_definitions(${target} PRIVATE
+      POPS_TEST_${variant}_DSO="$<TARGET_FILE:${_module}>" POPS_TEST_${variant}_RECEIPT="${_receipt}")
+  endforeach()
+endfunction()
+
+foreach(_criterion IN LISTS _standalone_amr_criteria)
+  pops_add_standalone_amr_criterion(${_criterion})
+endforeach()
 pops_use_standalone_amr_criterion(test_amr_seed_no_refine standalone_tracer)
-pops_use_standalone_amr_criterion(test_amr_regrid_variable standalone_energy)
-pops_use_standalone_amr_criterion(test_amr_regrid_variable standalone_density)
+pops_use_standalone_amr_criterion(test_amr_regrid_variable standalone_energy standalone_density)
+pops_use_standalone_amr_criterion(test_amr_seed_no_refine standalone_positive_tracer)
+pops_use_standalone_amr_criterion(test_generated_amr_system_block
+  standalone_sparse_parent standalone_helmholtz standalone_constant standalone_cell_integral
+  standalone_gaussian)
 
 # CTest starts a fresh process for every case. Build the seven exact source variants once,
 # rather than repeating eleven expensive compiler invocations inside the test watchdog.
@@ -924,6 +945,10 @@ pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXT
 
 pops_test_source(_src test_amr_history_ring)
 pops_add_gtest_suite(NAME test_amr_history_ring SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_use_standalone_amr_criterion(test_amr_history_ring standalone_history_budget)
+pops_use_standalone_amr_criterion(test_amr_named_field standalone_named_field)
+pops_use_standalone_amr_criterion(test_amr_program_field_publication standalone_field_publication)
+pops_use_standalone_amr_criterion(test_amr_system_contract standalone_bootstrap_sync)
 
 pops_test_source(_src test_collective_step_rejection)
 pops_add_gtest_suite(NAME test_collective_step_rejection SOURCES "${_src}")
@@ -1337,6 +1362,9 @@ if(POPS_HAS_MPI)
   endforeach()
   pops_use_euler_amr_fixture(test_mpi_amr_compiled_parity compiled_parity POPS_TEST_MPI_EULER_PROGRAM_SO)
   pops_use_euler_amr_fixture(test_amr_regrid_mpi_parity regrid_parity POPS_TEST_MPI_EULER_PROGRAM_SO)
+  pops_use_standalone_amr_criterion(test_mpi_amr_twoblock_parity
+    standalone_distributed_tracer standalone_positive_tracer)
+  pops_use_standalone_amr_criterion(test_mpi_field_plan_consensus standalone_secondary_block)
   # Runtime-generated Kokkos components resolve symbols from their authenticated host.
   # Static Kokkos requires the same export contract as the other native-loader fixtures.
   set_target_properties(test_mpi_system_layout_transfer PROPERTIES ENABLE_EXPORTS ON)

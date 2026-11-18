@@ -27,6 +27,7 @@ from pops.identity import make_identity
 from pops.identity.artifact import binary_identity
 from pops.identity.semantic import semantic_value
 from pops.mesh._amr.refinement_criterion import resolve_refinement_criterion
+from pops.physics import Scalar
 
 
 def cpp_string(value):
@@ -55,12 +56,32 @@ def main(output, dimension):
         ("standalone_energy", ("gas",), euler_variables, "E", 4.0, False, "test.clock.macro"),
         ("standalone_density", ("gas",), euler_variables, "rho", 4.0, False, "test.clock.macro"),
     )
+    default_provider = "test::prepared-named-threshold-union@1"
+    client_mounts = {
+        "standalone_history_budget": ("tracer", "u", 0.5, "test.amr-history.three-level-tagging@1"),
+        "standalone_named_field": ("tracer", "u", 0.5, "test.amr.auxiliary.sparse-bootstrap@1"),
+        "standalone_field_publication": ("transport", "scalar", 1.5, "tests.fields/partial-refinement"),
+        "standalone_positive_tracer": ("tracer", "u", 0.0, default_provider),
+        "standalone_bootstrap_sync": ("tracer", "scalar", 1.5, "tests.amr.system-contract/bootstrap-sync/tagging@1"),
+        "standalone_distributed_tracer": ("tracer", "u", 1.2, default_provider),
+        "standalone_secondary_block": ("b", "u", 0.5, "tests.mpi.multiblock-field/tagger-b@1"),
+        "standalone_sparse_parent": ("tracer", "u", 1.5, "tests.generated-amr/sparse-parent/tagging@1"),
+        "standalone_helmholtz": ("tracer", "u", 1.08, "tests.generated-amr/bootstrap-helmholtz/tagging@1"),
+        "standalone_constant": ("tracer", "u", 0.5, "tests.generated-amr/exact-constant-tagging@1"),
+        "standalone_cell_integral": ("tracer", "u", 0.5, "tests.generated-amr/exact-cell-integral-tagging@1"),
+        "standalone_gaussian": ("tracer", "u", 0.5, "tests.generated-amr/exact-gaussian-tagging@1"),
+    }
+    mounts += tuple(
+        (name, (block,), (variable,), variable, threshold, False, "test::prepared-tagging-clock")
+        for name, (block, variable, threshold, _) in client_mounts.items()
+    )
     output.mkdir(parents=True, exist_ok=True)
     declarations = []
     for name, blocks, variables, variable, threshold, coarsen, clock in mounts:
         owner = "standalone_euler" if name in ("standalone_energy", "standalone_density") else name
         model = pops.Model(owner)
-        state = model.state("U", components=variables)
+        roles = {variable: Scalar()} if name in client_mounts else None
+        state = model.state("U", components=variables, roles=roles)
         case = pops.Case(owner)
         handles = [case.block(block, model, states=(state,))[state] for block in blocks]
         checked = pops.validate(case)
@@ -91,9 +112,12 @@ def main(output, dimension):
             "parameters": data["parameters"],
             "minimum_cycles": data["hysteresis"]["min_cycles"],
         }
-        provider = make_identity(
-            "bound-amr-refinement-criterion", semantic_value(payload, where=name),
-        ).token
+        if name in client_mounts:
+            provider = client_mounts[name][3]
+        else:
+            provider = make_identity(
+                "bound-amr-refinement-criterion", semantic_value(payload, where=name),
+            ).token
         field, = data["fields"]
         observed_variable, = field["variables"]
         if (field["reach"] != [0] * dimension or data["parameters"] or data.get("model_parameters")
