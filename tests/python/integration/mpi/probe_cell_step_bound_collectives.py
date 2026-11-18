@@ -47,6 +47,8 @@ def _measure(library, world, build, label):
     runtime = pops.bind(artifact, params=params,
                         resources={"execution_context": artifact_execution_context(artifact)})
     native = runtime._executor._s
+    block, = artifact.plan.blocks
+    local_boxes = len(native.local_boxes(block.name))
     library.pops_measure_selection_begin()
     try:
         bound = native._step_bound()
@@ -54,7 +56,7 @@ def _measure(library, world, build, label):
         collectives, traversals = ctypes.c_int(), ctypes.c_int()
         library.pops_measure_selection_end(ctypes.byref(collectives), ctypes.byref(traversals))
     print("artifact", label, world.rank, artifact.so_path, flush=True)
-    row = label, world.rank, collectives.value, traversals.value, bound.hex(), expected.hex()
+    row = label, world.rank, local_boxes, collectives.value, traversals.value, bound.hex(), expected.hex()
     print("selection", *row, flush=True)
     return row
 
@@ -65,9 +67,9 @@ def main():
     library = ctypes.CDLL(os.environ["POPS_STEP_BOUND_PROBE"])
     rows = (_measure(library, world, _tutorial, "T02-MUSCL"),
             _measure(library, world, _l1, "L1-advection-diffusion"))
-    for label, rank, collectives, traversals, bound, expected in rows:
+    for label, rank, boxes, collectives, traversals, bound, expected in rows:
         assert bound == expected, (label, rank, bound, expected)
-        assert (collectives, traversals) == (1, 1), (label, rank, collectives, traversals)
+        assert (collectives, traversals) == (1, boxes), (label, rank, boxes, collectives, traversals)
 
 
 if __name__ == "__main__":
