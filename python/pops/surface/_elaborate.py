@@ -43,7 +43,7 @@ from pops.time._program import elaboration as _n8
 from pops.time._program import relations as _relations
 from pops.time._step.bound import StepBound, step_fraction
 
-from ._expr import Arith, Call, Expr, Predicate, is_number, text
+from ._expr import Arith, Call, Expr, Predicate, is_number, text, walk
 from ._geometry import (
     CHART_GHOSTS, CHART_POINT_READS, CHART_RECONSTRUCTIONS, FRAME_AXES, MAP_WORDS, Charted,
     Coordinate, FrameCoordinate, LogicalCoordinate, MathConstant, Support, chart_expression_data,
@@ -54,12 +54,12 @@ from ._model import (
     Term, model_names,
 )
 from ._model import _sign as _derived_sign
-from ._numerics import Numerics, SchemeValue, TermView
+from ._numerics import CellAverage, Numerics, SchemeValue, TermView
 from ._refusal import (
     AmbiguousElaboration, CoverageNotExact, MissingBoundaryRealization, NotYetElaborated,
     SupportMismatch, SurfaceRefusal, UnknownSolvePath,
 )
-from ._scheme import StencilRealization
+from ._scheme import FaceFlux, StencilRealization, UserScheme
 
 _LATER = "a later lot of N15"
 # The words of pops.math that b6's analytic expressions have (pops.analytic), for initial values.
@@ -369,6 +369,9 @@ class _Elaboration:
         # the inputs of the body lowered last; a shared node is lowered once, as b6 built it.
         self._lowered: tuple = (None, {})
         self.charted = False
+        self._flux_coordinate_reads: dict[Coordinate, Any] = {}
+        self._flux_coordinate_names: dict[Coordinate, str] = {}
+        self._in_flux_law = False
 
     # The support and its frame.
 
@@ -460,6 +463,9 @@ class _Elaboration:
                                    "a later lot of N15 with the data fields of Q3",
                                    site=value.site)
         if isinstance(value, (Coordinate, FrameCoordinate)):
+            if (isinstance(value, Coordinate) and self._in_flux_law
+                    and value in self._flux_coordinate_reads):
+                return self._flux_coordinate_reads[value]
             if self.charted or isinstance(value.support, Charted):
                 raise NotYetElaborated("the coordinate %s of a charted support read in a value "
                                        "of the model" % value, CHART_POINT_READS)
@@ -610,13 +616,58 @@ class _Elaboration:
                 elaborated[term] = self.flux(b6, frame, term, name, origin, state)
         return elaborated
 
+    def declare_flux_coordinates(self, b6: Any, frame: Any, term: Flux) -> None:
+        coordinates = tuple(dict.fromkeys(node for node in walk(term.value)
+                                          if isinstance(node, Coordinate)))
+        if not coordinates or self.charted:
+            return
+        from ._program import Uniform
+
+        support = self.support()
+        scheme = self.numerics.scheme_of(term)
+        builder = scheme.traced(term).builder if isinstance(scheme, UserScheme) else None
+        representation = self.numerics.representation_of(term.quantity)
+        if (type(self.case.layout_of(support)) is not Uniform or not self.layout_facts["periodic"]
+                or (representation is not None and type(representation) is not CellAverage)
+                or not is_number(self.program.advance.dt)
+                or not isinstance(builder, FaceFlux) or builder.reconstruction is not None):
+            raise NotYetElaborated(
+                "the coordinate %s read in the flux law" % coordinates[0],
+                "N15/G03 entity coordinates on a periodic Uniform CellAverage layout, "
+                "using constant traces and a fixed step", site=term.site)
+        for coordinate in coordinates:
+            if coordinate.support is not support:
+                raise SupportMismatch("flux coordinate belongs to another support", site=term.site)
+            if coordinate not in self._flux_coordinate_reads:
+                name = "flux_coordinate_" + coordinate.name
+                self._flux_coordinate_names[coordinate] = name
+                self._flux_coordinate_reads[coordinate] = b6.auxiliary(name, frame=frame.canonical_id)
+
+    def install_flux_coordinates(self, b6: Any, frame: Any) -> None:
+        if not self._flux_coordinate_names:
+            return
+        from pops.fields import AnalyticAux
+
+        module = b6.module
+        for coordinate, name in self._flux_coordinate_names.items():
+            target = module.aux_handle(module.aux()[name])
+            module.aux_provider(AnalyticAux._entity_coordinate(target, frame, coordinate.index))
+
+    def lower_flux_law(self, value: Any) -> Any:
+        self._in_flux_law = True
+        try:
+            return self.lower(value)
+        finally:
+            self._in_flux_law = False
+
     def flux(self, b6: Any, frame: Any, term: Flux, name: str, origin: str, state: Any) -> Any:
+        self.declare_flux_coordinates(b6, frame, term)
         axes = frame.axes
         slopes = term.slopes()
         waves = None if slopes is None else {
-            axis: (self.lower(slope),) for axis, slope in zip(axes, slopes, strict=True)}
+            axis: (self.lower_flux_law(slope),) for axis, slope in zip(axes, slopes, strict=True)}
         handle = b6.flux(name, state=state, frame=frame,
-                         components={axis: (self.lower(component),) for axis, component
+                         components={axis: (self.lower_flux_law(component),) for axis, component
                                      in zip(axes, term.components, strict=True)}, waves=waves)
         choices = [Choice("name", name, origin)]
         choices.append(Choice("waves", "none: dF/%s is not derived in this lot" % term.quantity
@@ -628,7 +679,7 @@ class _Elaboration:
             # R9: the slowest and the fastest speeds of a scalar flux are both dF/du, the pair
             # that the face input speeds of riemann.User reads (N3 lot 1, hll()).
             b6.wave_speeds(handle, frame=frame, values={
-                axis: (self.lower(slope), self.lower(slope))
+                axis: (self.lower_flux_law(slope), self.lower_flux_law(slope))
                 for axis, slope in zip(axes, slopes, strict=True)})
             signed = ", and model.wave_speeds(%s, frame=frame, values=the pair (dF/du, dF/du))" \
                 % name
@@ -1632,6 +1683,7 @@ class _Elaboration:
         rates = {balance: self.rate(b6, balance, terms, states) for balance in model.balances}
         plan, selections = self.plan(rates, terms, states)
         self.boundary_data(relations)
+        self.install_flux_coordinates(b6, frame)
         case6 = _Case(model.name)
         block = case6.block(model.name, b6)
         self.boundary_conditions(support, frame, block, plan, states, relations)

@@ -798,6 +798,21 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   Extent<Dim> ghosts{};
   for (int axis = 0; axis < Dim; ++axis)
     ghosts[axis] = storage_ghost_depth;
+  if constexpr (model_uses_flux_coordinates<Model>) {
+    if constexpr (static_arrays || !std::is_same_v<Reconstruction, NoSlope>)
+      throw std::invalid_argument("flux coordinates require Uniform Cartesian constant traces");
+    for (const auto& coordinate : Model::flux_coordinate_slots) {
+      if (coordinate.axis < 0 || coordinate.axis >= Dim ||
+          std::none_of(
+              Model::flux_provider_requirements.begin(), Model::flux_provider_requirements.end(),
+              [&](const auto& row) { return row.storage_slot == coordinate.storage_slot; }))
+        throw std::invalid_argument("flux coordinate role is outside the installed provider pack");
+    }
+    for (int axis = 0; axis < Dim; ++axis)
+      if (!request.topology.is_periodic(Face<Dim>{axis, BoundarySide::lower}) ||
+          !request.topology.is_periodic(Face<Dim>{axis, BoundarySide::upper}))
+        throw std::invalid_argument("flux coordinates require the installed periodic support");
+  }
   const auto spatial = [&] {
     if constexpr (static_arrays)
       return nd::prepare_cartesian_operator<Dim, Model, PreparedStaticGeometryMetric<Dim>,
