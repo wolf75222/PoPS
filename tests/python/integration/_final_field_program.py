@@ -343,9 +343,9 @@ def resolve_periodic_field_program(
         transfer.state(state_instance, StateTransfer())
         if field_instance is not None:
             transfer.field(field_instance, EllipticRecompute())
-        tagging_rules = [Tag(ValueExpr(state_instance) > case.value(threshold))]
+        tagging_rules = [Tag(lambda cell: cell.value(ValueExpr(state_instance)) > case.value(threshold))]
         if coarsen_below_threshold:
-            tagging_rules.append(Coarsen(ValueExpr(state_instance) < case.value(threshold)))
+            tagging_rules.append(Coarsen(lambda cell: cell.value(ValueExpr(state_instance)) < case.value(threshold)))
         tagging_rules.append(Buffer(cells=1, selection="refine-requests"))
         tagging = AMRTagging(
             rules=tuple(tagging_rules),

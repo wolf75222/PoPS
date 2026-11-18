@@ -3,8 +3,10 @@
 The physics of the slice at first order: ``ddt(u) == -div(vector(1, 1/4) * u)`` on the box
 [0, 1] x [0, 1] with 64 x 64 cells, ``rusanov()``, the SSPRK2 of ``pops.lib.time.methods``,
 inflow at the far field on x_min and y_min and outflow on x_max and y_max, and
-``dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2)``. The compiled run of the surface chooses each
-step by N8's compiled step rule and lands on its frontiers:
+``dt=cfl_limit(advection, cfl=0.45, max_dt=1e-2)``. Since N8 « dt= as a function of cell »
+(ROM-89), ``cfl_limit`` is a function of ``cell`` and the compiled run of the surface chooses each
+step by the generated step bound of its cells rule (not #782's stability rule, which the hand-written
+case keeps), and lands on its frontiers:
 
 1. a run to T_END gives, bit for bit, the steps and the state of the same case written by hand
    for b6 and N8 (``StepRule(0.45, 1e-2, strategy=AdaptiveCFL(0.45, 1e-2))``) under
@@ -178,8 +180,9 @@ def test_a_run_to_t_end_is_the_hand_written_rule_and_masters_adaptive_cfl(compil
     # the CFL step, 0.45 / 64 / 1.0 ~ 0.0070, is below max_dt: 29 steps, the last one cut
     assert result.steps == 29
 
-    # review R1 of #782: pops.run on the surface's own artifact takes the strategy that
-    # cfl_limit pairs with its rule, master's AdaptiveCFL, and reaches the same steps and state
+    # review R1 of #782: pops.run on the surface's own artifact takes the strategy of its cells
+    # rule (CellStepBound, the generated bound at cfl's budget) and reaches master's AdaptiveCFL's
+    # steps and state
     own = _hand_runtime(compiled, compiled["artifact"].compiled)
     pops.run(own, t_end=T_END, max_steps=10_000, console=False)
     assert own.time() == T_END and own.macro_step() == result.steps

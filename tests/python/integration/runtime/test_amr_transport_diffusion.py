@@ -110,8 +110,8 @@ def _case_and_layout():
             # Explicit coarsening prevents HOLD outside the refined region from repeatedly
             # padding the old patch until no coarse-fine interface remains to test.
             rules=(
-                Tag(ValueExpr(block_state) > case.value(threshold)),
-                Coarsen(ValueExpr(block_state) < case.value(threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(block_state)) > case.value(threshold)),
+                Coarsen(lambda cell: cell.value(ValueExpr(block_state)) < case.value(threshold)),
                 Buffer(cells=1),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

@@ -187,3 +187,35 @@ def test_fail_run_guard_is_typed_and_lowered_as_fatal():
     program.commit(temporal.next, guarded)
     program.step_strategy(FixedDt(0.1))
     assert "throw std::runtime_error" in emit_cpp_program(program)
+
+
+def test_global_guard_carries_the_observed_predicate_at_its_compiled_site():
+    from pathlib import Path
+
+    from pops.time._program.guard_failure_sites import SCHEMA, guard_failure_sites
+
+    program = Program("guarded")
+    temporal = typed_state(program, "fluid", state_name="U")
+    state = temporal.n
+    condition = (program.min(state) > 0) & (program.max(state) < 2)
+    current = program.guard("admitted", state, condition, action=FailRun())
+    stage = program.value("stage", current, at=temporal.next.point)
+    guarded = program._trial_guard("checked_stage", stage, program.min(stage) > 0, {
+        "site": "checked_stage", "variant": "NotAdmissible", "retry_can_change": False,
+    })
+    program.commit(temporal.next, guarded)
+    program.step_strategy(FixedDt(0.125))
+
+    source = emit_cpp_program(program)
+    terminal, trial = guard_failure_sites(program, program._ir_hash())
+    assert terminal.name == "admitted" and terminal.action == "fail_run"
+    assert trial.name == "checked_stage" and trial.action == "reject_attempt"
+    assert terminal.predicate == condition.id and terminal.token != trial.token
+    assert Path(terminal.python_origin.file).name == Path(__file__).name
+    assert terminal.python_origin.line < trial.python_origin.line
+    assert f'StepTerminalFailure("acceptance guard' in source
+    assert f'"trial_failure", "checked_stage failed: NotAdmissible", "{SCHEMA}"' in source
+    for site, node in ((terminal, current), (trial, guarded)):
+        observed = f"guard_observed_{node.id}"
+        assert f"const bool {observed} = " in source
+        assert f"""("{site.payload_prefix()}") + ({observed} ? '1' : '0')""" in source

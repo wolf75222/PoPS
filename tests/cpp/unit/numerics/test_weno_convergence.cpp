@@ -10,9 +10,12 @@
 #include <pops/numerics/spatial/nd/state_schema.hpp>
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -26,6 +29,23 @@ struct WideSlopePolicy {
   static constexpr int n_ghost = 4;
   POPS_HD Real limited_slope(Real backward, Real forward) const {
     return Real(0.5) * (backward + forward);
+  }
+};
+
+struct ConfigurableSlopePolicy {
+  static constexpr int formal_order = 2;
+  static constexpr int n_ghost = 2;
+
+  Real epsilon = Real(0.25);
+  int configurations = 0;
+
+  POPS_HD Real limited_slope(Real backward, Real forward) const {
+    return epsilon * (backward + forward);
+  }
+
+  POPS_HD void set_smoothness_epsilon(Real value) {
+    epsilon = value;
+    ++configurations;
   }
 };
 
@@ -293,6 +313,32 @@ TEST(test_weno_convergence, invalid_stencil_or_epsilon_remains_nonfinite) {
 TEST(test_weno_convergence, reconstruction_protocol_is_independent_of_storage_radius) {
   const auto policy = configured_reconstruction<WideSlopePolicy>();
   EXPECT_EQ(policy.limited_slope(Real(2), Real(4)), Real(3));
+}
+
+TEST(test_weno_convergence, missing_regularizer_preserves_the_constructed_policy) {
+  const auto implicit = configured_reconstruction<ConfigurableSlopePolicy>();
+  const auto absent = configured_reconstruction<ConfigurableSlopePolicy>(std::nullopt);
+  for (const auto policy : {implicit, absent}) {
+    EXPECT_EQ(policy.limited_slope(Real(2), Real(4)), Real(1.5));
+    EXPECT_EQ(policy.configurations, 0);
+  }
+
+  const auto supplied = configured_reconstruction<ConfigurableSlopePolicy>(Real(0));
+  EXPECT_EQ(supplied.limited_slope(Real(2), Real(4)), Real(0));
+  EXPECT_EQ(supplied.configurations, 1);
+}
+
+TEST(test_weno_convergence, configured_weno_regularizer_keeps_its_bits) {
+  const auto bits = [](Real value) {
+    return std::bit_cast<std::array<unsigned char, sizeof(Real)>>(value);
+  };
+  EXPECT_EQ(bits(configured_reconstruction<Weno5>().eps), bits(kWenoEpsilon));
+  EXPECT_EQ(bits(configured_reconstruction<Weno5>(std::nullopt).eps), bits(kWenoEpsilon));
+  for (const Real epsilon : {Real(0), -Real(0), Real(1.e-6)}) {
+    EXPECT_EQ(bits(configured_reconstruction<Weno5>(epsilon).eps), bits(epsilon));
+    EXPECT_EQ(bits(configured_reconstruction<Weno5>(std::optional<Real>{epsilon}).eps),
+              bits(epsilon));
+  }
 }
 
 TEST(test_muscl_limiters, mc_and_superbee_match_reference_formulas) {

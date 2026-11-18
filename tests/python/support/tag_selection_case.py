@@ -50,9 +50,9 @@ def build(shape, tag_buffer, transfer_kind, *, regrid_every=1000, coarsen=False,
     transfer.state(block[STATE], policy)
     threshold = case.param(RuntimeParam("tag-threshold", default=THRESHOLD))
     marker_value = ValueExpr(block[STATE])["marker"]
-    rules = [Tag(marker_value > case.value(threshold)), Buffer(cells=tag_buffer, selection="refine-requests")]
+    rules = [Tag(lambda cell: cell.value(marker_value) > case.value(threshold)), Buffer(cells=tag_buffer, selection="refine-requests")]
     if coarsen:
-        rules.append(Coarsen(marker_value < case.value(threshold)))
+        rules.append(Coarsen(lambda cell: cell.value(marker_value) < case.value(threshold)))
     layout = AMR(grid=CartesianGrid(frame=FRAME, cells=shape, periodic=PeriodicAxes(FRAME.axes)),
         hierarchy=AMRHierarchy(max_levels=max_levels, ratios=(2,)*(max_levels-1)),
         tagging=AMRTagging(rules=tuple(rules),

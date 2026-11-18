@@ -19,15 +19,21 @@ from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
 import pops
+from pops.amr import ConflictPolicy, EqualityPolicy, Hysteresis, Tag
 from pops.codegen.loader import CompiledModel
+from pops.mesh._amr.refinement_criterion import resolve_refinement_criterion
+from pops.model import Handle
 from pops.physics import Density
 from pops.physics._facade import Model
 
 import pops.runtime._engine_descriptors as engine
 from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_forward_euler_program
-from tests.python.support.amr_tagging import install_prepared_threshold_union
+from pops.runtime._runtime_mesh_lowering import _flow_refinement_criterion
+from tests.python.support.explicit_program import (
+    AMR_TEST_PROGRAM_CLOCK,
+    install_forward_euler_program,
+)
 from tests.python.support.native_execution_context import (
     install_compiled_model_amr_test_lane,
     runtime_aligned_abi,
@@ -74,15 +80,17 @@ def _amr_lane_model():
     )
 
 
-def _install_state_routes(sim, names):
+def _install_state_routes(sim, names) -> dict[str, Handle]:
     """Freeze every actual Case state identity before the first native package install."""
     model = pops.Model("amr-multiblock-state")
     state = model.state("U", components=("n",))
     case = pops.Case("amr-multiblock")
     blocks = {name: case.block(name, model, states=(state,)) for name in names}
     validated = pops.validate(case)
-    for name, block in blocks.items():
-        sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
+    reads = {name: validated.resolve(block[state]) for name, block in blocks.items()}
+    for name, read in reads.items():
+        sim._s._install_block_state_route(name, read.qualified_id)
+    return reads
 
 
 def _scalar_charge(name, q, *, limiter="none", background=0.0):
@@ -140,21 +148,48 @@ def _reject_other_route():
     assert (sim.n_blocks(), tuple(sim.field_provider_slots())) == before
 
 
-def _build(n=32, regrid_every=0, *, tagging=()):
+def _initial_densities(n):
+    return _bump(n, 0.40), np.roll(_bump(n, 0.20), (3, 5), axis=(0, 1))
+
+
+def _density_criterion(reads: dict[str, Handle], threshold: float):
+    rules = (
+        ("refine", Tag(lambda cell: cell.value(reads["ions"]) > threshold).predicate),
+        ("refine", Tag(lambda cell: cell.value(reads["electrons"]) > threshold).predicate),
+    )
+
+    def admit_state(state: Handle) -> None:
+        if not any(state is read for read in reads.values()):
+            raise ValueError("foreign multiblock fixture state")
+
+    return resolve_refinement_criterion(
+        rules,
+        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+        dimension=2,
+        admit_state=admit_state,
+    )
+
+
+def _build(n=32, regrid_every=0, *, refinement_threshold: float | None = None):
     sim = _amr_system(n, regrid_every=regrid_every)
     install_compiled_model_amr_test_lane(sim, _amr_lane_model())
-    _install_state_routes(sim, ("ions", "electrons"))
+    reads = _install_state_routes(sim, ("ions", "electrons"))
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.set_poisson(bc=Periodic())
     sim.add_equation("ions", _scalar_charge("ions", +1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
     sim.add_equation("electrons", _scalar_charge("electrons", -1.0, limiter="minmod"),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()))  # SCHEMA DIFFERENT
-    sim.set_density("ions", _bump(n, 0.40))
-    sim.set_density("electrons", np.roll(_bump(n, 0.20), (3, 5), axis=(0, 1)))
-    if tagging:
-        install_prepared_threshold_union(sim, tagging)
-    install_forward_euler_program(sim)
+    ions, electrons = _initial_densities(n)
+    sim.set_density("ions", ions)
+    sim.set_density("electrons", electrons)
+    if refinement_threshold is None:
+        install_forward_euler_program(sim)
+    else:
+        criterion = _density_criterion(reads, refinement_threshold)
+        _flow_refinement_criterion(sim._s, criterion, {}, clock_identity=AMR_TEST_PROGRAM_CLOCK)
+        install_forward_euler_program(sim, criterion=criterion)
     sim.mark_bound()  # seals exact Program accepted-state capacity before stepping
     return sim
 
@@ -218,12 +253,21 @@ def main():
     # tous les blocs. On verifie que le build paresseux + l'avance NE LEVENT PLUS et que la hierarchie
     # reste valide (au moins un patch fin). Le mouvement effectif de la grille est verrouille en C++
     # (test_amr_multiblock_regrid_union) ; ici on assure la non-regression de la facade Python.
-    s = _build(
-        n=n,
-        regrid_every=2,
-        tagging=(("ions", "n", 1.05), ("electrons", "n", 1.05)),
-    )  # regrid_every > 0 en multi-blocs : DESORMAIS supporte
-    s.advance(0.001, 6)     # declenche le build paresseux + plusieurs regrids
+    threshold = 1.05
+    s = _build(n=n, regrid_every=2, refinement_threshold=threshold)
+    assert s.time() == 0.0 and s._s.macro_step() == 0
+    assert s.n_levels() == 2
+    ions, electrons = _initial_densities(n)
+    ions_tag = ions > threshold
+    electrons_tag = electrons > threshold
+    assert np.count_nonzero(ions_tag & ~electrons_tag) == 51
+    assert np.count_nonzero(electrons_tag & ~ions_tag) == 35
+    assert np.count_nonzero(ions_tag & electrons_tag) == 9
+    assert np.count_nonzero(~(ions_tag | electrons_tag)) == 929
+    # Initial arrays have shape (y, x), matching native axis-0-fastest request order.
+    expected = (ions_tag | electrons_tag).astype(np.uint8).tobytes()
+    assert s._s._tagging_requests(0) == expected
+    s.advance(0.001, 6)
     assert s.n_patches() >= 1, "hierarchie sans patch fin apres regrid d'union"
     assert np.isfinite(np.asarray(s.density("ions"))).all(), "etat ions non fini apres regrid"
     print("OK  multi-blocs + regrid_every > 0 accepte (regrid d'union des tags, deverrouillage Phase 2)")

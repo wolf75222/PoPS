@@ -234,7 +234,7 @@ def _case(target, n, dim, mixture, *, tail_sign=None, legacy_weight=None):
             grid=grid,
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=AMRTagging(
-                rules=(Tag(ValueExpr(block_state) > case.value(threshold)), Buffer(cells=1)),
+                rules=(Tag(lambda cell: cell.value(ValueExpr(block_state)) > case.value(threshold)), Buffer(cells=1)),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS,
             ),

@@ -49,6 +49,12 @@ _STAGE_RATES = frozenset({
     # the block's auxiliary provider storage and the stage time; it reads the solved buffer
     "field_publication",
 })
+# A solve_linear of _SAFE is a native solve. A reference solve (N9 « La référence sous les solves
+# de relation », SV12) is the region of its node: the reference body and the operator that it
+# applies, such as the StencilFlux of a relation's rate at its iterate, write the region's own
+# buffers, the ghost cells and the rate scratch of what they evaluate and the solution. Its write
+# set is not proved disjoint from the valid cells of a state and the solved buffers of a field
+# request, so it is a barrier of both caches (``_reference_solve``).
 # The third rate of a stage, a stencil flux (``validate_stencil_flux``), writes its rate scratch,
 # the ghost cells of its state, its own prepared inputs and the stage time (``_crosses``).
 # The closed grammar of the data of a time-independent request: the literal kinds of
@@ -56,6 +62,14 @@ _STAGE_RATES = frozenset({
 _LITERALS = frozenset({"integer", "rational", "decimal", "binary64"})
 _BINARY = frozenset({"add", "sub", "mul", "div", "pow"})
 _UNARY = frozenset({"neg", "sqrt", "abs"})
+
+
+def _reference_solve(value: Any) -> bool:
+    """Whether ``value`` is a solve realized by the region of a reference (SV12), a barrier of
+    both caches."""
+    from pops.time.solve_outcome import solve_realization_kind
+
+    return value.op == "solve_linear" and solve_realization_kind(value) == "reference"
 
 
 def observe_operation(value: Any, var: Any, *, model: Any = None) -> None:
@@ -79,7 +93,7 @@ def observe_operation(value: Any, var: Any, *, model: Any = None) -> None:
                         versions[(value.id, component)] = versions.get(
                             (source.id, component), (source.id, component))
                 return
-    if value.op not in _SAFE or value.region != 0:
+    if value.op not in _SAFE or value.region != 0 or _reference_solve(value):
         var[("field_reuse_cache",)] = {}
 
 
@@ -219,7 +233,7 @@ def _time_independent_request(value: Any, *, target: str) -> bool:
 
 def _crosses(value: Any) -> bool:
     """Whether a time-independent entry stays valid across the top-level operation ``value``."""
-    if value.region != 0:
+    if value.region != 0 or _reference_solve(value):
         return False
     if value.op == "rhs":
         return not value.attrs.get("path_conservative", False)

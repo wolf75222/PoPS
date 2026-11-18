@@ -542,7 +542,11 @@ class ExactWeight {
                                        Natural::divide(b.numerator_, g2, bytes).first, bytes);
     out.denominator_ = Natural::multiply(Natural::divide(a.denominator_, g2, bytes).first,
                                          Natural::divide(b.denominator_, g1, bytes).first, bytes);
-    out.normalize_();
+    // Canonical operands and both cross cancellations leave a reduced nonzero product.
+    if (out.zero())
+      out.normalize_();
+    else
+      out.require_storage_();
     return out;
   }
   friend ExactWeight operator/(const ExactWeight& a, const ExactWeight& b) {

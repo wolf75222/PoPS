@@ -116,6 +116,7 @@ def rebuild_program(
         guard for guard in original_guards if guard_keep is None or guard_keep(guard)
     )
     out._advance_control = getattr(self, "_advance_control", None)
+    out._advance_step_bound = getattr(self, "_advance_step_bound", None)
     out._integral_states = dict(getattr(self, "_integral_states", {}))
     out._integral_units = dict(getattr(self, "_integral_units", {}))
     if project_states and getattr(self, "_advance_outputs", ()):

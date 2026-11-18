@@ -226,7 +226,7 @@ def _resolved(
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(state_instances[0]) > case.value(threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(state_instances[0])) > case.value(threshold)),
                 Buffer(cells=1, selection="refine-requests"),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

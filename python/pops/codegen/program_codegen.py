@@ -335,8 +335,7 @@ def _emit_cpp_program_impl(
         if target == "amr_system" else None)
     from .program_emit_finite_arrays import FINITE_OPS, finite_cpp_helpers, uses_finite_helpers
     from .program_emit_versioned import VERSIONED_OPS
-    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
-    value_ops = FINITE_OPS | VERSIONED_OPS | FIELD_REPRESENTATION_OPS
+    value_ops = FINITE_OPS | VERSIONED_OPS
     finite_roots = list(program._values)
     if program._dt_bound is not None:
         finite_roots.extend(program._dt_bound[0])
@@ -345,9 +344,8 @@ def _emit_cpp_program_impl(
         for value in finite_roots)
     from .program_emit_distributed_arrays import OPS as DISTRIBUTED_OPS
     from .program_emit_composite import composite_integral_helpers
-    distributed_ops = DISTRIBUTED_OPS | FIELD_REPRESENTATION_OPS
-    uses_distributed = any(value.op in distributed_ops or any(
-        child.op in distributed_ops for child in program._subblock_value_refs(value)) for value in finite_roots)
+    uses_distributed = any(value.op in DISTRIBUTED_OPS or any(
+        child.op in DISTRIBUTED_OPS for child in program._subblock_value_refs(value)) for value in finite_roots)
     parts = dict(
         name=cpp_string_literal(program.name),
         hash=emission_program_hash(program),
@@ -359,6 +357,7 @@ def _emit_cpp_program_impl(
         dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
         advance_control=(_emit_advance_control(program)
                          + _emit_advance_outputs(program, authority, target)
+                         + _emit_advance_step_bound(program, authority, target)
                          + _refuse_advance_memory_route(program, target)),
         module_metadata=(_emit_module_metadata(program, authority)
                          + _emit_uniform_history_metadata(program, target)),
@@ -401,6 +400,13 @@ def _emit_cpp_program_impl(
         if uses_distributed:
             finite_helpers += "\n#include <pops/runtime/program/distributed_array.hpp>\n"
         parts["model_helpers"] = finite_helpers + parts["model_helpers"]
+    # DM6: a Program that relays out through regrid_read exports the bytes it moved.
+    if any("ctx.regrid_read(" in part for part in parts.values() if isinstance(part, str)):
+        parts["model_helpers"] += (
+            "\n#include <pops/runtime/program/regrid_read_support.hpp>\n"
+            'extern "C" std::uint64_t pops_relayout_byte_count() {\n'
+            "  return pops::runtime::program::relayout_bytes().load(std::memory_order_relaxed);\n"
+            "}\n")
     return _PROGRAM_CPP_TEMPLATE.format(**parts)
 
 
@@ -609,6 +615,15 @@ def _emit_advance_outputs(program: Any, model: Any, target: str) -> str:
         "}\n" % (len(regions), count_cases, "".join(cases)))
 
 
+def _emit_advance_step_bound(program: Any, model: Any, target: str) -> str:
+    """The step bound of the cells rule of the elaborated Advance (N8 « dt= as a function of cell »,
+    D2), read by its loader; a Program without a cells rule exports no entry, so its translation
+    unit is unchanged."""
+    from pops.codegen.program_emit_step_bound import emit_step_bound
+
+    return emit_step_bound(program, model, target)
+
+
 def _emit_dt_bound_entry(target: str, body: str, value_name: str | None = None) -> str:
     """Emit one facade-typed dt-bound ABI with collectively prepared resources."""
     if target == "amr_system":
@@ -791,10 +806,6 @@ def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> N
     from .program_emit_structured_control import STRUCTURED_OPS
     from .program_emit_finite_arrays import FINITE_OPS
     from .program_emit_versioned import VERSIONED_OPS
-    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS, validate_field_representation
-    if v.op in FIELD_REPRESENTATION_OPS:
-        validate_field_representation(v)
-        return
     if v.op in STRUCTURED_OPS | FINITE_OPS | VERSIONED_OPS:
         for key in ("cond_block", "body_block", "true_block", "false_block"):
             for child in v.attrs.get(key, ()):

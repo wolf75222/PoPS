@@ -160,7 +160,7 @@ _SCALAR_LEAVES = frozenset(("scalar", "bool", "int64"))
 
 
 def value_signature(value) -> ValueSignature:
-    if is_finite_index(value) or value.vtype in ("product", "variant", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted", "field_topology"):
+    if is_finite_index(value) or value.vtype in ("product", "variant", "continuation_base", "continuation_candidate", "continuation_assessment", "continuation_accepted"):
         return cast("ValueSignature", value.attrs["signature"])
     if value.vtype == "result":
         return cast("ValueSignature", {"vtype": "result", "success": value.attrs["success_signature"],

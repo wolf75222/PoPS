@@ -298,13 +298,10 @@ def _burgers_case(scheme):
 
 
 def test_upwind_without_speed_still_accepts_a_flux_that_is_not_linear_rom_106():
-    """The failing graph of the CF15 card ROM-106, pinned.
+    """Historical b6 parity oracle: the positional upwind face is Rusanov on Burgers.
 
-    Section 2.6.9, row ``upwind``: without ``speed=``, a flux that is not F(1) u is refused
-    (``RealizationMismatch``, naming ``rusanov()`` and ``hll()``). The face of ``riemann.User``
-    has no input F(1).n and the library cannot read the form of its key, so ``upwind(F, Uh)`` is
-    still section 4.4's ``rusanov()`` and validates on Burgers. When ROM-106 lands, this test
-    becomes the refusal: ``pops.validate`` raises, with both names in its message.
+    These words come from examples.api_v02.b6_numerics, the parity reference for N3. The
+    public upwind() of §2.6.9 has its own refusal test in test_su_t2_scheme_refusals.py.
     """
     case, flux, U = _burgers_case(upwind)
     assert pops.validate(case)

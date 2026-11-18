@@ -4,7 +4,9 @@ flux and the words of the kinds and the forms, which a case that writes a scheme
 Lot 2 of N15 elaborates ``FaceFlux`` (without ``left=`` and ``right=``) under a ``Flux`` key and
 ``Reconstruct`` as the ``reconstruction=`` of a face scheme, lot B ``Ghost`` under a boundary
 policy (``boundary=``), ``spectral_radius``,
-``slowest_speed`` and ``fastest_speed`` of a flux at a trace, and ``kinds`` and ``forms``. Every
+``slowest_speed`` and ``fastest_speed`` of a flux at a trace, and ``kinds`` and ``forms``; N16
+lot 1 adds the carriers ``Cell``, ``Node``, ``Face`` and ``Edge`` of ``pops.Coefficients(on=...)``,
+of which it elaborates ``Cell`` (N16 lot 3 ``Node``, G08 ``Face`` and ``Edge``). Every
 other builder and reduction of 2.6.4 is importable and refuses its use with ``NotYetElaborated``,
 which names the lot that elaborates it. The module exports no entity: ``face``, ``cell``, ``term``
 and ``axis`` exist only as parameters of a scheme (SU7). An unknown name is refused with
@@ -14,6 +16,7 @@ from typing import Any as _Any
 
 from ._refusal import NotYetElaborated as _NotYetElaborated
 from ._refusal import SymbolNotInSurface as _SymbolNotInSurface
+from ._representation import Cell, Edge, Face, Node
 from ._scheme import (
     FaceFlux, Ghost, Reconstruct, fastest_speed, forms, kinds, slowest_speed, spectral_radius,
 )
@@ -44,7 +47,9 @@ for _word in _REDUCTIONS:
 
 __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
     "FaceFlux", "Reconstruct", "Ghost", *_BUILDERS, *_REDUCTIONS, "spectral_radius",
-    "slowest_speed", "fastest_speed", "kinds", "forms"]
+    "slowest_speed", "fastest_speed", "kinds", "forms",
+    # the carriers of pops.Coefficients(on=...) (N16 lot 1, D1b)
+    "Cell", "Node", "Face", "Edge"]
 
 
 def __getattr__(name: str) -> _Any:

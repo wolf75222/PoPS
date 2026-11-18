@@ -263,6 +263,8 @@ jobs:
           fetch-depth: 1
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
+        with:
+          amr-fixture-python: 'true'
       - name: Cache ccache (quality/warnings)
         uses: actions/cache@v6
         with:
@@ -341,11 +343,14 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
+          amr-fixture-python: 'true'
           extra-apt: clang-tidy
       - name: Configure (export compile_commands.json)
         env:
           KOKKOS_PREFIX: ${{ steps.kokkos.outputs.kokkos-prefix }}
         run: cmake --preset ci-kokkos
+      - name: Prepare generated headers for clang-tidy
+        run: cmake --build --preset ci-kokkos --target pops_amr_fixture_criteria pops_euler_amr_criteria pops_gen_solver_kernel
       - name: run-clang-tidy (non bloquant)
         run: |
           echo "$(clang-tidy --version | head -1)"
@@ -399,8 +404,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-      - id: kokkos
-        uses: ./.github/actions/setup-kokkos
       - name: Plan exact ASan target shard
         id: asan-plan
         run: |
@@ -409,6 +412,11 @@ jobs:
             --force-all \
             --shard-index ${{ matrix.shard }} \
             --shard-total 4
+      - id: kokkos
+        uses: ./.github/actions/setup-kokkos
+        with:
+          amr-fixture-python: ${{ contains(steps.asan-plan.outputs.cpp_shard_targets, 'test_amr_synthetic_program_loader_transaction') ||
+                                contains(steps.asan-plan.outputs.cpp_shard_targets, 'test_prepared_field_rhs_inputs') }}
       - name: Cache ccache (quality/asan)
         uses: actions/cache@v6
         with:
@@ -509,6 +517,7 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
+          amr-fixture-python: 'true'
           compiler: clang
           exec-space: openmp
           extra-apt: clang
@@ -572,6 +581,8 @@ jobs:
           fetch-depth: 1
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
+        with:
+          amr-fixture-python: 'true'
       - name: Cache ccache (quality/coverage)
         uses: actions/cache@v6
         with:

@@ -21,6 +21,8 @@
 //       field solver has a different local reduction tree than the replicated mono-box layout.
 #include <gtest/gtest.h>
 
+#include "amr_fixture_tag_mask_oracle.hpp"
+#include "euler_amr_fixture_criteria.hpp"
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include "test_harness.hpp"  // pops::test::Checker, checksum
@@ -36,6 +38,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -176,6 +179,51 @@ struct Result {
   int npf;
 };
 
+template <int Dim>
+std::unique_ptr<AmrSystem<Dim>> build_gravity(const AmrSystemConfig<Dim>& cfg,
+                                              const std::vector<double>& rho,
+                                              const char* runtime_identity) {
+  auto owner = std::make_unique<AmrSystem<Dim>>(cfg);
+  auto& sys = *owner;
+  test::install_amr_runtime_authority(sys, runtime_identity);
+  // Temporal subcycling is an independent execution authority: spell it out even though this
+  // regression happens to use the same ratio as the spatial hierarchy.  The runtime must never
+  // infer a clock relation from mesh refinement.
+  sys.set_temporal_relations({2}, {1}, {"integral_only"});
+  sys.install_block_state_route("gas", test::gravity.state_for("gas"));
+  add_compiled_model<Dim>(sys, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
+                          "explicit", /*gamma=*/1.4, 1, 1, {}, {}, 0.0,
+                          static_cast<double>(kWenoEpsilon), false, kGravityConsumerQid);
+  sys.set_poisson("charge_density", "geometric_mg", "periodic", gravity_field_solver_options());
+  install_default_gravity_field_output(sys);
+  test::gravity.install<Dim>(sys);
+  sys.set_conservative_state("gas", gravity_state<Dim>(rho));
+  EXPECT_FALSE(sys.uses_runtime_engine());
+  sys.install_program(POPS_TEST_GRAVITY_PROGRAM_SO);
+  sys.mark_bound();
+  EXPECT_TRUE(sys.uses_runtime_engine());
+  EXPECT_EQ(sys.installed_program_hash(),
+            std::string("test-forward-euler-amr/") + test::gravity.identity);
+  return owner;
+}
+
+template <int Dim>
+void expect_gravity_bootstrap(AmrSystem<Dim>& sys, const Extent<Dim>& shape,
+                              const std::vector<double>& rho) {
+  EXPECT_GT(sys.n_levels(), 1);
+  EXPECT_FALSE(sys.patch_boxes().empty());
+  const auto served = sys.density("gas");
+  std::vector<double> expected(rho.size());
+  for (std::size_t cell = 0; cell < rho.size(); ++cell)
+    expected[cell] = static_cast<double>(static_cast<Real>(rho[cell]));
+  EXPECT_EQ(served, expected);
+  const auto tags = sys.execute_prepared_tagging(0);
+  EXPECT_EQ(test::expect_fixture_tag_mask(
+                tags.refine, shape,
+                [&](std::size_t cell) { return expected[cell] > static_cast<double>(Real(1.2)); }),
+            expected.size());
+}
+
 // Builds an AmrSystem (4 bubbles, euler_poisson compiled), advances nsteps, returns the coarse density
 // (one flattened exact-rank coarse image, single-rank so already global), the final mass and m0.
 // distribute=true exercises the ADC-620 path (coupler_make_coarse_layout splits the coarse, the fine
@@ -185,23 +233,11 @@ Result run(int n, int nsteps, double dt, bool distribute) {
   const AmrSystemConfig<Dim> cfg = make_config<Dim>(n, distribute);
   const std::vector<double> rho = four_bubbles(cfg.shape);
 
-  AmrSystem<Dim> sys(cfg);
-  test::install_amr_runtime_authority(sys, distribute
-                                               ? "test.amr-distribute-coarse.distributed-runtime"
-                                               : "test.amr-distribute-coarse.replicated-runtime");
-  // Temporal subcycling is an independent execution authority: spell it out even though this
-  // regression happens to use the same ratio as the spatial hierarchy.  The runtime must never
-  // infer a clock relation from mesh refinement.
-  sys.set_temporal_relations({2}, {1}, {"integral_only"});
-  sys.install_block_state_route("gas", "tests.amr-distribute-coarse/gas/state@1");
-  add_compiled_model<Dim>(sys, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
-                          "explicit", /*gamma=*/1.4, 1, 1, {}, {}, 0.0,
-                          static_cast<double>(kWenoEpsilon), false, kGravityConsumerQid);
-  sys.set_poisson("charge_density", "geometric_mg", "periodic", gravity_field_solver_options());
-  install_default_gravity_field_output(sys);
-  test::install_prepared_threshold_union(sys, {{"gas", "rho", 1.2}});
-  sys.set_conservative_state("gas", gravity_state<Dim>(rho));
-  test::install_forward_euler_program(sys, true);
+  auto owner = build_gravity(cfg, rho,
+                             distribute ? "test.amr-distribute-coarse.distributed-runtime"
+                                        : "test.amr-distribute-coarse.replicated-runtime");
+  auto& sys = *owner;
+  expect_gravity_bootstrap(sys, cfg.shape, rho);
 
   Result R;
   R.m0 = sys.mass();
@@ -247,21 +283,27 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
   chk(rep.dens.size() == dis.dens.size(), "replicated coarse density same size as distributed");
 
   // (2) a CFL step advances by a finite, positive dt (no NaN/Inf from a corrupted layout).
-  AmrSystem<Dim> probe(probe_cfg);
-  test::install_amr_runtime_authority(probe, "test.amr-distribute-coarse.probe-runtime");
-  probe.set_temporal_relations({2}, {1}, {"integral_only"});
-  probe.install_block_state_route("gas", "tests.amr-distribute-coarse/gas/state@1");
-  add_compiled_model<Dim>(probe, "gas", gravity_model<Dim>(), "minmod", "rusanov", "conservative",
-                          "explicit", /*gamma=*/1.4, 1, 1, {}, {}, 0.0,
-                          static_cast<double>(kWenoEpsilon), false, kGravityConsumerQid);
-  probe.set_poisson("charge_density", "geometric_mg", "periodic", gravity_field_solver_options());
-  install_default_gravity_field_output(probe);
-  test::install_prepared_threshold_union(probe, {{"gas", "rho", 1.2}});
-  probe.set_conservative_state("gas", gravity_state<Dim>(four_bubbles(probe_cfg.shape)));
-  test::install_forward_euler_program(probe, true);
+  const auto probe_rho = four_bubbles(probe_cfg.shape);
+  auto probe_owner =
+      build_gravity(probe_cfg, probe_rho, "test.amr-distribute-coarse.probe-runtime");
+  auto& probe = *probe_owner;
+  expect_gravity_bootstrap(probe, probe_cfg.shape, probe_rho);
   const double dt_cfl = probe.step_cfl(0.4);
   chk(std::isfinite(dt_cfl), "distribute_coarse step_cfl returns a finite dt");
   chk(dt_cfl > 0.0, "distribute_coarse step_cfl returns a positive dt");
+  EXPECT_EQ(probe.macro_step(), 1);
+  EXPECT_EQ(probe.time(), dt_cfl);
+
+  // The periodic gravity problem must remain neutral even for the HOLD-only bootstrap.
+  const Real threshold = Real(1.2);
+  const Real below = Real(2) - threshold;
+  std::vector<double> hold_rho(probe_rho.size());
+  for (std::size_t cell = 0; cell < hold_rho.size(); ++cell)
+    hold_rho[cell] = static_cast<double>(cell % 2 == 0 ? threshold : below);
+  auto hold = build_gravity(probe_cfg, hold_rho, "test.amr-distribute-coarse.hold-runtime");
+  EXPECT_EQ(hold->n_levels(), 1);
+  EXPECT_TRUE(hold->patch_boxes().empty());
+  EXPECT_EQ(hold->density("gas"), hold_rho);
 
   // (3) The distributed and replicated layouts share the same owner at np=1 but not the same local
   // reduction tree (multi-tile versus mono-box). Require a tight scale-aware machine-roundoff bound,

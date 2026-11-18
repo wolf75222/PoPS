@@ -78,6 +78,10 @@ def validate_program_regions(program: Any) -> None:
         elif value.op == "capture_result":
             validate_input_regions(program, (attrs["body"],), regions["body_block"],
                                    "capture body result")
+        elif value.op == "solve_linear" and "body_block" in attrs:
+            # A reference realization: its region's result is the captured candidate (SV12).
+            validate_input_regions(program, (attrs["body"],), regions["body_block"],
+                                   "solve_linear reference region result")
         elif value.op in ("finite_map", "finite_scan", "distributed_map", "distributed_requests", "distributed_csr", "distributed_reduce", "distributed_scatter_reduce", "distributed_scan"):
             validate_input_regions(program, (attrs["body"],), regions["body_block"],
                                    "finite array body result")

@@ -12,6 +12,15 @@ from pops.identity import Identity, make_identity
 from ._plans import ResolvedSimulationPlan, _deep_freeze, _evidence
 
 
+def _thaw(value: Any) -> Any:
+    """Undo :func:`_deep_freeze` on identity data (mappings and tuples only)."""
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_thaw(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class CompiledPlanBlock:
     """Compiler facts retained for one block after authoring objects are discarded."""
@@ -98,7 +107,7 @@ def _data_layout(plan: Any) -> dict[str, Any]:
 
         return data_layout_and_distribution(plan)
     except Exception as exc:  # noqa: BLE001 - A1: a report never refuses a compiled plan
-        return {"schema_version": 3, "unreported": "%s: %s" % (type(exc).__name__, exc)}
+        return {"schema_version": 5, "unreported": "%s: %s" % (type(exc).__name__, exc)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,8 +609,10 @@ class CompiledSimulationArtifact:
     layout_programs: tuple[CompiledLayoutProgram, ...] = ()
     component_artifacts: tuple[Any, ...] = ()
     artifact_identity: Identity = field(init=False)
+    program_id: Identity = field(init=False)
     platform_manifest: Any = field(init=False)
     _component_evidence: Any = field(init=False, repr=False)
+    _program_evidence: Any = field(init=False, repr=False)
     _retained_source_evidence: Any = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -718,6 +729,39 @@ class CompiledSimulationArtifact:
         object.__setattr__(
             self, "artifact_identity", make_identity(
                 "artifact", self._payload(evidence, platform)))
+        program_evidence = self._current_program_evidence(platform)
+        object.__setattr__(self, "_program_evidence", _deep_freeze(program_evidence))
+        object.__setattr__(self, "program_id", make_identity("program", program_evidence))
+
+    def _current_program_evidence(self, platform: Any) -> dict[str, Any]:
+        """The ``program_id`` preimage (spec 0.3 CC2, CN9; N11 lot 2b).
+
+        The normalized IR and every resolved choice (the name-free plan identity, which holds the
+        name-free artifact projection), the target and platform, the toolchain, flags, routes and
+        libraries of each Program, and the emitter, ``codegen_source_authority()``. Not the binary
+        bytes, the generated source or the names, which are manifest provenance (CC10, CC11).
+        """
+        from pops.codegen.model_compile_evidence import codegen_source_authority
+
+        programs = []
+        for row in self.layout_programs:
+            toolchain = getattr(row.program, "toolchain_evidence", None)
+            programs.append(None if toolchain is None else _evidence(
+                toolchain, where="layout program toolchain"))
+        return {
+            "schema_version": 1,
+            "plan_identity": self.plan.plan_identity.to_data(),
+            "target": self.plan.target,
+            "backend": self.plan.backend,
+            "platform_manifest": platform.to_data(),
+            "programs": programs,
+            "blocks": [
+                {name: _evidence(getattr(block.model, name, None), where="block %s" % name)
+                 for name in ("target", "backend", "abi_key")}
+                for block in self.blocks
+            ],
+            "codegen_source_authority": codegen_source_authority(),
+        }
 
     @property
     def authoring_snapshot(self) -> Any:
@@ -902,6 +946,10 @@ class CompiledSimulationArtifact:
                     "availability": "retained" if source is not None else "unavailable",
                     "model_compile": component.source_provenance()
                     if callable(getattr(component, "source_provenance", None)) else None,
+                    "guard_origins": tuple(
+                        (site.to_data(), site.python_origin.to_data())
+                        for site in getattr(component, "guard_failure_sites", ())
+                    ),
                 }
             )
         return {"contract": "pops.compiled-program.source-evidence@2", "components": evidence,
@@ -956,14 +1004,33 @@ class CompiledSimulationArtifact:
                 or self._component_evidence != _deep_freeze(current)
                 or self.platform_manifest != current_platform):
             raise ValueError("CompiledSimulationArtifact identity verification failed")
+        recorded = _thaw(self._program_evidence)
+        if (recorded.get("plan_identity") != self.plan.plan_identity.to_data()
+                or recorded.get("platform_manifest") != current_platform.to_data()
+                or self.program_id != make_identity("program", recorded)):
+            raise ValueError("CompiledSimulationArtifact program_id verification failed")
 
     @property
     def source_maps(self) -> dict[str, Any]:
-        """Owner-qualified exact Program maps; no model-carrier substitution."""
+        """Owner-qualified exact maps; no model-carrier substitution.
+
+        The Program maps (``pops.program-source-map@1``), under ``layout:<id>`` or ``program``,
+        and, under ``block:<name>``, the map of each block whose model C++ holds a policy
+        generated from a Python body (``pops.model-source-map@1``): the face of a
+        ``riemann.User`` and the trace of a ``reconstruction.User``, with the file and line where
+        each body is written."""
         if self.layout_programs:
-            return {"layout:" + row.layout_id: row.program.source_maps["program"]
+            maps = {"layout:" + row.layout_id: row.program.source_maps["program"]
                     for row in self.layout_programs if "program" in row.program.source_maps}
-        return {} if self.program is None else self.program.source_maps
+        else:
+            maps = {} if self.program is None else dict(self.program.source_maps)
+        from .model_source_map import model_source_map, user_bodies
+
+        for block in getattr(self, "blocks", ()):
+            source = getattr(block.model, "_generated_cpp", None)
+            if type(source) is str and user_bodies(block.spatial):
+                maps["block:" + block.name] = model_source_map(source, block.spatial)
+        return maps
 
     def inspect(self) -> Any:
         from pops.codegen.inspect_report import build_compiled_report

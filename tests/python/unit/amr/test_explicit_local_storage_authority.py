@@ -5,7 +5,7 @@ import pops
 import pytest
 from pops.amr import (AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging, AMRTransfer,
                       Buffer, ConflictPolicy, EqualityPolicy, Hysteresis, Tag)
-from pops.amr._resolution import AMRTaggingResolutionContext, ResolvedAMRStateStorage
+from pops.amr._resolution import ResolvedAMRStateStorage
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
@@ -44,7 +44,7 @@ def _case(*, name="explicit_local", levels=1, depth=1):
     layout = AMR(grid=CartesianGrid(frame=frame, cells=(8, 8),
                                     periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=levels, ratios=(2,) * (levels - 1)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["u"] > case.value(threshold)),
+        tagging=AMRTagging(rules=(Tag(lambda cell: cell.value(ValueExpr(block[state])["u"]) > case.value(threshold)),
                                  Buffer(cells=0, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS),
@@ -111,12 +111,16 @@ def test_diffusion_sharing_storage_adapter_is_not_a_local_authority():
 
 
 def test_pointwise_plan_does_not_invent_gradient_stencil():
+    # The gradient of a region is the stencil of the method that discretizes the state
+    # (amr_indicator_stencil); a pointwise storage plan declares none, and gradient_norm has no
+    # default for it.
+    from pops.lib.amr import gradient_norm
+    from pops.mesh._amr.refinement_criterion import CriterionCell
+
     case, layout, state = _case()
     resolved = pops.resolve(pops.validate(case), layout=layout)
-    projection = resolved.layout_plan.project(resolved.layout_plan.layouts[0].handle)
     block, = resolved.blocks
-    context = AMRTaggingResolutionContext(owner=case.owner_path.canonical(),
-        layout_plan=projection, numerics=(block.numerics,), resolve=case.resolve,
-        state_storage=(ResolvedAMRStateStorage(block, case.resolve(state)),))
-    with pytest.raises(ValueError, match="no resolved spatial discretization"):
-        context._discrete_context(case.resolve(state))
+    assert all(not hasattr(row.method, "amr_indicator_stencil") for row in block.numerics.rates)
+    with pytest.raises(TypeError, match="discrete gradient stencil of a method"):
+        gradient_norm(CriterionCell(), ValueExpr(case.resolve(state))["u"], axes=(),
+                      stencil=None)

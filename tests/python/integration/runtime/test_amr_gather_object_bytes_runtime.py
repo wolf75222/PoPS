@@ -22,7 +22,7 @@ from tests.python.support.public_native_profile import compile_profile_plan_once
 def build_gather_case(policy):
     case,base=build(8,2)
     patches=PatchLayout(distribute_coarse=policy!='replicated',coarse_max_grid=4 if policy=='partitioned' else 8)
-    layout=AMR(**{k:getattr(base,k) for k in ('grid','hierarchy','tagging','regrid','transfer','execution','embedded_boundary','load_balance','tagger','clustering','reflux')},patch_layout=patches)
+    layout=AMR(**{k:getattr(base,k) for k in ('grid','hierarchy','tagging','regrid','transfer','execution','embedded_boundary','load_balance','clustering','reflux')},patch_layout=patches)
     return case,layout
 
 def validate_fixture_archive(archive,world_size):

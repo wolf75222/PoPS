@@ -4,7 +4,7 @@ The evidence ledger is **REQUIRED BY CI AND CURRENTLY OPEN**. The ledger in
 `tests/gates/m4_runtime_io.toml` records exact executable evidence for
 ADC-679 through ADC-687. It currently contains 53 executable checks and two
 explicit ADC-681 gaps: runtime installation/execution of external boundary
-components and external AMR Tagger/Clustering/Reflux components. Milestone
+components and external AMR Tagger/Reflux components. Milestone
 closure is accepted only after those rows are replaced by real installed
 proofs, `deferred = []`, and the required MPI job executes the complete gate;
 source audit alone is not acceptance evidence.

@@ -14,42 +14,10 @@ import json
 from pops.identity.scalar import scalar_cpp
 from pops.time._program.structured_control import value_signature
 from pops._ir.data_model import is_finite_array, value_kind
+from pops._ir.effects import device_lowered, host_region
 
 _NS = "pops::runtime::program::finite_kokkos::"
 _TYPES = {"scalar": "pops::Real", "int64": "std::int64_t", "bool": "bool"}
-_OPS = frozenset(
-    (
-        "finite_index_argument",
-        "finite_index",
-        "finite_index_value",
-        "finite_size",
-        "finite_domain",
-        "finite_same_domain",
-        "finite_at",
-        "finite_real",
-        "int64_constant",
-        "bool_constant",
-        "bool_op",
-        "int64_op",
-        "int64_compare",
-        "int64_cast",
-        "scalar_op",
-        "scalar_expression",
-        "scalar_isfinite",
-        "compare",
-        "product",
-        "product_get",
-        "branch",
-        "provenance_bind",
-        "distributed_index_argument",
-        "distributed_index",
-        "distributed_gid",
-        "distributed_local_at",
-        "distributed_rank",
-        "distributed_size",
-        "distributed_value_domain",
-    )
-)
 
 
 def _leaves(signature, token):
@@ -141,7 +109,7 @@ def admission(value):
         return "result requires structural storage beyond scalar/Product leaves", ()
     nodes = tuple(_walk(value.attrs["body_block"]))
     for node in nodes:
-        if node.op not in _OPS:
+        if not device_lowered(node.op):
             return "missing device lowering: " + node.op, ()
         if node.op == "branch" and not _flat(value_signature(node)):
             return "branch result requires structural storage", ()
@@ -573,9 +541,6 @@ def emit_map(value, var, lines):
     return True
 
 
-_ORDERED_OPS = _OPS | {"region_argument", "region_index"}
-
-
 def reads_arrays(value):
     """Whether a fold carries or reads an Array, so its placement is worth a row."""
     if any(is_finite_array(sig) for sig, _ in _leaves(value_signature(value.inputs[0]), None)):
@@ -598,7 +563,7 @@ def ordered_admission(value):
         return "result requires structural storage beyond scalar/Product leaves", ()
     nodes = tuple(_walk(value.attrs["body_block"]))
     for node in nodes:
-        if node.op not in _ORDERED_OPS:
+        if not device_lowered(node.op, ordered=True):
             return "missing device lowering: " + node.op, ()
         if node.op == "branch" and not _flat(value_signature(node)):
             return "branch result requires structural storage", ()
@@ -801,7 +766,6 @@ def emit_ordered(value, var, lines):
 # stay one-element reads.
 HOST_COLUMNS = "finite_host_columns"
 _ARGUMENTS = ("body_argument", "body_index", "cond_argument")
-_HOST_REGIONS = frozenset(("branch", "result_match", "capture_result", "structured_iterate"))
 
 
 def _host_reads(block):
@@ -815,7 +779,7 @@ def _host_reads(block):
         if node.op == "finite_at":
             yield node
             continue
-        if node.op in _HOST_REGIONS:
+        if host_region(node.op):
             keys = ("cond_block", "body_block", "true_block", "false_block")
         elif node.op == "finite_map":
             keys = ("body_block",) if admission(node)[0] is not None else ()

@@ -128,7 +128,7 @@ def _resolved_runtime_parameter_case(native_cxx):
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(state_instance) > case.value(refine_threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(state_instance)) > case.value(refine_threshold)),
                 Buffer(cells=1),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

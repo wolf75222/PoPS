@@ -1239,48 +1239,6 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   explicit_host_request.execution_mode = POPS_TAGGER_EXECUTION_HOST_V2;
   EXPECT_EQ(pops::component::tag_batch(tagger_api, nullptr, explicit_host_request, status), 0);
 
-  std::array<std::int64_t, 2> extents{4, 1};
-  std::array<std::int64_t, 4> boxes{};
-  std::size_t box_count = 0;
-  PopsClusteringApiV1 cluster_api{
-      abi_header(sizeof(PopsClusteringApiV1), POPS_NATIVE_INTERFACE_CLUSTERING_V1),
-      +[](void*, const PopsClusteringRequestV1* request, PopsComponentStatusV1* result) {
-        request->boxes[0] = 1;
-        request->boxes[1] = 0;
-        request->boxes[2] = 3;
-        request->boxes[3] = 0;
-        *request->box_count = 1;
-        *result = ok_status();
-        return 0;
-      }};
-  PopsClusteringRequestV1 cluster_request{sizeof(PopsClusteringRequestV1),
-                                          {sizeof(PopsConstByteViewV1), tags.data(), tags.size()},
-                                          extents.data(),
-                                          2,
-                                          boxes.data(),
-                                          1,
-                                          &box_count,
-                                          execution};
-  EXPECT_EQ(pops::component::cluster_tags(cluster_api, nullptr, cluster_request, status), 0);
-  EXPECT_EQ(box_count, 1u);
-  EXPECT_EQ(boxes, (std::array<std::int64_t, 4>{1, 0, 3, 0}));
-
-  PopsClusteringApiV1 excessive_cluster_api{
-      abi_header(sizeof(PopsClusteringApiV1), POPS_NATIVE_INTERFACE_CLUSTERING_V1),
-      +[](void*, const PopsClusteringRequestV1* request, PopsComponentStatusV1* result) {
-        *request->box_count = request->box_capacity + 1;
-        *result = ok_status();
-        return 0;
-      }};
-  box_count = 0;
-  EXPECT_THROW(
-      pops::component::cluster_tags(excessive_cluster_api, nullptr, cluster_request, status),
-      std::runtime_error);
-  auto missing_cluster_api = cluster_api;
-  missing_cluster_api.cluster = nullptr;
-  EXPECT_THROW(pops::component::cluster_tags(missing_cluster_api, nullptr, cluster_request, status),
-               std::runtime_error);
-
   std::array<double, 1> transferred{};
   std::array<std::int32_t, 2> ratio{2, 2};
   PopsTransferApiV2 transfer_api{

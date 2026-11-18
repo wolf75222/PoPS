@@ -86,7 +86,13 @@ def bind(
 
     if type(artifact) is not CompiledSimulationArtifact:
         raise TypeError("pops.bind requires an exact CompiledSimulationArtifact")
-    artifact.verify()
+    from pops.runtime._bind_agreement import bind_world, verify_world_bind
+
+    world = bind_world(resources)
+    if world is None:
+        artifact.verify()
+    else:
+        verify_world_bind(artifact, world)
     from pops._native_selector import select_native_dimension
 
     select_native_dimension(getattr(artifact, "resolved_dimension", None))

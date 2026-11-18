@@ -13,6 +13,7 @@
 #include <cmath>
 #include <concepts>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -30,6 +31,9 @@ struct CompiledSystemBlockRoutes {
   std::string reconstruction;
   std::string time;
   Real positivity_floor = Real(0);
+  // The smoothness epsilon of a reconstruction that has one, as the AMR route carries it; none
+  // keeps the policy's default (before N3 lot 3-eps the uniform route always dropped it).
+  std::optional<Real> smoothness_epsilon;
 };
 
 /// Complete immutable input handed to a package-owned exact block factory through ADL.
@@ -82,6 +86,10 @@ inline void validate_routes(const CompiledSystemBlockRoutes& routes) {
   if (routes.time != "explicit" && routes.time != "euler" && routes.time != "ssprk3" &&
       routes.time != "imex" && routes.time != "imexrk_ars222")
     throw std::invalid_argument("compiled System block has an unsupported Program time route");
+  if (routes.smoothness_epsilon &&
+      (!std::isfinite(*routes.smoothness_epsilon) || !(*routes.smoothness_epsilon > Real(0))))
+    throw std::invalid_argument(
+        "compiled System block smoothness epsilon must be finite and positive");
   if (!std::isfinite(routes.positivity_floor) || routes.positivity_floor < Real(0))
     throw std::invalid_argument(
         "compiled System block positivity floor must be finite and non-negative");
@@ -96,7 +104,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block_from_authority(
     std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>> provider_storage,
     std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan,
     std::shared_ptr<const StaticGeometry<Dim>> static_geometry, NewtonOptions newton = {},
-    bool newton_diagnostics = false) {
+    bool newton_diagnostics = false, std::optional<double> smoothness_epsilon = std::nullopt) {
   static_assert(Dim >= 1 && Dim <= 3);
   static_assert(
       requires { Model::dimension; },
@@ -119,6 +127,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block_from_authority(
 
   CompiledSystemBlockRoutes routes{limiter, riemann, reconstruction, time,
                                    static_cast<Real>(positivity_floor)};
+  if (smoothness_epsilon)
+    routes.smoothness_epsilon = static_cast<Real>(*smoothness_epsilon);
   validate_routes(routes);
   using Request = CompiledSystemBlockPreparation<Dim, Model>;
   static_assert(
@@ -178,7 +188,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
       name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, evolve,
       stride, positivity_floor, installer.geometry(), installer.periodicity(),
       std::move(provider_storage), std::move(provider_plan), installer.static_geometry(), newton,
-      newton_diagnostics);
+      newton_diagnostics, installer.smoothness_epsilon());
 }
 
 /// Prepare through the direct facade surface retained for in-process and test-owned Systems.
@@ -188,7 +198,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
     System<Dim>& system, const std::string& name, Model model, const std::string& limiter,
     const std::string& riemann, const std::string& reconstruction, const std::string& time,
     double gamma, int substeps, bool evolve, int stride, double positivity_floor = 0.0,
-    NewtonOptions newton = {}, bool newton_diagnostics = false) {
+    NewtonOptions newton = {}, bool newton_diagnostics = false,
+    std::optional<double> smoothness_epsilon = std::nullopt) {
   std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>> provider_storage;
   std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan;
   if constexpr (provider_count_for<Model, Dim>() > 0) {
@@ -200,7 +211,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
       name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, evolve,
       stride, positivity_floor, system.prepared_block_geometry(),
       system.prepared_block_periodicity(), std::move(provider_storage), std::move(provider_plan),
-      system.static_geometry(), newton, newton_diagnostics);
+      system.static_geometry(), newton, newton_diagnostics, smoothness_epsilon);
 }
 
 /// Stage the RuntimeInstance world lane Python bind installs when the C++ convenience path
@@ -269,13 +280,15 @@ void add_compiled_model(System<Dim>& system, const std::string& name, Model mode
                         const std::string& time = "explicit",
                         double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
                         bool evolve = true, int stride = 1, double positivity_floor = 0.0,
-                        NewtonOptions newton = {}, bool newton_diagnostics = false) {
+                        NewtonOptions newton = {}, bool newton_diagnostics = false,
+                        std::optional<double> smoothness_epsilon = std::nullopt) {
   ensure_compiled_system_execution_lane(system, name);
   ensure_compiled_system_state_route(system, name);
   install_prepared_block(
-      system, prepare_compiled_system_block<Dim>(
-                  system, name, std::move(model), limiter, riemann, reconstruction, time, gamma,
-                  substeps, evolve, stride, positivity_floor, newton, newton_diagnostics));
+      system, prepare_compiled_system_block<Dim>(system, name, std::move(model), limiter, riemann,
+                                                 reconstruction, time, gamma, substeps, evolve,
+                                                 stride, positivity_floor, newton,
+                                                 newton_diagnostics, smoothness_epsilon));
 }
 
 }  // namespace pops

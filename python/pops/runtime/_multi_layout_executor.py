@@ -951,6 +951,9 @@ class _MultiLayoutUniformExecutor:
             self._bound_snapshot.bind_identity,
         )
 
+    def _checkpoint_program_id(self) -> Any:
+        return self._bound_snapshot.program_id
+
     @property
     def last_run_identity(self) -> Any:
         return self._last_run_identity

@@ -461,8 +461,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         name = require_name(name, "coordinate name")
         if name in self._dsl._m.prim_defs or name in self._pending_coordinates():
             raise ValueError("coordinate %r is already declared" % name)
-        self._coordinates = {**self._pending_coordinates(), name: None}
-        return Var(name, "prim")
+        coordinate = Var(name, "prim")
+        self._coordinates = {**self._pending_coordinates(), name: coordinate}
+        return coordinate
 
     def _pending_coordinates(self) -> dict:
         return getattr(self, "_coordinates", {})
@@ -504,9 +505,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             raise NotYetElaborated(
                 "an accumulation law over a state of %d components" % len(components),
                 "a later lot of G03 (lot A recovers one coordinate per point)")
-        if (not isinstance(coordinates, Var) or coordinates.kind != "prim"
-                or coordinates.name not in self._pending_coordinates()
-                or self._pending_coordinates()[coordinates.name] is not None):
+        if (not isinstance(coordinates, Var)
+                or self._pending_coordinates().get(coordinates.name) is not coordinates):
             raise ValueError("accumulation(coordinates=) takes one undefined model.coordinate(...)")
         if not isinstance(law, Expr):
             raise TypeError("accumulation(law=) is a symbolic expression of its coordinates")
@@ -537,7 +537,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if type(recovery) is not LocalRoot:
             raise TypeError("accumulation(recovery=) is a LocalRoot")
         bound = Var("pops_root_" + coordinates.name, BOUND_KIND)
-        bound_law = substitute(law, coordinates.name, bound, kind="prim")
+        bound_law = substitute(law, coordinates.name, bound, kind="prim",
+                               only_variable=coordinates)
         from pops._ir.lowering import diff
         slope = diff(bound_law, bound)
         try:

@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 #include "component_abi_test_helpers.hpp"
 #include "explicit_amr_program.hpp"
 
@@ -641,7 +642,10 @@ void verify_restart_auxiliary_layout_replacement() {
 
 template <int Dim>
 void verify_bootstrap_covered_cell_synchronization() {
-  constexpr const char* state_route = "tests.amr.system-contract/bootstrap-sync/state";
+  const pops::test::StandaloneFixtureCriterion criterion{
+      pops::test::standalone_bootstrap_sync, POPS_TEST_standalone_bootstrap_sync_DSO,
+      POPS_TEST_standalone_bootstrap_sync_RECEIPT};
+  const char* state_route = criterion.criterion.state;
   pops::AmrSystemConfig<Dim> config = magnetic_config<Dim>();
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 16;
@@ -650,10 +654,7 @@ void verify_bootstrap_covered_cell_synchronization() {
                                             "test.amr-system-contract.bootstrap-sync-runtime");
   system.install_block_state_route("tracer", state_route);
   install_direct_tracer(system, "tracer", "tests.amr.system-contract/bootstrap-sync/flux");
-  pops::test::install_prepared_threshold_union(
-      system,
-      {{"tracer", "scalar", 1.5, pops::test::PreparedThresholdRelation::Above, state_route}},
-      "tests.amr.system-contract/bootstrap-sync/tagging@1");
+  criterion.install(system);
 
   const std::size_t cells = cell_count(config.shape);
   std::vector<double> initial(cells, 1.0);

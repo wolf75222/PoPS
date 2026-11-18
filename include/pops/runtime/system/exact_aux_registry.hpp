@@ -212,6 +212,11 @@ class ExactAuxiliaryRegistry final {
   ExactAuxiliaryRegistry(const ExactAuxiliaryRegistry&) = default;
   ExactAuxiliaryRegistry& operator=(const ExactAuxiliaryRegistry&) = default;
 
+  [[nodiscard]] const std::vector<AuxiliaryConsumerProviderPlan<Dim>>& consumer_plans() const {
+    require_sealed_();
+    return consumer_plans_;
+  }
+
   /// Structural registration only.  It is forbidden after @ref seal, so accepted executions see
   /// one immutable topology and one exact communicator-comparable contract.
   void add(provider_type provider) {

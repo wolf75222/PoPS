@@ -67,6 +67,9 @@ class OwnerSegment:
             raise TypeError("OwnerSegment.kind must be an OwnerKind")
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("OwnerSegment.name must be a non-empty string")
+        from pops.identity.presentation import require_owner_name
+
+        require_owner_name(self.kind.value, self.name)
 
     def to_data(self) -> dict[str, str]:
         return {"kind": self.kind.value, "name": self.name}

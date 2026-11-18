@@ -525,26 +525,6 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            "Atomically extend the prepared multi-level shared-interface provider registry.")
       .def("_discard_boundary_plans", &AmrSystem::discard_hyperbolic_boundaries,
            "Roll back one failed pre-block boundary authority transaction.")
-      .def(
-          "_install_amr_tagger_component",
-          [](AmrSystem& system, std::shared_ptr<pops::component::LoadedComponent> component,
-             const py::dict& binding, const std::string& parameters_json,
-             const std::string& target_json, const py::dict& execution_data) {
-            const py::dict capability = py::cast<py::dict>(binding["tagging_capability"]);
-            system.install_tagger_component(
-                std::move(component), py::cast<std::string>(binding["component_id"]),
-                py::cast<std::string>(binding["component_manifest_identity"]),
-                py::cast<std::uint32_t>(binding["interface_version"]),
-                py::cast<std::string>(binding["provider_identity"]),
-                py::cast<std::string>(binding["tagging_graph_identity"]),
-                py::cast<std::string>(binding["layout_identity"]),
-                py::cast<std::string>(binding["clock_identity"]),
-                py::cast<std::string>(capability["execution_mode"]), parameters_json, target_json,
-                pops::python::detail::make_component_execution_context(execution_data));
-          },
-          py::arg("component"), py::arg("binding"), py::arg("parameters_json"),
-          py::arg("target_json"), py::arg("execution_context"),
-          "Install one authenticated native Tagger candidate evaluator.")
       // Private production-package seam. Parameters are fixed before AMR closures are built.
       .def(
           "_install_native_block",
@@ -622,7 +602,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_set_generated_tagging", &AmrSystem::set_generated_tagging, py::arg("identity"),
            py::arg("field_identities"), py::arg("field_blocks"), py::arg("field_variables"),
            py::arg("field_components"), py::arg("field_reach"), py::arg("parameters"),
-           py::arg("min_cycles"), py::arg("clock_identity"), py::arg("provider_identity"))
+           py::arg("parameter_blocks"), py::arg("parameter_slots"), py::arg("min_cycles"),
+           py::arg("clock_identity"), py::arg("provider_identity"))
       .def("_set_generated_regrid_decision", &AmrSystem::set_generated_regrid_decision,
            py::arg("identity"), py::arg("field_identities"), py::arg("field_blocks"),
            py::arg("field_variables"), py::arg("field_components"), py::arg("parameters"),

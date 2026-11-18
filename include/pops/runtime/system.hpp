@@ -42,6 +42,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 #include <optional>
@@ -74,6 +75,10 @@ class PreparedSystemLayoutTransfer;
 
 namespace component {
 class LoadedComponent;
+}
+
+namespace runtime::program {
+enum class StepBoundDispatch : std::uint64_t;
 }
 
 /// Immutable bind-time contract for one native transfer between two Uniform System layouts.
@@ -321,7 +326,8 @@ class System {
       const std::string& recon = "conservative", const std::string& time = "explicit",
       double gamma = static_cast<double>(kPhysicalDefaultGamma), int substeps = 1,
       bool evolve = true, int stride = 1, const std::vector<double>& params = {},
-      double positivity_floor = 0.0, NewtonOptions newton = {}, bool newton_diagnostics = false);
+      double positivity_floor = 0.0, NewtonOptions newton = {}, bool newton_diagnostics = false,
+      std::optional<double> smoothness_epsilon = std::nullopt);
 
   /// Authenticate and stage one exact-ranked external Riemann package. The external DSO owns the
   /// prepared model and numerical flux type; its handle is retained by the ordinary native-package
@@ -519,6 +525,10 @@ class System {
   /// owner-qualified ComponentKeys, shapes, and accepted provider generations before publication.
   [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
   capture_auxiliary_checkpoint_accepted_state() const;
+  [[nodiscard]] POPS_EXPORT bool checkpoint_has_positional_state_authority() const;
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> capture_positional_auxiliary_checkpoint()
+      const;
+  POPS_EXPORT void validate_positional_auxiliary_checkpoint(std::span<const std::uint8_t>) const;
   /// Current accepted-image size observation for raw System callers. Pending task inputs are
   /// excluded. Arbitrary raw logical clocks make this a dynamic observation, not a future bound.
   /// The pair is ``(payload-free POPSAUX2/3 bytes, scalar values per full-domain level)``.
@@ -878,6 +888,17 @@ class System {
       const runtime::program::AdvanceStepRule* rule = nullptr);
   /// Retry.max_attempts of the installed Advance; 0 when the installed Program has none.
   int advance_max_attempts() const noexcept;
+  /// The step bound of a cells rule (N8 « dt= as a function of cell », D2): the smallest value over
+  /// the valid cells of the evolving block, at the accepted state, of the function of cell that dt=
+  /// writes, reduced over the ranks (PF8); +infinity when it is +infinity on every cell. A cell where
+  /// it is not finite, or not positive, fails with std::domain_error, whose message starts with
+  /// step_bound_nonfinite or step_bound_nonpositive and names the first such cell. Collective.
+  double step_bound(std::string_view bound_identity = {});
+  /// One step of @p dt under the Courant budget @p fraction of a cells rule, in (0, 1], which the
+  /// face guards of the step check (pops.run's CellStepBound; design note D4).
+  void step_at_fraction(double dt, double fraction);
+  /// The identity of the installed step bound; empty when the Program has none.
+  const std::string& step_bound_identity() const noexcept;
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
   POPS_EXPORT std::string advance_program_region(double dt);
   void begin_step_transaction();
@@ -1563,6 +1584,7 @@ class System {
   /// Checkpoint capture may serialize the current provisional effect under its active outer
   /// transaction; this is distinct from accepted-idle observation and makes no publication.
   [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_state_carriers() const;
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_positional_state_carriers() const;
   /// uniform-state-carriers@1: complete actual storage, no ghost refresh.
   [[nodiscard]] POPS_EXPORT std::uint64_t checkpoint_state_carriers_capacity() const;
   POPS_EXPORT void validate_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) const;
@@ -1617,7 +1639,11 @@ class System {
                                                   /// @}
 
  private:
-  std::vector<std::vector<std::uint8_t>> capture_state_storage_(bool provisional_capture) const;
+  runtime::system::AuxiliaryCheckpointAcceptedState<Dim> capture_auxiliary_checkpoint_(
+      bool positional) const;
+  std::vector<std::string> checkpoint_carrier_block_names_(bool positional) const;
+  std::vector<std::vector<std::uint8_t>> capture_state_storage_(bool provisional_capture,
+                                                                bool positional = false) const;
   typename SystemInterfaceProvider<Dim>::CoreEvaluator prepare_interface_core_evaluator_(
       typename SystemInterfaceProvider<Dim>::CoreFaceEvaluator* retained_evaluator = nullptr);
   void prepare_bound_physical_group_();
@@ -1637,6 +1663,11 @@ class System {
   /// last_dt_bound(). step_cfl executes the step it selects; run_advance with a step rule takes
   /// it as the proposal of a step. Collective. @return the selected dt.
   double select_step_(double fraction, double speed_floor, double max_dt, double min_dt);
+  /// Classifies, under a cells rule, a System whose b6 selection would do more than read speeds: a
+  /// default field solve or an elliptic source, a stability auxiliary, a source or parabolic
+  /// frequency, a stability_dt, substeps or stride, coupled frequencies, global or Program dt
+  /// bounds, or other than one evolving block (design note D2, C3, C5).
+  runtime::program::StepBoundDispatch cells_rule_dispatch_(std::string_view bound_identity) const;
   /// Internal result boundary shared by field, local-source and Program prepared-linear solves.
   [[nodiscard]] POPS_EXPORT SolveOutcome track_solve_outcome(SolveOutcome outcome) const noexcept;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains

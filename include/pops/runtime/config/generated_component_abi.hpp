@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 #define POPS_COMPONENT_API_SYMBOL_V1 "pops_component_interface_v1"
-#define POPS_COMPONENT_CATALOG_SHA256_V1 "3300f2e69852d0b12cbcb12b2c90c1c1dbdd9cddde375d4633062a64d0857985"
+#define POPS_COMPONENT_CATALOG_SHA256_V1 "eb2feac6afcc6b06eb7868d9ff6fc2a79ba57c36093aff363f762fe45bb5d9a2"
 #define POPS_COMPONENT_PROTOCOL_ABI_V1 1u
 #define POPS_COMPONENT_COMMON_ABI_V1 1u
 
@@ -24,7 +24,6 @@ typedef enum PopsNativeInterfaceIdV1 {
   POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1 = 1,
   POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1 = 2,
   POPS_NATIVE_INTERFACE_TAGGER_V2 = 3,
-  POPS_NATIVE_INTERFACE_CLUSTERING_V1 = 4,
   POPS_NATIVE_INTERFACE_TRANSFER_V2 = 5,
   POPS_NATIVE_INTERFACE_REFLUX_V1 = 6,
   POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2 = 7,
@@ -458,24 +457,6 @@ typedef struct PopsTaggerApiV2 {
   PopsTagBatchFnV2 tag_batch;
 } PopsTaggerApiV2;
 
-typedef struct PopsClusteringRequestV1 {
-  uint32_t struct_size;
-  PopsConstByteViewV1 tags;
-  const int64_t* extents;
-  int32_t dimension;
-  // `boxes` is box-major [lo_0..lo_(d-1), hi_0..hi_(d-1)]. Bounds are
-  // inclusive and relative to the supplied tag region.
-  int64_t* boxes;
-  size_t box_capacity;
-  size_t* box_count;
-  PopsExecutionContextV1 execution;
-} PopsClusteringRequestV1;
-typedef int32_t (*PopsClusterFnV1)(void*, const PopsClusteringRequestV1*, PopsComponentStatusV1*);
-typedef struct PopsClusteringApiV1 {
-  PopsComponentTableHeaderV1 header;
-  PopsClusterFnV1 cluster;
-} PopsClusteringApiV1;
-
 typedef enum PopsTransferOperationV1 {
   POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 = 1,
   POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1 = 2,
@@ -835,7 +816,6 @@ inline constexpr size_t generated_native_interface_table_size(
     case POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1: return sizeof(PopsGhostBoundaryApiV1);
     case POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1: return sizeof(PopsFieldBoundaryClosureApiV1);
     case POPS_NATIVE_INTERFACE_TAGGER_V2: return sizeof(PopsTaggerApiV2);
-    case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return sizeof(PopsClusteringApiV1);
     case POPS_NATIVE_INTERFACE_TRANSFER_V2: return sizeof(PopsTransferApiV2);
     case POPS_NATIVE_INTERFACE_REFLUX_V1: return sizeof(PopsRefluxApiV1);
     case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return sizeof(PopsFieldSolverApiV2);
@@ -852,7 +832,6 @@ inline constexpr uint32_t generated_native_interface_version(PopsNativeInterface
     case POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1: return 1u;
     case POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1: return 1u;
     case POPS_NATIVE_INTERFACE_TAGGER_V2: return 2u;
-    case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return 1u;
     case POPS_NATIVE_INTERFACE_TRANSFER_V2: return 2u;
     case POPS_NATIVE_INTERFACE_REFLUX_V1: return 1u;
     case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return 2u;
@@ -870,7 +849,6 @@ inline constexpr const char* generated_native_interface_table_name(
     case POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1: return "PopsGhostBoundaryApiV1";
     case POPS_NATIVE_INTERFACE_FIELD_BOUNDARY_CLOSURE_V1: return "PopsFieldBoundaryClosureApiV1";
     case POPS_NATIVE_INTERFACE_TAGGER_V2: return "PopsTaggerApiV2";
-    case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return "PopsClusteringApiV1";
     case POPS_NATIVE_INTERFACE_TRANSFER_V2: return "PopsTransferApiV2";
     case POPS_NATIVE_INTERFACE_REFLUX_V1: return "PopsRefluxApiV1";
     case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return "PopsFieldSolverApiV2";
@@ -917,14 +895,6 @@ inline bool generated_native_interface_table_is_complete(
           header->interface_version != 2u) return false;
       const auto* api = static_cast<const PopsTaggerApiV2*>(table);
       return api->tag_batch != nullptr;
-    }
-    case POPS_NATIVE_INTERFACE_CLUSTERING_V1: {
-      if (table_size < sizeof(PopsClusteringApiV1)) return false;
-      const auto* header = static_cast<const PopsComponentTableHeaderV1*>(table);
-      if (header->struct_size < sizeof(PopsClusteringApiV1) || header->struct_size > table_size ||
-          header->interface_version != 1u) return false;
-      const auto* api = static_cast<const PopsClusteringApiV1*>(table);
-      return api->cluster != nullptr;
     }
     case POPS_NATIVE_INTERFACE_TRANSFER_V2: {
       if (table_size < sizeof(PopsTransferApiV2)) return false;

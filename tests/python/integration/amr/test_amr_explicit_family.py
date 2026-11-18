@@ -139,7 +139,7 @@ def _resolved(method: str, *, multi: bool, native_cxx: str):
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
             rules=(
-                Tag(ValueExpr(rows[0][1]) > case.value(threshold)),
+                Tag(lambda cell: cell.value(ValueExpr(rows[0][1])) > case.value(threshold)),
                 Buffer(cells=1),
             ),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),

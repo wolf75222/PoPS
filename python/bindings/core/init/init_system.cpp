@@ -7,12 +7,14 @@
 #include "output_moving_geometry_binding.hpp"
 
 #include <pops/core/identity/sha256.hpp>
+#include <pops/mesh/geometry/centroid_slope.hpp>
 #include <pops/runtime/checkpoint/uniform_migration_authority.hpp>
 #include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 
 #include <array>
 #include <cmath>
@@ -395,15 +397,17 @@ void bind_system_assembly(py::class_<System>& cls) {
              const std::vector<std::vector<std::string>>& face_analytic_opcodes,
              const std::vector<std::vector<double>>& face_analytic_literals,
              const std::vector<std::string>& face_analytic_clocks,
-             const std::vector<int>& prescribed_trace_faces) {
+             const std::vector<int>& prescribed_trace_faces,
+             const std::vector<std::string>& face_source_identities) {
             reject_unqualified_periodic_identifications<pops::kNativeDimension>(
                 periodic_identifications, "ranked Cartesian boundary authority");
-            auto boundary = pops::prepare_hyperbolic_boundary<pops::kNativeDimension>(
-                                face_types, face_values, face_identities, component_roles, false,
-                                face_representations, face_converter_identities,
-                                face_analytic_opcodes, face_analytic_literals, face_analytic_clocks)
-                                .with_omitted_interface_faces(omitted_interface_faces)
-                                .with_prescribed_trace_faces(prescribed_trace_faces);
+            auto boundary =
+                pops::prepare_hyperbolic_boundary<pops::kNativeDimension>(
+                    face_types, face_values, face_identities, component_roles, false,
+                    face_representations, face_converter_identities, face_analytic_opcodes,
+                    face_analytic_literals, face_analytic_clocks, face_source_identities)
+                    .with_omitted_interface_faces(omitted_interface_faces)
+                    .with_prescribed_trace_faces(prescribed_trace_faces);
             system.install_prepared_hyperbolic_boundary(
                 name, identity, required_depth, state_identity,
                 std::make_shared<pops::PreparedHyperbolicBoundary<pops::kNativeDimension>>(
@@ -420,6 +424,7 @@ void bind_system_assembly(py::class_<System>& cls) {
           py::arg("face_analytic_literals") = std::vector<std::vector<double>>{},
           py::arg("face_analytic_clocks") = std::vector<std::string>{},
           py::arg("prescribed_trace_faces") = std::vector<int>{},
+          py::arg("face_source_identities") = std::vector<std::string>{},
           "Install one resolved per-block ghost-production plan before block construction.")
       .def("_install_block_state_route", &System::install_block_state_route, py::arg("name"),
            py::arg("state_identity"),
@@ -606,13 +611,13 @@ void bind_system_assembly(py::class_<System>& cls) {
              double gamma, int substeps, bool evolve, int stride, const std::vector<double>& params,
              double positivity_floor, int newton_max_iters, double newton_rel_tol,
              double newton_abs_tol, double newton_fd_eps, double newton_damping,
-             bool newton_diagnostics) {
+             bool newton_diagnostics, std::optional<double> smoothness_epsilon) {
             NewtonOptions newton = newton_options_from_abi(
                 newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps, newton_damping);
-            system.register_native_package(name, so_path, expected_model_identity,
-                                           expected_binary_identity, limiter, riemann, recon, time,
-                                           gamma, substeps, evolve, stride, params,
-                                           positivity_floor, newton, newton_diagnostics);
+            system.register_native_package(
+                name, so_path, expected_model_identity, expected_binary_identity, limiter, riemann,
+                recon, time, gamma, substeps, evolve, stride, params, positivity_floor, newton,
+                newton_diagnostics, smoothness_epsilon);
           },
           py::arg("name"), py::arg("so_path"), py::arg("expected_model_identity"),
           py::arg("expected_binary_identity"), py::arg("limiter") = "minmod",
@@ -626,7 +631,7 @@ void bind_system_assembly(py::class_<System>& cls) {
           py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
           py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
           py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
-          py::arg("newton_diagnostics") = false)
+          py::arg("newton_diagnostics") = false, py::arg("smoothness_epsilon") = py::none())
       .def("_register_external_riemann_package", &System::register_external_riemann_package,
            py::arg("name"), py::arg("so_path"), py::arg("brick_id"), py::arg("expected_sha256"),
            py::arg("expected_nvars"), py::arg("expected_provider_count"),
@@ -789,6 +794,31 @@ void bind_system_checkpoint(py::class_<System>& cls) {
             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
           },
           "Capture exact auxiliary accepted metadata and field payloads in one sealed image.")
+      .def("_checkpoint_has_positional_state_authority",
+           &System::checkpoint_has_positional_state_authority)
+      .def("_capture_positional_auxiliary_checkpoint",
+           [](const System& s) {
+             py::object result;
+             std::exception_ptr error;
+             try {
+               const auto bytes = s.capture_positional_auxiliary_checkpoint();
+               result = py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+             } catch (...) {
+               error = std::current_exception();
+             }
+             pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
+                                                  "Uniform auxiliary checkpoint Python staging");
+             return result;
+           })
+      .def("_validate_positional_auxiliary_checkpoint",
+           [](const System& s, py::bytes payload) {
+             char* data = nullptr;
+             Py_ssize_t size = 0;
+             if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
+               throw py::error_already_set();
+             s.validate_positional_auxiliary_checkpoint(
+                 {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)});
+           })
       .def("_checkpoint_auxiliary_capacity", &System::checkpoint_auxiliary_capacity,
            "Return the current Uniform accepted auxiliary metadata/scalar size observation.")
       .def("_checkpoint_program_auxiliary_capacity", &System::checkpoint_program_auxiliary_capacity,
@@ -1153,8 +1183,8 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("kind"), py::arg("opcodes"), py::arg("literals"), py::arg("rule_nodes"),
            py::arg("rule_weights"))
       // A host snapshot of the installed arrays for evidence and tests: cell arrays in the NumPy
-      // order of the state, face arrays per axis with the axis extent grown by one; None on the
-      // uniform logical box.
+      // order of the state, face arrays per axis with the axis extent grown by one, and the
+      // periodicity and seam translation of each axis; None on the uniform logical box.
       .def("_static_geometry_snapshot",
            [](const System& s) -> py::object {
              constexpr int Dim = pops::kNativeDimension;
@@ -1181,9 +1211,11 @@ void bind_system_physics(py::class_<System>& cls) {
              result["kind"] =
                  geometry->kind() == pops::StaticGeometryKind::chart ? "chart" : "nodes";
              result["closure_ratio"] = static_cast<double>(geometry->closure_ratio());
+             result["orthogonality"] = static_cast<double>(geometry->orthogonality());
              result["cell_measure"] = cell_array(view.cell_measure);
              py::tuple centroid(Dim), width(Dim), face_measure(Dim), face_distance(Dim),
-                 face_normal(Dim), nodes(Dim);
+                 face_normal(Dim), face_centroid(Dim), nodes(Dim), periodic(Dim),
+                 seam_translation(Dim);
              for (int axis = 0; axis < Dim; ++axis) {
                centroid[static_cast<std::size_t>(axis)] = cell_array(view.centroid[axis]);
                width[static_cast<std::size_t>(axis)] = cell_array(view.width[axis]);
@@ -1191,11 +1223,19 @@ void bind_system_physics(py::class_<System>& cls) {
                    face_array(axis, view.face_measure[axis]);
                face_distance[static_cast<std::size_t>(axis)] =
                    face_array(axis, view.face_distance[axis]);
-               py::tuple normal(Dim);
-               for (int component = 0; component < Dim; ++component)
+               py::tuple normal(Dim), middle(Dim), translation(Dim);
+               for (int component = 0; component < Dim; ++component) {
                  normal[static_cast<std::size_t>(component)] =
                      face_array(axis, view.face_normal[axis][component]);
+                 middle[static_cast<std::size_t>(component)] =
+                     face_array(axis, view.face_centroid[axis][component]);
+                 translation[static_cast<std::size_t>(component)] =
+                     static_cast<double>(view.seam_translation[axis][component]);
+               }
                face_normal[static_cast<std::size_t>(axis)] = normal;
+               face_centroid[static_cast<std::size_t>(axis)] = middle;
+               periodic[static_cast<std::size_t>(axis)] = view.periodic[axis];
+               seam_translation[static_cast<std::size_t>(axis)] = translation;
                const auto& positions = geometry->nodes()[static_cast<std::size_t>(axis)];
                auto node_extent = shape;
                for (int other = 0; other < Dim; ++other)
@@ -1208,9 +1248,67 @@ void bind_system_physics(py::class_<System>& cls) {
              result["face_measure"] = face_measure;
              result["face_distance"] = face_distance;
              result["face_normal"] = face_normal;
+             result["face_centroid"] = face_centroid;
              result["nodes"] = nodes;
+             result["periodic"] = periodic;
+             result["seam_translation"] = seam_translation;
              return result;
            })
+      // Runtime-private seam of the centred slope of the arrays (N17 L2b-2, DN40), for tests: the
+      // slope of every cell from given differences e(K + 1_a) - e(K - 1_a), one array per axis in
+      // the NumPy order of the state, by pops::centroid_slope, the function that the Program
+      // operation of centred differences calls. A Program consumes a slope of one component per
+      // axis in rank one only, so ranks two and three read the function here.
+      .def(
+          "_static_geometry_centroid_slopes",
+          [](const System& s,
+             py::array_t<double, py::array::c_style | py::array::forcecast> differences) {
+            constexpr int Dim = pops::kNativeDimension;
+            const auto geometry = s.static_geometry();
+            if (!geometry)
+              throw std::invalid_argument(
+                  "centroid slopes: the differences need the static geometry arrays of a mapped "
+                  "layout, and none are installed");
+            const auto shape = s.spatial_shape();
+            std::vector<py::ssize_t> expected = ranked_numpy_shape(shape);
+            expected.insert(expected.begin(), static_cast<py::ssize_t>(Dim));
+            bool matches = differences.ndim() == static_cast<py::ssize_t>(expected.size());
+            for (std::size_t index = 0; matches && index < expected.size(); ++index)
+              matches = differences.shape(static_cast<py::ssize_t>(index)) == expected[index];
+            if (!matches)
+              throw std::invalid_argument(
+                  "centroid slopes: the differences are one array per axis over the cells of the "
+                  "arrays, in the NumPy order of the state");
+            pops::device_fence();
+            const auto view = geometry->view();
+            const auto cells = static_cast<std::size_t>(view.domain.numPts());
+            const double* data = differences.data();
+            std::vector<double> slopes(cells * static_cast<std::size_t>(Dim));
+            for (std::size_t offset = 0; offset < cells; ++offset) {
+              pops::Index<Dim> cell{};
+              std::size_t rest = offset;
+              for (int axis = 0; axis < Dim; ++axis) {
+                const auto extent = static_cast<std::size_t>(view.domain.length(axis));
+                cell[axis] = view.domain.lo[axis] + static_cast<int>(rest % extent);
+                rest /= extent;
+              }
+              pops::RealVector<Dim> delta{};
+              for (int axis = 0; axis < Dim; ++axis)
+                delta[axis] = data[static_cast<std::size_t>(axis) * cells + offset];
+              pops::RealVector<Dim> slope{};
+              const auto status = pops::centroid_slope(view, cell, delta, slope);
+              if (status != pops::CentroidSlopeStatus::ok)
+                throw pops::runtime::program::StepAttemptRejected(
+                    pops::SolveStatus::kInvalidEvaluation,
+                    pops::runtime::program::StepAttemptDisposition::kReject, 0, "centroid_slope",
+                    status == pops::CentroidSlopeStatus::singular ? "singular centroid differences"
+                                                                  : "non-finite slope evaluation");
+              for (int axis = 0; axis < Dim; ++axis)
+                slopes[static_cast<std::size_t>(axis) * cells + offset] = slope[axis];
+            }
+            return to_ranked_state<Dim>(slopes, Dim, shape);
+          },
+          py::arg("differences"))
       // Toggles only the installed level-set transport mode without redefining its expression.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
       .def("embedded_boundary_mask",
@@ -1293,7 +1391,8 @@ void bind_system_stepping(py::class_<System>& cls) {
               System& system, double until, double proposal, std::int64_t max_steps,
               const std::vector<
                   std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>& outputs,
-              const std::optional<std::pair<double, double>>& rule) {
+              const std::optional<std::pair<double, double>>& rule,
+              const std::optional<std::pair<double, std::string>>& cells) {
             std::vector<pops::runtime::program::AdvanceOutputSchedule> schedule;
             schedule.reserve(outputs.size());
             for (const auto& [every_steps, at, arrays] : outputs)
@@ -1301,9 +1400,16 @@ void bind_system_stepping(py::class_<System>& cls) {
             // rule = (fraction, max_dt): the step rule of the Advance, max_dt +inf when it has
             // none; its floor is step_cfl's default.
             std::optional<pops::runtime::program::AdvanceStepRule> step_rule;
+            if (rule && cells)
+              throw std::invalid_argument("_run_advance takes a stability rule or a cells rule");
             if (rule)
               step_rule =
                   pops::runtime::program::AdvanceStepRule{rule->first, rule->second, speed_floor};
+            // cells = (fraction, bound identity): the cells rule of dt= as a function of cell.
+            if (cells)
+              step_rule = pops::runtime::program::AdvanceStepRule{
+                  cells->first, std::numeric_limits<double>::infinity(), speed_floor,
+                  pops::runtime::program::AdvanceStepRuleKind::kCells, cells->second};
             const auto report = system.run_advance(until, proposal, max_steps, schedule,
                                                    step_rule ? &*step_rule : nullptr);
             py::list samples;
@@ -1332,6 +1438,12 @@ void bind_system_stepping(py::class_<System>& cls) {
             result["last_prepared_solve_iterations"] = report.last_prepared_solve_iterations;
             result["last_prepared_solve_residual"] = report.last_prepared_solve_residual;
             result["rejection_detail"] = report.rejection_detail;
+            result["rejection_status"] = report.rejection_status;
+            if (!report.typed_failure_schema.empty()) {
+              result["typed_failure_schema"] = report.typed_failure_schema;
+              result["typed_failure_payload"] = py::bytes(report.typed_failure_payload);
+            }
+            result["face_frequency"] = report.face_frequency;
             result["segment_origin"] = report.segment.origin;
             result["segment_steps"] = report.segment.steps;
             result["outputs"] = samples;
@@ -1340,8 +1452,14 @@ void bind_system_stepping(py::class_<System>& cls) {
           py::arg("until"), py::arg("proposal"), py::arg("max_steps"),
           py::arg("outputs") = std::vector<
               std::tuple<std::int64_t, std::vector<double>, std::vector<std::string>>>{},
-          py::arg("rule") = std::optional<std::pair<double, double>>{})
+          py::arg("rule") = std::optional<std::pair<double, double>>{},
+          py::arg("cells") = std::optional<std::pair<double, std::string>>{})
       .def("_advance_max_attempts", &System::advance_max_attempts)
+      // The step bound of a cells rule at the accepted state (N8 « dt= as a function of cell »):
+      // the proposal of pops.run's CellStepBound strategy. Collective.
+      .def("_step_bound", &System::step_bound, py::arg("bound_identity") = "")
+      .def("_step_bound_identity", &System::step_bound_identity)
+      .def("_step_at_fraction", &System::step_at_fraction, py::arg("dt"), py::arg("fraction"))
       .def_static(
           "_advance_attempt_duration",
           [](double time, double proposal, double frontier, double origin, std::int64_t steps) {
@@ -1659,20 +1777,23 @@ void bind_system_data(py::class_<System>& cls) {
             return to_ranked_field(s.density_global(name), s.spatial_shape());
           },
           py::arg("name"))
-      .def("checkpoint_state_carriers",
-           [](const System& s) {
-             const auto bytes = s.checkpoint_state_carriers();
-             py::object result;
-             std::exception_ptr error;
-             try {
-               result = py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-             } catch (...) {
-               error = std::current_exception();
-             }
-             pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
-                                                  "Uniform checkpoint carrier Python staging");
-             return result;
-           })
+      .def(
+          "checkpoint_state_carriers",
+          [](const System& s, bool positional) {
+            const auto bytes = positional ? s.checkpoint_positional_state_carriers()
+                                          : s.checkpoint_state_carriers();
+            py::object result;
+            std::exception_ptr error;
+            try {
+              result = py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            } catch (...) {
+              error = std::current_exception();
+            }
+            pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
+                                                 "Uniform checkpoint carrier Python staging");
+            return result;
+          },
+          py::arg("positional") = false)
       .def("checkpoint_state_carriers_capacity", &System::checkpoint_state_carriers_capacity)
       .def("validate_checkpoint_state_carriers",
            [](const System& s, py::object value) {
