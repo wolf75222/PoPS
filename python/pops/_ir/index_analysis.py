@@ -39,9 +39,13 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+from typing import Any
 
 from .index_maps import (
     Coarsen, Drop, Entity, IndexMap, Opaque, Pin, Refine, Unpin, Unrefine, dense, exact_weight)
+from .product_reads import (
+    FibreFoldRead, ProductFootprint, ProductRead, ProductReadUnknown, fold_footprint, point_footprint,
+)
 from .refusals import ClassNotReached, ConservationNotStructural, PropertyNotDerived
 
 CLASSES = ("pointwise", "box_stencil", "face_incidence", "axis_reduction", "line_scan",
@@ -99,6 +103,32 @@ class LocalControl:
                             % (self.node, self.parts))
 
 
+@dataclass(frozen=True, slots=True)
+class ReadOccurrence:
+    """One read at its child-index path through region bodies and local control."""
+
+    path: tuple[int, ...]
+    read: Read | ProductRead | FibreFoldRead
+
+
+def _walk_reads(body, *, paths=False):
+    pending: list[tuple[tuple[int, ...], Any]] = [((), body)]
+    while pending:
+        path, item = pending.pop()
+        if type(item) in (Read, ProductRead, FibreFoldRead):
+            yield path, item
+            continue
+        if type(item) is LocalControl:
+            item = item.parts
+        if type(item) not in (tuple, list):
+            raise TypeError("a region body holds Read records and local control, got %r" % (item,))
+        if paths:
+            pending.extend((path + (index,), item[index])
+                           for index in range(len(item) - 1, -1, -1))
+        else:
+            pending.extend(((), child) for child in reversed(item))
+
+
 def region_reads(body):
     """The reads of ``body``, a region body with local control (G02 §5.4, IR4, B4).
 
@@ -106,24 +136,17 @@ def region_reads(body):
     and ``iterate``, each read once: a read in an arm that does not run counts, and a loop body
     counts once whatever its trip count. The reads come in the order of a left-to-right walk,
     each the first time it is met, so the first blocking map of a classification is stable.
+    Product analysis uses the same walk through the body, keeping the path of each occurrence.
     """
-    found, seen, pending = [], set(), [body]
-    while pending:
-        item = pending.pop()
-        if type(item) is Read:
-            try:
-                new = item not in seen
-                seen.add(item)
-            except TypeError:  # a label that does not hash: compare by equality
-                new = item not in found
-            if new:
-                found.append(item)
-        elif type(item) is LocalControl:
-            pending.extend(reversed(item.parts))
-        elif type(item) in (tuple, list):
-            pending.extend(reversed(item))
-        else:
-            raise TypeError("a region body holds Read records and local control, got %r" % (item,))
+    found, seen = [], set()
+    for _, item in _walk_reads(body):
+        try:
+            new = item not in seen
+            seen.add(item)
+        except TypeError:  # a label that does not hash: compare by equality
+            new = item not in found
+        if new:
+            found.append(item)
     return tuple(found)
 
 
@@ -158,11 +181,14 @@ class Region:
             raise ValueError("a region has a rank >= 1, got %r" % (self.rank,))
         if self.domain.axis is not None and self.domain.axis >= self.rank:
             raise ValueError("%r is not an entity of a rank-%d lattice" % (self.domain, self.rank))
-        region_reads(self.reads)
+        reads = region_reads(self.reads)
         for pair in self.targets + self.productions:
             if type(pair) is not tuple or len(pair) != 2 or not isinstance(pair[0], IndexMap):
                 raise TypeError("a scatter target is a (map, weight) pair, got %r" % (pair,))
-        for map_ in _maps(self):
+        # Typed product reads check the domain against their descriptors while deriving
+        # their footprint, without walking a deeply nested map's normalized kind cache.
+        ordinary_maps = tuple(read.map for read in reads if type(read) is Read)
+        for map_ in ordinary_maps + tuple(m for m, _ in self.targets + self.productions):
             if map_.source not in (None, self.domain):
                 raise TypeError("region %r maps over %r entities, but %r reads %r entities"
                                 % (self.name, self.domain, map_, map_.source))
@@ -172,8 +198,8 @@ class Region:
         if self.basis not in ("derived", "declared"):
             raise ValueError("a region's reads are derived or declared, got %r" % (self.basis,))
 
-    def halo(self, where=None):
-        return halo(self, where)
+    def halo(self, where=None, *, extents=None):
+        return halo(self, where, extents=extents)
 
     def conservation(self):
         return conservation(self)
@@ -190,7 +216,8 @@ def _translation_from(map_, domain):
 
 
 def _maps(region):
-    return (tuple(read.map for read in region_reads(region.reads))
+    return (tuple(read.adjacency.inverse_of if type(read) is FibreFoldRead else read.map
+                  for read in region_reads(region.reads))
             + tuple(m for m, _ in region.targets + region.productions))
 
 
@@ -198,12 +225,33 @@ def _normal_to(kind, axis):
     return int(kind.kind == "face" and kind.axis == axis)
 
 
-def halo(region, where=None):
+def _product_footprint(region, read, extents):
+    try:
+        value = (fold_footprint(read, extents) if type(read) is FibreFoldRead
+                 else point_footprint(read, extents))
+    except ProductReadUnknown as error:
+        return Fact("product read", Truth.UNKNOWN, blocking=read, detail=str(error))
+    if value.source.rank != region.rank or value.source.entity != region.domain:
+        raise ValueError("a product read must start on its region domain")
+    return Fact("product read", Truth.PROVED, value=value)
+
+
+def product_read_footprints(region, where=None, *, extents=None):
+    """Retain each typed read's path, footprint and any unresolved bounds."""
+    return tuple((ReadOccurrence(path, read), _product_footprint(region, read, extents or {}))
+                 for path, read in _walk_reads(region.reads, paths=True)
+                 if type(read) in (ProductRead, FibreFoldRead)
+                 and (where is None or where(read.array)))
+
+
+def halo(region, where=None, *, extents=None):
     """Exact widths ``(low, high)`` per axis of the entities read beyond the owned box (IR14).
 
     ``where``, a predicate on the array labels, restricts the reads. A read of type (None, None)
     reads entities of the domain's kind. Unknown when a read is not a translation from the domain,
     or when the domain or a read target is a boundary piece, whose widths depend on the extents.
+    Typed product reads contribute only displacements on the base axes. Fibre footprints do not
+    describe which rank owns the data.
     """
     if region.domain.piece is not None:
         return Fact("halo", Truth.UNKNOWN, blocking=region.domain,
@@ -212,14 +260,22 @@ def halo(region, where=None):
     for read in region_reads(region.reads):
         if where is not None and not where(read.array):
             continue
-        if not _translation_from(read.map, region.domain):
-            return Fact("halo", Truth.UNKNOWN, blocking=read.map,
-                        detail="%r is not a translation from %r" % (read.map, region.domain))
-        target = region.domain if read.map.target is None else read.map.target
-        if target.piece is not None:
-            return Fact("halo", Truth.UNKNOWN, blocking=read.map,
-                        detail="%r reads the faces of a boundary piece" % (read.map,))
-        offset = dense(read.map.translation(), region.rank)
+        if type(read) in (ProductRead, FibreFoldRead):
+            fact = _product_footprint(region, read, extents or {})
+            if fact.truth is Truth.UNKNOWN:
+                return Fact("halo", Truth.UNKNOWN, blocking=read, detail=fact.detail)
+            footprint = fact.value
+            assert isinstance(footprint, ProductFootprint)
+            target, offset = footprint.target.entity, footprint.offset
+        else:
+            if not _translation_from(read.map, region.domain):
+                return Fact("halo", Truth.UNKNOWN, blocking=read.map,
+                            detail="%r is not a translation from %r" % (read.map, region.domain))
+            target = region.domain if read.map.target is None else read.map.target
+            if target.piece is not None:
+                return Fact("halo", Truth.UNKNOWN, blocking=read.map,
+                            detail="%r reads the faces of a boundary piece" % (read.map,))
+            offset = dense(read.map.translation(), region.rank)
         for axis, step in enumerate(offset):
             grow = _normal_to(region.domain, axis) - _normal_to(target, axis)
             low[axis] = max(low[axis], -step)
@@ -335,6 +391,7 @@ def require(fact, region):
         region=region.name, property=fact.property, blocking=fact.blocking)
 
 
-__all__ = ["CLASSES", "LOCAL_CONTROL", "Fact", "LocalControl", "Read", "Region", "Truth",
+__all__ = ["CLASSES", "LOCAL_CONTROL", "Fact", "FibreFoldRead", "LocalControl", "ProductRead",
+           "Read", "ReadOccurrence", "Region", "Truth", "product_read_footprints",
            "check_expected_class", "classify", "conservation", "halo", "injective", "region_reads",
            "require"]
