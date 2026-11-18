@@ -30,13 +30,6 @@ def owner_role(owner: str) -> str | None:
     return presentation.project_owner_string(owner)
 
 
-def qualified_role(qid: str) -> str:
-    presentation = _presentation.get()
-    if presentation is None:
-        return qid
-    return presentation.project_qualified_id(qid)
-
-
 def provider_role(producer: str, owner: str, space: str, component: str) -> str:
     presentation = _presentation.get()
     if presentation is None:
@@ -44,7 +37,7 @@ def provider_role(producer: str, owner: str, space: str, component: str) -> str:
     if producer.startswith("pops.handle.v1::"):
         producer = presentation.project_qualified_id(producer)
     from pops.identity import make_identity
-    return make_identity("pops.checkpoint-auxiliary-provider", {
+    return make_identity("checkpoint-auxiliary-provider", {
         "producer": producer, "owner": owner, "space": space, "component": component,
     }).token
 

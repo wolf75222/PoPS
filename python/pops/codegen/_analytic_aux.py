@@ -120,14 +120,14 @@ def _analytic_aux_launcher(identity, producer, *, checkpoint_role=""):
     if not checkpoint_role:
         return source, ""
     from pops.identity import canonical_bytes
-    from ._checkpoint_provenance import qualified_role
 
     parameters = canonical_bytes({
         "role": checkpoint_role,
         "dimension": dimension,
         "frame": producer.frame.canonical_id,
         "operations": operations,
-        "literals": literals,
-        "clock": None if clock_id is None else qualified_role(clock_id),
+        # Use the same binary64 spelling as the C++ emitter.
+        "literals": tuple(float(literal).hex() for literal in literals),
+        "clock": clock_id,
     }).hex()
     return source, parameters

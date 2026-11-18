@@ -9407,6 +9407,13 @@
         "tests/python/integration/surface/test_cf17_l1_swaps.py": "0375f8af6eb067120afa9d3ceaad1c60471d205a9af635a33c2e19eda7b459b6"
       }
     },
+    "ci_20261118_n11_uniform_checkpoint_owner_identity": {
+      "basis": "Scheduling estimate in the 600 s native complete-runtime tier. Two Dim2 stock tests compile four artifacts across both owner variants, perform same-owner bitwise replay, and retain the M14 stock oracle. Baseline job 828832 ran both through their intended assertions in 359.19 s on ROMEO c031 with a cold JIT cache. That receipt is not GitHub CI wall time.",
+      "analogue": "tests/python/integration/runtime/test_uniform_state_carrier_checkpoint_runtime.py",
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_uniform_checkpoint_owner_identity.py": 600
+      }
+    },
     "ci_20261113_model_source_map": {
       "basis": "Unmeasured CI scheduling estimate for the model source map of the vertical slice (S2, driver 13:35), on the api_v02_20261013 tiers: 5 s for test_model_source_map.py, source-only (a synthetic model C++ text and descriptors; no compile). The local receipt comes from pytest on a 4-core container; it is not GitHub CI file wall time. Replace only from complete CI per-file receipts.",
       "estimates_seconds": {
@@ -9838,6 +9845,7 @@
   "tests/python/integration/runtime/test_tensor_transport_composition.py": 1200.0,
   "tests/python/integration/runtime/test_uniform_accepted_storage_observation.py": 600,
   "tests/python/integration/runtime/test_uniform_accepted_storage_observation_v2.py": 600,
+  "tests/python/integration/runtime/test_uniform_checkpoint_owner_identity.py": 600,
   "tests/python/integration/runtime/test_uniform_checkpoint_provisional_effect.py": 600,
   "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": 600,
   "tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py": 600,

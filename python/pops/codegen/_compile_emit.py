@@ -963,17 +963,16 @@ def _emit_auxiliary_route_registration(
                 % (key(row), contract(row), shape, boundary_for(route)),
             )
         )
+        native_owner = native_key(row["key"])["owner_qid"]
+        role = owner_role(native_owner)
+        durable = ("" if role is None else provider_role(
+            producer, role, row["key"]["space_name"], row["key"]["component"]))
         if kind == "AuxiliaryProviderKind::derived":
             if route is None:
                 raise ValueError(
                     "derived auxiliary provider %r has no exact typed lowering route"
                     % row["key"]["component"]
                 )
-        native_owner = native_key(row["key"])["owner_qid"]
-        role = owner_role(native_owner)
-        durable = ("" if role is None else provider_role(
-            producer, role, row["key"]["space_name"], row["key"]["component"]))
-        if kind == "AuxiliaryProviderKind::derived":
             from pops.fields.aux import AnalyticAux
 
             if durable and isinstance(route["producer"], AnalyticAux):
