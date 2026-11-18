@@ -999,13 +999,14 @@ class _MultiLayoutUniformExecutor:
             raise RuntimeError(
                 "multi-layout Program reports differ from the installed layout order"
             )
+        transaction_plan = getattr(self, "_step_transaction_plan", None)
         rows = []
         for layout_program in layout_programs:
             engine = self._engines[layout_program.layout_id]
             report = engine.program_report()
             if type(report) is not ProgramRuntimeReport:
                 raise TypeError("multi-layout child returned a non-canonical ProgramRuntimeReport")
-            if getattr(self._step_transaction_plan, "guards", ()):
+            if getattr(transaction_plan, "guards", ()):
                 expected_transaction = layout_program.program.program.transaction_plan()
                 if (engine._step_transaction_plan != expected_transaction
                         or report.step_transaction != expected_transaction.to_data()):
@@ -1146,12 +1147,13 @@ class _MultiLayoutUniformExecutor:
                 for layout_program, _engine_blocks, report in children
             ],
         ).hexdigest
+        transaction_plan = getattr(self, "_step_transaction_plan", None)
         return ProgramRuntimeReport(
             installed=True,
             program_hash=program_hash,
             step_transaction=(
-                self._step_transaction_plan.to_data()
-                if getattr(self._step_transaction_plan, "guards", ()) else _common_exact(
+                transaction_plan.to_data()
+                if getattr(transaction_plan, "guards", ()) else _common_exact(
                     (report.step_transaction for _row, _blocks, report in children),
                     where="multi-layout Program transaction report",
                 )
