@@ -550,7 +550,9 @@ class AMR(MeshDescriptor):
         data = {slot: _authority_data(value, slot) for slot, value in authorities.items()}
         data["patch_layout"] = _patch_layout_data(self.patch_layout)
         _load_balance_data(self.load_balance)
-        _provider_data(self.clustering, "clustering")
+        from pops.amr.providers import require_builtin_clustering
+
+        require_builtin_clustering(self.clustering)
         _provider_data(self.reflux, "reflux")
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
             if not callable(getattr(self.grid, method, None)):

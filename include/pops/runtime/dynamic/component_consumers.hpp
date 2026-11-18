@@ -782,33 +782,6 @@ inline int tag_batch(const PopsTaggerApiV2& api, void* state, const PopsTaggerRe
   return api.tag_batch(state, &request, &status);
 }
 
-inline int cluster_tags(const PopsClusteringApiV1& api, void* state,
-                        const PopsClusteringRequestV1& request, PopsComponentStatusV1& status) {
-  require_operation(api.cluster != nullptr, "cluster");
-  validate_execution_context(request.execution);
-  if (request.struct_size < sizeof(PopsClusteringRequestV1) ||
-      request.tags.struct_size < sizeof(PopsConstByteViewV1) || request.tags.data == nullptr ||
-      request.extents == nullptr || request.dimension < 1 || request.dimension > 3 ||
-      request.boxes == nullptr || request.box_capacity == 0 || request.box_count == nullptr)
-    throw std::invalid_argument("clustering request is incomplete");
-  std::size_t points = 1;
-  for (std::int32_t axis = 0; axis < request.dimension; ++axis) {
-    if (request.extents[axis] <= 0 || static_cast<std::uint64_t>(request.extents[axis]) >
-                                          std::numeric_limits<std::size_t>::max() / points)
-      throw std::invalid_argument("clustering extents are invalid or overflow");
-    points *= static_cast<std::size_t>(request.extents[axis]);
-  }
-  if (request.tags.size != points ||
-      request.box_capacity > std::numeric_limits<std::size_t>::max() /
-                                 (2u * static_cast<std::size_t>(request.dimension)))
-    throw std::invalid_argument("clustering tag shape or box capacity is invalid");
-  *request.box_count = 0;
-  const int code = api.cluster(state, &request, &status);
-  if (*request.box_count > request.box_capacity)
-    throw std::runtime_error("clustering component exceeded the output capacity supplied by PoPS");
-  return code;
-}
-
 inline int apply_transfer(const PopsTransferApiV2& api, void* state,
                           const PopsTransferRequestV1& request, PopsComponentStatusV1& status) {
   require_operation(api.apply != nullptr, "apply");

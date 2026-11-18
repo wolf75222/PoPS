@@ -207,6 +207,7 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
         hierarchy=authorities.hierarchy,
         tagging=authorities.tagging,
         native_layout=_native_layout(layout_plan),
+        layout_identity=layout_plan.qualified_id,
     )
     assert config.distribute_coarse is True
     assert config.coarse_max_grid == (7, 7)
@@ -236,6 +237,7 @@ def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(m
         hierarchy=automatic.hierarchy,
         tagging=automatic.tagging,
         native_layout=_native_layout(automatic_plan),
+        layout_identity=automatic_plan.qualified_id,
     )
     assert automatic_config.distribute_coarse is True
     assert automatic_config.coarse_max_grid == (0, 0)
@@ -292,6 +294,7 @@ def test_native_lowering_carries_rectangular_grid_without_collapsing_axes(monkey
         hierarchy=authorities.hierarchy,
         tagging=authorities.tagging,
         native_layout=rectangular_native,
+        layout_identity=layout_plan.qualified_id,
     )
     assert config.shape == (30, 12)
     assert config.lower == (-2.0, 1.5)
@@ -362,6 +365,7 @@ def test_measured_knapsack_roundtrips_exact_native_decision_policy(monkeypatch):
         hierarchy=authorities.hierarchy,
         tagging=authorities.tagging,
         native_layout=_native_layout(layout_plan),
+        layout_identity=layout_plan.qualified_id,
     )
     assert config.load_balance_provider == (
         "measured_knapsack",
@@ -688,7 +692,6 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
                 },
                 "provider_id": "pops.lib.amr::berger_rigoutsos",
                 "provider_identity": "test::clustering-provider",
-                "native_interface": interfaces.Clustering.to_data(),
                 "minimum_efficiency": 0.7,
                 "minimum_box_size": 1,
                 "maximum_box_size": 32,

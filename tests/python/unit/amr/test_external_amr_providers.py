@@ -12,7 +12,7 @@ import pops
 import pytest
 
 from pops import interfaces
-from pops.amr import ClusteringProvider, RefluxProvider
+from pops.amr import RefluxProvider
 from pops.external import build_source_package_manifest, load
 from pops.layouts import AMR
 from pops.model import ComponentManifest
@@ -32,7 +32,7 @@ def _example():
 def _component(
     tmp_path: Path, *, name: str, interface,
     dimension: int = 2, device: str = "cpu", alias: str | None = None, manifest_parameters=(),
-    instance_parameters=None,
+    instance_parameters=None, native_signature=None,
 ):
     export_alias = name if alias is None else alias
     root = tmp_path / name
@@ -44,7 +44,8 @@ def _component(
         facets=interface.facets,
         signature={
             "generic": True,
-            "native_interface": interface.signature_declaration(),
+            "native_interface": (interface.signature_declaration()
+                                 if native_signature is None else native_signature),
         },
         interfaces=interface.manifest_declarations(),
         parameters=manifest_parameters,
@@ -69,22 +70,35 @@ def _component(
     return factory(**({} if instance_parameters is None else instance_parameters))
 
 
-def test_external_amr_provider_accepts_a_3d_native_target_without_selecting_2d(tmp_path):
-    component = _component(
-        tmp_path, name="clustering-3d", alias="clustering_3d",
-        interface=interfaces.Clustering, dimension=3)
+@pytest.mark.parametrize("prior_catalogue", [True, False])
+def test_retired_clustering_manifest_cannot_select_a_native_interface(tmp_path, prior_catalogue):
+    assert not hasattr(interfaces, "Clustering")
+    assert not hasattr(pops.amr, "ClusteringProvider")
+    with pytest.raises(KeyError, match="unknown native component interface 'clustering'"):
+        interfaces.resolve("clustering")
 
-    provider = ClusteringProvider(component)
-    assert provider.inspect()["component_id"] == component.component_manifest.component_id
+    literal = interfaces.ComponentInterface(
+        name="clustering", abi_id=4, uri="pops://interfaces/clustering", version=1,
+        cpp_table="PopsClusteringApiV1", hot_path=False,
+        facets=("lowering", "effects"), operations=("cluster",),
+    )
+    signature = literal.signature_declaration()
+    if prior_catalogue:
+        signature["catalog_sha256"] = (
+            "3300f2e69852d0b12cbcb12b2c90c1c1dbdd9cddde375d4633062a64d0857985")
+    with pytest.raises(ValueError, match=r"pops://interfaces/clustering@1.*closed catalog"):
+        _component(tmp_path, name="legacy_cluster", interface=literal, native_signature=signature)
+
+
+def test_external_amr_provider_accepts_a_3d_native_target_without_selecting_2d(tmp_path):
+    component = _component(tmp_path, name="reflux_3d", interface=interfaces.Reflux, dimension=3)
+    assert RefluxProvider(component).inspect()["component_id"] == component.component_manifest.component_id
 
 
 def test_external_amr_provider_refuses_a_target_outside_ranked_dimensions(tmp_path):
-    component = _component(
-        tmp_path, name="clustering-4d", alias="clustering_4d",
-        interface=interfaces.Clustering, dimension=4)
-
+    component = _component(tmp_path, name="reflux_4d", interface=interfaces.Reflux, dimension=4)
     with pytest.raises(ValueError, match="dimension 1, 2, or 3"):
-        ClusteringProvider(component)
+        RefluxProvider(component)
 
 
 def _layout(authored, *, clustering, tagging=None, reflux=None):
@@ -102,51 +116,23 @@ def _layout(authored, *, clustering, tagging=None, reflux=None):
 
 def test_external_amr_provider_installers_fail_closed_at_resolution(tmp_path):
     target = _example().build_final_case()
-    clustering_component = _component(
-        tmp_path, name="clustering", interface=interfaces.Clustering)
-    reflux_component = _component(
-        tmp_path, name="reflux", interface=interfaces.Reflux)
-    cases = (
-        (
-            "clustering",
-            _layout(
-                target.layout,
-                clustering=ClusteringProvider(clustering_component),
-            ),
-            (clustering_component,),
-            "BergerRigoutsosProvider<Dim>",
-        ),
-        (
-            "reflux",
-            _layout(
-                target.layout,
-                clustering=target.layout.clustering,
-                reflux=RefluxProvider(reflux_component),
-            ),
-            (reflux_component,),
-            "transactional AmrRuntime<Dim> reflux ledger",
-        ),
-    )
-    for role, layout, components, authority in cases:
-        with pytest.raises(
-                NotImplementedError,
-                match=r"external AMR %s component installation.*%s"
-                % (role, authority)):
-            pops.resolve(
-                pops.validate(target.authoring.case),
-                layout=layout,
-                components=components,
-            )
+    component = _component(tmp_path, name="reflux", interface=interfaces.Reflux)
+    layout = _layout(target.layout, clustering=target.layout.clustering,
+                     reflux=RefluxProvider(component))
+    with pytest.raises(
+            NotImplementedError,
+            match=r"external AMR reflux component installation.*transactional AmrRuntime<Dim>"):
+        pops.resolve(pops.validate(target.authoring.case), layout=layout, components=(component,))
 
 
 def test_third_party_external_authority_uses_open_lowering_but_fails_closed(tmp_path):
     target = _example().build_final_case()
-    clustering_component = _component(
-        tmp_path, name="third_party_clustering", interface=interfaces.Clustering)
+    reflux_component = _component(
+        tmp_path, name="third_party_reflux", interface=interfaces.Reflux)
 
     @dataclass(frozen=True, slots=True)
-    class ThirdPartyClusteringAuthority:
-        delegate: ClusteringProvider
+    class ThirdPartyRefluxAuthority:
+        delegate: RefluxProvider
         __pops_ir_immutable__ = True
 
         def inspect(self):
@@ -162,28 +148,29 @@ def test_third_party_external_authority_uses_open_lowering_but_fails_closed(tmp_
 
     layout = _layout(
         target.layout,
-        clustering=ThirdPartyClusteringAuthority(
-            ClusteringProvider(clustering_component)),
+        clustering=target.layout.clustering,
+        reflux=ThirdPartyRefluxAuthority(
+            RefluxProvider(reflux_component)),
     )
     with pytest.raises(
             NotImplementedError,
-            match=r"external AMR clustering component installation.*"
-                  r"BergerRigoutsosProvider<Dim>"):
+            match=r"external AMR reflux component installation.*"
+                  r"transactional AmrRuntime<Dim> reflux ledger"):
         pops.resolve(
             pops.validate(target.authoring.case),
             layout=layout,
-            components=(clustering_component,),
+            components=(reflux_component,),
         )
 
 
 def test_incomplete_third_party_authority_is_rejected_explicitly(tmp_path):
     target = _example().build_final_case()
-    clustering_component = _component(
-        tmp_path, name="incomplete_clustering", interface=interfaces.Clustering)
+    reflux_component = _component(
+        tmp_path, name="incomplete_reflux", interface=interfaces.Reflux)
 
     @dataclass(frozen=True, slots=True)
-    class IncompleteClusteringAuthority:
-        delegate: ClusteringProvider
+    class IncompleteRefluxAuthority:
+        delegate: RefluxProvider
         __pops_ir_immutable__ = True
 
         def inspect(self):
@@ -194,30 +181,11 @@ def test_incomplete_third_party_authority_is_rejected_explicitly(tmp_path):
 
     layout = _layout(
         target.layout,
-        clustering=IncompleteClusteringAuthority(
-            ClusteringProvider(clustering_component)),
+        clustering=target.layout.clustering,
+        reflux=IncompleteRefluxAuthority(
+            RefluxProvider(reflux_component)),
     )
     with pytest.raises(TypeError, match="lower_amr_provider"):
-        pops.resolve(
-            pops.validate(target.authoring.case),
-            layout=layout,
-            components=(clustering_component,),
-        )
-
-
-def test_external_amr_providers_require_exact_resolve_inputs(tmp_path):
-    target = _example().build_final_case()
-    clustering_component = _component(
-        tmp_path, name="clustering", interface=interfaces.Clustering)
-    reflux_component = _component(
-        tmp_path, name="reflux", interface=interfaces.Reflux)
-    layout = _layout(
-        target.layout,
-        clustering=ClusteringProvider(clustering_component),
-        reflux=RefluxProvider(reflux_component),
-    )
-
-    with pytest.raises(ValueError, match="requires its exact ExternalComponent"):
         pops.resolve(
             pops.validate(target.authoring.case),
             layout=layout,
@@ -225,126 +193,114 @@ def test_external_amr_providers_require_exact_resolve_inputs(tmp_path):
         )
 
 
-def test_external_clustering_options_remain_inspectable_but_native_lowering_fails_closed(
-        tmp_path):
-    from pops.amr.providers import (
-        amr_provider_binding_identity,
-        prepare_amr_provider_native_config,
-    )
+def test_external_amr_providers_require_exact_resolve_inputs(tmp_path):
+    target = _example().build_final_case()
+    component = _component(tmp_path, name="reflux", interface=interfaces.Reflux)
+    other = _component(tmp_path, name="other_reflux", interface=interfaces.Reflux)
+    layout = _layout(target.layout, clustering=target.layout.clustering,
+                     reflux=RefluxProvider(component))
+    with pytest.raises(ValueError, match="requires its exact ExternalComponent"):
+        pops.resolve(pops.validate(target.authoring.case), layout=layout, components=(other,))
+
+
+def test_external_reflux_options_remain_inspectable_but_installation_fails_closed(tmp_path):
+    from pops.amr import ResolvedAMRProviderBinding, amr_provider_binding_identity
+    from pops.amr.providers import prepare_amr_provider_installation
 
     component = _component(
         tmp_path,
-        name="parameterized_clustering",
-        interface=interfaces.Clustering,
+        name="parameterized_reflux",
+        interface=interfaces.Reflux,
         manifest_parameters=({"name": "options", "kind": "runtime"},),
-        instance_parameters={"options": {"target_boxes": 12, "strict": True}},
+        instance_parameters={"options": {"strict": True}},
     )
-    binding = ClusteringProvider(component).inspect()
-    assert binding["component"]["parameters"] == {
-        "options": {"target_boxes": 12, "strict": True},
-    }
+    binding = RefluxProvider(component).inspect()
+    assert binding["component"]["parameters"] == {"options": {"strict": True}}
     binding["layout_identity"] = "test::layout"
-    binding["provider_identity"] = amr_provider_binding_identity(
-        "clustering", binding)
-
+    binding["clock_identity"] = "test::clock"
+    binding["provider_identity"] = amr_provider_binding_identity("reflux", binding)
     with pytest.raises(
             NotImplementedError,
-            match=r"external AMR clustering component installation.*"
-                  r"BergerRigoutsosProvider<Dim>"):
-        prepare_amr_provider_native_config(binding)
+            match=r"external AMR reflux component installation.*transactional AmrRuntime<Dim>"):
+        prepare_amr_provider_installation(
+            role="reflux", frozen_binding=binding, layout_identity="test::layout")
 
-    forged = dict(binding)
-    forged_component = dict(forged["component"])
-    forged_component["parameters"] = {
-        "options": {"target_boxes": 99, "strict": False},
-    }
-    forged["component"] = forged_component
-    from pops.amr import ResolvedAMRProviderBinding
-
+    forged = dict(binding, component=dict(binding["component"], parameters={"options": {"strict": False}}))
     with pytest.raises(ValueError, match="provider_identity"):
-        ResolvedAMRProviderBinding("clustering", forged)
+        ResolvedAMRProviderBinding("reflux", forged)
 
 
 def test_external_amr_provider_roles_are_not_interchangeable(tmp_path):
-    reflux_component = _component(
-        tmp_path, name="reflux", interface=interfaces.Reflux)
-    clustering_component = _component(
-        tmp_path, name="clustering", interface=interfaces.Clustering)
-
+    component = _component(tmp_path, name="transfer", interface=interfaces.Transfer)
     with pytest.raises(TypeError, match="requires exact interface"):
-        RefluxProvider(clustering_component)
-    with pytest.raises(TypeError, match="requires exact interface"):
-        ClusteringProvider(reflux_component)
+        RefluxProvider(component)
+
+    target = _example().build_final_case()
+    reflux = _component(tmp_path, name="reflux", interface=interfaces.Reflux)
+    layout = _layout(target.layout, clustering=RefluxProvider(reflux))
+    with pytest.raises(TypeError, match="built-in BergerRigoutsos policy"):
+        pops.resolve(pops.validate(target.authoring.case), layout=layout, components=(reflux,))
 
 
-def test_external_amr_provider_bind_fails_closed_without_native_mutation():
-    from pops.amr.providers import (
-        amr_provider_binding_identity,
-        prepare_amr_provider_installation,
-    )
+def test_external_amr_provider_bind_fails_closed_without_native_mutation(tmp_path):
+    from pops.amr import amr_provider_binding_identity
+    from pops.amr.providers import resolve_clustering_binding
     from pops.runtime._runtime_authorities import _install_amr_provider_authorities
 
     layout_identity = "test::layout"
-    clock_identity = "test::case::clock"
-
-    def binding(slot, interface, component_id, manifest):
-        row = {
-            "schema_version": 1,
-            "provider_type": "external_amr_%s" % slot,
-            "runtime_installation": {
-                "schema_version": 1,
-                "protocol": "external_component",
-            },
-            "provider_identity": "test::%s-provider" % slot,
-            "component_id": component_id,
-            "component_manifest_identity": manifest,
-            "component": {
-                "component_id": component_id,
-                "component_manifest": manifest,
-                "interface": interface.to_data(),
-            },
-            "native_interface": interface.to_data(),
-            "interface_version": interface.version,
-            "layout_identity": layout_identity,
-        }
-        if slot == "reflux":
-            row["clock_identity"] = clock_identity
-        row["provider_identity"] = amr_provider_binding_identity(slot, row)
-        return row
-
-    providers = {
-        "clustering": binding(
-            "clustering", interfaces.Clustering,
-            "test::clustering", "manifest::clustering"),
-        "reflux": binding(
-            "reflux", interfaces.Reflux, "test::reflux", "manifest::reflux"),
-    }
-    executable_authorities = {
-        "clustering": "BergerRigoutsosProvider<Dim>",
-        "reflux": "transactional AmrRuntime<Dim> reflux ledger",
-    }
-    for role, frozen in providers.items():
-        with pytest.raises(
-                NotImplementedError,
-                match=r"external AMR %s component installation.*%s"
-                % (role, executable_authorities[role])):
-            prepare_amr_provider_installation(
-                role=role,
-                frozen_binding=frozen,
-                layout_identity=layout_identity,
-            )
-
-    native = SimpleNamespace(calls=[])
-    engine = SimpleNamespace(_s=native)
+    target = _example().build_final_case()
+    component = _component(tmp_path, name="reflux", interface=interfaces.Reflux)
+    reflux = dict(RefluxProvider(component).inspect(), layout_identity=layout_identity,
+                  clock_identity="test::clock")
+    reflux["provider_identity"] = amr_provider_binding_identity("reflux", reflux)
+    clustering = resolve_clustering_binding(target.layout.clustering, layout_identity)
     plan = SimpleNamespace(
-        amr_providers=providers,
-        artifact=SimpleNamespace(
-            layout_plan=SimpleNamespace(qualified_id=layout_identity)),
+        amr_providers={"clustering": clustering, "reflux": reflux},
+        artifact=SimpleNamespace(layout_plan=SimpleNamespace(qualified_id=layout_identity)),
     )
+    engine = SimpleNamespace(_s=SimpleNamespace(calls=[]))
     with pytest.raises(
             NotImplementedError,
-            match=r"external AMR clustering component installation.*"
-                  r"BergerRigoutsosProvider<Dim>"):
+            match=r"external AMR reflux component installation.*transactional AmrRuntime<Dim>"):
         _install_amr_provider_authorities(engine, plan)
-    assert native.calls == []
+    assert engine._s.calls == []
     assert not hasattr(engine, "_amr_provider_authorities")
+
+    # A detached old clustering row is refused before a provider report is published.
+    plan.amr_providers["clustering"] = dict(clustering, native_interface={
+        "id": 4, "uri": "pops://interfaces/clustering", "version": 1,
+    })
+    with pytest.raises(ValueError, match="exactly the built-in policy fields"):
+        _install_amr_provider_authorities(engine, plan)
+    assert engine._s.calls == []
+    assert not hasattr(engine, "_amr_provider_authorities")
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"component_id": "external"}, "exactly the built-in policy fields"),
+        ({"extra": 1}, "exactly the built-in policy fields"),
+        ({"layout_identity": "other"}, "built-in policy of this layout"),
+        ({"runtime_installation": {"schema_version": 1, "protocol": "external_component"}},
+         "built-in policy of this layout"),
+        ({"minimum_efficiency": True}, "canonical binary64"),
+        ({"minimum_efficiency": {"binary64": "0x1.0p-1"}}, "canonical binary64"),
+        ({"minimum_efficiency": float("inf")}, r"must be in \(0, 1\]"),
+        ({"minimum_box_size": True}, "box-size controls are invalid"),
+        ({"minimum_box_size": 20, "maximum_box_size": 12}, "box-size controls are invalid"),
+        ({"maximum_box_size": 13}, "provider_identity does not authenticate"),
+    ],
+)
+def test_intrinsic_clustering_refuses_unsupported_or_forged_data(changes, message):
+    from pops.amr.providers import clustering_controls, resolve_clustering_binding
+    from pops.lib.amr import BergerRigoutsos
+
+    layout_identity = "test::layout"
+    policy = BergerRigoutsos(minimum_efficiency=0.91, minimum_box_size=2, maximum_box_size=12)
+    binding = resolve_clustering_binding(policy, layout_identity)
+    assert clustering_controls(binding, layout_identity=layout_identity) == (0.91, 2, 12)
+    canonical = dict(binding, minimum_efficiency={"binary64": float(0.91).hex()})
+    assert clustering_controls(canonical, layout_identity=layout_identity) == (0.91, 2, 12)
+    with pytest.raises((TypeError, ValueError), match=message):
+        clustering_controls({**binding, **changes}, layout_identity=layout_identity)

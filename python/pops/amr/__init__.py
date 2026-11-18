@@ -37,7 +37,6 @@ from .materialization import (
 from .providers import (
     AMRProviderLoweringContext,
     amr_provider_binding_identity,
-    ClusteringProvider,
     RefluxProvider,
     ResolvedAMRProviderBinding,
 )
@@ -57,7 +56,6 @@ __all__ = [
     "Buffer",
     "CanonicalOptions",
     "Coarsen",
-    "ClusteringProvider",
     "ConflictPolicy",
     "EqualityPolicy",
     "Hysteresis",

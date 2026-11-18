@@ -345,6 +345,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 4): remove the external Clustering interface from the native substitution
+  catalogue (FC6b, C38). `AMR(clustering=BergerRigoutsos(...))` still configures the core
+  clustering algorithm. Rebuild native component packages against the new catalogue. Exact
+  checkpoints retain their identity checks, including across this catalogue change.
 - ROM-95 (N12, lot 3c-2b): AMR tagging is written only as regions of `cell`. The ValueExpr tag
   graph leaves `pops`: `Tag` and `Coarsen` refuse an expression of the state and show the region
   form, `Tag(lambda cell: cell.value(q) > case.value(t))`; `mesh/_amr/tagging_graph.py` and

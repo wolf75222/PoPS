@@ -623,29 +623,16 @@ entier sentinelle n'appartient au contrat public ; une éventuelle représentati
 détail de lowering privé. Une taille positive n'est écrite dans `coarse_max_grid` que lorsque
 l'utilisateur veut réellement contraindre ce choix.
 
-Les builtins de `pops.lib.amr` et les composants externes implémentent le même petit protocole de
-provider. Un composant externe est sélectionné sans callback Python :
+Le clustering des cellules marquées fait partie de la mécanique AMR du cœur (DM13).
+`AMR(clustering=BergerRigoutsos(...))` règle l'efficacité minimale et les tailles minimale et
+maximale des boîtes. La politique authentifie ces trois contrôles et le layout. Elle ne charge
+aucun composant natif de substitution (N12, lot 4, C38).
 
-```python
-from pops.amr import ClusteringProvider, RefluxProvider
-
-layout = AMR(
-    ...,
-    clustering=ClusteringProvider(component=my_clustering),
-    reflux=RefluxProvider(component=my_reflux),
-)
-resolved = pops.resolve(
-    pops.validate(case),
-    layout=layout,
-    components=(my_clustering, my_reflux),
-)
-```
-
-Les deux valeurs doivent référencer un exact `pops.external.ExternalComponent` portant
-respectivement l'interface générée `Clustering` ou `Reflux`. Le même objet exact doit être fourni à
-`resolve(components=...)`; son identité de manifest, son interface et sa version traversent
-`resolve -> compile -> bind`. Le manifest doit déclarer une classification déterministe `bitwise` ou
-`reproducible`, car chaque rang doit produire la même hiérarchie.
+Le protocole de composant AMR expose la déclaration `RefluxProvider`. Son autorité identifie
+un `pops.external.ExternalComponent` portant l'interface générée `Reflux`. Le même objet exact
+doit être fourni à `resolve(components=...)` avec un manifeste `bitwise` ou `reproducible`.
+L'installation externe reste refusée tant que l'autorité atomique correspondante manque.
+Le chemin intégré emploie le flux ledger transactionnel.
 
 Le tagging n'a plus de provider (N12, lot 3c-2b). `AMRTagging` s'écrit en régions de `cell`,
 `Tag(lambda cell: cell.value(q) > case.value(t))`, et le critère est généré dans le Program compilé
@@ -1393,7 +1380,7 @@ paramètres, interfaces, requirements, capabilities, effets, layouts, clocks, d�
 restart et points d'entrée.
 
 Le même catalogue génère les IDs et tables C/POD versionnées des interfaces natives (flux numérique,
-ghost boundary, closure de champ, tagging, clustering, transfert, kernel local de reflux, solveur de
+ghost boundary, closure de champ, tagging, transfert, kernel local de reflux, solveur de
 champ, writer et topologie de champ). Le reflux conservatif complet reste une autorité interne
 pilotée par le flux ledger ; la table externe `Reflux` ne couvre que la transformation locale,
 non collective, de flux intégrés en correction non appliquée. Chaque famille possède sa propre version d'interface, indépendante de la version
@@ -1412,12 +1399,11 @@ active, une tentative périmée, une couverture incomplète ou une divergence en
 publication. Il n'existe plus de façade parallèle `EdgeStrip`/`Fx`/`Fy` ni d'adaptateur 2D du
 Program.
 
-La sélection `AMR(..., reflux=RefluxProvider(component))` traverse désormais la même résolution
-normalisée, identité de provider, artifact et transaction d'installation que
-`Clustering`. Sans sélection explicite, `FluxRegisterReflux` décrit le kernel builtin par le même
-protocole et apparaît dans le même rapport de providers. La qualification initiale de l'adaptateur
-reste limitée à la cible 2D, `float64`, CPU avec stockage hôte. Le chemin n'est pas encore prouvé par
-exécution MPI avec un composant externe, mesure de conservation ni backend GPU.
+La sélection `AMR(..., reflux=RefluxProvider(component))` authentifie le composant et
+l'horloge du Program à la résolution. L'autorité par défaut `FluxRegisterReflux` conserve
+le chemin intégré. Le rapport porte aussi les contrôles du clustering, dont l'identité
+est indépendante du catalogue de substitution. Le changement du catalogue impose de
+reconstruire les composants concernés et l'authentification des checkpoints reste exacte.
 
 Les champs sémantiques inconnus, capacités sans preuve, collisions d'identité et entry points manquants
 sont refusés. Un vieux manifest n'est pas « réparé » silencieusement.

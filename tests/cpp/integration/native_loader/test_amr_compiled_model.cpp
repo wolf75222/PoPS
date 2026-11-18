@@ -57,7 +57,7 @@ TEST(test_amr_compiled_model, ExactTransferTablePreservesConservativeDataflow) {
   EXPECT_EQ(coarse, (std::array<double, 4>{1.0, 2.0, 4.0, 8.0}));
 }
 
-TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
+TEST(test_amr_compiled_model, TaggingUsesPreparedMutableOutputs) {
   const std::array<double, 6> indicator{0.0, 2.0, 3.0, 0.5, 4.0, 0.0};
   std::array<std::uint8_t, 6> tags{};
   const PopsTaggerApiV2 tagger{
@@ -103,43 +103,6 @@ TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
   PopsComponentStatusV1 status{};
   ASSERT_EQ(pops::component::tag_batch(tagger, nullptr, tag_request, status), 0);
   EXPECT_EQ(tags, (std::array<std::uint8_t, 6>{0, 1, 1, 0, 1, 0}));
-
-  std::array<std::int64_t, 4> boxes{};
-  std::size_t box_count = 0;
-  const std::array<std::int64_t, 1> extents{6};
-  const PopsClusteringApiV1 clustering{
-      header(sizeof(PopsClusteringApiV1), POPS_NATIVE_INTERFACE_CLUSTERING_V1),
-      +[](void*, const PopsClusteringRequestV1* request, PopsComponentStatusV1* result_status) {
-        std::size_t first = request->tags.size;
-        std::size_t last = 0;
-        for (std::size_t point = 0; point < request->tags.size; ++point) {
-          if (request->tags.data[point] == 0)
-            continue;
-          if (first == request->tags.size)
-            first = point;
-          last = point;
-        }
-        *request->box_count = first == request->tags.size ? 0 : 1;
-        if (*request->box_count != 0) {
-          request->boxes[0] = static_cast<std::int64_t>(first);
-          request->boxes[1] = static_cast<std::int64_t>(last);
-        }
-        *result_status = ok();
-        return 0;
-      }};
-  const PopsClusteringRequestV1 cluster_request{
-      sizeof(PopsClusteringRequestV1),
-      {sizeof(PopsConstByteViewV1), tags.data(), tags.size()},
-      extents.data(),
-      1,
-      boxes.data(),
-      2,
-      &box_count,
-      abi::host_execution_context()};
-  ASSERT_EQ(pops::component::cluster_tags(clustering, nullptr, cluster_request, status), 0);
-  ASSERT_EQ(box_count, 1u);
-  EXPECT_EQ(boxes[0], 1);
-  EXPECT_EQ(boxes[1], 4);
 }
 
 }  // namespace
