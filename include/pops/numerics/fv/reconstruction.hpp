@@ -412,24 +412,25 @@ template <class Reconstruction>
 inline constexpr bool stencil_envelope_fits_storage =
     stencil_envelope_fits_storage_contract<Reconstruction>();
 
+/// Construct the policy and apply the route's smoothness epsilon only when supplied.
 template <class Reconstruction>
-inline Reconstruction configured_reconstruction(Real smoothness_epsilon = kWenoEpsilon) {
+inline Reconstruction configured_reconstruction(
+    std::optional<Real> smoothness_epsilon = std::nullopt) {
   static_assert(
       ReconstructionPolicy<Reconstruction>,
       "a reconstruction policy must declare positive formal_order/n_ghost metadata and implement "
       "exactly one pointwise protocol");
   Reconstruction reconstruction{};
-  if constexpr (requires(Reconstruction& value, Real eps) { value.set_smoothness_epsilon(eps); })
-    reconstruction.set_smoothness_epsilon(smoothness_epsilon);
+  if constexpr (requires(Reconstruction& value, Real eps) { value.set_smoothness_epsilon(eps); }) {
+    if (smoothness_epsilon)
+      reconstruction.set_smoothness_epsilon(*smoothness_epsilon);
+  }
   return reconstruction;
 }
 
-/// The same policy with the smoothness epsilon a route carries: none keeps the policy's default.
 template <class Reconstruction>
-inline Reconstruction configured_reconstruction(std::optional<Real> smoothness_epsilon) {
-  if (smoothness_epsilon)
-    return configured_reconstruction<Reconstruction>(*smoothness_epsilon);
-  return configured_reconstruction<Reconstruction>();
+inline Reconstruction configured_reconstruction(Real smoothness_epsilon) {
+  return configured_reconstruction<Reconstruction>(std::optional<Real>{smoothness_epsilon});
 }
 
 }  // namespace pops
