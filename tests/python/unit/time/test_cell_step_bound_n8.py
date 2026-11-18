@@ -12,6 +12,7 @@ import pops.surface as surface
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
 from pops.codegen.program_emit_params import program_param_entries
+from pops.codegen.program_emit_step_bound import _parameter_indices
 from pops.lib.numerics import two_point, upwind
 from pops.lib.time.methods import ssprk2
 from pops.surface.math import ddt, div, grad
@@ -198,6 +199,15 @@ def test_a_parameter_that_no_kernel_reads_is_refused_with_its_lot():
                                                "reads") as caught:
         _emit(_parameter_case(read_by_kernel=False))
     assert "a later lot of N8 « dt= as a function of cell »" in str(caught.value)
+
+
+def test_a_step_bound_never_uses_a_parameter_slot_of_another_block():
+    resolved = _parameter_case(read_by_kernel=True)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    bound = resolved.time._advance_step_bound
+    assert _parameter_indices(resolved.time, graph, 0, bound) == {"nu": 0}
+    with pytest.raises(NotYetElaborated, match="runtime parameter nu, which no kernel"):
+        _parameter_indices(resolved.time, graph, 7, bound)
 
 
 def test_the_runtime_knows_the_zero_elliptic_brick_by_its_codegen_identity():

@@ -46,19 +46,20 @@ def _parameter_indices(program: Any, model: Any, block: int, bound: Any) -> dict
     if not bound.parameters:
         return {}
     from pops.codegen.program_emit_params import program_param_entries
+    from pops.model._runtime_parameter_slots import index_program_parameter_slots
     from pops.time._program.traced_method import NotYetElaborated
 
-    entries = {name: index for blk, name, index, _ in program_param_entries(program, model)
-               if blk == block}
+    slots = index_program_parameter_slots(program_param_entries(program, model))
     indices = {}
     for handle in bound.parameters:
         name = handle.local_id
-        if name not in entries:
+        slot = slots.get((block, name))
+        if slot is None:
             raise NotYetElaborated(
                 "dt= as a function of cell reads the runtime parameter %s, which no kernel of the "
                 "method reads: its value is installed with the parameters of a kernel (a later "
                 "lot of N8 « dt= as a function of cell »)" % name)
-        indices[name] = entries[name]
+        indices[name] = slot
     return indices
 
 
