@@ -12,8 +12,9 @@ neither ``pops`` nor a case.
 ``[[earlier]]``, a module that only a ``[[bridge]]`` holds (it builds the native route and nothing
 of the surface, like the ghost laws of ``pops.lib.numerics.ghost_laws``), a package that only
 re-exports its submodules, or an unlisted module. ``found_bridges`` finds the bridges of the
-modules of the surface and of the bridge modules by their source: a subclass of ``SchemeValue``,
-or a call that builds a native route of face, reconstruction, diffusion, boundary or solver
+modules of the surface and of the bridge modules by their source: a subclass of ``SchemeValue``
+or of the retired ``StepRuleValue``, or a call that builds a native route of face,
+reconstruction, diffusion, boundary or solver
 (``riemann.X()`` and ``reconstruction.X()`` other than ``User``, a name imported from
 ``pops.numerics``, ``pops.solvers`` or ``pops.boundary`` other than ``StencilFlux``), under the
 public word that returns it.
@@ -43,6 +44,8 @@ GATE = "mg9-bridges"
 # (``riemann.User``, ``reconstruction.User``) and the stencil of a face flux (``StencilFlux``).
 WITH_BODY = {"User", "StencilFlux"}
 NATIVE_MODULES = ("pops.numerics", "pops.solvers", "pops.boundary")
+# Keep detecting the historical step rule pattern after its public type and bridge are retired.
+NATIVE_VALUES = {"SchemeValue", "StepRuleValue"}
 ROUTE_MODULES = {"riemann", "reconstruction"}
 
 
@@ -169,8 +172,8 @@ def bridges_of(source: str, module: str) -> set:
         if isinstance(node, ast.ClassDef):
             for base in node.bases:
                 name = base.id if isinstance(base, ast.Name) else getattr(base, "attr", None)
-                if name == "SchemeValue":
-                    found.add((node.name, module, "SchemeValue"))
+                if name in NATIVE_VALUES:
+                    found.add((node.name, module, name))
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and word == "<module>":
             word = node.name
         if isinstance(node, ast.Call):

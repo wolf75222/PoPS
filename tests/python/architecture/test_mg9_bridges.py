@@ -135,6 +135,22 @@ def test_cfl_limit_left_the_registry_written_with_the_surface():
     assert mg9.classify(ROOT, registry)["pops.lib.time.limits"] == "surface"
 
 
+def test_a_reintroduced_step_rule_bridge_is_found_under_its_public_word():
+    """The retirement of StepRuleValue keeps its historical bridge pattern detectable."""
+    found = mg9.bridges_of(textwrap.dedent("""\
+        from pops.surface import StepRuleValue
+
+
+        class _Limit(StepRuleValue):
+            pass
+
+
+        def limit(flux):
+            return _Limit(flux)
+        """), "pops.lib.time.limits")
+    assert found == {("limit", "pops.lib.time.limits", "StepRuleValue")}
+
+
 def test_a_native_route_is_found_and_a_body_is_not():
     found = mg9.bridges_of(SCHEMES_BEFORE_N3, "pops.lib.numerics.schemes")
     assert found == {
