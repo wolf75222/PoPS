@@ -24,11 +24,12 @@ FaceNormalIntegral()      Face, 1    lowest-order face element    GaussLeg(2)  f
 EdgeCirculation()         Edge, 1    lowest-order edge element    GaussLeg(2)  edge.integral
 ========================= ========== ============================ ============ ===================
 
-N16 lot 1 elaborates ``CellAverage()`` on the route of ``pops.CellAverage()`` (SU-T3); the other
-cell words are refused at ``pops.Numerics`` with the lot that elaborates them (G03 lot M1 for
-``CellTotal()``, the N16 lot that retires the transitional table of ``CellAverage()`` for
-``PointValue()`` and a stated rule, N16 lot 2 for ``DualLoad``), and the face and edge words with
-G08, which fixes their meaning.
+N16 lot 1 elaborates ``CellAverage()`` on the route of ``pops.CellAverage()`` (SU-T3). The N16 lot
+that lifts the table for three words elaborates ``CellTotal()``, ``PointValue()`` and
+``CellAverage(quadrature=Q)`` on the row of b6 that serves them (``plan.representations.add``, G03
+lot R-b), with their initial value bound as data until N16 lot 2 gives the projection by encode, and
+the oracle tests of N16 5.1 on a graded layout. ``DualLoad`` is refused at ``pops.Numerics`` with
+N16 lot 2, and the face and edge words with G08, which fixes their meaning.
 """
 from __future__ import annotations
 

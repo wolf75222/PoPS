@@ -14,9 +14,10 @@ serves it (note §4.3, §13, §14; driver's rulings of 12/11 23:00 and 23:05):
 - a cut cell: the scale kernel has the full grid cell measure, while the cut-cell update uses
   the embedded fluid volume;
 - an initial value projected on the analytic route: the b6 ``ConservativeCellAverage`` gives
-  averages; the encode of a projection waits for N16's table (plan/routes_transitoires.md, line 4);
-- any Program operation other than the stored state, its linear combinations and the two rates
-  that read the decoded state (a stencil flux is refused until a case runs it under a total);
+  averages; the projection by encode is N16 lot 2's (plan/routes_transitoires.md, line 4);
+- any Program operation other than the stored state, its linear combinations, the two rates
+  that read the decoded state (a stencil flux is refused until a case runs it under a total) and
+  the Advance assessment ``finite()`` of the stored candidate coefficients (``finite_guard_values``);
 - a prepared boundary component of another block that reads a total through its bound state
   route, which is outside the shared-interface scheduler and still reads accepted storage;
 - a layout mapping that reads or overwrites total storage through a cell-average port;
@@ -28,11 +29,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT
 from pops.time._program.traced_method import NotYetElaborated
+from pops.time.solve_outcome import RejectAttempt
 
 # The operations that a Program of a total may hold: the state, its combinations, and the rates
 # that read the decoded density (program_emit_totals.TOTAL_RATE_OPS).
 CELL_TOTAL_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs"})
+
+# The owner of the projection of an initial value by the encode of its representation.
+_PROJECTION_BY_ENCODE = ("N16 lot 2 (the projection of an initial value by the encode of its "
+                         "representation: cell.integral, the sample, the Riesz map of a rule)")
 
 
 class CellTotalNotYetElaborated(NotYetElaborated):
@@ -111,6 +118,41 @@ def _validate_volume_authority(plan: Any, blocks: tuple[Any, ...]) -> None:
             )
 
 
+def finite_guard_values(values: Any) -> frozenset[int]:
+    """Identify the default Advance assessment of the exact candidate's stored coefficients.
+
+    The Advance issues the guard and its RejectAttempt action. The all-component norm reads the
+    candidate, and the norm and predicate are reserved for this assessment. Decoding U/μ(K) is
+    outside this test and can overflow for finite U. Every other reduction remains unsupported.
+    """
+    values = tuple(values)
+    readers: dict[int, list[int]] = {}
+    for value in values:
+        for source in value.inputs:
+            readers.setdefault(source.id, []).append(value.id)
+    served: set[int] = set()
+    for guard in values:
+        if (guard.op != "acceptance_guard" or guard.vtype != "state" or len(guard.inputs) != 2
+                or set(guard.attrs) != {"guard", "action", "assessment"}
+                or guard.attrs["guard"] != "finite"
+                or guard.attrs["assessment"] != ADVANCE_ASSESSMENT_CONTRACT
+                or type(guard.attrs["action"]) is not RejectAttempt):
+            continue
+        candidate, test = guard.inputs
+        if (candidate.vtype != "state" or test.op != "scalar_isfinite" or test.vtype != "bool"
+                or len(test.inputs) != 1 or readers.get(test.id) != [guard.id]):
+            continue
+        (reduction,) = test.inputs
+        if (reduction.op != "reduce" or reduction.vtype != "scalar"
+                or reduction.attrs.get("kind") != "norm_inf_all"
+                or reduction.attrs.get("component_contract") != "pops.program.norm-inf-all@1"
+                or len(reduction.inputs) != 1 or reduction.inputs[0] is not candidate
+                or readers.get(reduction.id) != [test.id]):
+            continue
+        served.update((guard.id, test.id, reduction.id))
+    return frozenset(served)
+
+
 def validate_cell_total_consumers(plan: Any) -> None:
     """Refuse, before any C++, every consumer of a cell total that its lowering does not serve."""
     from pops.codegen.program_lowerability import all_ops
@@ -134,7 +176,10 @@ def validate_cell_total_consumers(plan: Any) -> None:
     _validate_volume_authority(plan, blocks)
     if plan.time is None:
         _refuse("cell_total_program", name, "a case without a Program", "the Program of the case")
-    ops = sorted({value.op for value in all_ops(plan.time)} - CELL_TOTAL_PROGRAM_OPS)
+    values = list(all_ops(plan.time))
+    guards = finite_guard_values(values)
+    ops = sorted({value.op for value in values if value.id not in guards}
+                 - CELL_TOTAL_PROGRAM_OPS)
     if any(op in ("geometry_state", "reynolds_update") for op in ops):
         _refuse("cell_total_moving", name, "a moving configuration, whose volume is a member of "
                 "the candidate", "G03 lots M1 and M2")
@@ -172,8 +217,43 @@ def validate_cell_total_consumers(plan: Any) -> None:
             _refuse("cell_total_initial_projection", name,
                     "the initial route %r, which projects cell averages; a total is bound as an "
                     "array of totals (BindArray)" % (route,),
-                    "the N16 lot that retires the transitional table of CellAverage()")
+                    _PROJECTION_BY_ENCODE)
 
 
-__all__ = ["CELL_TOTAL_PROGRAM_OPS", "CellTotalNotYetElaborated", "total_blocks",
-           "validate_cell_total_consumers"]
+def validate_represented_initials(plan: Any) -> None:
+    """A sample (``point_value``) or an average under a stated rule (``cell_average(rank,
+    quadrature=Q)``) has the rate of an average, so the lowering serves it; its initial value
+    differs from the average's by its projection only, the sample at the centre or the projection
+    under Q, which the analytic route of b6 does not give (``ConservativeCellAverage``, line 4 of
+    plan/routes_transitoires.md). Such a state is served bound as data (``BindArray``), and every
+    other initial route is refused before any C++ (N16, the lot that lifts the table for the three
+    words; review of #803, R1)."""
+    from pops.representations.definition import cell_average, constant_mode_scale
+
+    initial = plan.initial_condition_plan
+    if initial is None:
+        return
+    for block in plan.blocks:
+        for row in getattr(block.numerics, "representations", ()):
+            method = row.method
+            if constant_mode_scale(method) == "unit" or \
+                    method.identity == cell_average(method.rank).identity:
+                continue
+            for binding in initial.bindings:
+                if binding.subject != row.subject:
+                    continue
+                route = binding.source.options.to_data().get("native_route")
+                if route != "bound_level_zero":
+                    raise CellTotalNotYetElaborated(
+                        "represented_initial_projection",
+                        "the state of block %r is represented by %s (kind %r%s); the initial "
+                        "route %r projects cell averages, not its encode, so it is bound as an "
+                        "array of its coefficients (BindArray); %s gives the projection"
+                        % (block.name, row.method.identity[-12:], method.kind,
+                           "" if method.pairing is None else ", with a stated rule", route,
+                           _PROJECTION_BY_ENCODE))
+
+
+__all__ = ["CELL_TOTAL_PROGRAM_OPS", "CellTotalNotYetElaborated", "finite_guard_values",
+           "total_blocks",
+           "validate_cell_total_consumers", "validate_represented_initials"]

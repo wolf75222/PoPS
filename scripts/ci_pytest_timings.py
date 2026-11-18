@@ -30,7 +30,8 @@ ORDINARY_BUDGET_SECONDS = 35 * 60
 # N8 cell step rules require 170 shards. With the N17 graded layouts, 170 reaches 1902 s
 # and 171 keeps the largest multi-file shard at 1890 s.
 ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
-SHARD_TOTAL = 171
+# With the N16 representation modules, 172 keeps the maximum at 1886 s.
+SHARD_TOTAL = 172
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
