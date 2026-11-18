@@ -298,9 +298,17 @@ class ProgramProviderPlans:
                         rendered_key, rendered_contract, shape, slot,
                     )
                 )
+            from ._checkpoint_provenance import consumer_role
+
+            # Program owner paths use canonical quoted segments. /program/ is the
+            # delimiter emitted by program_provider_consumer_qid, before its SSA role.
+            owner, separator, node = qid.partition("/program/")
+            role = (consumer_role(owner, separator + node)
+                    if target == "system" and separator else "")
+            role_cpp = (", " + cpp_string_expression(role)) if role else ""
             lines.extend((
                 "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, " % cpp_string_expression(qid),
-                "      std::vector<ConsumerValue>{%s}});" % ", ".join(values),
+                "      std::vector<ConsumerValue>{%s}%s});" % (", ".join(values), role_cpp),
             ))
         return "\n".join(lines)
 

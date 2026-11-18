@@ -8,6 +8,10 @@ from ._analytic_expression_lowering import lower_analytic_components
 
 
 def emit_analytic_aux_launcher(identity, producer):
+    return _analytic_aux_launcher(identity, producer)[0]
+
+
+def _analytic_aux_launcher(identity, producer, *, checkpoint_role=""):
     """Lower the authenticated analytic VM vocabulary to a straight-line device expression."""
     clocks = producer.expression.time_clocks()
     clock_id = clocks[0].qualified_id if clocks else None
@@ -74,7 +78,7 @@ def emit_analytic_aux_launcher(identity, producer):
         "            const pops::Real physical_stage_time = static_cast<pops::Real>("
         "context.point.require_physical_time(%s));" % cpp_string_view_expression(clock_id)
     ] if clock_id is not None else [])
-    return "\n".join([
+    source = "\n".join([
         "      std::vector<Dependency>{},",
         "      Provider::launcher_type::trusted_extension(",
         "          pops::PreparedProviderIdentity{%s, %d}, %s," % (
@@ -113,3 +117,17 @@ def emit_analytic_aux_launcher(identity, producer):
         "            }",
         "          }), AuxiliaryPointReads{%s}" % ("AuxiliaryPointReads::clock | AuxiliaryPointReads::physical_time" if clock_id is not None else "0"),
     ])
+    if not checkpoint_role:
+        return source, ""
+    from pops.identity import canonical_bytes
+    from ._checkpoint_provenance import qualified_role
+
+    parameters = canonical_bytes({
+        "role": checkpoint_role,
+        "dimension": dimension,
+        "frame": producer.frame.canonical_id,
+        "operations": operations,
+        "literals": literals,
+        "clock": None if clock_id is None else qualified_role(clock_id),
+    }).hex()
+    return source, parameters
