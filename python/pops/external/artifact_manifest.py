@@ -225,8 +225,14 @@ class CompiledArtifactManifest:
             control = AdvanceControl.from_data(control).to_data()
         put(self, "control", None if control is None else freeze_manifest_json(
             control, where="artifact.control"))
+        from pops.time._step.transaction import validate_guard_failure_sites
+
+        if failure_sites is not None and type(failure_sites) not in (list, tuple):
+            raise TypeError("failure_sites requires a sequence of global guard rows")
+        failure_rows = list(failure_sites or ())
+        validate_guard_failure_sites(failure_rows)
         put(self, "failure_sites", freeze_manifest_json(
-            list(failure_sites or ()), where="artifact.failure_sites"))
+            failure_rows, where="artifact.failure_sites"))
 
     def supports(self):
         """The ``{flag: True/False/None}`` capability map (``None`` = honestly unknown)."""

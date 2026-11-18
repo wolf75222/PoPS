@@ -188,7 +188,7 @@ void collective_step_rejection_phase(const CommunicatorView& communicator,
                                      StepRejectionContract contract, std::string_view failure,
                                      Operation&& operation, Completion&& completion = {}) {
   std::exception_ptr error, terminal;
-  std::string terminal_schema, terminal_payload;
+  std::string terminal_schema, terminal_payload, terminal_detail;
   std::string payload;
   long rejected = 0;
   try {
@@ -198,6 +198,7 @@ void collective_step_rejection_phase(const CommunicatorView& communicator,
     try {
       terminal_schema = control.typed_failure_schema();
       terminal_payload = control.typed_failure_payload();
+      terminal_detail = control.what();
     } catch (...) {
       error = std::current_exception();
     }

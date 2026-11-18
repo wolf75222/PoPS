@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 from pops.identity.scalar import scalar_literal
+from pops.provenance import SourceSpan
 from pops.time._program.dump import _ProgramDump
 from pops.time._program.constants import _ProgramConstants
 from pops.time._authoring import atomic_authoring
@@ -117,6 +118,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
     def _acceptance_guard_value(
         self, name: str, value: ProgramValue, condition: ProgramValue, action: Any,
         *, numerical_stability: bool = False, assessment: Any = None, trial_site: Any = None,
+        authoring_origin: SourceSpan | None = None,
     ) -> ProgramValue:
         from pops.time.solve_outcome import FailRun, RejectAttempt
         if not isinstance(action, (RejectAttempt, FailRun)):
@@ -132,7 +134,7 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             value.vtype, "acceptance_guard", (value, condition),
             attrs, value.name, value.block,
             space=value.space, point=value.point, field_context=value.field_context,
-            state_ref=value.state_ref,
+            state_ref=value.state_ref, authoring_origin=authoring_origin,
         )
 
     @atomic_authoring
@@ -240,7 +242,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             self, (value, condition), self._current_region(), "acceptance guard")
 
     @atomic_authoring
-    def _trial_guard(self, name: Any, value: Any, condition: Any, trial_site: Any) -> Any:
+    def _trial_guard(self, name: Any, value: Any, condition: Any, trial_site: Any,
+                     *, authoring_origin: SourceSpan | None = None) -> Any:
         """Gate a value of a traced method by an admissibility predicate (spec 0.3 IR4, T38).
 
         ``cond(p, then=value, otherwise=fail(NotAdmissible))`` of a method body, lowered as
@@ -256,8 +259,13 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
             raise TypeError("trial guard: trial_site holds site (the guard name), "
                             "retry_can_change and variant")
         self._guard_regions(value, condition)
-        guarded = self._acceptance_guard_value(name, value, condition, RejectAttempt(),
-                                               trial_site=dict(trial_site))
+        # A compiler-generated guard has the origin of the value it authenticates. A
+        # traced cond supplies the exact authoring span captured before it materializes.
+        origin = value.provenance.primary if authoring_origin is None else authoring_origin
+        guarded = self._acceptance_guard_value(
+            name, value, condition, RejectAttempt(), trial_site=dict(trial_site),
+            authoring_origin=origin,
+        )
         self._register_acceptance_guard(AcceptanceGuard(name, GuardRole.INVARIANT,
                                                         RejectAttempt()))
         return guarded

@@ -130,6 +130,28 @@ class GuardFailureSite:
         return self.token + format(self.predicate, "016x")
 
 
+def validate_guard_failure_sites(rows: Any) -> None:
+    fields = {"token", "name", "variants", "origin", "action", "retry_can_change",
+              "payload", "predicate"}
+    tokens: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping) or set(row) != fields:
+            raise ValueError("failure_sites requires exact global guard rows")
+        token = row["token"]
+        if (type(token) is not str or len(token) != 64
+                or any(digit not in "0123456789abcdef" for digit in token) or token in tokens):
+            raise ValueError("failure_sites requires unique canonical site tokens")
+        tokens.add(token)
+        if (type(row["name"]) is not str or not row["name"]
+                or row["variants"] != ["NotAdmissible"] or row["origin"] != "trial"
+                or row["action"] not in ("reject_attempt", "fail_run")
+                or type(row["retry_can_change"]) is not bool
+                or (row["action"] == "fail_run" and row["retry_can_change"])
+                or row["payload"] != {"predicate": "Index", "value": "Bool"}
+                or type(row["predicate"]) is not int or not 0 <= row["predicate"] < 1 << 63):
+            raise ValueError("failure_sites has an invalid global guard contract")
+
+
 class _FailureObservation(Protocol):
     @property
     def variant(self) -> type: ...
@@ -142,6 +164,17 @@ class _FailureObservation(Protocol):
 
     @property
     def site(self) -> GuardFailureSite | None: ...
+
+
+def guard_observation_data(failure: _FailureObservation) -> dict[str, Any]:
+    site = failure.site
+    if site is None:
+        raise ValueError("a global guard observation requires its authenticated site")
+    return {
+        "variant": failure.variant.__name__, "origin": failure.origin,
+        "site": site.to_data(), "python_origin": site.python_origin.to_data(),
+        "payload": {name: failure.payload[name] for name in ("predicate", "value")},
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,13 +242,7 @@ class StepTransactionReport:
             "diagnostics": list(self.diagnostics),
         }
         if self.failure is not None:
-            site = self.failure.site
-            assert site is not None  # established by __post_init__
-            data["failure"] = {
-                "variant": self.failure.variant.__name__, "origin": self.failure.origin,
-                "site": site.to_data(), "payload": dict(self.failure.payload),
-                "python_origin": site.python_origin.to_data(),
-            }
+            data["failure"] = guard_observation_data(self.failure)
         return data
 
 

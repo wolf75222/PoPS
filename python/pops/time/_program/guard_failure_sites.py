@@ -10,7 +10,7 @@ from pops.time.solve_outcome import FailRun, RejectAttempt
 SCHEMA = "pops.global-guard-failure@1"
 _ACCEPTED_PREDICATE_OPS = frozenset({
     "compare", "reduce", "pointwise_expression", "scalar_isfinite",
-    "bool_and", "bool_or", "bool_not", "const_scalar",
+    "bool_op", "bool_constant",
 })
 
 
@@ -49,15 +49,11 @@ def guard_failure_site(program: Any, node: Any, program_hash: str) -> GuardFailu
                    and type(record.action) is FailRun for record in program._acceptance_guards):
             return None
         retry_can_change, disposition = False, "fail_run"
-        origin = node.provenance.primary
     else:
         if type(action) is not RejectAttempt or "assessment" in node.attrs \
                 or trial["variant"] != "NotAdmissible":
             return None
         retry_can_change, disposition = trial["retry_can_change"], "reject_attempt"
-        # A lowered trial guard protects this exact authored value. Its own creation
-        # may occur inside resolve/compile after the authoring stack has unwound.
-        origin = state.provenance.primary
     if type(retry_can_change) is not bool or not 0 <= predicate.id < 1 << 63:
         raise ValueError("global guard failure site has invalid typed metadata")
     token = canonical_json_sha256({
@@ -65,7 +61,7 @@ def guard_failure_site(program: Any, node: Any, program_hash: str) -> GuardFailu
         "site": node.id, "predicate": predicate.id,
     })
     return GuardFailureSite(token, node.attrs["guard"], predicate.id, disposition,
-                            retry_can_change, origin)
+                            retry_can_change, node.provenance.primary)
 
 
 def guard_failure_sites(program: Any, program_hash: str) -> tuple[GuardFailureSite, ...]:

@@ -197,7 +197,7 @@ def test_global_guard_carries_the_observed_predicate_at_its_compiled_site():
     program = Program("guarded")
     temporal = typed_state(program, "fluid", state_name="U")
     state = temporal.n
-    condition = program.min(state) > 0
+    condition = (program.min(state) > 0) & (program.max(state) < 2)
     current = program.guard("admitted", state, condition, action=FailRun())
     stage = program.value("stage", current, at=temporal.next.point)
     guarded = program._trial_guard("checked_stage", stage, program.min(stage) > 0, {
