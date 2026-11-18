@@ -17,8 +17,8 @@
 #include <pops/runtime/program/uniform_history_exchange_checkpoint.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
-#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -108,6 +108,19 @@ void require_step_bound_dispatch(StepBoundDispatch status) {
   }
   throw std::logic_error(std::string("System with dt= as a function of cell refuses ") + refused +
                          "; a later lot of N8 « dt= as a function of cell » elaborates it");
+}
+
+double face_step_frequency(std::string_view payload) {
+  // The producer emits a positive finite binary64 value with "%a".
+  if (payload.starts_with("0x") && payload.find('p', 2) != std::string_view::npos) {
+    double frequency = 0.0;
+    const char* end = payload.data() + payload.size();
+    const auto parsed = std::from_chars(payload.data() + 2, end, frequency, std::chars_format::hex);
+    if (parsed.ec == std::errc{} && parsed.ptr == end && std::isfinite(frequency) &&
+        frequency > 0.0)
+      return frequency;
+  }
+  throw std::runtime_error("System::run_advance received an invalid face step frequency");
 }
 
 }  // namespace
@@ -492,27 +505,12 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
         report.rejection = rejected.what();
         report.rejection_phase = phase;
         report.rejection_detail = rejected.detail();
-        if (cells) {
-          // The face guard refused the attempt with the faces' frequency (ROM-108). The compiled
-          // run does not retry at that frequency yet: it stops by name, with the largest frequency
-          // over the ranks, on every rank (design note D2, K1-c; review rev 3, P4).
-          double frequency = 0.0;
-          if (rejected.typed_failure_schema() == runtime::program::kFaceStepFrequencySchema) {
-            const std::string& text = rejected.typed_failure_payload();
-            char* end = nullptr;
-            frequency = std::strtod(text.c_str(), &end);
-            if (end == text.c_str() || *end != '\0' || !std::isfinite(frequency) ||
-                !(frequency > 0.0))
-              frequency = std::numeric_limits<double>::infinity();
-          }
-          const ExecutionLane& lane = prepared_boundary_execution_lane();
-          frequency = static_cast<double>(
-              all_reduce_max(static_cast<Real>(frequency), lane.communicator()));
-          if (frequency > 0.0) {
-            report.attempts = attempt;
-            report.face_frequency = frequency;
-            return finish(AdvanceRunStop::kFaceFrequency);
-          }
+        if (face_refusal) {
+          // The guard already used globally reduced frequencies, and step() agreed the
+          // rejection envelope before rollback. All ranks can read its payload directly.
+          report.face_frequency = face_step_frequency(rejected.typed_failure_payload());
+          report.attempts = attempt;
+          return finish(AdvanceRunStop::kFaceFrequency);
         }
         if (attempt >= max_attempts) {
           report.attempts = attempt;
