@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 import hashlib
 import math
-from types import MappingProxyType
+from types import FunctionType, MappingProxyType, MethodType
 
 from pops._structural_data import canonical_json, equal, transform_tree
 from pops.time import Program
@@ -559,6 +559,17 @@ def _formals(inputs):
     return program, args
 
 
+def _elaborator_name(builder):
+    """Read the callable's diagnostic name without invoking custom attribute hooks."""
+    builder_type = type(builder)
+    function = builder.__func__ if builder_type is MethodType else builder
+    if type(function) is FunctionType:
+        return function.__qualname__
+    owner = builder if issubclass(builder_type, type) else builder_type
+    # The built-in descriptor reads the actual name even if a metaclass overrides lookup.
+    return type.__dict__["__qualname__"].__get__(owner)
+
+
 def graph(*, inputs, output, captures=None, effects=None):
     """Elaborate ``builder(program, args[, captures])`` once into a closed native subgraph.
 
@@ -578,9 +589,7 @@ def graph(*, inputs, output, captures=None, effects=None):
         if not callable(builder):
             raise TypeError("graph requires a Python elaborator")
         program, args = _formals(inputs)
-        name = getattr(builder, "__qualname__", None)
-        if not isinstance(name, str):
-            name = type(builder).__qualname__
+        name = _elaborator_name(builder)
 
         def elaborate(p):
             with elaborating(builder, name=name):

@@ -35,16 +35,43 @@ def test_a_graph_function_that_decorates_itself_again_is_refused():
     assert refused.value.rule == "IR6" and refused.value.phase == "validate"
 
 
-def test_a_callable_elaborates_without_repr():
-    class CallableBuilder:
+def test_a_callable_elaborates_without_reading_custom_metadata():
+    decorate = graph(inputs=Product(x=Float64), output=Float64)
+
+    class BuilderType(type):
+        def __getattribute__(self, name):
+            if name == "__qualname__":
+                raise RuntimeError("metaclass name lookup is not an authoring operation")
+            return super().__getattribute__(name)
+
+    class CallableBuilder(metaclass=BuilderType):
+        calls = 0
+        recursive = False
+
+        def __getattr__(self, name):
+            if name == "__qualname__":
+                raise RuntimeError("builder name lookup is not an authoring operation")
+            raise AttributeError(name)
+
         def __repr__(self):
             raise RuntimeError("repr cannot be used")
 
         def __call__(self, program, arguments):
+            self.calls += 1
+            if self.recursive:
+                return decorate(self)
             return arguments["x"]
 
-    function = graph(inputs=Product(x=Float64), output=Float64)(CallableBuilder())
+    builder = CallableBuilder()
+    function = decorate(builder)
+    assert builder.calls == 1
     assert function.identity == "ed583949fa3aefb1e3734fb5409aaf10a896469cbe3080a438f9b71332ad8756"
+
+    builder.recursive = True
+    with pytest.raises(RecursiveGraphFunction) as error:
+        decorate(builder)
+    assert [name.rsplit(".", 1)[-1] for name, _ in error.value.cycle] == [
+        "CallableBuilder", "CallableBuilder"]
 
 
 def test_a_python_helper_that_unrolls_is_not_refused():
