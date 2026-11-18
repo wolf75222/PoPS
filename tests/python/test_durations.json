@@ -1,5 +1,13 @@
 {
   "_meta": {
+    "n12_20261118_c36_dsl_cold": {
+      "scope": "Four installed Dim2 serial AMR scripts sharing the generated criterion fixture.",
+      "basis": "Matched cold Linux x64 CI-entry runs on romeo-c026 measured production 325.28/389.48, guards 581.76/576.52, Poisson 198.74/197.84 and Roe 211.99/213.06 seconds (parent/topic). The longer observed guard run on Mac took 613.60 seconds. The updated weights round the larger observations plus ten percent up to ten seconds. Production and Poisson keep their existing weights. Refresh from a complete CI artifact.",
+      "updated_weights_seconds": {
+        "tests/python/integration/native_loader/test_dsl_production_amr_guards.py": 680,
+        "tests/python/integration/native_loader/test_dsl_production_amr_roe.py": 240
+      }
+    },
     "n12_20261118_c36_multiblock": {
       "basis": "The generated two-field refinement criterion adds one cold Program compilation to the full multiblock regression. Two cold Linux runs on one x64 node took 262 and 261 seconds; a separate x64 node took 279.39 seconds. The weight rounds the longest observation plus ten percent up to the next ten seconds. Refresh from a complete CI timing artifact.",
       "file": "tests/python/integration/amr/test_amr_multiblock.py",
@@ -9726,9 +9734,9 @@
   "tests/python/integration/native_loader/test_compiled_newton.py": 135,
   "tests/python/integration/native_loader/test_dsl_production.py": 265,
   "tests/python/integration/native_loader/test_dsl_production_amr.py": 450.0,
-  "tests/python/integration/native_loader/test_dsl_production_amr_guards.py": 300.0,
+  "tests/python/integration/native_loader/test_dsl_production_amr_guards.py": 680,
   "tests/python/integration/native_loader/test_dsl_production_amr_poisson.py": 220.0,
-  "tests/python/integration/native_loader/test_dsl_production_amr_roe.py": 180.0,
+  "tests/python/integration/native_loader/test_dsl_production_amr_roe.py": 240,
   "tests/python/integration/native_loader/test_equation_cadence.py": 495,
   "tests/python/integration/native_loader/test_external_component_package.py": 225.0,
   "tests/python/integration/native_loader/test_external_field_dispatch_faults_runtime.py": 120,

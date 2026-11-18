@@ -33,7 +33,7 @@ ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
 # With the N16 representation modules, 172 keeps the maximum at 1886 s.
 # The two-point mapped-face module brings the maximum to 1886 s at 173 bins.
 # Budgeting the cold WENO5 parity runs needs 174 bins, with a maximum of 1882 s.
-SHARD_TOTAL = 174
+SHARD_TOTAL = 175
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
