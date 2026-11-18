@@ -288,7 +288,7 @@ class AnalyticAux(_AuxProducer):
         if type(axis) is not int or axis < 0 or axis >= len(frame.axes):
             raise ValueError("entity coordinate axis is outside its frame")
         result = cls(target, coordinate(frame, frame.axes[axis]), frame=frame,
-                     boundary=AuxiliaryBoundary(width=1, kind="foextrap"))
+                     boundary=AuxiliaryBoundary(width=1))
         object.__setattr__(result, "_entity_coordinate_axis", axis)
         return result
 
