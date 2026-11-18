@@ -2442,7 +2442,8 @@ class RuntimeInstance:
 
         budget = (require_checkpoint_resource_budget(self) if workspace_byte_capacity is None else
                   restart_checkpoint_resource_budget(self, workspace_byte_capacity))
-        stored = decode_checkpoint_bytes(payload, budget)
+        stored = decode_checkpoint_bytes(
+            payload, budget, allow_historical_amr_refusal=budget.runtime_kind == "amr")
         if MANIFEST_KEY not in stored.files:
             raise ValueError("checkpoint has no canonical manifest")
         manifest = json.loads(str(stored[MANIFEST_KEY]))

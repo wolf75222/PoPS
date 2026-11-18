@@ -241,7 +241,9 @@ def _maximal_manifest(names: tuple[str, ...]) -> dict[str, Any]:
     return maximal
 
 
-def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) -> None:
+def _require_manifest_restart_identity(
+    manifest: Mapping[str, Any], token: str, *, allow_historical_amr_refusal: bool = False
+) -> None:
     from pops.identity.checkpoint_origin import (
         BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
         _is_bound_initial_origin,
@@ -276,9 +278,12 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
             raise ValueError("checkpoint %s identity digest is not canonical" % field)
         return Identity(domain, value["schema_version"], "sha256", raw_digest)
 
-    from ._checkpoint_contract import CHECKPOINT_MANIFEST_KEYS
+    from ._checkpoint_contract import CHECKPOINT_MANIFEST_KEYS, is_historical_amr_run_manifest
 
     expected_keys = set(CHECKPOINT_MANIFEST_KEYS)
+    historical = allow_historical_amr_refusal and is_historical_amr_run_manifest(manifest)
+    if historical:
+        expected_keys.remove("program_id")
     initial = manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION
     if initial:
         expected_keys.add("origin")
@@ -311,7 +316,8 @@ def _require_manifest_restart_identity(manifest: Mapping[str, Any], token: str) 
     identity("semantic_identity", "semantic")
     identity("artifact_identity", "artifact")
     identity("bind_identity", "bind")
-    identity("program_id", "program")
+    if not historical:
+        identity("program_id", "program")
     if initial:
         if not _is_bound_initial_origin(manifest["origin"]) \
                 or manifest["run_identity"] is not None \
@@ -476,13 +482,16 @@ def _checkpoint_zip_members(
 
 
 def decode_checkpoint_bytes(
-    payload: Any, budget: Any, *, allow_reviewed_unsealed: bool = False
+    payload: Any, budget: Any, *, allow_reviewed_unsealed: bool = False,
+    allow_historical_amr_refusal: bool = False,
 ) -> InMemoryCheckpoint:
     """Preflight and stream one exact NPZ into bounded immutable arrays.
 
     The caller must supply the exact resource authority installed from the live runtime. Central
     directory sizes are rejected against it before any NPY header or manifest is materialized. The
     sealed manifest then authenticates and may only narrow those live allocation bounds.
+    AMR restart inspection can preflight the older manifest to diagnose a refusal after full
+    payload authentication. A successful decode is never authority to restore that envelope.
     """
     if not isinstance(payload, bytes) or not payload:
         raise TypeError("restart payload must be non-empty exact bytes")
@@ -494,6 +503,8 @@ def decode_checkpoint_bytes(
         raise TypeError("restart decode requires one exact live checkpoint resource budget")
     if type(allow_reviewed_unsealed) is not bool:
         raise TypeError("restart unsealed-review policy must be an exact bool")
+    if type(allow_historical_amr_refusal) is not bool:
+        raise TypeError("historical AMR refusal policy must be an exact bool")
     if len(payload) > budget.max_archive_bytes:
         raise ValueError("checkpoint NPZ archive exceeds its live resource budget")
     declared_members = _checkpoint_central_directory_preflight(payload, budget)
@@ -599,7 +610,8 @@ def decode_checkpoint_bytes(
             restart_token = str(identity_array.item())
             if identity_plan.dtype.itemsize // 4 != len(restart_token):
                 raise ValueError("checkpoint restart identity member has non-canonical padding")
-            _require_manifest_restart_identity(manifest, restart_token)
+            _require_manifest_restart_identity(
+                manifest, restart_token, allow_historical_amr_refusal=allow_historical_amr_refusal)
 
             aggregate_budget = (
                 manifest_plan.info.file_size

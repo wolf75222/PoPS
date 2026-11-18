@@ -177,3 +177,87 @@ def test_a_checkpoint_of_the_tag_graph_route_is_refused_by_identity(
     assert (runtime.time(), runtime.macro_step()) == (time, step)
     runtime.restart(own)
     assert (runtime.time(), runtime.macro_step()) == (time, step)
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_historical_amr_refusal_authenticates_the_archive_before_identity(
+        tmp_path, criterion_native_cache) -> None:
+    """Authenticated historical envelopes have diagnostics only, even with equal semantics."""
+    import json
+    from pathlib import Path
+
+    from pops.identity import make_identity
+    from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
+
+    del criterion_native_cache
+    case, layout, _ = advection_case(_region_rules("value"), thresholds=THRESHOLDS,
+                                     name="refinement_criterion_parity")
+    runtime = pops.bind(pops.compile(pops.resolve(pops.validate(case), layout=layout)))
+    pops.step(runtime, t_bound=T_END)
+    own = runtime.checkpoint(tmp_path / "current.npz")
+    historical = Path(__file__).resolve().parents[2] / "data" / "amr_graph_checkpoint.npz"
+
+    def load(path):
+        with np.load(path, allow_pickle=False) as archive:
+            return {name: archive[name] for name in archive.files}
+
+    current = load(own)
+    old = load(historical)
+    semantic = json.loads(str(current[MANIFEST_KEY]))["semantic_identity"]
+
+    def manifest_variant(payload, edit, *, reseal=False):
+        copy = dict(payload)
+        manifest = json.loads(str(payload[MANIFEST_KEY]))
+        edit(manifest)
+        if reseal:
+            identity = manifest.pop("restart_identity")
+            restart = make_identity("restart", manifest)
+            manifest["restart_identity"] = dict(identity, hexdigest=restart.hexdigest)
+            copy[IDENTITY_KEY] = np.asarray(restart.token)
+        copy[MANIFEST_KEY] = np.asarray(json.dumps(manifest, sort_keys=True, separators=(",", ":")))
+        return copy
+
+    def accepted_image():
+        native = runtime._executor._s
+        levels = runtime.n_levels()
+        return (
+            runtime.time(), runtime.macro_step(), repr(runtime.patch_boxes()),
+            native.checkpoint_topology_epoch(), native.checkpoint_regrid_count(),
+            bytes(native.program_accepted_state()),
+            tuple(np.asarray(runtime.block_level_state_global("tracer", level)).tobytes()
+                  for level in range(levels)),
+        )
+
+    def alter_semantic(manifest):
+        manifest["semantic_identity"]["hexdigest"] = "0" * 64
+
+    def alter_program_and_semantic(manifest):
+        alter_semantic(manifest)
+        manifest["program_id"]["hexdigest"] = "0" * 64
+
+    variants = (
+        ("historical-corrupt-member", dict(old, t=old["t"] + 1.0),
+         "checkpoint payload digest mismatch for 't'"),
+        ("historical-corrupt-manifest", manifest_variant(old, alter_semantic),
+         "checkpoint manifest/restart identity is not authentic"),
+        ("modern-without-program",
+         manifest_variant(current, lambda manifest: manifest.pop("program_id")),
+         "checkpoint manifest/restart identity is not authentic"),
+        ("historical-same-semantics",
+         manifest_variant(old, lambda manifest: manifest.update(semantic_identity=semantic),
+                          reseal=True),
+         "historical AMR checkpoint has no program_id"),
+        ("modern-different-program-and-semantics",
+         manifest_variant(current, alter_program_and_semantic, reseal=True),
+         r"checkpoint program identity \(program_id\) does not match"),
+    )
+    before = accepted_image()
+    for name, payload, message in variants:
+        path = tmp_path / (name + ".npz")
+        np.savez_compressed(path, **payload)
+        with pytest.raises(ValueError, match=message):
+            runtime.restart(path)
+        assert accepted_image() == before, name
+    runtime.restart(own)
+    assert accepted_image() == before

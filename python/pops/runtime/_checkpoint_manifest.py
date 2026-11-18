@@ -12,7 +12,7 @@ from pops._generated_release_contract import (
     CHECKPOINT_ENVELOPE_SCHEMA_VERSION as CHECKPOINT_SCHEMA_VERSION,
 )
 from pops.output._checkpoint_contract import (
-    CHECKPOINT_MANIFEST_KEYS, IDENTITY_KEY, MANIFEST_KEY,
+    CHECKPOINT_MANIFEST_KEYS, IDENTITY_KEY, MANIFEST_KEY, is_historical_amr_run_manifest,
 )
 
 from pops.identity.checkpoint_origin import (
@@ -322,11 +322,21 @@ def inspect_checkpoint_payload_integrity(
     This is an offline integrity inspection, not a compatibility or migration decision. It proves
     only that a canonical checkpoint is internally complete and untampered.
     """
+    return _inspect_checkpoint_payload_integrity(
+        payload, runtime_kind=runtime_kind, allow_historical_amr_refusal=False)
+
+
+def _inspect_checkpoint_payload_integrity(
+    payload: Any, *, runtime_kind: str, allow_historical_amr_refusal: bool
+) -> tuple[dict[str, Any], Identity]:
     files = _payload_files(payload)
     if MANIFEST_KEY not in files or IDENTITY_KEY not in files:
         raise ValueError("checkpoint has no canonical manifest/restart identity; historical formats are refused")
     manifest = _strict_json(payload[MANIFEST_KEY])
     expected_keys = set(CHECKPOINT_MANIFEST_KEYS)
+    historical = allow_historical_amr_refusal and is_historical_amr_run_manifest(manifest)
+    if historical:
+        expected_keys.remove("program_id")
     initial = manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION
     if initial:
         expected_keys.add("origin")
@@ -345,12 +355,19 @@ def inspect_checkpoint_payload_integrity(
     if files != expected_files:
         raise ValueError("checkpoint NPZ keys differ from its exact manifest")
 
-    for field, domain in (
+    bound_domains = [
         ("semantic_identity", "semantic"),
         ("artifact_identity", "artifact"),
         ("bind_identity", "bind"),
-        ("program_id", "program"),
-    ):
+    ]
+    if historical:
+        from pops.output._checkpoint_collective import _require_manifest_restart_identity
+
+        _require_manifest_restart_identity(
+            manifest, str(payload[IDENTITY_KEY]), allow_historical_amr_refusal=True)
+    else:
+        bound_domains.append(("program_id", "program"))
+    for field, domain in bound_domains:
         recorded = _identity_from_json(manifest[field])
         if recorded.domain != domain:
             raise ValueError("checkpoint %s has wrong domain" % field)
@@ -385,11 +402,16 @@ def inspect_checkpoint_payload_integrity(
 
 def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: str) -> Identity:
     """Authenticate every checkpoint byte and all runtime identities before state mutation."""
-    manifest, restart = inspect_checkpoint_payload_integrity(
+    manifest, restart = _inspect_checkpoint_payload_integrity(
         payload,
         runtime_kind=runtime_kind,
+        allow_historical_amr_refusal=runtime_kind == "amr",
     )
     semantic, artifact, bind = _runtime_identities(owner)
+    if "program_id" not in manifest:
+        if _identity_from_json(manifest["semantic_identity"]).token != semantic.token:
+            raise ValueError("checkpoint semantic_identity does not match the bound runtime")
+        raise ValueError("historical AMR checkpoint has no program_id and cannot be restarted")
     program = _runtime_program_id(owner)
     # program_id first (N11 lot 2b): another target, toolchain, optimization flags or emitter is
     # refused as such, before the owner-name and member checks can describe it otherwise.
