@@ -242,6 +242,57 @@ def test_external_amr_provider_roles_are_not_interchangeable(tmp_path):
         pops.resolve(pops.validate(target.authoring.case), layout=layout, components=(reflux,))
 
 
+def test_clustering_redirect_is_refused_before_authority_callbacks():
+    from pops.lib.amr import BergerRigoutsos
+
+    class Redirect:
+        def __init__(self):
+            self.calls = []
+
+        def resolve_references(self, resolver):
+            self.calls.append("resolve_references")
+            return BergerRigoutsos(minimum_efficiency=0.91)
+
+        def inspect(self):
+            self.calls.append("inspect")
+            return BergerRigoutsos().inspect()
+
+    target = _example().build_final_case()
+    redirect = Redirect()
+    layout = _layout(target.layout, clustering=redirect)
+    validated = pops.validate(target.authoring.case)
+
+    def unexpected_resolver(_):
+        pytest.fail("clustering must be authenticated before resolving any references")
+
+    for read_layout in (layout.validate, layout.options, layout.runtime_layout_data,
+                        lambda: pops.resolve(validated, layout=layout),
+                        lambda: layout.resolve_for_case(unexpected_resolver)):
+        with pytest.raises(TypeError, match="built-in BergerRigoutsos policy"):
+            read_layout()
+        assert redirect.calls == []
+
+
+def test_resolving_intrinsic_clustering_reuses_the_immutable_policy(monkeypatch):
+    from pops.amr import AMRTransfer
+    from pops.lib.amr import BergerRigoutsos
+
+    def unexpected_policy_callback(self, resolver):
+        raise AssertionError("an intrinsic clustering policy has no references to resolve")
+
+    target = _example().build_final_case()
+    policy = BergerRigoutsos(minimum_efficiency=0.91, minimum_box_size=2, maximum_box_size=12)
+    layout = AMR(grid=target.layout.grid, hierarchy=target.layout.hierarchy,
+                 execution=target.layout.execution, transfer=AMRTransfer(), clustering=policy)
+    monkeypatch.setattr(BergerRigoutsos, "resolve_references", unexpected_policy_callback)
+    assert layout.resolve_for_case(lambda declaration: declaration).clustering is policy
+    resolved = pops.resolve(pops.validate(target.authoring.case),
+                            layout=_layout(target.layout, clustering=policy))
+    binding = resolved.amr_providers["clustering"]
+    assert (binding["minimum_efficiency"], binding["minimum_box_size"],
+            binding["maximum_box_size"]) == (0.91, 2, 12)
+
+
 def test_external_amr_provider_bind_fails_closed_without_native_mutation(tmp_path):
     from pops.amr import amr_provider_binding_identity
     from pops.amr.providers import resolve_clustering_binding

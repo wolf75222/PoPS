@@ -692,6 +692,13 @@ def resolve_amr_authorities(
     """
     if type(context) is not AMRResolutionContext:
         raise TypeError("AMR resolution requires an AMRResolutionContext")
+    from pops.amr.providers import (
+        AMRProviderLoweringContext,
+        ResolvedAMRProviderBinding,
+        resolve_clustering_binding,
+    )
+
+    clustering_binding = resolve_clustering_binding(clustering, context.layout_plan.qualified_id)
     program_regrid = getattr(context.program, "_regrid", None)
     when = None
     if tagging is None and regrid is None:
@@ -742,11 +749,6 @@ def resolve_amr_authorities(
         context.state_storage,
     )
     resolved_tagging = resolve_tagging(tagging, tagging_context, when=when)
-    from pops.amr.providers import (
-        AMRProviderLoweringContext,
-        ResolvedAMRProviderBinding,
-        resolve_clustering_binding,
-    )
 
     provider_context = AMRProviderLoweringContext(
         layout_identity=context.layout_plan.qualified_id,
@@ -761,7 +763,7 @@ def resolve_amr_authorities(
     if lowered.data.get("layout_identity") != provider_context.layout_identity:
         raise ValueError("resolved AMR provider authenticates another layout")
     provider_bindings = {
-        "clustering": resolve_clustering_binding(clustering, provider_context.layout_identity),
+        "clustering": clustering_binding,
         "reflux": lowered.data,
     }
     resolved_hierarchy = _hierarchy(
