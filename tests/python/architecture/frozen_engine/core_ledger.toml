@@ -615,3 +615,54 @@ paths = [
   "src/runtime/system/system.cpp",
   "src/runtime/system/system_aux.cpp",
 ]
+
+[[mechanism]]
+id = "cartesian-coordinate-reads-at-flux-faces"
+issue = "ROM-106"
+rule = "CF15"
+pre_freeze = true
+what = """
+A physical flux and its Jacobian can read coordinates supplied by the installed Cartesian
+metric. Resolved provider roles identify coordinate axes and project them into native storage
+slots. The face materializer binds one physical point to the coordinate slots of both traces
+and delegates the remaining slots to their original per-trace readers. At an identified
+periodic endpoint it uses the physical lower bound on the face axis and the same tangential
+coordinates. Metric measures and face orientation continue through FaceContext. Cell readers
+use the analytic cell-center provider with halo exchange from the installed topology.
+For a pack without coordinate slots, the registered face program follows its original path."""
+structures = [
+  { case = "periodic-kinematic-film", builder = "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py::build_film_case", structure = "One-dimensional cubic kinematic-wave flux, spatial mobility and state-dependent Rusanov radius" },
+  { case = "rotation-on-offset-box", builder = "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py::build_rotation_case", structure = "Two-dimensional linear advection with signed tangential speed and upwind switching" },
+]
+measurement = """
+The native-integration builders were committed at e396d5a5c before the product change
+ad415af40. On that pre-product revision and the verified stock Mac Kokkos Dim1 and Dim2 SDKs,
+both tests reached the intended G03 refusal in the public Surface compilation route after
+selection of their native dimension. The corresponding constant controls ran one native step.
+With the product, the two tracked native trials each run one SSPRK2 step at dt=0.002 without
+rejection and meet their independent conservative update oracles. The private case probes
+observe a maximum absolute error of 1.11e-16 in both dimensions. The Dim2 resolved consumer-to-
+native projection exchanges x and y slots. A native pack probe observes x=1.625 on both sides
+of an offset patch interface and x=1 at both periodic endpoints. Its diagnostic flux and
+Jacobian radius use the same point despite distinct ordinary values on the two traces and
+a coordinate cell sentinel. Reversing the face orientation inverts the flux density with
+an unchanged radius. An oversized fixed step exercises the real user-face stability refusal
+in both laws, preserving the native accepted state bytes and cursor. ROM-106 holds the raw
+case, SDK, slot projection and rollback receipts.
+"""
+refusal_set = """
+The admitted surface scope is fixed steps, CellAverage, Uniform Cartesian support with fully
+periodic topology and constant reconstruction. The surface refuses coordinate flux laws on
+unqualified routes. Native startup checks the installed topology and pack before evaluation.
+A coordinate-bearing face law refuses a reader that lacks the prepared face-point carrier.
+The existing native user-face guard still refuses over-budget attempts before publication."""
+paths = [
+  "include/pops/numerics/fv/flux_interfaces.hpp",
+  "include/pops/numerics/spatial/operators/cartesian_operator.hpp",
+  "include/pops/physics/composition/composite.hpp",
+  "include/pops/runtime/builders/compiled/generated_system_block.hpp",
+  "python/pops/codegen/component_provider_packs.py",
+  "python/pops/codegen/module_emit_brick.py",
+  "python/pops/fields/aux.py",
+  "python/pops/surface/_elaborate.py",
+]
