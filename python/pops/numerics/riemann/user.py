@@ -161,7 +161,7 @@ def _source_identity(body: Any, stability: Any, *, width: int, state_name: str,
 
 
 def User(body: Any, *, state: StateHandle, stability: Any = None,
-         name: str = "user_face") -> BrickDescriptor:
+         name: str = "user_face", origin: Any = None) -> BrickDescriptor:
     """Author ``face(left,right,flux_left,flux_right,speed) -> tuple[Expr,...]``.
 
     Every state/flux argument is an indexable tuple with the declared state width, including
@@ -176,6 +176,10 @@ def User(body: Any, *, state: StateHandle, stability: Any = None,
     evaluates an input only when an expression reads it. A face that reads ``speeds`` requires
     the model capability ``wave_speeds``, and a case whose model declares none is refused when
     it is validated, before any code is generated.
+
+    ``origin`` is where the body is written (``pops._source_origin.code_origin``), for the model
+    source map; left out, it is the origin of ``body``. A layer that wraps the author's body
+    passes the author's. It stays outside the descriptor's identity.
     """
     if not callable(body):
         raise TypeError("riemann.User(body=) requires a callable symbolic face body")
@@ -215,7 +219,16 @@ def User(body: Any, *, state: StateHandle, stability: Any = None,
         requirements=_requirements(roots + (stability_root,)),
         capabilities={"vector_face": True, "conservative_shared_face": True},
         expression=roots + (stability_root,),
+        origin=_origin(body, origin),
     )
+
+
+def _origin(body: Any, origin: Any) -> Any:
+    from pops._source_origin import code_origin
+
+    if origin is None:
+        return code_origin(body) if hasattr(body, "__code__") else None
+    return dict(origin)
 
 
 def authenticated_user_face(value: Any) -> BrickDescriptor:

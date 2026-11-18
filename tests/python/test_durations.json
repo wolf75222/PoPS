@@ -6723,7 +6723,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1212,
+    "estimated_count": 1213,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7267,6 +7267,7 @@
       "tests/python/unit/codegen/test_mapped_condensed.py",
       "tests/python/unit/codegen/test_matrix_free_dt_capture.py",
       "tests/python/unit/codegen/test_migration_public_workflows.py",
+      "tests/python/unit/codegen/test_model_source_map.py",
       "tests/python/unit/codegen/test_module_codegen.py",
       "tests/python/unit/codegen/test_module_data_model_contract.py",
       "tests/python/unit/codegen/test_module_hash.py",
@@ -8138,7 +8139,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1279,
+    "total_files": 1280,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9295,6 +9296,21 @@
       },
       "source_sha256": {
         "tests/python/integration/surface/test_cf17_l1_swaps.py": "0375f8af6eb067120afa9d3ceaad1c60471d205a9af635a33c2e19eda7b459b6"
+      }
+    },
+    "ci_20261113_model_source_map": {
+      "basis": "Unmeasured CI scheduling estimate for the model source map of the vertical slice (S2, driver 13:35), on the api_v02_20261013 tiers: 5 s for test_model_source_map.py, source-only (a synthetic model C++ text and descriptors; no compile). The local receipt comes from pytest on a 4-core container; it is not GitHub CI file wall time. Replace only from complete CI per-file receipts.",
+      "estimates_seconds": {
+        "tests/python/unit/codegen/test_model_source_map.py": 5
+      },
+      "local_receipts": {
+        "tests/python/unit/codegen/test_model_source_map.py": {
+          "cases": 4,
+          "session_seconds": 1.72
+        }
+      },
+      "source_sha256": {
+        "tests/python/unit/codegen/test_model_source_map.py": "bb1bc1b0e36da68eeb3f6742450c5a1383581d0d2f5130cfd34bef65da411137"
       }
     }
   },
@@ -10576,5 +10592,6 @@
   "tests/python/unit/numerics/test_cell_total_lowering.py": 15,
   "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": 300,
   "tests/python/unit/numerics/test_nonlinear_accumulation_recovery.py": 15,
-  "tests/python/integration/surface/test_cf17_l1_swaps.py": 600
+  "tests/python/integration/surface/test_cf17_l1_swaps.py": 600,
+  "tests/python/unit/codegen/test_model_source_map.py": 5
 }

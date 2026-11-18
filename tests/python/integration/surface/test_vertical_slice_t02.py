@@ -5,9 +5,10 @@ master's tutorial 02 written in the surface, its upwind flux and its SSPRK2 writ
 While ``tests/gates/vertical_slice.toml`` lists a piece, the file stops on the first one, and
 this test checks the statement and the refusal that the registry records; with the registry empty
 (since #799), it runs the file natively to its end, which writes master's two records (no skip, no
-xfail: CF14). Only that test compiles and loads native code, so only it carries the native
-markers (review O2). The file passes the lint SU-T1 and imports only the surface and the library
-(S1-a).
+xfail: CF14). The source map of its compiled artifact names where the face and the
+reconstruction that its model C++ generates are written (S2). Only those two tests compile and
+load native code, so only they carry the native markers (review O2). The file passes the lint
+SU-T1 and imports only the surface and the library (S1-a).
 """
 from __future__ import annotations
 
@@ -124,6 +125,61 @@ def _count_python_calls(monkeypatch):
 
     monkeypatch.setattr(_n8.Simulation, "__init__", counted_init)
     return calls, runs
+
+
+def _decorated(path, name):
+    """The line of the ``@pops.scheme`` of ``def name(`` in ``path``, one-based."""
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    index = next(i for i, line in enumerate(lines) if line.startswith("def %s(" % name))
+    assert lines[index - 1] == "@pops.scheme", (path, name)
+    return index
+
+
+@pytest.mark.compiler
+@pytest.mark.kokkos
+@pytest.mark.native_loader
+def test_the_source_map_names_where_the_face_and_the_reconstruction_are_written(monkeypatch):
+    """S2: the model C++ of the slice holds two policies generated from Python bodies; its source
+    map (``pops.model-source-map@1``) names their lines in the retained C++ and where each body
+    is written: the face in the case file at ``@pops.scheme def upwind``, the reconstruction in
+    ``pops.lib`` at ``@pops.scheme def muscl`` (driver 13:35). The case is compiled, not run."""
+    import hashlib
+
+    import pops.lib.numerics.limiters as limiters
+
+    source = CASE.read_text(encoding="utf-8")
+    head, _, rest = source.partition("\nartifact = pops.compile(")
+    head += "\nartifact = pops.compile(" + rest.split("\n", 1)[0] + "\n"
+    namespace = {"__name__": "slice_case", "__file__": str(CASE)}
+    monkeypatch.setattr(sys, "argv", [str(CASE)])
+    exec(compile(head, str(CASE), "exec"), namespace)
+    compiled = namespace["artifact"].compiled
+    (block,) = compiled.blocks
+    data = compiled.source_maps["block:%s" % block.name]
+    retained = block.model._generated_cpp
+    lines = retained.splitlines()
+    assert data["contract"] == "pops.model-source-map@1" and data["complete"], data
+    assert data["source_sha256"] == hashlib.sha256(retained.encode()).hexdigest()
+    evidence = {row["route"]: row for row in compiled._retained_source_evidence["components"]}
+    assert evidence["block:%s" % block.name]["sha256"] == data["source_sha256"]
+    bodies = {row["policy"]: row for row in data["bodies"]}
+    assert set(bodies) == {"UserFacePolicy", "UserReconstructionPolicy"} and not data["unlocated"]
+    for policy, row in bodies.items():
+        ((first, last),) = row["ranges"]
+        assert (lines[first - 1], lines[last - 1]) == ("struct %s {" % policy, "};"), row
+        assert '"%s"' % row["source_identity"] in "\n".join(lines[first - 1:last])
+    assert bodies["UserFacePolicy"]["origin"] == {
+        "written_in": "case", "path": str(CASE.resolve()),
+        "line": _decorated(CASE, "upwind"), "function": "upwind"}
+    assert bodies["UserReconstructionPolicy"]["origin"] == {
+        "written_in": "pops.lib", "path": "pops/lib/numerics/limiters.py",
+        "line": _decorated(limiters.__file__, "muscl"), "function": "muscl"}
+    report = compiled.inspect().to_dict()
+    texts = [row["written_in"] for row in
+             report["artifacts"]["model_source_maps"]["block:%s" % block.name]["bodies"]]
+    assert sorted(texts) == sorted([
+        "the case file, %s:%d" % (CASE.resolve(), _decorated(CASE, "upwind")),
+        "pops.lib, pops/lib/numerics/limiters.py:%d" % _decorated(limiters.__file__, "muscl")])
 
 
 @pytest.mark.compiler
