@@ -128,6 +128,7 @@ class _Executor:
             artifact_identity=plan.artifact.artifact_identity,
             bind_identity=plan.bind_identity,
         )
+        self._program_id = plan.artifact.program_id
         from pops.runtime._checkpoint_resource_budget import (
             _producer_checkpoint_resource_budget,
         )
@@ -204,6 +205,9 @@ class _Executor:
             self.bound_snapshot.artifact_identity,
             self.bound_snapshot.bind_identity,
         )
+
+    def _checkpoint_program_id(self):
+        return self._program_id
 
     def _restore_checkpoint_run_identity(self, identity):
         assert type(identity) is Identity
