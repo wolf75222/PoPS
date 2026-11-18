@@ -1,3 +1,4 @@
+#include "amr_fixture_criteria.hpp"
 #include "native_dso_compiler.hpp"
 #include "synthetic_loader_fixture.hpp"
 
@@ -8,8 +9,9 @@
 // The transaction cases consume fresh copies of these binaries and never compile.
 int main(int argc, char** argv) {
   try {
-    if (argc != 4)
-      throw std::invalid_argument("expected variant, source path, and shared-object path");
+    if (argc != 5)
+      throw std::invalid_argument(
+          "expected variant, source path, shared-object path, and criterion fragment");
     std::size_t consumed = 0;
     const auto value = std::stoul(argv[1], &consumed);
     if (consumed != std::string(argv[1]).size() || value > 63)
@@ -21,8 +23,12 @@ int main(int argc, char** argv) {
     {
       std::ofstream source(argv[2]);
       source.exceptions(std::ios::badbit | std::ios::failbit);
-      source << pops::test::synthetic_loader::source(interface_blocks, histories, attempt_cursor,
-                                                     with_flux, mapping, history_metadata);
+      source << pops::test::synthetic_loader::source(
+          interface_blocks, histories, attempt_cursor, with_flux, mapping, history_metadata,
+          attempt_cursor     ? pops::test::synthetic_attempt
+          : interface_blocks ? pops::test::synthetic_interface
+                             : pops::test::synthetic_history);
+      pops::test::append_fixture_criterion(source, argv[4]);
     }
     const auto result = pops::test::native_dso::compile_shared(
         argv[2], argv[3], "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");

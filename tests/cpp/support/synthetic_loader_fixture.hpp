@@ -1,5 +1,7 @@
 #pragma once
 
+#include "amr_fixture_criteria.hpp"
+
 #include <stdexcept>
 #include <string>
 
@@ -25,9 +27,9 @@ inline unsigned variant(bool interface_blocks, bool histories, bool attempt_curs
   }
 }
 
-inline std::string source(bool interface_blocks = false, bool histories = false,
-                          bool attempt_cursor = false, bool with_flux = true, bool mapping = false,
-                          bool history_metadata = false) {
+inline std::string source(bool interface_blocks, bool histories, bool attempt_cursor,
+                          bool with_flux, bool mapping, bool history_metadata,
+                          const FixtureCriterion& criterion) {
   // clang-format off
   return std::string("#define POPS_TEST_INTERFACE_BLOCKS ") +
       (interface_blocks ? "1\n" : "0\n") + "#define POPS_TEST_HISTORIES " +
@@ -35,7 +37,9 @@ inline std::string source(bool interface_blocks = false, bool histories = false,
       (attempt_cursor ? "1\n" : "0\n") + "#define POPS_TEST_ATTEMPT_FLUX " +
       (with_flux ? "1\n" : "0\n") + "#define POPS_TEST_ATTEMPT_MAPPING " +
       (mapping ? "1\n" : "0\n") + "#define POPS_TEST_HISTORY_METADATA " +
-      (history_metadata ? "1\n" : "0\n") + R"CPP(
+      (history_metadata ? "1\n" : "0\n") +
+      "#define POPS_TEST_TAG_ID \"" + criterion.identity + "\"\n" +
+      "#define POPS_TEST_TAG_STATE \"" + criterion.state + "\"\n" + R"CPP(
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -157,7 +161,7 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
 extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "source-built-synthetic-loader-transaction"; }
-extern "C" const char* pops_program_hash() {
+static const char* base_program_hash() {
 #if POPS_TEST_ATTEMPT_CURSOR
   return POPS_TEST_ATTEMPT_MAPPING
       ? (POPS_TEST_ATTEMPT_FLUX ? "tests.attempt-cursor/mapping-flux@1"
@@ -173,6 +177,10 @@ extern "C" const char* pops_program_hash() {
       ? "tests.synthetic-loader/program/interface-publication-v1"
       : "tests.synthetic-loader/program/loader-transaction-v1";
 #endif
+}
+extern "C" const char* pops_program_hash() {
+  static const std::string hash = std::string(base_program_hash()) + "/" POPS_TEST_TAG_ID;
+  return hash.c_str();
 }
 extern "C" int pops_program_operator_authority_count() { return 0; }
 extern "C" std::uint64_t pops_program_operator_authority_word(int, int) { return 0; }
@@ -210,7 +218,7 @@ extern "C" const char* pops_program_checkpoint_history_name(int history) {
 }
 extern "C" int pops_program_checkpoint_history_owner(int) { return 0; }
 extern "C" const char* pops_program_checkpoint_history_state_identity(int) {
-  return POPS_TEST_HISTORIES ? ("tests.synthetic-loader/state/tracer") : "";
+  return POPS_TEST_HISTORIES ? (POPS_TEST_TAG_STATE) : "";
 }
 extern "C" const char* pops_program_checkpoint_history_space_identity(int) {
   return POPS_TEST_HISTORIES ? ("cell.conservative") : "";
@@ -432,7 +440,7 @@ extern "C" void pops_install_program_amr(
       error = {};
       try {
         for (const char* name : {"tracer.first", "tracer.second"})
-          context->register_history(name, 1, 1, 0, "tests.synthetic-loader/state/tracer",
+          context->register_history(name, 1, 1, 0, POPS_TEST_TAG_STATE,
                                     "cell.conservative", "tests.synthetic-loader.clock", "none");
         auto* candidate = &context->scratch_state(1000, 0, context->state(0));
         next.emplace_back([context, candidate] {
