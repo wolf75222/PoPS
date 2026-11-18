@@ -1015,6 +1015,22 @@ class SourceGhost:
         object.__setattr__(self, "runtime_captures", captures)
         object.__setattr__(self, "source_identity", hashlib.sha256(encoded).hexdigest())
 
+    def _copies_nearest_interior(self) -> bool:
+        """Whether every ghost component directly reads its nearest interior component."""
+        from pops._ir.expr import Var
+
+        return (
+            len(self.ghosts) == self.depth
+            and all(len(row) == self.width for row in self.ghosts)
+            and all(
+                type(value) is Var
+                and value.kind == _GHOST_INPUT
+                and value.name == _ghost_inner_name(1, component)
+                for row in self.ghosts
+                for component, value in enumerate(row)
+            )
+        )
+
     def identity_data(self) -> dict[str, Any]:
         return {"source_identity": self.source_identity, "width": self.width,
                 "depth": self.depth, "reads": self.reads}

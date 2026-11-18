@@ -13,8 +13,8 @@ an allowlist: a consumer joins it when it reads the arrays and a test shows it.
   serves a face of the catalogue and a face authored in source alike (``riemann.User``, the words
   of ``pops.lib.numerics`` since N3 lot 1), whose input ``n`` is then the physical unit normal of
   the face; a trace authored in source reads a stencil of the logical box and stays refused;
-* transport boundaries that extend the interior state alone: a ghost state of the state, without
-  a formula on its components, a characteristic closure, a field, the clock or a parameter;
+* transport boundaries that extend the interior state alone, including a generated ghost that
+  copies each component directly from the nearest interior cell at every depth;
 * the two-point diffusion of a Program, of one component with a diagonal coefficient, on node
   positions (a graded box, of rank one to three), with conormal, value or periodic ends whose data
   reads no coordinate;
@@ -158,14 +158,70 @@ def _check_stencil(layout: Any, value: Any, rank: int, kind: str) -> None:
                     axis=axis, reads=reads)
 
 
-def _extends_the_state(provider: Any) -> bool:
+def _proved_ghost_copies(boundaries: Any) -> set[int]:
+    """Find copies whose actual transport condition owns the physical ghost production."""
+    from pops.boundary.transport import ResolvedTransportBoundarySet, SourceGhost
+    from pops.mesh.boundaries import GhostProducerPlan
+    from pops.mesh.boundaries.ports import GhostState
+    from pops.mesh.boundaries.providers import BoundaryProviderKind
+
+    admitted = set()
+    refused = set()
+    for plan in boundaries:
+        if type(plan) is not GhostProducerPlan:
+            continue
+        authority = plan.execution_authority
+        for production in plan.productions:
+            region = production.region
+            for provider in production.producer.boundary_providers:
+                if provider.kind is not BoundaryProviderKind.GHOST_FORMULA:
+                    continue
+                matches = (
+                    [condition for condition in authority.conditions if condition.provider is provider]
+                    if type(authority) is ResolvedTransportBoundarySet else []
+                )
+                if len(matches) != 1 or region.boundary is None:
+                    refused.add(id(provider))
+                    continue
+                condition = matches[0]
+                source = condition.source_ghost
+                geometry = condition.geometry
+                orientation = region.boundary.orientation
+                deps = provider.dependencies
+                if (
+                    type(source) is SourceGhost
+                    and source.state == condition.state == region.subject
+                    and deps.states == (region.subject,)
+                    and geometry.domain_geometry_id == authority.domain_geometry_id
+                    and (geometry.axis.index, geometry.side.value)
+                    == (orientation.axis, orientation.side.value)
+                    and condition.requirement.ghost_depth <= source.depth
+                    and orientation.axis < len(region.depth.depth)
+                    and region.depth.depth[orientation.axis] <= source.depth
+                    and deps.representation.source == deps.representation.target
+                    and deps.representation.converter is None
+                    and all(type(output) is GhostState and output.subject == region.subject
+                            and output.boundary == region.boundary for output in provider.outputs)
+                    and any(binding.provider is provider and binding.need.subject == region.subject
+                            and binding.need.boundary == region.boundary
+                            for binding in authority.plan.bindings)
+                    and not source.runtime_captures
+                    and source._copies_nearest_interior()
+                ):
+                    admitted.add(id(provider))
+                else:
+                    refused.add(id(provider))
+    return admitted - refused
+
+
+def _extends_the_state(provider: Any, ghost_copies: set[int]) -> bool:
     """A ghost state of the interior state alone: no formula on its components, no closure."""
     from pops.mesh.boundaries import ClosureMode
     from pops.mesh.boundaries.ports import GhostState
     from pops.mesh.boundaries.providers import BoundaryProviderKind
 
     dependencies = provider.dependencies
-    return (provider.kind is not BoundaryProviderKind.GHOST_FORMULA
+    return ((provider.kind is not BoundaryProviderKind.GHOST_FORMULA or id(provider) in ghost_copies)
             and bool(provider.outputs)
             and all(isinstance(row, GhostState) for row in provider.outputs)
             and dependencies.characteristic.mode is ClosureMode.NONE
@@ -279,9 +335,10 @@ def validate_static_geometry_consumers(plan: Any) -> None:
                 _check_diffusion(layout, block, rate.method, reading.rank, reading.kind)
             else:
                 _check_finite_volume(layout, block, rate.method)
+        ghost_copies = _proved_ghost_copies(numerics.boundaries)
         unserved = sorted({node.kind.value for node in _walk(numerics.boundaries)
                            if isinstance(getattr(node, "kind", None), BoundaryProviderKind)
-                           and not _extends_the_state(node)})
+                           and not _extends_the_state(node, ghost_copies)})
         if unserved:
             _refuse(layout, "static_geometry_boundary_unavailable",
                     "block %r has transport boundaries %s; on a mapped layout a boundary is served "

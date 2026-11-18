@@ -31,7 +31,7 @@ ORDINARY_BUDGET_SECONDS = 35 * 60
 # and 171 keeps the largest multi-file shard at 1890 s.
 ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
 # With the N16 representation modules, 172 keeps the maximum at 1886 s.
-SHARD_TOTAL = 172
+SHARD_TOTAL = 173
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
