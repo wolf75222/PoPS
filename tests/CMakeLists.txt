@@ -1199,6 +1199,45 @@ if(POPS_HAS_MPI)
     list(APPEND POPS_CPP_MPI_ONLY_TESTS test_mpi_hdf5_collective)
   endif()
 
+  set(_euler_dir "${CMAKE_CURRENT_BINARY_DIR}/euler-amr-fixtures")
+  set(_euler_outputs "${_euler_dir}/euler_amr_fixture_criteria_generated.hpp"
+    "${_euler_dir}/compiled_parity.cpp" "${_euler_dir}/regrid_parity.cpp")
+  if(IS_ABSOLUTE "${_amr_fixture_python}" AND EXISTS "${_amr_fixture_python}")
+    set(_generate_euler "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
+      "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
+      "${_euler_dir}" "${POPS_NATIVE_DIM}" --euler)
+  else()
+    set(_generate_euler ${_generate_amr_criteria})
+  endif()
+  add_custom_command(OUTPUT ${_euler_outputs}
+    COMMAND ${_generate_euler}
+    DEPENDS cpp/support/generate_amr_fixture_criteria.py ${_pops_criterion_python_sources}
+    VERBATIM)
+  add_custom_target(pops_euler_amr_criteria DEPENDS ${_euler_outputs})
+  add_executable(pops_build_euler_amr_fixture_program EXCLUDE_FROM_ALL
+    cpp/support/build_euler_amr_fixture_program.cpp)
+  target_link_libraries(pops_build_euler_amr_fixture_program PRIVATE pops::pops)
+  target_compile_features(pops_build_euler_amr_fixture_program PRIVATE cxx_std_${POPS_CXX_STD})
+  pops_native_loader_definitions(_euler_native_defs)
+  target_compile_definitions(pops_build_euler_amr_fixture_program PRIVATE ${_euler_native_defs})
+  add_dependencies(pops_build_euler_amr_fixture_program pops_euler_amr_criteria)
+  target_include_directories(pops_build_euler_amr_fixture_program PRIVATE "${_euler_dir}")
+  set(_fixture_support "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support")
+  foreach(_variant compiled_parity regrid_parity)
+    set(_stem "${_euler_dir}/${_variant}-program")
+    set(_fragment "${_euler_dir}/${_variant}.cpp")
+    add_custom_command(OUTPUT "${_stem}.so" "${_stem}.cpp"
+      COMMAND $<TARGET_FILE:pops_build_euler_amr_fixture_program> "${_variant}"
+        "${_fixture_support}/euler_amr_fixture_program.cpp.in" "${_fragment}"
+        "${_fixture_support}" "${_stem}.cpp" "${_stem}.so"
+      DEPENDS pops_build_euler_amr_fixture_program "${_fragment}"
+        cpp/support/euler_amr_fixture_program.cpp.in cpp/support/explicit_amr_program.hpp
+        cpp/support/native_dso_compiler.hpp "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
+      JOB_POOL pops_heavy_test_tu
+      VERBATIM)
+    add_custom_target(pops_euler_amr_${_variant} DEPENDS "${_stem}.so" "${_stem}.cpp")
+  endforeach()
+
   foreach(_test IN LISTS POPS_CPP_MPI_ONLY_TESTS)
     set(_extra_libs)
     set(_compile_definitions)
@@ -1252,6 +1291,18 @@ if(POPS_HAS_MPI)
         RANKS ${POPS_MPI_RANKS_${_test}}
         COMPILE_DEFINITIONS ${_compile_definitions})
     endif()
+  endforeach()
+  foreach(_test test_mpi_amr_compiled_parity test_amr_regrid_mpi_parity)
+    if(_test STREQUAL "test_mpi_amr_compiled_parity")
+      set(_variant compiled_parity)
+    else()
+      set(_variant regrid_parity)
+    endif()
+    add_dependencies(${_test} pops_euler_amr_${_variant})
+    target_include_directories(${_test} PRIVATE "${_euler_dir}")
+    target_compile_definitions(${_test} PRIVATE
+      POPS_TEST_MPI_EULER_PROGRAM_SO="${_euler_dir}/${_variant}-program.so")
+    set_target_properties(${_test} PROPERTIES ENABLE_EXPORTS ON)
   endforeach()
   # Runtime-generated Kokkos components resolve symbols from their authenticated host.
   # Static Kokkos requires the same export contract as the other native-loader fixtures.
