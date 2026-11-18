@@ -6737,7 +6737,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1229,
+    "estimated_count": 1230,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7114,6 +7114,7 @@
       "tests/python/integration/runtime/test_traced_methods_n8_native.py",
       "tests/python/integration/runtime/test_uniform_accepted_storage_observation.py",
       "tests/python/integration/runtime/test_uniform_accepted_storage_observation_v2.py",
+      "tests/python/integration/runtime/test_uniform_checkpoint_owner_identity.py",
       "tests/python/integration/runtime/test_uniform_checkpoint_provisional_effect.py",
       "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py",
       "tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py",
@@ -8169,7 +8170,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1296,
+    "total_files": 1297,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9551,6 +9552,13 @@
         "tests/python/integration/surface/test_cf17_l1_swaps.py": "0375f8af6eb067120afa9d3ceaad1c60471d205a9af635a33c2e19eda7b459b6"
       }
     },
+    "ci_20261118_n11_uniform_checkpoint_owner_identity": {
+      "basis": "Scheduling estimate in the 600 s native complete-runtime tier. Two Dim2 stock tests compile four artifacts across both owner variants, perform same-owner bitwise replay, and retain the M14 stock oracle. Baseline job 828832 ran both through their intended assertions in 359.19 s on ROMEO c031 with a cold JIT cache. That receipt is not GitHub CI wall time.",
+      "analogue": "tests/python/integration/runtime/test_uniform_state_carrier_checkpoint_runtime.py",
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_uniform_checkpoint_owner_identity.py": 600
+      }
+    },
     "ci_20261113_model_source_map": {
       "basis": "Unmeasured CI scheduling estimate for the model source map of the vertical slice (S2, driver 13:35), on the api_v02_20261013 tiers: 5 s for test_model_source_map.py, source-only (a synthetic model C++ text and descriptors; no compile). The local receipt comes from pytest on a 4-core container; it is not GitHub CI file wall time. Replace only from complete CI per-file receipts.",
       "estimates_seconds": {
@@ -10001,6 +10009,7 @@
   "tests/python/integration/runtime/test_tensor_transport_composition.py": 1200.0,
   "tests/python/integration/runtime/test_uniform_accepted_storage_observation.py": 600,
   "tests/python/integration/runtime/test_uniform_accepted_storage_observation_v2.py": 600,
+  "tests/python/integration/runtime/test_uniform_checkpoint_owner_identity.py": 600,
   "tests/python/integration/runtime/test_uniform_checkpoint_provisional_effect.py": 600,
   "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": 600,
   "tests/python/integration/runtime/test_uniform_cp9_dim2_runtime.py": 600,

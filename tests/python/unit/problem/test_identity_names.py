@@ -126,6 +126,32 @@ def test_literal_quantity_names_are_opaque_to_owner_projection(first, name):
         assert name in row["model"]["manifest"]["state_spaces"]
 
 
+def test_model_cache_key_tracks_the_checkpoint_projection_scope(first):
+    from pops.codegen._checkpoint_provenance import (
+        checkpoint_provenance, model_cache_components, owner_role,
+    )
+
+    reordered = {**FIRST, "blocks": FIRST["blocks"][::-1], "models": FIRST["models"][::-1]}
+    second = resolve_named_case(reordered, speeds=(2, 1))
+    owner = first.blocks[0].instance_owner_qid
+    assert owner == second.blocks[1].instance_owner_qid
+
+    assert model_cache_components("system") == {}
+    with checkpoint_provenance(first.snapshot.presentation):
+        first_key = model_cache_components("system")
+        first_role = owner_role(owner)
+        assert first_key and first_role
+        assert model_cache_components("amr_system") == {}
+        with checkpoint_provenance(second.snapshot.presentation):
+            assert owner_role(owner) != first_role
+            assert model_cache_components("system") != first_key
+        with checkpoint_provenance(None):
+            assert model_cache_components("system") == {}
+        assert model_cache_components("system") == first_key
+        assert owner_role(owner) == first_role
+    assert model_cache_components("system") == {}
+
+
 def test_retained_auxiliary_keeps_owner_renames_and_distinguishes_its_expression():
     first = resolve_named_case(FIRST, auxiliary_offset=2)
     renamed = resolve_named_case(RENAMED, auxiliary_offset=2)

@@ -554,3 +554,64 @@ paths = [
   "src/runtime/system/system.cpp",
   "src/runtime/system/system_io.cpp",
 ]
+
+[[mechanism]]
+id = "durable-uniform-checkpoint-owner-roles"
+issue = "ROM-93"
+rule = "CN11"
+pre_freeze = true
+what = """
+A Uniform checkpoint can encode the installed Program's block positions and the logical roles of
+its sealed auxiliary registry. The generated registrars carry the projection of their typed
+providers and consumers from the authenticated Plan. The model cache key includes that projection
+when it affects the emitted package. Checkpoint capture and preflight build a detached view from
+the final sealed registry, including consumers added after the first seal. They use the same
+native contract writer and map storage columns, accepted publication points and invalidations
+bijectively. POPSCAR2 carries the block positions; POPSAUX4/5 carries the projected registry and
+its data. Runtime execution keeps its installed registry and Program. Provider-empty and other
+unqualified Uniform routes use the named formats, as do AMR and the public storage observation.
+The outer restart identity and guards are retained."""
+structures = [
+  { case = "Uniform-two-block-transport", builder = "tests/python/integration/runtime/test_uniform_checkpoint_owner_identity.py::test_transport_checkpoint_follows_logical_block_order", structure = "Two-dimensional scalar transport with distinct block states, speeds and analytic auxiliary columns in the same storage group" },
+  { case = "M14", builder = "build_m14", structure = "Uniform two-fluid sheath with a solved Poisson field, wall and reservoir integrals, and dense source-state history" },
+]
+measurement = """
+The two tracked witnesses were added in a961b503e and collected after 266fb0765, before the
+mechanism in bcdd0bcad. On 027d0ef7, ROMEO job 828832 (c031, Dim2 serial) reached both intended
+assertions after the same-owner restart and its next step. Renaming the transport owners changes
+the native carrier bytes and the nested auxiliary contract despite equal program_id and state.
+Renaming only the M14 Case changes the nested contract despite equal program_id, accepted
+states, field, history and integrals. Jobs 828798 and 828809 retain the original two preimages.
+At c2630db58 both tracked witnesses pass in Dim2 serial along with the acquired Uniform v2
+migration and CP9 controls. ROMEO job 828884 authenticates the exact MPI SDK built in 828873.
+Each renamed pair has identical POPSCAR2 and POPSAUX4 bytes at two ranks, one with no boxes, with
+bitwise accepted and next states on same-owner restart. The actual transport storage columns
+change from (1,0) to (0,1) on both ranks. M14 binds a Program consumer after seal and retains its
+four-window FV-Poisson oracle. The MPI publication control of 828873 retains the named format.
+Cold and warm runs with different call and declaration orders show equal generated source and
+inner images for each fixed Plan. The stock and distributed receipts are recorded for ROM-93."""
+refusal_set = """
+The Uniform preflight refuses invalid carrier positions and shapes, mixed named and positional
+families, and a positional auxiliary contract that differs from the final sealed registry. The
+resealed contract attack refuses before restart transaction and leaves the accepted state intact.
+The named readers, outer artifact mismatch, and historical AMR restart rules keep their authority.
+A profile lacking the complete installed projection continues to write the named formats."""
+paths = [
+  "include/pops/runtime/checkpoint/state_carriers.hpp",
+  "include/pops/runtime/system.hpp",
+  "include/pops/runtime/system/auxiliary_checkpoint.hpp",
+  "include/pops/runtime/system/derived_aux_provider.hpp",
+  "include/pops/runtime/system/exact_aux_registry.hpp",
+  "python/bindings/core/init/init_system.cpp",
+  "python/pops/codegen/_analytic_aux.py",
+  "python/pops/codegen/_artifact_identity.py",
+  "python/pops/codegen/_checkpoint_provenance.py",
+  "python/pops/codegen/_compile_emit.py",
+  "python/pops/codegen/_phases.py",
+  "python/pops/codegen/program_emit_kernels.py",
+  "python/pops/physics/_facade_compile.py",
+  "python/pops/runtime/_system_io.py",
+  "src/runtime/system/auxiliary_checkpoint_projection.hpp",
+  "src/runtime/system/system.cpp",
+  "src/runtime/system/system_aux.cpp",
+]

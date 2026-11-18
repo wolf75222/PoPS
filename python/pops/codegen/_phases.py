@@ -510,6 +510,16 @@ def compile(plan: Any) -> Any:
     if type(plan) is not ResolvedSimulationPlan:
         raise TypeError("pops.compile requires the ResolvedSimulationPlan returned by pops.resolve")
     plan.verify()
+    from pops.codegen._checkpoint_provenance import checkpoint_provenance
+
+    presentation = (plan.snapshot.presentation
+                    if plan.target == "system" and len(plan.layout_plan.layouts) == 1
+                    else None)
+    with checkpoint_provenance(presentation):
+        return _compile_verified_plan(plan)
+
+
+def _compile_verified_plan(plan: Any) -> Any:
     from pops.codegen._orchestration_compile import compile_install_models
 
     models = compile_install_models(plan, plan.compile_options)

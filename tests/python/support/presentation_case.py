@@ -65,9 +65,10 @@ def build_named_case(names=FIRST, *, state_name="U", rate_name="balance", cells=
     case = pops.Case(names["case"])
     routes = []
     for index, (block_name, model_name) in enumerate(zip(names["blocks"], names["models"])):
+        offset = auxiliary_offset[index] if isinstance(auxiliary_offset, tuple) else auxiliary_offset
         model, state, flux, velocity, rate = _transport_model(
             model_name, frame, speed=speeds[index], loss=0.5 / speeds[index],
-            state_name=state_name, rate_name=rate_name, auxiliary_offset=auxiliary_offset,
+            state_name=state_name, rate_name=rate_name, auxiliary_offset=offset,
             speed_parameter=speed_parameter)
         block = case.block(block_name, model)
         plan = DiscretizationPlan()

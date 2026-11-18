@@ -794,6 +794,31 @@ void bind_system_checkpoint(py::class_<System>& cls) {
             return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
           },
           "Capture exact auxiliary accepted metadata and field payloads in one sealed image.")
+      .def("_checkpoint_has_positional_state_authority",
+           &System::checkpoint_has_positional_state_authority)
+      .def("_capture_positional_auxiliary_checkpoint",
+           [](const System& s) {
+             py::object result;
+             std::exception_ptr error;
+             try {
+               const auto bytes = s.capture_positional_auxiliary_checkpoint();
+               result = py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+             } catch (...) {
+               error = std::current_exception();
+             }
+             pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
+                                                  "Uniform auxiliary checkpoint Python staging");
+             return result;
+           })
+      .def("_validate_positional_auxiliary_checkpoint",
+           [](const System& s, py::bytes payload) {
+             char* data = nullptr;
+             Py_ssize_t size = 0;
+             if (PyBytes_AsStringAndSize(payload.ptr(), &data, &size) != 0)
+               throw py::error_already_set();
+             s.validate_positional_auxiliary_checkpoint(
+                 {reinterpret_cast<const std::uint8_t*>(data), static_cast<std::size_t>(size)});
+           })
       .def("_checkpoint_auxiliary_capacity", &System::checkpoint_auxiliary_capacity,
            "Return the current Uniform accepted auxiliary metadata/scalar size observation.")
       .def("_checkpoint_program_auxiliary_capacity", &System::checkpoint_program_auxiliary_capacity,
@@ -1752,20 +1777,23 @@ void bind_system_data(py::class_<System>& cls) {
             return to_ranked_field(s.density_global(name), s.spatial_shape());
           },
           py::arg("name"))
-      .def("checkpoint_state_carriers",
-           [](const System& s) {
-             const auto bytes = s.checkpoint_state_carriers();
-             py::object result;
-             std::exception_ptr error;
-             try {
-               result = py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-             } catch (...) {
-               error = std::current_exception();
-             }
-             pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
-                                                  "Uniform checkpoint carrier Python staging");
-             return result;
-           })
+      .def(
+          "checkpoint_state_carriers",
+          [](const System& s, bool positional) {
+            const auto bytes = positional ? s.checkpoint_positional_state_carriers()
+                                          : s.checkpoint_state_carriers();
+            py::object result;
+            std::exception_ptr error;
+            try {
+              result = py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            } catch (...) {
+              error = std::current_exception();
+            }
+            pops::collectively_rethrow_exception(error, s.prepared_boundary_execution_lane(),
+                                                 "Uniform checkpoint carrier Python staging");
+            return result;
+          },
+          py::arg("positional") = false)
       .def("checkpoint_state_carriers_capacity", &System::checkpoint_state_carriers_capacity)
       .def("validate_checkpoint_state_carriers",
            [](const System& s, py::object value) {

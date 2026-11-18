@@ -658,8 +658,26 @@ std::vector<runtime::program::ExchangeRecord> System<Dim>::program_exchange_reco
 }
 
 template <int Dim>
-std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(
-    bool provisional_capture) const {
+std::vector<std::string> System<Dim>::checkpoint_carrier_block_names_(bool positional) const {
+  auto names = p_->blocks_.names();
+  if (!positional)
+    return names;
+  const auto& program_to_system = program_block_map();
+  if (!checkpoint_has_positional_state_authority() || program_to_system.size() != names.size())
+    throw std::invalid_argument("positional state carriers require a complete installed Program");
+  std::vector<std::string> ordered;
+  ordered.reserve(names.size());
+  for (int block : program_to_system) {
+    if (block < 0 || static_cast<std::size_t>(block) >= names.size() || names[block].empty())
+      throw std::invalid_argument("positional state carrier Program block map is not bijective");
+    ordered.push_back(std::move(names[block]));
+  }
+  return ordered;
+}
+
+template <int Dim>
+std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(bool provisional_capture,
+                                                                           bool positional) const {
   const auto& lane = prepared_boundary_execution_lane();
   using namespace runtime::checkpoint;
   using Bits = std::conditional_t<sizeof(Real) == 8, std::uint64_t, std::uint32_t>;
@@ -681,7 +699,12 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(
     image.ranks = lane.size();
     image.shard = lane.rank();
     image.levels = 1;
-    image.blocks = p_->blocks_.names();
+    const auto blocks = checkpoint_carrier_block_names_(positional);
+    image.positional = positional;
+    if (positional)
+      image.blocks.resize(blocks.size());
+    else
+      image.blocks = blocks;
     if (image.blocks.empty() && !p_->program_.continuation_.configured())
       throw std::logic_error(
           "accepted state storage observation requires blocks or a complete Continuation");
@@ -692,13 +715,15 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(
         .scalar(std::int32_t{Dim})
         .scalar(p_->t)
         .scalar(std::int64_t{p_->macro_step_});
-    for (const auto& name : image.blocks)
+    if (positional)
+      contract.text(installed_program_hash());
+    for (const auto& name : blocks)
       contract.text(name);
     invocation = std::move(contract).release();
     authority.emplace_back("accepted-state-storage-observation", invocation);
     Kokkos::fence();
-    for (std::size_t block = 0; block < image.blocks.size(); ++block) {
-      const auto& field = p_->find(image.blocks[block]).U;
+    for (std::size_t block = 0; block < blocks.size(); ++block) {
+      const auto& field = p_->find(blocks[block]).U;
       for (std::size_t local = 0; local < field.local_size(); ++local) {
         const auto& fab = field.fab(local);
         StateCarrierPatch<Dim> row;
@@ -778,7 +803,7 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::capture_state_storage_(
   std::vector<std::uint8_t> result;
   error = {};
   try {
-    auto image = merge_state_carrier_shards<Dim>(shards);
+    auto image = merge_state_carrier_shards<Dim>(shards, positional);
     validate_complete_state_carriers(image);
     result = encode_state_carriers(image);
   } catch (...) {
@@ -806,6 +831,12 @@ std::vector<std::vector<std::uint8_t>> System<Dim>::observe_accepted_state_stora
 template <int Dim>
 std::vector<std::uint8_t> System<Dim>::checkpoint_state_carriers() const {
   auto images = capture_state_storage_(true);
+  return std::move(images[1]);
+}
+
+template <int Dim>
+std::vector<std::uint8_t> System<Dim>::checkpoint_positional_state_carriers() const {
+  auto images = capture_state_storage_(true, true);
   return std::move(images[1]);
 }
 
@@ -850,14 +881,15 @@ std::uint64_t System<Dim>::checkpoint_state_carriers_capacity() const {
 
 template <int Dim>
 void System<Dim>::validate_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) const {
-  const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes);
+  const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes, true);
   runtime::checkpoint::validate_complete_state_carriers(image);
+  const auto blocks = checkpoint_carrier_block_names_(image.positional);
   if (image.real_bits != sizeof(Real) * 8 || image.levels != 1 ||
-      image.blocks != p_->blocks_.names())
+      (image.positional ? image.blocks.size() != blocks.size() : image.blocks != blocks))
     throw std::invalid_argument("Uniform carrier storage authority differs");
   std::size_t at = 0;
-  for (std::size_t block = 0; block < image.blocks.size(); ++block) {
-    const auto& field = p_->find(image.blocks[block]).U;
+  for (std::size_t block = 0; block < blocks.size(); ++block) {
+    const auto& field = p_->find(blocks[block]).U;
     for (std::size_t patch = 0; patch < field.layout().size(); ++patch) {
       if (at == image.patches.size())
         throw std::invalid_argument("Uniform carrier missing patch");
@@ -887,9 +919,9 @@ void System<Dim>::restore_checkpoint_state_carriers(std::span<const std::uint8_t
     if (!p_->external_restart_transaction_ || p_->external_step_transaction_committed_)
       throw std::logic_error("Uniform carrier restore requires uncommitted restart transaction");
     validate_checkpoint_state_carriers(bytes);
-    const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes);
+    const auto image = runtime::checkpoint::decode_state_carriers<Dim>(bytes, true);
     std::size_t begin = 0;
-    for (const auto& name : image.blocks) {
+    for (const auto& name : checkpoint_carrier_block_names_(image.positional)) {
       auto& target = p_->find(name).U;
       auto candidate =
           std::make_unique<MultiFab<Dim>>(target.layout(), target.distribution(),
@@ -1874,6 +1906,8 @@ namespace pops {
 template std::vector<std::vector<std::uint8_t>>
 System<kNativeDimension>::observe_accepted_state_storage() const;
 template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_state_carriers() const;
+template std::vector<std::uint8_t> System<kNativeDimension>::checkpoint_positional_state_carriers()
+    const;
 template std::uint64_t System<kNativeDimension>::checkpoint_state_carriers_capacity() const;
 template void System<kNativeDimension>::validate_checkpoint_state_carriers(
     std::span<const std::uint8_t>) const;

@@ -634,6 +634,7 @@ def _emit_auxiliary_route_registration(
     if routes is None:
         raise ValueError("native auxiliary route emission requires resolved typed producer routes")
     from .provider_instances import emitter_contract, runtime_key
+    from ._checkpoint_provenance import consumer_role, owner_role, provider_role
     from pops.model.provider_pack import ComponentKey
     instance = emitter_contract(model, owner_qid=consumer_owner_qid)
     if instance is not None and consumer_owner_qid is None:
@@ -962,22 +963,42 @@ def _emit_auxiliary_route_registration(
                 % (key(row), contract(row), shape, boundary_for(route)),
             )
         )
+        native_owner = native_key(row["key"])["owner_qid"]
+        role = owner_role(native_owner) if target == "system" else None
+        durable = ("" if role is None else provider_role(
+            producer, role, row["key"]["space_name"], row["key"]["component"]))
         if kind == "AuxiliaryProviderKind::derived":
             if route is None:
                 raise ValueError(
                     "derived auxiliary provider %r has no exact typed lowering route"
                     % row["key"]["component"]
                 )
-            lines.append(derived_launcher(identity, route) + "});")
+            from pops.fields.aux import AnalyticAux
+
+            if durable and isinstance(route["producer"], AnalyticAux):
+                from pops.codegen._analytic_aux import _analytic_aux_launcher
+
+                launcher, parameters = _analytic_aux_launcher(
+                    identity, route["producer"], checkpoint_role=durable)
+                lines.append(
+                    launcher + ", Provider::CheckpointRole{%s, {%s}, %s}});"
+                    % (literal(durable), literal(role), literal(parameters)))
+            else:
+                lines.append(derived_launcher(identity, route) + "});")
+        elif durable:
+            lines.append(
+                "      std::vector<Dependency>{}, std::nullopt, AuxiliaryPointReads{}, "
+                "Provider::CheckpointRole{%s, {%s}, {}}});"
+                % (literal(durable), literal(role)))
         else:
             lines.append("      std::vector<Dependency>{}});")
 
     owner_qid = _consumer_owner_qid(model, consumer_owner_qid)
 
-    def emit_plan(identity: str, plan: Any) -> None:
+    def emit_plan(suffix: str, plan: Any) -> None:
         lines.append(
             "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, std::vector<ConsumerValue>{"
-            % literal(identity)
+            % literal(owner_qid + suffix)
         )
         for value in plan:
             lines.append(
@@ -989,13 +1010,14 @@ def _emit_auxiliary_route_registration(
                     value["consumer_slot"],
                 )
             )
-        lines.append("  }});")
+        role = consumer_role(owner_qid, suffix) if target == "system" else ""
+        lines.append("  }, %s});" % literal(role) if role else "  }});")
 
-    emit_plan(owner_qid + "/physical_flux", flux_plan)
+    emit_plan("/physical_flux", flux_plan)
     from pops.codegen._native_model_provider_plan import native_model_provider_plan
-    emit_plan(owner_qid + "/native_model", native_model_provider_plan(model))
+    emit_plan("/native_model", native_model_provider_plan(model))
     for operator, plan in plans.items():
-        emit_plan(owner_qid + "/operator/" + operator, plan)
+        emit_plan("/operator/" + operator, plan)
     lines.append("}")
     return "\n".join(lines) + "\n"
 

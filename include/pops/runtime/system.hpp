@@ -525,6 +525,10 @@ class System {
   /// owner-qualified ComponentKeys, shapes, and accepted provider generations before publication.
   [[nodiscard]] POPS_EXPORT runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
   capture_auxiliary_checkpoint_accepted_state() const;
+  [[nodiscard]] POPS_EXPORT bool checkpoint_has_positional_state_authority() const;
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> capture_positional_auxiliary_checkpoint()
+      const;
+  POPS_EXPORT void validate_positional_auxiliary_checkpoint(std::span<const std::uint8_t>) const;
   /// Current accepted-image size observation for raw System callers. Pending task inputs are
   /// excluded. Arbitrary raw logical clocks make this a dynamic observation, not a future bound.
   /// The pair is ``(payload-free POPSAUX2/3 bytes, scalar values per full-domain level)``.
@@ -1580,6 +1584,7 @@ class System {
   /// Checkpoint capture may serialize the current provisional effect under its active outer
   /// transaction; this is distinct from accepted-idle observation and makes no publication.
   [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_state_carriers() const;
+  [[nodiscard]] POPS_EXPORT std::vector<std::uint8_t> checkpoint_positional_state_carriers() const;
   /// uniform-state-carriers@1: complete actual storage, no ghost refresh.
   [[nodiscard]] POPS_EXPORT std::uint64_t checkpoint_state_carriers_capacity() const;
   POPS_EXPORT void validate_checkpoint_state_carriers(std::span<const std::uint8_t> bytes) const;
@@ -1634,7 +1639,11 @@ class System {
                                                   /// @}
 
  private:
-  std::vector<std::vector<std::uint8_t>> capture_state_storage_(bool provisional_capture) const;
+  runtime::system::AuxiliaryCheckpointAcceptedState<Dim> capture_auxiliary_checkpoint_(
+      bool positional) const;
+  std::vector<std::string> checkpoint_carrier_block_names_(bool positional) const;
+  std::vector<std::vector<std::uint8_t>> capture_state_storage_(bool provisional_capture,
+                                                                bool positional = false) const;
   typename SystemInterfaceProvider<Dim>::CoreEvaluator prepare_interface_core_evaluator_(
       typename SystemInterfaceProvider<Dim>::CoreFaceEvaluator* retained_evaluator = nullptr);
   void prepare_bound_physical_group_();
