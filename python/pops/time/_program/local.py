@@ -784,12 +784,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             self._allow_region_capture(self._region_for_block(parent), apply_region)
         self._recording.append(sub)
         try:
-            def placeholder(role: str) -> Any:
-                return self._new("state", role, (), {"ncomp": ncomp, "apply_operand": "state"},
-                                 role, operand.block, space=operand.space, point=operand.point,
-                                 state_ref=operand.state_ref, inherit_state_ref=False)
-            out_state = placeholder("apply_out")
-            in_state = placeholder("apply_in")
+            # Both placeholders retain the operand's state identity and evaluation point.
+            storage = dict(block=operand.block, space=operand.space, point=operand.point,
+                           state_ref=operand.state_ref, inherit_state_ref=False)
+            attrs = {"ncomp": ncomp, "apply_operand": "state"}
+            out_state = self._new("state", "apply_out", (), dict(attrs), "apply_out", **storage)
+            in_state = self._new("state", "apply_in", (), dict(attrs), "apply_in", **storage)
             result = body_fn(self, out_state, in_state)
             if result is None:
                 raise ValueError("set_apply(%s, operand=): the body returns A v, a value of its "

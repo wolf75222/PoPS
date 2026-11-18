@@ -28,6 +28,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from pops._ir.elaboration import elaborating
 from ._refusal import NotYetElaborated, SurfaceRefusal, SymbolicTruthValue, surface_entry
 from . import _run
 from ._run import BudgetExhausted, SolveFailed
@@ -883,7 +884,8 @@ def lower_solver(value: SolverValue, program: Any, linear: Any, name: Any = None
     returned: dict = {}
 
     def body(_program: Any) -> Any:
-        with _lowering(context):
+        origin_name = "@pops.solver " + value.definition.function.__name__
+        with _lowering(context), elaborating(value.definition, name=origin_name):
             context.point = at
             problem = Problem(context, linear, apply, value.request)
             returned["problem"] = problem

@@ -22,6 +22,13 @@ region is a translation from its domain, and otherwise names the class its atoms
 transfer, axis reduction or broadcast, CSR for a data map, generic) with the first map that is not
 a translation. The loop-nest generators of each class are phase 2 of N7.
 
+Local control (G02 lot L, design note §5.4). A region body may hold the local control of IR4: the
+arms of ``cond`` and ``match`` and the bodies of ``fold``, ``scan`` and ``iterate``.
+``region_reads`` walks it and returns the union of its reads over every arm and every body, read
+once whatever the trip count (B4); a read in an arm that does not run still counts. Every analysis
+reads the region through it, so a body with local control has the class of its reads, and an
+``iterate`` reads what its step reads.
+
 Scope at this commit (MG7). The footprint and the import set of IR14 are derived for translations
 only, and a halo through another map (``Parent``, ``Child``, ``Project``, a trace of a boundary
 piece) is Unknown; their box rules, symmetry (IR16), D.C = 0 and the transfer identities of IR17,
@@ -39,6 +46,7 @@ from .refusals import ClassNotReached, ConservationNotStructural, PropertyNotDer
 
 CLASSES = ("pointwise", "box_stencil", "face_incidence", "axis_reduction", "line_scan",
            "level_transfer", "csr", "generic")
+LOCAL_CONTROL = ("cond", "match", "fold", "scan", "iterate")
 
 
 class Truth(enum.Enum):
@@ -69,6 +77,57 @@ class Read:
 
 
 @dataclass(frozen=True, slots=True)
+class LocalControl:
+    """A node of local control in a region body (IR4).
+
+    ``node`` is ``cond``, ``match``, ``fold``, ``scan`` or ``iterate``.
+
+    ``parts`` holds the bodies whose reads count: the predicate or the scrutinee and every arm of
+    ``cond`` and ``match``, the body of ``fold`` and ``scan``, the step and the stop of ``iterate``.
+    A body is a ``Read``, a ``LocalControl`` or a tuple of bodies. The node holds no trip count:
+    the walker reads each body once (B4).
+    """
+    node: str
+    parts: tuple
+
+    def __post_init__(self):
+        if self.node not in LOCAL_CONTROL:
+            raise ValueError("unknown local control %r; the nodes are %s"
+                             % (self.node, ", ".join(LOCAL_CONTROL)))
+        if type(self.parts) is not tuple or not self.parts:
+            raise TypeError("a %s holds a non-empty tuple of bodies, got %r"
+                            % (self.node, self.parts))
+
+
+def region_reads(body):
+    """The reads of ``body``, a region body with local control (G02 §5.4, IR4, B4).
+
+    The union over the arms of ``cond`` and ``match`` and over the bodies of ``fold``, ``scan``
+    and ``iterate``, each read once: a read in an arm that does not run counts, and a loop body
+    counts once whatever its trip count. The reads come in the order of a left-to-right walk,
+    each the first time it is met, so the first blocking map of a classification is stable.
+    """
+    found, seen, pending = [], set(), [body]
+    while pending:
+        item = pending.pop()
+        if type(item) is Read:
+            try:
+                new = item not in seen
+                seen.add(item)
+            except TypeError:  # a label that does not hash: compare by equality
+                new = item not in found
+            if new:
+                found.append(item)
+        elif type(item) is LocalControl:
+            pending.extend(reversed(item.parts))
+        elif type(item) in (tuple, list):
+            pending.extend(reversed(item))
+        else:
+            raise TypeError("a region body holds Read records and local control, got %r" % (item,))
+    return tuple(found)
+
+
+@dataclass(frozen=True, slots=True)
 class Region:
     """What the analyses read of one kernel.
 
@@ -77,6 +136,8 @@ class Region:
     ``(map, weight)`` pair of each single-target ``scatter_reduce`` of a per-side value, a
     ``Production`` of §8.1 and never an exchange (IR25, D6): conservation reads the targets only.
     Every map starts from the domain. ``expected`` is the class the builder records (IR21).
+    ``reads`` is a region body: a tuple of ``Read`` records and ``LocalControl`` nodes, which the
+    analyses read through ``region_reads``.
     ``basis`` says where the reads come from: ``"derived"`` when they are collected from a body,
     ``"declared"`` when a native catalogue states them (a substitution of IR24 whose reference
     region is not written yet).
@@ -97,8 +158,7 @@ class Region:
             raise ValueError("a region has a rank >= 1, got %r" % (self.rank,))
         if self.domain.axis is not None and self.domain.axis >= self.rank:
             raise ValueError("%r is not an entity of a rank-%d lattice" % (self.domain, self.rank))
-        if any(type(read) is not Read for read in self.reads):
-            raise TypeError("a region's reads are Read records")
+        region_reads(self.reads)
         for pair in self.targets + self.productions:
             if type(pair) is not tuple or len(pair) != 2 or not isinstance(pair[0], IndexMap):
                 raise TypeError("a scatter target is a (map, weight) pair, got %r" % (pair,))
@@ -130,7 +190,7 @@ def _translation_from(map_, domain):
 
 
 def _maps(region):
-    return (tuple(read.map for read in region.reads)
+    return (tuple(read.map for read in region_reads(region.reads))
             + tuple(m for m, _ in region.targets + region.productions))
 
 
@@ -149,7 +209,7 @@ def halo(region, where=None):
         return Fact("halo", Truth.UNKNOWN, blocking=region.domain,
                     detail="the faces of a boundary piece: the widths depend on the extents")
     low, high = [0]*region.rank, [0]*region.rank
-    for read in region.reads:
+    for read in region_reads(region.reads):
         if where is not None and not where(read.array):
             continue
         if not _translation_from(read.map, region.domain):
@@ -219,7 +279,8 @@ def classify(region):
 
     A region whose every read and delivery is the identity of its domain is pointwise, a scatter
     to its own entities included; then a region over faces is face incidence, and a region over
-    cells a box stencil.
+    cells a box stencil. The reads are those of ``region_reads``: local control never changes a
+    class.
     """
     maps = _maps(region)
     blocking = next((m for m in maps if not _translation_from(m, region.domain)), None)
@@ -274,5 +335,6 @@ def require(fact, region):
         region=region.name, property=fact.property, blocking=fact.blocking)
 
 
-__all__ = ["CLASSES", "Fact", "Read", "Region", "Truth", "check_expected_class", "classify",
-           "conservation", "halo", "injective", "require"]
+__all__ = ["CLASSES", "LOCAL_CONTROL", "Fact", "LocalControl", "Read", "Region", "Truth",
+           "check_expected_class", "classify", "conservation", "halo", "injective", "region_reads",
+           "require"]
