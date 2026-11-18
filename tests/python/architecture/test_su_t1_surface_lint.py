@@ -6,12 +6,8 @@ The gallery of the surface (``examples/surface/gallery``, the cases and library 
 ``pops.lib.numerics`` since N3 lot 1, ``muscl`` since lot 2 (D8), and the gallery ``mc`` and
 ``superbee`` of the amended spec since lot 3; pinned here by hash) and every
 module of ``pops.lib`` that is written with the surface pass the lint of
-``scripts/surface_lint.py``. A module of the surface that the MG9 registry lists as a bridge
-(``tests/gates/mg9_bridges.toml``, ``[[bridge]]``) is excepted for the words of b6 that it imports
-to return a native route: since N3 lot 1 (ROM-87), ``pops.lib.numerics.schemes`` being gone, and
-since the N9 lot « La référence sous les solves de relation », which runs the reference ``cg()``
-under relation solves, no module of the surface is. The test fails on a new finding and on an
-exception that no longer holds.
+``scripts/surface_lint.py``. The MG9 bridge registry is empty after the reference ``cg()`` and
+the cell-based ``cfl_limit()`` move to the surface. Every finding fails the test.
 
 Each rule fails or warns on a statement written for it, so that a lint that sees nothing fails
 here. The words of the lint come from the spec (``--words``), whose hash the word file records.
@@ -57,13 +53,6 @@ MG9_SPEC = importlib.util.spec_from_file_location("mg9_bridges",
 assert MG9_SPEC is not None and MG9_SPEC.loader is not None
 mg9 = importlib.util.module_from_spec(MG9_SPEC)
 MG9_SPEC.loader.exec_module(mg9)
-
-
-def _bridges():
-    """The modules of the bridges of the MG9 registry, as paths under the root (MG9, MG6)."""
-    modules = mg9.library_modules(ROOT)
-    return {modules[entry["module"]].relative_to(ROOT).as_posix()
-            for entry in mg9.read(ROOT)["bridge"] if entry["module"] in modules}
 
 
 @pytest.fixture(scope="module")
@@ -135,22 +124,18 @@ def _surface_modules():
 
 
 def test_the_library_written_with_the_surface_passes_the_lint(words):
-    modules = [path.relative_to(ROOT).as_posix() for path in _surface_modules()]
-    assert {"python/pops/lib/time/methods.py", "python/pops/lib/numerics/fluxes.py"} <= \
-        set(modules)
-    bridges = _bridges()
-    excepted = set()
-    for name in modules:
-        for finding in lint.lint_file(ROOT / name, words, name=name):
-            if name in bridges and finding.rule == "word" and finding.kind == "F":
-                excepted.add(name)
-                continue
-            raise AssertionError(str(finding))
-    # a bridge module that is not written with the surface (the ghost laws of lot B) is MG9's;
-    # the step rule cfl_limit() of part D of lot D-E (#788) is the bridge written with the surface,
-    # and pops.lib.solve no longer is one since the N9 lot « La référence sous les solves de
-    # relation » ran the relation solves on the reference
-    assert excepted == bridges & set(modules) == {"python/pops/lib/time/limits.py"}
+    modules = {path.relative_to(ROOT).as_posix(): path for path in _surface_modules()}
+    assert {
+        "python/pops/lib/numerics/fluxes.py",
+        "python/pops/lib/numerics/limiters.py",
+        "python/pops/lib/solve/krylov.py",
+        "python/pops/lib/time/limits.py",
+        "python/pops/lib/time/methods.py",
+    } <= modules.keys()
+    assert mg9.read(ROOT)["bridge"] == []
+    for name, path in modules.items():
+        findings = [str(finding) for finding in lint.lint_file(path, words, name=name)]
+        assert findings == [], findings
 
 
 @pytest.mark.parametrize("source, expected", [

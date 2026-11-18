@@ -108,14 +108,10 @@ def test_the_modules_of_the_surface_pass_the_lint():
     assert {"pops.lib.numerics.fluxes", "pops.lib.output", "pops.lib.quadrature",
             "pops.lib.time.methods"} <= set(surface)
     assert kinds["pops.lib.time.when"] == "earlier"
-    # a bridge imports the native route that it returns: its findings of the rule "word" leave
-    # with it (as in the lint SU-T1)
-    bridges = {entry["module"] for entry in mg9.read(ROOT)["bridge"]}
     for name in surface:
         path = modules[name]
         rel = path.relative_to(ROOT).as_posix()
-        findings = [str(finding) for finding in lint.lint_file(path, words, name=rel)
-                    if not (name in bridges and finding.rule == "word" and finding.kind == "F")]
+        findings = [str(finding) for finding in lint.lint_file(path, words, name=rel)]
         assert findings == [], findings
 
 
