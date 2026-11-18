@@ -713,6 +713,12 @@ std::string System<Dim>::prepared_auxiliary_read_authority(std::string_view cons
 template <int Dim>
 runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
 System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
+  return capture_auxiliary_checkpoint_(false);
+}
+
+template <int Dim>
+runtime::system::AuxiliaryCheckpointAcceptedState<Dim> System<Dim>::capture_auxiliary_checkpoint_(
+    bool positional) const {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   runtime::system::AuxiliaryCheckpointAcceptedState<Dim> result;
   std::vector<const MultiFab<Dim>*> carriers;
@@ -807,6 +813,12 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   std::string collective_contract;
   std::exception_ptr finalization_error;
   try {
+    if (positional) {
+      if (!checkpoint_has_positional_state_authority())
+        throw std::logic_error("Uniform checkpoint has no installed positional authority");
+      const runtime::system::AuxiliaryCheckpointProjection<Dim> projection(p_->auxiliary_registry_);
+      result = projection.to_durable(result, cells);
+    }
     const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(result);
     ExactContractBuilder exact;
     exact.text("pops.uniform-exact-auxiliary-checkpoint")
@@ -828,32 +840,14 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
 
 template <int Dim>
 bool System<Dim>::checkpoint_has_positional_state_authority() const {
-  return p_->program_.artifact_backed_ && !installed_program_hash().empty() &&
+  return p_->program_.artifact_backed_ && !p_->program_.installed_hash_.empty() &&
+         program_block_map().size() == static_cast<std::size_t>(p_->blocks_.size()) &&
          runtime::system::AuxiliaryCheckpointProjection<Dim>::available(p_->auxiliary_registry_);
 }
 
 template <int Dim>
 std::vector<std::uint8_t> System<Dim>::capture_positional_auxiliary_checkpoint() const {
-  const ExecutionLane& lane = prepared_boundary_execution_lane();
-  const auto live = capture_auxiliary_checkpoint_accepted_state();
-  std::vector<std::uint8_t> bytes;
-  std::exception_ptr error;
-  try {
-    if (!checkpoint_has_positional_state_authority())
-      throw std::logic_error("Uniform checkpoint has no installed positional authority");
-    const runtime::system::AuxiliaryCheckpointProjection<Dim> projection(p_->auxiliary_registry_);
-    const auto durable = projection.to_durable(live, domain_cells(p_->dom));
-    bytes = runtime::system::serialize_auxiliary_checkpoint_state(durable);
-  } catch (...) {
-    error = std::current_exception();
-  }
-  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
-      error, &lane, "Uniform auxiliary checkpoint projection failed collectively");
-  const std::string_view image(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  if (!all_ranks_agree_exact_ordered_byte_pairs(
-          {{std::string_view("pops.uniform-positional-auxiliary-checkpoint"), image}}, lane))
-    throw std::runtime_error("Uniform positional auxiliary checkpoint differs between ranks");
-  return bytes;
+  return runtime::system::serialize_auxiliary_checkpoint_state(capture_auxiliary_checkpoint_(true));
 }
 
 template <int Dim>

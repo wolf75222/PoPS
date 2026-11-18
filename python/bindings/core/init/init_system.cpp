@@ -796,10 +796,10 @@ void bind_system_checkpoint(py::class_<System>& cls) {
            &System::checkpoint_has_positional_state_authority)
       .def("_capture_positional_auxiliary_checkpoint",
            [](const System& s) {
-             const auto bytes = s.capture_positional_auxiliary_checkpoint();
              py::object result;
              std::exception_ptr error;
              try {
+               const auto bytes = s.capture_positional_auxiliary_checkpoint();
                result = py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
              } catch (...) {
                error = std::current_exception();

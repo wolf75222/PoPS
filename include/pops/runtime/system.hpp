@@ -1638,6 +1638,8 @@ class System {
                                                   /// @}
 
  private:
+  runtime::system::AuxiliaryCheckpointAcceptedState<Dim> capture_auxiliary_checkpoint_(
+      bool positional) const;
   std::vector<std::string> checkpoint_carrier_block_names_(bool positional) const;
   std::vector<std::vector<std::uint8_t>> capture_state_storage_(bool provisional_capture,
                                                                 bool positional = false) const;
