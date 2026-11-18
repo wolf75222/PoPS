@@ -238,7 +238,9 @@ def _guard_lines(lines, sites, fixed, program, *, traced_route):
         out.append(indent + "<guard %d>" % seen)
         seen += 1
     assert seen == len(sites)
-    assert not any(re.search(r"\bguard_observed_\d+\b", row) for row in out)
+    # Other guards, such as Advance assessments, keep their original control in the body.
+    normalized = {f"guard_observed_{node.id}" for node in guards}
+    assert normalized.isdisjoint(re.findall(r"\bguard_observed_\d+\b", "\n".join(out)))
     return out
 
 
