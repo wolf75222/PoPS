@@ -699,7 +699,8 @@ pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES 
 # tagged fixture targets require this interpreter and its NumPy dependency.
 set(_amr_criteria_dir "${CMAKE_CURRENT_BINARY_DIR}/amr-fixture-criteria")
 set(_amr_criteria_outputs "${_amr_criteria_dir}/amr_fixture_criteria_generated.hpp")
-foreach(_criterion synthetic_history synthetic_interface synthetic_attempt field_rhs_value field_rhs_incidence)
+foreach(_criterion synthetic_history synthetic_interface synthetic_attempt field_rhs_value field_rhs_incidence
+    standalone_tracer standalone_energy standalone_density)
   list(APPEND _amr_criteria_outputs "${_amr_criteria_dir}/${_criterion}.cpp")
 endforeach()
 file(GLOB_RECURSE _pops_criterion_python_sources CONFIGURE_DEPENDS
@@ -728,6 +729,34 @@ function(pops_use_amr_fixture_criteria target)
 endfunction()
 pops_use_amr_fixture_criteria(test_amr_synthetic_program_loader_transaction)
 pops_use_amr_fixture_criteria(test_prepared_field_rhs_inputs)
+pops_use_amr_fixture_criteria(test_amr_seed_no_refine)
+pops_use_amr_fixture_criteria(test_amr_regrid_variable)
+
+function(pops_use_standalone_amr_criterion target variant)
+  set(_module "pops_amr_${variant}")
+  set(_library "${_amr_criteria_dir}/${variant}.cpp")
+  add_library(${_module} SHARED "${_library}")
+  target_link_libraries(${_module} PRIVATE pops::pops)
+  target_compile_definitions(${_module} PRIVATE POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")
+  target_compile_options(${_module} PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fno-gnu-unique>)
+  set_target_properties(${_module} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  add_dependencies(${_module} pops_amr_fixture_criteria)
+
+  set(_receipt "${_amr_criteria_dir}/${variant}-$<CONFIG>.binary-id")
+  add_custom_command(OUTPUT "${_receipt}"
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
+      "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
+      --binary-identity $<TARGET_FILE:${_module}> "${_receipt}"
+    DEPENDS ${_module} cpp/support/generate_amr_fixture_criteria.py ${_pops_criterion_python_sources}
+    VERBATIM)
+  add_custom_target(${_module}_receipt DEPENDS "${_receipt}")
+  add_dependencies(${target} ${_module}_receipt)
+  target_compile_definitions(${target} PRIVATE
+    POPS_TEST_${variant}_DSO="$<TARGET_FILE:${_module}>" POPS_TEST_${variant}_RECEIPT="${_receipt}")
+endfunction()
+pops_use_standalone_amr_criterion(test_amr_seed_no_refine standalone_tracer)
+pops_use_standalone_amr_criterion(test_amr_regrid_variable standalone_energy)
+pops_use_standalone_amr_criterion(test_amr_regrid_variable standalone_density)
 
 # CTest starts a fresh process for every case. Build the seven exact source variants once,
 # rather than repeating eleven expensive compiler invocations inside the test watchdog.

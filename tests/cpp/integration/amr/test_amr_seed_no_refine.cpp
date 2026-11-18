@@ -2,6 +2,7 @@
 
 #include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
 #include <pops/parallel/comm.hpp>
@@ -178,10 +179,11 @@ std::vector<PhysicalPatch<Dim>> physical_patches(const std::vector<pops::AmrPatc
 template <int Dim>
 pops::AmrSystem<Dim> make_system(const pops::AmrSystemConfig<Dim>& config,
                                  const std::vector<double>& initial,
-                                 const std::string& physical_face = {}) {
+                                 const std::string& physical_face = {},
+                                 const char* state_route = "state/tracer") {
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "test.amr-seed-no-refine.runtime@1");
-  system.install_block_state_route("tracer", "state/tracer");
+  system.install_block_state_route("tracer", state_route);
   if (!physical_face.empty()) {
     std::vector<std::string> face_types;
     std::vector<std::string> face_identities;
@@ -194,7 +196,7 @@ pops::AmrSystem<Dim> make_system(const pops::AmrSystemConfig<Dim>& config,
     system.install_hyperbolic_boundary("tracer", "test.amr-seed-no-refine.boundary@1", 1,
                                        face_types,
                                        std::vector<double>(static_cast<std::size_t>(2 * Dim), 0.0),
-                                       face_identities, {"Scalar"}, "state/tracer");
+                                       face_identities, {"Scalar"}, state_route);
   }
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
                                 "conservative", "explicit",
@@ -280,8 +282,29 @@ TEST(test_amr_seed_no_refine, PreparedTaggingSeedsExactGeometryWithoutReadMutati
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 32;
   config.regrid_every = 4;
-  auto system = make_system(config, gaussian(config.shape));
-  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.2}});
+  const pops::test::StandaloneFixtureCriterion criterion{pops::test::standalone_tracer,
+                                                         POPS_TEST_standalone_tracer_DSO,
+                                                         POPS_TEST_standalone_tracer_RECEIPT};
+  const auto initial = gaussian(config.shape);
+  auto system = make_system(config, initial, {}, criterion.criterion.state);
+  const std::string binary = criterion.binary_identity();
+  try {
+    system.install_standalone_refinement_criterion(
+        criterion.path, pops::my_rank() == 0 ? "wrong-artifact-bytes" : binary,
+        criterion.binding());
+    ADD_FAILURE() << "the mesh accepted a different artifact on rank zero";
+  } catch (const std::exception& error) {
+    EXPECT_NE(std::string(error.what()).find("expected artifact bytes"), std::string::npos);
+  }
+  auto wrong_route = criterion.binding();
+  wrong_route.fields[0].state = "state/tracer";
+  EXPECT_THROW(system.install_standalone_refinement_criterion(criterion.path, binary, wrong_route),
+               std::exception);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_TRUE(system.installed_program_hash().empty());
+  criterion.install(system);
+  EXPECT_THROW(criterion.install(system), std::exception);
 
   const std::vector<pops::AmrPatch<Dim>> first = system.patch_boxes();
   ASSERT_FALSE(first.empty());
@@ -308,6 +331,48 @@ TEST(test_amr_seed_no_refine, PreparedTaggingSeedsExactGeometryWithoutReadMutati
   EXPECT_EQ(second, first);
   EXPECT_EQ(physical_patches(second, config), projected);
   EXPECT_EQ(system.block_level_state_global("tracer", 0), state_before);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_TRUE(system.installed_program_hash().empty());
+
+  auto threshold_state = initial;
+  const auto probes = pops::test::standalone_threshold_samples(pops::Real(1.2));
+  std::copy(probes.begin(), probes.end(), threshold_state.begin());
+  auto edge = make_system(config, threshold_state, {}, criterion.criterion.state);
+  criterion.install(edge);
+  auto legacy = make_system(config, threshold_state);
+  pops::test::install_prepared_threshold_union(legacy, {{"tracer", "u", 1.2}});
+  const auto requests = edge.tagging_requests(0);
+  const auto edge_boxes = edge.patch_boxes();
+  const auto edge_state = edge.block_level_state_global("tracer", 0);
+  EXPECT_EQ(requests, legacy.tagging_requests(0));
+  EXPECT_EQ(edge_boxes, legacy.patch_boxes());
+  EXPECT_EQ(edge_state, legacy.block_level_state_global("tracer", 0));
+  ASSERT_GE(requests.size(), 3u);
+  EXPECT_EQ(requests[0], 0);
+  EXPECT_EQ(requests[1], 0);
+  EXPECT_EQ(requests[2], 1);
+  const std::array<pops::Real, 3> observed{pops::Real(edge_state[0]), pops::Real(edge_state[1]),
+                                           pops::Real(edge_state[2])};
+  EXPECT_EQ(observed, probes);
+  EXPECT_EQ(criterion.marks<Dim>(observed),
+            (std::array<std::uint8_t, 3>{0, 0, pops::runtime::amr::kGeneratedCriterionRefine}));
+
+  auto invalid = edge_state;
+  invalid[0] = std::numeric_limits<pops::Real>::quiet_NaN();
+  edge.set_conservative_state("tracer", invalid);
+  try {
+    (void)edge.regrid_from_prepared_tagging(0);
+    ADD_FAILURE() << "non-finite criterion input published a regrid";
+  } catch (const std::exception& error) {
+    EXPECT_NE(std::string(error.what()).find("non-finite indicator sample"), std::string::npos);
+  }
+  EXPECT_EQ(edge.patch_boxes(), edge_boxes);
+  const auto rejected_state = edge.block_level_state_global("tracer", 0);
+  EXPECT_TRUE(std::isnan(rejected_state[0]));
+  EXPECT_TRUE(std::equal(rejected_state.begin() + 1, rejected_state.end(), edge_state.begin() + 1));
+  EXPECT_DOUBLE_EQ(edge.time(), 0.0);
+  EXPECT_EQ(edge.macro_step(), 0);
 }
 
 TEST(test_amr_seed_no_refine, AcceptedCadencePublishesTagDerivedRegridOnlyWhenDue) {

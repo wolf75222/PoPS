@@ -700,6 +700,11 @@ class AmrSystem {
                              const std::vector<int>& parameter_slots, int min_cycles,
                              const std::string& clock_identity,
                              const std::string& provider_identity);
+  /// Authenticate and install one generated local-state criterion before the hierarchy is
+  /// materialized. The binary and its binding come from the mesh plan, with no Program step.
+  POPS_EXPORT void install_standalone_refinement_criterion(
+      const std::string& path, const std::string& binary_identity,
+      const runtime::amr::StandaloneCriterionBinding& binding);
   /// Install the regrid decision generated into the compiled Program (DM13b, T33) in place of
   /// the configured cadence: its identity, the field table of its indicators (the qualified state
   /// of each field, its block, the variables read in it with their component indices), the bound

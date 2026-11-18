@@ -20,8 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "python"))
 import pops
 from pops._ir.handle_expr import ValueExpr
 from pops.amr import Coarsen, ConflictPolicy, EqualityPolicy, Hysteresis, Tag
-from pops.codegen.program_emit_refinement_criterion import emit_refinement_criterion
+from pops.codegen.program_emit_refinement_criterion import (
+    emit_refinement_criterion, emit_standalone_refinement_criterion,
+)
 from pops.identity import make_identity
+from pops.identity.artifact import binary_identity
 from pops.identity.semantic import semantic_value
 from pops.mesh._amr.refinement_criterion import resolve_refinement_criterion
 
@@ -45,13 +48,20 @@ def main(output, dimension):
         ("field_rhs_value", ("material",), ("u",), "u", 2.4, False, "test.field-rhs-v2.clock"),
         ("field_rhs_incidence", ("material",), ("u", "tag"), "tag", 2.4, False,
          "test.field-rhs-v2.clock"),
+        ("standalone_tracer", ("tracer",), ("u",), "u", 1.2, False, "test.clock.macro"),
+    )
+    euler_variables = ("rho", *(f"momentum_{axis}" for axis in range(dimension)), "E")
+    mounts += (
+        ("standalone_energy", ("gas",), euler_variables, "E", 4.0, False, "test.clock.macro"),
+        ("standalone_density", ("gas",), euler_variables, "rho", 4.0, False, "test.clock.macro"),
     )
     output.mkdir(parents=True, exist_ok=True)
     declarations = []
     for name, blocks, variables, variable, threshold, coarsen, clock in mounts:
-        model = pops.Model(name)
+        owner = "standalone_euler" if name in ("standalone_energy", "standalone_density") else name
+        model = pops.Model(owner)
         state = model.state("U", components=variables)
-        case = pops.Case(name)
+        case = pops.Case(owner)
         handles = [case.block(block, model, states=(state,))[state] for block in blocks]
         checked = pops.validate(case)
         routes = [checked.resolve(handle) for handle in handles]
@@ -96,8 +106,9 @@ def main(output, dimension):
         if len(routes) > 1:
             declarations.append(f"inline constexpr char {name}_second_state[] = "
                                 f"{cpp_string(routes[1].qualified_id)};")
-        write_if_changed(output / (name + ".cpp"),
-                         emit_refinement_criterion(criterion, native_dimension=dimension))
+        emitter = (emit_standalone_refinement_criterion if name.startswith("standalone_")
+                   else emit_refinement_criterion)
+        write_if_changed(output / (name + ".cpp"), emitter(criterion, native_dimension=dimension))
     write_if_changed(output / "amr_fixture_criteria_generated.hpp",
                      "\n".join(declarations) + "\n")
 
@@ -168,5 +179,8 @@ def euler(output, dimension):
 
 
 if __name__ == "__main__":
-    build = euler if sys.argv[3:] == ["--euler"] else main
-    build(Path(sys.argv[1]), int(sys.argv[2]))
+    if sys.argv[1] == "--binary-identity":
+        write_if_changed(Path(sys.argv[3]), binary_identity(sys.argv[2]).token + "\n")
+    else:
+        build = euler if sys.argv[3:] == ["--euler"] else main
+        build(Path(sys.argv[1]), int(sys.argv[2]))

@@ -42,8 +42,17 @@ def test_every_core_ledger_entry_names_its_issue_structures_measurement_and_path
             if separator:
                 # CF15 also admits an existing case built by a tracked integration probe.
                 relative = Path(file)
+                assert ".." not in relative.parts, row
+                if relative.suffix == ".cpp":
+                    assert relative.is_relative_to("tests/cpp/integration"), row
+                    suite, separator, test = builder.partition("/")
+                    assert separator and re.fullmatch(r"[A-Za-z_]\w*", suite), row
+                    assert re.fullmatch(r"[A-Za-z_]\w*", test), row
+                    source = (ROOT / relative).read_text(encoding="utf-8")
+                    assert re.search(r"^TEST\(\s*%s\s*,\s*%s\s*\)" % (suite, test), source, re.M), row
+                    continue
                 assert relative.is_relative_to("tests/python/integration"), row
-                assert ".." not in relative.parts and relative.suffix == ".py", row
+                assert relative.suffix == ".py", row
                 source = (ROOT / relative).read_text(encoding="utf-8")
             else:
                 builder = file
