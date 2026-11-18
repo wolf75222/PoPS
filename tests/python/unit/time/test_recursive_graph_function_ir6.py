@@ -35,6 +35,18 @@ def test_a_graph_function_that_decorates_itself_again_is_refused():
     assert refused.value.rule == "IR6" and refused.value.phase == "validate"
 
 
+def test_a_callable_elaborates_without_repr():
+    class CallableBuilder:
+        def __repr__(self):
+            raise RuntimeError("repr cannot be used")
+
+        def __call__(self, program, arguments):
+            return arguments["x"]
+
+    function = graph(inputs=Product(x=Float64), output=Float64)(CallableBuilder())
+    assert function.identity == "ed583949fa3aefb1e3734fb5409aaf10a896469cbe3080a438f9b71332ad8756"
+
+
 def test_a_python_helper_that_unrolls_is_not_refused():
     def power(p, x, n):
         return x if n == 1 else x * power(p, x, n - 1)

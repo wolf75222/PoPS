@@ -33,6 +33,9 @@ A row is a set of words:
     a control operation whose nested blocks run where it runs; on the host route of a device map,
     the host executes them.
 
+A row without words records an emitted operation for which lot L grants none of the checked
+capabilities. It makes no claim about the operation's runtime purity or placement.
+
 The fields that the note adds later come with their readers: the variants a site may raise (lot F1),
 the domain row of a partial operation (lot P), suspensions (lot F2) and the resource an allocation
 draws from (lot K1). This module imports nothing from the package, so every reader may import it.
@@ -71,11 +74,26 @@ def _row(words: str) -> Effect:
                   region="region" in tokens, device=device, host_region="host-region" in tokens)
 
 
+# The spatial operations already refused after synchronization. Their operation names and effect
+# rows have one spelling here while G10 owns these transitional operators.
+_POST_SYNC_SPATIAL_ROWS = {
+    "apply_laplacian_coeff":                '',
+    "divergence":                           '',
+    "gradient":                            '',
+    "laplacian":                           '',
+}
+POST_SYNC_SPATIAL_OPS = frozenset(_POST_SYNC_SPATIAL_ROWS)
+
 _ROWS = {
+    **_POST_SYNC_SPATIAL_ROWS,
+    "accept_increment":                     '',
     # acceptance_guard: see stencil_flux_divergence.
     "acceptance_guard":                    'graph fails algorithm region',
+    "affine_moment_update":                 '',
+    "apply":                                '',
     "apply_in":                            'graph fails algorithm region',
     "apply_out":                           'graph fails algorithm region',
+    "attempt_start":                        '',
     "bool_constant":                       'graph region device',
     "bool_op":                             'graph region device',
     "branch":                              'graph fails rendezvous region device host-region',
@@ -85,6 +103,12 @@ _ROWS = {
     "cell_compare":                        'graph region',
     "cfl":                                 'region',
     "compare":                             'graph region device',
+    "composite_integral":                   '',
+    "composite_pair":                       '',
+    "condensed_coeffs":                     '',
+    "condensed_energy":                     '',
+    "condensed_reconstruct":                '',
+    "condensed_rhs":                        '',
     "continuation_accept":                 'graph fails rendezvous region',
     "continuation_accepted_candidate":     'graph fails rendezvous region',
     "continuation_assessment_checks":      'graph fails rendezvous region',
@@ -100,9 +124,11 @@ _ROWS = {
     "continuation_forest_level":           'graph fails rendezvous region',
     "continuation_forest_level_count":     'graph fails rendezvous region',
     "continuation_freeze":                 'graph fails rendezvous region',
+    "continuation_open":                    '',
     "continuation_parent_open":            'graph fails rendezvous region',
     "continuation_parent_publish":         'graph fails rendezvous region',
     "continuation_proposal":               'graph fails rendezvous region',
+    "continuation_publish":                 '',
     "continuation_read":                   'graph fails rendezvous region',
     "continuation_regrid_base":            'graph fails rendezvous region',
     "continuation_regrid_child_publish":   'graph fails rendezvous region',
@@ -119,6 +145,9 @@ _ROWS = {
     "continuation_target_topology":        'graph fails rendezvous region',
     "continuation_transform":              'graph fails rendezvous region',
     "continuation_working_value":          'graph fails rendezvous region',
+    "coupled_rate":                         '',
+    "coupled_rate_out":                     '',
+    "diffusive_rhs":                        '',
     "distributed_balanced_domain":         'graph fails algorithm',
     "distributed_csr":                     'graph fails algorithm',
     "distributed_domain":                  'graph fails algorithm',
@@ -140,11 +169,18 @@ _ROWS = {
     "field_bundle_export":                 'region',
     "field_bundle_import":                 'region',
     "field_component":                     'graph region',
+    "field_evolved_state":                  '',
     "field_gradient":                      'graph fails algorithm region',
+    "field_map_pack":                       '',
     "field_problem_apply":                 'graph fails algorithm region',
     "field_problem_coefficients":          'graph fails algorithm region',
     "field_problem_load":                  'graph fails algorithm region',
+    "field_publication":                    '',
+    "field_sample":                         '',
+    "field_state_cell_mean":                '',
     "field_storage_allocate":              'region',
+    "field_warm_start":                     '',
+    "fill_boundary":                        '',
     "finite_at":                           'graph fails rendezvous region device',
     "finite_domain":                       'graph region device',
     "finite_index":                        'graph fails rendezvous region device',
@@ -156,11 +192,21 @@ _ROWS = {
     "finite_same_domain":                  'graph fails rendezvous region device',
     "finite_scan":                         'graph fails rendezvous region',
     "finite_size":                         'graph region device',
+    "geometry_state":                       '',
+    "graph_argument":                       '',
+    "history":                              '',
+    "history_interval_begin":               '',
+    "history_interval_check":               '',
+    "history_interval_duration":            '',
     "hmin":                                'region',
+    "implicit_source":                      '',
+    "input_fields":                         '',
     "int64_cast":                          'graph fails rendezvous region device',
     "int64_compare":                       'graph region device',
     "int64_constant":                      'graph region device',
     "int64_op":                            'graph fails rendezvous region device',
+    "integral_candidate":                   '',
+    "interval_begin":                       '',
     # interval_check and interval_end: root-issued sidecars stay lexical captures; every delivery
     # rechecks the exact context, point and live attempt, and converges a failure before leaving.
     "interval_check":                      'region',
@@ -169,12 +215,25 @@ _ROWS = {
     "iteration_is_ok":                     'graph region',
     "iteration_payload":                   'graph region',
     "iteration_success":                   'graph fails rendezvous region',
+    "layout_map_export":                    '',
+    "layout_map_import":                    '',
     "linear_combine":                      'graph region',
+    "linear_source":                        '',
+    "local_transform":                      '',
+    "logical_and":                          '',
     "matrix_free_operator":                'graph fails algorithm region',
+    "max_wave_speed":                       '',
     "pointwise_expression":                'graph fails region',
+    "post_synchronization":                 '',
+    "principal_rate":                       '',
     "product":                             'graph region device',
     "product_get":                         'graph region device',
+    "project":                              '',
     "provenance_bind":                     'graph region device',
+    "range":                                '',
+    "reached_duration":                     '',
+    "record_balance_term":                  '',
+    "record_scalar":                        '',
     "reduce":                              'graph algorithm region',
     "region_argument":                     'graph region ordered',
     "region_index":                        'graph region ordered',
@@ -185,19 +244,36 @@ _ROWS = {
     "result_ok":                           'graph region',
     "result_payload":                      'graph region',
     "result_success":                      'graph fails rendezvous region',
+    "reynolds_update":                      '',
+    "rhs":                                  '',
+    "rhs_jacvec":                           '',
     "scalar_expression":                   'graph fails rendezvous region device',
     "scalar_field":                        'region',
     "scalar_isfinite":                     'graph region device',
     "scalar_op":                           'graph fails rendezvous region device',
+    "solve_coupled_implicit":               '',
+    "solve_evidence":                       '',
+    "solve_fields":                         '',
+    "solve_fields_from_blocks":             '',
+    "solve_implicit_source":                '',
     "solve_linear":                        'graph fails algorithm region',
+    "solve_local_linear":                   '',
+    "solve_local_nonlinear":                '',
     "solve_outcome":                       'graph fails algorithm region',
     "solve_outcome_component":             'graph fails algorithm region',
+    "solve_spatial_field":                  '',
+    "solve_spatial_nonlinear":              '',
+    "source":                               '',
+    "spatial_interaction":                  '',
     "state":                               'region',
     # PreparedStencilFlux (and acceptance_guard) converges allocation, halo, kernel and validity
     # failures; a guarded capture keeps its exchanges across the region's lexical lifetime.
     "stencil_flux_divergence":             'graph fails algorithm region',
+    "store_history":                        '',
     "structured_fold":                     'graph fails rendezvous region',
     "structured_iterate":                  'graph fails rendezvous region host-region',
+    "subcycle":                             '',
+    "synchronize":                          '',
     "variant_construct":                   'graph region',
     "variant_is":                          'graph fails rendezvous region',
     "variant_payload":                     'graph region',
@@ -205,10 +281,11 @@ _ROWS = {
     "variant_unreachable":                 'graph fails region',
     "vector_field":                        'graph region',
     "where":                               'graph region',
+    "while":                                '',
 }
 
 EFFECTS = MappingProxyType({op: _row(words) for op, words in _ROWS.items()})
-del _ROWS
+del _ROWS, _POST_SYNC_SPATIAL_ROWS
 
 
 def effect(op: str) -> Effect:

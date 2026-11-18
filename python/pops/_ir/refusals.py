@@ -193,4 +193,3 @@ class RecursiveGraphFunction(ValueError):
 __all__ = ["ClassNotReached", "ConservationNotStructural", "CoverageNotExact",
            "DeliveryNotStructural", "GeneralAccessOnPatches", "PropertyNotDerived",
            "RecursiveGraphFunction", "RegionRefusal", "ScheduleIllegal", "TermNotAdditive"]
-

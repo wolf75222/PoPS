@@ -52,7 +52,8 @@ def topology(program, field, *, level, side, dimension):
     result = {"vtype": "field_topology", "field_signature": signature,
               "side": side, "dimension": dimension}
     validate_topology_signature(result)
-    return new_typed(program, result, "continuation_%s_topology" % side,
+    return new_typed(program, result,
+                     "continuation_source_topology" if side == "source" else "continuation_target_topology",
                      (field, _level(program, level)), {"dimension": dimension, "side": side})
 
 

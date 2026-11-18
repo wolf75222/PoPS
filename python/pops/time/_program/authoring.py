@@ -13,6 +13,7 @@ from pops.time._program.value_validation import (
 )
 from pops.time.stencil import StencilAccess
 from pops.time.values import ProgramValue, _is_field_value, _resolve_handle
+from pops._ir.effects import POST_SYNC_SPATIAL_OPS
 from pops._ir.data_model import field_role, is_finite_index
 
 if TYPE_CHECKING:
@@ -809,15 +810,11 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         "condensed_rhs",
         "condensed_reconstruct",
         "condensed_energy",
-        "laplacian",
-        "gradient",
-        "divergence",
-        "apply_laplacian_coeff",
         "store_history",
         "post_synchronization",
         "matrix_free_operator",
         "coupled_rate",
-    })
+    }) | POST_SYNC_SPATIAL_OPS
 
     @atomic_authoring
     def after_synchronization(self, body_fn: Any, *, name: Any = None,

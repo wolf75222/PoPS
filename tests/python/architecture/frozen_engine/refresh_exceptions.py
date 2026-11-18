@@ -190,6 +190,18 @@ def check_base(rev: str, names) -> int:
             except RuntimeError as error:
                 print(error, file=sys.stderr)
                 return 2
+            from .. import test_ir5_private_lists as ir5
+
+            registry = root / ir5.REGISTRY.relative_to(ir5.ROOT)
+            if registry.is_file():
+                growth = ir5.registry_growth(
+                    base_root / ir5.PACKAGE.relative_to(ir5.ROOT),
+                    base_root / ir5.REGISTRY.relative_to(ir5.ROOT),
+                    registry, ir5._operations(),
+                )
+                for finding in growth:
+                    print("%s (IR5: the registry only shrinks)" % finding, file=sys.stderr)
+                failed |= bool(growth)
             declared = _declared_in_this_pr(base_root, root)
             moves = _moves_declared_in_this_pr(base_root, root)
             for name in names:

@@ -5785,9 +5785,13 @@ python/pops/_ir/__init__.py:90 laplacian G10 | "laplacian"
 python/pops/_ir/balance.py:145 gradient G10 | "coupled_gradient"
 python/pops/_ir/balance.py:300 divergence G10 | "multiple divergence occurrences require an explicit numerical coverage construction"
 python/pops/_ir/balance.py:302 divergence G10 | "signed or scaled divergence requires a matching numerical construction"
-python/pops/_ir/effects.py:86 cfl N8 | "cfl"
-python/pops/_ir/effects.py:143 gradient G10 | "field_gradient"
-python/pops/_ir/effects.py:198 divergence G10 | "stencil_flux_divergence"
+python/pops/_ir/effects.py:80 laplacian G10 | "apply_laplacian_coeff"
+python/pops/_ir/effects.py:81 divergence G10 | "divergence"
+python/pops/_ir/effects.py:82 gradient G10 | "gradient"
+python/pops/_ir/effects.py:83 laplacian G10 | "laplacian"
+python/pops/_ir/effects.py:104 cfl N8 | "cfl"
+python/pops/_ir/effects.py:173 gradient G10 | "field_gradient"
+python/pops/_ir/effects.py:271 divergence G10 | "stencil_flux_divergence"
 python/pops/_ir/elliptic.py:116 gradient G10 | CoeffGradient
 python/pops/_ir/elliptic.py:122 gradient G10 | "CoeffGradient scale"
 python/pops/_ir/elliptic.py:125 gradient G10 | CoeffGradient
@@ -10149,10 +10153,6 @@ python/pops/time/_methods/tableau.py:173 runge-kutta N3 | certify_additive_runge
 python/pops/time/_methods/tableau.py:180 runge-kutta N3 | "AdditiveRungeKuttaTableau"
 python/pops/time/_methods/tableau.py:180 runge-kutta N3 | "DiagonallyImplicitRungeKuttaTableau"
 python/pops/time/_methods/tableau.py:180 runge-kutta N3 | "RungeKuttaTableau"
-python/pops/time/_program/authoring.py:811 laplacian G10 | "laplacian"
-python/pops/time/_program/authoring.py:812 gradient G10 | "gradient"
-python/pops/time/_program/authoring.py:813 divergence G10 | "divergence"
-python/pops/time/_program/authoring.py:814 laplacian G10 | "apply_laplacian_coeff"
 python/pops/time/_program/condensed.py:87 c-rho N3 | c_rho
 python/pops/time/_program/condensed.py:88 gradient G10 | gradient_map
 python/pops/time/_program/condensed.py:113 c-rho N3 | c_rho

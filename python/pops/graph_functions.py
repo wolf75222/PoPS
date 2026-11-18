@@ -578,8 +578,12 @@ def graph(*, inputs, output, captures=None, effects=None):
         if not callable(builder):
             raise TypeError("graph requires a Python elaborator")
         program, args = _formals(inputs)
+        name = getattr(builder, "__qualname__", None)
+        if not isinstance(name, str):
+            name = type(builder).__qualname__
+
         def elaborate(p):
-            with elaborating(builder, name=getattr(builder, "__qualname__", repr(builder))):
+            with elaborating(builder, name=name):
                 if captures is not None:
                     return builder(p, args, frozen_captures)
                 return builder(p, args)

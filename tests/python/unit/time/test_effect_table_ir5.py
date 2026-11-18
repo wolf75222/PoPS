@@ -6,7 +6,10 @@ before the table: GraphFunction snapshots keep their two effect words, so no ide
 """
 import pytest
 
-from pops._ir.effects import EFFECTS, Effect, _row, effect, graph_effect_words, region_safe
+from pops._ir.effects import (
+    EFFECTS, Effect, _row, device_lowered, effect, graph_effect_words, has_graph_contract,
+    host_region, region_safe,
+)
 from pops.codegen.program_emit_finite_arrays import FINITE_OPS
 from pops.codegen.program_emit_structured_control import STRUCTURED_OPS
 from pops.graph_functions import graph
@@ -77,6 +80,18 @@ def test_an_operation_without_a_row_has_no_contract():
     assert not region_safe("no_such_op")
     with pytest.raises(ValueError, match="no declared effect contract: state"):
         graph_effect_words("state")
+
+
+@pytest.mark.parametrize("op", ("history", "store_history", "laplacian"))
+def test_an_effect_row_does_not_admit_an_operation_without_a_checked_capability(op):
+    assert op in EFFECTS
+    assert not has_graph_contract(op)
+    assert not region_safe(op)
+    assert not device_lowered(op)
+    assert not device_lowered(op, ordered=True)
+    assert not host_region(op)
+    with pytest.raises(ValueError, match="no declared effect contract: " + op):
+        graph_effect_words(op)
 
 
 @pytest.mark.parametrize("words", ("graph graph", "graph unknown", "graph algorithm rendezvous",

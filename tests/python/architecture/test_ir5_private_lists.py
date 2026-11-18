@@ -7,6 +7,7 @@ the tree in both directions: an unlisted set fails, and so does an entry whose s
 
 Each rule fails on a tree written for it, so that a check that sees nothing fails here. The test
 reads the source tree and loads the effect table by its file path; it does not import ``pops``.
+The base ratchet is called by the engine guard base check, including on first introduction.
 """
 from __future__ import annotations
 
@@ -33,6 +34,93 @@ def _operations():
     finally:
         del sys.modules[name]
     return frozenset(module.EFFECTS)
+
+
+# These three constructors introduce Program nodes. The exceptions below forward an existing
+# operation, or a parameter whose caller is scanned, rather than choosing a new operation name.
+_FORWARDED_OPS = {
+    ("graph_functions.py", "inline", "new_typed", "op"),
+    ("time/_program/api.py", "_new", "_new", "op"),
+    ("time/_program/distributed_arrays.py", "_new", "_new", "op"),
+    ("time/_program/distributed_arrays.py", "_new", "new_typed", "op"),
+    ("time/_program/operations.py", "_new", "ProgramValue", "op"),
+    ("time/_program/operations.py", "_replace_value", "ProgramValue", "current.op"),
+    ("time/_program/rebuild.py", "clone", "ProgramValue", "v.op"),
+    ("time/_program/structured_control.py", "new_typed", "_new", "op"),
+}
+
+
+def _operation_argument(call):
+    """The operation argument of a Program constructor, including positional wrappers."""
+    func = call.func
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+    if name == "_new":
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and (
+                func.value.id in ("ScalarExpr", "PredicateExpr")):
+            return None  # the separate analytic expression tree
+        position = 1 if isinstance(func, ast.Attribute) else 2
+    elif name in ("new_typed", "ProgramValue"):
+        position = 2 if name == "new_typed" else 3
+    else:
+        return None
+    argument = next((keyword.value for keyword in call.keywords if keyword.arg == "op"), None)
+    if argument is None and len(call.args) > position:
+        argument = call.args[position]
+    assert argument is not None, "no exact operation argument: %s" % ast.unparse(call)
+    return name, argument
+
+
+def _emitted_names(node, constants):
+    if isinstance(node, ast.IfExp):
+        left, right = _emitted_names(node.body, constants), _emitted_names(node.orelse, constants)
+        return left + right if left and right else ()
+    if isinstance(node, ast.Name):
+        node = constants.get(node.id, node)
+    if isinstance(node, ast.Constant) and type(node.value) is str:
+        return (node.value,)
+    return ()
+
+
+def missing_operation_rows(package, operations):
+    """Check actual node producers, resolving names without importing the production package."""
+    missing = []
+    for path in sorted(package.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if not any(name in source for name in ("_new", "new_typed", "ProgramValue")):
+            continue
+        relative = path.relative_to(package).as_posix()
+        tree = ast.parse(source)
+        constants = {
+            target.id: statement.value for statement in tree.body
+            if isinstance(statement, ast.Assign)
+            for target in statement.targets if isinstance(target, ast.Name)
+        }
+        # Later (nested) functions own their calls rather than inheriting their caller's scope.
+        scopes = {child: node.name for node in ast.walk(tree)
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  for child in ast.walk(node) if isinstance(child, ast.Call)}
+        for call in ast.walk(tree):
+            if not isinstance(call, ast.Call):
+                continue
+            producer = _operation_argument(call)
+            if producer is None:
+                continue
+            name, argument = producer
+            if (relative, scopes.get(call), name, ast.unparse(argument)) in _FORWARDED_OPS:
+                continue
+            names = _emitted_names(argument, constants)
+            if not names:
+                missing.append("%s:%d: unresolved Program operation %s" %
+                               (relative, argument.lineno, ast.unparse(argument)))
+            for op in names:
+                if op not in operations:
+                    missing.append("%s:%d: Program operation has no effect row: %s" %
+                                   (relative, argument.lineno, op))
+    return missing
+
+
+def test_every_program_operation_emitted_by_a_producer_has_an_effect_row():
+    assert missing_operation_rows(PACKAGE, _operations()) == []
 
 
 def _strings(node):
@@ -100,6 +188,13 @@ def check(package, registry, operations):
     found, listed = private_lists(package, operations), registered(registry)
     return ["unlisted private list of operations: %s.%s" % key for key in sorted(found - listed)] + [
         "stale entry, its list is gone: %s.%s" % key for key in sorted(listed - found)]
+
+
+def registry_growth(base_package, base_registry, registry, operations):
+    """One introduction may register lists already present in the base sources."""
+    before = (registered(base_registry) if base_registry.is_file()
+              else private_lists(base_package, operations))
+    return ["new IR5 registry entry: %s.%s" % key for key in sorted(registered(registry) - before)]
 
 
 def test_the_registry_matches_the_tree():
@@ -176,3 +271,51 @@ def test_short_sets_and_sets_with_other_names_are_not_lists_of_operations(tmp_pa
             return local
         """)
     assert check(package, registry, OPERATIONS) == []
+
+def test_emitted_names_are_checked_without_using_an_admission_list(tmp_path):
+    package, _ = _tree(tmp_path, """
+        HISTORY = "history"
+        def emit(p, sig, flag):
+            new_typed(p, sig, HISTORY, (), {})
+            p._new("scalar", "reduce" if flag else "laplacian", (), {}, None, None)
+            p._new(vtype="state", op="store_history", inputs=(), attrs={}, name=None, block=None)
+    """)
+    assert set(missing_operation_rows(package, {"reduce"})) == {
+        "sub/module.py:4: Program operation has no effect row: history",
+        "sub/module.py:5: Program operation has no effect row: laplacian",
+        "sub/module.py:6: Program operation has no effect row: store_history",
+    }
+
+
+def test_an_unresolved_operation_name_is_not_ignored(tmp_path):
+    package, _ = _tree(tmp_path, """
+        def emit(p, op, flag):
+            p._new("scalar", "reduce" if flag else op, (), {}, None, None)
+    """)
+    assert missing_operation_rows(package, {"reduce"}) == [
+        "sub/module.py:3: unresolved Program operation 'reduce' if flag else op"]
+
+
+def test_an_entry_cannot_hide_a_new_private_list(tmp_path):
+    old = '_ADMITTED = {"branch", "reduce", "scalar_op"}'
+    base, base_registry = _tree(tmp_path / "base", old, ENTRY)
+    new_entry = ENTRY.replace('_ADMITTED', '_EXTRA')
+    package, registry = _tree(tmp_path / "head", old + '\n' + old.replace('_ADMITTED', '_EXTRA'),
+                              ENTRY + new_entry)
+    assert check(package, registry, OPERATIONS) == []
+    assert registry_growth(base, base_registry, registry, OPERATIONS) == [
+        "new IR5 registry entry: pops.sub.module._EXTRA"]
+    base_registry.unlink()  # initial introduction must also reject the extra site
+    assert registry_growth(base, base_registry, registry, OPERATIONS) == [
+        "new IR5 registry entry: pops.sub.module._EXTRA"]
+
+    _, initial = _tree(tmp_path / "initial", old, ENTRY)
+    assert registry_growth(base, base_registry, initial, OPERATIONS) == []
+
+
+def test_the_registry_can_remove_a_list_after_bootstrap(tmp_path):
+    old = '_ADMITTED = {"branch", "reduce", "scalar_op"}'
+    base, base_registry = _tree(tmp_path / "base", old, ENTRY)
+    package, registry = _tree(tmp_path / "head", "")
+    assert check(package, registry, OPERATIONS) == []
+    assert registry_growth(base, base_registry, registry, OPERATIONS) == []
