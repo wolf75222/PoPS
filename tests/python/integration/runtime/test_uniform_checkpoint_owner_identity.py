@@ -11,7 +11,7 @@ from tests.python.support.native_execution_context import artifact_execution_con
 from tests.python.support.presentation_case import FIRST, resolve_named_case
 
 
-pytestmark = (pytest.mark.compiler, pytest.mark.native_loader)
+pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
 def _snapshot(path):
