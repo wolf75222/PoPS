@@ -42,6 +42,9 @@ from dataclasses import dataclass
 
 from .index_maps import (
     Coarsen, Drop, Entity, IndexMap, Opaque, Pin, Refine, Unpin, Unrefine, dense, exact_weight)
+from .product_reads import (
+    FibreFoldRead, ProductFootprint, ProductRead, ProductReadUnknown, fold_footprint, point_footprint,
+)
 from .refusals import ClassNotReached, ConservationNotStructural, PropertyNotDerived
 
 CLASSES = ("pointwise", "box_stencil", "face_incidence", "axis_reduction", "line_scan",
@@ -106,11 +109,12 @@ def region_reads(body):
     and ``iterate``, each read once: a read in an arm that does not run counts, and a loop body
     counts once whatever its trip count. The reads come in the order of a left-to-right walk,
     each the first time it is met, so the first blocking map of a classification is stable.
+    A typed product read preserves the occurrence that owns its domain proof or fold law.
     """
     found, seen, pending = [], set(), [body]
     while pending:
         item = pending.pop()
-        if type(item) is Read:
+        if type(item) in (Read, ProductRead, FibreFoldRead):
             try:
                 new = item not in seen
                 seen.add(item)
@@ -172,8 +176,8 @@ class Region:
         if self.basis not in ("derived", "declared"):
             raise ValueError("a region's reads are derived or declared, got %r" % (self.basis,))
 
-    def halo(self, where=None):
-        return halo(self, where)
+    def halo(self, where=None, *, extents=None):
+        return halo(self, where, extents=extents)
 
     def conservation(self):
         return conservation(self)
@@ -190,7 +194,8 @@ def _translation_from(map_, domain):
 
 
 def _maps(region):
-    return (tuple(read.map for read in region_reads(region.reads))
+    return (tuple(read.adjacency.inverse_of if type(read) is FibreFoldRead else read.map
+                  for read in region_reads(region.reads))
             + tuple(m for m, _ in region.targets + region.productions))
 
 
@@ -198,12 +203,33 @@ def _normal_to(kind, axis):
     return int(kind.kind == "face" and kind.axis == axis)
 
 
-def halo(region, where=None):
+def _product_footprint(region, read, extents):
+    try:
+        value = (fold_footprint(read, extents) if type(read) is FibreFoldRead
+                 else point_footprint(read, extents))
+    except ProductReadUnknown as error:
+        return Fact("product read", Truth.UNKNOWN, blocking=read, detail=str(error))
+    if value.source.rank != region.rank or value.source.entity != region.domain:
+        raise ValueError("a product read must start on its region domain")
+    return Fact("product read", Truth.PROVED, value=value)
+
+
+def product_read_footprints(region, where=None, *, extents=None):
+    """Retain a footprint per typed read, with unresolved bounds for the bind check."""
+    return tuple((read, _product_footprint(region, read, extents or {}))
+                 for read in region_reads(region.reads)
+                 if type(read) in (ProductRead, FibreFoldRead)
+                 and (where is None or where(read.array)))
+
+
+def halo(region, where=None, *, extents=None):
     """Exact widths ``(low, high)`` per axis of the entities read beyond the owned box (IR14).
 
     ``where``, a predicate on the array labels, restricts the reads. A read of type (None, None)
     reads entities of the domain's kind. Unknown when a read is not a translation from the domain,
     or when the domain or a read target is a boundary piece, whose widths depend on the extents.
+    Typed product reads contribute only displacements on the base axes. Fibre footprints do not
+    describe which rank owns the data.
     """
     if region.domain.piece is not None:
         return Fact("halo", Truth.UNKNOWN, blocking=region.domain,
@@ -212,14 +238,22 @@ def halo(region, where=None):
     for read in region_reads(region.reads):
         if where is not None and not where(read.array):
             continue
-        if not _translation_from(read.map, region.domain):
-            return Fact("halo", Truth.UNKNOWN, blocking=read.map,
-                        detail="%r is not a translation from %r" % (read.map, region.domain))
-        target = region.domain if read.map.target is None else read.map.target
-        if target.piece is not None:
-            return Fact("halo", Truth.UNKNOWN, blocking=read.map,
-                        detail="%r reads the faces of a boundary piece" % (read.map,))
-        offset = dense(read.map.translation(), region.rank)
+        if type(read) in (ProductRead, FibreFoldRead):
+            fact = _product_footprint(region, read, extents or {})
+            if fact.truth is Truth.UNKNOWN:
+                return Fact("halo", Truth.UNKNOWN, blocking=read, detail=fact.detail)
+            footprint = fact.value
+            assert isinstance(footprint, ProductFootprint)
+            target, offset = footprint.target.entity, footprint.offset
+        else:
+            if not _translation_from(read.map, region.domain):
+                return Fact("halo", Truth.UNKNOWN, blocking=read.map,
+                            detail="%r is not a translation from %r" % (read.map, region.domain))
+            target = region.domain if read.map.target is None else read.map.target
+            if target.piece is not None:
+                return Fact("halo", Truth.UNKNOWN, blocking=read.map,
+                            detail="%r reads the faces of a boundary piece" % (read.map,))
+            offset = dense(read.map.translation(), region.rank)
         for axis, step in enumerate(offset):
             grow = _normal_to(region.domain, axis) - _normal_to(target, axis)
             low[axis] = max(low[axis], -step)
@@ -335,6 +369,7 @@ def require(fact, region):
         region=region.name, property=fact.property, blocking=fact.blocking)
 
 
-__all__ = ["CLASSES", "LOCAL_CONTROL", "Fact", "LocalControl", "Read", "Region", "Truth",
+__all__ = ["CLASSES", "LOCAL_CONTROL", "Fact", "FibreFoldRead", "LocalControl", "ProductRead",
+           "Read", "Region", "Truth", "product_read_footprints",
            "check_expected_class", "classify", "conservation", "halo", "injective", "region_reads",
            "require"]
