@@ -1,8 +1,8 @@
 """The program, the case and their inspection (spec 0.3, 2.6.2, 2.6.6; §5.2, Q3, 14.1).
 
 ``pops.Advance(method, dt=1e-3, attempts=2)`` is one attempt loop of a method: a number ``dt`` is
-a fixed proposal, a step rule of a library (``_step``, such as ``cfl_limit`` of ``pops.lib.time``)
-the rule of N8 that chooses each step, ``attempts=`` the number of attempts of a step (T38), and
+a fixed proposal, a function of ``cell`` the bound of each step (N8 « dt= as a function of cell »;
+``cfl_limit`` of ``pops.lib.time`` returns one), ``attempts=`` the number of attempts of a step (T38), and
 an omitted ``accept=`` is ``finite()``. ``pops.Program(advance=A, initial={u: u0})`` gives the initial value of each
 evolved quantity, a datum being supplied at bind under the representation of its arrays (Q3).
 ``pops.Case(model=, numerics=, program=, layout={Ω: pops.Uniform(cells=256)})`` holds them, and is
@@ -33,7 +33,6 @@ from ._refusal import (
     user_site,
 )
 
-_N8_STEP = "a later lot of N8 (the step rules of 5.11, PF8)"
 _N8_ACCEPT = "N8 phase 1 (the assessments of T28)"
 
 
@@ -129,13 +128,7 @@ class Advance:
                 "the advance of %s has no step rule; the step size is a choice that PoPS never "
                 "makes by a heuristic" % method.name,
                 write="pops.Advance(%r, dt=...) with a number or a function of cell" % (method,))
-        from ._step import StepRuleValue
-
-        if callable(dt) and not is_number(dt) and not isinstance(dt, StepRuleValue):
-            raise NotYetElaborated(
-                "pops.Advance(dt=<a function of cell>), a step rule, has no elaborated form yet; "
-                "%s elaborates it%s" % (_N8_STEP, StepRuleValue.meanwhile()), None)
-        if not isinstance(dt, StepRuleValue) and not _positive_number(dt):
+        if not (callable(dt) and not is_number(dt)) and not _positive_number(dt):
             raise TypeError("pops.Advance(dt=...) takes a positive number, a function of cell or "
                             "a controller, got %r" % (dt,))
         if accept is not None:

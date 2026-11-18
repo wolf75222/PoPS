@@ -932,9 +932,9 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // prepared affine Krylov route
 #include <pops/core/foundation/types.hpp>
 #include <array>                               // exact-ranked axis packs
+#include <charconv>                            // locale-independent face step refusal payload
 #include <chrono>                              // std::chrono::steady_clock (per-node profiling pair, ADC-459)
 #include <cmath>                               // std::sqrt / std::fabs / std::pow in lowered formulas
-#include <cstdio>                              // std::snprintf (face step refusal payload, ROM-108)
 #include <limits>                              // std::numeric_limits (dt_bound +inf sentinel)
 #include <functional>                          // per-level AMR persistent Program closures
 #include <memory>                              // std::make_shared (persistent matrix-free scratch)

@@ -409,11 +409,15 @@ def _face_step_frequency_rejection(frequency, alpha):
     rejected = "pops_face_step_rejected"
     return [
         "} catch (const pops::runtime::program::StepAttemptRejected& %s) {" % rejected,
-        "  char pops_face_step_text[64];",
-        "  std::snprintf(pops_face_step_text, sizeof(pops_face_step_text), \"%%a\", "
-        "static_cast<double>(%s / %s));" % (frequency, alpha),
+        "  char pops_face_step_text[64] = {'0', 'x'};",
+        "  const auto pops_face_step_encoding = std::to_chars("
+        "pops_face_step_text + 2, pops_face_step_text + sizeof(pops_face_step_text),",
+        "      static_cast<double>(%s / %s), std::chars_format::hex);" % (frequency, alpha),
+        "  if (pops_face_step_encoding.ec != std::errc{})",
+        "    throw std::runtime_error(\"cannot encode the face step frequency\");",
         "  throw pops::runtime::program::StepAttemptRejected(%s.status(), %s.disposition(), "
-        "%s.reason_code(), %s.phase(), %s.detail(), \"%s\", std::string(pops_face_step_text));"
+        "%s.reason_code(), %s.phase(), %s.detail(), \"%s\", "
+        "std::string(pops_face_step_text, pops_face_step_encoding.ptr));"
         % (rejected, rejected, rejected, rejected, rejected, FACE_STEP_FREQUENCY_SCHEMA),
         "}",
     ]

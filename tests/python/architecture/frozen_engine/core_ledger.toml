@@ -377,3 +377,39 @@ paths = [
   "python/pops/runtime/_runtime_mesh_lowering.py",
   "src/runtime/amr/amr_system.cpp",
 ]
+
+[[mechanism]]
+id = "cell-step-bound-selection-with-failure-consensus"
+issue = "ROM-89"
+rule = "IR26"
+pre_freeze = true
+what = """
+Select the minimum binary64 bound of a traced function over the accepted cells of a Uniform
+System. The generated entry evaluates it in one pass per box and records the first global
+ordinal in each invalid category. An exact rank reduction decides both the minimum and the
+dispatch or cell failure. The same installed-plan check guards both native step selection
+routes. The core supplies ownership, reduction and diagnostics."""
+structures = [
+  { case = "T02", builder = "tests/python/integration/mpi/probe_cell_step_bound_collectives.py::_tutorial", structure = "two-dimensional bounded linear transport with MUSCL and a Courant cap" },
+  { case = "L1", builder = "tests/python/integration/runtime/test_cell_step_rule_n8_native.py::_compile_l1", structure = "two-dimensional periodic advection and diffusion with a combined advective and parabolic restriction" },
+]
+measurement = """
+tests/python/integration/mpi/probe_cell_step_bound_collectives.py, witnesses committed ahead of
+the mechanism at c31146291 and 248dee69d. On d13ad5e0, the Mac Dim2 MPICH build at two ranks
+executes five MPI_Allreduce calls per rank and two Kokkos reduction launches per owned box
+for selection alone on each structure. Rank 0 owns one box; rank 1 owns none.
+The bound is exact on each rank: T02 0x1.ccccccccccccdp-8, L1 0x1.97a4b01a16d40p-7.
+The PF8 witness requires one Allreduce per rank and one traversal per owned box."""
+refusal_set = "the installed-plan refusal applies to both public step routes; cells selection requires binary64 and keeps the named non-finite and non-positive diagnostics"
+paths = [
+  "include/pops/parallel/comm.hpp",
+  "include/pops/runtime/program/generated_step_bound.hpp",
+  "include/pops/runtime/program/program_runtime_state.hpp",
+  "include/pops/runtime/system.hpp",
+  "python/bindings/core/init/init_system.cpp",
+  "python/pops/codegen/program_emit_step_bound.py",
+  "python/pops/runtime/_simulation.py",
+  "python/pops/runtime/_step_strategy.py",
+  "src/runtime/system/system.cpp",
+  "src/runtime/system/system_io.cpp",
+]

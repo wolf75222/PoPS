@@ -40,6 +40,7 @@ from pops._ir.quantity import QuantityRef
 from pops._ir.values import RuntimeParamRef
 from pops._ir.visitors import _children, _key
 from pops.model import Handle, OwnerPath, ParamHandle
+from pops.model._runtime_parameter_slots import index_program_parameter_slots
 
 from .tagging_policy import ConflictPolicy, EqualityPolicy, Hysteresis
 
@@ -544,7 +545,7 @@ def criterion_parameter_routes(
     read by no formula that the Program evaluates, and is refused by its name.
     """
     blocks = {name: index for index, name in block_routes}
-    slots = {(index, name): slot for index, name, slot, _default in parameter_routes}
+    slots = index_program_parameter_slots(parameter_routes)
     rows = []
     for row in criterion.model_parameters:
         index = blocks.get(row.block)

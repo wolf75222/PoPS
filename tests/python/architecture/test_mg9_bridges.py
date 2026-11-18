@@ -81,11 +81,7 @@ def test_the_registry_holds_every_module_and_every_bridge_of_pops_lib():
 
 def test_no_word_of_n3_is_a_bridge_after_lot_1():
     registry = mg9.read(ROOT)
-    # Only the CFL rule from #788 still needs a bridge after N9 and G04-a.
-    assert [(entry["word"], entry["module"], "arrives" in entry) for entry in registry["bridge"]] == [
-        ("cfl_limit", "pops.lib.time.limits", False)
-    ]
-    assert registry["bridge"][0]["owner"].startswith("N8")
+    assert registry["bridge"] == []
     assert {(word, route) for word, module, route in mg9.found_bridges(ROOT)
             if module == "pops.lib.solve"} == set()
     assert {word for word, module, _ in mg9.found_bridges(ROOT)
@@ -112,26 +108,26 @@ def test_the_modules_of_the_surface_pass_the_lint():
     assert {"pops.lib.numerics.fluxes", "pops.lib.output", "pops.lib.quadrature",
             "pops.lib.time.methods"} <= set(surface)
     assert kinds["pops.lib.time.when"] == "earlier"
-    # a bridge imports the native route that it returns: its findings of the rule "word" leave
-    # with it (as in the lint SU-T1)
-    bridges = {entry["module"] for entry in mg9.read(ROOT)["bridge"]}
     for name in surface:
         path = modules[name]
         rel = path.relative_to(ROOT).as_posix()
-        findings = [str(finding) for finding in lint.lint_file(path, words, name=rel)
-                    if not (name in bridges and finding.rule == "word" and finding.kind == "F")]
+        findings = [str(finding) for finding in lint.lint_file(path, words, name=rel)]
         assert findings == [], findings
 
 
-def test_a_step_rule_value_is_a_bridge_under_its_public_word():
-    """cfl_limit() of N15 lot D-E part D returns a StepRuleValue whose realize is b6's
-    AdaptiveCFL: the bridge is the public word, owned by N8 until dt= is a function of cell."""
+def test_cfl_limit_left_the_registry_written_with_the_surface():
+    """The exit of the bridge of N15 lot D-E part D (#788): cfl_limit() returns a function of cell
+    written with the surface (N8 « dt= as a function of cell », D1), which no native route
+    realizes. The registry only shrinks (MG6): the entry is gone and nothing finds it again."""
     registry = mg9.read(ROOT)
+    assert "cfl_limit" not in {entry["word"] for entry in registry["bridge"]}
     assert {(word, route) for word, module, route in mg9.found_bridges(ROOT)
-            if module == "pops.lib.time.limits"} == {("cfl_limit", "StepRuleValue")}
-    entry = [entry for entry in registry["bridge"] if entry["word"] == "cfl_limit"][0]
-    assert entry["owner"].startswith("N8, which elaborates dt= as a function of cell")
+            if module == "pops.lib.time.limits"} == set()
     assert mg9.classify(ROOT, registry)["pops.lib.time.limits"] == "surface"
+
+
+def test_a_reintroduced_step_rule_bridge_is_found_under_its_public_word():
+    """The retirement of StepRuleValue keeps its historical bridge pattern detectable."""
     found = mg9.bridges_of(textwrap.dedent("""\
         from pops.surface import StepRuleValue
 

@@ -372,6 +372,11 @@ class _ProgramSerialization(_ProgramBase):
                 # Version 35: the failure sites of a traced method list their variants (N9 « La
                 # référence sous les solves de relation » §3.6): control schema 5.
                 _raise_ir_version(result, 35)
+            if advance_control.step_bound is not None:
+                # Version 36: the step bound of an Advance written as a function of cell (N8
+                # « dt= as a function of cell »): control schema 6, whose proposal names the
+                # bound that the Program generates. Versions 34 and 35 are N9's relation solves.
+                _raise_ir_version(result, 36)
         cadence = self.cadence_contract()
         if not cadence.is_default:
             result["cadence"] = cadence.to_data()

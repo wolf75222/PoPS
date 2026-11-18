@@ -18,23 +18,8 @@ gate = "mg9-bridges"
 # pops.lib.numerics.fluxes, and pops.lib.numerics.schemes, which returned riemann.Rusanov(),
 # riemann.HLL() and Diffusion(flux=F^d), is gone: no word of N3 is a bridge.
 #
-# cg() of the N15 lot « solves » (#776) was a bridge (pops.solvers.CG under a relation solve) until
-# the N9 lot « La référence sous les solves de relation » (ROM-90): a relation solve now runs the
-# reference cg() of pops.lib.solve, its body the region of the solve's node, and the operator is
-# the rates of the components at a State operand. pops.lib.solve returns no native route.
-# The step rule cfl_limit() of N15 lot D-E, part D (#788), accepted as a bridge by the pilot's
-# ruling (driver, 12/11) and counted in the exit list of phase 1: its value subclasses the
-# surface's StepRuleValue and realizes N8's compiled StepRule paired with b6's AdaptiveCFL of the
-# same fraction and cap. The bridge carries the refusal of dt= as a function of cell; N8 removes
-# the entry when it elaborates dt= as a function of cell (the step rules of 5.11 written with the
-# surface, 2.6.9), and cfl_limit is then written with the surface.
-[[bridge]]
-word = "cfl_limit"
-module = "pops.lib.time.limits"
-route = "pops.time.AdaptiveCFL, through the compiled StepRule of N8 (StepRuleValue)"
-owner = "N8, which elaborates dt= as a function of cell (the step rules of 5.11 written with the surface), before the exit of phase 1"
-refusal = "tests/python/unit/surface/test_lot_d_step_rule.py::test_a_function_of_cell_is_still_a_later_step_rule"
-exit_test = "the slice's case with dt= a function of cell written with the surface, against the steps of cfl_limit(advection, cfl=0.45, max_dt=1e-2) under Simulation.run"
+# Reference CG, generated ghost fills and the cell-based step rule each execute their Python body.
+bridge = []
 
 [[earlier]]
 modules = ["pops.lib.numerics.face_flux"]

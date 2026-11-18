@@ -357,6 +357,7 @@ def _emit_cpp_program_impl(
         dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
         advance_control=(_emit_advance_control(program)
                          + _emit_advance_outputs(program, authority, target)
+                         + _emit_advance_step_bound(program, authority, target)
                          + _refuse_advance_memory_route(program, target)),
         module_metadata=(_emit_module_metadata(program, authority)
                          + _emit_uniform_history_metadata(program, target)),
@@ -612,6 +613,15 @@ def _emit_advance_outputs(program: Any, model: Any, target: str) -> str:
         "  switch (output) {\n%s    default: break;\n  }\n"
         '  throw std::out_of_range("pops_program_advance_output_scalars: no such Output");\n'
         "}\n" % (len(regions), count_cases, "".join(cases)))
+
+
+def _emit_advance_step_bound(program: Any, model: Any, target: str) -> str:
+    """The step bound of the cells rule of the elaborated Advance (N8 « dt= as a function of cell »,
+    D2), read by its loader; a Program without a cells rule exports no entry, so its translation
+    unit is unchanged."""
+    from pops.codegen.program_emit_step_bound import emit_step_bound
+
+    return emit_step_bound(program, model, target)
 
 
 def _emit_dt_bound_entry(target: str, body: str, value_name: str | None = None) -> str:

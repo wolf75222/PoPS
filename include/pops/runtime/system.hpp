@@ -42,6 +42,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 #include <optional>
@@ -74,6 +75,10 @@ class PreparedSystemLayoutTransfer;
 
 namespace component {
 class LoadedComponent;
+}
+
+namespace runtime::program {
+enum class StepBoundDispatch : std::uint64_t;
 }
 
 /// Immutable bind-time contract for one native transfer between two Uniform System layouts.
@@ -878,6 +883,17 @@ class System {
       const runtime::program::AdvanceStepRule* rule = nullptr);
   /// Retry.max_attempts of the installed Advance; 0 when the installed Program has none.
   int advance_max_attempts() const noexcept;
+  /// The step bound of a cells rule (N8 « dt= as a function of cell », D2): the smallest value over
+  /// the valid cells of the evolving block, at the accepted state, of the function of cell that dt=
+  /// writes, reduced over the ranks (PF8); +infinity when it is +infinity on every cell. A cell where
+  /// it is not finite, or not positive, fails with std::domain_error, whose message starts with
+  /// step_bound_nonfinite or step_bound_nonpositive and names the first such cell. Collective.
+  double step_bound(std::string_view bound_identity = {});
+  /// One step of @p dt under the Courant budget @p fraction of a cells rule, in (0, 1], which the
+  /// face guards of the step check (pops.run's CellStepBound; design note D4).
+  void step_at_fraction(double dt, double fraction);
+  /// The identity of the installed step bound; empty when the Program has none.
+  const std::string& step_bound_identity() const noexcept;
   /// RuntimeInstance-only outer transaction spanning native advancement and prepared consumers.
   POPS_EXPORT std::string advance_program_region(double dt);
   void begin_step_transaction();
@@ -1637,6 +1653,11 @@ class System {
   /// last_dt_bound(). step_cfl executes the step it selects; run_advance with a step rule takes
   /// it as the proposal of a step. Collective. @return the selected dt.
   double select_step_(double fraction, double speed_floor, double max_dt, double min_dt);
+  /// Classifies, under a cells rule, a System whose b6 selection would do more than read speeds: a
+  /// default field solve or an elliptic source, a stability auxiliary, a source or parabolic
+  /// frequency, a stability_dt, substeps or stride, coupled frequencies, global or Program dt
+  /// bounds, or other than one evolving block (design note D2, C3, C5).
+  runtime::program::StepBoundDispatch cells_rule_dispatch_(std::string_view bound_identity) const;
   /// Internal result boundary shared by field, local-source and Program prepared-linear solves.
   [[nodiscard]] POPS_EXPORT SolveOutcome track_solve_outcome(SolveOutcome outcome) const noexcept;
   /// Dedicated generated-Program sink for one validated, attempt-local balance term. It remains

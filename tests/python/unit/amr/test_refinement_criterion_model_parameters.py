@@ -87,13 +87,17 @@ def test_the_model_parameter_follows_the_case_parameters_in_the_patch_table() ->
 def test_the_program_routes_give_each_model_parameter_its_block_slot() -> None:
     criterion = _criterion(_model_rules, model_parameters={"nu": 0.5})
 
+    blocks = ((0, "other"), (3, "tracer"))
+    tracer_kappa = (3, "kappa", 0, 0.1)
+    tracer_nu = (3, "nu", 1, 0.5)
+    other_nu = (0, "nu", 0, 0.75)
     routes = criterion_parameter_routes(
-        criterion, ((3, "tracer"),), ((3, "kappa", 0, 0.1), (3, "nu", 1, 0.5)))
+        criterion, blocks, (tracer_kappa, tracer_nu, other_nu))
     assert routes == ((3, 1),)
     with pytest.raises(ValueError, match=r"'nu' of block 'tracer'.*case\.param"):
-        criterion_parameter_routes(criterion, ((3, "tracer"),), ((3, "kappa", 0, 0.1),))
+        criterion_parameter_routes(criterion, blocks, (tracer_kappa, other_nu))
     with pytest.raises(ValueError, match="no slot"):
-        criterion_parameter_routes(criterion, ((0, "other"),), ((0, "nu", 0, 0.5),))
+        criterion_parameter_routes(criterion, ((0, "other"),), (other_nu,))
 
 
 def test_a_parameter_without_its_declaring_handle_is_refused() -> None:
