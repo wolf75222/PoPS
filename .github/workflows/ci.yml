@@ -257,6 +257,7 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
+          amr-fixture-python: 'false'
           extra-apt: mold
 
       - name: Prewarm production runtime objects (${{ matrix.lane }})
@@ -668,6 +669,7 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
+          amr-fixture-python: 'false'
           # Match every consumer before the compiler include-tree capture.
           extra-apt: mold libopenmpi-dev openmpi-bin
 
@@ -1713,6 +1715,7 @@ jobs:
             ccache libeigen3-dev libhdf5-openmpi-dev libopenmpi-dev ninja-build openmpi-bin \
             pybind11-dev python3-dev python3-h5py python3-venv python3-pip python3-packaging \
             python3-numpy python3-pytest python3-vtk9 python3-mpmath python3-scipy
+          echo "POPS_AMR_FIXTURE_PYTHON=/usr/bin/python3" >> "$GITHUB_ENV"
 
       - name: Resolve runner and compiler cache identity
         id: kokkos-platform
@@ -2409,7 +2412,8 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev ninja-build ccache mold
+          sudo apt-get install -y libeigen3-dev ninja-build ccache mold python3-numpy
+          echo "POPS_AMR_FIXTURE_PYTHON=/usr/bin/python3" >> "$GITHUB_ENV"
 
       - name: Install MPI SDK for required Python syntax witnesses
         if: matrix.kind == 'python'
@@ -2767,6 +2771,7 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
+          amr-fixture-python: 'false'
           extra-apt: mold libopenmpi-dev openmpi-bin libhdf5-openmpi-dev
 
       - id: python

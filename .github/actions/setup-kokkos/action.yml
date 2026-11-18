@@ -19,6 +19,9 @@ inputs:
   extra-apt:
     description: 'Paquets apt supplementaires (separes par des espaces), p.ex. clang-tidy'
     default: ''
+  amr-fixture-python:
+    description: 'Install the build-time Python emitter dependency for the tagged C++ fixtures'
+    default: 'true'
   compiler:
     description: >
       Compilateur de l'install Kokkos : gcc (defaut) ou clang. La cle inclut l'image du runner,
@@ -59,6 +62,13 @@ runs:
         OMP_DEP=""
         if [ "${{ inputs.exec-space }}" = "openmp" ]; then OMP_DEP="libomp-dev"; fi
         sudo apt-get install -y libeigen3-dev ninja-build ccache $OMP_DEP ${{ inputs.extra-apt }}
+
+    - name: Install the AMR fixture generator dependency
+      if: inputs.amr-fixture-python == 'true'
+      shell: bash
+      run: |
+        sudo apt-get install -y python3-numpy
+        echo "POPS_AMR_FIXTURE_PYTHON=/usr/bin/python3" >> "$GITHUB_ENV"
 
     - name: Resolve runner and compiler cache identity
       id: cache-platform

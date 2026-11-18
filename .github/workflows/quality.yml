@@ -176,6 +176,8 @@ jobs:
           fetch-depth: 1
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
+        with:
+          amr-fixture-python: 'false'
       # setup-kokkos may use ccache for its own install. The artifact must contain only entries
       # produced by this exact PoPS profile/lane and checkout.
       - name: Initialize exact quality prewarm ccache

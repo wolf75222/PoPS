@@ -695,13 +695,48 @@ pops_test_source(_src test_amr_synthetic_program_loader_transaction)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
-# CTest starts a fresh process for every case. Build the six exact source variants once,
+# Generate each test-owned predicate once with the production Python compiler. Only the
+# tagged fixture targets require this interpreter and its NumPy dependency.
+set(_amr_criteria_dir "${CMAKE_CURRENT_BINARY_DIR}/amr-fixture-criteria")
+set(_amr_criteria_outputs "${_amr_criteria_dir}/amr_fixture_criteria_generated.hpp")
+foreach(_criterion synthetic_history synthetic_interface synthetic_attempt field_rhs_value field_rhs_incidence)
+  list(APPEND _amr_criteria_outputs "${_amr_criteria_dir}/${_criterion}.cpp")
+endforeach()
+file(GLOB_RECURSE _pops_criterion_python_sources CONFIGURE_DEPENDS
+  "${CMAKE_SOURCE_DIR}/python/pops/*.py")
+set(_generate_amr_criteria
+  "${CMAKE_COMMAND}" -E echo "The generated AMR fixture targets require Python >=3.10 and NumPy >=1.24"
+  COMMAND "${CMAKE_COMMAND}" -E false)
+set(_amr_fixture_python "${Python3_EXECUTABLE}")
+if(DEFINED ENV{POPS_AMR_FIXTURE_PYTHON})
+  set(_amr_fixture_python "$ENV{POPS_AMR_FIXTURE_PYTHON}")
+endif()
+if(IS_ABSOLUTE "${_amr_fixture_python}" AND EXISTS "${_amr_fixture_python}")
+  set(_generate_amr_criteria
+    "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
+    "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
+    "${_amr_criteria_dir}" "${POPS_NATIVE_DIM}")
+endif()
+add_custom_command(OUTPUT ${_amr_criteria_outputs}
+  COMMAND ${_generate_amr_criteria}
+  DEPENDS cpp/support/generate_amr_fixture_criteria.py ${_pops_criterion_python_sources}
+  VERBATIM)
+add_custom_target(pops_amr_fixture_criteria DEPENDS ${_amr_criteria_outputs})
+function(pops_use_amr_fixture_criteria target)
+  add_dependencies(${target} pops_amr_fixture_criteria)
+  target_include_directories(${target} PRIVATE "${_amr_criteria_dir}")
+endfunction()
+pops_use_amr_fixture_criteria(test_amr_synthetic_program_loader_transaction)
+pops_use_amr_fixture_criteria(test_prepared_field_rhs_inputs)
+
+# CTest starts a fresh process for every case. Build the seven exact source variants once,
 # rather than repeating eleven expensive compiler invocations inside the test watchdog.
 # Reuse native_dso_compiler so compiler, -O2, header ABI, Kokkos and MPI flags stay identical.
 add_executable(pops_build_synthetic_loader_fixture EXCLUDE_FROM_ALL
   cpp/support/build_synthetic_loader_fixture.cpp)
 target_link_libraries(pops_build_synthetic_loader_fixture PRIVATE pops::pops)
 target_compile_features(pops_build_synthetic_loader_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+pops_use_amr_fixture_criteria(pops_build_synthetic_loader_fixture)
 target_compile_definitions(pops_build_synthetic_loader_fixture PRIVATE ${_native_defs})
 set(_synthetic_fixture_dir "${CMAKE_CURRENT_BINARY_DIR}/synthetic-loader-fixtures")
 file(MAKE_DIRECTORY "${_synthetic_fixture_dir}")
@@ -713,10 +748,18 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 set(_synthetic_fixture_outputs "")
 foreach(_variant 4 8 9 10 12 28 42)
   set(_stem "${_synthetic_fixture_dir}/${_variant}")
+  if(_variant EQUAL 9)
+    set(_criterion synthetic_interface)
+  elseif(_variant EQUAL 4 OR _variant EQUAL 12 OR _variant EQUAL 28)
+    set(_criterion synthetic_attempt)
+  else()
+    set(_criterion synthetic_history)
+  endif()
+  set(_fragment "${_amr_criteria_dir}/${_criterion}.cpp")
   add_custom_command(OUTPUT "${_stem}.so" "${_stem}.cpp"
     COMMAND $<TARGET_FILE:pops_build_synthetic_loader_fixture>
-      "${_variant}" "${_stem}.cpp" "${_stem}.so"
-    DEPENDS pops_build_synthetic_loader_fixture
+      "${_variant}" "${_stem}.cpp" "${_stem}.so" "${_fragment}"
+    DEPENDS pops_build_synthetic_loader_fixture "${_fragment}"
       cpp/support/synthetic_loader_fixture.hpp cpp/support/native_dso_compiler.hpp
       "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
     JOB_POOL pops_heavy_test_tu
@@ -745,7 +788,29 @@ add_custom_command(OUTPUT "${_field_rhs_fixture_stem}.so" "${_field_rhs_fixture_
   VERBATIM)
 add_custom_target(pops_field_rhs_value_program_fixture
   DEPENDS "${_field_rhs_fixture_stem}.so" "${_field_rhs_fixture_stem}.cpp")
-add_dependencies(test_prepared_field_rhs_inputs pops_field_rhs_value_program_fixture)
+add_executable(pops_build_tagged_field_rhs_value_program_fixture EXCLUDE_FROM_ALL
+  cpp/support/build_field_rhs_value_program_fixture.cpp)
+target_link_libraries(pops_build_tagged_field_rhs_value_program_fixture PRIVATE pops::pops)
+target_compile_features(pops_build_tagged_field_rhs_value_program_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+target_compile_definitions(pops_build_tagged_field_rhs_value_program_fixture PRIVATE
+  ${_field_rhs_native_defs} POPS_TEST_GENERATED_FIXTURE_CRITERION)
+pops_use_amr_fixture_criteria(pops_build_tagged_field_rhs_value_program_fixture)
+set(_tagged_field_rhs_stem "${_field_rhs_fixture_stem}-tagged")
+set(_value_fragment "${_amr_criteria_dir}/field_rhs_value.cpp")
+add_custom_command(OUTPUT "${_tagged_field_rhs_stem}.so" "${_tagged_field_rhs_stem}.cpp"
+  COMMAND $<TARGET_FILE:pops_build_tagged_field_rhs_value_program_fixture>
+    "${_tagged_field_rhs_stem}.cpp" "${_tagged_field_rhs_stem}.so" "${_value_fragment}"
+  DEPENDS pops_build_tagged_field_rhs_value_program_fixture "${_value_fragment}"
+    cpp/support/field_rhs_value_program_fixture.hpp cpp/support/native_dso_compiler.hpp
+    "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
+  JOB_POOL pops_heavy_test_tu
+  VERBATIM)
+add_custom_target(pops_tagged_field_rhs_value_program_fixture
+  DEPENDS "${_tagged_field_rhs_stem}.so" "${_tagged_field_rhs_stem}.cpp")
+add_dependencies(test_prepared_field_rhs_inputs
+  pops_field_rhs_value_program_fixture pops_tagged_field_rhs_value_program_fixture)
+target_compile_definitions(test_prepared_field_rhs_inputs PRIVATE
+  POPS_TEST_TAGGED_FIELD_RHS_VALUE_PROGRAM_SO="${_tagged_field_rhs_stem}.so")
 target_compile_definitions(test_prepared_field_rhs_inputs PRIVATE
   POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO="${_field_rhs_fixture_stem}.so")
 add_dependencies(test_generated_amr_system_block pops_field_rhs_value_program_fixture)
@@ -760,12 +825,14 @@ add_executable(pops_build_field_rhs_aux_incidence_program_fixture EXCLUDE_FROM_A
   cpp/support/build_field_rhs_aux_incidence_program_fixture.cpp)
 target_link_libraries(pops_build_field_rhs_aux_incidence_program_fixture PRIVATE pops::pops)
 target_compile_features(pops_build_field_rhs_aux_incidence_program_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+pops_use_amr_fixture_criteria(pops_build_field_rhs_aux_incidence_program_fixture)
 target_compile_definitions(pops_build_field_rhs_aux_incidence_program_fixture PRIVATE ${_field_rhs_native_defs})
 set(_field_rhs_aux_incidence_stem "${CMAKE_CURRENT_BINARY_DIR}/field-rhs-aux-incidence-program-fixture")
+set(_incidence_fragment "${_amr_criteria_dir}/field_rhs_incidence.cpp")
 add_custom_command(OUTPUT "${_field_rhs_aux_incidence_stem}.so" "${_field_rhs_aux_incidence_stem}.cpp"
   COMMAND $<TARGET_FILE:pops_build_field_rhs_aux_incidence_program_fixture>
-    "${_field_rhs_aux_incidence_stem}.cpp" "${_field_rhs_aux_incidence_stem}.so"
-  DEPENDS pops_build_field_rhs_aux_incidence_program_fixture
+    "${_field_rhs_aux_incidence_stem}.cpp" "${_field_rhs_aux_incidence_stem}.so" "${_incidence_fragment}"
+  DEPENDS pops_build_field_rhs_aux_incidence_program_fixture "${_incidence_fragment}"
     "${POPS_HEADER_ROOT}/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp"
     cpp/support/native_dso_compiler.hpp "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
   JOB_POOL pops_heavy_test_tu

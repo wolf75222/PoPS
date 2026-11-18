@@ -1,4 +1,7 @@
 #include "field_rhs_value_program_fixture.hpp"
+#ifdef POPS_TEST_GENERATED_FIXTURE_CRITERION
+#include "amr_fixture_criteria.hpp"
+#endif
 #include "native_dso_compiler.hpp"
 
 #include <fstream>
@@ -7,12 +10,29 @@
 
 int main(int argc, char** argv) {
   try {
+#ifdef POPS_TEST_GENERATED_FIXTURE_CRITERION
+    if (argc != 4)
+      throw std::invalid_argument(
+          "expected source path, shared-object path and criterion fragment");
+#else
     if (argc != 3)
       throw std::invalid_argument("expected source path and shared-object path");
+#endif
     {
       std::ofstream output(argv[1]);
       output.exceptions(std::ios::badbit | std::ios::failbit);
+#ifdef POPS_TEST_GENERATED_FIXTURE_CRITERION
+      output << "#define pops_program_hash pops_test_untagged_program_hash\n";
+#endif
       output << pops::test::field_rhs_value_program::source();
+#ifdef POPS_TEST_GENERATED_FIXTURE_CRITERION
+      const auto hash =
+          pops::test::field_rhs_value.program_hash(pops::test::field_rhs_value_program::identity);
+      output << "\n#undef pops_program_hash\n"
+                "extern \"C\" const char* pops_program_hash() { return \""
+             << hash << "\"; }\n";
+      pops::test::append_fixture_criterion(output, argv[3]);
+#endif
     }
     const auto result = pops::test::native_dso::compile_shared(
         argv[1], argv[2], "-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI");
