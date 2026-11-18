@@ -93,7 +93,7 @@ class NotAdmissible(RunFailed):
 
 
 class FaceFrequencyStop(NotYetElaborated):
-    """The face guard refused a cells rule with no shorter correction available.
+    """The face guard refused a step rule with no further frequency correction.
 
     ``frequency`` is the largest over the ranks. ``result`` holds the last accepted state.
     """
@@ -101,7 +101,7 @@ class FaceFrequencyStop(NotYetElaborated):
     def __init__(self, result: RunResult, frequency: float) -> None:
         super().__init__(
             "the face guard refused the attempt of the step from t=%r at the faces' frequency %r "
-            "(%s); the compiled cells rule has no further frequency correction"
+            "(%s); the compiled step rule has no further frequency correction"
             % (result.time, frequency, FACE_STEP_FREQUENCY_SCHEMA))
         self.result = result
         self.frequency = frequency
@@ -526,9 +526,9 @@ class Simulation:
         guard = None
         stopped = None
         if stop == _FACE_FREQUENCY:
-            if cells is None:
-                raise RuntimeError("System::run_advance stopped on the faces' frequency without a "
-                                   "cells rule")
+            if report.get("typed_failure_schema") != FACE_STEP_FREQUENCY_SCHEMA:
+                raise RuntimeError("System::run_advance stopped on the faces' frequency without "
+                                   "its typed rejection")
             stopped = float(report["face_frequency"])
         elif stop == _STEP_BUDGET:
             failure = Failure(BudgetExhausted, None, {

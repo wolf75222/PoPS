@@ -535,13 +535,10 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
           }
           report.attempts = attempt;
           report.face_frequency = frequency;
-          if (attempt >= max_attempts) {
-            report.typed_failure_schema = rejected.typed_failure_schema();
-            report.typed_failure_payload = rejected.typed_failure_payload();
+          report.typed_failure_schema = rejected.typed_failure_schema();
+          report.typed_failure_payload = rejected.typed_failure_payload();
+          if (attempt >= max_attempts)
             return finish(AdvanceRunStop::kAttemptBudget);
-          }
-          if (!cells)
-            throw;
           return finish(AdvanceRunStop::kFaceFrequency);
         }
         if (attempt >= max_attempts) {

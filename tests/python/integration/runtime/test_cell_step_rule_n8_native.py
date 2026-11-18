@@ -550,6 +550,85 @@ def test_the_guarded_muscl_face_retries_as_master_on_both_compiled_rules(muscl_s
     _bitwise(_state(ruled), _state(master))
 
 
+@surface.scheme
+def _mixed_phase_guard(face, term):
+    q = term.quantity
+    left, right = face.left(q), face.right(q)
+    speed = dot(vector(AX, AY), face.normal)
+    fraction = (left - FAR_FIELD) / (1.0 - FAR_FIELD)
+    # The recorded speed grows on mixed concentrations at the trial's second stage.
+    estimate = speed * (2.0 + 4.0 * fraction * (1.0 - fraction))
+    return surface.discrete.FaceFlux(
+        where(speed > 0.0, speed * left, speed * right),
+        reconstruction=muscl(limiter=vanleer), speed=estimate)
+
+
+@pytest.mark.parametrize("rule", ["cells", "stability"])
+def test_a_second_face_refusal_returns_the_last_accepted_result(
+        rule, tmp_path, native_cxx, kokkos_root):
+    from pops._bootstrap import StepAttemptRejected
+    from pops.time import AdaptiveCFL
+    from pops.time._program import elaboration
+
+    del native_cxx, kokkos_root
+    with pytest.MonkeyPatch.context() as patch:
+        if rule == "stability":
+            elaborate = elaboration.elaborate
+
+            def stability(advance, **kwargs):
+                kwargs["proposal"] = elaboration.StepRule(CFL, None, strategy=AdaptiveCFL(CFL))
+                return elaborate(advance, **kwargs)
+
+            patch.setattr(elaboration, "elaborate", stability)
+        proposal = _tutorial if rule == "cells" else lambda *_: 1e-3
+        artifact, quantity, datum = _slice(
+            proposal, lambda _: _mixed_phase_guard(), attempts=3,
+            output_time=surface.every(steps=1))
+
+    initial = np.full(CELLS, FAR_FIELD)
+    initial[8:23, 8:24] = 1.0
+    compiled = artifact.compiled
+    binding, = compiled.plan.initial_condition_plan.bindings
+    reference = pops.bind(
+        compiled, initial_values={binding.subject: np.ascontiguousarray(initial.T[None, ...])},
+        resources={"execution_context": artifact_execution_context(compiled)})
+    native = reference._executor._s
+    schema = "pops.face-step-frequency@1"
+    with pytest.raises(StepAttemptRejected) as first:
+        native.step_cfl(CFL)
+    assert first.value.typed_failure_schema == schema
+    first_frequency = float.fromhex(first.value.typed_failure_payload.decode("ascii"))
+    assert first_frequency == 2 * abs(AX) * CELLS[0]
+    with pytest.raises(StepAttemptRejected) as second:
+        native._step_at_fraction(CFL / first_frequency, CFL)
+    cause = second.value
+    assert cause.typed_failure_schema == schema
+    frequency = float.fromhex(cause.typed_failure_payload.decode("ascii"))
+    assert frequency > first_frequency
+    assert (reference.time(), reference.macro_step()) == (0, 0)
+    _bitwise(initial, _state(reference))
+
+    simulation = surface.bind(artifact, data={datum: initial}, directory=tmp_path)
+    with pytest.raises(surface.FaceFrequencyStop) as caught:
+        simulation.run(until=T_END, max_steps=1)
+    result = caught.value.result
+    assert caught.value.frequency == frequency
+    assert (result.time, result.steps, result.rejections) == (0, 0, 2)
+    assert result.failure is None
+    assert result.diagnostics["control"]["proposal"]["rule"] == rule
+    assert result.diagnostics["control"]["retry"]["max_attempts"] == 3
+    native_report = result.diagnostics["native"]
+    assert native_report["attempts"] == 2
+    assert native_report["typed_failure_schema"] == schema
+    assert native_report["typed_failure_payload"] == cause.typed_failure_payload
+    assert native_report["rejection"] == str(cause)
+    output, = artifact.case.outputs
+    publication, = result.outputs[output]
+    assert (publication.time, publication.step) == (0.0, 0)
+    _bitwise(publication["u"], initial)
+    _bitwise(result.state[quantity], _state(reference))
+
+
 def test_the_first_step_is_the_smallest_bound_at_the_initial_state(burgers, tmp_path):
     """2.6.2: the first proposal is the smallest value of E over the cells at the initial state
     (PF8), on the compiled route and on pops.run: (cfl * h) / s at the fastest cell."""
