@@ -354,6 +354,13 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             install_plan=plan,
             initial_sources=_uniform_initial_sources(plan),
         )
+        from pops.runtime._uniform_checkpoint_projection import describe_uniform_checkpoint
+
+        # This System is still private to the bind transaction. The returned snapshot stays
+        # immutable and the named bind identity does not include the optional O3 descriptor.
+        snapshot = engine.bound_snapshot
+        object.__setattr__(snapshot, "_uniform_checkpoint_projection",
+                           describe_uniform_checkpoint(engine, plan, snapshot))
         return engine
 
 

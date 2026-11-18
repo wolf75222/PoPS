@@ -174,6 +174,7 @@ class BoundSnapshot:
         "schema_version", "semantic_identity", "artifact_identity", "layout", "blocks",
         "field_plans", "step_transaction", "params", "aux_evidence", "initial_evidence",
         "bind_schema_identity", "execution_context", "bind_identity", "program_id",
+        "_uniform_checkpoint_projection",
     )
 
     def __init__(self, *, semantic_identity: Any, artifact_identity: Any, layout: Any,
@@ -200,6 +201,7 @@ class BoundSnapshot:
             object.__setattr__(self, name, _freeze(_data(value, where=name), where=name))
         object.__setattr__(self, "bind_schema_identity", schema_id)
         object.__setattr__(self, "bind_identity", make_identity("bind", self._identity_payload()))
+        object.__setattr__(self, "_uniform_checkpoint_projection", None)
 
     def _identity_payload(self) -> dict[str, Any]:
         return {
