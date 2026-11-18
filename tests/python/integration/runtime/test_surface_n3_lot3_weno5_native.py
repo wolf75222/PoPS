@@ -4,15 +4,14 @@
 The advection of tutorial 02 of ``scalar_advection`` (the case of S1-c of the vertical slice) on
 the box [0, 1] x [0, 1] with no periodic axis, ``ddt(u) == -div(vector(1, 1/4) * u)``, inflow on
 x_min and y_min (``u == g``) and outflow on x_max and y_max, realized by ``ghosts()``, and the
-SSPRK2 of ``pops.lib.time.methods``, on 16 x 8 cells for 50 steps of dt = 1e-3. The face is
-``upwind(reconstruction=weno5(epsilon=1e-6))``. ``pops.compile``, ``pops.bind`` and
-``simulation.run`` give, bit for bit, the state that the same case written by hand for b6 and N8
-reaches with master's native ``reconstruction.WENO5(epsilon=1e-6)`` and ``riemann.Rusanov()``, the
-form of ``upwind()`` (D1): E2 of the lot note. The case is the one of
+SSPRK2 of ``pops.lib.time.methods``, on 16 x 8 cells for 50 steps of dt = 1e-3.
+``upwind(reconstruction=weno5(...))`` and master's native ``reconstruction.WENO5(...)`` with
+``riemann.Rusanov()`` give the same state bit for bit, both with their defaults and with 1e-6
+(D1, E2 of the lot note). The case is the one of
 ``test_surface_n3_lot2_muscl_native.py``; the inflow ghosts three cells deep feed the stencil.
 
-Both cases set the regulariser to 1e-6, far from master's default 1e-40, so that the run reads
-it. Before N3 lot 3-eps the uniform native route dropped ``reconstruction.WENO5(epsilon=)``
+The two values exercise the regulariser: 1e-6 is far from master's default 1e-40.
+Before N3 lot 3-eps the uniform native route dropped ``reconstruction.WENO5(epsilon=)``
 (``System.add_equation`` passed ``weno_epsilon`` to an external Riemann brick only and the
 generated block built ``configured_reconstruction<Weno5>()`` with the default), so the hand case
 ran 1e-40 while the word, whose regulariser is a literal of the compiled policy, ran 1e-6.
@@ -150,13 +149,15 @@ def compiled(tmp_path_factory, native_cxx, kokkos_root):
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
         patch.chdir(REPO_ROOT)
-        case, u, u0 = _surface_case(EPSILON)
-        artifact = surface.compile(case, target=surface.OpenMP())
+        generated = {}
         hand = {}
         for epsilon in (EPSILON, None):
+            case, u, u0 = _surface_case(epsilon)
+            artifact = surface.compile(case, target=surface.OpenMP())
+            generated[epsilon] = {"artifact": artifact, "u": u, "u0": u0}
             hand_case, layout = _hand_case(epsilon)
             hand[epsilon] = pops.compile(pops.resolve(pops.validate(hand_case), layout=layout))
-        yield {"u": u, "u0": u0, "artifact": artifact, "hand": hand}
+        yield {"generated": generated, "hand": hand}
 
 
 def _hand_state(compiled, epsilon=EPSILON):
@@ -165,7 +166,7 @@ def _hand_state(compiled, epsilon=EPSILON):
     initial = np.ascontiguousarray(np.transpose(_initial())[np.newaxis, ...])
     runtime = pops.bind(hand, initial_values={binding.subject: initial})
     result = Simulation(runtime).run(UNTIL)
-    assert result.failure is None
+    assert result.failure is None and result.time == UNTIL and result.steps == 50
     return np.transpose(np.asarray(result.state["advection"])[0])
 
 
@@ -179,9 +180,10 @@ def _surface_state(compiled, directory):
     return final
 
 
-def test_weno5_runs_as_master_s_native_weno5(compiled, tmp_path):
-    final = _surface_state(compiled, tmp_path)
-    _bitwise(final, _hand_state(compiled))
+@pytest.mark.parametrize("epsilon", (None, EPSILON), ids=("default", "explicit"))
+def test_weno5_runs_as_master_s_native_weno5(compiled, tmp_path, epsilon):
+    final = _surface_state(compiled["generated"][epsilon], tmp_path)
+    _bitwise(final, _hand_state(compiled, epsilon))
     # the inflow brings g into the corner cell (x_0, y_0), where u0 is about 1e-7
     assert 0.3 * G < final[0, 0] < G
 
@@ -193,4 +195,4 @@ def test_the_uniform_route_reads_the_weno5_regulariser(compiled, tmp_path):
     assert np.isfinite(tuned).all() and np.isfinite(default).all()
     # red before lot 3-eps: the route ran the default whatever the descriptor said
     assert tuned.tobytes() != default.tobytes()
-    _bitwise(tuned, _surface_state(compiled, tmp_path))
+    _bitwise(tuned, _surface_state(compiled["generated"][EPSILON], tmp_path))

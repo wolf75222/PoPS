@@ -281,8 +281,7 @@ class _SystemInstall(_System):
         )
         weno_epsilon = getattr(spatial, "weno_epsilon", None)
         smoothness_epsilon = (
-            float(numerical_defaults_report()["weno"]["epsilon"])
-            if weno_epsilon is None
+            None if weno_epsilon is None
             else native_real(weno_epsilon, where="System.add_equation.weno_epsilon")
         )
         contract = _model_coupling_contract(
@@ -341,6 +340,10 @@ class _SystemInstall(_System):
                     "add_equation: external Riemann brick %r lacks the System v7 "
                     "prepared-package ABI" % spatial.external_flux_id
                 )
+            external_epsilon = (
+                float(numerical_defaults_report()["weno"]["epsilon"])
+                if smoothness_epsilon is None else smoothness_epsilon
+            )
             self._s._register_external_riemann_package(
                 name,
                 spatial.external_flux_library_path,
@@ -358,7 +361,7 @@ class _SystemInstall(_System):
                 evolve,
                 nstride,
                 positivity_floor,
-                smoothness_epsilon,
+                external_epsilon,
             )
             self._pending_native_packages += 1
         else:
