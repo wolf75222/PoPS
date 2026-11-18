@@ -537,11 +537,12 @@ def _chunk_step_body(lines, boundaries):
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None, balance_due_contract: Any = None,
                has_shared_interface_implicit_jacvec: bool = False,
-               provider_plans: Any = None, value_authority: Any = None) -> tuple:
+               provider_plans: Any = None, value_authority: Any = None,
+               exchange_metadata: list[str] | None = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns
-    ``(prelude, body, post_synchronization, authorities, incidence)``:
+    ``(prelude, body, post_synchronization, authorities)``:
 
       - ``prelude``: INSTALL-TIME C++ (before ``ctx.install``) -- persistent scratch fields (held
         via ``std::shared_ptr`` so they outlive the install call and are reused across every step
@@ -874,12 +875,14 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     authorities = tuple(dict.fromkeys(
         var.get(("compiled_program_operator_authorities",), ())))
     # A root table cannot describe repeated or deferred consumption in a nested region.
-    incidence = transfer_rows if (
-        target == "system" and not continuation_closers and not legacy_path_prefix
-        and len(transfer_rows) == len(program._integral_transfers)
-        and not any(value.op == "subcycle" for value in all_ops(program))
-    ) else None
-    return prelude_src, body_src, post_sync_src, authorities, incidence
+    if (exchange_metadata is not None and target == "system" and transfer_rows
+            and not continuation_closers and not legacy_path_prefix
+            and len(transfer_rows) == len(program._integral_transfers)
+            and not any(value.op == "subcycle" for value in all_ops(program))):
+        from .program_integral_transfers import emit_uniform_exchange_incidence
+        exchange_metadata.append(emit_uniform_exchange_incidence(program, transfer_rows))
+    return prelude_src, body_src, post_sync_src, authorities
+
 
 def _emit_post_synchronization_phase(
     program: Any,
