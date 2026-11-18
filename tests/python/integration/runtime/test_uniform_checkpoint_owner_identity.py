@@ -268,8 +268,12 @@ def test_m14_checkpoint_preserves_field_and_integral_authority(
         assert resumed.observe_accepted_state_storage().complete == accepted
         assert (resumed.time(), resumed.macro_step()) == clock
         # The owner can read this CP9, but the still-named exchange declaration has no O3 role.
-        with patch.object(resumed._executor, "_begin_checkpoint_restart",
-                          side_effect=AssertionError("O3 opened a restart transaction")):
+        def unexpected_projection_begin():
+            pytest.fail("O3 opened a restart transaction")
+
+        with monkeypatch.context() as projection_guard:
+            projection_guard.setattr(resumed._executor, "_begin_checkpoint_restart",
+                                     unexpected_projection_begin)
             with pytest.raises(ValueError, match="program_exchange_state"):
                 inspect_uniform_checkpoint(resumed, checkpoint.read_bytes())
         assert resumed.observe_accepted_state_storage().complete == accepted
