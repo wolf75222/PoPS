@@ -2145,7 +2145,6 @@ include/pops/numerics/fv/reconstruction.hpp:282 weno N3 | weno5z_core
 include/pops/numerics/fv/reconstruction.hpp:291 weno N3 | Weno5
 include/pops/numerics/fv/reconstruction.hpp:298 weno N3 | kWenoEpsilon
 include/pops/numerics/fv/reconstruction.hpp:307 weno N3 | weno5z
-include/pops/numerics/fv/reconstruction.hpp:415 weno N3 | kWenoEpsilon
 include/pops/numerics/fv/spatial_discretisation.hpp:26 rusanov N3 | RusanovFlux
 include/pops/numerics/fv/spatial_discretisation.hpp:43 rusanov N3 | RusanovFlux
 include/pops/numerics/fv/spatial_discretisation.hpp:44 minmod N3 | Minmod
