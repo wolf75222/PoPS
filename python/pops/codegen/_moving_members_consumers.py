@@ -33,51 +33,72 @@ def member_blocks(plan: Any) -> tuple[Any, ...]:
     return tuple(block for block in plan.blocks if members_of(block.model) is not None)
 
 
-def moving_state_ids(blocks: Any) -> frozenset[str]:
-    from pops.mesh.moving_configuration import members_of
-
-    return frozenset(identity for block in blocks if members_of(block.model) is not None
-                     for identity in block.state_identities)
-
-
 def lower_moving_member_guards(program: Any, blocks: Any) -> Any:
     """Check physical geometry before evaluating its rate and before publishing the candidate."""
-    from pops.mesh.moving_configuration import MEMBER_COMPONENTS
+    from contextlib import nullcontext
+
+    from pops.mesh.moving_configuration import MEMBER_COMPONENTS, MOTION_SOURCE, members_of
+    from pops.time._evaluation_point import evaluation_partition
     from pops.time._program.control import AdvanceControl
     from pops.time._step.strategy import FixedDt
     from pops.time.references import canonical_handle
 
-    state_ids = moving_state_ids(blocks)
-    if not state_ids or type(program._step_strategy) is not FixedDt:
+    geometries = {
+        identity: members for block in blocks if (members := members_of(block.model)) is not None
+        for identity in block.state_identities
+    }
+    if not geometries or type(program._step_strategy) is not FixedDt:
         return program
     volume_component = MEMBER_COMPONENTS.index("volume")
     trial_sites: list[dict[str, Any]] = []
 
-    def is_geometry(state: Any) -> bool:
-        return state is not None and canonical_handle(state).qualified_id in state_ids
+    def geometry_of(state: Any) -> Any:
+        return None if state is None else geometries.get(canonical_handle(state).qualified_id)
+
+    def admit(out: Any, value: Any, condition: Any, name: str) -> Any:
+        site = {"site": name, "variant": "NotAdmissible", "retry_can_change": False}
+        result = out._trial_guard(name, value, condition, site)
+        trial_sites.append({**site, "guard": "admissibility", "classified": True, "lot": None})
+        return result
 
     def guard(out: Any, value: Any, name: str) -> Any:
         volume = out._new("scalar", "reduce", (value,),
                           {"kind": "min", "comp": volume_component}, None, value.block)
         finite = out.isfinite(out.norm_inf_all(value))
-        site = {"site": name, "variant": "NotAdmissible", "retry_can_change": False}
-        result = out._trial_guard(name, value, finite & (volume > 0), site)
-        trial_sites.append({**site, "guard": "admissibility", "classified": True, "lot": None})
-        return result
+        return admit(out, value, finite & (volume > 0), name)
+
+    def guard_rate_domain(out: Any, node: Any, value: Any, members: Any) -> Any:
+        reads_motion = ((node.op == "source" and node.attrs["source"] == MOTION_SOURCE)
+                        or (node.op == "rhs" and (
+                            node.attrs.get("sources") is None
+                            or MOTION_SOURCE in node.attrs["sources"])))
+        if not reads_motion or members.rate_domain is None:
+            return value
+        partition = node.attrs.get("evaluation_partition")
+        if partition is None and "explicit" in getattr(node.point, "partitions", ()):
+            partition = "explicit"
+        with (nullcontext() if partition is None else evaluation_partition(out, partition)):
+            status = out.transform(value, transform=members.rate_domain)
+        return admit(out, value, out.min(status) > 0, "moving rate domain stage %d" % node.id)
 
     def guard_rate(out: Any, node: Any, inputs: list[Any]) -> list[Any]:
         # Equations evaluate their input as physical geometry. Method arithmetic can also
         # represent increments with the State role, so those edges carry no admissibility check.
         support_only = node.attrs.get("support_only_inputs", ())
         if node.op in {"source", "rhs", "pointwise_expression", "solve_implicit_source"}:
-            return [guard(out, value, "moving geometry stage %d/%d" % (node.id, index))
-                    if (index not in support_only and value.vtype == "state"
-                        and is_geometry(value.state_ref)) else value
-                    for index, value in enumerate(inputs)]
+            checked = []
+            for index, value in enumerate(inputs):
+                members = geometry_of(value.state_ref)
+                if index not in support_only and value.vtype == "state" and members is not None:
+                    value = guard(out, value, "moving geometry stage %d/%d" % (node.id, index))
+                    if index == 0:
+                        value = guard_rate_domain(out, node, value, members)
+                checked.append(value)
+            return checked
         return inputs
 
     def guard_commit(out: Any, state: Any, value: Any) -> Any:
-        if is_geometry(state):
+        if geometry_of(state) is not None:
             return guard(out, value, "moving geometry commit %d" % value.id)
         return value
 

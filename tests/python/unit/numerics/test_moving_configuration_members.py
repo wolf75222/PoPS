@@ -51,12 +51,13 @@ def test_the_node_rate_of_a_map_is_its_time_derivative_at_the_reference_coordina
     assert time_derivative(x*x + 3) is None
 
 
-def test_zero_over_a_proven_nonzero_denominator_has_no_moving_members():
+@pytest.mark.parametrize("power", [False, True])
+def test_zero_over_a_proven_nonzero_denominator_has_no_moving_members(power):
     frame = _frame()
     x = coordinate(frame, frame.axes[0])
     t = time(pops.Program("geometry_defined_zero").clock)
     base = _grid(frame, cells=4)
-    law = x + 0/(1 + t*t)
+    law = x + 0/(1 + (t**2 if power else t*t))
     assert time_derivative(law) is None
     configuration = MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
     assert configuration.at_rest and configuration.layout is base
@@ -83,6 +84,78 @@ def test_stationary_map_can_select_away_a_quotient_pole():
     base = _grid(frame, cells=4)
     law = x + where(x == 0.5, 0, 0/(x - 0.5))
     assert MovingConfiguration(base, node_rate=GeometryEvolution((law,))).layout is base
+    for predicate in ((x != 0.5) & (1/(x - 0.5) > 0),
+                      (x == 0.5) | (1/(x - 0.5) > 0)):
+        law = where(predicate, x, x)
+        assert MovingConfiguration(base, node_rate=GeometryEvolution((law,))).layout is base
+
+
+@pytest.mark.parametrize("style", ["condition", "selected-branch", "unselected-branch", "with-rate"])
+def test_selected_map_paths_require_a_defined_predicate(style):
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_domain_paths").clock)
+    base = _grid(frame, cells=4)
+    masked_pole = where(1/(x - 0.5) > 0, x, x)
+    law = {
+        "condition": masked_pole,
+        "selected-branch": where(x > 0.25, masked_pole, x),
+        "unselected-branch": where(x > 0.75, masked_pole, x),
+        "with-rate": where(x > 0.25, masked_pole, x) + t*x*(1-x),
+    }[style]
+    if style == "unselected-branch":
+        assert MovingConfiguration(base, node_rate=GeometryEvolution((law,))).layout is base
+    else:
+        with pytest.raises(ValueError, match="undefined at a reference node"):
+            MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
+
+
+def test_map_powers_keep_legitimate_zero_and_singular_paths():
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_power_domain").clock)
+    base = _grid(frame, cells=4)
+    assert time_derivative((x + t)**0) is None
+    for exponent in (1, 2, -2):
+        xi = np.array([0.25, 0.5, 0.75])
+        derivative = time_derivative((x + t)**exponent)
+        np.testing.assert_allclose(evaluate(derivative, xi, 0.25),
+                                   exponent*(xi + 0.25)**(exponent - 1))
+    law = x + (1/(x - 0.5))**0
+    with pytest.raises(ValueError, match="undefined at a reference node"):
+        MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
+
+    active = MovingConfiguration(base, node_rate=GeometryEvolution((x + (t - 0.5)**-1,)))
+    with np.errstate(all="ignore"):
+        assert not np.isfinite(active.node_rate_at(active.reference_nodes(),
+                                                   active.reference_nodes(), 0.5)).any()
+
+
+def test_a_rational_map_keeps_its_rate_on_the_selected_domain():
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_selected_rational").clock)
+    base = _grid(frame, cells=4)
+    law = x + where(x > 0.75, 0/(t - 0.5), x*(1-x)*t/(2-t))
+    configuration = MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
+    xi = configuration.reference_nodes()
+    with np.errstate(all="ignore"):
+        np.testing.assert_allclose(
+            configuration.node_rate_at(xi, xi, 0.5)[:-1], 2*xi[:-1]*(1-xi[:-1])/(1.5**2),
+        )
+        assert np.isnan(configuration.node_rate_at(xi, xi, 0.5)[-1])
+    case = pops.Case("geometry_selected_rational")
+    members = configuration.members(case)
+    assert members is not None and members.rate_domain is not None
+
+
+def test_a_clock_switching_map_names_the_unserved_derivative():
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_clock_switch").clock)
+    law = x + where(t < 0.5, t*x*(1-x), 0)
+    with pytest.raises(NotYetElaborated, match="selection reads the clock.*node_rate=w"):
+        MovingConfiguration(_grid(frame, cells=4), node_rate=GeometryEvolution((law,)))
 
 
 def test_differentiation_retains_a_dynamic_quotient_domain():

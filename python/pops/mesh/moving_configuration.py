@@ -37,7 +37,8 @@ import numpy as np
 
 from pops.analytic import CellBounds, PredicateExpr, ScalarExpr
 from pops.analytic import cos as _cos, exp as _exp, log as _log, sin as _sin, sqrt as _sqrt
-from pops.analytic import constant as _constant
+from pops.analytic import constant as _constant, where as _where
+from pops.analytic._model import _time_clocks
 from .moving import GeometryEvolution
 
 MEMBER_COMPONENTS = ("x_left", "x_right", "volume")
@@ -166,6 +167,8 @@ def time_derivative(expr: Any) -> Any:
         a, b = arguments
         return _add(_scale(b, time_derivative(a)), _scale(a, time_derivative(b)))
     if op == "div":
+        if _is_zero(expr):
+            return None
         a, b = arguments
         da, db = time_derivative(a), time_derivative(b)
         numerator = da if db is None else _sub(_scale(b, da), _scale(a, db))
@@ -174,10 +177,24 @@ def time_derivative(expr: Any) -> Any:
         return numerator/(b if db is None else b*b)
     if op == "pow":
         a, b = arguments
-        if b.time_clocks():
-            _refuse("the time derivative of a power whose exponent reads the clock",
+        exponent = b._literal
+        if exponent == 0.0:
+            return None
+        derivative = time_derivative(a)
+        if exponent == 1.0:
+            return derivative
+        return _scale(exponent*a**(exponent - 1.0), derivative)
+    if op == "where":
+        predicate, left, right = arguments
+        if _time_clocks(predicate):
+            _refuse("the time derivative of a coordinate map whose selection reads the clock",
                     "a later lot of G03; state the node rate, node_rate=w(x, t)")
-        return _scale(b*a**(b - 1), time_derivative(a))
+        left_rate, right_rate = time_derivative(left), time_derivative(right)
+        if left_rate is None and right_rate is None:
+            return None
+        zero = _constant(0.0)
+        return _where(predicate, zero if left_rate is None else left_rate,
+                      zero if right_rate is None else right_rate)
     derivative = time_derivative(arguments[0]) if len(arguments) == 1 else None
     if op == "sin":
         return _scale(_cos(arguments[0]), derivative)
@@ -209,30 +226,50 @@ _NUMPY = {"sin": np.sin, "cos": np.cos, "exp": np.exp, "log": np.log, "sqrt": np
           "maximum": np.fmax, "atan2": np.arctan2, "hypot": np.hypot,
           "erf": np.vectorize(math.erf, otypes=[float]),
           "erfc": np.vectorize(math.erfc, otypes=[float]),
-          "where": np.where, "eq": np.equal, "ne": np.not_equal, "lt": np.less,
+          "eq": np.equal, "ne": np.not_equal, "lt": np.less,
           "le": np.less_equal, "gt": np.greater, "ge": np.greater_equal,
-          "and": np.logical_and, "or": np.logical_or, "not": np.logical_not,
+          "not": np.logical_not,
           "between": lambda value, lower, upper: np.logical_and(lower <= value, value <= upper)}
 
 
-def _evaluate(expr: ScalarExpr, coordinate: Any, t: float) -> Any:
-    def value(node: Any) -> Any:
+def _evaluate(expr: ScalarExpr | PredicateExpr, coordinates: Any, t: float) -> Any:
+    def choose(condition: Any, yes: Any, no: Any, axes: Any, *, dtype: Any) -> Any:
+        if np.ndim(condition) == 0:
+            return (yes if condition else no)(axes)
+        mask = np.broadcast_to(condition, axes[0].shape)
+        result = np.empty(mask.shape, dtype=dtype)
+        for selected, branch in ((mask, yes), (~mask, no)):
+            if selected.any():
+                result[selected] = branch(tuple(axis[selected] for axis in axes))
+        return result
+
+    def value(node: Any, axes: Any) -> Any:
         op = node._op
         if op == "constant":
             return node._literal
         if op == "coordinate":
-            return coordinate(node._coordinate.axis.index)
+            return axes[node._coordinate.axis.index]
         if op == "time":
             return float(t)
+        args = node._arguments
+        if op == "where":
+            return choose(value(args[0], axes), lambda scoped: value(args[1], scoped),
+                          lambda scoped: value(args[2], scoped), axes, dtype=float)
+        if op == "and":
+            return choose(value(args[0], axes), lambda scoped: value(args[1], scoped),
+                          lambda _: False, axes, dtype=bool)
+        if op == "or":
+            return choose(value(args[0], axes), lambda _: True,
+                          lambda scoped: value(args[1], scoped), axes, dtype=bool)
         if op not in _NUMPY:
             raise NotImplementedError("no NumPy reading of the analytic operation %r" % op)
-        return _NUMPY[op](*(value(item) for item in node._arguments))
-    return value(expr)
+        return _NUMPY[op](*(value(item, axes) for item in args))
+    return value(expr, np.broadcast_arrays(*coordinates))
 
 
 def evaluate(expr: ScalarExpr, x: Any, t: float = 0.0) -> np.ndarray:
     """A NumPy reading of a node rate or a map at coordinates ``x`` and time ``t`` (oracles only)."""
-    return np.broadcast_to(np.asarray(_evaluate(expr, lambda _: np.asarray(x, dtype=float), t),
+    return np.broadcast_to(np.asarray(_evaluate(expr, (np.asarray(x, dtype=float),), t),
                                       dtype=float), np.shape(x)).copy()
 
 
@@ -249,8 +286,89 @@ def _check_leaves(expr: ScalarExpr, frame: Any, what: str) -> None:
         raise ValueError("the %s reads more than one clock" % what)
 
 
+def _finite(expr: ScalarExpr) -> PredicateExpr:
+    # IEEE self-subtraction is exactly zero for every finite value and NaN for a nonfinite
+    # operand. This uses the prepared Real precision, including builds with binary32 Real.
+    return expr - expr == 0
+
+
+def _domain_predicate(law: ScalarExpr, *, reads_clock: bool) -> PredicateExpr | None:
+    """A typed check of the reached partial expressions and comparison operands of a map."""
+    zero, one = _constant(0.0), _constant(1.0)
+
+    def combine(checks: Any) -> PredicateExpr | None:
+        result = None
+        for check in checks:
+            if check is not None:
+                result = check if result is None else result & check
+        return result
+
+    def relevant(node: ScalarExpr | PredicateExpr) -> bool:
+        return bool(_time_clocks(node)) == reads_clock
+
+    def condition_value(condition: PredicateExpr | None) -> ScalarExpr:
+        return one if condition is None else _where(condition, one, zero)
+
+    def selected_checks(condition: PredicateExpr, left: Any, right: Any) -> PredicateExpr | None:
+        checked_condition = visit(condition)
+        if not reads_clock and _time_clocks(condition):
+            # A static pass cannot know which path this condition will select.
+            return checked_condition
+        left_check = None if left is None else visit(left)
+        right_check = None if right is None else visit(right)
+        if left_check is None and right_check is None:
+            return checked_condition
+        selected = _where(condition, condition_value(left_check), condition_value(right_check))
+        return combine((checked_condition, selected > 0))
+
+    def visit(node: ScalarExpr | PredicateExpr) -> PredicateExpr | None:
+        op, args = node._op, node._arguments
+        if op == "where":
+            condition, left, right = cast(tuple[PredicateExpr, ScalarExpr, ScalarExpr], args)
+            return selected_checks(condition, left, right)
+        if op in {"and", "or"}:
+            condition, tail = cast(tuple[PredicateExpr, PredicateExpr], args)
+            return selected_checks(condition, tail if op == "and" else None,
+                                   tail if op == "or" else None)
+        checks = [visit(item) for item in args]
+        if op == "div" and _is_zero(args[1]):
+            checks.append(zero > one)
+        elif isinstance(node, ScalarExpr) and relevant(node) \
+                and op in {"div", "sqrt", "log", "pow"} and not _defined(node):
+            operands = cast(tuple[ScalarExpr, ...], args)
+            checks.extend(_finite(operand) for operand in operands)
+            if op == "div":
+                checks.append(operands[1] != 0)
+            elif op == "sqrt":
+                checks.append(operands[0] >= 0)
+            elif op == "log":
+                checks.append(operands[0] > 0)
+            elif op == "pow":
+                base, exponent = operands
+                n = cast(float, exponent._literal)
+                if n < 0:
+                    checks.append(base != 0 if n.is_integer() else base > 0)
+                elif not n.is_integer():
+                    checks.append(base >= 0)
+            checks.append(_finite(node))
+        elif op in {"eq", "ne", "lt", "le", "gt", "ge", "between"}:
+            checks.extend(_finite(operand) for operand in cast(tuple[ScalarExpr, ...], args)
+                          if operand._arguments and relevant(operand))
+        return combine(checks)
+
+    return visit(law)
+
+
+def _selects_branch(expr: ScalarExpr | PredicateExpr) -> bool:
+    return expr._op == "where" or any(_selects_branch(item) for item in expr._arguments)
+
+
 def _validate_partial_map(law: ScalarExpr, frame: Any, cells: tuple[int, ...]) -> None:
-    """Check static domain restrictions that differentiation would otherwise erase."""
+    """Check the reached static domain restrictions at the exact reference nodes."""
+    predicate = _domain_predicate(law, reads_clock=False)
+    if predicate is None:
+        return
+
     def coordinate(axis: int) -> Any:
         shape = [1]*len(cells)
         shape[axis] = cells[axis] + 1
@@ -258,22 +376,10 @@ def _validate_partial_map(law: ScalarExpr, frame: Any, cells: tuple[int, ...]) -
         spacing = (upper - lower)*(1.0/float(cells[axis]))
         return lower + np.arange(cells[axis] + 1, dtype=float).reshape(shape)*spacing
 
-    pending = [law]
-    while pending:
-        node = pending.pop()
-        if _defined(node):
-            continue
-        if node._op == "div" and _is_zero(node._arguments[1]):
-            raise ValueError("coordinate map has a zero denominator")
-        if not node.time_clocks():
-            with np.errstate(all="ignore"):
-                if not np.isfinite(_evaluate(node, coordinate, 0.0)).all():
-                    raise ValueError("coordinate map is undefined at a reference node")
-        if node._op != "where":
-            # A time-dependent selection is already refused by the derivative rule.
-            # A static selection above checks only selected values, so do not check its branches
-            # without the selection.
-            pending.extend(cast(tuple[ScalarExpr, ...], node._arguments))
+    with np.errstate(all="ignore"):
+        nodes = tuple(coordinate(axis) for axis in range(len(cells)))
+        if not np.asarray(_evaluate(predicate, nodes, 0.0), dtype=bool).all():
+            raise ValueError("coordinate map is undefined at a reference node")
 
 
 def _at_rest_value(node_rate: Any) -> bool:
@@ -288,8 +394,10 @@ def _at_rest_value(node_rate: Any) -> bool:
     return False
 
 
-def _rate_form(node_rate: Any, frame: Any) -> tuple[str, ScalarExpr | None]:
-    """(form, w): ``"expression"`` with w(x, t), or ``"map"`` with ∂ₜΦ(ξ, t); w is ``None`` at rest."""
+def _rate_form(
+    node_rate: Any, frame: Any,
+) -> tuple[str, ScalarExpr | None, PredicateExpr | None]:
+    """The rate form, its expression and the remaining stage-domain obligation."""
     from pops._ir.expr import Expr
     if isinstance(node_rate, (int, float)) and not isinstance(node_rate, bool):
         node_rate = _constant(float(node_rate))
@@ -298,14 +406,18 @@ def _rate_form(node_rate: Any, frame: Any) -> tuple[str, ScalarExpr | None]:
             _refuse("a coordinate map of rank %d" % len(node_rate.coordinate_map), "G03 lot M2")
         (law,) = node_rate.coordinate_map
         derivative = time_derivative(law)
-        if not _defined(law):
-            # Preserve the original domain through differentiation and zero folding. A partial
-            # map evaluated outside its domain yields a nonfinite rate and the trial is rejected.
-            derivative = _add(derivative, _constant(0.0)*law)
-        return "map", None if _is_zero(derivative) else derivative
+        prior_domain = _domain_predicate(law, reads_clock=True)
+        zero = _is_zero(derivative)
+        if zero and prior_domain is None:
+            return "map", None, None
+        rate = _constant(0.0) if zero else derivative
+        rate_domain = _domain_predicate(rate, reads_clock=True)
+        domain = (prior_domain & rate_domain if prior_domain is not None and rate_domain is not None
+                  else prior_domain if rate_domain is None else rate_domain)
+        return "map", rate, domain
     if type(node_rate) is ScalarExpr:
         _check_leaves(node_rate, frame, "node_rate")
-        return "expression", None if _is_zero(node_rate) else node_rate
+        return "expression", None if _is_zero(node_rate) else node_rate, None
     if isinstance(node_rate, Expr):
         from pops._ir.visitors import _children
         from pops._ir.expr import Var
@@ -363,6 +475,7 @@ class MovingConfiguration:
     def __init__(self, base: Any, *, node_rate: Any) -> None:
         self.base = base
         self.declared: MovingMembers | None = None
+        self._rate_domain: PredicateExpr | None = None
         self.frame, cells, self._map, self._grid = _base_frame_and_cells(base)
         if type(node_rate) is GeometryEvolution:
             for law in node_rate.coordinate_map:
@@ -375,7 +488,7 @@ class MovingConfiguration:
             return
         _require_motion_served(self._grid, cells)
         self.cells = cells[0]
-        self.form, self.node_rate = _rate_form(node_rate, self.frame)
+        self.form, self.node_rate, self._rate_domain = _rate_form(node_rate, self.frame)
 
     @property
     def at_rest(self) -> bool:
@@ -408,6 +521,13 @@ class MovingConfiguration:
         """w at the nodes, by the NumPy reading of the node rate (oracles only)."""
         if self.node_rate is None:
             return np.zeros(np.shape(positions))
+        if self._rate_domain is not None:
+            nodes = np.asarray(reference, dtype=float)
+            valid = np.broadcast_to(_evaluate(self._rate_domain, (nodes,), t), nodes.shape)
+            result = np.full(nodes.shape, np.nan)
+            if np.any(valid):
+                result[valid] = evaluate(self.node_rate, nodes[valid], t)
+            return result
         return evaluate(self.node_rate, positions if self.form == "expression" else reference, t)
 
     def members(self, case: Any, name: str = "configuration") -> MovingMembers | None:
@@ -440,6 +560,7 @@ class MovingMembers:
         if node_rate is None:
             raise ValueError("a configuration at rest has no members (K13)")
         providers = []
+        self.rate_domain = None
         if configuration.form == "expression":
             clocks = node_rate.time_clocks()
             clock = (model.auxiliary("stage_clock", frame=frame.canonical_id, unit="1")
@@ -453,12 +574,37 @@ class MovingMembers:
         else:
             bounds = CellBounds(frame)
             axis = frame.axes[0]
-            left = model.auxiliary("rate_left", frame=frame.canonical_id, unit="1")
-            right = model.auxiliary("rate_right", frame=frame.canonical_id, unit="1")
-            for label, bound in (("rate_left", bounds.lower(axis)),
-                                 ("rate_right", bounds.upper(axis))):
-                providers.append((label, _rebuild(
-                    node_rate, lambda node, bound=bound: bound if node._op == "coordinate" else node)))
+            domain = configuration._rate_domain
+            faces = (bounds.lower(axis), bounds.upper(axis))
+            if domain is None and not _selects_branch(node_rate):
+                left = model.auxiliary("rate_left", frame=frame.canonical_id, unit="1")
+                right = model.auxiliary("rate_right", frame=frame.canonical_id, unit="1")
+                for label, bound in zip(("rate_left", "rate_right"), faces, strict=True):
+                    def at_face(node: Any, bound: Any = bound) -> Any:
+                        return bound if node._op == "coordinate" else node
+
+                    providers.append((label, _rebuild(node_rate, at_face)))
+            else:
+                # The providers supply finite input data. The common lazy expression
+                # emitter evaluates the selected path of each predicate and rate.
+                from pops._ir.control_expr import Where
+                from pops._ir.expr import BooleanAnd
+
+                references = tuple(model.auxiliary(label, frame=frame.canonical_id, unit="1")
+                                   for label in ("reference_left", "reference_right"))
+                providers.extend(zip(("reference_left", "reference_right"), faces, strict=True))
+                clocks = node_rate.time_clocks() or (() if domain is None else _time_clocks(domain))
+                clock = None
+                if clocks:
+                    clock = model.auxiliary("stage_clock", frame=frame.canonical_id, unit="1")
+                    providers.append(("stage_clock", analytic_time(clocks[0])))
+                left, right = (_board(node_rate, reference, clock, map_domain=True)
+                               for reference in references)
+                if domain is not None:
+                    valid = BooleanAnd(*(_board(domain, reference, clock, map_domain=True)
+                                         for reference in references))
+                    self.rate_domain = model.local_transform(
+                        "motion_domain", (Where(valid, 1, 0), 0, 0), on=state)
         model.source(MOTION_SOURCE, on=state, value=(left, right, right - left))
         for label, expression in providers:
             model.module.aux_provider(AnalyticAux(
@@ -477,11 +623,12 @@ class MovingMembers:
         return {self.block[self.state]: self.configuration.initial_members()}
 
 
-def _board(expr: Any, position: Any, clock: Any) -> Any:
+def _board(expr: Any, position: Any, clock: Any, *, map_domain: bool = False) -> Any:
     """The board expression of an analytic node rate, its coordinate read at ``position`` and its
     clock at the stage-clock auxiliary."""
     from pops import math as pm
-    from pops._ir.expr import Const
+    from pops._ir.control_expr import Where
+    from pops._ir.expr import BooleanAnd, BooleanNot, BooleanOr, Compare, Const
 
     unary = {"sin": pm.sin, "cos": pm.cos, "exp": pm.exp, "log": pm.log, "sqrt": pm.sqrt}
 
@@ -493,6 +640,19 @@ def _board(expr: Any, position: Any, clock: Any) -> Any:
             return position
         if op == "time":
             return clock
+        if map_domain:
+            if op == "where":
+                return Where(*(lower(item) for item in arguments))
+            if op in {"eq", "ne", "lt", "le", "gt", "ge"}:
+                return Compare(op, *(lower(item) for item in arguments))
+            if op in {"and", "or", "not"}:
+                return {"and": BooleanAnd, "or": BooleanOr, "not": BooleanNot}[op](
+                    *(lower(item) for item in arguments))
+            if op == "between":
+                value, low, high = (lower(item) for item in arguments)
+                return BooleanAnd(Compare("le", low, value), Compare("le", value, high))
+            if op == "abs":
+                return abs(lower(arguments[0]))
         if op in unary:
             return unary[op](lower(arguments[0]))
         if op == "neg":

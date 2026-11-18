@@ -288,3 +288,73 @@ def test_moving_geometry_rejects_inversion_before_stage_use_and_publication(
             assert pre_rollback_times == [dt, 0.0]
         assert before == after == tuple(array.tobytes() for array in values.values())
         assert runtime.time() == 0.0 and runtime.macro_step() == 0
+
+
+def test_map_domain_is_checked_before_motion_at_the_reached_stage(
+        isolated_native_cache, native_cxx, kokkos_root):
+    import pops
+    from pops._bootstrap import StepAttemptRejected
+    from pops.analytic import coordinate, time, where
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian1D
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, GeometryEvolution
+    from pops.mesh.moving_configuration import MovingConfiguration
+    from pops.time import FixedDt
+    from tests.python.support.native_execution_context import artifact_execution_context
+    from tests.python.support.public_native_profile import compile_profile_plan_once, native_profile
+
+    del isolated_native_cache, native_cxx, kokkos_root
+    scope = "moving rational map with guarded selection"
+    _, world = native_profile(dimension=1, scope=scope)
+
+    def build():
+        case = pops.Case("guarded_rational_map")
+        program = pops.Program("guarded_rational_map")
+        frame = CartesianDomain("guarded_rational_map", (0.0,), (1.0,)).frame(Cartesian1D())
+        layout = Uniform(CartesianGrid(frame=frame, cells=(4,)))
+        x, t = coordinate(frame, frame.axes[0]), time(program.clock)
+        law = (x + 0.125*x*(1-x)*t/(2-t)
+               + where(x > 1, 0/(t - 0.25), 0)
+               + where(x > 0.75, 0/(t - 0.5), 0))
+        config = MovingConfiguration(layout, node_rate=GeometryEvolution((law,)))
+        members = config.members(case)
+        state = program.state(members.block[members.state])
+        first = members.rate(state.n)
+        stage = program.stage("heun", c=1)
+        trial = program.value("trial", state.n + program.dt*first, at=stage)
+        second = members.rate(trial)
+        candidate = state.n + program.dt*(0.5*first + 0.5*second)
+        program.commit(state.next, program.value("candidate", candidate, at=state.next.point))
+        program.step_strategy(FixedDt(0.25))
+        case.program(program)
+        return pops.resolve(pops.validate(case), layout=layout), members.initial_values(), config
+
+    plan, initial, config = collective_call(world, build)
+    artifact = compile_profile_plan_once(world, plan, route=scope, compile_artifact=pops.compile)
+    runtime = collective_call(world, lambda: pops.bind(
+        artifact, initial_values=initial,
+        resources={"execution_context": artifact_execution_context(artifact)}))
+
+    # The pole at t=1/4 lies outside the selected branch at every reference node.
+    report = collective_call(world, lambda: pops.run(runtime, t_end=0.25, max_steps=1, console=False))
+    accepted = collective_call(world, lambda: np.asarray(runtime.state_global("configuration")).copy())
+    with collective_check(world):
+        assert report.accepted_steps == 1
+        xi = config.reference_nodes()
+        left, right, _ = accepted
+        increment = 0.25*0.5*(0.25*xi*(1-xi)/2**2 + 0.25*xi*(1-xi)/(2-0.25)**2)
+        np.testing.assert_allclose(np.concatenate((left, right[-1:])), xi + increment, rtol=0, atol=4*EPS)
+
+    def reject():
+        with pytest.raises(StepAttemptRejected) as failed:
+            pops.run(runtime, t_end=0.5, max_steps=1, console=False)
+        return failed.value.phase, str(failed.value)
+
+    phase, failure = collective_call(world, reject)
+    restored = collective_call(world, lambda: np.asarray(runtime.state_global("configuration")).copy())
+    with collective_check(world):
+        assert phase == "trial_failure"
+        assert "moving rate domain stage" in failure and "NotAdmissible" in failure
+        assert restored.tobytes() == accepted.tobytes()
+        assert runtime.time() == 0.25 and runtime.macro_step() == 1
