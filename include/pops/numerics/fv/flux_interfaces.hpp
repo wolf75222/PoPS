@@ -941,8 +941,8 @@ POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux_at(
     const typename Model::State& right_state, const RightStorage& right_providers,
     const Index<Dim>& right_index, const FaceContext& face) {
   if constexpr (model_uses_flux_coordinates<Model> && !(requires {
-                  LeftStorage::certified_face_point;
-                  RightStorage::certified_face_point;
+                  requires LeftStorage::certified_face_point;
+                  requires RightStorage::certified_face_point;
                 })) {
     return FluxEvaluation<typename Model::State>::reject(
         RiemannFailureCause::kUserInvalidStability);
