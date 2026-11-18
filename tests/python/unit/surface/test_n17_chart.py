@@ -24,6 +24,7 @@ every test below fails there (CF15).
 from __future__ import annotations
 
 import types
+from fractions import Fraction
 
 import numpy
 import pytest
@@ -380,6 +381,46 @@ def test_an_array_published_on_another_support_is_not_a_datum_of_the_annulus():
                 "periodic[0.0, 6.283185307179586) x %s" % chart) in message
     (representation,) = on_annulus.elaborated.representations.values()
     _run.require_published_under(_published_on(on_annulus), representation, "pops.bind")
+
+
+def test_chart_provenance_distinguishes_a_logical_coordinate_from_a_named_constant():
+    box = surface.Box(r=(1, 2), pi=(0, 1))
+    chart = box.chart(x=box.r + box.pi + box.pi, y=box.pi)
+    shifted = box.chart(x=box.r + box.pi + pi, y=box.pi)
+    assert repr(chart) == repr(shifted)
+    original, other = _case(chart), _case(shifted)
+    (u0,) = other.model.data_fields
+    array = _published_on(original)
+    with pytest.raises(SupportMismatch, match="equal shapes do not make supports interchangeable"):
+        surface.bind(_artifact(other), data={u0: array})
+
+    renamed_box = surface.Box(s=(1, 2), t=(0, 1))
+    renamed = _case(renamed_box.chart(x=renamed_box.s + renamed_box.t + renamed_box.t,
+                                    y=renamed_box.t))
+    (expected,) = renamed.elaborated.representations.values()
+    _run.require_published_under(array, expected, "pops.bind")
+    report, _ = _reading(renamed)
+    choices = {choice.name: choice.value for choice in _layout_row(report).choices}
+    assert choices["chart"] == "x = s + t + t, y = t"
+
+
+def test_chart_provenance_keeps_expression_structure_and_logical_domain():
+    from pops.surface._elaborate import elaborated_representation
+
+    box = surface.Box(r=(1, 2), s=(0, 1))
+    original = box.chart(x=(box.r + box.s) + 2, y=box.s)
+    reordered = box.chart(x=box.r + (box.s + 2), y=box.s)
+    rational = box.chart(x=(box.r + box.s) + Fraction(2, 1), y=box.s)
+    reversed_frame = box.chart(x=box.s, y=(box.r + box.s) + 2)
+    periodic = surface.Box(r=(1, 2), s=surface.Periodic(0, 1))
+    periodic_chart = periodic.chart(x=(periodic.r + periodic.s) + 2, y=periodic.s)
+    moved = surface.Box(r=(2, 3), s=(0, 1))
+    moved_chart = moved.chart(x=(moved.r + moved.s) + 2, y=moved.s)
+
+    assert repr(original) == repr(reordered) == repr(rational)
+    reference = elaborated_representation(None, original)
+    for chart in (reordered, rational, reversed_frame, periodic_chart, moved_chart):
+        assert elaborated_representation(None, chart) != reference
 
 
 def test_the_annulus_bounds_and_cells_are_logical():

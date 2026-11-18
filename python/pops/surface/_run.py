@@ -411,17 +411,23 @@ def require_published_under(array: Any, expected: Any, where: str) -> None:
     if written is None or written == expected:
         return
     if written.space.support != expected.space.support:
+        written_support, expected_support = _support_text(written), _support_text(expected)
+        if written_support == expected_support:
+            written_support += " (identity %s)" % written.identity
+            expected_support += " (identity %s)" % expected.identity
         raise SupportMismatch(
             "%s gives an array that a run published on the support %s, as the datum of a "
             "quantity on the support %s; equal shapes do not make supports interchangeable"
-            % (where, _support_text(written), _support_text(expected)),
+            % (where, written_support, expected_support),
             write="the array on the support of the datum, or a pops.Map between the supports")
     expected.require_same(written, where=where)
 
 
 def _support_text(representation: Any) -> str:
-    return " x ".join("%s in %s" % (name, domain)
-                      for name, domain in representation.space.support.coordinates)
+    coordinates = representation.support_presentation
+    if coordinates is None:
+        coordinates = representation.space.support.coordinates
+    return " x ".join("%s in %s" % (name, domain) for name, domain in coordinates)
 
 
 @surface_entry

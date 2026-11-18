@@ -25,8 +25,11 @@ tagged piece wait for the supports of G03 and G09.
 from __future__ import annotations
 
 import math as _math
+from decimal import Decimal
 from fractions import Fraction
 from typing import Any
+
+from pops.identity.scalar import scalar_literal
 
 from ._expr import Arith, Call, Expr, is_number, text
 from ._refusal import NotYetElaborated, ReservedName, SupportMismatch, surface_entry, user_site
@@ -445,7 +448,7 @@ def _chart(box: Box, frame: dict) -> tuple:
             "a chart whose frame axes are named %s; this lot elaborates the frame axes x and y "
             "of the Cartesian frames, in that order (DN26)" % ", ".join(names), _G03)
     for name, value in frame.items():
-        _chart_reads(value, box, "the component %s of the chart of %r" % (name, box))
+        chart_expression_data(value, box, "the component %s of the chart of %r" % (name, box))
     components = tuple(frame.values())
     reads = [_folded(component)[1] for component in components]
     for name, read in zip(names, reads, strict=True):
@@ -471,35 +474,37 @@ def _chart(box: Box, frame: dict) -> tuple:
     return names, components, _degenerate_pieces(box, components)
 
 
-def _chart_reads(value: Any, box: Box, where: str) -> None:
-    """A chart reads the coordinates of its box, numbers, pi and the words of a coordinate map."""
+def chart_expression_data(value: Any, box: Box, where: str) -> tuple[Any, ...]:
+    """Authenticate a chart expression and record its ordered structure."""
     if is_number(value):
-        return
+        # Other Number types use their binary64 value, as in the analytic map.
+        literal = value if type(value) in (int, Fraction, Decimal, float) else float(value)
+        return "literal", scalar_literal(literal).to_data()
     if isinstance(value, MathConstant):
         if not _math.isfinite(value.value):
             raise SupportMismatch("%s reads %s" % (where, value.name),
                                   write="an expression of the coordinates, numbers and pi")
-        return
+        return "math_constant", scalar_literal(float(value.value)).to_data()
     if isinstance(value, Coordinate):
-        if value.support is not box:
+        index = value.index
+        if (value.support is not box or type(index) is not int
+                or not 0 <= index < box.rank or box._coordinates[index] is not value):
             raise SupportMismatch(
                 "%s reads the coordinate %s of %r; a chart reads the coordinates of %r, numbers "
                 "and pi (D0b)" % (where, value.name, value.support, box),
                 write="an expression of %s" % ", ".join("Ω.%s" % name for name in box._names))
-        return
+        return "axis", index
     if isinstance(value, Arith):
         if value.op == "**" and not is_number(value.args[1]):
             raise NotYetElaborated("%s, a power whose exponent is not a number, in %s"
                                    % (text(value), where), _N11)
-        for argument in value.args:
-            _chart_reads(argument, box, where)
-        return
+        return "arithmetic", value.op, tuple(
+            chart_expression_data(argument, box, where) for argument in value.args)
     if isinstance(value, Call):
         if value.word not in MAP_WORDS:
             raise NotYetElaborated("%s in %s" % (text(value), where), _N11)
-        for argument in value.args:
-            _chart_reads(argument, box, where)
-        return
+        return "call", value.word, tuple(
+            chart_expression_data(argument, box, where) for argument in value.args)
     raise SupportMismatch(
         "%s reads %s; a chart reads the coordinates of %r, numbers and pi (D0b)"
         % (where, text(value), box),

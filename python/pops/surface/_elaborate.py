@@ -27,6 +27,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from pops import math as _pm
+from pops._structural_data import canonical_json
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian1D, Cartesian2D, Cartesian3D
 from pops.initial import InitialCondition
@@ -44,7 +45,7 @@ from pops.time._program import relations as _relations
 from ._expr import Arith, Call, Expr, Predicate, is_number, text
 from ._geometry import (
     CHART_GHOSTS, CHART_POINT_READS, CHART_RECONSTRUCTIONS, FRAME_AXES, MAP_WORDS, Charted,
-    Coordinate, FrameCoordinate, LogicalCoordinate, MathConstant, Support,
+    Coordinate, FrameCoordinate, LogicalCoordinate, MathConstant, Support, chart_expression_data,
 )
 from ._method import MethodValue, _Trace, specialize, translate
 from ._model import (
@@ -168,12 +169,23 @@ def elaborated_representation(quantity: Any, support: Support) -> Any:
     coordinates = tuple(
         (name, ("periodic[%r, %r)" if periodic else "[%r, %r]") % (float(lower), float(upper)))
         for name, (lower, upper, periodic) in zip(support._names, support.bounds(), strict=True))
+    presentation = None
     if isinstance(support, Charted):
-        # the image of the chart: equal logical boxes under two charts are two supports (D0b)
-        coordinates += tuple((name, "chart %s" % text(component)) for name, component
-                             in zip(support._frame_names, support._components, strict=True))
+        components = tuple(zip(support._frame_names, support._components, strict=True))
+        presentation = coordinates + tuple((name, "chart %s" % text(component))
+                                            for name, component in components)
+        logical = tuple(
+            ("logical_axis_%d" % index, canonical_json((float(lower).hex(), float(upper).hex(),
+                                                       periodic)))
+            for index, (lower, upper, periodic) in enumerate(support.bounds()))
+        image = tuple(
+            ("frame_axis_%d" % index, canonical_json(chart_expression_data(
+                component, support._box, "the component %s of the chart of %r" % (name, support._box))))
+            for index, (name, component) in enumerate(components))
+        coordinates = logical + image
     space = Space("scalar", components=("value",), support=PhysicalSupport(coordinates))
-    return ElaboratedRepresentation(space, cell_average(support.rank))
+    return ElaboratedRepresentation(space, cell_average(support.rank),
+                                    support_presentation=presentation)
 
 
 # b6 selects a term of a balance whose weight is 1 or -1 only (the partitions of a physical
