@@ -473,7 +473,7 @@ paths = [
 
 [[mechanism]]
 id = "durable-uniform-checkpoint-owner-roles"
-issue = "ROM-113"
+issue = "ROM-93"
 rule = "CN11"
 pre_freeze = true
 what = """
@@ -505,7 +505,7 @@ bitwise accepted and next states on same-owner restart. The actual transport sto
 change from (1,0) to (0,1) on both ranks. M14 binds a Program consumer after seal and retains its
 four-window FV-Poisson oracle. The MPI publication control of 828873 retains the named format.
 Cold and warm runs with different call and declaration orders show equal generated source and
-inner images for each fixed Plan. The stock and distributed receipts are recorded for ROM-113."""
+inner images for each fixed Plan. The stock and distributed receipts are recorded for ROM-93."""
 refusal_set = """
 The Uniform preflight refuses invalid carrier positions and shapes, mixed named and positional
 families, and a positional auxiliary contract that differs from the final sealed registry. The
