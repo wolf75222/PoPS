@@ -102,6 +102,32 @@ class LocalControl:
                             % (self.node, self.parts))
 
 
+@dataclass(frozen=True, slots=True)
+class ReadOccurrence:
+    """One read at its child-index path through region bodies and local control."""
+
+    path: tuple[int, ...]
+    read: Read | ProductRead | FibreFoldRead
+
+
+def _walk_reads(body, *, paths=False):
+    pending = [((), body)]
+    while pending:
+        path, item = pending.pop()
+        if type(item) in (Read, ProductRead, FibreFoldRead):
+            yield path, item
+            continue
+        if type(item) is LocalControl:
+            item = item.parts
+        if type(item) not in (tuple, list):
+            raise TypeError("a region body holds Read records and local control, got %r" % (item,))
+        if paths:
+            pending.extend((path + (index,), item[index])
+                           for index in range(len(item) - 1, -1, -1))
+        else:
+            pending.extend(((), child) for child in reversed(item))
+
+
 def region_reads(body):
     """The reads of ``body``, a region body with local control (G02 §5.4, IR4, B4).
 
@@ -109,25 +135,17 @@ def region_reads(body):
     and ``iterate``, each read once: a read in an arm that does not run counts, and a loop body
     counts once whatever its trip count. The reads come in the order of a left-to-right walk,
     each the first time it is met, so the first blocking map of a classification is stable.
-    A typed product read preserves the occurrence that owns its domain proof or fold law.
+    Product analysis uses the same walk through the body, keeping the path of each occurrence.
     """
-    found, seen, pending = [], set(), [body]
-    while pending:
-        item = pending.pop()
-        if type(item) in (Read, ProductRead, FibreFoldRead):
-            try:
-                new = item not in seen
-                seen.add(item)
-            except TypeError:  # a label that does not hash: compare by equality
-                new = item not in found
-            if new:
-                found.append(item)
-        elif type(item) is LocalControl:
-            pending.extend(reversed(item.parts))
-        elif type(item) in (tuple, list):
-            pending.extend(reversed(item))
-        else:
-            raise TypeError("a region body holds Read records and local control, got %r" % (item,))
+    found, seen = [], set()
+    for _, item in _walk_reads(body):
+        try:
+            new = item not in seen
+            seen.add(item)
+        except TypeError:  # a label that does not hash: compare by equality
+            new = item not in found
+        if new:
+            found.append(item)
     return tuple(found)
 
 
@@ -162,11 +180,14 @@ class Region:
             raise ValueError("a region has a rank >= 1, got %r" % (self.rank,))
         if self.domain.axis is not None and self.domain.axis >= self.rank:
             raise ValueError("%r is not an entity of a rank-%d lattice" % (self.domain, self.rank))
-        region_reads(self.reads)
+        reads = region_reads(self.reads)
         for pair in self.targets + self.productions:
             if type(pair) is not tuple or len(pair) != 2 or not isinstance(pair[0], IndexMap):
                 raise TypeError("a scatter target is a (map, weight) pair, got %r" % (pair,))
-        for map_ in _maps(self):
+        # Typed product reads check the domain against their descriptors while deriving
+        # their footprint, without walking a deeply nested map's normalized kind cache.
+        ordinary_maps = tuple(read.map for read in reads if type(read) is Read)
+        for map_ in ordinary_maps + tuple(m for m, _ in self.targets + self.productions):
             if map_.source not in (None, self.domain):
                 raise TypeError("region %r maps over %r entities, but %r reads %r entities"
                                 % (self.name, self.domain, map_, map_.source))
@@ -215,9 +236,9 @@ def _product_footprint(region, read, extents):
 
 
 def product_read_footprints(region, where=None, *, extents=None):
-    """Retain a footprint per typed read, with unresolved bounds for the bind check."""
-    return tuple((read, _product_footprint(region, read, extents or {}))
-                 for read in region_reads(region.reads)
+    """Retain each typed read's path, footprint and any unresolved bounds."""
+    return tuple((ReadOccurrence(path, read), _product_footprint(region, read, extents or {}))
+                 for path, read in _walk_reads(region.reads, paths=True)
                  if type(read) in (ProductRead, FibreFoldRead)
                  and (where is None or where(read.array)))
 
@@ -370,6 +391,6 @@ def require(fact, region):
 
 
 __all__ = ["CLASSES", "LOCAL_CONTROL", "Fact", "FibreFoldRead", "LocalControl", "ProductRead",
-           "Read", "Region", "Truth", "product_read_footprints",
+           "Read", "ReadOccurrence", "Region", "Truth", "product_read_footprints",
            "check_expected_class", "classify", "conservation", "halo", "injective", "region_reads",
            "require"]

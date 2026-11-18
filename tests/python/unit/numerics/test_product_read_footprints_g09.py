@@ -1,4 +1,5 @@
 from collections import Counter
+from functools import reduce
 
 import pytest
 
@@ -61,6 +62,31 @@ def test_typed_checks_survive_erased_atoms_and_symbolic_extents():
         one_footprint(bad)
 
 
+@pytest.mark.parametrize("depth", (2, 4, 1100))
+def test_double_inverse_cannot_erase_an_intermediate_pin_bound(depth):
+    base, fibre = box((13,)), box(("nv",))
+    map_ = Compose(Project(1), Embed((5,), 1))
+    for _ in range(depth):
+        map_ = Inverse(map_)
+    read = ProductRead("A", map_, base, base, fibre)
+    assert read.map.normal_form() == ()
+    assert one_footprint(read).truth is Truth.UNKNOWN
+    with pytest.raises(ValueError, match="fibre index 5 is outside"):
+        one_footprint(read, extents={"nv": 5})
+    assert list(one_footprint(read, extents={"nv": 6}).value.indices((7,))) == [(7,)]
+
+
+def test_same_record_in_two_arms_keeps_both_occurrence_paths():
+    base, fibre = box((13,)), box((5,))
+    read = ProductRead("A", Embed((4,), 1), base, product(base, fibre), fibre)
+    region = Region("two uses", cell, 1, (LocalControl("cond", ((), (read,), (read,))),))
+    assert region_reads(region.reads) == (read,)
+    uses = product_read_footprints(region)
+    assert len(uses) == 2
+    assert [occurrence.path for occurrence, _ in uses] == [(0, 1, 0), (0, 2, 0)]
+    assert all(occurrence.read is read for occurrence, _ in uses)
+
+
 def test_repin_reads_a_constant_and_unpin_keeps_its_partial_domain():
     base, fibre = box((13,)), box((5,))
     domain = product(base, fibre)
@@ -98,10 +124,10 @@ def test_control_body_retains_array_and_consumer_authority():
     assert region_reads(region.reads) == (
         predicate, point, first_fold, other_array, other_pin, second_fold,
     )
-    assert tuple(read for read, _ in product_read_footprints(region)) == (
-        point, first_fold, other_array, other_pin, second_fold,
+    assert tuple(use.read for use, _ in product_read_footprints(region)) == (
+        point, first_fold, other_array, point, other_pin, second_fold,
     )
-    assert tuple(read for read, _ in product_read_footprints(
+    assert tuple(use.read for use, _ in product_read_footprints(
         region, where=lambda array: array == "other",
     )) == (other_array,)
     assert classify(region) == ("axis_reduction", point.map)
@@ -133,9 +159,13 @@ def test_logical_partition_changes_transfers_not_the_footprints():
             }
             values = {point_index: 100 * point_index[0] + point_index[1]
                       for point_index in expected}
-            assert [values[index] for index in contributions] == [
-                100 * (cell_index + 1) + slot for slot in range(5)
-            ]
+            by_owner = {part: {point_index: values[point_index] for point_index in expected
+                               if owners[point_index[-1]] == part}
+                        for part in range(len(sections))}
+            ordered = [by_owner[owners[index[-1]]][index] for index in contributions]
+            assert reduce(lambda acc, value: acc * 1000 + value, ordered, 0) == reduce(
+                lambda acc, index: acc * 1000 + values[index], expected, 0,
+            )
             requested_by = Counter(
                 (owners[slot], key)
                 for slot in range(5)

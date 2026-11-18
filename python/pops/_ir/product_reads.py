@@ -93,13 +93,19 @@ def _same_base(source, target):
 
 def _atoms(map_):
     """Use the structured expression before a normal form can erase a partial map."""
-    if type(map_) is Compose:
-        yield from _atoms(map_.inner)
-        yield from _atoms(map_.outer)
-    elif type(map_) is Inverse and type(map_.of) is Compose:
-        raise ProductReadUnknown("the inverse requires a domain proof through a composition")
-    else:
-        yield from reversed(map_.normal_form())
+    pending = [map_]
+    while pending:
+        current = pending.pop()
+        inverted = False
+        while type(current) is Inverse:
+            inverted = not inverted
+            current = current.of
+        if type(current) is Compose:
+            if inverted:
+                raise ProductReadUnknown("the inverse requires a domain proof through a composition")
+            pending.extend((current.outer, current.inner))
+        else:
+            yield from reversed((Inverse(current) if inverted else current).normal_form())
 
 
 def _bound_extent(size, extents):
