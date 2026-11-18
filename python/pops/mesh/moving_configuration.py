@@ -31,6 +31,7 @@ gives the quantities of a ``Finite`` support. Rank 2 is lot M2.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Any, cast
 
 import numpy as np
@@ -211,13 +212,18 @@ def time_derivative(expr: Any) -> Any:
     return None  # unreachable
 
 
-def _rebuild(expr: Any, leaf: Any) -> Any:
+def _rebuild(
+    expr: ScalarExpr | PredicateExpr, leaf: Callable[[ScalarExpr], ScalarExpr],
+) -> ScalarExpr | PredicateExpr:
     """The same tree with each coordinate, time and input leaf replaced by ``leaf(node)``."""
-    if expr._op in ("coordinate", "time", "input"):
+    if isinstance(expr, ScalarExpr) and expr._op in ("coordinate", "time", "input"):
         return leaf(expr)
     if not expr._arguments:
         return expr
-    return type(expr)._new(expr._op, tuple(_rebuild(item, leaf) for item in expr._arguments))
+    arguments = tuple(_rebuild(item, leaf) for item in expr._arguments)
+    if isinstance(expr, ScalarExpr):
+        return ScalarExpr._new(expr._op, arguments)
+    return PredicateExpr._new(expr._op, arguments)
 
 
 _NUMPY = {"sin": np.sin, "cos": np.cos, "exp": np.exp, "log": np.log, "sqrt": np.sqrt,
@@ -580,7 +586,7 @@ class MovingMembers:
                 left = model.auxiliary("rate_left", frame=frame.canonical_id, unit="1")
                 right = model.auxiliary("rate_right", frame=frame.canonical_id, unit="1")
                 for label, bound in zip(("rate_left", "rate_right"), faces, strict=True):
-                    def at_face(node: Any, bound: Any = bound) -> Any:
+                    def at_face(node: ScalarExpr, bound: ScalarExpr = bound) -> ScalarExpr:
                         return bound if node._op == "coordinate" else node
 
                     providers.append((label, _rebuild(node_rate, at_face)))
