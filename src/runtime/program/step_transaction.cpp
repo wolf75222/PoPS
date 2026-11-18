@@ -20,5 +20,6 @@ namespace pops::runtime::program {
 // type while the already-loaded _pops module catches and translates it to the registered Python
 // exception; a header-only destructor would permit hidden, DSO-local RTTI identities.
 StepAttemptRejected::~StepAttemptRejected() noexcept = default;
+StepTerminalFailure::~StepTerminalFailure() noexcept = default;
 
 }  // namespace pops::runtime::program

@@ -7,6 +7,7 @@ from typing import Literal, TypedDict
 # are only the typed seam consumed by ``pops._bootstrap``.
 __all__ = (
     "StepAttemptRejected",
+    "StepTerminalFailure",
     "__version__",
     "__abi_version__",
     "__release_contract_sha256__",
@@ -82,6 +83,12 @@ class StepAttemptRejected(RuntimeError):
     disposition: Literal["retry", "reject"]
     reason_code: int
     failed_rank: int
+    typed_failure_schema: str
+    typed_failure_payload: bytes
+
+class StepTerminalFailure(RuntimeError):
+    typed_failure_schema: str
+    typed_failure_payload: bytes
 
 class _RuntimeEnvironmentReport(TypedDict):
     dimension: int

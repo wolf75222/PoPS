@@ -187,11 +187,20 @@ template <class Operation, class Completion = step_rejection_detail::NoCompletio
 void collective_step_rejection_phase(const CommunicatorView& communicator,
                                      StepRejectionContract contract, std::string_view failure,
                                      Operation&& operation, Completion&& completion = {}) {
-  std::exception_ptr error;
+  std::exception_ptr error, terminal;
+  std::string terminal_schema, terminal_payload;
   std::string payload;
   long rejected = 0;
   try {
     std::forward<Operation>(operation)();
+  } catch (const StepTerminalFailure& control) {
+    terminal = std::current_exception();
+    try {
+      terminal_schema = control.typed_failure_schema();
+      terminal_payload = control.typed_failure_payload();
+    } catch (...) {
+      error = std::current_exception();
+    }
   } catch (const StepAttemptRejected& control) {
     try {
       payload = step_rejection_detail::encode(control, contract);
@@ -208,7 +217,16 @@ void collective_step_rejection_phase(const CommunicatorView& communicator,
     error = std::current_exception();
   }
   collectively_rethrow_exception(error, communicator, failure);
-  if (all_reduce_max(rejected, communicator) != 0)
+  const long control = all_reduce_max(terminal ? 2L : rejected, communicator);
+  if (control == 2) {
+    if (all_reduce_min(terminal ? 1L : 0L, communicator) == 0)
+      collectively_rethrow_exception(terminal, communicator, failure);
+    if (!all_ranks_agree_exact_ordered_byte_pairs({{terminal_schema, terminal_payload}},
+                                                  communicator))
+      throw std::runtime_error("collective terminal failure fields differ between ranks");
+    std::rethrow_exception(terminal);
+  }
+  if (control == 1)
     step_rejection_detail::rethrow(communicator, std::move(payload), rejected, contract);
 }
 

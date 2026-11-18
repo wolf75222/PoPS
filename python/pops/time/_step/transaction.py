@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.time.solve_outcome import FailRun, RejectAttempt, SolveAction
 from pops.time._step.strategy import StepStrategy
+
+if TYPE_CHECKING:
+    from pops.runtime._simulation import Failure
 
 
 class ProvisionalStore(str, Enum):
@@ -120,6 +123,7 @@ class StepTransactionReport:
     rolled_back_effects: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
     projections: tuple[str, ...] = ()
+    failure: Failure | None = None
 
     def __post_init__(self) -> None:
         if self.status not in _STATUSES:
@@ -153,9 +157,13 @@ class StepTransactionReport:
                 "StepTransactionReport.projections must contain non-empty guard names")
         if len(set(self.projections)) != len(self.projections):
             raise ValueError("StepTransactionReport.projections cannot contain duplicates")
+        if self.failure is not None and (
+            self.failure.site is None or self.failure.site.action != self.action
+        ):
+            raise ValueError("StepTransactionReport failure must certify the observed action")
 
     def to_data(self) -> dict[str, Any]:
-        return {
+        data = {
             "status": self.status,
             "phase": self.phase,
             "action": self.action,
@@ -166,6 +174,14 @@ class StepTransactionReport:
             "projections": list(self.projections),
             "diagnostics": list(self.diagnostics),
         }
+        if self.failure is not None:
+            site = self.failure.site
+            data["failure"] = {
+                "variant": self.failure.variant.__name__, "origin": self.failure.origin,
+                "site": site.to_data(), "payload": dict(self.failure.payload),
+                "python_origin": site.python_origin.to_data(),
+            }
+        return data
 
 
 @dataclass(frozen=True, slots=True)

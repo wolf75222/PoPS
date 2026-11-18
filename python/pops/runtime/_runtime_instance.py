@@ -1640,6 +1640,14 @@ class RuntimeInstance:
                     ),
                     diagnostics=(str(error),),
                 )
+            if cleanup_error is None and phase == "solve":
+                from pops.runtime._guard_failure import attach_guard_failure
+
+                guard_failure = attach_guard_failure(error, self._install_plan.artifact)
+                if guard_failure is not None:
+                    if not isinstance(failure_report, StepTransactionReport):
+                        raise RuntimeError("global guard lost its rollback report") from error
+                    failure_report = replace(failure_report, failure=guard_failure)
             if failure_report is not None and hasattr(native, "_last_step_transaction_report"):
                 native._last_step_transaction_report = failure_report
             if cleanup_error is not None:

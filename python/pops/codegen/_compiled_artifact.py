@@ -936,6 +936,10 @@ class CompiledSimulationArtifact:
                     "availability": "retained" if source is not None else "unavailable",
                     "model_compile": component.source_provenance()
                     if callable(getattr(component, "source_provenance", None)) else None,
+                    "guard_origins": tuple(
+                        (site.to_data(), site.python_origin.to_data())
+                        for site in getattr(component, "guard_failure_sites", ())
+                    ),
                 }
             )
         return {"contract": "pops.compiled-program.source-evidence@2", "components": evidence,

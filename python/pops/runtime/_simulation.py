@@ -116,9 +116,10 @@ class Failure:
     the run rather than of an attempt, has the origin ``None``.
     """
 
-    __slots__ = ("variant", "origin", "payload")
+    __slots__ = ("variant", "origin", "payload", "site")
 
-    def __init__(self, variant: type, origin: str | None, payload: Mapping[str, Any]) -> None:
+    def __init__(self, variant: type, origin: str | None, payload: Mapping[str, Any],
+                 *, site: Any = None) -> None:
         if not (isinstance(variant, type) and issubclass(variant, RunFailed)) \
                 or variant is RunFailed:
             raise TypeError("Failure.variant is a subclass of RunFailed")
@@ -127,12 +128,16 @@ class Failure:
         object.__setattr__(self, "variant", variant)
         object.__setattr__(self, "origin", origin)
         object.__setattr__(self, "payload", MappingProxyType(dict(payload)))
+        object.__setattr__(self, "site", site)
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("Failure is immutable")
 
     def describe(self) -> str:
         payload = self.payload
+        if self.site is not None:
+            return "%s at the trial site %s: predicate %d observed %s" % (
+                self.variant.__name__, self.site.name, payload["predicate"], payload["value"])
         if self.variant is BudgetExhausted and payload["budget"] == "max_steps":
             return ("%s: max_steps=%d accepted steps ended the run at t=%r before until=%r"
                     % (self.variant.__name__, payload["max_steps"], payload["time"],
