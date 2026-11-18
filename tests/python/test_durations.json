@@ -9217,19 +9217,19 @@
       }
     },
     "n3_20261113_lot3_weno5": {
-      "basis": "Unmeasured CI scheduling estimates for the two modules of N3 lot 3 (ROM-87), weno5 written with the surface, on the api_v02_20261013 tiers. 60 s for the source-only module, which elaborates, validates and resolves eight surface cases and their hand-written b6 forms, generates their C++ without compiling it, and compiles two small policy programs against the native pops::Weno5 over 14^5 stencils and 200000 profiles each, as the analogue test_n3_lot2_muscl.py. 600 s for the Dim2 native module, which compiles two artifacts once per module (the surface advection with upwind(reconstruction=weno5()) and its hand-written b6 form with master's WENO5) and runs two compiled runs of 50 steps on 16 x 8 cells, as the analogue test_surface_lot_b_boundaries_native.py (two artifacts, 600 s). The local receipts come from pytest on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "basis": "Unmeasured CI scheduling estimates for the two modules of N3 lot 3 (ROM-87), weno5 written with the surface, on the api_v02_20261013 tiers. 60 s for the source-only module, which elaborates, validates and resolves eight surface cases and their hand-written b6 forms, generates their C++ without compiling it, and compiles two small policy programs against the native pops::Weno5 over 14^5 stencils and 200000 profiles each, as the analogue test_n3_lot2_muscl.py. 650 s for the Dim2 native module, which compiles three artifacts once per module (the surface advection with upwind(reconstruction=weno5(epsilon=1e-6)), and its hand-written b6 form with master's WENO5 at epsilon 1e-6 and at the default, the last added by N3 lot 3-eps) and runs five compiled runs of 50 steps on 16 x 8 cells: its local receipt (587.69 s) rounded up by about ten percent, as the 600 s of lot 3 rounded up its 544 s receipt. The analogue test_surface_lot_b_boundaries_native.py (two artifacts, 600 s) scaled by the third artifact would give 900 s, which does not fit the 165 bins of SHARD_TOTAL at the 1890 s margin. The local receipts come from pytest on a 4-core container, one module per session (native with a Kokkos 4.4.01 Serial and OpenMP build of _pops, Dim2); they are not GitHub CI file wall times. Existing weights, native dimensions (default Dim2), MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
         "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py",
         "tests/python/unit/surface/test_n3_lot3_weno5.py": "tests/python/unit/surface/test_n3_lot2_muscl.py"
       },
       "estimates_seconds": {
-        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 600,
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 650,
         "tests/python/unit/surface/test_n3_lot3_weno5.py": 60
       },
       "local_receipts": {
         "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": {
-          "cases": 1,
-          "session_seconds": 544.33
+          "cases": 2,
+          "session_seconds": 587.69
         },
         "tests/python/unit/surface/test_n3_lot3_weno5.py": {
           "cases": 17,
@@ -9237,8 +9237,27 @@
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": "9615ec9980d25a2f2e3d32a0fc005fa6cd5007a8e7a751f9c5fd3fc88d568b92",
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": "e46ada0771b88914a406fcb572f8ddc3b44005e0b058c783e27a32782e58d4e1",
         "tests/python/unit/surface/test_n3_lot3_weno5.py": "6df9441f7c7bef19f8d75fff558b5559f69e0b3001233f92396a290777e51cd6"
+      }
+    },
+    "n3_20261118_lot3_weno5_default_parity": {
+      "basis": "Unmeasured CI scheduling estimate for the three NumPy parity and distinction checks on Uniform in N3 lot 3-eps (ROM-87). The file builds four artifacts once per module, covering both surface and hand-written b6 at the default and at epsilon 1e-6. The 1601.33 s cold-cache session on macOS, Dim2 Kokkos Serial, included competing local work during part of setup. The planning weight adds ten percent and rounds up to the next 25 s. This is a Mac wall-clock observation and a planning estimate, pending a complete per-file GitHub CI receipt.",
+      "previous_weight_seconds": {
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 650
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 1775
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": {
+          "head": "18f3dea30538c78d46e1bb1474a02c4c28a93088",
+          "cases": 3,
+          "session_seconds": 1601.33
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": "365e6510ba9ab368da0c92d2af383350c877335abd7e94be1b13eaacc2319392"
       }
     },
     "n12_20261113_physical_maps_split": {
@@ -10851,7 +10870,7 @@
   "tests/python/integration/runtime/test_n17_chart_two_point_native.py": 1200,
   "tests/python/integration/surface/test_vertical_slice_t02.py": 300,
   "tests/python/unit/surface/test_representation_n16.py": 15,
-  "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 600,
+  "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 1775,
   "tests/python/unit/surface/test_n3_lot3_weno5.py": 60,
   "tests/python/integration/runtime/test_amr_physical_maps_layout_regions.py": 590,
   "tests/python/integration/runtime/test_state_operand_n9_native.py": 600,
