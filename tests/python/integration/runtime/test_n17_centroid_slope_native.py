@@ -102,7 +102,9 @@ def test_the_slope_refuses_the_singular_centroid_rows_of_a_certified_chart(nativ
     arrays = system._static_geometry_snapshot()
     assert arrays["kind"] == "chart"
     assert np.all(np.asarray(arrays["cell_measure"]) > 0.)
-    np.testing.assert_array_equal(centroid_rows(arrays)[1, 1], [[0.5, 0.25], [1., 0.5]])
+    rows = centroid_rows(arrays)
+    np.testing.assert_array_equal(rows[1, 1], [[0.5, 0.25], [1., 0.5]])
+    assert int(np.flatnonzero(np.linalg.det(rows).T == 0.)[0]) == 5
     for first in (1., 0.5):
         differences = np.ones((2, 4, 4))
         differences[0, 1, 1] = first
@@ -112,6 +114,13 @@ def test_the_slope_refuses_the_singular_centroid_rows_of_a_certified_chart(nativ
         assert (error.phase, error.status, error.disposition) == (
             "centroid_slope", "invalid_evaluation", "reject")
         assert error.detail == "singular centroid differences"
+    for coordinate, detail in (((0, 0), "non-finite slope evaluation"),
+                               ((3, 3), "singular centroid differences")):
+        differences = np.ones((2, 4, 4))
+        differences[(0, *coordinate)] = np.nan
+        with pytest.raises(module.StepAttemptRejected) as rejected:
+            system._static_geometry_centroid_slopes(differences)
+        assert rejected.value.detail == detail
 
 
 # name: (the bare System of its arrays, kind, periodicity, seam translations).
