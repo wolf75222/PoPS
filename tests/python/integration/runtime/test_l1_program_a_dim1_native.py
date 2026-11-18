@@ -23,7 +23,7 @@ FREQUENCY = (Fraction(abs(SPEED)) / Fraction(WIDTH)
              + 2 * Fraction(NU) / Fraction(WIDTH) ** 2)
 DT = float(1 / FREQUENCY)
 ONE_STEP_ATOL = 8 * EPS
-FINAL_ATOL = 4e-13
+FINAL_ATOL = 64 * EPS
 
 
 def _compile(factor):
@@ -121,7 +121,7 @@ def test_l1_program_a_loses_no_attempt_on_the_interval(variants, tmp_path, recor
 
     one = _bind(nominal, tmp_path / "one-step", initial)
     dt = _attempt_duration(one)
-    assert abs(dt - DT) <= math.ulp(DT)
+    assert dt == DT
     assert abs(_margin(dt)) < 32
     record_property("first_step_error", _one_accepted_step(one, u, dt, initial))
 
@@ -131,18 +131,35 @@ def test_l1_program_a_loses_no_attempt_on_the_interval(variants, tmp_path, recor
     assert result.steps == steps == 1567
 
     expected = initial
+    time = np.float64(0)
     for _ in range(steps - 1):
         expected = _ssprk2(expected, DT)
-    # The constant-step segment anchors time at the product step * DT.
-    final_dt = END - (steps - 1) * DT
-    expected = _ssprk2(expected, final_dt)
-    error = _check_state(result.state[u], expected, atol=FINAL_ATOL)
+        time += DT
+    # A cells rule starts a new segment each step, so the landing step uses
+    # the accumulated binary64 time rather than the product of step and DT.
+    final_dt = END - time
+    final_expected = _ssprk2(expected, final_dt)
+    error = _check_state(result.state[u], final_expected, atol=FINAL_ATOL)
+
+    split = _bind(nominal, tmp_path / "last-step", initial)
+    with pytest.raises(surface.BudgetExhausted) as caught:
+        split.run(until=END, max_steps=steps - 1)
+    before_last = caught.value.result
+    assert before_last.failure.payload["budget"] == "max_steps"
+    assert before_last.steps == steps - 1 and before_last.rejections == 0
+    assert before_last.time == time
+    _check_state(before_last.state[u], expected, atol=FINAL_ATOL)
+    last = split.run(until=END)
+    assert last.failure is None and last.time == END
+    assert last.steps == 1 and last.rejections == 0
+    assert np.asarray(last.state[u]).tobytes() == np.asarray(result.state[u]).tobytes()
     native = select_native_dimension(1).runtime_environment_report()
     assert native["dimension"] == 1 and native["real_bytes"] == 8
     record_property("native_backend", native["kokkos_backend"])
     record_property("native_device", native["kokkos_device"])
     record_property("dt", dt.hex())
     record_property("dt_frequency_margin_eps", _margin(dt))
+    record_property("oracle_time_before_last", time.hex())
     record_property("oracle_final_dt", final_dt.hex())
     record_property("final_error", error)
 

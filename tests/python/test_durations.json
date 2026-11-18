@@ -9520,7 +9520,7 @@
       }
     },
     "ci_20261118_rom112_l1_dim1": {
-      "basis": "ROM-112 Dim1 native test. One interval case and two variants of its compiled cell step bound, each built in a cold pytest module cache, with one full SSPRK2 trajectory and two single-attempt controls. Local Darwin arm64, binary64 Kokkos OpenMP host and two threads: 94.89 s observed. Reserve the 300 s native tier for the cold Linux runner; refresh from a complete CI timing artifact.",
+      "basis": "ROM-112 Dim1 native test. One interval case and two variants of its compiled cell step bound, each built in a cold pytest module cache, with a full SSPRK2 trajectory, its independently replayed final step and two guard controls. Local installed Darwin arm64, binary64 Kokkos OpenMP host and two threads: 90.62 s observed. Reserve the 300 s native tier for the cold Linux runner; refresh from a complete CI timing artifact.",
       "analogues": {
         "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": "tests/python/integration/runtime/test_candidate_guards_n8_dim1_native.py"
       },
@@ -9530,12 +9530,12 @@
       "local_receipts": {
         "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": {
           "cases": 3,
-          "phase_seconds": 87.0,
-          "session_seconds": 94.89
+          "phase_seconds": 89.75,
+          "session_seconds": 90.62
         }
       },
       "source_sha256": {
-        "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": "335a32fef532ab35919ad402e8479a034eb64cc0187c619b3b89a140f09ff9ad"
+        "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": "fbae7a0b61e4bc1ab22d40cd67f6cce6ca357379819c3cd4ba8cf9424c6c8735"
       }
     }
   },
