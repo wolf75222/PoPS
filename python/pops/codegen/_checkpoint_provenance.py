@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -10,32 +11,55 @@ if TYPE_CHECKING:
     from pops.identity.presentation import PresentationMap
 
 
-_presentation: ContextVar[PresentationMap | None] = ContextVar(
-    "checkpoint_presentation", default=None)
+@dataclass(frozen=True, slots=True)
+class _CheckpointProvenance:
+    presentation: PresentationMap
+    cache_identity: str
+
+
+_provenance: ContextVar[_CheckpointProvenance | None] = ContextVar(
+    "checkpoint_provenance", default=None)
 
 
 @contextmanager
 def checkpoint_provenance(presentation: PresentationMap | None) -> Iterator[None]:
-    token = _presentation.set(presentation)
+    from pops.identity import make_identity
+
+    provenance = None
+    if presentation is not None:
+        # The emitted roles depend on the projection recipes and their declared order.
+        # The calculated lookup index is reconstructed from these immutable inputs.
+        declaration = {item.name: getattr(presentation, item.name)
+                       for item in fields(presentation) if item.init}
+        identity = make_identity("checkpoint-provenance", declaration)
+        provenance = _CheckpointProvenance(presentation, identity.token)
+    token = _provenance.set(provenance)
     try:
         yield
     finally:
-        _presentation.reset(token)
+        _provenance.reset(token)
+
+
+def model_cache_components(target: str) -> dict[str, str]:
+    provenance = _provenance.get()
+    if provenance is None or target != "system":
+        return {}
+    return {"checkpoint_projection": provenance.cache_identity}
 
 
 def owner_role(owner: str) -> str | None:
-    presentation = _presentation.get()
-    if presentation is None:
+    provenance = _provenance.get()
+    if provenance is None:
         return None
-    return presentation.project_owner_string(owner)
+    return provenance.presentation.project_owner_string(owner)
 
 
 def provider_role(producer: str, owner: str, space: str, component: str) -> str:
-    presentation = _presentation.get()
-    if presentation is None:
+    provenance = _provenance.get()
+    if provenance is None:
         return ""
     if producer.startswith("pops.handle.v1::"):
-        producer = presentation.project_qualified_id(producer)
+        producer = provenance.presentation.project_qualified_id(producer)
     from pops.identity import make_identity
     return make_identity("checkpoint-auxiliary-provider", {
         "producer": producer, "owner": owner, "space": space, "component": component,

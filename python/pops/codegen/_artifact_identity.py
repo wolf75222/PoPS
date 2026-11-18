@@ -33,6 +33,7 @@ def model_artifact_spec(
     from pops.identity import artifact_spec_identity, make_identity
 
     from pops.codegen.model_compile_evidence import codegen_source_authority
+    from pops.codegen._checkpoint_provenance import model_cache_components
 
     digest = str(model_hash(model))
     wave_speeds = getattr(model, "_ws_jacobian", {}) or {}
@@ -51,6 +52,7 @@ def model_artifact_spec(
         },
         components={
             **native_compiler_command_contract(compiler),
+            **model_cache_components(target),
             "codegen_source_authority": codegen_source_authority(),
             "model_hash": digest,
             "emitted_name": str(name or ""),

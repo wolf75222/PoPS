@@ -964,7 +964,7 @@ def _emit_auxiliary_route_registration(
             )
         )
         native_owner = native_key(row["key"])["owner_qid"]
-        role = owner_role(native_owner)
+        role = owner_role(native_owner) if target == "system" else None
         durable = ("" if role is None else provider_role(
             producer, role, row["key"]["space_name"], row["key"]["component"]))
         if kind == "AuxiliaryProviderKind::derived":
@@ -1010,7 +1010,7 @@ def _emit_auxiliary_route_registration(
                     value["consumer_slot"],
                 )
             )
-        role = consumer_role(owner_qid, suffix)
+        role = consumer_role(owner_qid, suffix) if target == "system" else ""
         lines.append("  }, %s});" % literal(role) if role else "  }});")
 
     emit_plan("/physical_flux", flux_plan)
