@@ -31,6 +31,7 @@ ORDINARY_BUDGET_SECONDS = 35 * 60
 # and 171 keeps the largest multi-file shard at 1890 s.
 ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
 # With the N16 representation modules, 172 keeps the maximum at 1886 s.
+# The two-point mapped-face module brings the maximum to 1886 s at 173 bins.
 SHARD_TOTAL = 173
 
 
