@@ -20,8 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "python"))
 import pops
 from pops._ir.handle_expr import ValueExpr
 from pops.amr import Coarsen, ConflictPolicy, EqualityPolicy, Hysteresis, Tag
-from pops.codegen.program_emit_refinement_criterion import emit_refinement_criterion
+from pops.codegen.program_emit_refinement_criterion import (
+    emit_refinement_criterion, emit_standalone_refinement_criterion,
+)
 from pops.identity import make_identity
+from pops.identity.artifact import binary_identity
 from pops.identity.semantic import semantic_value
 from pops.mesh._amr.refinement_criterion import resolve_refinement_criterion
 
@@ -103,8 +106,9 @@ def main(output, dimension):
         if len(routes) > 1:
             declarations.append(f"inline constexpr char {name}_second_state[] = "
                                 f"{cpp_string(routes[1].qualified_id)};")
-        write_if_changed(output / (name + ".cpp"),
-                         emit_refinement_criterion(criterion, native_dimension=dimension))
+        emitter = (emit_standalone_refinement_criterion if name.startswith("standalone_")
+                   else emit_refinement_criterion)
+        write_if_changed(output / (name + ".cpp"), emitter(criterion, native_dimension=dimension))
     write_if_changed(output / "amr_fixture_criteria_generated.hpp",
                      "\n".join(declarations) + "\n")
 
@@ -175,5 +179,8 @@ def euler(output, dimension):
 
 
 if __name__ == "__main__":
-    build = euler if sys.argv[3:] == ["--euler"] else main
-    build(Path(sys.argv[1]), int(sys.argv[2]))
+    if sys.argv[1] == "--binary-identity":
+        write_if_changed(Path(sys.argv[3]), binary_identity(sys.argv[2]).token + "\n")
+    else:
+        build = euler if sys.argv[3:] == ["--euler"] else main
+        build(Path(sys.argv[1]), int(sys.argv[2]))

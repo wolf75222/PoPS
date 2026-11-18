@@ -2801,10 +2801,32 @@ struct AmrSystem<Dim>::Impl {
     std::optional<Generated> generated;
   };
 
-  /// The refinement criterion that the installed compiled Program exports, if any.
+  /// The refinement criterion exported by a compiled Program or owned by the mesh itself.
   struct GeneratedCriterionAuthority {
     runtime::amr::GeneratedCriterionEntry<Dim> entry = nullptr;
     std::string identity;
+    std::shared_ptr<pops::native_loader::AuthenticatedPackageLifetime> standalone;
+
+    static GeneratedCriterionAuthority read(pops::dynlib::handle handle, std::string_view owner) {
+      GeneratedCriterionAuthority authority;
+      const auto identity_of = reinterpret_cast<const char* (*)()>(
+          pops::dynlib::sym(handle, runtime::amr::kGeneratedCriterionIdentitySymbol));
+      authority.entry = reinterpret_cast<runtime::amr::GeneratedCriterionEntry<Dim>>(
+          pops::dynlib::sym(handle, runtime::amr::kGeneratedCriterionEntrySymbol));
+      if ((identity_of == nullptr) != (authority.entry == nullptr))
+        throw std::runtime_error(
+            std::string(owner) +
+            ": the refinement criterion entry and identity are not exported together");
+      if (identity_of != nullptr) {
+        const char* raw_identity = pops::dynlib::invoke_with_host_exception(
+            identity_of, runtime::amr::kGeneratedCriterionIdentitySymbol);
+        if (raw_identity == nullptr || raw_identity[0] == '\0')
+          throw std::runtime_error(std::string(owner) +
+                                   ": the refinement criterion identity is empty");
+        authority.identity = raw_identity;
+      }
+      return authority;
+    }
   };
 
   enum class TaggingFieldKind : std::uint8_t { state, auxiliary };
@@ -9259,6 +9281,33 @@ struct AmrSystem<Dim>::Impl {
     return std::find(blocks_read.begin(), blocks_read.end(), block) != blocks_read.end();
   }
 
+  std::size_t tagging_state_block(const std::string& block_name, const std::string& identity,
+                                  bool allow_direct = true) const {
+    const auto block = std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& value) {
+      return value.name == block_name;
+    });
+    if (block == blocks.end())
+      throw std::invalid_argument("AMR tagging state leaf names another native block");
+    const std::string& installed = boundary_registry.state_route(block_name);
+    if (identity != installed &&
+        (!allow_direct || identity != direct_amr_state_identity(block_name)))
+      throw std::invalid_argument(
+          "AMR tagging state leaf differs from its exact qualified storage route");
+    return static_cast<std::size_t>(std::distance(blocks.begin(), block));
+  }
+
+  void require_tagging_components(std::size_t block, const std::vector<std::string>& variables,
+                                  const std::vector<int>& components) const {
+    const auto& names = prepared_blocks[block].conservative_variables.names;
+    for (std::size_t read = 0; read < variables.size(); ++read) {
+      const int component = components[read];
+      if (component < 0 || static_cast<std::size_t>(component) >= names.size() ||
+          names[static_cast<std::size_t>(component)] != variables[read])
+        throw std::invalid_argument(
+            "AMR generated refinement criterion reads a variable at another component");
+    }
+  }
+
   const ResolvedTaggingProgram& resolve_tagging_program() const {
     if (resolved_tagging)
       return *resolved_tagging;
@@ -9296,19 +9345,6 @@ struct AmrSystem<Dim>::Impl {
       return candidate.fields.size() - 1;
     };
 
-    const auto state_block_of = [&](const std::string& block_name, const std::string& identity) {
-      const auto block = std::find_if(blocks.begin(), blocks.end(), [&](const BlockSpec& value) {
-        return value.name == block_name;
-      });
-      if (block == blocks.end())
-        throw std::invalid_argument("AMR tagging state leaf names another native block");
-      const std::string& installed = boundary_registry.state_route(block_name);
-      if (identity != installed && identity != direct_amr_state_identity(block_name))
-        throw std::invalid_argument(
-            "AMR tagging state leaf differs from its exact qualified storage route");
-      return static_cast<std::size_t>(std::distance(blocks.begin(), block));
-    };
-
     if (tagging_spec->generated) {
       const auto& generated = *tagging_spec->generated;
       if (generated_criterion.entry == nullptr ||
@@ -9338,17 +9374,13 @@ struct AmrSystem<Dim>::Impl {
       }
       for (std::size_t field = 0; field < generated.field_identities.size(); ++field) {
         const std::string& identity = generated.field_identities[field];
-        const std::size_t block_index = state_block_of(generated.field_blocks[field], identity);
-        const auto& names = prepared_blocks[block_index].conservative_variables.names;
+        const std::size_t block_index =
+            tagging_state_block(generated.field_blocks[field], identity);
+        require_tagging_components(block_index, generated.field_variables[field],
+                                   generated.field_components[field]);
         typename runtime::amr::PreparedTaggingProgram<Dim>::GeneratedField bound;
-        for (std::size_t read = 0; read < generated.field_variables[field].size(); ++read) {
-          const int component = generated.field_components[field][read];
-          if (component < 0 || static_cast<std::size_t>(component) >= names.size() ||
-              names[static_cast<std::size_t>(component)] != generated.field_variables[field][read])
-            throw std::invalid_argument(
-                "AMR generated refinement criterion reads a variable at another component");
+        for (const int component : generated.field_components[field])
           bound.components.push_back(static_cast<std::int32_t>(component));
-        }
         bound.reach = generated.field_reach[field];
         if (bind_field(TaggingFieldKind::state, identity, {}, block_index) != field)
           throw std::invalid_argument(
@@ -9368,7 +9400,7 @@ struct AmrSystem<Dim>::Impl {
       std::size_t field_index = 0;
       int component = -1;
       if (kind == "state") {
-        const std::size_t block_index = state_block_of(block_name, identity);
+        const std::size_t block_index = tagging_state_block(block_name, identity);
         const auto found =
             std::find(prepared_blocks[block_index].conservative_variables.names.begin(),
                       prepared_blocks[block_index].conservative_variables.names.end(), variable);
@@ -15597,6 +15629,119 @@ void AmrSystem<Dim>::set_generated_tagging(
 }
 
 template <int Dim>
+void AmrSystem<Dim>::install_standalone_refinement_criterion(
+    const std::string& path, const std::string& binary_identity,
+    const runtime::amr::StandaloneCriterionBinding& binding) {
+  constexpr const char* operation = "install_standalone_refinement_criterion";
+  p_->require_no_native_package_callback(operation);
+  const ExecutionLane& lane = p_->require_package_assembly_lane();
+  typename Impl::TaggingSpec candidate;
+  typename Impl::GeneratedCriterionAuthority authority;
+  std::string contract;
+  std::exception_ptr error;
+  try {
+    require_amr_assembling(p_->lifecycle, operation);
+    if (p_->engine || p_->program.step_ || p_->tagging_spec || p_->tagger_component ||
+        p_->generated_criterion.entry || p_->prepared_blocks.empty() ||
+        p_->prepared_blocks.size() != p_->blocks.size() || binding.identity.empty() ||
+        binding.fields.empty() || binding.clock.empty() || binding.provider.empty() ||
+        binding.minimum_cycles < 0)
+      throw std::invalid_argument(
+          "AMR standalone refinement requires one complete pre-materialization mesh authority");
+
+    auto& generated = candidate.generated.emplace();
+    generated.identity = binding.identity;
+    std::set<std::string_view> seen;
+    for (const auto& field : binding.fields) {
+      if (field.variables.empty() || field.variables.size() != field.components.size() ||
+          !seen.insert(field.state).second)
+        throw std::invalid_argument("AMR standalone refinement has an invalid state field table");
+      const auto block = p_->tagging_state_block(field.block, field.state, false);
+      p_->require_tagging_components(block, field.variables, field.components);
+      generated.field_identities.push_back(field.state);
+      generated.field_blocks.push_back(field.block);
+      generated.field_variables.push_back(field.variables);
+      generated.field_components.push_back(field.components);
+      generated.field_reach.push_back({});
+    }
+
+    auto file = std::make_shared<pops::dynlib::AuthenticatedNativeFile>(path);
+    if (file->binary_identity() != binary_identity)
+      throw std::invalid_argument(
+          "AMR standalone refinement differs from the expected artifact bytes");
+    pops::dynlib::UniqueHandle opened(pops::dynlib::open_private_image(file->load_path()));
+    if (!pops::dynlib::valid(opened.get()))
+      throw std::runtime_error("cannot load AMR standalone refinement: " +
+                               pops::dynlib::last_error());
+    const auto read_key = reinterpret_cast<const char* (*)()>(
+        pops::dynlib::sym(opened.get(), runtime::amr::kStandaloneCriterionAbiKeySymbol));
+    if (read_key == nullptr)
+      throw std::invalid_argument("artifact lacks the AMR standalone refinement ABI");
+    const char* key = pops::dynlib::invoke_with_host_exception(
+        read_key, runtime::amr::kStandaloneCriterionAbiKeySymbol);
+    if (key == nullptr || pops::detail::abi_key_string() != key)
+      throw std::invalid_argument("AMR standalone refinement ABI differs from the runtime");
+
+    using Metadata = runtime::amr::StandaloneCriterionMetadata;
+    const auto read_metadata = reinterpret_cast<const Metadata* (*)()>(
+        pops::dynlib::sym(opened.get(), runtime::amr::kStandaloneCriterionMetadataSymbol));
+    if (read_metadata == nullptr)
+      throw std::invalid_argument("artifact lacks the AMR standalone refinement metadata");
+    const Metadata* metadata = pops::dynlib::invoke_with_host_exception(
+        read_metadata, runtime::amr::kStandaloneCriterionMetadataSymbol);
+    if (metadata == nullptr || metadata->real_bytes != sizeof(Real) ||
+        metadata->minimum_cycles != binding.minimum_cycles ||
+        metadata->field_count != binding.fields.size() || metadata->fields == nullptr)
+      throw std::invalid_argument("AMR standalone refinement metadata differs from the mesh plan");
+    for (std::size_t index = 0; index < binding.fields.size(); ++index) {
+      const auto& actual = metadata->fields[index];
+      const auto& expected = binding.fields[index];
+      if (actual.state == nullptr || expected.state != actual.state || actual.block == nullptr ||
+          expected.block != actual.block || actual.count != expected.variables.size() ||
+          actual.variables == nullptr || actual.components == nullptr)
+        throw std::invalid_argument(
+            "AMR standalone refinement field table differs from the mesh plan");
+      for (std::size_t slot = 0; slot < actual.count; ++slot)
+        if (actual.variables[slot] == nullptr ||
+            expected.variables[slot] != actual.variables[slot] ||
+            expected.components[slot] != actual.components[slot])
+          throw std::invalid_argument(
+              "AMR standalone refinement field table differs from the mesh plan");
+    }
+    authority = Impl::GeneratedCriterionAuthority::read(opened.get(), "AMR standalone refinement");
+    if (authority.entry == nullptr || authority.identity != binding.identity)
+      throw std::invalid_argument("AMR standalone refinement identity differs from the mesh plan");
+    authority.standalone = std::make_shared<pops::native_loader::AuthenticatedPackageLifetime>(
+        std::move(file), std::move(opened));
+    candidate.min_cycles = binding.minimum_cycles;
+    candidate.clock_identity = binding.clock;
+    candidate.provider_identity = binding.provider;
+    ExactContractBuilder exact;
+    exact.text("pops.amr-system.standalone-refinement")
+        .scalar(std::uint32_t{1})
+        .text(binary_identity)
+        .scalar(std::int32_t{Dim});
+    Impl::append_generated_tagging_contract(exact, generated);
+    exact.scalar(candidate.min_cycles)
+        .text(candidate.clock_identity)
+        .text(candidate.provider_identity);
+    contract = std::move(exact).release();
+  } catch (...) {
+    error = std::current_exception();
+  }
+  runtime::system::auxiliary_ghost_detail::rethrow_collective_failure(
+      error, &lane, "AMR standalone refinement preparation failed collectively");
+  if (!all_ranks_agree_exact_ordered_byte_pairs(
+          {{std::string_view("standalone-refinement"), std::string_view(contract)}}, lane))
+    throw std::invalid_argument("AMR standalone refinement contracts differ between MPI ranks");
+
+  static_assert(std::is_nothrow_move_constructible_v<typename Impl::TaggingSpec>);
+  static_assert(std::is_nothrow_move_assignable_v<typename Impl::GeneratedCriterionAuthority>);
+  p_->tagging_spec.emplace(std::move(candidate));
+  p_->generated_criterion = std::move(authority);
+}
+
+template <int Dim>
 void AmrSystem<Dim>::set_generated_regrid_decision(
     const std::string& identity, const std::vector<std::string>& field_identities,
     const std::vector<std::string>& field_blocks,
@@ -15612,10 +15757,10 @@ void AmrSystem<Dim>::set_generated_regrid_decision(
   try {
     require_amr_assembling(p_->lifecycle, "set_generated_regrid_decision");
     const std::size_t fields = field_identities.size();
-    if (p_->engine || p_->regrid_decision_spec || !p_->tagging_spec ||
-        !p_->tagging_spec->generated || identity.empty() || field_blocks.size() != fields ||
-        field_variables.size() != fields || field_components.size() != fields ||
-        (indicator_count == 0) != (fields == 0))
+    if (p_->engine || p_->generated_criterion.standalone || p_->regrid_decision_spec ||
+        !p_->tagging_spec || !p_->tagging_spec->generated || identity.empty() ||
+        field_blocks.size() != fields || field_variables.size() != fields ||
+        field_components.size() != fields || (indicator_count == 0) != (fields == 0))
       throw std::invalid_argument(
           "AMR generated regrid decision requires one complete unique pre-materialization "
           "authority after a generated refinement criterion");
@@ -23064,6 +23209,8 @@ void AmrSystem<Dim>::restore_checkpoint_counters(int regrid_count, std::uint64_t
 template <int Dim>
 void AmrSystem<Dim>::install_program_step(std::function<void(double)> step) {
   p_->require_no_native_package_callback("install_program_step");
+  if (p_->generated_criterion.standalone)
+    throw std::invalid_argument("a Program step cannot replace a standalone refinement owner");
   p_->program.install_unverified_step(std::move(step));
   p_->program_flux_expression_budget.reset();
 }
@@ -23152,6 +23299,9 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
   std::exception_ptr preparation_error;
 
   try {
+    if (p_->generated_criterion.standalone)
+      throw std::invalid_argument(
+          "a compiled Program cannot replace a standalone refinement owner");
 #if !defined(_WIN32)
     Dl_info info;
     if (dladdr(reinterpret_cast<void*>(&detail::abi_key_string), &info) && info.dli_fname)
@@ -23398,21 +23548,8 @@ POPS_EXPORT void AmrSystem<Dim>::install_program(const std::string& so_path) {
 
     // A refinement criterion generated into the Program (DM13b) is exported with its identity;
     // the tagging authority installed before names the criterion it expects.
-    const auto criterion_identity = reinterpret_cast<const char* (*)()>(
-        pops::dynlib::sym(handle, runtime::amr::kGeneratedCriterionIdentitySymbol));
-    generated_criterion.entry = reinterpret_cast<runtime::amr::GeneratedCriterionEntry<Dim>>(
-        pops::dynlib::sym(handle, runtime::amr::kGeneratedCriterionEntrySymbol));
-    if ((criterion_identity == nullptr) != (generated_criterion.entry == nullptr))
-      throw std::runtime_error(
-          "AmrSystem::install_program: the refinement criterion entry and identity are not "
-          "exported together");
-    if (criterion_identity != nullptr) {
-      const char* raw_identity = criterion_identity();
-      if (raw_identity == nullptr || raw_identity[0] == '\0')
-        throw std::runtime_error(
-            "AmrSystem::install_program: the refinement criterion identity is empty");
-      generated_criterion.identity = raw_identity;
-    }
+    generated_criterion =
+        Impl::GeneratedCriterionAuthority::read(handle, "AmrSystem::install_program");
     // A regrid decision generated into the Program (DM13b) is exported the same way.
     const auto decision_identity = reinterpret_cast<const char* (*)()>(
         pops::dynlib::sym(handle, runtime::amr::kGeneratedRegridDecisionIdentitySymbol));
@@ -27276,6 +27413,8 @@ template void AmrSystem<kNativeDimension>::set_generated_tagging(
     const std::vector<std::vector<std::string>>&, const std::vector<std::vector<int>>&,
     const std::vector<std::vector<std::size_t>>&, const std::vector<double>&,
     const std::vector<int>&, const std::vector<int>&, int, const std::string&, const std::string&);
+template void AmrSystem<kNativeDimension>::install_standalone_refinement_criterion(
+    const std::string&, const std::string&, const runtime::amr::StandaloneCriterionBinding&);
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::tagging_requests(int);
 template void AmrSystem<kNativeDimension>::set_generated_regrid_decision(
     const std::string&, const std::vector<std::string>&, const std::vector<std::string>&,

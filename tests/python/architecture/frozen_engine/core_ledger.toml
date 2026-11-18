@@ -615,3 +615,36 @@ paths = [
   "src/runtime/system/system.cpp",
   "src/runtime/system/system_aux.cpp",
 ]
+
+[[mechanism]]
+id = "mesh-owns-a-standalone-generated-refinement-criterion"
+issue = "ROM-95"
+rule = "DM13b"
+pre_freeze = true
+what = """
+The mesh can install a compiled local-state refinement region independently of a time Program.
+The package uses the established generated-criterion patch ABI and the same kernel emitter. The
+mesh validates the artifact and its ordered field table against its block state authorities and
+publishes the entry and table together after agreement, before any hierarchy exists. The prepared
+tagger runs the same generated entry on valid patches and uses the same tagging policy and
+topology publication. A compiled Program still owns the regions that it exports itself."""
+structures = [
+  { case = "AMR-scalar-seed", builder = "tests/cpp/integration/amr/test_amr_seed_no_refine.cpp::test_amr_seed_no_refine/PreparedTaggingSeedsExactGeometryWithoutReadMutation", structure = "Gaussian tracer: initial hierarchy seeding and exact geometry on first mesh access, without time advance" },
+  { case = "AMR-Euler-component-regrids", builder = "tests/cpp/integration/amr/test_amr_regrid_variable.cpp::test_amr_regrid_variable/FixedRefineRequestsDoNotRedilateExistingBuffer", structure = "Euler energy bump with uniform density: explicit repeated regrid and buffer retention, without time advance" },
+]
+measurement = """
+On d7677287 (ROMEO 829122, GNU 15.3, Dim2 Float64 without MPI), the 17 original CTest cases
+pass. Installing the two emitted tables in the real fixtures, with qualified routes and exact
+component names, fails at the first patch_boxes call because the criterion has no executable
+owner without a compiled Program. The two red tests precede the core change at 0b46601e. The
+historical evaluator gives identical boxes, coarse state and clock with the old and qualified
+route (one tracer image and five Euler images). The same test IDs check the generated results,
+native marks at the threshold and its Real neighbors, normalized decisions, wrong artifact and
+route, duplicate ownership and non-finite regrid refusal without publication."""
+refusal_set = "removed: a local conserved-state criterion had no generated entry outside a compiled Program; added: standalone artifacts refuse another field table, storage route, binary, ABI, or criterion identity, late or duplicate installation, and dependencies requiring halo or parameter/Program authority"
+paths = [
+  "include/pops/runtime/amr/generated_refinement_criterion.hpp",
+  "include/pops/runtime/amr_system.hpp",
+  "python/pops/codegen/program_emit_refinement_criterion.py",
+  "src/runtime/amr/amr_system.cpp",
+]

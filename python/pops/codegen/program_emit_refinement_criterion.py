@@ -265,4 +265,50 @@ def emit_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
     ])
 
 
-__all__ = ["CRITERION_ENTRY_SYMBOL", "CRITERION_IDENTITY_SYMBOL", "emit_refinement_criterion"]
+def emit_standalone_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
+    """Export a resolved local-state criterion with the standalone mesh-owner contract."""
+    source = emit_refinement_criterion(criterion, native_dimension=native_dimension)
+    if criterion.parameters or criterion.model_parameters:
+        raise ValueError("a standalone refinement criterion has no runtime parameter authority")
+    data = criterion.runtime_criterion_data({})
+    fields = data["fields"]
+    if not fields or any(any(field["reach"]) for field in fields):
+        raise ValueError("a standalone refinement criterion requires local conserved state reads")
+
+    tables, rows = [], []
+    for index, field in enumerate(fields):
+        variables = ", ".join(_cpp_string(name) for name in field["variables"])
+        components = ", ".join(str(slot) for slot in field["components"])
+        tables.extend([
+            "constexpr const char* variables_%d[] = {%s};" % (index, variables),
+            "constexpr int components_%d[] = {%s};" % (index, components),
+        ])
+        rows.append("  {%s, %s, %d, variables_%d, components_%d}," % (
+            _cpp_string(field["state"]), _cpp_string(field["block"]),
+            len(field["variables"]), index, index))
+    return "#include <pops/core/foundation/native_dimension.hpp>\n" + source + "\n".join([
+        "#include <pops/runtime/dynamic/abi_key.hpp>",
+        "",
+        "namespace {",
+        *tables,
+        "constexpr pops::runtime::amr::StandaloneCriterionFieldView criterion_fields[] = {",
+        *rows,
+        "};",
+        "constexpr pops::runtime::amr::StandaloneCriterionMetadata criterion_metadata{",
+        "  sizeof(pops::Real), %d, %d, criterion_fields};" % (criterion.hysteresis.min_cycles,
+                                                            len(fields)),
+        "}  // namespace",
+        "",
+        'extern "C" const char* pops_standalone_refinement_criterion_abi_key_v1() {',
+        "  return POPS_ABI_KEY_LITERAL;",
+        "}",
+        'extern "C" const pops::runtime::amr::StandaloneCriterionMetadata*',
+        "pops_standalone_refinement_criterion_metadata_v1() {",
+        "  return &criterion_metadata;",
+        "}",
+        "",
+    ])
+
+
+__all__ = ["CRITERION_ENTRY_SYMBOL", "CRITERION_IDENTITY_SYMBOL", "emit_refinement_criterion",
+           "emit_standalone_refinement_criterion"]
