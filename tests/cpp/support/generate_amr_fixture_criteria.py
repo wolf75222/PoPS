@@ -103,12 +103,13 @@ def main(output, dimension):
 
 
 def euler(output, dimension):
-    """Generate the two MPI criteria and all of their binding rows."""
+    """Generate the Euler criteria and their binding rows."""
     output.mkdir(parents=True, exist_ok=True)
     declarations = []
+    euler_state = ("rho", *("rho_" + axis for axis in "xyz"[:dimension]), "E")
     for name, blocks, variables, field, threshold in (
-        ("compiled_parity", ("gas",),
-         ("rho", *("rho_" + axis for axis in "xyz"[:dimension]), "E"), "rho", 1.2),
+        ("compiled_parity", ("gas",), euler_state, "rho", 1.2),
+        ("gravity", ("gas",), euler_state, "rho", 1.2),
         ("regrid_parity", ("a", "b"), ("n",), "n", 1.5),
     ):
         model = pops.Model(name)
