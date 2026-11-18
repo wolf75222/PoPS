@@ -34,6 +34,8 @@ _DIM = "pops::kNativeDimension"
 _MARK = "pops::runtime::amr::kGeneratedCriterion"
 _FLOAT32_MAX = int(float.fromhex("0x1.fffffep+127"))
 _FLOAT64_MAX = int(float.fromhex("0x1.fffffffffffffp+1023"))
+_FLOAT32_OVERFLOW = _FLOAT32_MAX + (1 << 103)
+_FLOAT64_OVERFLOW = _FLOAT64_MAX + (1 << 970)
 _REAL_LIMITS = "std::numeric_limits<pops::Real>"
 
 
@@ -47,16 +49,24 @@ def _native_literal(expression: Const) -> str:
         # Custom and algebraic literals supply their own lowering. Check its value before
         # the generated local narrows it to Real.
         return "pops_checked_criterion_literal(%s)" % token
-    if not -_FLOAT64_MAX <= value <= _FLOAT64_MAX:
+    if not -_FLOAT64_OVERFLOW < value < _FLOAT64_OVERFLOW:
         raise ValueError("refinement criterion literal exceeds the finite native scalar range")
-    if not -_FLOAT32_MAX <= value <= _FLOAT32_MAX:
-        invalid = "%s::quiet_NaN()" % _REAL_LIMITS
-        if literal.target == "float":
-            return invalid
-        # Do not evaluate the lossy conversion on a Float32 build. This expression
-        # stays inside the scope of the literal, including a guarded where branch.
-        return "(%s::max_exponent == 128 ? %s : (%s))" % (_REAL_LIMITS, invalid, token)
-    return token
+    if -_FLOAT32_MAX <= value <= _FLOAT32_MAX:
+        return token
+
+    sign = "-" if value < 0 else ""
+    if not -_FLOAT32_OVERFLOW < value < _FLOAT32_OVERFLOW:
+        binary32 = "%s::quiet_NaN()" % _REAL_LIMITS
+    else:
+        # The open band above the largest finite magnitude rounds back to that maximum.
+        binary32 = "%sstd::numeric_limits<float>::max()" % sign
+    if literal.target == "float":
+        return binary32
+    if not -_FLOAT64_MAX <= value <= _FLOAT64_MAX:
+        token = "%sstd::numeric_limits<double>::max()" % sign
+    # Avoid a narrowing conversion outside the range of C++'s floating conversion.
+    # The conditional remains in the active scope of this literal.
+    return "(%s::max_exponent == 128 ? %s : (%s))" % (_REAL_LIMITS, binary32, token)
 
 
 def _cpp_string(text: str) -> str:
@@ -218,6 +228,13 @@ def emit_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
         "POPS_HD pops::Real pops_checked_criterion_literal(Scalar value) {",
         "  constexpr auto limit = %s::max();" % _REAL_LIMITS,
         "  if (value >= -limit && value <= limit) return pops::Real(value);",
+        "  if constexpr (std::numeric_limits<Scalar>::digits > %s::digits &&" % _REAL_LIMITS,
+        "                std::numeric_limits<Scalar>::max_exponent > %s::max_exponent) {" % _REAL_LIMITS,
+        "    constexpr auto half_ulp = %s::max_exponent == 128 ? 0x1p103 : 0x1p970;" % _REAL_LIMITS,
+        "    constexpr Scalar overflow = Scalar(limit) + Scalar(half_ulp);",
+        "    if (value > limit && value < overflow) return limit;",
+        "    if (value < -limit && value > -overflow) return -limit;",
+        "  }",
         "  return %s::quiet_NaN();" % _REAL_LIMITS,
         "}",
         "",
