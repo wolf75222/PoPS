@@ -105,7 +105,10 @@ def _atoms(map_):
                 raise ProductReadUnknown("the inverse requires a domain proof through a composition")
             pending.extend((current.outer, current.inner))
         else:
-            yield from reversed((Inverse(current) if inverted else current).normal_form())
+            atom_map = Inverse(current) if inverted else current
+            if not isinstance(atom_map, IndexMap):
+                raise ProductReadUnknown("the point map needs a relation for its inverse")
+            yield from reversed(atom_map.normal_form())
 
 
 def _bound_extent(size, extents):

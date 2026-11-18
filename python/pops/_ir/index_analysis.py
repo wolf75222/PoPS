@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+from typing import Any
 
 from .index_maps import (
     Coarsen, Drop, Entity, IndexMap, Opaque, Pin, Refine, Unpin, Unrefine, dense, exact_weight)
@@ -111,7 +112,7 @@ class ReadOccurrence:
 
 
 def _walk_reads(body, *, paths=False):
-    pending = [((), body)]
+    pending: list[tuple[tuple[int, ...], Any]] = [((), body)]
     while pending:
         path, item = pending.pop()
         if type(item) in (Read, ProductRead, FibreFoldRead):
