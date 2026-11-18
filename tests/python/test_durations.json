@@ -1,5 +1,13 @@
 {
   "_meta": {
+    "rom106_face_coordinates": {
+      "basis": "Matched cold serial Dim1 and Dim2 runs on ROMEO c022 with source fc800abf took 55.37 s (film, job 829229) and 53.86 s (rotation, job 829265). Initial cold Mac Kokkos runs took 36.61 s each; the later 151.39 s Dim1 replay overlapped several native SDK builds. Each weight uses the larger controlled cold observation plus ten percent, rounded up to ten seconds. The source test took 0.97 s and keeps its 2 s estimate. Refresh from a complete CI receipt.",
+      "weights_seconds": {
+        "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py": 70,
+        "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py": 60,
+        "tests/python/unit/surface/test_n15_face_coordinates.py": 2
+      }
+    },
     "n12_20261118_c36_dsl_cold": {
       "scope": "Four installed Dim2 serial AMR scripts sharing the generated criterion fixture.",
       "basis": "Matched cold Linux x64 CI-entry runs on romeo-c026 measured production 325.28/389.48, guards 581.76/576.52, Poisson 198.74/197.84 and Roe 211.99/213.06 seconds (parent/topic). The longer observed guard run on Mac took 613.60 seconds. The updated weights round the larger observations plus ten percent up to ten seconds. Production and Poisson keep their existing weights. Refresh from a complete CI artifact.",
@@ -6737,7 +6745,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1231,
+    "estimated_count": 1234,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7028,6 +7036,8 @@
       "tests/python/integration/runtime/test_multisupport_double_consume_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_parent_reject_v14_native.py",
       "tests/python/integration/runtime/test_multisupport_stale_assessment_v14_native.py",
+      "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py",
+      "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py",
       "tests/python/integration/runtime/test_n16_three_words_native.py",
       "tests/python/integration/runtime/test_n17_centroid_slope_native.py",
       "tests/python/integration/runtime/test_n17_centroid_slope_rod_native.py",
@@ -7777,6 +7787,7 @@
       "tests/python/unit/surface/test_lot_d_step_rule.py",
       "tests/python/unit/surface/test_lot_e_project.py",
       "tests/python/unit/surface/test_lot_g_run.py",
+      "tests/python/unit/surface/test_n15_face_coordinates.py",
       "tests/python/unit/surface/test_n17_chart.py",
       "tests/python/unit/surface/test_n17_graded.py",
       "tests/python/unit/surface/test_n3_lot1_library_words.py",
@@ -8171,7 +8182,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1298,
+    "total_files": 1301,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -11024,5 +11035,8 @@
   "tests/python/unit/time/test_effect_table_ir5.py": 5,
   "tests/python/unit/time/test_recursive_graph_function_ir6.py": 5,
   "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": 300,
-  "tests/python/unit/numerics/test_product_read_footprints_g09.py": 5
+  "tests/python/unit/numerics/test_product_read_footprints_g09.py": 5,
+  "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py": 70,
+  "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py": 60,
+  "tests/python/unit/surface/test_n15_face_coordinates.py": 2
 }

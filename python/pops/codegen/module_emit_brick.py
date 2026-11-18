@@ -377,6 +377,25 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
                   availability, (row["consumer_slot"] if native_slots is None
                                  else native_slots[row["consumer_slot"]])))
     S.append("  }};")
+    from pops.fields.aux import AnalyticAux
+    from pops.model.provider_pack import ComponentKey
+
+    coordinate_slots = []
+    routes = model._auxiliary_provider_routes
+    for row in provider_rows:
+        route = routes.get(ComponentKey(**row["key"]))
+        producer = None if route is None else route["producer"]
+        if isinstance(producer, AnalyticAux) and producer._entity_coordinate_axis is not None:
+            slot = row["consumer_slot"] if native_slots is None else native_slots[row["consumer_slot"]]
+            axis = producer._entity_coordinate_axis
+            if not 0 <= axis < dimension or any(old_slot == slot for old_slot, _ in coordinate_slots):
+                raise ValueError("physical-flux coordinate slots disagree with the native pack")
+            coordinate_slots.append((slot, axis))
+    if coordinate_slots:
+        S.append("  inline static constexpr std::array<pops::FluxCoordinateSlot, %d> "
+                 "flux_coordinate_slots{{" % len(coordinate_slots))
+        S.extend("    {%d, %d}," % pair for pair in coordinate_slots)
+        S.append("  }};")
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         S.append(rt_member.rstrip("\n"))
     S += _exact_brick_contract(

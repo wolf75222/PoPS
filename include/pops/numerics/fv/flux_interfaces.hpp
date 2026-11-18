@@ -229,6 +229,19 @@ consteval bool qualified_flux_provider_requirements_valid() {
   }
 }
 
+/// One resolved coordinate role in a generated physical-flux provider pack.
+struct FluxCoordinateSlot {
+  int storage_slot;
+  int axis;
+};
+
+template <class Model>
+inline constexpr bool model_uses_flux_coordinates = [] {
+  if constexpr (requires { Model::flux_coordinate_slots; })
+    return !Model::flux_coordinate_slots.empty();
+  return false;
+}();
+
 /// Exact values before they are sealed into a model-qualified bound pack.
 ///
 /// This is deliberately the same compact POD used by sources, stability rules, and projections;
@@ -927,7 +940,13 @@ POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux_at(
     const LeftStorage& left_providers, const Index<Dim>& left_index,
     const typename Model::State& right_state, const RightStorage& right_providers,
     const Index<Dim>& right_index, const FaceContext& face) {
-  if constexpr (path_conservative_model<Model>) {
+  if constexpr (model_uses_flux_coordinates<Model> && !(requires {
+                  requires LeftStorage::certified_face_point;
+                  requires RightStorage::certified_face_point;
+                })) {
+    return FluxEvaluation<typename Model::State>::reject(
+        RiemannFailureCause::kUserInvalidStability);
+  } else if constexpr (path_conservative_model<Model>) {
     // Refusal precedes provider binding: the ordinary route has no authority
     // to read a path model's boundary traces, even when they would be valid.
     return FluxEvaluation<typename Model::State>::reject(

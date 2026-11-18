@@ -127,6 +127,8 @@
     "tests/python/integration/runtime/test_multisupport_double_consume_v14_native.py": 2,
     "tests/python/integration/runtime/test_multisupport_parent_reject_v14_native.py": 2,
     "tests/python/integration/runtime/test_multisupport_stale_assessment_v14_native.py": 2,
+    "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py": 1,
+    "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py": 2,
     "tests/python/integration/runtime/test_n16_three_words_native.py": 1,
     "tests/python/integration/runtime/test_n17_centroid_slope_rod_native.py": 1,
     "tests/python/integration/runtime/test_n17_graded_box_native.py": 3,
