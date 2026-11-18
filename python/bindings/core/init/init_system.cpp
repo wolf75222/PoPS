@@ -14,6 +14,7 @@
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 
 #include <array>
 #include <cmath>
@@ -1266,7 +1267,14 @@ void bind_system_physics(py::class_<System>& cls) {
               pops::RealVector<Dim> delta{};
               for (int axis = 0; axis < Dim; ++axis)
                 delta[axis] = data[static_cast<std::size_t>(axis) * cells + offset];
-              const pops::RealVector<Dim> slope = pops::centroid_slope(view, cell, delta);
+              pops::RealVector<Dim> slope{};
+              const auto status = pops::centroid_slope(view, cell, delta, slope);
+              if (status != pops::CentroidSlopeStatus::ok)
+                throw pops::runtime::program::StepAttemptRejected(
+                    pops::SolveStatus::kInvalidEvaluation,
+                    pops::runtime::program::StepAttemptDisposition::kReject, 0, "centroid_slope",
+                    status == pops::CentroidSlopeStatus::singular ? "singular centroid differences"
+                                                                  : "non-finite slope evaluation");
               for (int axis = 0; axis < Dim; ++axis)
                 slopes[static_cast<std::size_t>(axis) * cells + offset] = slope[axis];
             }

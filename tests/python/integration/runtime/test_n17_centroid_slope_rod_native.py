@@ -36,6 +36,11 @@ import math
 import numpy as np
 import pops
 import pytest
+from pops.analytic import coordinates
+from pops.domain import CartesianDomain
+from pops.frames import Cartesian1D
+from pops.layouts import Uniform
+from pops.mesh import CartesianGrid, GeometryEvolution, MovingControlVolumes
 
 from examples.api_v02.models_static_geometry import SLOPE_CELLS, build_graded_slope, graded_nodes
 from tests.python.support.api_v02_native import recorded_attempt
@@ -221,6 +226,27 @@ def test_an_affine_field_at_the_neighbour_centroids_returns_its_slope(native_cxx
     rows = centroid_rows(arrays)
     slopes = np.asarray(system._static_geometry_centroid_slopes(ranked(differences)))
     assert slopes.shape == (1, SLOPE_CELLS)
-    assert np.array_equal(slopes[0], differences[0] / rows[:, 0, 0])
+    assert np.array_equal(slopes[0].view("uint64"), (differences[0] / rows[:, 0, 0]).view("uint64"))
     floor = rounding_floor(rows, largest_value(arrays, OFFSET, (SLOPE,)), (SLOPE,))
     assert np.all(np.abs(slopes[0] - SLOPE) <= floor)
+
+
+def test_a_small_nonzero_centroid_pivot_keeps_its_finite_quotient(native_cxx, kokkos_root):
+    del native_cxx, kokkos_root
+    module, _ = native_profile(dimension=1, scope="N17 DN39 small finite pivot")
+    length = math.ldexp(1., -80)
+    frame = CartesianDomain("N17_short_rod", (0.,), (length,)).frame(Cartesian1D())
+    x, = coordinates(frame)
+    layout = MovingControlVolumes(Uniform(CartesianGrid(frame=frame, cells=(8,))),
+                                  evolution=GeometryEvolution((x * (x / length + 1.) / 2.,)))
+    system = layout_static_system(dimension=1, layout=layout, owner=pops.Case("N17_short_rod"))
+    rows = centroid_rows(system._static_geometry_snapshot())[:, 0, 0]
+    assert np.all((rows > 0.) & (rows < length))
+    slopes = system._static_geometry_centroid_slopes(ranked(-2. * rows[None]))
+    np.testing.assert_array_equal(slopes, np.full((1, 8), -2.))
+    for bad_value in (np.nan, np.inf):
+        differences = np.zeros((1, 8))
+        differences[0, 0] = bad_value
+        with pytest.raises(module.StepAttemptRejected) as rejected:
+            system._static_geometry_centroid_slopes(ranked(differences))
+        assert rejected.value.detail == "non-finite slope evaluation"
