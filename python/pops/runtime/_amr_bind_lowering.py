@@ -130,22 +130,6 @@ def _physical_patch_bounds(
     return result
 
 
-def _native_binary64(value: Any, *, where: str) -> float:
-    if (
-        isinstance(value, Mapping)
-        and set(value) == {"binary64"}
-        and isinstance(value["binary64"], str)
-    ):
-        result = float.fromhex(value["binary64"])
-    elif isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError("%s must be one canonical binary64 value" % where)
-    else:
-        result = float(value)
-    if not 0.0 < result <= 1.0:
-        raise ValueError("%s must be in (0, 1]" % where)
-    return result
-
-
 def _native_patch_generation_values(options: Any) -> tuple[bool, int]:
     """Lower the exact public patch authority into the current native provider ABI."""
     expected = {"native_route", "distribute_coarse", "coarse_max_grid"}
@@ -238,6 +222,7 @@ def amr_config_from_layout(
     hierarchy: Any = None,
     tagging: Any = None,
     native_layout: Any,
+    layout_identity: str,
 ) -> Any:
     """Build ``AmrSystemConfig`` without inferring or dropping authored facts."""
     from pops._bootstrap import AmrSystemConfig
@@ -249,8 +234,15 @@ def amr_config_from_layout(
     data["execution"] = validate_execution_data(data["execution"], dimension=len(cells))
     if type(hierarchy) is not ResolvedHierarchy:
         raise TypeError("adaptive runtime requires an exact resolved hierarchy")
+    from pops.amr.providers import clustering_controls
     from pops.mesh._amr.hierarchy_native import lower_native_hierarchy
 
+    cluster = hierarchy.plan.clustering.options.to_data()
+    if set(cluster) != {"provider"}:
+        raise ValueError("resolved AMR hierarchy requires one exact clustering policy")
+    efficiency, minimum, maximum = clustering_controls(
+        cluster["provider"], layout_identity=layout_identity,
+    )
     native_hierarchy = lower_native_hierarchy(hierarchy)
 
     cfg = AmrSystemConfig()
@@ -276,35 +268,21 @@ def amr_config_from_layout(
         cfg.accepted_halo_contract_version = 1
         cfg.accepted_halo_extent = widths
 
-    cluster = hierarchy.plan.clustering.options.to_data()
-    clustering_provider = cluster.get("provider")
     patches = hierarchy.plan.patch_generation.options.to_data()
     balance = hierarchy.plan.load_balance.options.to_data()
     distribute_coarse, coarse_max_grid = _native_patch_generation_values(patches)
     if type(balance) is not dict or set(balance) != {"provider"}:
         raise TypeError("resolved AMR load balance must preserve one exact provider authority")
     from pops.amr._load_balance_contract import validate_load_balance_provider_data
-    from pops.amr.providers import prepare_amr_provider_native_config
 
     balance_provider = validate_load_balance_provider_data(balance["provider"])
     if data.get("load_balance") != balance_provider:
         raise ValueError(
             "resolved hierarchy load balance differs from the adaptive layout authority"
         )
-    prepared_clustering = prepare_amr_provider_native_config(clustering_provider)
-    if prepared_clustering.role != "clustering":
-        raise ValueError("resolved hierarchy selected a non-clustering provider")
-    native_config_converters = {
-        "cluster_min_efficiency": lambda value: _native_binary64(
-            value, where="AMR clustering minimum_efficiency"
-        ),
-        "cluster_min_box_size": int,
-        "cluster_max_box_size": int,
-    }
-    if not set(prepared_clustering.config) <= set(native_config_converters):
-        raise NotImplementedError("AMR clustering provider emitted an unsupported native control")
-    for name, value in prepared_clustering.config.items():
-        setattr(cfg, name, native_config_converters[name](value))
+    cfg.cluster_min_efficiency = efficiency
+    cfg.cluster_min_box_size = minimum
+    cfg.cluster_max_box_size = maximum
     cfg.distribute_coarse = distribute_coarse
     cfg.coarse_max_grid = (coarse_max_grid,) * len(cells)
     cfg._set_load_balance_provider(

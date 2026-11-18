@@ -34,7 +34,7 @@ FC6B_CLOSED_LIST = (
 # shrinks (MG6); never add a name here.
 B6_INTERFACE_EXCEPTIONS = frozenset({
     "numerical_flux", "ghost_boundary", "field_boundary_closure", "boundary_flux",
-    "accepted_initial_ghost", "transfer", "tagger", "clustering", "field_topology", "writer",
+    "accepted_initial_ghost", "transfer", "tagger", "field_topology", "writer",
 })
 
 

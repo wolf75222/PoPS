@@ -139,16 +139,6 @@
       "operations": ["tag_batch"]
     },
     {
-      "id": 4,
-      "name": "clustering",
-      "uri": "pops://interfaces/clustering",
-      "version": 1,
-      "cpp_table": "PopsClusteringApiV1",
-      "hot_path": false,
-      "facets": ["lowering", "effects"],
-      "operations": ["cluster"]
-    },
-    {
       "id": 5,
       "name": "transfer",
       "uri": "pops://interfaces/transfer",

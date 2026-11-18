@@ -461,30 +461,7 @@ class BergerRigoutsos:
             raise TypeError("BergerRigoutsos.resolve_references requires a callable resolver")
         return self
 
-    def require_component_inputs(self, components: Any) -> None:
-        del components
-
-    def lower_amr_provider(self, context: Any) -> Any:
-        from pops.amr.providers import (
-            AMRProviderLoweringContext,
-            ResolvedAMRProviderBinding,
-        )
-
-        if type(context) is not AMRProviderLoweringContext:
-            raise TypeError("BergerRigoutsos requires an AMRProviderLoweringContext")
-        self.require_component_inputs(context.components)
-        from pops.amr.providers import amr_provider_binding_identity
-
-        data = {
-            **self.runtime_binding_data(),
-            "layout_identity": context.layout_identity,
-        }
-        data["provider_identity"] = amr_provider_binding_identity("clustering", data)
-        return ResolvedAMRProviderBinding("clustering", data)
-
     def runtime_binding_data(self) -> dict[str, Any]:
-        from pops import interfaces
-
         data = {
             "schema_version": 1,
             "provider_type": "builtin_amr_clustering",
@@ -493,7 +470,6 @@ class BergerRigoutsos:
                 "protocol": "builtin",
             },
             "provider_id": "pops.lib.amr::berger_rigoutsos",
-            "native_interface": interfaces.Clustering.to_data(),
             "minimum_efficiency": self.minimum_efficiency,
             "minimum_box_size": self.minimum_box_size,
             "maximum_box_size": self.maximum_box_size,

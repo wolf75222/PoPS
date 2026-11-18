@@ -692,6 +692,13 @@ def resolve_amr_authorities(
     """
     if type(context) is not AMRResolutionContext:
         raise TypeError("AMR resolution requires an AMRResolutionContext")
+    from pops.amr.providers import (
+        AMRProviderLoweringContext,
+        ResolvedAMRProviderBinding,
+        resolve_clustering_binding,
+    )
+
+    clustering_binding = resolve_clustering_binding(clustering, context.layout_plan.qualified_id)
     program_regrid = getattr(context.program, "_regrid", None)
     when = None
     if tagging is None and regrid is None:
@@ -727,13 +734,10 @@ def resolve_amr_authorities(
                 raise TypeError("AMR %s authority must implement %s()" % (slot, method))
     if type(context) is not AMRResolutionContext:
         raise TypeError("AMR resolution requires an AMRResolutionContext")
-    providers = (clustering, reflux)
-    for value in providers:
-        for method in ("inspect", "resolve_references", "lower_amr_provider"):
-            if not callable(getattr(value, method, None)):
-                raise TypeError("AMR provider authority must implement %s()" % method)
-    resolved_providers = tuple(
-        value.resolve_references(context.resolve) for value in providers)
+    for method in ("inspect", "resolve_references", "lower_amr_provider"):
+        if not callable(getattr(reflux, method, None)):
+            raise TypeError("AMR reflux provider authority must implement %s()" % method)
+    resolved_reflux = reflux.resolve_references(context.resolve)
     resolved_transfer = transfer.resolve_references(context.resolve).resolve(
         context.layout_plan, context.numerics, state_storage=context.state_storage
     )
@@ -745,32 +749,23 @@ def resolve_amr_authorities(
         context.state_storage,
     )
     resolved_tagging = resolve_tagging(tagging, tagging_context, when=when)
-    from pops.amr.providers import (
-        AMRProviderLoweringContext,
-        ResolvedAMRProviderBinding,
-    )
 
     provider_context = AMRProviderLoweringContext(
         layout_identity=context.layout_plan.qualified_id,
         components=context.components,
         clock_identity=context.program.clock.qualified_id,
     )
-    provider_bindings = {}
-    for provider_authority in resolved_providers:
-        lowered = provider_authority.lower_amr_provider(provider_context)
-        if type(lowered) is not ResolvedAMRProviderBinding:
-            raise TypeError(
-                "AMR provider lower_amr_provider() must return "
-                "ResolvedAMRProviderBinding"
-            )
-        if lowered.data.get("layout_identity") != provider_context.layout_identity:
-            raise ValueError("resolved AMR provider authenticates another layout")
-        if lowered.role in provider_bindings:
-            raise ValueError("AMR provider roles must be unique")
-        provider_bindings[lowered.role] = lowered.data
-    if set(provider_bindings) != {"clustering", "reflux"}:
-        raise ValueError("AMR resolution requires exact clustering and reflux provider roles")
-    provider_bindings = {role: provider_bindings[role] for role in ("clustering", "reflux")}
+    lowered = resolved_reflux.lower_amr_provider(provider_context)
+    if type(lowered) is not ResolvedAMRProviderBinding:
+        raise TypeError("AMR provider lower_amr_provider() must return ResolvedAMRProviderBinding")
+    if lowered.role != "reflux":
+        raise ValueError("AMR resolution requires an exact reflux provider role")
+    if lowered.data.get("layout_identity") != provider_context.layout_identity:
+        raise ValueError("resolved AMR provider authenticates another layout")
+    provider_bindings = {
+        "clustering": clustering_binding,
+        "reflux": lowered.data,
+    }
     resolved_hierarchy = _hierarchy(
         hierarchy,
         patch_layout,

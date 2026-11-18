@@ -3,8 +3,8 @@ from __future__ import annotations
 
 NATIVE_COMPONENT_ABI_VERSION = 1
 NATIVE_COMPONENT_COMMON_ABI_VERSION = 1
-NATIVE_COMPONENT_CATALOG_SHA256 = '3300f2e69852d0b12cbcb12b2c90c1c1dbdd9cddde375d4633062a64d0857985'
-NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = 'd5b9b39c34236696fee592a902560209576475cf07119e33bd7e0a8d3519352d'
+NATIVE_COMPONENT_CATALOG_SHA256 = 'eb2feac6afcc6b06eb7868d9ff6fc2a79ba57c36093aff363f762fe45bb5d9a2'
+NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = '4897c3ccc339e94a6d2b3150876ec013f7c692ff46b718cc4900f264818907a3'
 NATIVE_TAGGING_PROGRAM_ABI = {'version': 1,
  'execution_modes': {'native_backend': 1, 'host': 2},
  'collective_scopes': {'none': 0},
@@ -56,14 +56,6 @@ NATIVE_COMPONENT_INTERFACES = ({'id': 0,
   'hot_path': True,
   'facets': ('lowering', 'fallible_evaluation'),
   'operations': ('tag_batch',)},
- {'id': 4,
-  'name': 'clustering',
-  'uri': 'pops://interfaces/clustering',
-  'version': 1,
-  'cpp_table': 'PopsClusteringApiV1',
-  'hot_path': False,
-  'facets': ('lowering', 'effects'),
-  'operations': ('cluster',)},
  {'id': 5,
   'name': 'transfer',
   'uri': 'pops://interfaces/transfer',

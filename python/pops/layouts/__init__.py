@@ -535,7 +535,10 @@ class AMR(MeshDescriptor):
         """Whether the Program writes the criterion and the regrid decision (DM13b)."""
         return self.tagging is None and self.regrid is None
 
-    def _validate_authorities(self) -> None:
+    def _validate_authorities(self) -> Any:
+        from pops.amr.providers import require_builtin_clustering
+
+        clustering = require_builtin_clustering(self.clustering)
         if (self.tagging is None) != (self.regrid is None):
             raise TypeError("AMR writes both tagging= and regrid=, or neither; without them the "
                             "Program writes Regrid(criterion, when)")
@@ -550,7 +553,6 @@ class AMR(MeshDescriptor):
         data = {slot: _authority_data(value, slot) for slot, value in authorities.items()}
         data["patch_layout"] = _patch_layout_data(self.patch_layout)
         _load_balance_data(self.load_balance)
-        _provider_data(self.clustering, "clustering")
         _provider_data(self.reflux, "reflux")
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
             if not callable(getattr(self.grid, method, None)):
@@ -561,6 +563,7 @@ class AMR(MeshDescriptor):
         _resolved_hierarchy_data(self.hierarchy, dimension=dimension)
         if self._embedded_boundary_plan is not None:
             _embedded_boundary_plan_data(self._embedded_boundary_plan, where="AMR")
+        return clustering
 
     def requirements(self) -> RequirementSet:
         return RequirementSet({
@@ -594,7 +597,7 @@ class AMR(MeshDescriptor):
         })
 
     def options(self) -> dict[str, Any]:
-        self._validate_authorities()
+        clustering = self._validate_authorities()
         dimension = self.grid.capabilities().get("dim")
         options = {
             "grid": self.grid.to_dict(),
@@ -608,7 +611,7 @@ class AMR(MeshDescriptor):
             "execution": self.execution.to_data(),
             "patch_layout": _patch_layout_data(self.patch_layout),
             "load_balance": _load_balance_data(self.load_balance),
-            "clustering": self.clustering.inspect(),
+            "clustering": clustering.inspect(),
             "reflux": self.reflux.inspect(),
         }
         if self._embedded_boundary_plan is not None:
@@ -650,6 +653,9 @@ class AMR(MeshDescriptor):
         """Return a detached descriptor with every declaration Handle authenticated."""
         if not callable(resolver):
             raise TypeError("AMR.resolve_for_case requires a callable Handle resolver")
+        from pops.amr.providers import require_builtin_clustering
+
+        clustering = require_builtin_clustering(self.clustering)
 
         def resolved(value: Any) -> Any:
             if getattr(value, "is_resolved", False):
@@ -667,7 +673,7 @@ class AMR(MeshDescriptor):
             embedded_boundary=None,
             patch_layout=self.patch_layout,
             load_balance=self.load_balance,
-            clustering=self.clustering.resolve_references(resolved),
+            clustering=clustering,
             reflux=self.reflux.resolve_references(resolved),
         )
         # Resolution keeps only the signed, detached plan.  It cannot re-enter a mutable Geometry

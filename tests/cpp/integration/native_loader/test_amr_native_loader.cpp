@@ -88,7 +88,14 @@ PopsFieldViewV1 field_view(double* data, const std::array<std::size_t, Dim>& ext
   return result;
 }
 
-enum class FluxTableFixture { Exact, HeaderOnly, ForgedEntrySize, WrongAbi };
+enum class FluxTableFixture {
+  Exact,
+  HeaderOnly,
+  ForgedEntrySize,
+  WrongAbi,
+  PriorCatalogue,
+  RetiredInterface
+};
 
 constexpr const char* kComponentId = "pops://test/final-flux@1.0.0";
 constexpr const char* kSemanticIdentity = "semantic-final-flux";
@@ -384,38 +391,6 @@ std::string component_source() {
       return 0;
     }
 
-    int cluster(void*, const PopsClusteringRequestV1* request, PopsComponentStatusV1* status) {
-      if (request->dimension < 1 || request->dimension > 3 || request->box_capacity < 1)
-        return 2;
-      std::array<std::int64_t, 3> lo{0, 0, 0};
-      std::array<std::int64_t, 3> hi{-1, -1, -1};
-      for (std::int32_t axis = 0; axis < request->dimension; ++axis)
-        lo[axis] = request->extents[axis];
-      for (std::size_t point = 0; point < request->tags.size; ++point) {
-        if (request->tags.data[point] == 0)
-          continue;
-        std::size_t remaining = point;
-        for (std::int32_t axis = 0; axis < request->dimension; ++axis) {
-          const auto coordinate = static_cast<std::int64_t>(
-              remaining % static_cast<std::size_t>(request->extents[axis]));
-          remaining /= static_cast<std::size_t>(request->extents[axis]);
-          lo[axis] = std::min(lo[axis], coordinate);
-          hi[axis] = std::max(hi[axis], coordinate);
-        }
-      }
-      if (hi[0] < 0) {
-        *request->box_count = 0;
-      } else {
-        for (std::int32_t axis = 0; axis < request->dimension; ++axis) {
-          request->boxes[axis] = lo[axis];
-          request->boxes[request->dimension + axis] = hi[axis];
-        }
-        *request->box_count = 1;
-      }
-      *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
-      return 0;
-    }
-
     int prepare(const PopsComponentPrepareRequestV1* request, void** state,
                 PopsComponentStatusV1* status) {
       const bool canonical_execution =
@@ -467,10 +442,17 @@ std::string component_source() {
     const PopsTaggerApiV2 tagger{{sizeof(PopsTaggerApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,
                                   POPS_NATIVE_INTERFACE_TAGGER_V2, 2, &prepare, &destroy},
                                  &tag_batch};
-    const PopsClusteringApiV1 clustering{
-        {sizeof(PopsClusteringApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
-         POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, &prepare, &destroy},
-        &cluster};
+#if defined(POPS_TEST_RETIRED_INTERFACE)
+    constexpr auto retired_clustering_id = static_cast<PopsNativeInterfaceIdV1>(4);
+    struct RetiredClusteringTable {
+      PopsComponentTableHeaderV1 header;
+      int (*cluster)(void*, const void*, PopsComponentStatusV1*);
+    };
+    const RetiredClusteringTable retired_clustering{
+        {sizeof(RetiredClusteringTable), POPS_COMPONENT_PROTOCOL_ABI_V1, retired_clustering_id, 1,
+         &prepare, &destroy},
+        +[](void*, const void*, PopsComponentStatusV1*) { return 0; }};
+#endif
     const PopsComponentInterfaceEntryV1 interfaces[]{
         {POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
 #if defined(POPS_TEST_FORGED_FLUX_ENTRY_SIZE)
@@ -482,7 +464,10 @@ std::string component_source() {
         {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1), &ghost},
         {POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1, 1, sizeof(PopsBoundaryFluxApiV1), &boundary_flux},
         {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2), &tagger},
-        {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1), &clustering}};
+#if defined(POPS_TEST_RETIRED_INTERFACE)
+        {retired_clustering_id, 1, sizeof(retired_clustering), &retired_clustering},
+#endif
+    };
     const PopsComponentApiV1 component{
         sizeof(PopsComponentApiV1),
         POPS_COMPONENT_PROTOCOL_ABI_V1,
@@ -491,11 +476,15 @@ std::string component_source() {
 #else
         POPS_ABI_KEY_LITERAL,
 #endif
+#if defined(POPS_TEST_PRIOR_CATALOGUE)
+        "3300f2e69852d0b12cbcb12b2c90c1c1dbdd9cddde375d4633062a64d0857985",
+#else
         POPS_COMPONENT_CATALOG_SHA256_V1,
+#endif
         "pops://test/final-flux@1.0.0",
         "semantic-final-flux",
         "manifest-final-flux",
-        6,
+        sizeof(interfaces) / sizeof(interfaces[0]),
         interfaces};
     }  // namespace
 
@@ -541,6 +530,10 @@ std::filesystem::path compile_component(FluxTableFixture fixture = FluxTableFixt
     fixture_flags += " -DPOPS_TEST_FORGED_FLUX_ENTRY_SIZE";
   if (fixture == FluxTableFixture::WrongAbi)
     fixture_flags += " -DPOPS_TEST_WRONG_COMPONENT_ABI";
+  if (fixture == FluxTableFixture::PriorCatalogue)
+    fixture_flags += " -DPOPS_TEST_PRIOR_CATALOGUE";
+  if (fixture == FluxTableFixture::RetiredInterface)
+    fixture_flags += " -DPOPS_TEST_RETIRED_INTERFACE";
   const auto package = pops::test::native_dso::compile_shared(source, library, fixture_flags);
   if (!package.ok) {
     pops::test::native_dso::report_compile_failure("test_amr_native_loader", package);
@@ -562,8 +555,7 @@ pops::component::ExpectedNativeComponent expected(const std::filesystem::path& l
            {POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, sizeof(PopsTransferApiV2)},
            {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1)},
            {POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1, 1, sizeof(PopsBoundaryFluxApiV1)},
-           {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2)},
-           {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1)}}};
+           {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2)}}};
 }
 
 std::shared_ptr<const pops::component::PreparedExecutionContextV1> prepared_execution() {
@@ -842,6 +834,44 @@ TEST(test_amr_native_loader, RefusesHeaderOnlyTableWithForgedFullEntrySize) {
   const auto library = compile_component(FluxTableFixture::ForgedEntrySize);
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected(library)),
                std::runtime_error);
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, RefusesPriorCatalogueWithCurrentAbiAndRetainedTables) {
+  const auto library = compile_component(FluxTableFixture::PriorCatalogue);
+  const auto manifest = expected(library);
+  try {
+    (void)pops::component::LoadedComponent::load(library.string(), manifest);
+    ADD_FAILURE() << "a DSO with a prior catalogue digest must be refused";
+  } catch (const std::runtime_error& error) {
+    EXPECT_STREQ(error.what(), "native component API identity mismatch");
+  }
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, RefusesRetiredIdWithCurrentCatalogueAndCoherentManifest) {
+  constexpr auto retired_id = static_cast<PopsNativeInterfaceIdV1>(4);
+  EXPECT_EQ(pops::component::generated_native_interface_version(retired_id), 0u);
+  EXPECT_EQ(pops::component::generated_native_interface_table_size(retired_id), 0u);
+  const PopsComponentTableHeaderV1 header{sizeof(PopsComponentTableHeaderV1),
+                                          POPS_COMPONENT_PROTOCOL_ABI_V1,
+                                          retired_id,
+                                          1,
+                                          nullptr,
+                                          nullptr};
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(retired_id, &header,
+                                                                             sizeof(header)));
+
+  const auto library = compile_component(FluxTableFixture::RetiredInterface);
+  auto manifest = expected(library);
+  manifest.interfaces.push_back({retired_id, 1, sizeof(PopsComponentTableHeaderV1)});
+  try {
+    (void)pops::component::LoadedComponent::load(library.string(), manifest);
+    ADD_FAILURE() << "retired ABI id 4 must be refused";
+  } catch (const std::runtime_error& error) {
+    EXPECT_STREQ(error.what(),
+                 "native component interface version differs from the closed catalog");
+  }
   std::filesystem::remove(library);
 }
 
