@@ -398,6 +398,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3c-2b): AMR tagging is written only as regions of `cell`. The ValueExpr tag
+  graph leaves `pops`: `Tag` and `Coarsen` refuse an expression of the state and show the region
+  form, `Tag(lambda cell: cell.value(q) > case.value(t))`; `mesh/_amr/tagging_graph.py` and
+  `tagging_resolution.py`, the `resolve_for_amr_*` hooks of the IR (a Boolean node now declares
+  `__pops_ir_boolean__`, read by `pops._ir.is_boolean_expression`), the bytecode lowering of
+  `flow_bootstrap_tagging`, `pops.amr.TaggerProvider`, `pops.lib.amr.SymbolicTagger` and the
+  `tagger=` slot of `pops.layouts.AMR` are removed. `Hysteresis`, `EqualityPolicy` and
+  `ConflictPolicy` keep their names in `pops.amr` (module `mesh/_amr/tagging_policy.py`). The
+  parity tests compare with the boxes and marks that the graph gave, recorded before it went
+  (`tests/python/data/amr_graph_oracles.json`, with a margin to each threshold). Tagging on the
+  output of a field solve, which only the graph read, is gone with it. The native bytecode VM is
+  retained as a seam for 24 C++ and five Python low-level tests until lot 3c-2c. Two further
+  C++ tests cover the native Tagger ABI and loader during that transition.
 - ROM-95 (N12, lot 3c-2a): a refinement region reads a runtime parameter of its model.
   `Tag(lambda cell: cell.value(q) > model.value(nu))` reads `nu` from the RuntimeParams table of
   the block whose state it reads, the table its faces and stencils read, when the tagging plan is

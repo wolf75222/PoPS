@@ -457,7 +457,6 @@ class AMR(MeshDescriptor):
         embedded_boundary: Any = None,
         patch_layout: Any = None,
         load_balance: Any = None,
-        tagger: Any = None,
         clustering: Any = None,
         reflux: Any = None,
     ) -> None:
@@ -477,20 +476,13 @@ class AMR(MeshDescriptor):
             else _capture_embedded_boundary(self.grid, embedded_boundary, where="AMR")
         )
         self._patch_layout = PatchLayout() if patch_layout is None else patch_layout
-        if load_balance is None or tagger is None or clustering is None or reflux is None:
-            from pops.lib.amr import (
-                BergerRigoutsos,
-                FluxRegisterReflux,
-                SpaceFillingCurve,
-                SymbolicTagger,
-            )
+        if load_balance is None or clustering is None or reflux is None:
+            from pops.lib.amr import BergerRigoutsos, FluxRegisterReflux, SpaceFillingCurve
 
             load_balance = SpaceFillingCurve() if load_balance is None else load_balance
-            tagger = SymbolicTagger() if tagger is None else tagger
             clustering = BergerRigoutsos() if clustering is None else clustering
             reflux = FluxRegisterReflux() if reflux is None else reflux
         self._load_balance = load_balance
-        self._tagger = tagger
         self._clustering = clustering
         self._reflux = reflux
 
@@ -531,10 +523,6 @@ class AMR(MeshDescriptor):
         return self._load_balance
 
     @property
-    def tagger(self) -> Any:
-        return self._tagger
-
-    @property
     def clustering(self) -> Any:
         return self._clustering
 
@@ -562,7 +550,6 @@ class AMR(MeshDescriptor):
         data = {slot: _authority_data(value, slot) for slot, value in authorities.items()}
         data["patch_layout"] = _patch_layout_data(self.patch_layout)
         _load_balance_data(self.load_balance)
-        _provider_data(self.tagger, "tagger")
         _provider_data(self.clustering, "clustering")
         _provider_data(self.reflux, "reflux")
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
@@ -621,7 +608,6 @@ class AMR(MeshDescriptor):
             "execution": self.execution.to_data(),
             "patch_layout": _patch_layout_data(self.patch_layout),
             "load_balance": _load_balance_data(self.load_balance),
-            "tagger": self.tagger.inspect(),
             "clustering": self.clustering.inspect(),
             "reflux": self.reflux.inspect(),
         }
@@ -681,7 +667,6 @@ class AMR(MeshDescriptor):
             embedded_boundary=None,
             patch_layout=self.patch_layout,
             load_balance=self.load_balance,
-            tagger=self.tagger.resolve_references(resolved),
             clustering=self.clustering.resolve_references(resolved),
             reflux=self.reflux.resolve_references(resolved),
         )
@@ -707,7 +692,6 @@ class AMR(MeshDescriptor):
             execution=self.execution,
             patch_layout=self.patch_layout,
             load_balance=self.load_balance,
-            tagger=self.tagger,
             clustering=self.clustering,
             reflux=self.reflux,
             context=context,

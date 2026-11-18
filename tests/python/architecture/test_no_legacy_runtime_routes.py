@@ -169,8 +169,10 @@ def test_native_amr_tagging_has_only_the_prepared_installation_route() -> None:
         + "\n  ".join(violations)
     )
     assert "_set_bootstrap_tagging" in sources["python/bindings/core/init/init_amr.cpp"]
-    assert "flow_bootstrap_tagging" in sources[
-        "python/pops/runtime/_runtime_mesh_lowering.py"]
+    assert "_install_amr_tagger_component" not in sources["python/bindings/core/init/init_amr.cpp"]
+    lowering = sources["python/pops/runtime/_runtime_mesh_lowering.py"]
+    assert "flow_bootstrap_tagging" in lowering and "sim._set_generated_tagging(" in lowering
+    assert "_set_bootstrap_tagging" not in lowering
     assert "struct Regrid" not in sources["include/pops/runtime/amr_system.hpp"]
     assert ".regrid.threshold" not in sources["src/runtime/amr/amr_system.cpp"]
 

@@ -156,150 +156,6 @@ def _flux_component(tmp_path: Path):
     )
 
 
-def _tagger_source_component(tmp_path: Path):
-    """Build the source Tagger used by the existing AMR retry scenario."""
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    interface = interfaces.Tagger
-    from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
-
-    capability = {
-        "schema_version": 1,
-        "capability_type": "amr_tagging_program",
-        "leaf_opcodes": list(NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"]),
-        "logical_opcodes": list(NATIVE_TAGGING_PROGRAM_ABI["logical_opcodes"]),
-        "candidate_outputs": list(NATIVE_TAGGING_PROGRAM_ABI["candidate_outputs"]),
-        "indicator_stencil_routes": list(NATIVE_TAGGING_PROGRAM_ABI["indicator_stencil_routes"]),
-        "maximum_stencil_terms": NATIVE_TAGGING_PROGRAM_ABI["maximum_stencil_terms"],
-        "maximum_instruction_count": NATIVE_TAGGING_PROGRAM_ABI["maximum_instruction_count"],
-        "non_finite_policy": "reject",
-        "persistent_hysteresis": False,
-        "execution_mode": "host",
-        "collective_scope": "none",
-        "memory_spaces": ["host"],
-    }
-    manifest = ComponentManifest(
-        uri="pops://external.test/shared-interface/tagger",
-        component_type="tagger",
-        version="1.0.0",
-        facets=interface.facets,
-        signature={"generic": True, "native_interface": interface.signature_declaration()},
-        interfaces=interface.manifest_declarations(),
-        capabilities=(capability,),
-        # Successful masks use only finite per-cell comparisons and fixed-order boolean OR.
-        # The explicit fail-once status publishes no Tagger result; the owning transaction
-        # must restore any hierarchy prefix already rebuilt by the previous parent.
-        determinism={"classification": "bitwise", "scope": ["same-input"]},
-        target={"variants": [{
-            "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
-        }]},
-        entry_points={"interface_table": "pops_component_interface_v1"},
-    )
-    expected_parameters_json = json.dumps(
-        manifest.to_data()["parameters"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    )
-    expected_target_json = json.dumps(
-        manifest.to_data()["target"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    )
-    source = f'''#include <pops/runtime/config/generated_component_abi.hpp>
-#include <atomic>
-#include <cmath>
-#include <cstddef>
-#include <cstring>
-
-namespace {{
-std::atomic<int> fail_once{{0}};
-
-int prepare(const PopsComponentPrepareRequestV1* request, void** state,
-            PopsComponentStatusV1* status) {{
-  if (!request || !state || !status || !request->parameters_json || !request->target_json ||
-      std::strcmp(request->parameters_json, {json.dumps(expected_parameters_json)}) != 0 ||
-      std::strcmp(request->target_json, {json.dumps(expected_target_json)}) != 0) {{
-    if (status) *status = {{sizeof(PopsComponentStatusV1), 71,
-                            POPS_COMPONENT_ABORT_RUN_V1, "unauthenticated Tagger prepare JSON"}};
-    return 71;
-  }}
-  *state = new int(771);
-  *status = {{sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
-  return 0;
-}}
-
-void destroy(void* state) {{ delete static_cast<int*>(state); }}
-
-int tag_batch(void* state, const PopsTaggerRequestV2* request, PopsComponentStatusV1* status) {{
-  if (!state || *static_cast<int*>(state) != 771 || !request || !status ||
-      request->execution_mode != POPS_TAGGER_EXECUTION_HOST_V2 ||
-      request->collective_scope != POPS_TAGGER_COLLECTIVE_NONE_V2 ||
-      request->execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
-      request->state_count != 2 || request->refine_candidates.size == 0 ||
-      request->refine_candidates.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
-      request->coarsen_candidates.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
-      request->refine_equalities.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
-      request->coarsen_equalities.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
-      request->coarsen_candidates.size != request->refine_candidates.size ||
-      request->refine_equalities.size != request->refine_candidates.size ||
-      request->coarsen_equalities.size != request->refine_candidates.size ||
-      request->logical_time.tick < 0) return 72;
-  // Fail only after parent zero has replaced the hierarchy with its temporary two-level prefix.
-  if (request->logical_time.tick > 0 && request->logical_time.level == 1 &&
-      fail_once.fetch_add(1) == 0) {{
-    *status = {{sizeof(PopsComponentStatusV1), 73, POPS_COMPONENT_RETRY_STEP_V1,
-                "injected rank-local Tagger failure"}};
-    return 0;
-  }}
-  for (size_t point = 0; point < request->refine_candidates.size; ++point) {{
-    bool refine = false;
-    for (size_t state_index = 0; state_index < request->state_count; ++state_index) {{
-      const PopsConstFieldViewV1& field = request->states[state_index].values;
-      if (!field.data || field.dimension != 2 || field.component_count != 1 ||
-          field.memory_space != POPS_MEMORY_SPACE_HOST_V1) return 74;
-      size_t quotient = point;
-      size_t offset = 0;
-      for (int axis = 0; axis < 2; ++axis) {{
-        const size_t interior = field.extents[axis] - field.ghost_lower[axis] - field.ghost_upper[axis];
-        if (interior == 0) return 75;
-        offset += (quotient % interior + field.ghost_lower[axis]) * field.axis_strides[axis];
-        quotient /= interior;
-      }}
-      const double value = static_cast<const double*>(field.data)[offset];
-      if (!std::isfinite(value)) return 76;
-      refine = refine || value > 0.10;
-    }}
-    request->refine_candidates.data[point] = refine ? 1u : 0u;
-    request->coarsen_candidates.data[point] = 0u;
-    request->refine_equalities.data[point] = 0u;
-    request->coarsen_equalities.data[point] = 0u;
-  }}
-  *status = {{sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
-  return 0;
-}}
-
-const PopsTaggerApiV2 tagger_table = {{
-  {{sizeof(PopsTaggerApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,
-    POPS_NATIVE_INTERFACE_TAGGER_V2, 2, &prepare, &destroy}},
-  &tag_batch
-}};
-const PopsComponentInterfaceEntryV1 entry = {{
-  POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2), &tagger_table
-}};
-const PopsComponentApiV1 api = {{
-  sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
-  POPS_ABI_KEY_LITERAL, POPS_COMPONENT_CATALOG_SHA256_V1,
-  {json.dumps(manifest.component_id)}, {json.dumps(manifest.semantic_digest.token)},
-  {json.dumps(manifest.manifest_digest.token)}, 1, &entry
-}};
-}}
-extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &api; }}
-'''.encode()
-    source_name = "shared_tagger.cpp"
-    (tmp_path / source_name).write_bytes(source)
-    package = build_source_package_manifest(
-        components={"tagger": manifest}, payloads={source_name: ("source", source)}
-    )
-    package_path = tmp_path / "shared-tagger.pops.json"
-    package_path.write_text(json.dumps(package), encoding="utf-8")
-    return load(package_path).require("tagger", interface=interface)()
-
-
 def _ghost_source_component(tmp_path: Path):
     """Build one real GhostBoundary library that fails once after dirtying ABI scratch."""
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -557,7 +413,7 @@ def _program(left_state, right_state, rate):
     return program
 
 
-def _ssprk2_program(left_state, right_state, rate):
+def _ssprk2_program(left_state, right_state, rate, *, source_rate=None):
     program = pops.Program("shared_interface_ssprk2")
     left = program.state(left_state)
     right = program.state(right_state)
@@ -568,21 +424,22 @@ def _ssprk2_program(left_state, right_state, rate):
     right_k0 = program.value("right_k0", rate(right_n), at=stage_0)
     stage_1 = StagePoint("shared_stage_1", {"main": TimePoint(program.clock, 1)})
     left_stage = program.value(
-        "left_stage", left.n + program.dt * left_k0, at=stage_1)
+        "left_stage", left_n + program.dt * left_k0, at=stage_1)
     right_stage = program.value(
-        "right_stage", right.n + program.dt * right_k0, at=stage_1)
+        "right_stage", right_n + program.dt * right_k0, at=stage_1)
     left_k1 = program.value("left_k1", rate(left_stage), at=stage_1)
     right_k1 = program.value("right_k1", rate(right_stage), at=stage_1)
-    left_next = program.value(
-        "left_next",
-        left.n + 0.5 * program.dt * left_k0 + 0.5 * program.dt * left_k1,
-        at=left.next.point,
-    )
-    right_next = program.value(
-        "right_next",
-        right.n + 0.5 * program.dt * right_k0 + 0.5 * program.dt * right_k1,
-        at=right.next.point,
-    )
+    left_next_expr = left_n + 0.5 * program.dt * left_k0 + 0.5 * program.dt * left_k1
+    right_next_expr = right_n + 0.5 * program.dt * right_k0 + 0.5 * program.dt * right_k1
+    if source_rate is not None:
+        # Read the parameter through a separate zero source at publication.
+        # The two subcycled shared-flux stages retain their original inputs.
+        left_source = program.value("left_neutral_source", source_rate(left_n), at=stage_0)
+        right_source = program.value("right_neutral_source", source_rate(right_n), at=stage_0)
+        left_next_expr = left_next_expr + program.dt * left_source
+        right_next_expr = right_next_expr + program.dt * right_source
+    left_next = program.value("left_next", left_next_expr, at=left.next.point)
+    right_next = program.value("right_next", right_next_expr, at=right.next.point)
     program.commit(left.next, left_next)
     program.commit(right.next, right_next)
     program.step_strategy(FixedDt(1.0e-3))
@@ -1044,15 +901,57 @@ def test_static_interface_uses_density_in_both_stages_for_cell_totals(tmp_path):
             np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=0.0)
 
 
+def _with_regrid_fault_parameter(core):
+    """Give the shared transport fixture a model parameter read by a neutral source."""
+    from pops.math import ddt, div
+    from pops.params import RuntimeParam
+    from pops.representations import Conservative
+    from pops.spaces import CellState
+
+    model = pops.Model("shared_interface_regrid_failure", frame=core.frame)
+    state = model.state("U", components=("u",), representation=Conservative(),
+                        space=CellState(frame=core.frame))
+    (u,) = state
+    a_x = model.param(RuntimeParam("a_x", default=1.0))
+    a_y = model.param(RuntimeParam("a_y", default=1.0e-12))
+    inlet_x = model.param(RuntimeParam("u_in_x", default=0.0))
+    inlet_y = model.param(RuntimeParam("u_in_y", default=0.0))
+    fault = model.param(RuntimeParam("tagging_fault", default=0.0))
+    values = {axis: model.value(handle) for axis, handle in zip(
+        core.frame.axes, (a_x, a_y), strict=True)}
+    velocity = model.vector("a", frame=core.frame, components=values)
+    flux = model.flux(
+        "advection_flux", frame=core.frame, state=state,
+        components={axis: (value * u,) for axis, value in values.items()},
+        waves={axis: (value,) for axis, value in values.items()})
+    source = model.source("parameter_read", on=state, value=(0.0 * model.value(fault) * u,))
+    balance = model.rate("advection_rate", equation=ddt(state) == -div(flux) + source)
+    rate = balance.select(flux)
+    source_rate = balance.select(source)
+
+    case = pops.Case("shared_interface_regrid_failure")
+    tracer = case.block("tracer", model=model)
+    refine_threshold = case.param(RuntimeParam("refine_u_gradient", default=0.10))
+    coarsen_threshold = case.param(RuntimeParam("coarsen_u_gradient", default=0.04))
+    return replace(
+        core, model=model, state=state, scalar=u, velocity=velocity, flux=flux, rate=rate,
+        case=case, tracer=tracer, tracer_state=tracer[state],
+        velocity_x_param=a_x, velocity_y_param=a_y,
+        inlet_x_param=inlet_x, inlet_y_param=inlet_y,
+        inlet_x_value=model.value(inlet_x), inlet_y_value=model.value(inlet_y),
+        refine_threshold=refine_threshold, coarsen_threshold=coarsen_threshold,
+    ), fault, source_rate
+
+
 def _shared_interface_amr_authoring(
     tmp_path,
     *,
     component_root=None,
     component=None,
-    tagger_component=None,
     program_factory=_ssprk2_program,
     with_checkpoint=True,
     with_implicit_solve=False,
+    with_late_regrid_failure=False,
 ):
     from pops.amr import (
         AMRTagging,
@@ -1067,14 +966,18 @@ def _shared_interface_amr_authoring(
     from pops.boundary.transport import Inflow, Outflow
     from pops.initial import InitialCondition
     from pops.lib.amr import ConservativeLinear, StateTransfer
+    from pops.numerics import StateStorage
     from pops.lib.initial import BindArray
-    from pops.math import ValueExpr, ddt, div
+    from pops.math import ddt, div
     from pops.projection import ConservativeCellAverage
     from pops.representations import Conservative
     from pops.spaces import CellState
 
     example = _load_example()
     core = example.build_authoring(output_root=tmp_path / "unused")
+    fault = source_rate = None
+    if with_late_regrid_failure:
+        core, fault, source_rate = _with_regrid_fault_parameter(core)
     right = core.case.block("right", model=core.model)
     right_state = right[core.state]
     finite_volume = FiniteVolume(
@@ -1088,6 +991,8 @@ def _shared_interface_amr_authoring(
     def numerics(state):
         plan = DiscretizationPlan()
         plan.rates.add(core.rate, finite_volume)
+        if source_rate is not None:
+            plan.rates.add(source_rate, StateStorage())
         plan.boundaries.add(TransportBoundarySet({
             boundaries.x_min: Inflow(state=state, value=core.inlet_x_value),
             boundaries.x_max: Outflow(state=state),
@@ -1181,6 +1086,9 @@ def _shared_interface_amr_authoring(
         program = program_factory(
             core.tracer_state, right_state, core.rate, packed_state
         )
+    elif fault is not None:
+        program = program_factory(
+            core.tracer_state, right_state, core.rate, source_rate=source_rate)
     else:
         program = program_factory(core.tracer_state, right_state, core.rate)
     core.case.program(program)
@@ -1202,12 +1110,29 @@ def _shared_interface_amr_authoring(
     transfer.state(right_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     if packed_state is not None:
         transfer.state(packed_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
+    tag_rules = (
+        Tag(lambda cell: cell.value(core.tracer_state)
+            > core.case.value(core.refine_threshold)),
+        Tag(lambda cell: cell.value(right_state) > core.case.value(core.refine_threshold)),
+    )
+    failure_handle = None
+    if fault is not None:
+        failure_handle = core.case.resolve(fault, block=core.tracer)
+        model_value = core.model.value(fault).resolve_references(
+            lambda declaration: core.case.resolve(declaration, block=core.tracer))
+        x_axis = core.frame.axes[0]
+
+        def fail_on_fine_parent(cell):
+            value = cell.value(core.tracer_state)
+            # L0 has width 1/8. Its denominator stays positive after arming the
+            # fault, so L0 is staged before the zero denominator at L1.
+            width_shift = cell.width(x_axis) - 1.0 / 16
+            denominator = width_shift * width_shift + (1.0 - model_value)
+            return (1 + value * value) / denominator < 0
+
+        tag_rules += (Tag(fail_on_fine_parent),)
     tagging = AMRTagging(
-        rules=(
-            Tag(ValueExpr(core.tracer_state) > core.case.value(core.refine_threshold)),
-            Tag(ValueExpr(right_state) > core.case.value(core.refine_threshold)),
-            Buffer(cells=1, selection="refine-requests"),
-        ),
+        rules=tag_rules + (Buffer(cells=1, selection="refine-requests"),),
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
         conflict_policy=ConflictPolicy.REFINE_WINS,
     )
@@ -1241,7 +1166,6 @@ def _shared_interface_amr_authoring(
         right=right,
         right_state=right_state,
         component=component,
-        tagger_component=tagger_component,
         program=program,
         transfer=transfer,
         tagging=tagging,
@@ -1250,6 +1174,7 @@ def _shared_interface_amr_authoring(
         packed_state=packed_state,
         packed_initial=packed_initial,
         params=params,
+        late_regrid_failure=failure_handle,
     )
 
 
@@ -1268,7 +1193,6 @@ def _resolve_shared_interface_amr(
         AMRExecution,
         AMRHierarchy,
         AMRRegrid,
-        TaggerProvider,
     )
     from pops.layouts import AMR
 
@@ -1283,11 +1207,6 @@ def _resolve_shared_interface_amr(
                 ratios=tuple(2 for _ in range(max_levels - 1)),
             ),
             tagging=authoring.tagging,
-            tagger=(
-                TaggerProvider(authoring.tagger_component)
-                if authoring.tagger_component is not None
-                else None
-            ),
             regrid=(
                 AMRRegrid.frozen() if frozen else
                 AMRRegrid(schedule=every(regrid_interval, clock=authoring.program.clock))
@@ -1303,9 +1222,7 @@ def _resolve_shared_interface_amr(
             clustering=clustering,
         ),
         components=tuple(
-            component
-            for component in (authoring.component, authoring.tagger_component)
-            if component is not None
+            component for component in (authoring.component,) if component is not None
         ),
         compile_options={"include": INCLUDE},
     )
@@ -1435,11 +1352,10 @@ def test_sparse_interface_coverage_oracle_accepts_tiling_and_rejects_holes():
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     # Retrying an identical failed invocation is supported when it owns no external
     # consumer lifecycle. The separate restart scenario below retains checkpoint coverage.
+    from pops.runtime._install_param_routing import route_program_params
+
     authoring = _shared_interface_amr_authoring(
-        tmp_path,
-        tagger_component=_tagger_source_component(tmp_path / "tagger"),
-        with_checkpoint=False,
-    )
+        tmp_path, with_checkpoint=False, with_late_regrid_failure=True)
     example = authoring.example
     core = authoring.core
     right_state = authoring.right_state
@@ -1515,24 +1431,35 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         )
 
     assert actual_interface_counts() == (0, 0, 0)
-    rollback_before_tagger_retry = _shared_interface_accepted_image(runtime)
-    from pops._bootstrap import StepAttemptRejected
-
-    with pytest.raises(StepAttemptRejected) as rejected:
+    schema = artifact.bind_schema
+    compile_values = schema.resolve_compile()
+    normal = route_program_params(
+        artifact, schema, schema.resolve_bind(params, compile_values=compile_values))
+    faulted = route_program_params(
+        artifact, schema, schema.resolve_bind(
+            {**params, authoring.late_regrid_failure: 1.0},
+            compile_values=compile_values))
+    changed_blocks = [index for index, values in faulted.items() if values != normal[index]]
+    assert len(changed_blocks) == 1
+    block_index, = changed_blocks
+    # Use the existing native fixture seam to arm the fault after bootstrap. The
+    # public RuntimeInstance keeps its parameters fixed throughout either invocation.
+    runtime._executor._s.set_program_params(block_index, faulted[block_index])
+    rollback_before = _shared_interface_accepted_image(runtime)
+    cause = "prepared AMR tagging rejected a non-finite indicator sample"
+    with pytest.raises(RuntimeError, match=cause) as rejected:
         pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
-    assert rejected.value.status == "invalid_evaluation"
-    assert rejected.value.disposition == "retry"
-    assert rejected.value.reason_code == 73
-    assert rejected.value.phase == "amr_tagger"
-    assert rejected.value.detail == "injected rank-local Tagger failure"
-    _assert_same_shared_interface_image(runtime, rollback_before_tagger_retry)
-    # Instrumentation reports real executions, including discarded work. SSPRK2 evaluates twice
-    # per level substep; rollback restores scientific state without erasing those observations.
+    assert type(rejected.value) is RuntimeError
+    failure = runtime._executor._last_step_transaction_report
+    assert failure.status == "failed" and failure.action == "fail_run"
+    assert any(cause in message for message in failure.diagnostics)
+    _assert_same_shared_interface_image(runtime, rollback_before)
     rejected_counts = actual_interface_counts()
     assert rejected_counts == (2, 4, 8)
 
-    retry_report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
-    assert retry_report.accepted_steps == 1
+    runtime._executor._s.set_program_params(block_index, normal[block_index])
+    report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+    assert report.accepted_steps == 1 and report.rejected_steps == 0
 
     refined_authority = runtime._executor._interface_authorities[interface.qualified_id]
     assert refined_authority["levels"] == (0, 1, 2)
@@ -1540,8 +1467,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     total_counts = actual_interface_counts()
     assert total_counts == (4, 8, 16)
     assert tuple(
-        total - rejected
-        for total, rejected in zip(total_counts, rejected_counts, strict=True)
+        total - rejected for total, rejected in zip(total_counts, rejected_counts, strict=True)
     ) == (2, 4, 8)
     final_left = runtime.integral("tracer")
     final_right = runtime.integral("right")
@@ -1554,7 +1480,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     np.testing.assert_allclose(final_integral, initial_integral, rtol=0.0, atol=2.0e-13)
 
     # Keep the original independent two-level checkpoint/restart coverage alongside the full
-    # three-level dynamic replacement and post-publication Tagger rollback/retry above.
+    # three-level dynamic replacement above.
     # This independent authoring owns the original checkpoint consumer. Its fast moving profile
     # advances far enough to make the recorded boxes stale while the ordinary regrid cadence stays
     # dormant. Each runtime opens its output invocation once; post-restart continuation starts at a
@@ -1562,7 +1488,6 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     restart_authoring = _shared_interface_amr_authoring(
         tmp_path / "restart-authoring",
         component=authoring.component,
-        tagger_component=authoring.tagger_component,
         with_checkpoint=True,
     )
     np.testing.assert_array_equal(restart_authoring.left_initial, left_initial)
@@ -1647,7 +1572,7 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
 
     # RegridOnRestart enters the native tag/cluster/regrid boundary. A deliberately rejected
     # post-transform validation must restore the fresh runtime exactly before the same restart is
-    # retried and committed. This remains independent of the typed Tagger retry proved above.
+    # retried and committed.
     restarted = restart_authoring.example._bind_artifact(
         restart_artifact,
         initial_values=restart_initial_values,

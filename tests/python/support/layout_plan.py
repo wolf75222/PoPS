@@ -53,7 +53,8 @@ def final_amr_layout(
         grid=grid,
         hierarchy=AMRHierarchy(max_levels=max_levels, ratios=(ratio,) * (max_levels - 1)),
         tagging=AMRTagging(
-            rules=(Tag(Const(1.0) > Const(0.0)), Buffer(1)),
+            # A region that every cell meets; the tests that use this layout never resolve it.
+            rules=(Tag(lambda cell: Const(1.0) > Const(0.0)), Buffer(1)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),

@@ -1,8 +1,9 @@
 """Typed external AMR provider bindings.
 
 These values select one exact native component at authoring time.  They retain no
-Python callback: resolve authenticates the component and its graph-evaluator capabilities,
-then compile carries only the immutable native binding record to installation.
+Python callback: resolve authenticates the component, then compile carries only the immutable
+native binding record to installation.  The roles are clustering and reflux; the tagger role went
+with the tag graph (N12 lot 3c-2b), since a refinement criterion is generated into the Program.
 """
 from __future__ import annotations
 
@@ -12,26 +13,19 @@ from math import isfinite
 from typing import Any
 
 from pops.identity import make_identity
-from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
-
-
-_TAGGER_LEAF_OPCODES = dict(NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"])
-_TAGGER_LOGICAL_OPCODES = dict(NATIVE_TAGGING_PROGRAM_ABI["logical_opcodes"])
-_TAGGER_OUTPUTS = tuple(NATIVE_TAGGING_PROGRAM_ABI["candidate_outputs"])
 
 
 @dataclass(frozen=True, slots=True)
 class AMRProviderLoweringContext:
     """Resolved facts available to every open AMR provider authority.
 
-    Providers decide which facts they consume.  In particular, a tagger authenticates the
-    resolved tagging graph while a clustering provider remains independent of it; the resolver
-    never needs to name either concrete implementation.
+    Providers decide which facts they consume: a reflux provider authenticates the Program
+    clock while a clustering provider remains independent of it; the resolver never needs to name
+    either concrete implementation.
     """
 
     layout_identity: str
     components: Any
-    tagging_graph: Any
     clock_identity: str
 
     def __post_init__(self) -> None:
@@ -39,8 +33,6 @@ class AMRProviderLoweringContext:
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise TypeError("AMR provider lowering context requires a non-empty %s" % name)
-        if not isinstance(getattr(self.tagging_graph, "qualified_id", None), str):
-            raise TypeError("AMR provider lowering context requires one resolved tagging graph")
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,238 +138,6 @@ def _component_binding(component: Any, interface: Any) -> dict[str, Any]:
         "native_interface": interface.to_data(),
         "interface_version": interface.version,
     }
-
-
-def _normalize_tagger_capability(capabilities: Any) -> dict[str, Any]:
-    matches = []
-    for row in capabilities:
-        if isinstance(row, dict) and row.get("capability_type") == "amr_tagging_program":
-            matches.append(row)
-        elif hasattr(row, "get") and row.get("capability_type") == "amr_tagging_program":
-            matches.append(row)
-    if len(matches) != 1:
-        raise ValueError(
-            "TaggerProvider.component must declare exactly one amr_tagging_program capability")
-    row = matches[0]
-    expected = {
-        "schema_version", "capability_type", "leaf_opcodes", "logical_opcodes",
-        "candidate_outputs", "indicator_stencil_routes", "maximum_stencil_terms",
-        "maximum_instruction_count", "non_finite_policy", "persistent_hysteresis",
-        "execution_mode", "collective_scope", "memory_spaces",
-    }
-    if set(row) != expected or row.get("schema_version") != 1:
-        raise ValueError("AMR Tagger capability has an unsupported schema")
-    leaves = tuple(row["leaf_opcodes"])
-    logical = tuple(row["logical_opcodes"])
-    outputs = tuple(row["candidate_outputs"])
-    maximum = row["maximum_instruction_count"]
-    stencil_routes = tuple(row["indicator_stencil_routes"])
-    maximum_stencil_terms = row["maximum_stencil_terms"]
-    non_finite_policy = row["non_finite_policy"]
-    execution_mode = row["execution_mode"]
-    collective_scope = row["collective_scope"]
-    memory_spaces = tuple(row["memory_spaces"])
-    if not leaves or len(set(leaves)) != len(leaves) \
-            or any(value not in _TAGGER_LEAF_OPCODES for value in leaves):
-        raise ValueError("AMR Tagger capability declares invalid leaf opcodes")
-    if not logical or len(set(logical)) != len(logical) \
-            or any(value not in _TAGGER_LOGICAL_OPCODES for value in logical):
-        raise ValueError("AMR Tagger capability declares invalid logical opcodes")
-    if outputs != _TAGGER_OUTPUTS:
-        raise ValueError(
-            "AMR Tagger must return exact refine/coarsen candidate and equality masks")
-    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 1:
-        raise ValueError("AMR Tagger maximum_instruction_count must be an integer >= 1")
-    known_routes = tuple(NATIVE_TAGGING_PROGRAM_ABI["indicator_stencil_routes"])
-    if not stencil_routes or len(set(stencil_routes)) != len(stencil_routes) \
-            or any(route not in known_routes for route in stencil_routes):
-        raise ValueError("AMR Tagger declares invalid indicator_stencil_routes")
-    if isinstance(maximum_stencil_terms, bool) \
-            or not isinstance(maximum_stencil_terms, int) \
-            or maximum_stencil_terms < 1 \
-            or maximum_stencil_terms > NATIVE_TAGGING_PROGRAM_ABI["maximum_stencil_terms"]:
-        raise ValueError("AMR Tagger maximum_stencil_terms is outside the native ABI")
-    if non_finite_policy != NATIVE_TAGGING_PROGRAM_ABI["non_finite_policy"]:
-        raise ValueError("AMR Tagger must reject every non-finite indicator sample")
-    if type(row["persistent_hysteresis"]) is not bool:
-        raise TypeError("AMR Tagger persistent_hysteresis capability must be Boolean")
-    if execution_mode not in NATIVE_TAGGING_PROGRAM_ABI["execution_modes"]:
-        raise ValueError("AMR Tagger declares an invalid execution_mode")
-    if collective_scope not in NATIVE_TAGGING_PROGRAM_ABI["collective_scopes"] \
-            or collective_scope != "none":
-        raise ValueError("AMR Tagger callbacks must be explicitly noncollective")
-    known_memory_spaces = tuple(NATIVE_TAGGING_PROGRAM_ABI["memory_spaces"])
-    if not memory_spaces or len(set(memory_spaces)) != len(memory_spaces) \
-            or any(value not in known_memory_spaces for value in memory_spaces):
-        raise ValueError("AMR Tagger declares invalid memory_spaces")
-    if execution_mode == "host" and memory_spaces != ("host",):
-        raise ValueError(
-            "host AMR Tagger execution must declare exactly the host memory space")
-    return {
-        "schema_version": 1,
-        "capability_type": "amr_tagging_program",
-        "leaf_opcodes": list(leaves),
-        "leaf_opcode_ids": [_TAGGER_LEAF_OPCODES[value] for value in leaves],
-        "logical_opcodes": list(logical),
-        "logical_opcode_ids": [_TAGGER_LOGICAL_OPCODES[value] for value in logical],
-        "candidate_outputs": list(outputs),
-        "indicator_stencil_routes": list(stencil_routes),
-        "maximum_stencil_terms": maximum_stencil_terms,
-        "maximum_instruction_count": maximum,
-        "non_finite_policy": non_finite_policy,
-        "persistent_hysteresis": row["persistent_hysteresis"],
-        "execution_mode": execution_mode,
-        "collective_scope": collective_scope,
-        "memory_spaces": list(memory_spaces),
-    }
-
-
-def _tagger_capability(component: Any) -> dict[str, Any]:
-    return _normalize_tagger_capability(component.component_manifest.capabilities)
-
-
-def _require_tagger_target_execution(component: Any, capability: Mapping[str, Any]) -> None:
-    from pops import interfaces
-
-    targets = interfaces.Tagger.native_target_variants(component)
-    if capability["execution_mode"] == "host":
-        # The prepared adapter owns bounded Kokkos HostSpace mirrors for every selected target.
-        # Host callbacks therefore never borrow a device carrier or claim its pointer is host data.
-        return
-    if capability["execution_mode"] != "native_backend":
-        return
-    required_spaces = {
-        target["device"]: "host" if target["device"] == "cpu" else "managed"
-        for target in targets
-    }
-    incompatible = tuple(
-        (device, required_space)
-        for device, required_space in sorted(required_spaces.items())
-        if required_space not in capability["memory_spaces"]
-    )
-    if incompatible:
-        device, required_space = incompatible[0]
-        raise ValueError(
-            "native-backend AMR Tagger target %r requires %r field memory"
-            % (device, required_space)
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class TaggerProvider:
-    """Bind one external evaluator to the resolved AMRTagging graph."""
-
-    component: Any
-    __pops_ir_immutable__ = True
-
-    def __post_init__(self) -> None:
-        from pops import interfaces
-
-        _external_component(
-            self.component, interface=interfaces.Tagger, where="TaggerProvider.component")
-        capability = _tagger_capability(self.component)
-        _require_tagger_target_execution(self.component, capability)
-
-    def resolve_references(self, resolver: Any) -> TaggerProvider:
-        if not callable(resolver):
-            raise TypeError("TaggerProvider.resolve_references requires a callable resolver")
-        return self
-
-    def require_component_inputs(self, components: Any) -> None:
-        _require_component(self.component, components, where="TaggerProvider")
-
-    def require_tagging_graph(self, graph: Any) -> None:
-        from pops.mesh._amr import ResolvedRefinementCriterion
-
-        if type(graph) is ResolvedRefinementCriterion:
-            raise NotImplementedError(
-                "an external AMR Tagger component runs a tag graph; a criterion written as "
-                "functions of cell is generated into the compiled Program and runs on the "
-                "builtin tagger")
-        capability = _tagger_capability(self.component)
-        registrations = getattr(graph, "registrations", None)
-        authoring = getattr(graph, "graph", None)
-        if not isinstance(registrations, tuple) or authoring is None:
-            raise TypeError("TaggerProvider requires one resolved AMRTagging graph")
-        used = {row.node_type for row in registrations}
-        supported = set(capability["leaf_opcodes"]) | set(capability["logical_opcodes"])
-        missing = sorted(used - supported)
-        if missing:
-            raise NotImplementedError(
-                "external AMR Tagger lacks resolved opcode(s): %s" % ", ".join(missing))
-
-        def count(node: Any) -> int:
-            operands = node.operands()
-            return 1 + sum(count(child) for child in operands)
-
-        instruction_count = count(authoring.refine)
-        if authoring.coarsen is not None:
-            instruction_count += count(authoring.coarsen)
-        if instruction_count > capability["maximum_instruction_count"]:
-            raise NotImplementedError(
-                "external AMR Tagger graph exceeds maximum_instruction_count")
-        def require_stencils(node: Any) -> None:
-            if getattr(node, "node_type", None) in {"gradient_above", "gradient_below"}:
-                from pops.numerics.indicator_stencils import DiscreteGradientStencil
-
-                lowering = getattr(getattr(node, "context", None), "lowering", None)
-                if type(lowering) is not DiscreteGradientStencil:
-                    raise TypeError("resolved AMR gradient has no typed stencil lowering")
-                if lowering.route not in capability["indicator_stencil_routes"]:
-                    raise NotImplementedError(
-                        "external AMR Tagger lacks indicator stencil route %r" % lowering.route)
-                if any(len(axis.offsets) > capability["maximum_stencil_terms"]
-                       for axis in lowering.axes):
-                    raise NotImplementedError(
-                        "external AMR Tagger stencil exceeds maximum_stencil_terms")
-            for child in node.operands():
-                require_stencils(child)
-
-        require_stencils(authoring.refine)
-        if authoring.coarsen is not None:
-            require_stencils(authoring.coarsen)
-        if authoring.hysteresis.min_cycles != 0:
-            raise NotImplementedError(
-                "external AMR Tagger persistent_hysteresis is not implemented by "
-                "the component adapter")
-
-    def lower_amr_provider(
-        self, context: AMRProviderLoweringContext,
-    ) -> ResolvedAMRProviderBinding:
-        """Authenticate component, graph and clock before emitting detached runtime data."""
-        if type(context) is not AMRProviderLoweringContext:
-            raise TypeError("TaggerProvider requires an AMRProviderLoweringContext")
-        self.require_component_inputs(context.components)
-        self.require_tagging_graph(context.tagging_graph)
-        data = {
-            **self.runtime_binding_data(),
-            "layout_identity": context.layout_identity,
-            "clock_identity": context.clock_identity,
-            "tagging_graph_identity": context.tagging_graph.qualified_id,
-        }
-        data["provider_identity"] = amr_provider_binding_identity("tagger", data)
-        return ResolvedAMRProviderBinding("tagger", data)
-
-    def runtime_binding_data(self) -> dict[str, Any]:
-        from pops import interfaces
-
-        data = {
-            "schema_version": 1,
-            "provider_type": "external_amr_tagger",
-            "runtime_installation": {
-                "schema_version": 1,
-                "protocol": "external_component",
-            },
-            **_component_binding(self.component, interfaces.Tagger),
-            "tagging_capability": _tagger_capability(self.component),
-        }
-        data["provider_identity"] = make_identity("amr-tagger-provider", data).token
-        return data
-
-    def inspect(self) -> dict[str, Any]:
-        return self.runtime_binding_data()
-
-    canonical_identity = inspect
 
 
 @dataclass(frozen=True, slots=True)
@@ -507,10 +267,8 @@ class _AMRRuntimeInterfaceProtocol:
     def resolved_identity_namespace(self) -> str:
         return "resolved-amr-%s-provider" % self.role
 
-    def validate_resolved_capability(
-        self, binding: Mapping[str, Any], resolved_tagging_identity: str | None,
-    ) -> None:
-        del binding, resolved_tagging_identity
+    def validate_resolved_capability(self, binding: Mapping[str, Any]) -> None:
+        del binding
 
     def builtin_native_config(self, binding: Mapping[str, Any]) -> dict[str, Any]:
         del binding
@@ -521,10 +279,7 @@ class _AMRRuntimeInterfaceProtocol:
 class _ClusteringRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
     """Clustering controls that belong to the builtin native implementation."""
 
-    def validate_resolved_capability(
-        self, binding: Mapping[str, Any], resolved_tagging_identity: str | None,
-    ) -> None:
-        del resolved_tagging_identity
+    def validate_resolved_capability(self, binding: Mapping[str, Any]) -> None:
         installation = binding.get("runtime_installation")
         if not isinstance(installation, Mapping) \
                 or installation.get("protocol") != "builtin":
@@ -565,91 +320,10 @@ class _ClusteringRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
 
 
 @dataclass(frozen=True, slots=True)
-class _TaggerRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
-    """Candidate-program capability owned by the Tagger native interface."""
-
-    def validate_resolved_capability(
-        self, binding: Mapping[str, Any], resolved_tagging_identity: str | None,
-    ) -> None:
-        capability = binding.get("tagging_capability")
-        expected_keys = {
-            "schema_version", "capability_type", "leaf_opcodes", "leaf_opcode_ids",
-            "logical_opcodes", "logical_opcode_ids", "candidate_outputs",
-            "indicator_stencil_routes", "maximum_stencil_terms",
-            "maximum_instruction_count", "non_finite_policy", "persistent_hysteresis",
-            "execution_mode", "collective_scope", "memory_spaces",
-        }
-        leaves = tuple(capability.get("leaf_opcodes", ())) \
-            if isinstance(capability, Mapping) else ()
-        leaf_ids = tuple(capability.get("leaf_opcode_ids", ())) \
-            if isinstance(capability, Mapping) else ()
-        logical = tuple(capability.get("logical_opcodes", ())) \
-            if isinstance(capability, Mapping) else ()
-        logical_ids = tuple(capability.get("logical_opcode_ids", ())) \
-            if isinstance(capability, Mapping) else ()
-        maximum_instructions = capability.get("maximum_instruction_count") \
-            if isinstance(capability, Mapping) else None
-        maximum_stencil_terms = (
-            capability.get("maximum_stencil_terms")
-            if isinstance(capability, Mapping)
-            else None
-        )
-        execution_mode = capability.get("execution_mode") \
-            if isinstance(capability, Mapping) else None
-        collective_scope = capability.get("collective_scope") \
-            if isinstance(capability, Mapping) else None
-        memory_spaces = tuple(capability.get("memory_spaces", ())) \
-            if isinstance(capability, Mapping) else ()
-        if not isinstance(capability, Mapping) or set(capability) != expected_keys \
-                or capability.get("schema_version") != 1 \
-                or capability.get("capability_type") != "amr_tagging_program" \
-                or not leaves or len(set(leaves)) != len(leaves) \
-                or any(value not in _TAGGER_LEAF_OPCODES for value in leaves) \
-                or leaf_ids != tuple(_TAGGER_LEAF_OPCODES[value] for value in leaves) \
-                or not logical or len(set(logical)) != len(logical) \
-                or any(value not in _TAGGER_LOGICAL_OPCODES for value in logical) \
-                or logical_ids != tuple(_TAGGER_LOGICAL_OPCODES[value] for value in logical) \
-                or tuple(capability.get("candidate_outputs", ())) != _TAGGER_OUTPUTS \
-                or not set(capability.get("indicator_stencil_routes", ())) <= set(
-                    NATIVE_TAGGING_PROGRAM_ABI["indicator_stencil_routes"]) \
-                or not capability.get("indicator_stencil_routes") \
-                or isinstance(maximum_instructions, bool) \
-                or not isinstance(maximum_instructions, int) \
-                or maximum_instructions < 1 \
-                or maximum_instructions > NATIVE_TAGGING_PROGRAM_ABI[
-                    "maximum_instruction_count"] \
-                or isinstance(maximum_stencil_terms, bool) \
-                or not isinstance(maximum_stencil_terms, int) \
-                or maximum_stencil_terms < 1 \
-                or maximum_stencil_terms > NATIVE_TAGGING_PROGRAM_ABI[
-                    "maximum_stencil_terms"] \
-                or capability.get("non_finite_policy") != NATIVE_TAGGING_PROGRAM_ABI[
-                    "non_finite_policy"] \
-                or type(capability.get("persistent_hysteresis")) is not bool \
-                or execution_mode not in NATIVE_TAGGING_PROGRAM_ABI["execution_modes"] \
-                or collective_scope not in NATIVE_TAGGING_PROGRAM_ABI["collective_scopes"] \
-                or collective_scope != "none" \
-                or not memory_spaces or len(set(memory_spaces)) != len(memory_spaces) \
-                or any(space not in NATIVE_TAGGING_PROGRAM_ABI["memory_spaces"]
-                       for space in memory_spaces) \
-                or (execution_mode == "host" and memory_spaces != ("host",)) \
-                or not isinstance(binding.get("tagging_graph_identity"), str) \
-                or not binding.get("tagging_graph_identity") \
-                or not isinstance(binding.get("clock_identity"), str) \
-                or not binding.get("clock_identity") \
-                or (resolved_tagging_identity is not None
-                    and binding.get("tagging_graph_identity") != resolved_tagging_identity):
-            raise ValueError(
-                "AMR Tagger lacks the exact resolved candidate-program authority")
-
-@dataclass(frozen=True, slots=True)
 class _RefluxRuntimeInterfaceProtocol(_AMRRuntimeInterfaceProtocol):
     """The local Reflux callback is qualified by the accepted Program clock."""
 
-    def validate_resolved_capability(
-        self, binding: Mapping[str, Any], resolved_tagging_identity: str | None,
-    ) -> None:
-        del resolved_tagging_identity
+    def validate_resolved_capability(self, binding: Mapping[str, Any]) -> None:
         if not isinstance(binding.get("clock_identity"), str) \
                 or not binding["clock_identity"]:
             raise ValueError("AMR Reflux lacks its exact Program clock authority")
@@ -680,11 +354,6 @@ def _runtime_interface_protocols() -> dict[tuple[Any, ...], _AMRRuntimeInterface
             role="clustering",
             native_interface=interfaces.Clustering.to_data(),
             builtin_provider_id="pops.lib.amr::berger_rigoutsos",
-        ),
-        _TaggerRuntimeInterfaceProtocol(
-            role="tagger",
-            native_interface=interfaces.Tagger.to_data(),
-            builtin_provider_id="pops.lib.amr::symbolic_tagger",
         ),
         _RefluxRuntimeInterfaceProtocol(
             role="reflux",
@@ -767,11 +436,8 @@ def _validate_external_binding(
         raise ValueError(
             "AMR %s provider_identity does not authenticate its resolved authority"
             % protocol.role)
-    if protocol.role == "tagger":
-        return
     executable_authority = {
         "clustering": "BergerRigoutsosProvider<Dim>",
-        "tagger": "PreparedTaggingExecutionPlan<Dim>",
         "reflux": "the transactional AmrRuntime<Dim> reflux ledger",
     }[protocol.role]
     raise NotImplementedError(
@@ -801,7 +467,6 @@ def validate_amr_provider_binding(
     frozen_binding: Any,
     layout_identity: str,
     component_inputs: Mapping[str, Mapping[str, Any]] | None = None,
-    resolved_tagging_identity: str | None = None,
 ) -> dict[str, Any]:
     """Authenticate detached provider data through its interface and installation protocols."""
     if not isinstance(frozen_binding, Mapping):
@@ -830,7 +495,7 @@ def validate_amr_provider_binding(
     if validator is None:
         raise NotImplementedError("AMR %s provider binding protocol is not implemented" % role)
     validator(protocol, binding, component_inputs)
-    protocol.validate_resolved_capability(binding, resolved_tagging_identity)
+    protocol.validate_resolved_capability(binding)
     if binding["provider_identity"] != amr_provider_binding_identity(role, binding):
         raise ValueError(
             "AMR %s provider_identity does not authenticate its resolved authority" % role)
@@ -849,21 +514,8 @@ def _prepare_builtin_provider(
     return PreparedAMRProviderInstallation(protocol.role, binding)
 
 
-def _prepare_external_tagger_provider(
-    protocol: _AMRRuntimeInterfaceProtocol,
-    binding: dict[str, Any],
-    **_: Any,
-) -> PreparedAMRProviderInstallation:
-    if protocol.role != "tagger":
-        raise NotImplementedError(
-            "external AMR %s provider runtime protocol is not implemented" % protocol.role
-        )
-    return PreparedAMRProviderInstallation(protocol.role, binding)
-
-
 _INSTALLATION_PROTOCOLS: dict[str, Callable[..., PreparedAMRProviderInstallation]] = {
     "builtin": _prepare_builtin_provider,
-    "external_component": _prepare_external_tagger_provider,
 }
 
 
@@ -919,7 +571,6 @@ def prepare_amr_provider_installation(
     role: str,
     frozen_binding: Any,
     layout_identity: str,
-    resolved_tagging_identity: str | None,
 ) -> PreparedAMRProviderInstallation:
     """Lower one detached provider through its native-interface protocol.
 
@@ -933,7 +584,6 @@ def prepare_amr_provider_installation(
         role=role,
         frozen_binding=frozen_binding,
         layout_identity=layout_identity,
-        resolved_tagging_identity=resolved_tagging_identity,
     )
     protocol = _runtime_interface_protocols()[
         _runtime_interface_key(binding.get("native_interface"))]
@@ -963,6 +613,5 @@ __all__ = [
     "PreparedAMRProviderNativeConfig",
     "RefluxProvider",
     "ResolvedAMRProviderBinding",
-    "TaggerProvider",
     "validate_amr_provider_binding",
 ]
