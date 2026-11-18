@@ -160,6 +160,20 @@ def test_term_expect_accepts_the_key_of_its_form():
     _numerics(u, flux, linear_upwind())
 
 
+@pytest.mark.parametrize("law", [lambda u: u**2 / 2, lambda u: u + 1],
+                         ids=["burgers", "affine"])
+def test_public_upwind_without_speed_requires_a_homogeneous_linear_flux(law):
+    _, _, u, flux, _ = _model(law)
+    with pytest.raises(surface.RealizationMismatch) as caught:
+        represent = {u: surface.CellAverage()}
+        surface.Numerics(represent=represent, schemes={flux: upwind()})  # <- upwind-numerics
+    message = str(caught.value)
+    assert "the scheme expects the key" in message
+    assert "rusanov()" in message and "hll()" in message
+    assert message.startswith(f"{HERE}:{_line('upwind-numerics')} (in ")
+    assert "pops/lib/numerics/fluxes.py:" in message
+
+
 # --- the scalars and the vectors of a face (2.6.3, review Q2) ---------------------------------------
 
 def test_dot_of_a_scalar_with_the_normal_is_a_support_mismatch():
