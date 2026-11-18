@@ -37,8 +37,9 @@ def amr_lowering_coverage(
     from pops.mesh._amr import ResolvedRefinementCriterion
 
     tagging = bootstrap.tagging
-    criterion = isinstance(tagging, ResolvedRefinementCriterion)
-    hysteresis = tagging.hysteresis if criterion else tagging.graph.hysteresis
+    if not isinstance(tagging, ResolvedRefinementCriterion):
+        raise TypeError("AMR lowering coverage requires a resolved refinement criterion")
+    hysteresis = tagging.hysteresis
     tagging_target = "amr-runtime-tagging:%s" % tagging.qualified_id
     hysteresis_targets = ["%s:hysteresis" % tagging_target]
     if hysteresis.min_cycles > 0:
@@ -57,8 +58,7 @@ def amr_lowering_coverage(
             targets=("amr-runtime-regrid:%s" % hierarchy_identity,),
         ),
         LoweringCoverageRow(
-            source="%s:%s" % ("amr-refinement-criterion" if criterion else "amr-tagging-graph",
-                              tagging.qualified_id),
+            source="amr-refinement-criterion:%s" % tagging.qualified_id,
             disposition="lowered",
             targets=(tagging_target,),
         ),
@@ -96,39 +96,18 @@ def amr_lowering_coverage(
             targets=("amr-runtime-bootstrap:prepare-accepted-halo",
                      "amr-runtime-publication:prepare-complete-candidate-halo"),
         ))
-    if criterion:
-        # Each region is generated into the compiled Program, whose entry the tagging plan calls.
-        from pops.codegen.program_emit_refinement_criterion import CRITERION_ENTRY_SYMBOL
+    # Each region is generated into the compiled Program, whose entry the tagging plan calls.
+    from pops.codegen.program_emit_refinement_criterion import CRITERION_ENTRY_SYMBOL
 
-        rows.extend(
-            LoweringCoverageRow(
-                source="amr-refinement-region:%s:%s/%d" % (tagging.qualified_id, action, index),
-                disposition="lowered",
-                targets=("program-entry:%s" % CRITERION_ENTRY_SYMBOL,),
-            )
-            for action, regions in (("refine", tagging.refine), ("coarsen", tagging.coarsen))
-            for index, _ in enumerate(regions)
+    rows.extend(
+        LoweringCoverageRow(
+            source="amr-refinement-region:%s:%s/%d" % (tagging.qualified_id, action, index),
+            disposition="lowered",
+            targets=("program-entry:%s" % CRITERION_ENTRY_SYMBOL,),
         )
-    else:
-        registrations = {
-            registration.node_type: registration
-            for registration in tagging.registrations
-        }
-
-        def append_predicate(node: Any, path: str) -> None:
-            registration = registrations[node.node_type]
-            rows.append(LoweringCoverageRow(
-                source="amr-tagging-predicate:%s:%s:%s"
-                % (tagging.qualified_id, path, node.node_type),
-                disposition="lowered",
-                targets=(registration.lowering.qualified_id,),
-            ))
-            for index, child in enumerate(node.operands()):
-                append_predicate(child, "%s/%d" % (path, index))
-
-        append_predicate(tagging.graph.refine, "refine")
-        if tagging.graph.coarsen is not None:
-            append_predicate(tagging.graph.coarsen, "coarsen")
+        for action, regions in (("refine", tagging.refine), ("coarsen", tagging.coarsen))
+        for index, _ in enumerate(regions)
+    )
     rows.extend(
         LoweringCoverageRow(
             source="amr-transfer-entry:%s" % entry.identity.token,

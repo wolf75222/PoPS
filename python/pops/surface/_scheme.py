@@ -32,6 +32,8 @@ import inspect as _inspect
 from fractions import Fraction
 from typing import Any
 
+from pops._source_origin import code_origin
+
 from ._expr import Arith, Call, Expr, Predicate, Relation, is_number, text, walk
 from ._geometry import Coordinate, MathConstant
 from ._method import ENTITY_PARAMETERS
@@ -1360,7 +1362,8 @@ class UserScheme(SchemeValue):
         return FiniteVolume(flux=view.elaborated, variables=variables.Conservative(view.state),
                             reconstruction=recon,
                             riemann=riemann.User(body=body, state=view.state,
-                                                 stability=stability))
+                                                 stability=stability,
+                                                 origin=code_origin(self.scheme.body)))
 
     def describe(self) -> str:
         """The b6 builder, for ``pops.inspect``; the options are in the repr of the value."""
@@ -1486,7 +1489,7 @@ def realize_reconstruction(value: Any, traced: Traced, view: TermView) -> Any:
         return (lower(expression, inputs),)
 
     return reconstruction.User(body, state=view.state, formal_order=formal_order(expression),
-                               name=value.word)
+                               name=value.word, origin=code_origin(value.scheme.body))
 
 
 def face_function(function: Any, view: TermView, where: str, reconstructed: bool = False) -> Any:

@@ -2,7 +2,8 @@
 
 A Tag or Coarsen predicate may be a function of ``cell``: PoPS traces it once, resolves its reads
 into field and parameter tables, and generates it into the compiled Program. These tests cover the
-traced surface, the resolved criterion and its C++; the native parity with the tag-graph VM is in
+traced surface, the resolved criterion and its C++; the native comparison with the recorded oracles of
+the tag-graph VM, removed in N12 lot 3c-2b, is in
 ``tests/python/integration/amr/test_refinement_criterion_parity.py``.
 """
 from __future__ import annotations
@@ -107,15 +108,42 @@ def test_tag_traces_a_function_of_cell_once_and_keeps_its_boolean_region() -> No
         Coarsen(0.5)
 
 
-def test_tagging_writes_every_predicate_the_same_way() -> None:
+def test_a_rule_refuses_an_expression_of_the_state() -> None:
+    # The tag graph read an expression of the state; without it a rule is a region of cell, and
+    # the refusal shows that form.
     def mixed(names):
         return (
             Tag(lambda cell: cell.value(names.state) > names.value("refine")),
             Coarsen(ValueExpr(names.state) < names.value("coarsen")),
         )
 
-    with pytest.raises(TypeError, match="the same way"):
-        advection_case(mixed)
+    def gradient(names):
+        return (Tag(norm(grad(ValueExpr(names.state))) > names.value("refine")),)
+
+    for rules, where in ((mixed, "Coarsen"), (gradient, "Tag")):
+        with pytest.raises(TypeError, match=r"%s no longer takes an expression of the state: .*"
+                                            r"%s\(lambda cell: cell\.value\(q\) > "
+                                            r"case\.value\(t\)\)" % (where, where)):
+            advection_case(rules)
+
+
+def test_the_tagging_policies_are_explicit() -> None:
+    from pops.amr import AMRTagging, Buffer
+
+    assert Hysteresis(min_cycles=2, equality=EqualityPolicy.HOLD).canonical_identity() == {
+        "schema_version": 1, "hysteresis_type": "min_cycles", "min_cycles": 2,
+        "equality": "hold"}
+    with pytest.raises(TypeError, match="EqualityPolicy"):
+        Hysteresis(min_cycles=1, equality="hold")
+    with pytest.raises(ValueError, match=">= 0"):
+        Hysteresis(min_cycles=-1, equality=EqualityPolicy.HOLD)
+    _, layout, _ = advection_case(_value_rules)
+    with pytest.raises(TypeError, match="ConflictPolicy"):
+        AMRTagging(rules=layout.tagging.rules, hysteresis=layout.tagging.hysteresis,
+                   conflict_policy="error")
+    assert AMRTagging(rules=layout.tagging.rules, hysteresis=layout.tagging.hysteresis,
+                      conflict_policy=ConflictPolicy.ERROR).rules == layout.tagging.rules
+    assert sum(type(rule) is Buffer for rule in layout.tagging.rules) == 1
 
 
 def test_resolution_builds_the_field_and_parameter_tables_of_the_regions() -> None:
@@ -181,7 +209,7 @@ def test_region_reads_the_level_only_through_cell() -> None:
         _resolved(direct)
 
 
-def test_a_region_compares_strictly_as_a_leaf_of_the_tag_graph() -> None:
+def test_a_region_compares_strictly() -> None:
     _, _, names = advection_case(_value_rules)
     threshold = names.value("refine")
 
@@ -252,8 +280,8 @@ def test_a_where_inside_an_operand_is_the_cond_of_ir4() -> None:
         return lambda cell: where(test(cell.value(names.state), names.value("refine")),
                                   lambda: 1.0, lambda: 0.0) > 0.5
 
-    # The tag graph cannot write a where, and the strict rule of its leaves does not reach the test
-    # of one: that test is the two-valued Boolean of the cond of IR4, which may compare at equality.
+    # The strict rule of the comparisons does not reach the test of a where: that test is the
+    # two-valued Boolean of the cond of IR4, which may compare at equality.
     for test in (operator.ge, operator.le, operator.eq):
         region = Tag(flag(test)).predicate.expression
         assert _key(certainly(region)) == _key(region)
@@ -323,7 +351,7 @@ def test_emitted_kernel_keeps_the_arithmetic_order_of_the_vm_gradient() -> None:
     assert '"%s"' % criterion.qualified_id in source
     assert "patch->field_count != 1" in source and "patch->parameter_count != 2" in source
     # (c0 * v(-1) + c1 * v(+1)) / h per axis, then the sum of the squares and its square root: the
-    # order of PreparedTaggingPatchKernel, one operation per statement.
+    # order of the gradient of the removed tag-graph VM, one operation per statement.
     order = [r"\(-0\.5 \* cse\d+_\)", r"\(0\.5 \* cse\d+_\)",
              r"\(cse\d+_ \+ cse\d+_\)", r"\(cse\d+_ / cse\d+_\)", r"\(cse\d+_ \* cse\d+_\)",
              r"std::sqrt\(cse\d+_\)", r"\(cse\d+_ > cse\d+_\)", r"\(cse\d+_ < cse\d+_\)"]
@@ -356,23 +384,13 @@ def test_gradient_norm_reads_a_function_of_cell_at_each_stencil_cell() -> None:
         gradient_norm(cell, names.state, axes=(x,), stencil=names.gradient)
 
 
-def test_tag_graph_route_is_unchanged_for_expression_predicates() -> None:
-    def graph(names):
-        magnitude = norm(grad(ValueExpr(names.state)))
-        return (Tag(magnitude > names.value("refine")),
-                Coarsen(magnitude < names.value("coarsen")))
-
-    tagging = _resolved(graph).bootstrap_plan.tagging
-    assert type(tagging) is not ResolvedRefinementCriterion
-    assert tagging.runtime_tagging_data()["graph_type"] == "amr_tagging_runtime"
-
-
 @pytest.mark.parametrize("selection", [None, "refine-requests"])
 def test_a_region_criterion_keeps_the_selection_of_its_buffer(selection) -> None:
     # Buffer(cells=n) is master's: its cells join the transition buffer, max(n, derived), and the
     # native tag selection 2 grows the whole target coverage. selection="refine-requests" is
     # pops.amr.tag-selection@1: n cells around each refine request, and derived nesting alone in
-    # the hierarchy. Regions of cell keep either choice as the tag graph of the same cells does.
+    # the hierarchy. Regions of cell keep either choice, with the identity, native configuration and
+    # transition buffers that the tag graph of the same cells had (recorded before it was removed).
     from pops.amr import Buffer
     from pops.mesh._amr.hierarchy_native import lower_native_hierarchy
     from pops.runtime._amr_bind_lowering import _install_native_tag_selection_config
@@ -380,10 +398,6 @@ def test_a_region_criterion_keeps_the_selection_of_its_buffer(selection) -> None
     class ConfigProjection:
         tag_selection_contract_version = None
         tag_selection_buffer = None
-
-    def graph(names):
-        value = ValueExpr(names.state)
-        return (Tag(value > names.value("refine")), Coarsen(value < names.value("coarsen")))
 
     def route(rules):
         resolved = _resolved(rules, buffer=Buffer(cells=3, selection=selection))
@@ -398,20 +412,18 @@ def test_a_region_criterion_keeps_the_selection_of_its_buffer(selection) -> None
         return tagging, identity, native, buffers
 
     region, region_identity, region_native, region_buffers = route(_value_rules)
-    vm, vm_identity, vm_native, vm_buffers = route(graph)
 
     assert type(region.graph) is ResolvedRefinementCriterion
-    assert type(vm.graph) is not ResolvedRefinementCriterion
-    assert region.buffer_cells == vm.buffer_cells == 3
-    assert region.selection == vm.selection == selection
+    assert region.buffer_cells == 3
+    assert region.selection == selection
     if selection is None:
-        assert region_identity == vm_identity == {
+        assert region_identity == {
             "schema_version": 1, "authority_type": "resolved_amr_tagging", "buffer_cells": 3}
-        assert region_native == vm_native == (2, (0, 0))
-        assert region_buffers == vm_buffers == ((3, 3),)
+        assert region_native == (2, (0, 0))
+        assert region_buffers == ((3, 3),)
     else:
-        assert region_identity == vm_identity == {
+        assert region_identity == {
             "schema_version": 2, "authority_type": "resolved_amr_tagging",
             "selection_contract": "pops.amr.tag-selection@1", "buffer_cells": 3}
-        assert region_native == vm_native == (1, (3, 3))
-        assert region_buffers == vm_buffers == ((2, 2),)
+        assert region_native == (1, (3, 3))
+        assert region_buffers == ((2, 2),)

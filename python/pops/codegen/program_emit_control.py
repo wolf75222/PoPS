@@ -282,19 +282,28 @@ def _emit_contiguous_rhs_group(
         lines: list[str], group_identity: int, target: Any = "system", model: Any = None) -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
     from pops.codegen.program_emit_ops import _required_block_index, _rhs_flux_temporal_family
+    from pops.codegen.program_emit_totals import decode_total_rate_input, encode_total_rate_output
 
     stage = _stage_fraction(values[0])
     lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     requests = []
+    rate_inputs: dict[int, str] = {}
+    total_rates: set[int] = set()
     from .program_source_map import operation, operation_group
     for value in values:
         with operation(value, lines, environment=var, channel="rhs_group_preparation"):
             state = value.inputs[0]
-            var[value.id] = "r%d" % value.id
-            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
-                         % (var[value.id], int(value.id), var[state.id]))
             index = _required_block_index(
                 block_idx, value.block, "emit simultaneous rhs %r" % value.name)
+            density = decode_total_rate_input(
+                value, var[state.id], lines, model=model, block=index)
+            if density is not None:
+                total_rates.add(value.id)
+            rate_input = density if density is not None else var[state.id]
+            rate_inputs[value.id] = rate_input
+            var[value.id] = "r%d" % value.id
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
+                         % (var[value.id], int(value.id), rate_input))
             requested = value.attrs.get("sources")
             default_source = requested is None or "default" in requested
             family = (
@@ -304,14 +313,14 @@ def _emit_contiguous_rhs_group(
             from pops.codegen.program_models import model_for_node
             from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
             lines += prepare_default_rhs_providers(
-                model_for_node(model, value), value, index, var[state.id],
+                model_for_node(model, value), value, index, rate_input,
                 var.get(("program_provider_plans",)), target=target,
                 flux=True, source=default_source)
             from pops.codegen.program_transport_quadrature import declare_transport_faces
             faces = declare_transport_faces(value, model_for_node(model, value), var, lines)
             capture = "" if faces is None else ", &"+faces
             from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
-            input_trace = emit_rhs_input_trace(value, index, var[state.id], lines, target)
+            input_trace = emit_rhs_input_trace(value, index, rate_input, lines, target)
             var[("rhs_input_trace", value.id)] = input_trace
             trace = ""
             if input_trace is not None:
@@ -319,7 +328,7 @@ def _emit_contiguous_rhs_group(
                     capture = ", nullptr"
                 trace = ", " + input_trace
             requests.append("{%d, &%s, &%s, %d, %d%s%s%s}" % (
-                index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
+                index, rate_input, var[value.id], int(value.id), 0 if default_source else 1,
                 family, capture, trace))
     from .program_value_authority import begin_value_write_cpp, complete_value_cpp
     for value in values:
@@ -331,7 +340,12 @@ def _emit_contiguous_rhs_group(
     if model is not None:
         for value in values:
             emit_transport_frequency(value, var, lines, model=model_for_node(model, value),
-                                     block_index=block_idx[value.block], target=target)
+                                     block_index=block_idx[value.block], target=target,
+                                     state=rate_inputs[value.id])
+    for value in values:
+        if value.id in total_rates:
+            with operation(value, lines, environment=var, channel="rhs_group_total_encoding"):
+                encode_total_rate_output(var[value.id], lines)
     for value in values:
         lines.extend(complete_value_cpp(value, var))
 

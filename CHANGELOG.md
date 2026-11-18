@@ -18,6 +18,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-90 (N9, « La référence sous les solves de relation »): the relation solve of a traced
+  method runs the reference conjugate gradient of `pops.lib.solve` (lot 4) instead of b6's native
+  CG. A reference solve is one `solve_linear` node realized by its solver's region (SV12, IR 34),
+  with the native's outcome, consumption and evidence; its candidate passes the SV8 gate, measured
+  in the region through the same apply and decided by the native's
+  `apply_measured_original_residual_gate`. One table of solve failures gives both realizations
+  their actions, and a trial site reports the variant of its status (T39): an iteration limit is
+  `BudgetExhausted` (`max_iterations`), any other rejected status `SolveFailed`, in the rows of
+  `pops.advance-control@5` (IR 35). A `matrix_free_operator` of domain and range `state` records
+  its apply on a State operand (`set_apply(operator, body, operand=)`, IR26), so the operator of a
+  relation is the component's own rate at the State, such as the two-point StencilFlux with the
+  runtime parameters it reads; core ledger entry `state-operand-of-a-matrix-free-operator`. The
+  claims of the rates stay (IR16): `LinearClaims.homogeneous`, and a rate not stated linear and
+  homogeneous is refused by name. A coefficient that is a `model.parameter` is claimed from its
+  admissible set: L1-d with `nu = model.parameter("nu", admissible=pops.Positive())` compiles once
+  and runs with each bound value, equal to the case with `nu` a constant within the request of the
+  solve. A reference solve is a barrier of the field caches of #781. The Trace witness of the
+  relation route (L1-d against the same IMEX step written on b6 with the native CG) is in
+  `test_relation_solve_reference_n9_native.py`.
+- ROM-22 (G04-a, « Générer les fantômes depuis la politique de bord »): the ghost cells of a
+  boundary relation of the surface are generated from the body of its policy (`ghosts()` or a
+  policy written in the case). The elaborator runs the policy at the depths 1..D of the halo of
+  the block (D from the methods of the plan) and gives each piece the b6 `SourceGhost` of
+  `pops.boundary.transport` (not exported); the model package compiles it into
+  `pops_generated::UserGhostPolicy`, which the prepared boundary calls on the device after the
+  native laws (`HyperbolicBoundaryLaw::SourceGhost`, token `source_ghost`), authenticated face by
+  face. A policy outside the two laws of master is now generated (a constant ghost, the linear
+  extrapolation under `muscl`); a ghost that reads `face.normal`, a coordinate or an inner cell
+  deeper than D is refused by its name. A source ghost face needs the generated face of its
+  package (`riemann.User`), and every fill without the policy (AMR, policy-less fills) refuses it.
+  The MG9 bridge `realize` (`pops.lib.numerics.ghost_laws`) is removed. Integer depths are a
+  transitional route (`plan/routes_transitoires.md`), removed by G04 in phase 2.
 - OD31 (vertical slice of the exit of phase 1): master's tutorial 02 written in the surface,
   `examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py`, with its upwind
   flux (in master's arithmetic) and its SSPRK2 written in the case file. The pieces that PoPS does
@@ -32,7 +64,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   differs from master only in the rounding of exp in the initial data, in the 12 recorded cells,
   each by 2 ulp at most, and by at most 1e-12 relative at t = 0.2 (cause C44, removed with G07);
   with master's initial array bound as data, it is bit for bit at t = 0 and t = 0.2. The bound only
-  shrinks (MG6). `benchmarks/slice/t02_pf10.py` measures PF10 (1) and (3) for the slice.
+  shrinks (MG6). `benchmarks/slice/t02_pf10.py` measures PF10 (1) and (3) for the slice, one
+  route per process when a pair does not fit in memory (`measure --route`, `merge`).
+  `pops.inspect(case)` reports where each scheme written with `@pops.scheme` and the method
+  are written, « the case file, <file>:<line> » or « pops.lib, <file>:<line> » (S1-b), and the
+  slice's native test counts no Python call inside the native run (S2, CF9).
+- The model source map (S2 of the vertical slice, driver 13:35): `compiled.source_maps` adds,
+  under `block:<name>`, the map `pops.model-source-map@1` of each block whose model C++ holds a
+  policy generated from a Python body, the face of `riemann.User` (`UserFacePolicy`) and the
+  trace of `reconstruction.User` (`UserReconstructionPolicy`): its lines in the retained C++, its
+  source identity and the origin of its body, the case file or `pops.lib` with its file, line and
+  function (`pops._source_origin`). The surface gives each brick the origin of the
+  `@pops.scheme` body it realizes; `riemann.User(origin=)` and `reconstruction.User(origin=)`
+  take it, and default to their own body's. The origin is local provenance, off the identity of
+  the descriptor and of the artifact: the generated C++ and its cache key do not change.
+  `compiled.inspect()` reports the bodies under `model_source_maps`. On the slice, the face is
+  « the case file, …/02_openmp_explicit_ssprk2.py:34 » and the reconstruction « pops.lib,
+  pops/lib/numerics/limiters.py:45 ».
+- CF17 for L1 (exit of phase 1, OD31): `examples/surface/litmus/l1/` writes L1 of 17.1 in the
+  surface (L1-a: `upwind()`, `two_point()`, SSPRK2) and its three swaps, `rusanov()` (L1-b), the
+  upwind face written in the case with `@pops.scheme` (L1-c) and IMEX Euler with `cg()` (L1-d).
+  `tests/python/integration/surface/test_cf17_l1_swaps.py` checks that each swap changes only the
+  lines of the swapped function, lints the four files, and runs them natively in Dim1 at the level
+  of L1-a: L1-b and L1-c give L1-a bit for bit, the integral of u is kept, u stays in [0, 1], no
+  swap is farther from the exact cell averages than L1-a, and no Python runs inside the native run
+  (CF9). The four files are the CF1 case `L1-swaps` (frozen engine unchanged). Until N8 elaborates
+  `dt=` as a function of cell the step is a number, and `nu` is a constant while `cg()` is a
+  bridge. `pops.lib.time` re-exports `ssprk2` and `imex_euler` of `pops.lib.time.methods` (the
+  same objects), so the files import them as 17.1 writes it, `from pops.lib.time import ssprk2`.
 - ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
   from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
   `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the
@@ -303,6 +362,52 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `regrid_topology`, `scalar_field(topology=, initial=)`, the `field_topology` value type and the
   native bundle and allocation fragments. The three regrid cases ran bit for bit equal to the
   bridge on every cell, halo included, before the deletion.
+- ROM-90 (N9, « Le coût de la région d'un solveur »): a solver's region records no face
+  expression. The value of a reference solve's region leaves it by a raw copy into the prelude
+  buffer that the native CG also writes, so the face-record expressions that b6 keeps for the
+  publication of an accepted state were computed in the region and dropped at its boundary.
+  Inside the region the lowering now emits the pure field algebra (`PureFieldAlgebra::axpy` and
+  `lincomb`, the kernels of `ctx.axpy` and `ctx.lincomb`), captures no StencilFlux face, brackets
+  no write and attaches no affine expression; outside it the generated C++ is unchanged. The
+  relation solves of `cg()` give the same states bit for bit and, on L1-d, run at 1.4 times the
+  native witness at 64² and 2.6 times at 256² (18 ms and 270 ms per step, against 2.47 s and
+  259 s before). `benchmarks/n9_relation_cost` measures the ratio in A B B A blocks against the
+  bound of 10 that the driver set on 13/11.
+- ROM-90 (N9, « La référence sous les solves de relation »): `cg()` of `pops.lib.solve` is no
+  longer a bridge of MG9 on b6's native CG. `cg().linear_solver(request=)` returns the reference
+  with the request's tolerances, `SolverDefinition.declare_relation(requires=, description=)`
+  replaces `bind_relation_native`, and the linear maps of N15 (`linear_apply`, the apply of
+  `two_point()`) are removed: the operator is the discrete operator that the explicit route
+  evaluates. `pops.lib.solve` is a package (`claims`, `refused`). A fixed failure site under a
+  reference realization is refused at elaboration (§3.7), and a b6 rate op that a region does not
+  run is refused by name. `tests/gates/mg9_bridges.toml` loses its `cg` entry. Cost (reported,
+  not gated, driver's ruling of 13/11): the relation solves under `cg()` are about 470 times
+  slower than before this lot at 64² and about 2600 times at 256². On L1-d a step takes 2.47 s
+  at 64² and 259 s at 256² (11 GB resident), against 5.3 ms and 99 ms for the same step on b6's
+  native CG. The region recorded the face expressions of every iterate; the follow-up « Le coût
+  de la région d'un solveur » removes them.
+- ROM-93 with ROM-25 (N11 lot 2b-ii, G07): checkpoints are authenticated by `program_id` (spec 0.3
+  CN9, G07 criterion (iv)). The checkpoint manifest records the compiled `program_id` next to the
+  semantic, artifact and bind identities. After verifying the envelope and the member digests,
+  restart checks the program identity before restoring any state. A change of program, target,
+  toolchain, optimization flags or emitter produces a program identity mismatch. When the program
+  identities agree and an expected Uniform state member is missing, the diagnostic names that
+  member. Restart across renamed owners requires name-free native images in N11 lot 2c-ii. The manifest keeps its
+  schema version: a manifest without `program_id` (written before this lot) is refused by its
+  exact key set. The Uniform v2 migration seals with the `program_id` of its authority checkpoint.
+- ROM-93 with ROM-25 (N11 lot 2b-i, G07): owner names leave the identities (spec 0.3 CC2, gap
+  C47). The case, block, model definition and layout names are presentation names: a case renamed
+  in every owner keeps its semantic identity, `snapshot.artifact_hash` and `plan_identity`, while
+  the full snapshot keeps the names. `pops.identity.presentation` projects the canonical preimages
+  (`$case`, `$block<k>` in registration order, `$model<k>` and `$layout<k>` in first use); the names
+  of quantities, terms, the Program, frames and realizations (`reconstruction.User`, `riemann.User`,
+  `@pops.scheme`) stay in the identities while gap C52 is open. A compiled artifact carries
+  `program_id` (domain `program`: the plan identity, the compile choices of each layout Program and
+  `codegen_source_authority()`), shown by `inspect()`, the runtime inspection and the run report.
+  A module outside PoPS read by a callback is identified in the artifact projection by the values
+  it supplies, not by its source digest. A checkpoint of the same program under other owner names
+  is refused by name (N11 lot 2b-ii, 2c). `ARTIFACT_SCHEMA_VERSION` is 8; semantic identities of
+  every case change once.
 - ROM-85 (N10, phase 1, lot 3a): strict mode on `Patches` (spec 0.3 DM5). The layout record
   (`data_layout_and_distribution`, schema 4) lists every general access of the plan
   (`general_accesses`: node, op, array, layout and IR8 provenance of the index) for `at` and the
@@ -343,6 +448,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 3c-2b): AMR tagging is written only as regions of `cell`. The ValueExpr tag
+  graph leaves `pops`: `Tag` and `Coarsen` refuse an expression of the state and show the region
+  form, `Tag(lambda cell: cell.value(q) > case.value(t))`; `mesh/_amr/tagging_graph.py` and
+  `tagging_resolution.py`, the `resolve_for_amr_*` hooks of the IR (a Boolean node now declares
+  `__pops_ir_boolean__`, read by `pops._ir.is_boolean_expression`), the bytecode lowering of
+  `flow_bootstrap_tagging`, `pops.amr.TaggerProvider`, `pops.lib.amr.SymbolicTagger` and the
+  `tagger=` slot of `pops.layouts.AMR` are removed. `Hysteresis`, `EqualityPolicy` and
+  `ConflictPolicy` keep their names in `pops.amr` (module `mesh/_amr/tagging_policy.py`). The
+  parity tests compare with the boxes and marks that the graph gave, recorded before it went
+  (`tests/python/data/amr_graph_oracles.json`, with a margin to each threshold). Tagging on the
+  output of a field solve, which only the graph read, is gone with it. The native bytecode VM is
+  retained as a seam for 24 C++ and five Python low-level tests until lot 3c-2c. Two further
+  C++ tests cover the native Tagger ABI and loader during that transition.
+- ROM-95 (N12, lot 3c-2a): a refinement region reads a runtime parameter of its model.
+  `Tag(lambda cell: cell.value(q) > model.value(nu))` reads `nu` from the RuntimeParams table of
+  the block whose state it reads, the table its faces and stencils read, when the tagging plan is
+  prepared; the value is bind data and enters neither the criterion identity nor the C++. A
+  parameter of another model, a non-runtime one, or one that no formula of the model reads (no
+  slot in the table, refused at compile) is refused by its name, and a threshold that no relation
+  reads stays a `case.param` (Q4). A Regrid `when` body and its indicators refuse a model parameter
+  by its name. Core ledger: `refinement-region-reads-a-runtime-parameter-of-its-model`.
 - ROM-95 (N12, lot 3c, part 1): the tests and test fixtures that wrote AMR tagging as a ValueExpr
   graph without testing the graph itself write regions of `cell` (66 files); a partial
   per-layout case on the physical maps shows each of three layouts refining its own part of the

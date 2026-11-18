@@ -348,38 +348,3 @@ def test_transfer_registry_accepts_an_external_policy_protocol():
     registry.state(core.tracer_state, ExternalStateTransfer())
     policy = registry.inspect()["states"][0]["policy"]
     assert policy["provider"] == "tests.external.state-transfer.v1"
-
-
-def test_boolean_tagging_composition_lowers_through_node_protocols():
-    example = _example()
-    target = example.build_final_case()
-    core, authored = target.authoring, target.layout
-    from pops.amr import AMRTagging, Buffer, Coarsen, Tag
-    from pops.math import ValueExpr
-    from pops.layouts import AMR
-    from pops.math import grad, norm
-    from pops.mesh._amr import AnyOf
-
-    value = ValueExpr(core.tracer_state)
-    predicate = (value > core.case.value(core.refine_value)) | (
-        norm(grad(value)) > core.case.value(core.refine_gradient)
-    )
-    tagging = AMRTagging(
-        rules=(
-            Tag(predicate),
-            Coarsen(value < core.case.value(core.coarsen_value)),
-            Buffer(cells=2, selection="refine-requests"),
-        ),
-        hysteresis=authored.tagging.hysteresis,
-        conflict_policy=authored.tagging.conflict_policy,
-    )
-    layout = AMR(
-        grid=authored.grid,
-        hierarchy=authored.hierarchy,
-        tagging=tagging,
-        regrid=authored.regrid,
-        transfer=authored.transfer,
-        execution=authored.execution,
-    )
-    resolved = pops.resolve(pops.validate(core.case), layout=layout)
-    assert type(resolved.bootstrap_plan.tagging.graph.refine) is AnyOf

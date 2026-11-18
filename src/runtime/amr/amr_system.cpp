@@ -2783,7 +2783,10 @@ struct AmrSystem<Dim>::Impl {
     std::string provider_identity;
     /// The criterion generated into the compiled Program (DM13b), in place of the bytecode: the
     /// block states it reads, in the order of its field table, the variables it reads in each one
-    /// with their component indices, its reach per axis, and its bound runtime parameters.
+    /// with their component indices, its reach per axis, and its bound runtime parameters. The
+    /// rows after ``parameters`` read a runtime parameter of a model: each names its Program
+    /// block and its slot in that block's RuntimeParams table, the table that the faces and
+    /// stencils of the model read; the preparation reads the value there (N12 lot 3c-2a).
     struct Generated {
       std::string identity;
       std::vector<std::string> field_identities;
@@ -2792,6 +2795,8 @@ struct AmrSystem<Dim>::Impl {
       std::vector<std::vector<int>> field_components;
       std::vector<std::array<std::size_t, Dim>> field_reach;
       std::vector<double> parameters;
+      std::vector<int> parameter_blocks;
+      std::vector<int> parameter_slots;
     };
     std::optional<Generated> generated;
   };
@@ -4735,7 +4740,9 @@ struct AmrSystem<Dim>::Impl {
                     for (const std::size_t value : reach)
                       item.scalar(static_cast<std::uint64_t>(value));
                   })
-        .sequence(generated.parameters);
+        .sequence(generated.parameters)
+        .sequence(generated.parameter_blocks)
+        .sequence(generated.parameter_slots);
   }
 
   static void append_regrid_decision_contract(ExactContractBuilder& contract,
@@ -9243,6 +9250,15 @@ struct AmrSystem<Dim>::Impl {
       std::fill(block.begin(), block.end(), false);
   }
 
+  /// Whether the generated refinement criterion reads a runtime parameter of Program block
+  /// @p block from its RuntimeParams table (N12 lot 3c-2a).
+  bool generated_criterion_reads_program_block(int block) const {
+    if (!tagging_spec || !tagging_spec->generated)
+      return false;
+    const auto& blocks_read = tagging_spec->generated->parameter_blocks;
+    return std::find(blocks_read.begin(), blocks_read.end(), block) != blocks_read.end();
+  }
+
   const ResolvedTaggingProgram& resolve_tagging_program() const {
     if (resolved_tagging)
       return *resolved_tagging;
@@ -9303,6 +9319,23 @@ struct AmrSystem<Dim>::Impl {
       candidate.program.generated_entry = generated_criterion.entry;
       candidate.program.generated_identity = generated.identity;
       candidate.program.generated_parameters = generated.parameters;
+      // A model parameter is read from its block's RuntimeParams table as it stands now, the table
+      // that the faces and stencils of the model read; set_program_params drops this preparation,
+      // so it never keeps a value that the table no longer holds (N12 lot 3c-2a).
+      for (std::size_t row = 0; row < generated.parameter_blocks.size(); ++row) {
+        const RuntimeParams table = program.params(generated.parameter_blocks[row]);
+        const int slot = generated.parameter_slots[row];
+        if (slot < 0 || slot >= table.count)
+          throw std::invalid_argument(
+              "AMR generated refinement criterion reads a runtime parameter outside the "
+              "RuntimeParams table of Program block " +
+              std::to_string(generated.parameter_blocks[row]));
+        const double value = static_cast<double>(table.get(slot));
+        if (!std::isfinite(value))
+          throw std::invalid_argument(
+              "AMR generated refinement criterion reads a non-finite runtime parameter");
+        candidate.program.generated_parameters.push_back(value);
+      }
       for (std::size_t field = 0; field < generated.field_identities.size(); ++field) {
         const std::string& identity = generated.field_identities[field];
         const std::size_t block_index = state_block_of(generated.field_blocks[field], identity);
@@ -15483,6 +15516,7 @@ void AmrSystem<Dim>::set_generated_tagging(
     const std::vector<std::vector<std::string>>& field_variables,
     const std::vector<std::vector<int>>& field_components,
     const std::vector<std::vector<std::size_t>>& field_reach, const std::vector<double>& parameters,
+    const std::vector<int>& parameter_blocks, const std::vector<int>& parameter_slots,
     int min_cycles, const std::string& clock_identity, const std::string& provider_identity) {
   p_->require_no_native_package_callback("set_generated_tagging");
   const ExecutionLane& lane = p_->require_package_assembly_lane();
@@ -15496,13 +15530,18 @@ void AmrSystem<Dim>::set_generated_tagging(
     if (p_->engine || p_->tagging_spec || p_->tagger_component || identity.empty() || fields == 0 ||
         field_blocks.size() != fields || field_variables.size() != fields ||
         field_components.size() != fields || field_reach.size() != fields || min_cycles < 0 ||
-        clock_identity.empty() || provider_identity.empty())
+        parameter_blocks.size() != parameter_slots.size() || clock_identity.empty() ||
+        provider_identity.empty())
       throw std::invalid_argument(
           "AMR generated refinement criterion requires one complete unique pre-materialization "
           "authority");
-    typename Impl::TaggingSpec::Generated generated{identity,        field_identities, field_blocks,
-                                                    field_variables, field_components, {},
-                                                    parameters};
+    typename Impl::TaggingSpec::Generated generated{
+        identity, field_identities, field_blocks,     field_variables, field_components,
+        {},       parameters,       parameter_blocks, parameter_slots};
+    for (std::size_t row = 0; row < parameter_blocks.size(); ++row)
+      if (parameter_blocks[row] < 0 || parameter_slots[row] < 0)
+        throw std::invalid_argument(
+            "AMR generated refinement criterion has an invalid model parameter row");
     for (std::size_t field = 0; field < fields; ++field) {
       if (field_identities[field].empty() || field_blocks[field].empty() ||
           field_variables[field].empty() ||
@@ -23655,11 +23694,13 @@ void AmrSystem<Dim>::set_program_params(int block, const std::vector<double>& va
   const auto& lane = p_->require_package_assembly_lane();
   std::map<int, RuntimeParams> candidate;
   std::exception_ptr error;
+  bool reads_criterion = false;
   try {
     if (p_->active_accepted_auxiliary_point)
       throw std::logic_error(
           "AMR runtime parameters are borrowed by accepted auxiliary preparation");
     p_->require_no_native_package_callback("set_program_params");
+    reads_criterion = p_->generated_criterion_reads_program_block(block);
     candidate = p_->program.block_params_;
     auto carrier = p_->program.prepare_params(block, values, "AmrSystem");
     candidate.at(block) = std::move(carrier);
@@ -23671,6 +23712,14 @@ void AmrSystem<Dim>::set_program_params(int block, const std::vector<double>& va
   p_->program.block_params_.swap(candidate);
   p_->field_candidate_observations.clear();
   p_->staged_field_candidate_observations.clear();
+  if (reads_criterion) {
+    // The prepared tagging program holds the values that it read from this table: drop it, so
+    // that the next tagging reads the table as it now stands, as the faces and stencils of the
+    // model do (N12 lot 3c-2a).
+    p_->resolved_tagging.reset();
+    p_->tagging_plan.reset();
+    p_->component_tagging_plan.reset();
+  }
 }
 
 template <int Dim>
@@ -27225,8 +27274,8 @@ template void AmrSystem<kNativeDimension>::set_bootstrap_tagging(
 template void AmrSystem<kNativeDimension>::set_generated_tagging(
     const std::string&, const std::vector<std::string>&, const std::vector<std::string>&,
     const std::vector<std::vector<std::string>>&, const std::vector<std::vector<int>>&,
-    const std::vector<std::vector<std::size_t>>&, const std::vector<double>&, int,
-    const std::string&, const std::string&);
+    const std::vector<std::vector<std::size_t>>&, const std::vector<double>&,
+    const std::vector<int>&, const std::vector<int>&, int, const std::string&, const std::string&);
 template std::vector<std::uint8_t> AmrSystem<kNativeDimension>::tagging_requests(int);
 template void AmrSystem<kNativeDimension>::set_generated_regrid_decision(
     const std::string&, const std::vector<std::string>&, const std::vector<std::string>&,

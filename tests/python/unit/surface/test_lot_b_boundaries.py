@@ -4,10 +4,10 @@
 support (2.6.2, SU14, D9); this lot elaborates the forms ``Value`` (``u == g``, g free of the
 quantities) and ``NoData`` (``outflow(u)``), and refuses the others with ``NotYetElaborated``.
 ``pops.Numerics(boundary=ghosts())`` realizes each relation: the elaborator runs the policy under
-each relation at the depths that b6 reads, checks that the ghost it gives is a ghost law of b6
-(2 g - u_k is ``Inflow``, u_1 is ``Outflow``) and adds the ``TransportBoundarySet`` of the block
-to the plan (T5). Each case gives the case written by hand for b6 (SU-T3: program IR, artifact
-without provenance, semantic identity, C++). The compiled run is checked by
+each relation at the depths 1..D of the halo of the block and adds to the plan (T5) the b6
+``SourceGhost`` of each piece, whose ghost cells the model package generates from the body
+(G04-a). Each case gives the case written by hand for b6 with ``SourceGhost`` (SU-T3: program IR,
+artifact without provenance, semantic identity, C++). The compiled run is checked by
 ``tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py``.
 """
 import json
@@ -15,14 +15,15 @@ import types
 
 import pytest
 
-from examples.api_v02 import b6_numerics
+from examples.api_v02 import b6_numerics, b6_reconstructions
 
 import pops
 import pops.surface as surface
 from pops import math as pm
 from pops.boundary import TransportBoundarySet
-from pops.boundary.transport import Inflow, Outflow
+from pops.boundary.transport import SourceGhost
 from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen.user_ghost_lowering import emit_user_ghost_policy
 from pops.codegen.program_models import ProgramModelGraph
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian2D
@@ -30,14 +31,14 @@ from pops.initial import InitialCondition
 from pops.layouts import Uniform
 from pops.lib.initial import BindArray
 from pops.lib.numerics.boundaries import ghosts
-from pops.lib.numerics import rusanov, upwind
+from pops.lib.numerics import muscl, rusanov, upwind, vanleer
 from pops.lib.time.methods import ssprk2
 from pops.mesh import CartesianGrid, PeriodicAxes
-from pops.numerics import DiscretizationPlan
+from pops.numerics import DiscretizationPlan, reconstruction, riemann
 from pops.params import ConstParam, RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.surface.discrete import Ghost, forms
-from pops.surface.math import ddt, div, grad, outflow, vector
+from pops.surface.math import ddt, div, dot, grad, outflow, vector
 from pops.time._program.elaboration import Advance, Proposal, elaborate
 from pops.time._program.traced_method import Candidate, method
 
@@ -88,9 +89,11 @@ def _inflow_outflow(parts, value=0.05):
     return inlet, outlet
 
 
-def _hand_case(laws, periodic_x=False, inlet=0.05):
+def _hand_case(laws, periodic_x=False, inlet=0.05, recon=None, face=None):
     """The case written for b6 and N8: ``laws(boundaries, state, inlet)`` gives the transport
-    boundaries of the block, keyed by the boundaries of the frame."""
+    boundaries of the block, keyed by the boundaries of the frame; ``recon(u)`` the
+    reconstruction of its face, first order if None; ``face(flux, u, recon)`` its face, the
+    source-authored Rusanov of b6 if None."""
     frame = CartesianDomain("box", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
     x, y = frame.axes
     model = pops.Model("advection", frame=frame)
@@ -102,7 +105,9 @@ def _hand_case(laws, periodic_x=False, inlet=0.05):
     rate = model.rate("u", equation=pm.ddt(u) == -pm.div(flux_u))
     plan = DiscretizationPlan()
     selection = rate.select(flux_u)
-    plan.rates.add(selection, b6_numerics.rusanov(flux_u, u))
+    reconstructed = None if recon is None else recon(u)
+    plan.rates.add(selection, b6_numerics.rusanov(flux_u, u, reconstruction=reconstructed)
+                   if face is None else face(flux_u, u, reconstructed))
     value = inlet(model) if callable(inlet) else inlet
     case = pops.Case("advection")
     block = case.block("advection", model)
@@ -122,11 +127,39 @@ def _hand_case(laws, periodic_x=False, inlet=0.05):
                                        periodic=PeriodicAxes((x,)) if periodic_x else None))
 
 
-def _four_sides(boundaries, state, value):
-    return {boundaries.x_min: Inflow(state=state, value=value),
-            boundaries.y_min: Inflow(state=state, value=value),
-            boundaries.x_max: Outflow(state=state),
-            boundaries.y_max: Outflow(state=state)}
+def _mirror(state, value, depth=1):
+    """The ghost 2 g - u_k that ghosts() gives a value, at the depths 1..depth."""
+    return SourceGhost(state=state, body=lambda inner, k: (2 * value - inner(k)[0],), depth=depth)
+
+
+def _copy(state, depth=1):
+    """The ghost u_1 that ghosts() gives no data."""
+    return SourceGhost(state=state, body=lambda inner, k: (inner(1)[0],), depth=depth)
+
+
+def _four_sides(boundaries, state, value, depth=1, outlet=None):
+    out = outlet or _copy
+    return {boundaries.x_min: _mirror(state, value, depth),
+            boundaries.y_min: _mirror(state, value, depth),
+            boundaries.x_max: out(state, depth=depth),
+            boundaries.y_max: out(state, depth=depth)}
+
+
+def _user(body, name="muscl"):
+    """A reconstruction of the cell written by hand for b6 over the samples -1, 0 and 1, as the
+    surface realizes a ``Reconstruct`` (``tests/python/unit/surface/test_n3_lot2_muscl.py``)."""
+    def recon(u):
+        def sampled(sample):
+            minus, centre, plus = sample(-1)[0], sample(0)[0], sample(1)[0]
+            return (body(minus, centre, plus),)
+
+        return reconstruction.User(sampled, state=u, formal_order=3, name=name)
+
+    return recon
+
+
+_hand_vanleer = _user(lambda minus, centre, plus: centre + .5 * b6_reconstructions.vanleer(
+    centre - minus, plus - centre))
 
 
 def _resolved(case, layout):
@@ -164,7 +197,7 @@ def _assert_same(case, hand):
 
 # --- SU-T3: the elaborated case is the case written by hand --------------------------------------
 
-def test_a_value_and_no_data_are_the_inflow_and_outflow_of_b6():
+def test_a_value_and_no_data_are_the_generated_ghosts_of_their_policy():
     parts = _parts()
     _inflow_outflow(parts)
     _assert_same(_case(parts), _hand_case(_four_sides))
@@ -202,8 +235,7 @@ def test_a_periodic_axis_and_relations_on_the_other():
     parts.model.on(parts.sides.y_max, outflow(parts.u))
 
     def laws(boundaries, state, value):
-        return {boundaries.y_min: Inflow(state=state, value=value),
-                boundaries.y_max: Outflow(state=state)}
+        return {boundaries.y_min: _mirror(state, value), boundaries.y_max: _copy(state)}
 
     _assert_same(_case(parts), _hand_case(laws, periodic_x=True))
 
@@ -212,11 +244,13 @@ def test_inspect_reports_the_form_and_the_ghost_of_each_relation():
     parts = _parts()
     _inflow_outflow(parts)
     report = str(surface.inspect(_case(parts)))
-    assert "Inflow(state=block[u], value=0.05) on x_min, y_min" in report
+    assert ("SourceGhost(state=block[u], body=the Ghost of ghosts(), depth=1) on x_min, y_min"
+            in report)
     assert "form = Value (derived)" in report
-    assert "ghost = 2 g - u_k (FixedState), by ghosts() (derived)" in report
-    assert "Outflow(state=block[u]) on x_max, y_max" in report
-    assert "ghost = u_1 (Extrapolate), by ghosts() (derived)" in report
+    assert "ghost = k=1: 0.1 - face.inner(1).value(u), by ghosts() (derived)" in report
+    assert ("SourceGhost(state=block[u], body=the Ghost of ghosts(), depth=1) on x_max, y_max"
+            in report)
+    assert "ghost = k=1: face.inner(1).value(u), by ghosts() (derived)" in report
     assert "periodic=None" in report
 
 
@@ -297,15 +331,22 @@ def test_the_policy_is_a_called_scheme_over_face():
                          boundary={parts.sides.x_min: ghosts()})
 
 
-def test_a_policy_whose_ghost_is_not_a_law_of_b6_names_its_lot():
+def test_a_policy_outside_the_laws_of_b6_is_generated():
+    """G04-a, C4: a constant ghost g is generated at D = 1, where lot B refused it."""
     @surface.scheme
     def constant_ghost(face, term, depth):
-        return Ghost(term.data)
+        if term.form is forms.Value:
+            return Ghost(term.data)
+        return Ghost(face.inner(1).value(term.quantity))
+
+    def laws(boundaries, state, value):
+        constant = SourceGhost(state=state, body=lambda inner, k: (value,), depth=1)
+        return {boundaries.x_min: constant, boundaries.y_min: constant,
+                boundaries.x_max: _copy(state), boundaries.y_max: _copy(state)}
 
     parts = _parts()
     _inflow_outflow(parts)
-    with pytest.raises(surface.NotYetElaborated, match="not a ghost law of b6"):
-        _case(parts, boundary=constant_ghost()).elaborated  # noqa: B018
+    _assert_same(_case(parts, boundary=constant_ghost()), _hand_case(laws))
 
 
 def test_a_policy_written_as_the_library_is_the_library_ghosts():
@@ -340,17 +381,156 @@ def test_upwind_with_boundaries():
     assert resolved.snapshot.semantic_identity
 
 
-def test_a_policy_that_departs_from_the_laws_deeper_than_one_cell_is_refused():
+@surface.scheme
+def _deep(face, term, depth):
+    if term.form is forms.Value:
+        return Ghost(2 * term.data - face.inner(depth).value(term.quantity))
+    return Ghost(face.inner(depth).value(term.quantity))   # u_k, not u_1, past depth 1
+
+
+@surface.scheme
+def _linear(face, term, depth):
+    if term.form is forms.Value:
+        return Ghost(2 * term.data - face.inner(depth).value(term.quantity))
+    q = term.quantity
+    return Ghost(2 * face.inner(1).value(q) - face.inner(2).value(q))
+
+
+def _reflected(state, depth):
+    return SourceGhost(state=state, body=lambda inner, k: (inner(k)[0],), depth=depth)
+
+
+def _extrapolated(state, depth):
+    return SourceGhost(state=state, body=lambda inner, k: (2 * inner(1)[0] - inner(2)[0],),
+                       depth=depth)
+
+
+def test_a_policy_that_departs_from_the_laws_deeper_than_one_cell_is_generated():
+    """Lot B refused u_k under no data, which departs from u_1 at k = 2. Under first order the
+    halo is one cell deep (D = 1), where it is u_1; under muscl (D = 2) it is generated."""
+    parts = _parts()
+    _inflow_outflow(parts)
+    _assert_same(_case(parts, boundary=_deep()), _hand_case(_four_sides))
+    parts = _parts()
+    _inflow_outflow(parts)
+    case = _case(parts, scheme=rusanov(reconstruction=muscl(limiter=vanleer)), boundary=_deep())
+
+    def laws(boundaries, state, value):
+        return _four_sides(boundaries, state, value, depth=2, outlet=_reflected)
+
+    _assert_same(case, _hand_case(laws, recon=_hand_vanleer))
+
+
+# --- G04-a: the generated ghosts ------------------------------------------------------------------
+
+def test_muscl_generates_the_ghosts_at_the_depths_1_and_2():
+    parts = _parts()
+    _inflow_outflow(parts)
+    case = _case(parts, scheme=rusanov(reconstruction=muscl(limiter=vanleer)))
+
+    def laws(boundaries, state, value):
+        return _four_sides(boundaries, state, value, depth=2)
+
+    _assert_same(case, _hand_case(laws, recon=_hand_vanleer))
+    report = str(surface.inspect(case))
+    assert ("ghost = k=1: 0.1 - face.inner(1).value(u); k=2: 0.1 - "
+            "face.inner(2).value(u), by ghosts() (derived)") in report
+    # Q3: one branch per integer depth in the generated policy, no symbolic depth (2.6.6)
+    elaborated = case.elaborated
+    resolved = _resolved(elaborated.case, elaborated.layout)
+    (package,) = ProgramModelGraph.from_resolved_blocks(resolved.blocks).models_by_block.values()
+    policy = emit_user_ghost_policy(package)
+    assert "static constexpr int depth = 2;" in policy
+    for ordinal in range(4):
+        branch = policy.split("if constexpr (Ordinal == %d) {" % ordinal)[1].split(
+            "if constexpr (Ordinal ==")[0]
+        assert branch.count("if (k == 1) {") == branch.count("if (k == 2) {") == 1
+        assert "if (k == 3)" not in branch
+
+
+def test_the_linear_extrapolation_is_generated_under_muscl_and_refused_under_first_order():
+    """C4, Q3: 2 u_1 - u_2 reads the second inner cell; muscl stores two ghost cells, first order
+    one, where the read is refused by its name."""
+    parts = _parts()
+    _inflow_outflow(parts)
+    case = _case(parts, scheme=rusanov(reconstruction=muscl(limiter=vanleer)), boundary=_linear())
+
+    def laws(boundaries, state, value):
+        return _four_sides(boundaries, state, value, depth=2, outlet=_extrapolated)
+
+    _assert_same(case, _hand_case(laws, recon=_hand_vanleer))
+    parts = _parts()
+    _inflow_outflow(parts)
+    with pytest.raises(surface.NotYetElaborated,
+                       match=r"face\.inner\(2\)\.value\(u\) in the ghost .* deeper than the 1 "
+                             r"ghost cell of the block") as caught:
+        _case(parts, boundary=_linear()).elaborated  # noqa: B018
+    assert "symbolic depth of 2.6.6" in str(caught.value)
+
+
+def test_a_ghost_that_reads_the_normal_or_a_coordinate_names_its_lot():
+    """D3: face.normal and a coordinate are not read by a generated ghost of this lot."""
     @surface.scheme
-    def deep(face, term, depth):
-        if term.form is forms.Value:
-            return Ghost(2 * term.data - face.inner(depth).value(term.quantity))
-        return Ghost(face.inner(depth).value(term.quantity))   # u_k, not u_1, past depth 1
+    def normal(face, term, depth):
+        inner = face.inner(1).value(term.quantity)
+        return Ghost(inner * dot(vector(1.0, 0.0), face.normal))
 
     parts = _parts()
     _inflow_outflow(parts)
-    with pytest.raises(surface.NotYetElaborated, match="not a ghost law of b6"):
-        _case(parts, boundary=deep()).elaborated  # noqa: B018
+    with pytest.raises(surface.NotYetElaborated, match="face.normal in the ghost") as caught:
+        _case(parts, boundary=normal()).elaborated  # noqa: B018
+    assert "characteristic and reflected ghosts" in str(caught.value)
+
+    parts = _parts()
+    x = parts.domain.x
+
+    @surface.scheme
+    def coordinate(face, term, depth):
+        return Ghost(face.inner(1).value(term.quantity) + x)
+
+    _inflow_outflow(parts)
+    with pytest.raises(surface.NotYetElaborated, match="the coordinate x in the ghost") as caught:
+        _case(parts, boundary=coordinate()).elaborated  # noqa: B018
+    assert "C44" in str(caught.value)
+
+
+def test_a_source_ghost_face_needs_the_generated_face_of_its_package():
+    """C2: the generated ghosts are filled by the generated System block, whose face is the
+    source-authored face of the package (riemann.User); a native face is refused by name."""
+    from pops.numerics.spatial import FiniteVolume
+    from pops.numerics import variables
+
+    def native(flux, u, recon):
+        return FiniteVolume(flux=flux, variables=variables.Conservative(u),
+                            reconstruction=recon or reconstruction.FirstOrder(),
+                            riemann=riemann.Rusanov())
+
+    with pytest.raises(ValueError, match=r"needs the generated face of its package "
+                                         r"\(riemann\.User\)"):
+        _cpp(_resolved(*_hand_case(_four_sides, face=native)))
+
+
+def test_a_package_that_stores_more_ghost_cells_than_it_generates_is_refused():
+    """R1: the composition of the halos of resolved operations is known at compilation only; a
+    block that stores more ghost cells than the generated depths is refused there."""
+    from pops.codegen.user_ghost_lowering import require_user_ghost_storage
+
+    package = types.SimpleNamespace(_user_ghost={"depth": 1, "stencil_depth": 1},
+                                    _program_state_ghost_depth=2)
+    with pytest.raises(ValueError, match="fill the ghost depths 1..1, but its block stores 2"):
+        require_user_ghost_storage(package)
+    package._program_state_ghost_depth = 1
+    require_user_ghost_storage(package)
+
+
+def test_a_source_ghost_refuses_a_read_deeper_than_its_depth():
+    """Q3: a body of b6 that reads past the depth of its ghost cells is refused by its name."""
+    def laws(boundaries, state, value):
+        deep = SourceGhost(state=state, body=lambda inner, k: (inner(2)[0],), depth=1)
+        return {**_four_sides(boundaries, state, value), boundaries.x_max: deep}
+
+    with pytest.raises(ValueError, match="reads the inner cell 2, deeper than the depth 1"):
+        _hand_case(laws)
 
 
 def test_boundary_data_that_is_not_finite_is_refused_at_the_relation():

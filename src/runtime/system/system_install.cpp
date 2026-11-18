@@ -614,10 +614,11 @@ ExternalBoundaryDependencyStorage<Dim> prepare_external_boundary_dependencies(
                 const HyperbolicBoundaryLaw law = physical->face(axis, side).law;
                 if (law == HyperbolicBoundaryLaw::External ||
                     law == HyperbolicBoundaryLaw::CharacteristicNoInflow ||
-                    physical->has_analytic_state())
+                    law == HyperbolicBoundaryLaw::SourceGhost || physical->has_analytic_state())
                   throw std::runtime_error(
                       "prepared System cross-route GhostBoundary requires a source model transport "
-                      "hook for external, characteristic, or analytic physical faces");
+                      "hook for external, characteristic, source ghost, or analytic physical "
+                      "faces");
               }
           detached.ghost_transport =
               std::make_shared<typename ExternalBoundaryDependencyStorage<Dim>::GhostTransport>(

@@ -491,6 +491,7 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
           report.rejection = rejected.what();
           report.rejection_phase = phase;
           report.rejection_detail = rejected.detail();
+          report.rejection_status = solve_status_name(rejected.status());
           return finish(AdvanceRunStop::kTrialFailure);
         }
         // The face guard of a riemann.User face refuses in the native evaluation of the rate,
@@ -505,6 +506,7 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
         report.rejection = rejected.what();
         report.rejection_phase = phase;
         report.rejection_detail = rejected.detail();
+        report.rejection_status = solve_status_name(rejected.status());
         if (face_refusal) {
           // The guard already used globally reduced frequencies, and step() agreed the
           // rejection envelope before rollback. All ranks can read its payload directly.

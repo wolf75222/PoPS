@@ -79,6 +79,14 @@ class Choice:
         return "%s = %s (%s)" % (self.name, self.value, self.origin)
 
 
+def written_in(body: Any) -> str:
+    """Where the body of a scheme or a method is written, for ``pops.inspect``: ``pops.lib`` and
+    its line, or the case file and its line (S1-b of the vertical slice)."""
+    from pops._source_origin import code_origin, origin_text
+
+    return origin_text(code_origin(body))
+
+
 class Row:
     """One construct: its mathematics, its level, its elaborated form and its choices."""
 
@@ -191,10 +199,11 @@ def _per_axis_text(values: tuple, spell: Any) -> str:
 
 
 _G04 = "a later lot of N15 with the boundary relations of G04"
-_GENERATED_GHOSTS = "a later lot of N15 with the generated ghost fills of G04"
-# The depths at which a boundary policy is checked: those that b6 derives at most (WENO5 reads
-# three cells), so that a body that departs from a law of b6 at a depth is refused.
-_GHOST_DEPTHS = (1, 2, 3)
+# The reads that a generated ghost of G04-a does not take (D3), with their owners.
+_NORMAL_GHOSTS = "a later lot of G04 with the characteristic and reflected ghosts"
+_SYMBOLIC_DEPTH = ("G04 phase 2, with the symbolic depth of 2.6.6 (the generated ghosts of G04-a "
+                   "read the cells 1..D of the halo of the block)")
+_FACE_CENTRE_DATA = "G04, with the boundary data read at the centre of the face (C44)"
 
 
 _ANALYTIC_LOT = "a later lot of N15 with the generated initial values of G07"
@@ -219,17 +228,20 @@ def _number(value: Any) -> Any:
 class _RateSum:
     """A rate option of a method: the sum of the selections of its terms, in balance order.
 
-    At an unknown of a solve, the rate is read as the linear map that the schemes of its terms
-    state (``linear_apply`` and ``linear_claims``, the lot « solves »): each term asks its scheme
-    for the map when a relation reads it, never before, so that an explicit method never needs one.
+    At an unknown of a solve, the rate is read as is, at the solve's operand (§3.4 of the N9 lot
+    « La référence sous les solves de relation »), and its claims are those that the schemes of
+    its terms state (``linear_claims``, IR16): each term asks its scheme for them when a relation
+    reads it, never before, so that an explicit method never needs them. Every term of the rate
+    states them: a term that is not linear and homogeneous in the state (a source, a forcing) is
+    refused by name, since it would make the operator affine.
     """
 
-    __slots__ = ("views", "linear", "_providers")
+    __slots__ = ("views", "linear", "_claims")
 
     def __init__(self, views: Sequence[Any], linear: Sequence[Any] = ()) -> None:
         self.views = tuple(views)
         self.linear = tuple(linear)
-        self._providers: tuple | None = None
+        self._claims: tuple | None = None
 
     def __call__(self, state: Any) -> Any:
         result = self.views[0](state)
@@ -237,36 +249,30 @@ class _RateSum:
             result = result + view(state)
         return result
 
-    def providers(self) -> tuple:
-        if self._providers is None:
-            self._providers = tuple(linear() for linear in self.linear)
-        return self._providers
+    def claims(self) -> tuple:
+        if self._claims is None:
+            self._claims = tuple(linear() for linear in self.linear)
+        return self._claims
 
     @property
     def linear_claims(self) -> Any:
         from pops.time._program.relations import LinearClaims
 
         claims = []
-        for provider in self.providers():
-            claim = LinearClaims.of(provider.claims())
+        for stated in self.claims():
+            claim = LinearClaims.of(stated)
             if claim is None:
                 raise NotYetElaborated(
-                    "the linear map %r of a rate read at the unknown of a solve states no claims "
-                    "(symmetric, negative_semidefinite, proof, description; IR16)" % (provider,),
+                    "the rate %r read at the unknown of a solve states no claims (symmetric, "
+                    "negative_semidefinite, homogeneous, proof, description; IR16)" % (stated,),
                     "G10, the operator generated from the term, with the Newton solves of N9")
             claims.append(claim)
         return LinearClaims(
             symmetric=all(claim.symmetric for claim in claims),
             negative_semidefinite=all(claim.negative_semidefinite for claim in claims),
+            homogeneous=all(claim.homogeneous for claim in claims),
             proof="; ".join(claim.proof for claim in claims),
             description=" + ".join(claim.description for claim in claims))
-
-    def linear_apply(self, P: Any, value: Any) -> Any:
-        providers = self.providers()
-        result = providers[0].apply(P, value)
-        for provider in providers[1:]:
-            result = result + provider.apply(P, value)
-        return result
 
 
 class _StencilTerm:
@@ -274,7 +280,10 @@ class _StencilTerm:
     that covers it, ``-div_h`` of its face flux, the evaluation k named ``<name>_<k>``.
 
     ``stencil_flux_divergence`` gives -div_h(F) of the physical flux F, which is the contribution
-    of ``-div(F)`` to the balance; a term written ``+div(F)`` is its opposite."""
+    of ``-div(F)`` to the balance; a term written ``+div(F)`` is its opposite. The evaluations are
+    counted by name in the Program, wherever they are recorded: a solve's operator evaluates the
+    rate inside its declaration and its region, whose values are not among the Program's top-level
+    values (§3.4 of the N9 lot « La référence sous les solves de relation »)."""
 
     __slots__ = ("flux", "name", "weight")
 
@@ -287,10 +296,11 @@ class _StencilTerm:
         from pops.time._program.stencil_flux import OPERATION
 
         program = state.prog
-        evaluation = sum(1 for value in program._values
-                         if value.op == OPERATION and value.name.startswith(self.name + "_"))
+        counts = program.__dict__.setdefault("_stencil_term_evaluations", {})
+        evaluation = counts.get(self.name, 0)
         rate = getattr(program, OPERATION)("%s_%d" % (self.name, evaluation), state,
                                            flux=self.flux)
+        counts[self.name] = evaluation + 1
         return rate if self.weight == -1 else -rate
 
 
@@ -657,6 +667,9 @@ class _Elaboration:
                     term, terms[term], states[term.quantity], slope=slope, unit_flux=speed,
                     lower=self.lower), balance)
                 choices = [Choice("scheme", scheme, "stated")]
+                if hasattr(scheme, "scheme"):       # a scheme written with @pops.scheme
+                    choices.append(Choice("written in", written_in(scheme.scheme.body),
+                                          "stated"))
                 choices.extend(Choice("option %s" % name, value, origin)
                                for name, value, origin in getattr(scheme, "option_choices",
                                                                   list)())
@@ -678,21 +691,19 @@ class _Elaboration:
         return plan, selections
 
     def _linear(self, scheme: Any, view: TermView, balance: Balance) -> Any:
-        """The linear map of the rate of a term, asked when a solve reads it, never before, of the
-        solver that ``solvers=`` states (N3 lot 1, D7): the matrix-free apply is the solver's,
-        beside ``cg()`` in ``pops.lib.solve``, and it recognizes the scheme by the normal form of
-        its face, so that a copy of ``two_point()`` written in a case is applied as the word."""
+        """The claims of the rate of a term read at the unknown of a solve, asked when a solve
+        reads it, never before (IR16): the scheme states them, by the normal form of its face, so
+        that a copy of ``two_point()`` written in a case is claimed as the word (N3 lot 1, D7). No
+        solver states them: the operator of a relation solve is its components' rates at the
+        State, and each solve runs the solver that ``solvers=`` keys by its own site (O1 of the
+        delta review of #778, the N9 lot « La référence sous les solves de relation »)."""
+        from pops.lib.solve import linear_claims
+
         weight = next(-coefficient if isinstance(term, DiffusiveFlux) else coefficient
                       for term, coefficient in balance.occurrences if term is view.term)
 
         def linear() -> Any:
-            operator = next((solver.linear_operator for _, solver in self.program.solvers
-                             if hasattr(solver, "linear_operator")), None)
-            if operator is None:
-                # no solver states one: the apply of the library, whose solve N8 then refuses
-                # without a solver (auto() of SV11)
-                from pops.lib.solve import linear_operator as operator
-            return operator(view, scheme=scheme, weight=weight, layout=self.layout_facts)
+            return linear_claims(view, scheme=scheme, weight=weight, layout=self.layout_facts)
         return linear
 
     # The program.
@@ -822,6 +833,7 @@ class _Elaboration:
                    "%r: %r" % item for item in realization.items())),
             [Choice("method", "%s, %d evaluations of its rates"
                     % (value.name, len(elaboration.trace.evaluations)), "stated"),
+             Choice("written in", written_in(value.method.body), "stated"),
              *stated,
              Choice("attempts", retry.max_attempts,
                     "default" if advance.attempts is None else "stated"),
@@ -865,8 +877,9 @@ class _Elaboration:
              Choice("guess", "the state at the start of the attempt (SV3)", "derived"),
              Choice("solver", site.solver, "stated"),
              Choice("implicit operator", claims, "derived"),
-             Choice("SPD certificate", "derived (IR16) from the substituted operator, until "
-                    "IR16 derives it from the face blocks (§17.1): %s" % proofs if site.spd
+             Choice("SPD certificate", "derived (IR16) from the claims of the rates of the "
+                    "components, which the operator evaluates at the State, until IR16 derives "
+                    "it from the face blocks (§17.1): %s" % proofs if site.spd
                     else "not derived", "derived"),
              Choice("failure", "SolveFailed fails the attempt (T38)", "derived")])
 
@@ -1134,46 +1147,85 @@ class _Elaboration:
                 else self.lower(relation.data)
                 for relation in relations if relation.form == "Value"}
 
+    def ghost_depth(self, plan: Any) -> int:
+        """The halo depth D of the block, derived from the plan (G04-a, R1): the largest
+        ``ghost_depth`` of the methods of its rates and states, and of the storage that a rate
+        asks. The composition of the halos of resolved operations is known only at compilation,
+        where the package refuses a block that stores more ghost cells than D."""
+        depth = 1
+        for _subject, method in (*plan.rates.items(), *plan.states.items()):
+            depth = max(depth, int(getattr(method, "ghost_depth", 1)))
+            requirements: Any = getattr(method, "runtime_storage_requirements", None)
+            if requirements is not None:
+                storage: Any = requirements()
+                if storage is not None:
+                    depth = max(depth, int(storage["ghost_depth"]))
+        return depth
+
+    def ghost_reads(self, relation: Any, policy: Any, k: int, value: Any, depth: int) -> None:
+        """Refuse a read that a generated ghost of this lot does not take (D3), each by its
+        name and its owner."""
+        from ._expr import walk
+        from ._scheme import SchemeLeaf
+
+        for node in walk(value):
+            if isinstance(node, SchemeLeaf) and node.key[0] == "normal":
+                raise NotYetElaborated(
+                    "face.normal in the ghost that %r gives under %r at depth %d"
+                    % (policy, relation, k), _NORMAL_GHOSTS, site=relation.site)
+            if isinstance(node, SchemeLeaf) and node.key[0] == "inner" and node.key[1] > depth:
+                raise NotYetElaborated(
+                    "%s in the ghost that %r gives under %r at depth %d, deeper than the %d "
+                    "ghost cell%s of the block" % (text(node), policy, relation, k, depth,
+                                                   "" if depth == 1 else "s"),
+                    _SYMBOLIC_DEPTH, site=relation.site)
+            if isinstance(node, Coordinate):
+                raise NotYetElaborated(
+                    "the coordinate %s in the ghost that %r gives under %r" % (node, policy,
+                                                                               relation),
+                    _FACE_CENTRE_DATA, site=relation.site)
+
     def boundary_conditions(self, support: Box, frame: Any, block: Any, plan: Any,
-                            states: dict, relations: list, data: dict) -> None:
-        """Run the boundary policy under each relation, check that the ghost it gives is a
-        ghost law of b6, and add the transport boundaries of the block to the plan (T5): the
-        ghost 2 g - u_k of a value and the ghost u_1 of no data, b6's two laws of master
-        (2.6.5), whose b6 conditions ``pops.lib.numerics.ghost_laws`` names (the bridge of the
-        boundary policy, until G04 generates the ghost fills)."""
+                            states: dict, relations: list) -> None:
+        """Run the boundary policy under each relation at the depths 1..D of the block, and add
+        to the plan (T5) the b6 ``SourceGhost`` of each piece, the ghost cells generated from the
+        body of the policy (G04-a): the model package compiles them, the prepared boundary fills
+        them on the device."""
         if not relations:
             return
         from pops.boundary import TransportBoundarySet
-        from pops.lib.numerics.ghost_laws import realize
-
-        from ._scheme import SchemeLeaf, normal_form
+        from pops.boundary.transport import SourceGhost
 
         policy = self.numerics.boundary
+        depth = self.ghost_depth(plan)
+        depths = tuple(range(1, depth + 1))
         laws: dict = {}
         for relation in relations:
             quantity = relation.quantity
             state = block[states[quantity]]
-            for _piece, k, value in policy.ghosts(relation, _GHOST_DEPTHS):
-                if relation.form == "Value":
-                    expected = 2 * relation.data - SchemeLeaf(("inner", k), quantity, "u_%d" % k)
-                else:
-                    expected = SchemeLeaf(("inner", 1), quantity, "u_1")
-                if normal_form(value) != normal_form(expected):
-                    raise NotYetElaborated(
-                        "the ghost %s that %r gives under %r at depth %d, which is not a ghost "
-                        "law of b6 (2 g - u_k for a value, u_1 for no data)"
-                        % (text(value), policy, relation, k), _GENERATED_GHOSTS,
-                        site=relation.site)
-            law, spelling, ghost = realize(
-                relation.form, state, data.get(relation), "block[%s]" % quantity.name,
-                self.code(relation.data) if relation.form == "Value" else "")
+            values: dict = {}
+            for piece, k, value in policy.ghosts(relation, depths):
+                self.ghost_reads(relation, policy, k, value, depth)
+                values.setdefault(piece.name, {})[k] = value
             for piece in relation.pieces:
-                laws[getattr(frame.boundaries, piece.name)] = law
+                bodies = values[piece.name]
+
+                def body(inner: Any, k: int, bodies: dict = bodies) -> tuple:
+                    inputs = {("inner", j): inner(j)[0] for j in depths}
+                    return (self.lower(bodies[k], inputs),)
+
+                laws[getattr(frame.boundaries, piece.name)] = SourceGhost(
+                    state=state, body=body, depth=depth)
+            first = values[relation.pieces[0].name]
             self.rows.append(Row(
                 repr(relation), "numerics",
-                "%s on %s" % (spelling, ", ".join(piece.name for piece in relation.pieces)),
+                "SourceGhost(state=block[%s], body=the Ghost of %r, depth=%d) on %s"
+                % (quantity.name, policy, depth,
+                   ", ".join(piece.name for piece in relation.pieces)),
                 [Choice("form", relation.form, "derived"),
-                 Choice("ghost", "%s, by %r" % (ghost, policy), "derived")]))
+                 Choice("ghost", "%s, by %r" % ("; ".join("k=%d: %s" % (k, text(first[k]))
+                                                         for k in depths), policy),
+                        "derived")]))
         periodic = tuple(axis for axis, (_, _, flag)
                          in zip(frame.axes, support.bounds(), strict=True) if flag)
         plan.boundaries.add(TransportBoundarySet(
@@ -1201,10 +1253,10 @@ class _Elaboration:
         terms = self.terms(b6, frame, states)
         rates = {balance: self.rate(b6, balance, terms, states) for balance in model.balances}
         plan, selections = self.plan(rates, terms, states)
-        data = self.boundary_data(relations)
+        self.boundary_data(relations)
         case6 = _Case(model.name)
         block = case6.block(model.name, b6)
-        self.boundary_conditions(support, frame, block, plan, states, relations, data)
+        self.boundary_conditions(support, frame, block, plan, states, relations)
         case6.numerics(plan, block=block)
         self.initial(case6, block, states, frame)
         advance = self.advance(case6, block, states, selections)

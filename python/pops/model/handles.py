@@ -58,6 +58,10 @@ class Handle:
             raise ValueError("Handle local_id must be a non-empty string")
         if not isinstance(kind, str) or not kind:
             raise ValueError("Handle kind must be a non-empty string")
+        if kind in ("block", "layout"):
+            from pops.identity.presentation import require_owner_name
+
+            require_owner_name(kind, local_id)
         if isinstance(schema_version, bool) or not isinstance(schema_version, int) \
                 or schema_version < 1:
             raise ValueError("Handle schema_version must be an integer >= 1")

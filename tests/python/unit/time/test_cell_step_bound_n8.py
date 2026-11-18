@@ -47,6 +47,20 @@ def test_a_cells_rule_records_schema_six_and_round_trips():
     assert AdvanceControl.from_data(data) == control
 
 
+def test_a_cells_rule_preserves_the_failure_variants_of_its_method():
+    failure = {"site": "method/solve", "guard": "solve",
+               "variant": ["BudgetExhausted", "SolveFailed"], "retry_can_change": True,
+               "classified": True, "lot": None}
+    control = _control(trial_failures=(failure,))
+    data = control.to_data()
+    assert data["schema"] == ADVANCE_CONTROL_CELLS_SCHEMA
+    assert data["trial_failures"] == [failure]
+    assert AdvanceControl.from_data(data) == control
+    data["trial_failures"][0]["variant"] = ["SolveFailed"]
+    with pytest.raises(ValueError, match="variants"):
+        AdvanceControl.from_data(data)
+
+
 @pytest.mark.parametrize("change", ["schema 4", "a stability rule", "a stray key", "dt",
                                     "no bound"])
 def test_a_record_that_mixes_the_rules_is_refused(change):
