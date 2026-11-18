@@ -9062,6 +9062,25 @@
         "tests/python/unit/surface/test_n3_lot3_weno5.py": "6df9441f7c7bef19f8d75fff558b5559f69e0b3001233f92396a290777e51cd6"
       }
     },
+    "n3_20261118_lot3_weno5_default_parity": {
+      "basis": "Unmeasured CI scheduling estimate for the three NumPy parity and distinction checks on Uniform in N3 lot 3-eps (ROM-87). The file builds four artifacts once per module, covering both surface and hand-written b6 at the default and at epsilon 1e-6. The 1601.33 s cold-cache session on macOS, Dim2 Kokkos Serial, included competing local work during part of setup. The planning weight adds ten percent and rounds up to the next 25 s. This is a Mac wall-clock observation and a planning estimate, pending a complete per-file GitHub CI receipt.",
+      "previous_weight_seconds": {
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 650
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 1775
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": {
+          "head": "18f3dea30538c78d46e1bb1474a02c4c28a93088",
+          "cases": 3,
+          "session_seconds": 1601.33
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": "365e6510ba9ab368da0c92d2af383350c877335abd7e94be1b13eaacc2319392"
+      }
+    },
     "n12_20261113_physical_maps_split": {
       "basis": "CI pytest timestamps of shard 86 of batch 43421613714 (591a30ab, image 20261111.370.1; reading b03/lot_591a30a/lecture.md). #794 (N12 lot 3c-1, db4f6142) added test_native_amr_maps_each_layout_refines_its_own_region_as_the_tag_graph to test_amr_physical_maps.py without changing the file's 1050-second row; the file took 2298 s there and the shard reached its 45-minute step limit. The test moves to its own file, and each file gets a planning weight that rounds its larger observation up by about ten percent, as b03_20261113_shard128_continuum_hall_weights does. A file at 2298 s could not stay whole: above ORDINARY_BUDGET_SECONDS it must sit alone in one of the first six shards, which hold longer files. No deadline, test selection or assertion changes.",
       "observed_seconds": {
@@ -10344,7 +10363,7 @@
   "tests/python/unit/surface/test_n3_lot2_muscl.py": 90,
   "tests/python/integration/surface/test_vertical_slice_t02.py": 300,
   "tests/python/unit/surface/test_representation_n16.py": 15,
-  "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 650,
+  "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py": 1775,
   "tests/python/unit/surface/test_n3_lot3_weno5.py": 60,
   "tests/python/integration/runtime/test_amr_physical_maps_layout_regions.py": 590
 }

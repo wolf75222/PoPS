@@ -23,10 +23,9 @@ ORDINARY_BUDGET_SECONDS = 35 * 60
 # 148 bins retain35min for complete inventories and measured CI47b2 costs (N3, N8, N9, N15, N17).
 # Every shard of more than one file stays at least ten percent under that budget
 # (ORDINARY_MARGIN_SECONDS, pinned by test_ci_shard_binpack.py); a lot that crosses it raises
-# SHARD_TOTAL. 165 bins since the shard 128 recalibration of batch 43318819535
-# (b03_20261113_shard128_continuum_hall_weights) merged with #797 and #798.
+# SHARD_TOTAL. N3 lot 3-eps needs 166 bins after budgeting its cold-cache WENO5 parity checks.
 ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
-SHARD_TOTAL = 165
+SHARD_TOTAL = 166
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
