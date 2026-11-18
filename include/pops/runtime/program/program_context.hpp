@@ -10,6 +10,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/centroid_slope.hpp>
 #include <pops/mesh/geometry/swept_interval.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/consensus_words.hpp>
@@ -112,6 +113,33 @@ struct GradientKernel {
       ++upper[axis];
       result(cell, axis) = (value(upper, 0) - value(lower, 0)) / (Real(2) * geometry.spacing(axis));
     }
+  }
+};
+
+/// The centred slope on static geometry arrays (N17 L2b-2, DN38): the differences of the two
+/// neighbour values along each axis, solved against the differences of the neighbour centroids by
+/// the header function that the generated cell read of N15 shares.
+template <int Dim>
+struct CentroidSlopeKernel {
+  FieldView<Real, Dim> result{};
+  FieldView<const Real, Dim> value{};
+  StaticGeometryView<Dim> arrays{};
+
+  POPS_HD Real operator()(const Index<Dim>& cell) const {
+    RealVector<Dim> differences{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = cell;
+      Index<Dim> upper = cell;
+      --lower[axis];
+      ++upper[axis];
+      differences[axis] = value(upper, 0) - value(lower, 0);
+    }
+    RealVector<Dim> slope{};
+    if (centroid_slope(arrays, cell, differences, slope) != CentroidSlopeStatus::ok)
+      return Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      result(cell, axis) = slope[axis];
+    return Real(0);
   }
 };
 
@@ -1938,6 +1966,11 @@ class ProgramContext {
                                const Boundary& boundary) const {
     require_scalar_stencil_(output, input, Dim, "Program gradient");
     boundary.fill(input);
+    if (const auto arrays = static_geometry()) {
+      evaluate_centroid_slopes_(output, input, arrays->view());
+      count_kernel_();
+      return;
+    }
     const Geometry<Dim> geom = boundary.geometry();
     for (std::size_t local = 0; local < output.local_size(); ++local) {
       const FieldView<Real, Dim> result = output.fab(local).view();
@@ -1946,6 +1979,40 @@ class ProgramContext {
                     program_context_detail::GradientKernel<Dim>{result, value, geom});
     }
     count_kernel_();
+  }
+
+  void evaluate_centroid_slopes_(field_type& output, const field_type& input,
+                                 const StaticGeometryView<Dim>& arrays) const {
+    constexpr long numerical_failure = 1;
+    constexpr long execution_failure = 2;
+    const auto& lane = prepared_execution_lane();
+    long local_status = 0;
+    std::exception_ptr local_error;
+    try {
+      for (std::size_t local = 0; local < output.local_size(); ++local) {
+        const auto result = output.fab(local).view();
+        const auto value = input.fab(local).view();
+        if (for_each_cell_reduce_max(
+                output.box(local),
+                program_context_detail::CentroidSlopeKernel<Dim>{result, value, arrays}) != Real(0))
+          local_status = numerical_failure;
+      }
+    } catch (...) {
+      local_error = std::current_exception();
+      local_status = execution_failure;
+    }
+    // A rank with no local cells votes success. This vote identifies the collective operation,
+    // without attributing a particular numerical cause to a cell or a rank.
+    const long status = all_reduce_max(local_status, lane);
+    if (status == execution_failure) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Centred slope evaluation failed collectively");
+    }
+    if (status == numerical_failure)
+      throw StepAttemptRejected(SolveStatus::kInvalidEvaluation, StepAttemptDisposition::kReject, 0,
+                                "centroid_slope",
+                                "singular centroid differences or non-finite slope evaluation");
   }
 
  public:

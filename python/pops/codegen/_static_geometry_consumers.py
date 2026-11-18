@@ -23,6 +23,15 @@ an allowlist: a consumer joins it when it reads the arrays and a test shows it.
   lot 1), whose row of axis a reads the two cells of its face and the spacing of a alone, and on a
   chart is one law on every logical axis (DN35): the arrays give that spacing as the distance
   across the face, and the measures of its faces and cells;
+* the centred differences of a Program (N17 L2b-2, DN38): the slope g_K of a cell solves
+  delta X g = delta e on the differences of the centroids of its neighbours, the stored centroids
+  inside, translated by the seam across a periodic axis and reflected through the centroid of the
+  end face, 2 m_f - c_K, at a physical end (``pops::centroid_slope``, the header function that the
+  generated cell read of N15 will share); its values are those of the boundary session of the
+  Program. With it, the scratch that a Program allocates for it and the cellwise algebra of
+  Program values (a pointwise expression, of which the cell mean of a computed cell is one), which
+  reads values, scalars and literals and never a coordinate; the Laplacian and the divergence of
+  a Program read the uniform spacings and stay refused;
 * states and linear combinations of a Program, a fixed step, initial values bound as arrays;
 * the reductions that a block owns, which are raw algebra over the cell values and weigh nothing
   by a measure, and the finite assessment of an elaborated Advance that reads them (isfinite and
@@ -43,12 +52,15 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
+from pops.time._program.local import CENTRED_DIFFERENCES as _CENTRED_DIFFERENCES
 from pops.time._program.stencil_flux import OPERATION as _STENCIL_OPERATION
 
-# The operation of a stencil flux is named once, by the module that builds it.
+# The operations of a stencil flux and of centred differences are named once, by the modules that
+# build them.
 STATIC_GEOMETRY_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs",
                                          _STENCIL_OPERATION, "reduce", "scalar_isfinite",
-                                         "acceptance_guard"})
+                                         "acceptance_guard", _CENTRED_DIFFERENCES, "scalar_field",
+                                         "pointwise_expression"})
 # What a physical face normal provides to a face law: the normal flux F.n, a bound of the normal
 # spectral radius, and the provider pack of each trace.
 NORMAL_FACE_CAPABILITIES = frozenset({"physical_flux", "provider_pack", "stability_bound"})
