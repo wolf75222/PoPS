@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/core/foundation/native_dimension.hpp>
+#include <pops/runtime/amr/prepared_tagger_component.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/authenticated_native_file.hpp>
@@ -122,6 +123,7 @@ std::string component_source() {
     } prepared_state_lifetime_oracle;
 
     int tag_call_count = 0;
+    bool tag_retry_issued = false;
     int partial_tag_output = 0;
     const void* last_tag_state_data = nullptr;
     std::int64_t last_tag_logical_tick = -1;
@@ -260,6 +262,12 @@ std::string component_source() {
         *status = {sizeof(PopsComponentStatusV1), 21, POPS_COMPONENT_ABORT_RUN_V1,
                    "unsupported non-finite policy"};
         return 21;
+      }
+      if (request->logical_time.tick > 0 && request->logical_time.level == 1 && !tag_retry_issued) {
+        tag_retry_issued = true;
+        *status = {sizeof(PopsComponentStatusV1), 73, POPS_COMPONENT_RETRY_STEP_V1,
+                   "injected rank-local Tagger failure"};
+        return 0;
       }
       const std::size_t points = request->refine_candidates.size;
       std::fill_n(request->refine_candidates.data, points, std::uint8_t{0});
@@ -618,6 +626,86 @@ TEST(test_amr_native_loader, LoadsAuthenticatesAndExecutesExactFinalTable) {
     EXPECT_THROW(
         (void)loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, mismatched_context),
         std::invalid_argument);
+  }
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, PreparedTaggerPreservesTypedLateRetry) {
+  namespace amr = pops::runtime::amr;
+  namespace program = pops::runtime::program;
+  using Tagger = amr::PreparedTaggerComponent<kDim>;
+  const auto library = compile_component();
+  {
+    auto loaded = std::make_shared<pops::component::LoadedComponent>(
+        pops::component::LoadedComponent::load(library.string(), expected(library)));
+    auto lane = pops::ExecutionLane::world("test::prepared-tagger-retry");
+    const auto make_layout = [](int level, int last_cell) {
+      pops::Index<kDim> lower{}, upper{}, rank_origin{};
+      pops::Extent<kDim> rank_extent{};
+      std::array<int, kDim> ratio{};
+      for (int axis = 0; axis < kDim; ++axis) {
+        upper[axis] = last_cell;
+        rank_extent[axis] = 1;
+        ratio[axis] = level == 0 ? 1 : 2;
+      }
+      const pops::Box<kDim> domain(lower, upper);
+      const pops::mesh::BoxArray<kDim> patches(std::vector<pops::Box<kDim>>{domain});
+      const auto distribution = pops::mesh::Distribution<kDim>::replicated(
+          patches, pops::mesh::RankSpace<kDim>{rank_origin, rank_extent});
+      return pops::amr::hierarchy::LevelLayout<kDim>{
+          level, domain, patches, distribution, pops::amr::RefinementRatio<kDim>{ratio}, {1, 1}};
+    };
+    const std::vector layouts{make_layout(0, 1), make_layout(1, 3)};
+    pops::MultiFab<kDim> coarse(layouts[0].patches(), layouts[0].distribution(), {}, 1, {});
+    pops::MultiFab<kDim> fine(layouts[1].patches(), layouts[1].distribution(), {}, 1, {});
+    coarse.set_val(pops::Real(1));
+    fine.set_val(pops::Real(1));
+    Tagger::Program criterion;
+    criterion.leaves = {{0, 0, POPS_TAGGING_ABOVE_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1}};
+    criterion.refine_ops = {POPS_TAGGING_ABOVE_V1};
+    criterion.refine_args = {0};
+    criterion.clock_identity = "test::clock";
+    criterion.provider_identity = "test::prepared-tagger";
+    criterion.prepared = true;
+    amr::PreparedTaggerComponentSpec spec{kComponentId,
+                                          kManifestIdentity,
+                                          criterion.provider_identity,
+                                          "test::graph",
+                                          "test::layout",
+                                          criterion.clock_identity,
+                                          2,
+                                          POPS_TAGGER_EXECUTION_HOST_V2,
+                                          prepared_execution(),
+                                          "{}",
+                                          "{}"};
+    const std::vector<std::vector<Tagger::Field>> fields{{{"test::state", &coarse}},
+                                                         {{"test::state", &fine}}};
+    std::vector<amr::PreparedTaggingExecutionBudget> budgets;
+    for (const auto& layout : layouts) {
+      const auto cells = static_cast<std::size_t>(layout.domain().numPts());
+      budgets.push_back({{1, 1, cells, cells, cells, 1U << 20}, cells * 16, cells * 2});
+    }
+    auto tagger = Tagger::prepare(std::move(loaded), std::move(spec), criterion, fields, layouts,
+                                  budgets, 1, 0, lane);
+    std::array<pops::Real, kDim> spacing;
+    spacing.fill(pops::Real(0.5));
+    const auto& accepted = tagger.execute(1, layouts[1], spacing, 1, 0, 0.0);
+    const auto cells = static_cast<std::size_t>(layouts[1].domain().numPts());
+    ASSERT_EQ(accepted.refine.count(), cells);
+    EXPECT_EQ(tagger.execute(0, layouts[0], spacing, 1, 1, 0.001).refine.count(),
+              static_cast<std::size_t>(layouts[0].domain().numPts()));
+    try {
+      (void)tagger.execute(1, layouts[1], spacing, 1, 1, 0.001);
+      ADD_FAILURE() << "late Tagger call must report its typed retry";
+    } catch (const program::StepAttemptRejected& rejected) {
+      EXPECT_EQ(rejected.status(), pops::SolveStatus::kInvalidEvaluation);
+      EXPECT_EQ(rejected.disposition(), program::StepAttemptDisposition::kRetry);
+      EXPECT_EQ(rejected.reason_code(), 73u);
+      EXPECT_EQ(rejected.phase(), "amr_tagger");
+      EXPECT_EQ(rejected.detail(), "injected rank-local Tagger failure");
+    }
+    EXPECT_EQ(accepted.refine.count(), cells);
+    EXPECT_EQ(tagger.execute(1, layouts[1], spacing, 1, 1, 0.001).refine.count(), cells);
   }
   std::filesystem::remove(library);
 }
