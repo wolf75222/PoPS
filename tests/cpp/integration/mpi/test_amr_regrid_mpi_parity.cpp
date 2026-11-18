@@ -229,16 +229,27 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
       second[cell] = b[cell % b.size()];
     }
     auto witness = build(first, second);
-    EXPECT_GT(witness->n_patches(), 0);
+    EXPECT_GT(witness->n_levels(), 1);
+    EXPECT_FALSE(witness->patch_boxes().empty());
     EXPECT_EQ(witness->density("a"), first);
     EXPECT_EQ(witness->density("b"), second);
     const auto tags = witness->execute_prepared_tagging(0);
     const auto checked = test::expect_fixture_tag_mask(
         tags.refine, cfg.shape, [&](std::size_t cell) { return expected[cell % expected.size()]; });
     EXPECT_EQ(all_reduce_sum(double(checked)), double(first.size()));
+
+    // The same generated authority sees equality in both inputs at the first bootstrap.
+    const std::vector<double> at_threshold(first.size(), 1.5);
+    auto hold = build(at_threshold, at_threshold);
+    EXPECT_EQ(hold->n_levels(), 1);
+    EXPECT_TRUE(hold->patch_boxes().empty());
+    EXPECT_EQ(hold->density("a"), at_threshold);
+    EXPECT_EQ(hold->density("b"), at_threshold);
   }
   auto owner = build(rho0, rho1);
   auto& sys = *owner;
+  EXPECT_GT(sys.n_levels(), 1);
+  EXPECT_FALSE(sys.patch_boxes().empty());
 
   const double m0a = sys.mass("a");  // declenche le build paresseux
   const double m0b = sys.mass("b");

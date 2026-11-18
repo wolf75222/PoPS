@@ -243,6 +243,8 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   EXPECT_EQ(sys.installed_program_hash(),
             std::string("test-forward-euler-amr/") + test::compiled_parity.identity);
 
+  EXPECT_GT(sys.n_levels(), 1);
+  EXPECT_FALSE(sys.patch_boxes().empty());
   const auto served = sys.density("gas");
   EXPECT_TRUE(std::equal(served.begin(), served.end(), rho.begin(), rho.end(),
                          [](double stored, double initial) {
