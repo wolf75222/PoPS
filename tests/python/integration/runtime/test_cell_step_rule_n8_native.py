@@ -183,6 +183,31 @@ def test_a_refused_face_stops_the_compiled_run_and_pops_run_retries(slices, tmp_
 L1_CELLS, NU, L1_END = 64, 1e-3, 0.05
 
 
+def _compile_l1():
+    domain = surface.Box(x=surface.Periodic(0, 1), y=surface.Periodic(0, 1))
+    model = surface.Model("advection_diffusion")
+    u = model.quantity("u", surface.Scalar(domain))
+    a = model.constant("a", value=1.0)
+    nu = model.parameter("nu", default=NU)
+    advection = model.flux(of=u, value=vector(a, a) * u)
+    diffusion = model.diffusive_flux(of=u, value=-nu * grad(u))
+    model.balance(ddt(u) == -div(advection + diffusion))
+    numerics = surface.Numerics(represent={u: surface.CellAverage()},
+                                schemes={advection: upwind(), diffusion: two_point()})
+
+    def combined_limit(cell):
+        # c_a + 2 d r_d <= 1 on the square: upwind's |a| / h on the largest axis and the
+        # four faces of two_point(), 4 nu / h^2
+        h = cell.width(domain.x)
+        return 1 / (abs(a) / h + 4 * nu / h**2)
+
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=combined_limit),
+                              initial={u: 0.5})
+    case = surface.Case(model=model, numerics=numerics, program=program,
+                        layout={domain: surface.Uniform(cells=(L1_CELLS, L1_CELLS))})
+    return surface.compile(case, target=surface.OpenMP()), u, nu
+
+
 @pytest.fixture(scope="module")
 def l1(tmp_path_factory, native_cxx, kokkos_root):
     del native_cxx, kokkos_root
@@ -190,28 +215,7 @@ def l1(tmp_path_factory, native_cxx, kokkos_root):
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
-        domain = surface.Box(x=surface.Periodic(0, 1), y=surface.Periodic(0, 1))
-        model = surface.Model("advection_diffusion")
-        u = model.quantity("u", surface.Scalar(domain))
-        a = model.constant("a", value=1.0)
-        nu = model.parameter("nu", default=NU)
-        advection = model.flux(of=u, value=vector(a, a) * u)
-        diffusion = model.diffusive_flux(of=u, value=-nu * grad(u))
-        model.balance(ddt(u) == -div(advection + diffusion))
-        numerics = surface.Numerics(represent={u: surface.CellAverage()},
-                                    schemes={advection: upwind(), diffusion: two_point()})
-
-        def combined_limit(cell):
-            # c_a + 2 d r_d <= 1 on the square: upwind's |a| / h on the largest axis and the
-            # four faces of two_point(), 4 nu / h^2
-            h = cell.width(domain.x)
-            return 1 / (abs(a) / h + 4 * nu / h**2)
-
-        program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=combined_limit),
-                                  initial={u: 0.5})
-        case = surface.Case(model=model, numerics=numerics, program=program,
-                            layout={domain: surface.Uniform(cells=(L1_CELLS, L1_CELLS))})
-        yield surface.compile(case, target=surface.OpenMP()), u, nu
+        yield _compile_l1()
 
 
 def test_l1_program_a_loses_no_attempt_under_the_guard(l1, tmp_path, record_property):
@@ -329,9 +333,20 @@ def test_a_poisson_source_is_refused_by_name(tmp_path, native_cxx, kokkos_root, 
     from pops.time._step.bound import StepBound
 
     artifact = _hand_muscl(proposal=StepBound(CellWidth(0), 2), poisson_source=True)
-    with pytest.raises(RuntimeError, match=r"refuses the elliptic source of an evolving block, "
-                                           r"which the default field solve reads"):
-        Simulation(_bound(artifact)).run(T_END)
+    routes = (
+        lambda runtime: Simulation(runtime).run(T_END),
+        lambda runtime: pops.run(runtime, t_end=T_END, output_dir=tmp_path, console=False),
+        lambda runtime: pops.step(runtime, t_bound=T_END, output_dir=tmp_path),
+    )
+    for launch in routes:
+        runtime = _bound(artifact)
+        before = _state(runtime)
+        clock = runtime.time(), runtime.macro_step()
+        with pytest.raises(RuntimeError, match=r"refuses the elliptic source of an evolving block, "
+                                               r"which the default field solve reads"):
+            launch(runtime)
+        _bitwise(before, _state(runtime))
+        assert (runtime.time(), runtime.macro_step()) == clock
 
 
 # --- the slice at MUSCL (D6; ruling 13/11, 3) ------------------------------------------------------
