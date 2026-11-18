@@ -350,7 +350,7 @@ jobs:
           KOKKOS_PREFIX: ${{ steps.kokkos.outputs.kokkos-prefix }}
         run: cmake --preset ci-kokkos
       - name: Prepare generated headers for clang-tidy
-        run: cmake --build --preset ci-kokkos --target pops_amr_fixture_criteria pops_gen_solver_kernel
+        run: cmake --build --preset ci-kokkos --target pops_amr_fixture_criteria pops_euler_amr_criteria pops_gen_solver_kernel
       - name: run-clang-tidy (non bloquant)
         run: |
           echo "$(clang-tidy --version | head -1)"
