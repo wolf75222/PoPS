@@ -421,10 +421,10 @@ def _project_presentation(presentation: Any, data: Any, *, artifact: bool) -> An
     """Replace the owner names of one canonical identity preimage by their positions."""
     from pops.problem._snapshot_presentation import (
         ARTIFACT_KEYS, ARTIFACT_VALUES, DERIVED, REFERENCES, REFERENCE_KEYS,
-        SEMANTIC_KEYS, SEMANTIC_VALUES, SETS,
+        SEMANTIC_KEYS, SEMANTIC_VALUES, SETS, project_parameter_expression,
     )
 
-    return presentation.project(
+    projected = presentation.project(
         data,
         keys=ARTIFACT_KEYS if artifact else SEMANTIC_KEYS,
         values=ARTIFACT_VALUES if artifact else SEMANTIC_VALUES,
@@ -433,6 +433,10 @@ def _project_presentation(presentation: Any, data: Any, *, artifact: bool) -> An
         references=REFERENCES,
         reference_keys=REFERENCE_KEYS,
     )
+    if artifact:
+        for declaration in projected["payload"].get("params", {}).values():
+            project_parameter_expression(declaration, presentation)
+    return projected
 
 
 def _compile_time_snapshot_value(program: Any, *, include_provenance: bool = True) -> Any:

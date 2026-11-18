@@ -734,11 +734,15 @@ class ResolvedSimulationPlan:
             return payload
         from pops.problem._snapshot_presentation import (
             DERIVED, PLAN_VALUES, REFERENCES, REFERENCE_KEYS, SETS, ghost_presentation_map,
-            project_field_install_references, project_retained_auxiliaries,
+            projected_bind_schema_artifact_hash, project_field_install_references,
+            project_retained_auxiliaries,
         )
 
         presentation = ghost_presentation_map(presentation, self.blocks, self.layout_plan)
         presentation = project_field_install_references(presentation, payload, self.field_plans)
+        if self.bind_schema.slots:
+            payload["bind_schema_artifact_hash"] = projected_bind_schema_artifact_hash(
+                self.bind_schema, presentation)
         project_retained_auxiliaries(payload["continuation_transitions"]["objects"], self.blocks,
                                      presentation)
         return presentation.project(

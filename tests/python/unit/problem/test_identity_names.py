@@ -46,6 +46,56 @@ def test_renamed_owners_keep_every_identity(first):
         assert name in authored
 
 
+def test_parameterized_models_keep_identity_under_owner_rename():
+    literal = "case:advection"
+    first = resolve_named_case(FIRST, speed_parameter=literal)
+    renamed = resolve_named_case(RENAMED, speed_parameter=literal)
+    changed = resolve_named_case(FIRST, speed_parameter=literal, speeds=(1, 3))
+    assert _identities(first) == _identities(renamed)
+    assert _identities(first)["artifact_hash"] != _identities(changed)["artifact_hash"]
+    assert first.plan_identity != changed.plan_identity
+    assert first.bind_schema.artifact_hash != renamed.bind_schema.artifact_hash
+    for plan in (first, renamed):
+        plan.verify()
+        assert [slot.handle.local_id for slot in plan.bind_schema] == [literal, literal]
+
+
+def test_case_parameter_expression_projects_only_authenticated_handle_leaves():
+    from pops.params import DerivedParam, ParamInvalidation, ParamPhase, ParamStorage, RuntimeParam
+
+    literal = "case:advection"
+
+    def resolve(names, *, factor=2, default=2.0):
+        case, layout = build_named_case(names)
+        alpha = case.param(RuntimeParam(literal, default=default))
+        case.param(DerivedParam(
+            "beta", case.value(alpha) * factor, depends_on=(alpha,), phase=ParamPhase.Bind,
+            storage=ParamStorage.DerivedCache, invalidation=ParamInvalidation.OnDependencies))
+        return pops.resolve(pops.validate(case), layout=layout)
+
+    first = resolve(FIRST)
+    renamed = resolve(RENAMED)
+    changed_default = resolve(FIRST, default=4.0)
+    changed_expression = resolve(FIRST, factor=3)
+    assert _identities(first) == _identities(renamed) == _identities(changed_default)
+    assert first.bind_schema.hash != changed_default.bind_schema.hash
+    assert first.bind_schema.artifact_hash == changed_default.bind_schema.artifact_hash
+    assert first.bind_schema.artifact_hash != renamed.bind_schema.artifact_hash
+    assert first.snapshot.hash != renamed.snapshot.hash
+    assert first.snapshot.artifact_hash != changed_expression.snapshot.artifact_hash
+    assert first.plan_identity != changed_expression.plan_identity
+    for plan in (first, renamed):
+        plan.verify()
+        params = plan.snapshot.artifact_to_dict()["payload"]["params"]
+        assert params["beta"]["depends_on"] == [{"name": literal, "param_kind": "runtime"}]
+        assert params[literal]["name"] == literal
+        assert params["beta"]["expression"]["value"][1][0] == [
+            "handle_value", params[literal]["qid"]]
+        assert "#authoring=" not in params[literal]["qid"]
+        values = plan.bind_schema.resolve_bind({}, compile_values=plan.bind_schema.resolve_compile())
+        assert values[plan.bind_schema.slots[1].handle] == 4.
+
+
 @pytest.mark.parametrize("block_name", (
     "blocks", "payload", "[]", "accepted Program exchange mailbox", "left/right:100%",
 ))

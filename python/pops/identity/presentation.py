@@ -351,7 +351,8 @@ class PresentationMap:
         ``keys`` lists the mappings keyed by block names. ``values`` maps a path to the kind of the
         bare name held there: ``"case"``, ``"block"`` or ``"model_of_block"`` (the model of the
         block named by the path's block key), ``continuation_name`` (a block name in a
-        block-owned row), or ``continuation_identity`` (a qualified handle in a state row).
+        block-owned row), ``continuation_identity`` (a qualified handle in a state row), or
+        ``qualified`` (a complete qualified handle id).
         ``references`` and ``reference_keys`` identify fields
         and mapping keys that carry serialized references. ``sets`` lists the lists whose order
         is a sort by name (a set): they are sorted again by the canonical JSON of their projected
@@ -417,6 +418,8 @@ class _Projection:
         return self.map.project_string(value, self.digests) if target is None else target
 
     def _bare(self, value: str, kind: str, block: str | None, record: dict[str, Any]) -> str:
+        if kind == "qualified":
+            return self.map.project_qualified_id(value)
         if kind == "case":
             return self.map.case_label(value)
         if kind == "block":

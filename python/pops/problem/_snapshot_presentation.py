@@ -24,6 +24,8 @@ ARTIFACT_VALUES = {
     ("payload", "name"): "case",
     ("payload", "options", "name"): "case",
     ("payload", "blocks", "*", "model", "manifest", "name"): "model_of_block",
+    ("payload", "blocks", "*", "model", "manifest", "params", "*", "qid"): "qualified",
+    ("payload", "params", "*", "qid"): "qualified",
 }
 # Lists sorted by qualified id, so by name, are sets: sorted again after the projection. A
 # LayoutPlan orders its layouts, assignments and mappings so; a Program its commits; the Case its
@@ -345,6 +347,31 @@ def presentation_map(problem: Any, *, layout: Any = None, numerics: Any = None) 
 def _sha256_json(value: Any) -> str:
     text = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _project_bind_expression(value: Any, names: PresentationMap) -> Any:
+    """Project qualified leaves of an authenticated BindSchema expression key."""
+    if not isinstance(value, (list, tuple)):
+        return value
+    if (len(value) == 2 and value[0] == "handle_value"
+            or len(value) == 3 and value[0] == "param_const_qid"):
+        return [value[0], names.project_qualified_id(value[1]), *value[2:]]
+    return [_project_bind_expression(item, names) for item in value]
+
+
+def project_parameter_expression(declaration: dict[str, Any], names: PresentationMap) -> None:
+    expression = declaration["expression"]
+    if expression is not None:
+        expression["value"] = _project_bind_expression(expression["value"], names)
+
+
+def projected_bind_schema_artifact_hash(schema: Any, names: PresentationMap) -> str:
+    """Keep the BindSchema slot order and scientific declarations in the Plan identity."""
+    data = names.project(schema.artifact_data(),
+                         values={("payload", "slots", "[]", "qid"): "qualified"})
+    for slot in data["payload"]["slots"]:
+        project_parameter_expression(slot["declaration"], names)
+    return _sha256_json(data)
 
 
 def _named_digests(problem: Any, layout: Any, names: PresentationMap) -> tuple[tuple[str, str], ...]:

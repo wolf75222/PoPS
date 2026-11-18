@@ -178,6 +178,10 @@ def _problem_param_rows(problem: Any, *, artifact: bool) -> dict[str, Any]:
         row = dict(declaration_data)
         if row.get("name") != name:
             raise ValueError("Case parameter %r projection changed its registry name" % name)
+        if artifact and row["kind"] == "derived":
+            from pops.model._bind_expression import resolved_declaration_expression
+
+            row["expression"] = resolved_declaration_expression(declaration, problem.resolve)
         row["qid"] = handle.qualified_id
         row["handle"] = handle.canonical_identity()
         rows[name] = row
