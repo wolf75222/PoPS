@@ -18,7 +18,8 @@ The node rate w takes two forms (§7.4):
    evaluated at each copy's own position;
 2. a coordinate map of b6 (``GeometryEvolution``): w = ∂ₜΦ at the reference coordinate of the
    node, derived symbolically here and evaluated by two analytic auxiliaries at the lower and upper
-   face coordinates of the base grid.
+   face coordinates of the base grid. The initial positions come from the base. The method
+   integrates X(ξ, t) = X_base(ξ) + Φ(ξ, t) − Φ(ξ, 0) to its own order.
 
 Why the copies of one node stay equal: both copies of a node start from one base node and receive
 the same rate, computed by the same expression from the same inputs, so they stay bitwise equal.
@@ -29,11 +30,12 @@ gives the quantities of a ``Finite`` support. Rank 2 is lot M2.
 """
 from __future__ import annotations
 
-from typing import Any
+import math
+from typing import Any, cast
 
 import numpy as np
 
-from pops.analytic import CellBounds, ScalarExpr
+from pops.analytic import CellBounds, PredicateExpr, ScalarExpr
 from pops.analytic import cos as _cos, exp as _exp, log as _log, sin as _sin, sqrt as _sqrt
 from pops.analytic import constant as _constant
 from .moving import GeometryEvolution
@@ -51,6 +53,57 @@ def _refuse(what: str, lot: str) -> None:
 
 # --- the analytic node rate ----------------------------------------------------------------------
 
+def _nonnegative(expr: ScalarExpr) -> bool:
+    if expr._op == "constant":
+        return cast(float, expr._literal) >= 0
+    args = cast(tuple[ScalarExpr, ...], expr._arguments)
+    if expr._op == "mul":
+        left, right = args
+        return left.same_as(right) and _defined(left)
+    if expr._op == "pow":
+        base, exponent = args
+        return exponent._literal == 2 and _defined(base)
+    if expr._op == "add":
+        return all(_nonnegative(item) for item in args)
+    return False
+
+
+def _positive(expr: ScalarExpr) -> bool:
+    if expr._op == "constant":
+        return cast(float, expr._literal) > 0
+    if expr._op == "add":
+        left, right = cast(tuple[ScalarExpr, ScalarExpr], expr._arguments)
+        return ((_positive(left) and _nonnegative(right))
+                or (_nonnegative(left) and _positive(right)))
+    return False
+
+
+def _defined(expr: ScalarExpr | PredicateExpr) -> bool:
+    """A conservative proof that a subtree is defined everywhere over real inputs."""
+    op = expr._op
+    args = cast(tuple[ScalarExpr, ...], expr._arguments)
+    if op == "div":
+        denominator = args[1]
+        return _defined(args[0]) and _known_nonzero(denominator)
+    if op == "log":
+        return _positive(args[0])
+    if op == "sqrt":
+        return _nonnegative(args[0])
+    if op == "pow":
+        base, exponent = args
+        n = cast(float, exponent._literal)
+        return _positive(base) or (n >= 0 and n.is_integer() and _defined(base))
+    return op in {"constant", "coordinate", "time", "abs", "neg", "add", "sub",
+                  "mul", "sin", "cos", "exp", "minimum", "maximum", "hypot", "atan2",
+                  "erf", "erfc", "where", "eq", "ne", "le", "ge", "lt", "gt",
+                  "between", "not", "and", "or"} and all(
+        _defined(item) for item in expr._arguments)
+
+
+def _known_nonzero(expr: ScalarExpr) -> bool:
+    return (expr._op == "constant" and expr._literal != 0.0) or _positive(expr)
+
+
 def _is_zero(expr: Any) -> bool:
     """Whether ``expr`` is an exact zero of the analytic algebra (the normal form of K13)."""
     if expr is None:
@@ -59,11 +112,15 @@ def _is_zero(expr: Any) -> bool:
     if op == "constant":
         return expr._literal == 0.0
     if op == "mul":
-        return any(_is_zero(item) for item in arguments)
+        return all(_defined(item) for item in arguments) and any(_is_zero(item) for item in arguments)
+    if op == "sub" and arguments[0].same_as(arguments[1]):
+        return _defined(arguments[0])
     if op in ("add", "sub"):
         return all(_is_zero(item) for item in arguments)
-    if op in ("neg", "div"):
+    if op == "neg":
         return _is_zero(arguments[0])
+    if op == "div":
+        return _known_nonzero(arguments[1]) and _is_zero(arguments[0])
     return False
 
 
@@ -111,9 +168,10 @@ def time_derivative(expr: Any) -> Any:
     if op == "div":
         a, b = arguments
         da, db = time_derivative(a), time_derivative(b)
-        if db is None:
-            return None if da is None else da/b
-        return _sub(_scale(b, da), _scale(a, db))/(b*b)
+        numerator = da if db is None else _sub(_scale(b, da), _scale(a, db))
+        if numerator is None:
+            return None if _defined(expr) else _constant(0.0)/b
+        return numerator/(b if db is None else b*b)
     if op == "pow":
         a, b = arguments
         if b.time_clocks():
@@ -147,24 +205,35 @@ def _rebuild(expr: Any, leaf: Any) -> Any:
 
 _NUMPY = {"sin": np.sin, "cos": np.cos, "exp": np.exp, "log": np.log, "sqrt": np.sqrt,
           "abs": np.abs, "neg": np.negative, "add": np.add, "sub": np.subtract,
-          "mul": np.multiply, "div": np.divide, "pow": np.power, "minimum": np.minimum,
-          "maximum": np.maximum}
+          "mul": np.multiply, "div": np.divide, "pow": np.power, "minimum": np.fmin,
+          "maximum": np.fmax, "atan2": np.arctan2, "hypot": np.hypot,
+          "erf": np.vectorize(math.erf, otypes=[float]),
+          "erfc": np.vectorize(math.erfc, otypes=[float]),
+          "where": np.where, "eq": np.equal, "ne": np.not_equal, "lt": np.less,
+          "le": np.less_equal, "gt": np.greater, "ge": np.greater_equal,
+          "and": np.logical_and, "or": np.logical_or, "not": np.logical_not,
+          "between": lambda value, lower, upper: np.logical_and(lower <= value, value <= upper)}
 
 
-def evaluate(expr: ScalarExpr, x: Any, t: float = 0.0) -> np.ndarray:
-    """A NumPy reading of a node rate or a map at coordinates ``x`` and time ``t`` (oracles only)."""
+def _evaluate(expr: ScalarExpr, coordinate: Any, t: float) -> Any:
     def value(node: Any) -> Any:
         op = node._op
         if op == "constant":
             return node._literal
         if op == "coordinate":
-            return np.asarray(x, dtype=float)
+            return coordinate(node._coordinate.axis.index)
         if op == "time":
             return float(t)
         if op not in _NUMPY:
             raise NotImplementedError("no NumPy reading of the analytic operation %r" % op)
         return _NUMPY[op](*(value(item) for item in node._arguments))
-    return np.broadcast_to(np.asarray(value(expr), dtype=float), np.shape(x)).copy()
+    return value(expr)
+
+
+def evaluate(expr: ScalarExpr, x: Any, t: float = 0.0) -> np.ndarray:
+    """A NumPy reading of a node rate or a map at coordinates ``x`` and time ``t`` (oracles only)."""
+    return np.broadcast_to(np.asarray(_evaluate(expr, lambda _: np.asarray(x, dtype=float), t),
+                                      dtype=float), np.shape(x)).copy()
 
 
 def _check_leaves(expr: ScalarExpr, frame: Any, what: str) -> None:
@@ -178,6 +247,33 @@ def _check_leaves(expr: ScalarExpr, frame: Any, what: str) -> None:
         raise ValueError("the %s reads the coordinates of another frame" % what)
     if len(expr.time_clocks()) > 1:
         raise ValueError("the %s reads more than one clock" % what)
+
+
+def _validate_partial_map(law: ScalarExpr, frame: Any, cells: tuple[int, ...]) -> None:
+    """Check static domain restrictions that differentiation would otherwise erase."""
+    def coordinate(axis: int) -> Any:
+        shape = [1]*len(cells)
+        shape[axis] = cells[axis] + 1
+        lower, upper = float(frame.lower[axis]), float(frame.upper[axis])
+        spacing = (upper - lower)*(1.0/float(cells[axis]))
+        return lower + np.arange(cells[axis] + 1, dtype=float).reshape(shape)*spacing
+
+    pending = [law]
+    while pending:
+        node = pending.pop()
+        if _defined(node):
+            continue
+        if node._op == "div" and _is_zero(node._arguments[1]):
+            raise ValueError("coordinate map has a zero denominator")
+        if not node.time_clocks():
+            with np.errstate(all="ignore"):
+                if not np.isfinite(_evaluate(node, coordinate, 0.0)).all():
+                    raise ValueError("coordinate map is undefined at a reference node")
+        if node._op != "where":
+            # A time-dependent selection is already refused by the derivative rule.
+            # A static selection above checks only selected values, so do not check its branches
+            # without the selection.
+            pending.extend(cast(tuple[ScalarExpr, ...], node._arguments))
 
 
 def _at_rest_value(node_rate: Any) -> bool:
@@ -201,8 +297,11 @@ def _rate_form(node_rate: Any, frame: Any) -> tuple[str, ScalarExpr | None]:
         if len(node_rate.coordinate_map) != 1:
             _refuse("a coordinate map of rank %d" % len(node_rate.coordinate_map), "G03 lot M2")
         (law,) = node_rate.coordinate_map
-        _check_leaves(law, frame, "coordinate map")
         derivative = time_derivative(law)
+        if not _defined(law):
+            # Preserve the original domain through differentiation and zero folding. A partial
+            # map evaluated outside its domain yields a nonfinite rate and the trial is rejected.
+            derivative = _add(derivative, _constant(0.0)*law)
         return "map", None if _is_zero(derivative) else derivative
     if type(node_rate) is ScalarExpr:
         _check_leaves(node_rate, frame, "node_rate")
@@ -265,6 +364,12 @@ class MovingConfiguration:
         self.base = base
         self.declared: MovingMembers | None = None
         self.frame, cells, self._map, self._grid = _base_frame_and_cells(base)
+        if type(node_rate) is GeometryEvolution:
+            for law in node_rate.coordinate_map:
+                _check_leaves(law, self.frame, "coordinate map")
+                _validate_partial_map(law, self.frame, cells)
+        elif type(node_rate) is ScalarExpr:
+            _check_leaves(node_rate, self.frame, "node_rate")
         if _at_rest_value(node_rate):
             self.form, self.node_rate, self.cells = "rest", None, cells[0]
             return

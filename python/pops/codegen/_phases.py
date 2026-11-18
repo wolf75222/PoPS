@@ -245,6 +245,9 @@ def resolve(
             numerics=numerics,
         ))
     blocks = tuple(resolved_blocks)
+    if target == "system":
+        from ._moving_members_consumers import lower_moving_member_guards
+        resolved_time = lower_moving_member_guards(resolved_time, blocks)
     resolved_hierarchy = None
     amr_transfer = None
     initial_condition_plan = None

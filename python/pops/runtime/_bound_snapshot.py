@@ -248,7 +248,8 @@ class MultiLayoutBoundSnapshot:
         "bind_schema_identity", "execution_context", "bind_identity",
     )
 
-    def __init__(self, install_plan: Any, child_snapshots: Any) -> None:
+    def __init__(self, install_plan: Any, child_snapshots: Any, *, child_transactions: Any,
+                 transaction_plan: Any) -> None:
         from pops.codegen._plans import require_install_plan
 
         install_plan = require_install_plan(install_plan)
@@ -282,10 +283,15 @@ class MultiLayoutBoundSnapshot:
         object.__setattr__(self, "blocks", _freeze(ordered, where="blocks"))
         object.__setattr__(self, "field_plans", _freeze({}, where="field_plans"))
         transactions = tuple(snapshot.to_dict()["step_transaction"] for snapshot in snapshots)
-        if any(value != transactions[0] for value in transactions[1:]):
-            raise ValueError("per-layout Program transaction contracts are not identical")
-        object.__setattr__(
-            self, "step_transaction", _freeze(transactions[0], where="step_transaction"))
+        if transaction_plan is None:
+            if any(value != transactions[0] for value in transactions[1:]):
+                raise ValueError("per-layout Program transaction contracts are not identical")
+            transaction_data = transactions[0]
+        else:
+            if transactions != tuple(row.to_data() for row in child_transactions):
+                raise ValueError("multi-layout child snapshot transaction differs from its compiled Program")
+            transaction_data = transaction_plan.to_data()
+        object.__setattr__(self, "step_transaction", _freeze(transaction_data, where="step_transaction"))
         object.__setattr__(self, "params", _freeze(
             _data(install_plan.params.rows(), where="params"), where="params"))
         from pops.runtime._auxiliary_bind import auxiliary_array_evidence
