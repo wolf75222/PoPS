@@ -23,7 +23,6 @@ Pre-rebuild (an ``_pops`` that predates ``AmrSystem.enable_profiling`` or the en
 SKIPS cleanly: the binding / scope is simply absent and the typed view stays unavailable.
 """
 from tests.python.support.requirements import require_native_or_skip
-from tests.python.support.amr_tagging import install_prepared_threshold_union
 import sys
 
 import numpy as np
@@ -31,11 +30,19 @@ import pytest
 from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
+from pops._ir.handle_expr import ValueExpr  # noqa: E402
+from pops.amr import ConflictPolicy, EqualityPolicy, Hysteresis, Tag  # noqa: E402
+from pops.mesh._amr.refinement_criterion import resolve_refinement_criterion  # noqa: E402
+from pops.model import Handle  # noqa: E402
 import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.runtime._profile import PerformanceSummary, Profile  # noqa: E402
-from tests.python.support.explicit_program import install_forward_euler_program  # noqa: E402
+from pops.runtime._runtime_mesh_lowering import _flow_refinement_criterion  # noqa: E402
+from tests.python.support.explicit_program import (  # noqa: E402
+    AMR_TEST_PROGRAM_CLOCK,
+    install_forward_euler_program,
+)
 
 # Two compressible AMR packages and their shared time Program compile on a cold runner.
 # This single-rank test passed CI in 270.35s before a later run exceeded the default 300s cap.
@@ -75,7 +82,7 @@ def _built_multiblock(n=64, regrid_every=1):
     """A small built MULTI-block AmrSystem (>= 2 blocks -> AmrRuntime engine) with a refining bump.
 
     Two Euler blocks on the shared hierarchy; block 0 carries an energy bump in the bottom-left
-    corner and the prepared refinement graph tags exact variable ``E``.
+    corner and the generated criterion reads the exact variable ``E``.
     """
     sim = AmrSystem(_amr_config(n, regrid_every=regrid_every))
     model = pops.Model("amr-profile-state")
@@ -83,17 +90,34 @@ def _built_multiblock(n=64, regrid_every=1):
     case = pops.Case("amr-profile-composition")
     blocks = {name: case.block(name, model, states=(state,)) for name in ("gas0", "gas1")}
     validated = pops.validate(case)
-    for name, block in blocks.items():
-        sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
+    reads = {name: validated.resolve(block[state]) for name, block in blocks.items()}
+    for name, read in reads.items():
+        sim._s._install_block_state_route(name, read.qualified_id)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.set_poisson(bc=Periodic())
     sim.add_equation("gas0", _comp(), time=engine.Explicit())
     sim.add_equation("gas1", _comp(), time=engine.Explicit())
-    install_prepared_threshold_union(
-        sim, (("gas0", "E", 6.0), ("gas1", "E", 6.0)))
     sim.set_conservative_state("gas0", _state(n, 1.0, 2.0, bump_comp=3, bump_val=12.0, lo=4, hi=20))
     sim.set_conservative_state("gas1", _state(n, 1.0, 2.0, 0, 1.0, 0, 0))  # uniform background
-    install_forward_euler_program(sim)
+    energy0 = ValueExpr(reads["gas0"])["E"]
+    energy1 = ValueExpr(reads["gas1"])["E"]
+
+    def admit_state(state: Handle) -> None:
+        if not any(state is read for read in reads.values()):
+            raise ValueError("foreign profiling fixture state")
+
+    criterion = resolve_refinement_criterion(
+        (
+            ("refine", Tag(lambda cell: cell.value(energy0) > 6.0).predicate),
+            ("refine", Tag(lambda cell: cell.value(energy1) > 6.0).predicate),
+        ),
+        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+        dimension=2,
+        admit_state=admit_state,
+    )
+    _flow_refinement_criterion(sim._s, criterion, {}, clock_identity=AMR_TEST_PROGRAM_CLOCK)
+    install_forward_euler_program(sim, criterion=criterion)
     sim.mark_bound()
     return sim
 
