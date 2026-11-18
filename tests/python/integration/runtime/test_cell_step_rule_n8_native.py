@@ -563,10 +563,13 @@ def _mixed_phase_guard(face, term):
         reconstruction=muscl(limiter=vanleer), speed=estimate)
 
 
+@pytest.mark.parametrize("attempts", [2, 3])
 @pytest.mark.parametrize("rule", ["cells", "stability"])
 def test_a_second_face_refusal_returns_the_last_accepted_result(
-        rule, tmp_path, native_cxx, kokkos_root):
+        rule, attempts, tmp_path, native_cxx, kokkos_root):
     from pops._bootstrap import StepAttemptRejected
+    from pops.runtime._simulation import BudgetExhausted, FaceFrequencyStop, NotAdmissible
+    from pops.time._program.traced_method import NotYetElaborated
     from pops.time import AdaptiveCFL
     from pops.time._program import elaboration
 
@@ -582,7 +585,7 @@ def test_a_second_face_refusal_returns_the_last_accepted_result(
             patch.setattr(elaboration, "elaborate", stability)
         proposal = _tutorial if rule == "cells" else lambda *_: 1e-3
         artifact, quantity, datum = _slice(
-            proposal, lambda _: _mixed_phase_guard(), attempts=3,
+            proposal, lambda _: _mixed_phase_guard(), attempts=attempts,
             output_time=MAX_DT)
 
     initial = np.full(CELLS, FAR_FIELD)
@@ -620,19 +623,37 @@ def test_a_second_face_refusal_returns_the_last_accepted_result(
     _bitwise(initial, _state(reference))
 
     simulation = surface.bind(artifact, data={datum: initial}, directory=tmp_path)
-    with pytest.raises(surface.FaceFrequencyStop) as caught:
+    error_type = surface.BudgetExhausted if attempts == 2 else surface.FaceFrequencyStop
+    with pytest.raises(error_type) as caught:
         simulation.run(until=T_END, max_steps=1)
-    result = caught.value.result
-    assert caught.value.frequency == frequency
+    error = caught.value
+    result = error.result
     assert (result.time, result.steps, result.rejections) == (0, 0, 2)
-    assert result.failure is None
     assert result.diagnostics["control"]["proposal"]["rule"] == rule
-    assert result.diagnostics["control"]["retry"]["max_attempts"] == 3
+    assert result.diagnostics["control"]["retry"]["max_attempts"] == attempts
     native_report = result.diagnostics["native"]
     assert native_report["attempts"] == 2
-    assert native_report["typed_failure_schema"] == schema
-    assert native_report["typed_failure_payload"] == cause.typed_failure_payload
     assert native_report["rejection"] == str(cause)
+
+    failure = result.failure
+    assert failure.origin == "trial"
+    assert failure.payload["attempts"] == 2
+    assert failure.payload["face_schema"] == schema
+    assert failure.payload["face_frequency"] == frequency
+    assert failure.payload["face_site"] == native_report["rejection_detail"]
+    assert failure.payload["rejection"] == str(cause)
+    if attempts == 2:
+        assert failure.variant is BudgetExhausted
+        assert failure.payload["budget"] == "max_attempts"
+        assert failure.payload["max_attempts"] == 2
+    else:
+        assert failure.variant is NotAdmissible
+        assert isinstance(error, surface.FaceFrequencyStop) and error.frequency == frequency
+        assert isinstance(error, surface.RunFailed)
+        assert isinstance(error, FaceFrequencyStop)
+        assert isinstance(error, NotYetElaborated)
+        assert native_report["typed_failure_schema"] == schema
+        assert native_report["typed_failure_payload"] == cause.typed_failure_payload
     output, = artifact.case.outputs
     assert result.outputs[output] == ()
     _bitwise(result.state[quantity], _state(reference))

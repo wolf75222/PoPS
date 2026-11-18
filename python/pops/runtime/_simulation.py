@@ -143,6 +143,11 @@ class Failure:
             return ("%s: max_steps=%d accepted steps ended the run at t=%r before until=%r"
                     % (self.variant.__name__, payload["max_steps"], payload["time"],
                        payload["until"]))
+        if self.variant is NotAdmissible and "face_frequency" in payload:
+            return ("%s: the face guard (%s) ended the step from t=%r after %d attempt(s) "
+                    "at frequency %r; last: %s"
+                    % (self.variant.__name__, payload["face_schema"], payload["time"],
+                       payload["attempts"], payload["face_frequency"], payload["rejection"]))
         if self.variant is BudgetExhausted and "face_frequency" in payload:
             return ("%s: the face guard (%s) rejected the last of %d attempt(s) from t=%r "
                     "at frequency %r; last: %s"
@@ -530,6 +535,11 @@ class Simulation:
                 raise RuntimeError("System::run_advance stopped on the faces' frequency without "
                                    "its typed rejection")
             stopped = float(report["face_frequency"])
+            failure = Failure(NotAdmissible, "trial", {
+                "attempts": report["attempts"], "time": time, "rejection": report["rejection"],
+                "face_schema": FACE_STEP_FREQUENCY_SCHEMA, "face_frequency": stopped,
+                "face_site": report["rejection_detail"],
+            })
         elif stop == _STEP_BUDGET:
             failure = Failure(BudgetExhausted, None, {
                 "budget": "max_steps", "max_steps": max_steps, "steps": report["steps"],
@@ -585,10 +595,10 @@ class Simulation:
             },
             continuation=self._continuation, failure=failure,
             outputs={output: tuple(rows) for output, rows in published.items()})
-        if failure is not None:
-            raise failure.variant(result)
         if stopped is not None:
             raise FaceFrequencyStop(result, stopped)
+        if failure is not None:
+            raise failure.variant(result)
         return result
 
 

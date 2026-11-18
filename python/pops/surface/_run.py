@@ -40,6 +40,8 @@ from typing import Any
 
 import numpy as _np
 
+from pops.runtime._simulation import FaceFrequencyStop as _NativeFaceFrequencyStop
+
 from ._model import Datum, Model, Parameter, Quantity
 from ._refusal import (
     AmbiguousElaboration, NotYetElaborated, SupportMismatch, surface_entry, user_site,
@@ -523,11 +525,12 @@ class SolveFailed(RunFailed):
     """A solve of the trial failed at a fixed failure site (T39)."""
 
 
-class FaceFrequencyStop(RunFailed):
+class FaceFrequencyStop(RunFailed, _NativeFaceFrequencyStop):
     """A compiled step rule has no further correction at the frequency the faces recorded."""
 
     def __init__(self, result: RunResult, message: str, frequency: float) -> None:
-        super().__init__(result, message)
+        RuntimeError.__init__(self, message)
+        self.result = result
         self.frequency = frequency
 
 
