@@ -15,6 +15,9 @@ import math
 import re
 from typing import Any
 
+from pops.time._program.traced_method import NotYetElaborated
+from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA
+
 ADVANCE_CONTROL_SCHEMA = "pops.advance-control@1"
 """Schema of ``AdvanceControl.to_data`` for an Advance without Outputs."""
 
@@ -64,6 +67,21 @@ ADVANCE_ASSESSMENT_CONTRACT = "pops.advance-assessment@1"
 in the phase that the compiled run repeats (T28), every other rejection is a trial failure."""
 
 _MAX_ATTEMPTS = 2**31 - 1
+
+
+class FaceFrequencyStop(NotYetElaborated):
+    """The face guard refused a step rule with no further frequency correction.
+
+    ``frequency`` is the largest over the ranks. ``result`` holds the last accepted state.
+    """
+
+    def __init__(self, result: Any, frequency: float) -> None:
+        super().__init__(
+            "the face guard refused the attempt of the step from t=%r at the faces' frequency %r "
+            "(%s); the compiled step rule has no further frequency correction"
+            % (result.time, frequency, FACE_STEP_FREQUENCY_SCHEMA))
+        self.result = result
+        self.frequency = frequency
 
 
 class AdvanceControl:

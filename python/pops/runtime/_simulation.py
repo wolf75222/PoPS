@@ -49,9 +49,8 @@ from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Any
 
-from pops.time._program.control import AdvanceControl, memory_rings
+from pops.time._program.control import AdvanceControl, FaceFrequencyStop, memory_rings
 from pops.time._program.elaboration import Proposal, StepRule
-from pops.time._program.traced_method import NotYetElaborated
 from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA, CellStepBound
 from pops.time._program.memory import MemoryView
 from pops.time._program.outputs import EveryDt, OutputRegion, Product, landing
@@ -90,21 +89,6 @@ class SolveFailed(RunFailed):
 class NotAdmissible(RunFailed):
     """An admissibility guard of the trial failed (S5, IR4, T39): at a fixed failure site, which
     a retry cannot change, the step ends after its first attempt (T38)."""
-
-
-class FaceFrequencyStop(NotYetElaborated):
-    """The face guard refused a step rule with no further frequency correction.
-
-    ``frequency`` is the largest over the ranks. ``result`` holds the last accepted state.
-    """
-
-    def __init__(self, result: RunResult, frequency: float) -> None:
-        super().__init__(
-            "the face guard refused the attempt of the step from t=%r at the faces' frequency %r "
-            "(%s); the compiled step rule has no further frequency correction"
-            % (result.time, frequency, FACE_STEP_FREQUENCY_SCHEMA))
-        self.result = result
-        self.frequency = frequency
 
 
 class Failure:

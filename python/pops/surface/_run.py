@@ -40,7 +40,7 @@ from typing import Any
 
 import numpy as _np
 
-from pops.runtime._simulation import FaceFrequencyStop as _NativeFaceFrequencyStop
+from pops.time._program.control import FaceFrequencyStop as _NativeFaceFrequencyStop
 
 from ._model import Datum, Model, Parameter, Quantity
 from ._refusal import (
