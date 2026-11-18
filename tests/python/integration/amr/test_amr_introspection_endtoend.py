@@ -24,6 +24,7 @@ import pops
 import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
+from pops.amr import ConflictPolicy, EqualityPolicy, Hysteresis, Tag  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.codegen._plans import (  # noqa: E402
     BindInputs, InstallPlan,
@@ -33,16 +34,21 @@ from pops.codegen._compiled_artifact import (  # noqa: E402
 )
 from pops.codegen._compiled_model_identity import compiled_model_identity  # noqa: E402
 from pops.layouts import Uniform  # noqa: E402
+from pops.mesh._amr.refinement_criterion import resolve_refinement_criterion  # noqa: E402
+from pops.model import Handle  # noqa: E402
 from pops.params import RuntimeParam  # noqa: E402
+from pops.runtime._runtime_mesh_lowering import _flow_refinement_criterion  # noqa: E402
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
-from tests.python.support.amr_tagging import install_prepared_threshold_union  # noqa: E402
 from tests.python.support.layout_plan import cartesian_grid  # noqa: E402
 from tests.python.support.native_execution_context import (  # noqa: E402
     artifact_execution_context,
 )
 from tests.python.support.resolved_amr_plan import resolved_amr_plan  # noqa: E402
 from tests.python.support.compiled_program import CompiledProgramStub  # noqa: E402
-from tests.python.support.explicit_program import install_forward_euler_program  # noqa: E402
+from tests.python.support.explicit_program import (  # noqa: E402
+    AMR_TEST_PROGRAM_CLOCK,
+    install_forward_euler_program,
+)
 
 
 def _amr_metadata_fixture():
@@ -151,14 +157,32 @@ def _built_amr(n=32):
     sim = AmrSystem(n=n, L=1.0, periodicity=(True, True), regrid_every=2, coarse_max_grid=16)
     sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.set_poisson(bc=Periodic())
+    state_model = pops.Model("amr-introspection-state")
+    state = state_model.state("U", components=("n",))
+    case = pops.Case("amr-introspection-runtime")
+    block = case.block("ne", state_model, states=(state,))
+    read = pops.validate(case).resolve(block[state])
+    sim._s._install_block_state_route("ne", read.qualified_id)
     sim.add_equation("ne", compiled,
                   spatial=engine.Spatial(minmod=True), time=engine.Explicit())
-    install_prepared_threshold_union(sim, (("ne", "n", 1.05),))
     xs = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(xs, xs)
     ne = 1.0 + 0.4 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.01)
     sim.set_density("ne", ne + (1.0 - ne.mean()))
-    install_forward_euler_program(sim)
+
+    def admit_state(state: Handle) -> None:
+        if state is not read:
+            raise ValueError("foreign introspection fixture state")
+
+    criterion = resolve_refinement_criterion(
+        (("refine", Tag(lambda cell: cell.value(read) > 1.05).predicate),),
+        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+        dimension=2,
+        admit_state=admit_state,
+    )
+    _flow_refinement_criterion(sim._s, criterion, {}, clock_identity=AMR_TEST_PROGRAM_CLOCK)
+    install_forward_euler_program(sim, criterion=criterion)
     sim.mark_bound()  # close native assembly before transactional CFL stepping
     return sim
 
