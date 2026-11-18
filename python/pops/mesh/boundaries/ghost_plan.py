@@ -1,7 +1,7 @@
 """Immutable ghost-region producer plans with exact, order-independent resolution."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 from typing import TYPE_CHECKING, Any
@@ -302,6 +302,7 @@ class GhostProducerPlan:
     linearization_contributions: tuple[BoundaryLinearizationContribution, ...] = ()
     execution_authority: Any = None
     component_bindings: tuple[BoundaryComponentBinding, ...] = ()
+    _presentation_origins: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.topology, BoundaryTopology):
@@ -1009,6 +1010,7 @@ class GhostProducerRegistry:
         linearization_contributions: tuple[BoundaryLinearizationContribution, ...] = (),
         execution_authority: Any = None,
         component_bindings: tuple[BoundaryComponentBinding, ...] = (),
+        _presentation_origins: Any = None,
     ) -> GhostProducerPlan:
         if not isinstance(productions, tuple):
             raise TypeError("GhostProducerRegistry productions must be a tuple")
@@ -1022,7 +1024,7 @@ class GhostProducerRegistry:
         return GhostProducerPlan(
             topology, coverage, regions, productions, corner_policies, interfaces,
             residual_contributions, linearization_contributions, execution_authority,
-            component_bindings)
+            component_bindings, _presentation_origins)
 
 
 __all__ = [

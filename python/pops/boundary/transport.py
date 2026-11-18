@@ -151,23 +151,30 @@ def _unique_references(*groups: Any) -> tuple[Handle, ...]:
     return tuple(rows)
 
 
+def _transport_identity_digest(*parts: str) -> str:
+    return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:24]
+
+
+def _representation_id(state_id: str, name: str) -> str:
+    return "state-representation-%s" % _transport_identity_digest(state_id, name)
+
+
+def _provider_id(state_id: str, boundary_id: str, condition_type: str) -> str:
+    return "%s-%s" % (condition_type, _transport_identity_digest(
+        state_id, boundary_id, condition_type))
+
+
 def _representation_handle(state: Handle, name: str) -> Handle:
-    digest = hashlib.sha256(
-        (state.qualified_id + "\0" + name).encode("utf-8")
-    ).hexdigest()[:24]
     return Handle(
-        "state-representation-%s" % digest,
+        _representation_id(state.qualified_id, name),
         kind="representation",
         owner=state.owner_path,
     )
 
 
 def _provider_handle(state: Handle, boundary: Any, condition_type: str) -> Handle:
-    payload = "%s\0%s\0%s" % (
-        state.qualified_id, boundary.canonical_id, condition_type)
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
     return Handle(
-        "%s-%s" % (condition_type, digest),
+        _provider_id(state.qualified_id, boundary.canonical_id, condition_type),
         kind="boundary_provider",
         owner=state.owner_path,
     )
@@ -302,6 +309,7 @@ class ResolvedTransportCondition:
     provider: Any
     prescribed_trace: bool = False
     source_ghost: Any = None
+    _source_representation_name: str = ""
 
     def __post_init__(self) -> None:
         from pops.mesh.boundaries import BoundaryProvider, BoundaryProviderKind, ClosureMode
@@ -370,6 +378,28 @@ class ResolvedTransportCondition:
         }
 
     inspect = canonical_identity
+
+    def presentation_handles(self, names: Any) -> tuple[tuple[str, str], ...]:
+        """Replay exact transport-handle constructors for this immutable condition."""
+        if not self._source_representation_name:
+            return ()
+        owning_state = self.state.qualified_id
+        projected_state = names.project_qualified_id(owning_state)
+        target_name = getattr(self.state, "space").representation
+        flow = self.provider.dependencies.representation
+        rows = []
+        for handle, representation in (
+            (flow.source, self._source_representation_name), (flow.target, target_name),
+        ):
+            expected = _representation_handle(self.state, representation)
+            if handle != expected:
+                raise ValueError("transport representation handle differs from its producer")
+            rows.append((handle.qualified_id, _representation_id(projected_state, representation)))
+        if self.provider.handle != _provider_handle(self.state, self.geometry, self.condition_type):
+            raise ValueError("transport boundary handle differs from its producer")
+        rows.append((self.provider.qualified_id, _provider_id(
+            projected_state, self.geometry.canonical_id, self.condition_type)))
+        return tuple(rows)
 
 
 def _resolved_condition(
@@ -472,6 +502,7 @@ def _resolved_condition(
         provider=provider,
         prescribed_trace=getattr(condition, "trace", None) == "prescribed",
         source_ghost=condition if condition_type == "source_ghost" else None,
+        _source_representation_name=source_name,
     )
 
 

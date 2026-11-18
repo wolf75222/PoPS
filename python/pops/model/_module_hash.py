@@ -71,11 +71,15 @@ def _aux_producer_hash_data(producer: Any) -> Any:
     return result
 
 
-def module_content_hash(module: Any) -> str:
-    """Hash declarations, aliases and typed operator bindings in canonical order."""
+def module_content_hash(module: Any, *, name_free: bool = False) -> str:
+    """Hash declarations, aliases and typed operator bindings in canonical order.
+
+    ``name_free`` leaves out the module name, a presentation name (CC2): the digest then
+    identifies the same definition under any model name (N11 lot 2b).
+    """
     payload = {
         "schema": "spec2-module",
-        "name": module.name,
+        "name": None if name_free else module.name,
         "state_spaces": [
             module._state_spaces[name].to_data() for name in sorted(module._state_spaces)
         ],

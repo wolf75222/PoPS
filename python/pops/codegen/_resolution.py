@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import json
 from typing import Any, cast
+from urllib.parse import quote
 
 
 CAPABILITY_EVIDENCE_SCHEMA_VERSION = 2
@@ -112,11 +113,12 @@ def _collect_problem_evidence(
         if not isinstance(spec, Mapping) or spec.get("model") is None:
             raise CapabilityResolutionError("block %r has no resolved model evidence" % name)
         model = spec["model"]
+        block_ref = "block:%s" % quote(name, safe="")
         caps = getattr(model, "provided_capabilities", None)
         if callable(caps):
             caps = caps()
         if caps is not None:
-            _add_tokens(provider_sources, "block:%s" % name, _tokens(caps))
+            _add_tokens(provider_sources, block_ref, _tokens(caps))
         module = getattr(model, "module", None)
         registry = getattr(module if module is not None else model, "operator_registry", None)
         if callable(registry):
@@ -126,7 +128,7 @@ def _collect_problem_evidence(
                 operator = registry.get(operator_name)
                 _add_tokens(
                     provider_sources,
-                    "block:%s/operator:%s" % (name, operator_name),
+                    "%s/operator:%s" % (block_ref, operator_name),
                     _tokens(getattr(operator, "capabilities", None)),
                 )
                 required.update(_tokens(getattr(operator, "requirements", None)))

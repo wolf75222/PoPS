@@ -171,6 +171,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
         self.artifact_spec_identity = None
         self.binary_identity = None
         self.artifact_identity = None
+        # The name-free compile choices of this Program (program_id, CC2; N11 lot 2b).
+        self.toolchain_evidence: dict[str, Any] | None = None
 
     @property
     def target(self) -> str:

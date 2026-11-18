@@ -380,12 +380,31 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
     ):
         recorded = _identity_from_json(manifest[field])
         if recorded.domain != domain or recorded.token != current.token:
+            if field == "artifact_identity" and runtime_kind == "uniform":
+                missing = _missing_uniform_state_members(owner, manifest["arrays"])
+                if missing:
+                    raise ValueError(
+                        "checkpoint artifact_identity does not match the bound runtime: "
+                        "no member %s; restart across renamed owners requires N11 lot 2c-ii"
+                        % ", ".join(missing))
             raise ValueError("checkpoint %s does not match the bound runtime" % field)
     from pops.runtime._engine_descriptors import abi_key
     files = _payload_files(payload)
     if "abi_key" not in files or str(payload["abi_key"]) != str(abi_key()):
         raise ValueError("checkpoint ABI identity does not match the loaded runtime")
     return restart
+
+
+def _missing_uniform_state_members(owner: Any, arrays: Mapping[str, Any]) -> list[str]:
+    """Return the missing state members shown by the authenticated Uniform manifest."""
+    names: Any = getattr(owner, "block_names", None)
+    if not callable(names):
+        names = getattr(getattr(owner, "_bound_snapshot", None), "block_names", None)
+    if not callable(names):
+        return []
+    block_names: Any = names()
+    expected = ("state_%s" % name for name in block_names)
+    return [member for member in expected if member not in arrays]
 
 
 def checkpoint_run_identity(payload: Any) -> Identity | None:

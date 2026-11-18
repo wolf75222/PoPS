@@ -150,7 +150,9 @@ def test_case_initials_is_unique_freezable_and_in_snapshot():
     assert case.options()["n_initials"] == 1
     assert pops.inspect(case)["initials"][0]["value"]["profile"] == "constant"
     semantic_initial, = case.snapshot.semantic_to_dict()["initials"]
-    assert semantic_initial["state"] == case.resolve(qualified).canonical_identity()
+    # N11 lot 2b-i (CC2, C47): the semantic preimage holds the state with its owners projected.
+    assert semantic_initial["state"] == case.snapshot.presentation.project(
+        case.resolve(qualified).canonical_identity())
     assert semantic_initial["value"]["profile"] == "constant"
     with pytest.raises(RuntimeError, match="frozen"):
         case.initials.add(initial)
