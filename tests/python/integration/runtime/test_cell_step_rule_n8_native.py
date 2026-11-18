@@ -393,22 +393,20 @@ def _master(scheme, *, compiled_stability=False):
                                 schemes={advection: scheme(advection)}, boundary=ghosts())
     program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3, attempts=2),
                               initial={u: u0})
-    case = surface.Case(model=model, numerics=numerics, program=program,
-                        layout={domain: surface.Uniform(cells=CELLS)})
-    if compiled_stability:
-        from pops.time._program import elaboration as lowering
+    with pytest.MonkeyPatch.context() as patch:
+        if compiled_stability:
+            from pops.time._program import elaboration as lowering
 
-        elaborate = lowering.elaborate
+            elaborate = lowering.elaborate
 
-        def stability(advance, **kwargs):
-            kwargs["proposal"] = lowering.StepRule(CFL, None, strategy=AdaptiveCFL(CFL))
-            return elaborate(advance, **kwargs)
+            def stability(advance, **kwargs):
+                kwargs["proposal"] = lowering.StepRule(CFL, None, strategy=AdaptiveCFL(CFL))
+                return elaborate(advance, **kwargs)
 
-        with pytest.MonkeyPatch.context() as patch:
             patch.setattr(lowering, "elaborate", stability)
-            elaborated = case.elaborated
-    else:
-        elaborated = case.elaborated
+        case = surface.Case(model=model, numerics=numerics, program=program,
+                            layout={domain: surface.Uniform(cells=CELLS)})
+    elaborated = case.elaborated
     elaborated.case._time.step_strategy(AdaptiveCFL(CFL))
     return pops.compile(pops.resolve(pops.validate(elaborated.case), layout=elaborated.layout))
 
@@ -525,11 +523,14 @@ def test_the_guarded_muscl_face_retries_as_master_on_both_compiled_rules(muscl_s
     from pops.runtime._simulation import BudgetExhausted, Simulation
 
     expected = CFL / (2 * abs(AX) * CELLS[0])
-    artifacts = (muscl_slices["guarded"][0].compiled, muscl_slices["guarded_stability"])
-    for artifact in artifacts:
+    artifacts = {"cells": muscl_slices["guarded"][0].compiled,
+                 "stability": muscl_slices["guarded_stability"]}
+    for rule, artifact in artifacts.items():
         compiled = _bound(artifact)
+        simulation = Simulation(compiled)
+        assert simulation._control.to_data()["proposal"]["rule"] == rule
         with pytest.raises(BudgetExhausted) as caught:
-            Simulation(compiled).run(T_END, max_steps=1)
+            simulation.run(T_END, max_steps=1)
         result = caught.value.result
         assert result.failure.payload["budget"] == "max_steps"
         assert (result.steps, result.rejections, result.time) == (1, 1, expected)
