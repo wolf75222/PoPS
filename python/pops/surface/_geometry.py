@@ -29,7 +29,7 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
-from pops.identity.scalar import scalar_literal
+from pops._ir.expr import Const
 
 from ._expr import Arith, Call, Expr, is_number, text
 from ._refusal import NotYetElaborated, ReservedName, SupportMismatch, surface_entry, user_site
@@ -479,12 +479,12 @@ def chart_expression_data(value: Any, box: Box, where: str) -> tuple[Any, ...]:
     if is_number(value):
         # Other Number types use their binary64 value, as in the analytic map.
         literal = value if type(value) in (int, Fraction, Decimal, float) else float(value)
-        return "literal", scalar_literal(literal).to_data()
+        return "literal", Const(literal).literal.to_data()
     if isinstance(value, MathConstant):
         if not _math.isfinite(value.value):
             raise SupportMismatch("%s reads %s" % (where, value.name),
                                   write="an expression of the coordinates, numbers and pi")
-        return "math_constant", scalar_literal(float(value.value)).to_data()
+        return "math_constant", Const(float(value.value)).literal.to_data()
     if isinstance(value, Coordinate):
         index = value.index
         if (value.support is not box or type(index) is not int
