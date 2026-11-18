@@ -62,7 +62,7 @@ class Effect:
     region: bool
     device: str | None
     host_region: bool
-    accepted_state_inputs: bool
+    accepted_state_inputs: bool = False
 
 
 def _row(words: str) -> Effect:

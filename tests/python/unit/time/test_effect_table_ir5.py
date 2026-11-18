@@ -113,7 +113,9 @@ def test_a_malformed_row_is_refused(words):
 
 def test_rows_read_as_their_words():
     assert effect("reduce") == Effect(graph=True, fails=False, collective="algorithm", region=True,
-                                      device=None, host_region=False)
+                                      device=None, host_region=False, accepted_state_inputs=True)
+    assert effect("branch") == Effect(graph=True, fails=True, collective="rendezvous", region=True,
+                                      device="device", host_region=True)
     assert effect("region_index").device == "ordered"
     assert effect("structured_iterate").host_region
     assert graph_effect_words("product") == frozenset()
