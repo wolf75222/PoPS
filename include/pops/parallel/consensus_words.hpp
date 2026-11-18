@@ -34,11 +34,13 @@ class ConsensusWords {
 
   std::size_t maximum(double local) { return push_(local); }
 
-  void reduce(const ExecutionLane& lane) {
+  void reduce(const ExecutionLane& lane) { reduce(lane.communicator()); }
+
+  void reduce(const CommunicatorView& communicator) {
     if (reduced_)
       throw std::logic_error("consensus words are reduced once");
-    if (lane.size() > 1)
-      all_reduce_max_inplace(words_.data(), static_cast<int>(size_), lane);
+    if (communicator.size() > 1)
+      all_reduce_max_inplace(words_.data(), static_cast<int>(size_), communicator);
     reduced_ = true;
   }
 
