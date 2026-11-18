@@ -352,13 +352,31 @@ def test_emitted_kernel_keeps_the_arithmetic_order_of_the_vm_gradient() -> None:
     assert "patch->field_count != 1" in source and "patch->parameter_count != 2" in source
     # (c0 * v(-1) + c1 * v(+1)) / h per axis, then the sum of the squares and its square root: the
     # order of the gradient of the removed tag-graph VM, one operation per statement.
-    order = [r"\(-0\.5 \* cse\d+_\)", r"\(0\.5 \* cse\d+_\)",
-             r"\(cse\d+_ \+ cse\d+_\)", r"\(cse\d+_ / cse\d+_\)", r"\(cse\d+_ \* cse\d+_\)",
-             r"std::sqrt\(cse\d+_\)", r"\(cse\d+_ > cse\d+_\)", r"\(cse\d+_ < cse\d+_\)"]
-    positions = [re.search(pattern, source) for pattern in order]
-    assert all(positions), [p for p, m in zip(order, positions) if m is None]
-    starts = [match.start() for match in positions]
-    assert starts == sorted(starts)
+    statements = re.findall(r"const pops::Real (cse\d+_) = ([^;]+);", source)
+    definitions = {expression: (name, index)
+                   for index, (name, expression) in enumerate(statements)}
+
+    negative = definitions["-0.5"][0]
+    positive = definitions["0.5"][0]
+    products = []
+    for offset in range(4):
+        coefficient = (negative, positive)[offset % 2]
+        sample = definitions[f"fields[0](at{offset}_, 0)"][0]
+        products.append(f"({coefficient} * {sample})")
+
+    sums = [f"({definitions[products[i]][0]} + {definitions[products[i + 1]][0]})"
+            for i in (0, 2)]
+    gradients = [f"({definitions[total][0]} / {definitions[f'spacing[{axis}]'][0]})"
+                 for axis, total in enumerate(sums)]
+    squares = [f"({value} * {value})" for value, _ in (definitions[g] for g in gradients)]
+    squared_norm = f"({definitions[squares[0]][0]} + {definitions[squares[1]][0]})"
+    norm = f"std::sqrt({definitions[squared_norm][0]})"
+    result = definitions[norm][0]
+    refine = f"({result} > {definitions['parameters[0]'][0]})"
+    coarsen = f"({result} < {definitions['parameters[1]'][0]})"
+    order = products + sums + gradients + squares + [squared_norm, norm, refine, coarsen]
+    positions = [definitions[expression][1] for expression in order]
+    assert positions == sorted(positions)
     assert source.count("Kokkos::isfinite(") >= 8
 
     with pytest.raises(ValueError, match="native dimension 3"):
