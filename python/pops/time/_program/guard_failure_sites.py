@@ -3,15 +3,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._ir.effects import effect
 from pops._structural_data import canonical_json_sha256
 from pops.time._step.transaction import GuardFailureSite, GuardRole
 from pops.time.solve_outcome import FailRun, RejectAttempt
 
 SCHEMA = "pops.global-guard-failure@1"
-_ACCEPTED_PREDICATE_OPS = frozenset({
-    "compare", "reduce", "pointwise_expression", "scalar_isfinite",
-    "bool_op", "bool_constant",
-})
 
 
 def _predicate_of_accepted_state(state: Any, predicate: Any) -> bool:
@@ -28,7 +25,7 @@ def _predicate_of_accepted_state(state: Any, predicate: Any) -> bool:
         if node.id in seen:
             continue
         seen.add(node.id)
-        if node.op not in _ACCEPTED_PREDICATE_OPS or node.point != state.point:
+        if not effect(node.op).accepted_state_inputs or node.point != state.point:
             return False
         pending.extend(node.inputs)
     return reads_state

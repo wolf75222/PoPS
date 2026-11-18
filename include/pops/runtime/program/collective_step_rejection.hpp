@@ -222,8 +222,8 @@ void collective_step_rejection_phase(const CommunicatorView& communicator,
   if (control == 2) {
     if (all_reduce_min(terminal ? 1L : 0L, communicator) == 0)
       collectively_rethrow_exception(terminal, communicator, failure);
-    if (!all_ranks_agree_exact_ordered_byte_pairs({{terminal_schema, terminal_payload}},
-                                                  communicator))
+    if (!all_ranks_agree_exact_ordered_byte_pairs(
+            {{terminal_schema, terminal_payload}, {"detail", terminal_detail}}, communicator))
       throw std::runtime_error("collective terminal failure fields differ between ranks");
     std::rethrow_exception(terminal);
   }
