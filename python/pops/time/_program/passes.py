@@ -143,6 +143,9 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         registry_keep: Any = None,
         canonical_owner: bool = False,
         transformation: str = "normalize",
+        inputs_of: Any = None,
+        commit_value: Any = None,
+        guard_keep: Any = None,
     ) -> Any:
         """Clone and remap this Program through the shared lossless rebuild engine.
 
@@ -162,6 +165,9 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             registry_keep=registry_keep,
             canonical_owner=canonical_owner,
             transformation=transformation,
+            inputs_of=inputs_of,
+            commit_value=commit_value,
+            guard_keep=guard_keep,
         )
 
     # --- common-subexpression elimination (Spec 3 s28, ADC-465) ---

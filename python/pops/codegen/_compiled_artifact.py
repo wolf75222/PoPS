@@ -36,6 +36,7 @@ class CompiledPlanBlock:
     model_owner: Any = None
     declares_auxiliary_providers: bool = False
     resolved_operations: Any = None
+    moving_volume_component: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -55,6 +56,9 @@ class CompiledPlanBlock:
             raise TypeError(
                 "CompiledPlanBlock state_identities must uniquely qualify every state space")
         object.__setattr__(self, "state_identities", state_identities)
+        if self.moving_volume_component is not None and (
+                type(self.moving_volume_component) is not int or self.moving_volume_component < 0):
+            raise TypeError("CompiledPlanBlock moving volume must identify a component ordinal")
         if not isinstance(self.instance_owner_qid, str) or not self.instance_owner_qid:
             raise TypeError(
                 "CompiledPlanBlock instance_owner_qid must be a canonical Case-block instance owner"
@@ -148,6 +152,8 @@ class CompiledPlanRecord:
         if type(plan) is not ResolvedSimulationPlan:
             raise TypeError("CompiledPlanRecord requires an exact ResolvedSimulationPlan")
         plan.verify()
+        from pops.mesh.moving_configuration import MEMBER_COMPONENTS, members_of
+
         return cls(
             plan_identity=Identity.from_data(plan.plan_identity.to_data()),
             snapshot=plan.snapshot,
@@ -179,7 +185,9 @@ class CompiledPlanRecord:
                     instance_owner=block.instance_owner,
                     model_owner=block.model_owner,
                     declares_auxiliary_providers=block.declares_auxiliary_providers,
-                    resolved_operations=block.resolved_operations)
+                    resolved_operations=block.resolved_operations,
+                    moving_volume_component=(None if members_of(block.model) is None
+                                             else MEMBER_COMPONENTS.index("volume")))
                 for block in plan.blocks
             ),
             time_identity=_evidence(plan.time, where="resolved time"),
@@ -361,6 +369,8 @@ class CompiledPlanRecord:
                     "backend": block.backend,
                     "state_spaces": block.state_spaces,
                     "state_identities": block.state_identities,
+                    **({"moving_volume_component": block.moving_volume_component}
+                       if block.moving_volume_component is not None else {}),
                     "instance_owner_qid": block.instance_owner_qid,
                     "instance_owner": block.instance_owner,
                     "model_owner": block.model_owner,

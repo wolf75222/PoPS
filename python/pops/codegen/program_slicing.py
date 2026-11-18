@@ -43,6 +43,43 @@ def _block_ids(value: Any, seen: set[int] | None = None) -> frozenset[str]:
         block_id for item in values for block_id in _block_ids(item, seen))
 
 
+def _local_guard_owners(program: Any) -> dict[str, str]:
+    from pops.time._step.transaction import GuardRole
+    from pops.time.solve_outcome import RejectAttempt
+
+    owners = {}
+    refusal = "multi-layout Program slicing does not support dt bounds or guards"
+    for guard in program._acceptance_guards:
+        matches = [node for node in program._values
+                   if node.op == "acceptance_guard" and node.attrs.get("guard") == guard.name]
+        if len(matches) != 1:
+            raise ValueError(refusal)
+        node = matches[0]
+        owner = _block_id(node)
+        if (owner is None or guard.role is not GuardRole.INVARIANT
+                or type(guard.action) is not RejectAttempt
+                or set(node.attrs) != {"guard", "action", "trial_site"}
+                or dict(node.attrs["trial_site"]) != {
+                    "site": guard.name, "variant": "NotAdmissible", "retry_can_change": False
+                }):
+            raise ValueError(refusal)
+        pending, seen = list(node.inputs), set()
+        while pending:
+            value = pending.pop()
+            if value.id in seen:
+                continue
+            seen.add(value.id)
+            block = _block_id(value)
+            if (block != owner and not (block is None and value.op in {"scalar", "dt", "bool_op"})) \
+                    or any(value.attrs.get(key) for key in ("apply_block", "residual_block", "body_block")):
+                raise ValueError(refusal)
+            pending.extend(value.inputs)
+            if _block_ids(value.attrs) - {owner}:
+                raise ValueError(refusal)
+        owners[guard.name] = owner
+    return owners
+
+
 def slice_program(program: Any, block_names: Any) -> Any:
     """Return an independent Program whose graph is the exact selected-block closure.
 
@@ -57,9 +94,10 @@ def slice_program(program: Any, block_names: Any) -> Any:
     selected = frozenset(block_names)
     if not selected or any(not isinstance(name, str) or not name for name in selected):
         raise TypeError("slice_program block_names must contain non-empty names")
-    if program._dt_bound is not None or program._acceptance_guards:
+    if program._dt_bound is not None:
         raise ValueError(
             "multi-layout Program slicing does not support dt bounds or guards")
+    guard_owners = _local_guard_owners(program)
     if set(program._histories) - set(program._history_state_refs):
         raise ValueError("multi-layout histories require exact qualified state ownership")
     values = tuple(program._values)
@@ -121,6 +159,7 @@ def slice_program(program: Any, block_names: Any) -> Any:
         lambda value: value.id in keep,
         state_keep=keep_state,
         registry_keep=lambda owner: owner in registry_owners,
+        guard_keep=lambda guard: guard_owners[guard.name] in selected,
         transformation="normalize",
     )
     from pops.codegen.program_emit_field_routes import _walk_program_nodes
