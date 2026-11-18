@@ -1,5 +1,5 @@
 #include <pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp>
-#include "amr_fixture_criteria.hpp"
+#include "field_rhs_fixture_criterion.hpp"
 #include "native_dso_compiler.hpp"
 
 #include <fstream>
@@ -14,13 +14,9 @@ int main(int argc, char** argv) {
     {
       std::ofstream output(argv[1]);
       output.exceptions(std::ios::badbit | std::ios::failbit);
-      output << "#define pops_program_hash pops_test_untagged_program_hash\n";
-      output << pops::test::aux_incidence_value_program::source();
-      const auto hash = pops::test::field_rhs_incidence.program_hash(
-          pops::test::aux_incidence_value_program::identity);
-      output << "\n#undef pops_program_hash\n"
-                "extern \"C\" const char* pops_program_hash() { return \""
-             << hash << "\"; }\n";
+      output << pops::test::qualify_fixture_program_source(
+          pops::test::aux_incidence_value_program::source(),
+          pops::test::aux_incidence_value_program::identity, pops::test::field_rhs_incidence);
       pops::test::append_fixture_criterion(output, argv[3]);
     }
     const auto result = pops::test::native_dso::compile_shared(

@@ -21,7 +21,7 @@ inputs:
     default: ''
   amr-fixture-python:
     description: 'Install the build-time Python emitter dependency for the tagged C++ fixtures'
-    default: 'true'
+    default: 'false'
   compiler:
     description: >
       Compilateur de l'install Kokkos : gcc (defaut) ou clang. La cle inclut l'image du runner,

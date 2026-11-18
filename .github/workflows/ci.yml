@@ -257,7 +257,6 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
-          amr-fixture-python: 'false'
           extra-apt: mold
 
       - name: Prewarm production runtime objects (${{ matrix.lane }})
@@ -397,6 +396,8 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
+          amr-fixture-python: ${{ contains(steps.test-plan.outputs.cpp_shard_targets, 'test_amr_synthetic_program_loader_transaction') ||
+                                contains(steps.test-plan.outputs.cpp_shard_targets, 'test_prepared_field_rhs_inputs') }}
           extra-apt: mold
 
       # actions/cache est immutable. restore/save separes + cle unique par tentative permettent a
@@ -669,7 +670,6 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
-          amr-fixture-python: 'false'
           # Match every consumer before the compiler include-tree capture.
           extra-apt: mold libopenmpi-dev openmpi-bin
 
@@ -2412,7 +2412,15 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev ninja-build ccache mold python3-numpy
+          sudo apt-get install -y libeigen3-dev ninja-build ccache mold
+
+      - name: Install the AMR fixture generator dependency
+        if: >-
+          matrix.kind == 'cpp' &&
+          (contains(steps.openmp-cpp-plan.outputs.cpp_shard_targets, 'test_amr_synthetic_program_loader_transaction') ||
+           contains(steps.openmp-cpp-plan.outputs.cpp_shard_targets, 'test_prepared_field_rhs_inputs'))
+        run: |
+          sudo apt-get install -y python3-numpy
           echo "POPS_AMR_FIXTURE_PYTHON=/usr/bin/python3" >> "$GITHUB_ENV"
 
       - name: Install MPI SDK for required Python syntax witnesses
@@ -2771,7 +2779,6 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
-          amr-fixture-python: 'false'
           extra-apt: mold libopenmpi-dev openmpi-bin libhdf5-openmpi-dev
 
       - id: python
