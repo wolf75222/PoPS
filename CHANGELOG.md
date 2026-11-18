@@ -356,7 +356,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   parity tests compare with the boxes and marks that the graph gave, recorded before it went
   (`tests/python/data/amr_graph_oracles.json`, with a margin to each threshold). Tagging on the
   output of a field solve, which only the graph read, is gone with it. The native bytecode VM is
-  kept only as the seam of 27 low-level test files until lot 3c-2c (transitional route).
+  retained as a seam for 24 C++ and five Python low-level tests until lot 3c-2c. Two further
+  C++ tests cover the native Tagger ABI and loader during that transition.
 - ROM-95 (N12, lot 3c-2a): a refinement region reads a runtime parameter of its model.
   `Tag(lambda cell: cell.value(q) > model.value(nu))` reads `nu` from the RuntimeParams table of
   the block whose state it reads, the table its faces and stencils read, when the tagging plan is

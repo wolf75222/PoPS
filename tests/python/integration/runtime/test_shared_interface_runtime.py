@@ -413,7 +413,7 @@ def _program(left_state, right_state, rate):
     return program
 
 
-def _ssprk2_program(left_state, right_state, rate):
+def _ssprk2_program(left_state, right_state, rate, *, source_rate=None):
     program = pops.Program("shared_interface_ssprk2")
     left = program.state(left_state)
     right = program.state(right_state)
@@ -424,21 +424,22 @@ def _ssprk2_program(left_state, right_state, rate):
     right_k0 = program.value("right_k0", rate(right_n), at=stage_0)
     stage_1 = StagePoint("shared_stage_1", {"main": TimePoint(program.clock, 1)})
     left_stage = program.value(
-        "left_stage", left.n + program.dt * left_k0, at=stage_1)
+        "left_stage", left_n + program.dt * left_k0, at=stage_1)
     right_stage = program.value(
-        "right_stage", right.n + program.dt * right_k0, at=stage_1)
+        "right_stage", right_n + program.dt * right_k0, at=stage_1)
     left_k1 = program.value("left_k1", rate(left_stage), at=stage_1)
     right_k1 = program.value("right_k1", rate(right_stage), at=stage_1)
-    left_next = program.value(
-        "left_next",
-        left.n + 0.5 * program.dt * left_k0 + 0.5 * program.dt * left_k1,
-        at=left.next.point,
-    )
-    right_next = program.value(
-        "right_next",
-        right.n + 0.5 * program.dt * right_k0 + 0.5 * program.dt * right_k1,
-        at=right.next.point,
-    )
+    left_next_expr = left_n + 0.5 * program.dt * left_k0 + 0.5 * program.dt * left_k1
+    right_next_expr = right_n + 0.5 * program.dt * right_k0 + 0.5 * program.dt * right_k1
+    if source_rate is not None:
+        # Read the parameter through a separate zero source at publication.
+        # The two subcycled shared-flux stages retain their original inputs.
+        left_source = program.value("left_neutral_source", source_rate(left_n), at=stage_0)
+        right_source = program.value("right_neutral_source", source_rate(right_n), at=stage_0)
+        left_next_expr = left_next_expr + program.dt * left_source
+        right_next_expr = right_next_expr + program.dt * right_source
+    left_next = program.value("left_next", left_next_expr, at=left.next.point)
+    right_next = program.value("right_next", right_next_expr, at=right.next.point)
     program.commit(left.next, left_next)
     program.commit(right.next, right_next)
     program.step_strategy(FixedDt(1.0e-3))
@@ -793,6 +794,48 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
     )
 
 
+def _with_regrid_fault_parameter(core):
+    """Give the shared transport fixture a model parameter read by a neutral source."""
+    from pops.math import ddt, div
+    from pops.params import RuntimeParam
+    from pops.representations import Conservative
+    from pops.spaces import CellState
+
+    model = pops.Model("shared_interface_regrid_failure", frame=core.frame)
+    state = model.state("U", components=("u",), representation=Conservative(),
+                        space=CellState(frame=core.frame))
+    (u,) = state
+    a_x = model.param(RuntimeParam("a_x", default=1.0))
+    a_y = model.param(RuntimeParam("a_y", default=1.0e-12))
+    inlet_x = model.param(RuntimeParam("u_in_x", default=0.0))
+    inlet_y = model.param(RuntimeParam("u_in_y", default=0.0))
+    fault = model.param(RuntimeParam("tagging_fault", default=0.0))
+    values = {axis: model.value(handle) for axis, handle in zip(
+        core.frame.axes, (a_x, a_y), strict=True)}
+    velocity = model.vector("a", frame=core.frame, components=values)
+    flux = model.flux(
+        "advection_flux", frame=core.frame, state=state,
+        components={axis: (value * u,) for axis, value in values.items()},
+        waves={axis: (value,) for axis, value in values.items()})
+    source = model.source("parameter_read", on=state, value=(0.0 * model.value(fault) * u,))
+    balance = model.rate("advection_rate", equation=ddt(state) == -div(flux) + source)
+    rate = balance.select(flux)
+    source_rate = balance.select(source)
+
+    case = pops.Case("shared_interface_regrid_failure")
+    tracer = case.block("tracer", model=model)
+    refine_threshold = case.param(RuntimeParam("refine_u_gradient", default=0.10))
+    coarsen_threshold = case.param(RuntimeParam("coarsen_u_gradient", default=0.04))
+    return replace(
+        core, model=model, state=state, scalar=u, velocity=velocity, flux=flux, rate=rate,
+        case=case, tracer=tracer, tracer_state=tracer[state],
+        velocity_x_param=a_x, velocity_y_param=a_y,
+        inlet_x_param=inlet_x, inlet_y_param=inlet_y,
+        inlet_x_value=model.value(inlet_x), inlet_y_value=model.value(inlet_y),
+        refine_threshold=refine_threshold, coarsen_threshold=coarsen_threshold,
+    ), fault, source_rate
+
+
 def _shared_interface_amr_authoring(
     tmp_path,
     *,
@@ -801,6 +844,7 @@ def _shared_interface_amr_authoring(
     program_factory=_ssprk2_program,
     with_checkpoint=True,
     with_implicit_solve=False,
+    with_late_regrid_failure=False,
 ):
     from pops.amr import (
         AMRTagging,
@@ -815,6 +859,7 @@ def _shared_interface_amr_authoring(
     from pops.boundary.transport import Inflow, Outflow
     from pops.initial import InitialCondition
     from pops.lib.amr import ConservativeLinear, StateTransfer
+    from pops.numerics import StateStorage
     from pops.lib.initial import BindArray
     from pops.math import ddt, div
     from pops.projection import ConservativeCellAverage
@@ -823,6 +868,9 @@ def _shared_interface_amr_authoring(
 
     example = _load_example()
     core = example.build_authoring(output_root=tmp_path / "unused")
+    fault = source_rate = None
+    if with_late_regrid_failure:
+        core, fault, source_rate = _with_regrid_fault_parameter(core)
     right = core.case.block("right", model=core.model)
     right_state = right[core.state]
     finite_volume = FiniteVolume(
@@ -836,6 +884,8 @@ def _shared_interface_amr_authoring(
     def numerics(state):
         plan = DiscretizationPlan()
         plan.rates.add(core.rate, finite_volume)
+        if source_rate is not None:
+            plan.rates.add(source_rate, StateStorage())
         plan.boundaries.add(TransportBoundarySet({
             boundaries.x_min: Inflow(state=state, value=core.inlet_x_value),
             boundaries.x_max: Outflow(state=state),
@@ -929,6 +979,9 @@ def _shared_interface_amr_authoring(
         program = program_factory(
             core.tracer_state, right_state, core.rate, packed_state
         )
+    elif fault is not None:
+        program = program_factory(
+            core.tracer_state, right_state, core.rate, source_rate=source_rate)
     else:
         program = program_factory(core.tracer_state, right_state, core.rate)
     core.case.program(program)
@@ -950,13 +1003,29 @@ def _shared_interface_amr_authoring(
     transfer.state(right_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
     if packed_state is not None:
         transfer.state(packed_state, StateTransfer(prolongation=ConservativeLinear(physical_faces="one-sided")))
+    tag_rules = (
+        Tag(lambda cell: cell.value(core.tracer_state)
+            > core.case.value(core.refine_threshold)),
+        Tag(lambda cell: cell.value(right_state) > core.case.value(core.refine_threshold)),
+    )
+    failure_handle = None
+    if fault is not None:
+        failure_handle = core.case.resolve(fault, block=core.tracer)
+        model_value = core.model.value(fault).resolve_references(
+            lambda declaration: core.case.resolve(declaration, block=core.tracer))
+        x_axis = core.frame.axes[0]
+
+        def fail_on_fine_parent(cell):
+            value = cell.value(core.tracer_state)
+            # L0 has width 1/8. Its denominator stays positive after arming the
+            # fault, so L0 is staged before the zero denominator at L1.
+            width_shift = cell.width(x_axis) - 1.0 / 16
+            denominator = width_shift * width_shift + (1.0 - model_value)
+            return (1 + value * value) / denominator < 0
+
+        tag_rules += (Tag(fail_on_fine_parent),)
     tagging = AMRTagging(
-        rules=(
-            Tag(lambda cell: cell.value(core.tracer_state)
-                > core.case.value(core.refine_threshold)),
-            Tag(lambda cell: cell.value(right_state) > core.case.value(core.refine_threshold)),
-            Buffer(cells=1, selection="refine-requests"),
-        ),
+        rules=tag_rules + (Buffer(cells=1, selection="refine-requests"),),
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
         conflict_policy=ConflictPolicy.REFINE_WINS,
     )
@@ -998,6 +1067,7 @@ def _shared_interface_amr_authoring(
         packed_state=packed_state,
         packed_initial=packed_initial,
         params=params,
+        late_regrid_failure=failure_handle,
     )
 
 
@@ -1175,7 +1245,10 @@ def test_sparse_interface_coverage_oracle_accepts_tiling_and_rejects_holes():
 def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
     # Retrying an identical failed invocation is supported when it owns no external
     # consumer lifecycle. The separate restart scenario below retains checkpoint coverage.
-    authoring = _shared_interface_amr_authoring(tmp_path, with_checkpoint=False)
+    from pops.runtime._install_param_routing import route_program_params
+
+    authoring = _shared_interface_amr_authoring(
+        tmp_path, with_checkpoint=False, with_late_regrid_failure=True)
     example = authoring.example
     core = authoring.core
     right_state = authoring.right_state
@@ -1251,16 +1324,44 @@ def test_runtime_instance_executes_dynamic_three_level_shared_flux(tmp_path):
         )
 
     assert actual_interface_counts() == (0, 0, 0)
-    # The external Tagger that failed this step once, to prove its rollback and retry, went with
-    # the tag graph (N12 lot 3c-2b); the step is accepted at its first attempt.
+    schema = artifact.bind_schema
+    compile_values = schema.resolve_compile()
+    normal = route_program_params(
+        artifact, schema, schema.resolve_bind(params, compile_values=compile_values))
+    faulted = route_program_params(
+        artifact, schema, schema.resolve_bind(
+            {**params, authoring.late_regrid_failure: 1.0},
+            compile_values=compile_values))
+    changed_blocks = [index for index, values in faulted.items() if values != normal[index]]
+    assert len(changed_blocks) == 1
+    block_index, = changed_blocks
+    # Use the existing native fixture seam to arm the fault after bootstrap. The
+    # public RuntimeInstance keeps its parameters fixed throughout either invocation.
+    runtime._executor._s.set_program_params(block_index, faulted[block_index])
+    rollback_before = _shared_interface_accepted_image(runtime)
+    cause = "prepared AMR tagging rejected a non-finite indicator sample"
+    with pytest.raises(RuntimeError, match=cause) as rejected:
+        pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
+    assert type(rejected.value) is RuntimeError
+    failure = runtime._executor._last_step_transaction_report
+    assert failure.status == "failed" and failure.action == "fail_run"
+    assert any(cause in message for message in failure.diagnostics)
+    _assert_same_shared_interface_image(runtime, rollback_before)
+    rejected_counts = actual_interface_counts()
+    assert rejected_counts == (2, 4, 8)
+
+    runtime._executor._s.set_program_params(block_index, normal[block_index])
     report = pops.run(runtime, t_end=1.0e-3, max_steps=1, console=False)
-    assert report.accepted_steps == 1
+    assert report.accepted_steps == 1 and report.rejected_steps == 0
 
     refined_authority = runtime._executor._interface_authorities[interface.qualified_id]
     assert refined_authority["levels"] == (0, 1, 2)
     assert len(refined_authority["declaration_identity"]) == 64
-    # SSPRK2 evaluates twice per level substep.
-    assert actual_interface_counts() == (2, 4, 8)
+    total_counts = actual_interface_counts()
+    assert total_counts == (4, 8, 16)
+    assert tuple(
+        total - rejected for total, rejected in zip(total_counts, rejected_counts, strict=True)
+    ) == (2, 4, 8)
     final_left = runtime.integral("tracer")
     final_right = runtime.integral("right")
     lost_by_left = initial_left - final_left
