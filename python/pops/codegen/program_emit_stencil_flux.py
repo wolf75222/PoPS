@@ -33,7 +33,25 @@ def _runtime_parameter_binding(declaration, model):
     return reads
 
 
-def emit_stencil_flux(value, var, lines, *, block, target, model=None):
+def _static_row_bindings(declaration, axis, row, bindings):
+    """The bindings of the row of ``axis`` on static geometry arrays: its spacing is the distance
+    across the face, which the row reads alone (resolution refuses another spacing, a cell beyond
+    the two cells of the face and a field: ``_static_geometry_consumers``)."""
+    from pops.model.stencil_expression import row_leaf_names
+
+    leaves = row_leaf_names(row)
+    for d, symbol in enumerate(declaration.spacing):
+        if d != axis and symbol.name in leaves:
+            raise ValueError("a stencil row of axis %d on static geometry arrays reads the spacing "
+                             "of axis %d" % (axis, d))
+    if declaration.field_samples:
+        raise ValueError("a stencil flux on static geometry arrays reads no field")
+    result = dict(bindings)
+    result[declaration.spacing[axis].name] = "arrays.distance_at(%d, face)" % axis
+    return result
+
+
+def emit_stencil_flux(value, var, lines, *, block, target, model=None, static_geometry=False):
     from pops.time._program.stencil_flux import validate_stencil_flux
     from pops.codegen.cpp_writer import _cse_emit
     from pops.time._evaluation_point import evaluation_stage_fraction
@@ -41,6 +59,10 @@ def emit_stencil_flux(value, var, lines, *, block, target, model=None):
 
     declaration = validate_stencil_flux(value)
     runtime_reads = _runtime_parameter_binding(declaration, model)
+    # A layout served by static geometry arrays (N17, C1): the face of axis a reads the distance
+    # across it as its spacing along a, and the faces and cells take the measures of the arrays.
+    if static_geometry and target != "system":
+        raise ValueError("static geometry arrays are read by a Uniform native install only")
     state = var[value.inputs[0].id]
     prepared = "stencil_prepared_%d" % value.id
     out = "stencil_rhs_%d" % value.id
@@ -50,7 +72,8 @@ def emit_stencil_flux(value, var, lines, *, block, target, model=None):
     setup_end = len(lines)
     stage = evaluation_stage_fraction(value)
     lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
-    lines.append('ctx.require_cartesian_generated_operator(%d, "stencil_flux");' % block)
+    lines.append(('ctx.require_static_geometry_operator(%d, "stencil_flux");' if static_geometry
+                  else 'ctx.require_cartesian_generated_operator(%d, "stencil_flux");') % block)
     if target == "amr_system":
         from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
 
@@ -69,8 +92,8 @@ def emit_stencil_flux(value, var, lines, *, block, target, model=None):
         map(str, declaration.ghost_extent)
     )
     kind = (
-        "pops::runtime::program::PreparedStencilFlux<pops::kNativeDimension, %d>"
-        % declaration.components
+        "pops::runtime::program::PreparedStencilFlux<pops::kNativeDimension, %d%s>"
+        % (declaration.components, ", true" if static_geometry else "")
     )
     lines += [
         "const auto %s_geometry = ctx.geometry();" % prepared,
@@ -119,6 +142,7 @@ def emit_stencil_flux(value, var, lines, *, block, target, model=None):
         "  const auto q = std::as_const(%s).fab(li).view();" % state,
         *(["  const auto params = stencil_params_%d;" % value.id] if runtime_reads else []),
         "  const auto geometry = %s_geometry;" % prepared,
+        *(["  const auto arrays = %s.static_arrays();" % prepared] if static_geometry else []),
         "  return [=] POPS_HD(const pops::Index<pops::kNativeDimension>& face, int axis) {",
         "    pops::runtime::program::StencilFaceResult<%d> result;" % declaration.components,
     ]
@@ -146,13 +170,16 @@ def emit_stencil_flux(value, var, lines, *, block, target, model=None):
         )
     for axis, expressions in enumerate(declaration.rows):
         lines.append("    %s (axis == %d) {" % ("if" if axis == 0 else "else if", axis))
+        row_bindings = bindings
+        if static_geometry:
+            row_bindings = _static_row_bindings(declaration, axis, expressions, bindings)
         body, values, names = _cse_emit(
             expressions,
             "pops::Real",
             "      ",
             materialize_all=True,
             return_names=True,
-            scalar_bindings=bindings,
+            scalar_bindings=row_bindings,
         )
         lines.extend(body)
         checks = " && ".join("Kokkos::isfinite(%s)" % x for x in (*names, *values))

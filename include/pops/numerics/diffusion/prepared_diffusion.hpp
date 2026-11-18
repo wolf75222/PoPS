@@ -347,10 +347,12 @@ struct Divergence {
 };
 
 /// The two-point flux of a scalar diagonal law on the static geometry arrays of node positions
-/// (N17, C1). It is the Cartesian kernel with the logical spacing h replaced by the distance that
-/// the arrays state across the face: between the centroids of its cells, and at a physical end the
-/// mirrored distance 2 |m_f - c_K|, so that the centroid lies half of it from the face. The end
-/// coefficient is the linear extrapolation in that distance (1.5 a_K - 0.5 a_in on a uniform box).
+/// (N17, C1), a graded box of rank one to three. It is the Cartesian kernel with the logical
+/// spacing h replaced by the distance that the arrays state across the face: between the centroids
+/// of its cells, and at a physical end the mirrored distance 2 |m_f - c_K|, so that the centroid
+/// lies half of it from the face. The faces of node positions are orthogonal to the line of the
+/// centroids that they separate, so the two-point flux stays consistent. The end coefficient is
+/// the linear extrapolation in that distance (1.5 a_K - 0.5 a_in on a uniform box).
 template <int Dim>
 struct StaticFaceFlux {
   FieldView<const Real, Dim> q, w, a;
@@ -453,17 +455,17 @@ struct StaticCellBalance {
 ///
 /// With @p StaticArrays the faces read the static geometry arrays of a mapped layout (N17, C1)
 /// instead of the uniform spacings of the logical box: distances, face measures and cell measures.
-/// The arrays serve the scalar diagonal law of node positions of rank one, whose faces are
-/// orthogonal to the line of the centroids, so the two-point flux stays consistent.
+/// The arrays serve the scalar diagonal law of node positions (a graded box of rank one to three),
+/// whose faces are orthogonal to the line of the centroids, so the two-point flux stays
+/// consistent; a chart, whose faces need not be, is refused at construction.
 template <int Dim, int Components = 1, bool Tensor = false, bool Coupled = false,
           bool StaticArrays = false>
 class PreparedDiffusion {
   static_assert(Dim >= 1 && Dim <= 3, "Cartesian diffusion requires native dimensions 1 through 3");
   static_assert(Components > 0, "diffusion requires at least one accumulated component");
   static_assert(!Coupled || Tensor, "coupled gradients require the full component Jacobian");
-  static_assert(!StaticArrays || (Dim == 1 && Components == 1 && !Tensor && !Coupled),
-                "static geometry arrays serve the scalar diagonal diffusion of node positions of "
-                "rank one");
+  static_assert(!StaticArrays || (Components == 1 && !Tensor && !Coupled),
+                "static geometry arrays serve the scalar diagonal diffusion of node positions");
   using Field = MultiFab<Dim>;
   using Boundary = PreparedScalarBoundarySession<Dim>;
   Geometry<Dim> geometry_;

@@ -180,6 +180,12 @@ def User(body: Any, *, state: StateHandle, stability: Any = None,
     ``origin`` is where the body is written (``pops._source_origin.code_origin``), for the model
     source map; left out, it is the origin of ``body``. A layer that wraps the author's body
     passes the author's. It stays outside the descriptor's identity.
+
+    On a layout served by static geometry arrays (N17, C1: a graded box, a chart), ``n`` is the
+    physical unit normal of the face, oriented along increasing logical index, the fluxes and
+    ``speed`` are taken along it, and the face is integrated over the measure of the face that
+    the arrays hold; the step guard reads the stability bound times the measure of the face over
+    the measure of the cell. Such a face reads the cell values as its traces.
     """
     if not callable(body):
         raise TypeError("riemann.User(body=) requires a callable symbolic face body")
